@@ -12,11 +12,9 @@ import {
   CardTitle,
   CardFooter,
 } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert" // pythagora_mocked_data - DO NOT REMOVE THIS COMMENT
 import { useToast } from "@/hooks/useToast"
 import {
   LogIn
-  , LightbulbIcon // pythagora_mocked_data - DO NOT REMOVE THIS COMMENT
 } from "lucide-react"
 import { useAuth } from "@/contexts/AuthContext"
 
@@ -61,14 +59,6 @@ export function Login() {
           <CardDescription>Enter your credentials to continue</CardDescription>
         </CardHeader>
         <CardContent>
-          <Alert className="mb-6 border-yellow-200 bg-yellow-50 dark:bg-yellow-950/30 dark:border-yellow-900/50 p-4">{ /* pythagora_mocked_data - DO NOT REMOVE THIS COMMENT */}
-            <div className="flex items-center space-x-4">{/*pythagora_mocked_data - DO NOT REMOVE THIS COMMENT */}
-              <LightbulbIcon className="h-6 w-6 text-yellow-500 dark:text-yellow-400 flex-shrink-0 stroke-[1.5] filter drop-shadow-sm" />{ /* pythagora_mocked_data - DO NOT REMOVE THIS COMMENT */}
-              <AlertDescription className="text-yellow-800 dark:text-yellow-200 flex-1 min-w-0">{ /* pythagora_mocked_data - DO NOT REMOVE THIS COMMENT */}
-                Pythagora: You can use any email/password in the frontend phase{ /* pythagora_mocked_data - DO NOT REMOVE THIS COMMENT */}
-              </AlertDescription>{ /* pythagora_mocked_data - DO NOT REMOVE THIS COMMENT */}
-            </div>{ /* pythagora_mocked_data - DO NOT REMOVE THIS COMMENT */}
-          </Alert>{ /* pythagora_mocked_data - DO NOT REMOVE THIS COMMENT */}
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>

@@ -6,7 +6,6 @@ import api from './api';
 // Response: { accessToken: string, refreshToken: string }
 export const login = async (email: string, password: string) => {
   try {
-    return { accessToken: '123', refreshToken: '123' }; // pythagora_mocked_data - remove when the backend is being implemented
     const response = await api.post('/api/auth/login', { email, password });
     return response.data;
   } catch (error) {
@@ -21,7 +20,6 @@ export const login = async (email: string, password: string) => {
 // Response: { email: string }
 export const register = async (email: string, password: string) => {
   try {
-    return { email: 'jake@example.com' }; // pythagora_mocked_data - remove when the backend is being implemented
     const response = await api.post('/api/auth/register', {email, password});
     return response.data;
   } catch (error) {
