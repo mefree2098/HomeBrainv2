@@ -10,7 +10,17 @@
     "server": "cd server && npm run dev",
     "server-install": "cd server && npm install",
     "start": "concurrently -n \"client,server\" \"npm run client\" \"npm run server\"",
-    "debug": "concurrently -n \"client,server\" \"npm run client\" \"cross-env NODE_OPTIONS=--inspect-brk=9229 npm run server\""
+    "debug": "concurrently -n \"client,server\" \"npm run client\" \"cross-env NODE_OPTIONS=--inspect-brk=9229 npm run server\"",
+    "seed": "cd server && node scripts/seedDatabase.js",
+    "seed:devices": "cd server && node scripts/seedDatabase.js devices",
+    "seed:scenes": "cd server && node scripts/seedDatabase.js scenes",
+    "seed:automations": "cd server && node scripts/seedDatabase.js automations",
+    "seed:voice": "cd server && node scripts/seedDatabase.js voiceDevices",
+    "seed:profiles": "cd server && node scripts/seedDatabase.js userProfiles",
+    "seed:force": "cd server && node scripts/seedDatabase.js --force",
+    "clean": "cd server && node scripts/cleanDatabase.js",
+    "clean:confirm": "cd server && node scripts/cleanDatabase.js --confirm",
+    "reset": "npm run clean:confirm && npm run seed"
   },
   "author": "",
   "license": "ISC",
