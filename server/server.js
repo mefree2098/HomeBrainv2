@@ -7,6 +7,7 @@ const MongoStore = require('connect-mongo');
 const basicRoutes = require("./routes/index");
 const authRoutes = require("./routes/authRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
+const sceneRoutes = require("./routes/sceneRoutes");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 
@@ -40,6 +41,8 @@ app.use(basicRoutes);
 app.use('/api/auth', authRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
+// Scene Routes
+app.use('/api/scenes', sceneRoutes);
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {

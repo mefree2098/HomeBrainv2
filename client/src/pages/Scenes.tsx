@@ -43,7 +43,7 @@ export function Scenes() {
         console.error('Failed to fetch data:', error)
         toast({
           title: "Error",
-          description: "Failed to load scenes data",
+          description: error.message || "Failed to load scenes data",
           variant: "destructive"
         })
       } finally {
@@ -73,7 +73,7 @@ export function Scenes() {
       console.error('Failed to activate scene:', error)
       toast({
         title: "Error",
-        description: "Failed to activate scene",
+        description: error.message || "Failed to activate scene",
         variant: "destructive"
       })
     }
@@ -100,7 +100,7 @@ export function Scenes() {
       console.error('Failed to create scene:', error)
       toast({
         title: "Error",
-        description: "Failed to create scene",
+        description: error.message || "Failed to create scene",
         variant: "destructive"
       })
     }
@@ -258,7 +258,7 @@ export function Scenes() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between text-sm text-muted-foreground">
-                <span>{scene.devices.length} devices</span>
+                <span>{scene.deviceActions?.length || scene.devices?.length || 0} devices</span>
                 <span>Voice enabled</span>
               </div>
               
