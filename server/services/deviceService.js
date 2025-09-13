@@ -206,6 +206,7 @@ class DeviceService {
           break;
           
         case 'turnOn':
+        case 'turn_on': // Support snake_case format
           updateData.status = true;
           if (device.type === 'light' && device.brightness === 0) {
             updateData.brightness = 75; // Default brightness
@@ -213,6 +214,7 @@ class DeviceService {
           break;
           
         case 'turnOff':
+        case 'turn_off': // Support snake_case format
           updateData.status = false;
           if (device.type === 'light') {
             updateData.brightness = 0;
@@ -220,6 +222,7 @@ class DeviceService {
           break;
           
         case 'setBrightness':
+        case 'set_brightness': // Support snake_case format
           if (device.type !== 'light') {
             throw new Error('Brightness control is only available for lights');
           }
@@ -231,6 +234,7 @@ class DeviceService {
           break;
           
         case 'setColor':
+        case 'set_color': // Support snake_case format
           if (device.type !== 'light') {
             throw new Error('Color control is only available for lights');
           }
@@ -241,6 +245,7 @@ class DeviceService {
           break;
           
         case 'setTemperature':
+        case 'set_temperature': // Support snake_case format
           if (device.type !== 'thermostat') {
             throw new Error('Temperature control is only available for thermostats');
           }
