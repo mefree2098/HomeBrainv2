@@ -1,18 +1,61 @@
 import api from './api';
 
+// Simple request cache to prevent duplicate API calls
+const requestCache = new Map<string, { data: any; timestamp: number; promise?: Promise<any> }>();
+const CACHE_DURATION = 5000; // 5 seconds cache
+
 // Description: Get voice system status
 // Endpoint: GET /api/voice/status
 // Request: {}
 // Response: { listening: boolean, connected: boolean, activeDevices: number, totalDevices: number, deviceStats: object }
 export const getVoiceStatus = async () => {
-  console.log('Fetching voice status from API')
-  try {
-    const response = await api.get('/api/voice/status');
-    return response.data;
-  } catch (error) {
-    console.error('Error fetching voice status:', error);
-    throw new Error(error?.response?.data?.message || error.message);
+  const cacheKey = 'voice-status';
+  const now = Date.now();
+  
+  // Check if we have a recent cached response
+  const cached = requestCache.get(cacheKey);
+  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+    console.log('Using cached voice status');
+    return cached.data;
   }
+  
+  // Check if there's already a request in progress
+  if (cached?.promise) {
+    console.log('Waiting for in-progress voice status request');
+    return await cached.promise;
+  }
+  
+  console.log('Fetching voice status from API')
+  
+  // Create and cache the promise to prevent duplicate requests
+  const requestPromise = (async () => {
+    try {
+      const response = await api.get('/api/voice/status');
+      const data = response.data;
+      
+      // Update cache with successful response
+      requestCache.set(cacheKey, {
+        data,
+        timestamp: now
+      });
+      
+      return data;
+    } catch (error) {
+      // Remove failed request from cache
+      requestCache.delete(cacheKey);
+      console.error('Error fetching voice status:', error);
+      throw new Error(error?.response?.data?.message || error.message);
+    }
+  })();
+  
+  // Store the promise to prevent duplicate requests
+  requestCache.set(cacheKey, {
+    data: null,
+    timestamp: now,
+    promise: requestPromise
+  });
+  
+  return await requestPromise;
 }
 
 // Description: Get all voice devices
@@ -20,14 +63,53 @@ export const getVoiceStatus = async () => {
 // Request: {}
 // Response: { success: boolean, devices: Array<{ _id: string, name: string, room: string, deviceType: string, status: string, lastSeen: string, batteryLevel?: number, powerSource: string, connectionType: string, ipAddress?: string, volume: number, microphoneSensitivity: number, firmwareVersion?: string, uptime: number }>, count: number }
 export const getVoiceDevices = async () => {
-  console.log('Fetching voice devices from API')
-  try {
-    const response = await api.get('/api/voice/devices');
-    return response.data;
-  } catch (error) {
-    console.error('Error fetching voice devices:', error);
-    throw new Error(error?.response?.data?.message || error.message);
+  const cacheKey = 'voice-devices';
+  const now = Date.now();
+  
+  // Check if we have a recent cached response
+  const cached = requestCache.get(cacheKey);
+  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+    console.log('Using cached voice devices');
+    return cached.data;
   }
+  
+  // Check if there's already a request in progress
+  if (cached?.promise) {
+    console.log('Waiting for in-progress voice devices request');
+    return await cached.promise;
+  }
+  
+  console.log('Fetching voice devices from API')
+  
+  // Create and cache the promise to prevent duplicate requests
+  const requestPromise = (async () => {
+    try {
+      const response = await api.get('/api/voice/devices');
+      const data = response.data;
+      
+      // Update cache with successful response
+      requestCache.set(cacheKey, {
+        data,
+        timestamp: now
+      });
+      
+      return data;
+    } catch (error) {
+      // Remove failed request from cache
+      requestCache.delete(cacheKey);
+      console.error('Error fetching voice devices:', error);
+      throw new Error(error?.response?.data?.message || error.message);
+    }
+  })();
+  
+  // Store the promise to prevent duplicate requests
+  requestCache.set(cacheKey, {
+    data: null,
+    timestamp: now,
+    promise: requestPromise
+  });
+  
+  return await requestPromise;
 }
 
 // Description: Test voice device

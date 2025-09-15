@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -22,29 +22,57 @@ export function VoiceDevices() {
   const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
   const [testingDevice, setTestingDevice] = useState<string | null>(null)
+  
+  // Refs for preventing memory leaks and managing state
+  const isMountedRef = useRef(true)
+  const fetchingRef = useRef(false)
 
-  useEffect(() => {
-    const fetchVoiceDevices = async () => {
-      try {
-        console.log('Fetching voice devices data')
-        const data = await getVoiceDevices()
-        setDevices(data.devices)
-      } catch (error) {
-        console.error('Failed to fetch voice devices:', error)
-        toast({
-          title: "Error",
-          description: "Failed to load voice devices",
-          variant: "destructive"
-        })
-      } finally {
-        setLoading(false)
-      }
+  const fetchVoiceDevices = useCallback(async () => {
+    // Prevent multiple simultaneous requests
+    if (fetchingRef.current || !isMountedRef.current) {
+      return
     }
 
-    fetchVoiceDevices()
-    const interval = setInterval(fetchVoiceDevices, 10000) // Refresh every 10 seconds
-    return () => clearInterval(interval)
+    fetchingRef.current = true
+    try {
+      console.log('Fetching voice devices data (throttled)')
+      const data = await getVoiceDevices()
+      
+      if (!isMountedRef.current) return
+      
+      setDevices(data.devices)
+    } catch (error) {
+      if (!isMountedRef.current) return
+      
+      console.error('Failed to fetch voice devices:', error)
+      toast({
+        title: "Error",
+        description: "Failed to load voice devices",
+        variant: "destructive"
+      })
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false)
+      }
+      fetchingRef.current = false
+    }
   }, [toast])
+
+  useEffect(() => {
+    isMountedRef.current = true
+    
+    // Initial fetch
+    fetchVoiceDevices()
+    
+    // Reduced frequency: refresh every 60 seconds instead of 10
+    console.log('Setting up voice devices polling with 60s interval')
+    const interval = setInterval(fetchVoiceDevices, 60000)
+    
+    return () => {
+      isMountedRef.current = false
+      clearInterval(interval)
+    }
+  }, [fetchVoiceDevices])
 
   const handleTestDevice = async (deviceId: string, deviceName: string) => {
     setTestingDevice(deviceId)

@@ -4,7 +4,7 @@ import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
 import { useAuth } from "@/contexts/AuthContext"
 import { useNavigate } from "react-router-dom"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { getVoiceStatus } from "@/api/voice"
 import { useToast } from "@/hooks/useToast"
 
@@ -17,26 +17,92 @@ export function Header() {
     connected: true,
     activeDevices: 5
   })
+  
+  // Refs for managing state and preventing memory leaks
+  const isMountedRef = useRef(true)
+  const fetchingRef = useRef(false)
+  const errorCountRef = useRef(0)
+  const lastSuccessRef = useRef(Date.now())
 
-  useEffect(() => {
-    const fetchVoiceStatus = async () => {
-      try {
-        const status = await getVoiceStatus()
-        setVoiceStatus(status)
-      } catch (error) {
-        console.error('Failed to fetch voice status:', error)
+  const fetchVoiceStatus = useCallback(async () => {
+    // Prevent multiple simultaneous requests
+    if (fetchingRef.current || !isMountedRef.current) {
+      return
+    }
+
+    fetchingRef.current = true
+    try {
+      console.log('Fetching voice status from API (throttled)')
+      const status = await getVoiceStatus()
+      
+      if (!isMountedRef.current) return
+
+      setVoiceStatus(status)
+      errorCountRef.current = 0
+      lastSuccessRef.current = Date.now()
+      
+    } catch (error) {
+      if (!isMountedRef.current) return
+
+      errorCountRef.current += 1
+      console.error(`Failed to fetch voice status (attempt ${errorCountRef.current}):`, error)
+      
+      // Only show toast for first few errors to avoid spam
+      if (errorCountRef.current <= 2) {
         toast({
           title: "Voice Status Error",
           description: "Failed to get voice device status",
           variant: "destructive"
         })
       }
+      
+      // If we haven't had success in a while, increase error count faster
+      const timeSinceLastSuccess = Date.now() - lastSuccessRef.current
+      if (timeSinceLastSuccess > 60000) { // 1 minute
+        errorCountRef.current = Math.min(errorCountRef.current + 1, 10)
+      }
+      
+    } finally {
+      fetchingRef.current = false
     }
-
-    fetchVoiceStatus()
-    const interval = setInterval(fetchVoiceStatus, 5000)
-    return () => clearInterval(interval)
   }, [toast])
+
+  useEffect(() => {
+    isMountedRef.current = true
+    
+    // Initial fetch
+    fetchVoiceStatus()
+    
+    // Set up interval with backoff based on error count
+    const getInterval = () => {
+      const baseInterval = 30000 // 30 seconds (much less aggressive than 5s)
+      const maxInterval = 300000 // 5 minutes max
+      const backoffInterval = Math.min(baseInterval * Math.pow(1.5, errorCountRef.current), maxInterval)
+      return backoffInterval
+    }
+    
+    const setupInterval = () => {
+      const intervalTime = getInterval()
+      console.log(`Setting up voice status polling with ${intervalTime/1000}s interval`)
+      return setInterval(fetchVoiceStatus, intervalTime)
+    }
+    
+    let interval = setupInterval()
+    
+    // Adjust interval based on error count every minute
+    const adjustmentInterval = setInterval(() => {
+      if (!isMountedRef.current) return
+      
+      clearInterval(interval)
+      interval = setupInterval()
+    }, 60000)
+
+    return () => {
+      isMountedRef.current = false
+      clearInterval(interval)
+      clearInterval(adjustmentInterval)
+    }
+  }, [fetchVoiceStatus])
 
   const handleLogout = () => {
     console.log('User logging out')
