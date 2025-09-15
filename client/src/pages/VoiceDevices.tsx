@@ -23,64 +23,48 @@ export function VoiceDevices() {
   const [loading, setLoading] = useState(true)
   const [testingDevice, setTestingDevice] = useState<string | null>(null)
   
-  // Refs for preventing memory leaks and managing state
-  const isMountedRef = useRef(true)
-  const fetchingRef = useRef(false)
-  const toastRef = useRef(toast)
+  const componentId = useRef(`voice-devices-${Date.now()}-${Math.random()}`).current
 
-  // Update toast ref when it changes
   useEffect(() => {
-    toastRef.current = toast
-  }, [toast])
-
-  const fetchVoiceDevices = useCallback(async () => {
-    // Prevent multiple simultaneous requests
-    if (fetchingRef.current || !isMountedRef.current) {
-      return
-    }
-
-    fetchingRef.current = true
-    try {
-      console.log('Fetching voice devices data (throttled)')
-      const data = await getVoiceDevices()
-      
-      if (!isMountedRef.current) return
-      
-      setDevices(data.devices)
-    } catch (error) {
-      if (!isMountedRef.current) return
-      
-      console.error('Failed to fetch voice devices:', error)
-      if (toastRef.current) {
-        toastRef.current({
+    console.log(`VoiceDevices component ${componentId} mounting - fetching initial data`)
+    
+    const fetchInitialData = async () => {
+      try {
+        console.log('Fetching voice devices data (initial)')
+        const data = await getVoiceDevices()
+        setDevices(data.devices || [])
+      } catch (error) {
+        console.error('Failed to fetch voice devices:', error)
+        toast({
           title: "Error",
           description: "Failed to load voice devices",
           variant: "destructive"
         })
-      }
-    } finally {
-      if (isMountedRef.current) {
+      } finally {
         setLoading(false)
       }
-      fetchingRef.current = false
     }
-  }, [])
 
-  useEffect(() => {
-    isMountedRef.current = true
+    fetchInitialData()
     
-    // Initial fetch
-    fetchVoiceDevices()
-    
-    // Reduced frequency: refresh every 60 seconds instead of 10
-    console.log('Setting up voice devices polling with 60s interval')
-    const interval = setInterval(fetchVoiceDevices, 60000)
+    // Set up periodic refresh - much less frequent due to aggressive caching
+    console.log(`VoiceDevices ${componentId}: Setting up polling with 120s interval`)
+    const interval = setInterval(async () => {
+      try {
+        console.log(`VoiceDevices ${componentId}: Periodic refresh`)
+        const data = await getVoiceDevices()
+        setDevices(data.devices || [])
+      } catch (error) {
+        console.error(`VoiceDevices ${componentId}: Periodic refresh failed:`, error)
+        // Don't show toast for periodic failures to avoid spam
+      }
+    }, 120000) // 2 minutes - longer interval due to 10s cache
     
     return () => {
-      isMountedRef.current = false
+      console.log(`VoiceDevices component ${componentId} unmounting - clearing interval`)
       clearInterval(interval)
     }
-  }, [])
+  }, [componentId, toast])
 
   const handleTestDevice = async (deviceId: string, deviceName: string) => {
     setTestingDevice(deviceId)

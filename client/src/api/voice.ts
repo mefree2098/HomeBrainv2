@@ -1,8 +1,19 @@
 import api from './api';
 
-// Simple request cache to prevent duplicate API calls
+// Enhanced request cache to aggressively prevent duplicate API calls
 const requestCache = new Map<string, { data: any; timestamp: number; promise?: Promise<any> }>();
-const CACHE_DURATION = 5000; // 5 seconds cache
+const CACHE_DURATION = 10000; // 10 seconds cache (more aggressive)
+const IN_FLIGHT_REQUESTS = new Map<string, Promise<any>>(); // Track in-flight requests globally
+
+// Debug function to monitor cache usage
+const logCacheStats = () => {
+  console.log('Voice API Cache Stats:', {
+    cached: requestCache.size,
+    inFlight: IN_FLIGHT_REQUESTS.size,
+    keys: Array.from(requestCache.keys()),
+    flightKeys: Array.from(IN_FLIGHT_REQUESTS.keys())
+  });
+};
 
 // Description: Get voice system status
 // Endpoint: GET /api/voice/status
@@ -15,19 +26,20 @@ export const getVoiceStatus = async () => {
   // Check if we have a recent cached response
   const cached = requestCache.get(cacheKey);
   if (cached && cached.data && (now - cached.timestamp) < CACHE_DURATION) {
-    console.log('Using cached voice status');
+    console.log('Using cached voice status (10s cache)');
     return cached.data;
   }
   
-  // Check if there's already a request in progress
-  if (cached?.promise) {
-    console.log('Waiting for in-progress voice status request');
-    return await cached.promise;
+  // Check for global in-flight request
+  if (IN_FLIGHT_REQUESTS.has(cacheKey)) {
+    console.log('Waiting for global in-flight voice status request');
+    return await IN_FLIGHT_REQUESTS.get(cacheKey);
   }
   
   console.log('Fetching voice status from API')
+  logCacheStats();
   
-  // Create and cache the promise to prevent duplicate requests
+  // Create and track the promise globally
   const requestPromise = (async () => {
     try {
       const response = await api.get('/api/voice/status');
@@ -45,21 +57,14 @@ export const getVoiceStatus = async () => {
       requestCache.delete(cacheKey);
       console.error('Error fetching voice status:', error);
       throw new Error(error?.response?.data?.message || error.message);
+    } finally {
+      // Always clean up in-flight tracking
+      IN_FLIGHT_REQUESTS.delete(cacheKey);
     }
   })();
   
-  // Store the promise to prevent duplicate requests (don't cache null data)
-  if (!requestCache.has(cacheKey)) {
-    requestCache.set(cacheKey, {
-      data: null,
-      timestamp: 0,
-      promise: requestPromise
-    });
-  } else {
-    // Update existing entry with the promise
-    const existing = requestCache.get(cacheKey);
-    existing.promise = requestPromise;
-  }
+  // Track this request globally
+  IN_FLIGHT_REQUESTS.set(cacheKey, requestPromise);
   
   return await requestPromise;
 }
@@ -75,19 +80,20 @@ export const getVoiceDevices = async () => {
   // Check if we have a recent cached response
   const cached = requestCache.get(cacheKey);
   if (cached && cached.data && (now - cached.timestamp) < CACHE_DURATION) {
-    console.log('Using cached voice devices');
+    console.log('Using cached voice devices (10s cache)');
     return cached.data;
   }
   
-  // Check if there's already a request in progress
-  if (cached?.promise) {
-    console.log('Waiting for in-progress voice devices request');
-    return await cached.promise;
+  // Check for global in-flight request
+  if (IN_FLIGHT_REQUESTS.has(cacheKey)) {
+    console.log('Waiting for global in-flight voice devices request');
+    return await IN_FLIGHT_REQUESTS.get(cacheKey);
   }
   
   console.log('Fetching voice devices from API')
+  logCacheStats();
   
-  // Create and cache the promise to prevent duplicate requests
+  // Create and track the promise globally
   const requestPromise = (async () => {
     try {
       const response = await api.get('/api/voice/devices');
@@ -105,21 +111,14 @@ export const getVoiceDevices = async () => {
       requestCache.delete(cacheKey);
       console.error('Error fetching voice devices:', error);
       throw new Error(error?.response?.data?.message || error.message);
+    } finally {
+      // Always clean up in-flight tracking
+      IN_FLIGHT_REQUESTS.delete(cacheKey);
     }
   })();
   
-  // Store the promise to prevent duplicate requests (don't cache null data)
-  if (!requestCache.has(cacheKey)) {
-    requestCache.set(cacheKey, {
-      data: null,
-      timestamp: 0,
-      promise: requestPromise
-    });
-  } else {
-    // Update existing entry with the promise
-    const existing = requestCache.get(cacheKey);
-    existing.promise = requestPromise;
-  }
+  // Track this request globally
+  IN_FLIGHT_REQUESTS.set(cacheKey, requestPromise);
   
   return await requestPromise;
 }

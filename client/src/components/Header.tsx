@@ -4,9 +4,9 @@ import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
 import { useAuth } from "@/contexts/AuthContext"
 import { useNavigate } from "react-router-dom"
-import { useState, useEffect, useRef, useCallback } from "react"
-import { getVoiceStatus } from "@/api/voice"
+import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/useToast"
+import { voicePollingManager } from "@/services/voicePollingManager"
 
 export function Header() {
   const { logout } = useAuth()
@@ -18,97 +18,41 @@ export function Header() {
     activeDevices: 5
   })
   
-  // Refs for managing state and preventing memory leaks
-  const isMountedRef = useRef(true)
-  const fetchingRef = useRef(false)
+  const componentId = useRef(`header-${Date.now()}-${Math.random()}`).current
   const errorCountRef = useRef(0)
-  const lastSuccessRef = useRef(Date.now())
-  const toastRef = useRef(toast)
-
-  // Update toast ref when it changes
-  useEffect(() => {
-    toastRef.current = toast
-  }, [toast])
-
-  const fetchVoiceStatus = useCallback(async () => {
-    // Prevent multiple simultaneous requests
-    if (fetchingRef.current || !isMountedRef.current) {
-      return
-    }
-
-    fetchingRef.current = true
-    try {
-      console.log('Fetching voice status from API (throttled)')
-      const status = await getVoiceStatus()
-      
-      if (!isMountedRef.current) return
-
-      setVoiceStatus(status)
-      errorCountRef.current = 0
-      lastSuccessRef.current = Date.now()
-      
-    } catch (error) {
-      if (!isMountedRef.current) return
-
-      errorCountRef.current += 1
-      console.error(`Failed to fetch voice status (attempt ${errorCountRef.current}):`, error)
-      
-      // Only show toast for first few errors to avoid spam
-      if (errorCountRef.current <= 2 && toastRef.current) {
-        toastRef.current({
-          title: "Voice Status Error",
-          description: "Failed to get voice device status",
-          variant: "destructive"
-        })
-      }
-      
-      // If we haven't had success in a while, increase error count faster
-      const timeSinceLastSuccess = Date.now() - lastSuccessRef.current
-      if (timeSinceLastSuccess > 60000) { // 1 minute
-        errorCountRef.current = Math.min(errorCountRef.current + 1, 10)
-      }
-      
-    } finally {
-      fetchingRef.current = false
-    }
-  }, [])
 
   useEffect(() => {
-    isMountedRef.current = true
+    console.log(`Header component ${componentId} mounting - subscribing to voice polling manager`)
     
-    // Initial fetch
-    fetchVoiceStatus()
-    
-    // Set up interval with backoff based on error count
-    const getInterval = () => {
-      const baseInterval = 30000 // 30 seconds (much less aggressive than 5s)
-      const maxInterval = 300000 // 5 minutes max
-      const backoffInterval = Math.min(baseInterval * Math.pow(1.5, errorCountRef.current), maxInterval)
-      return backoffInterval
-    }
-    
-    const setupInterval = () => {
-      const intervalTime = getInterval()
-      console.log(`Setting up voice status polling with ${intervalTime/1000}s interval`)
-      return setInterval(fetchVoiceStatus, intervalTime)
-    }
-    
-    let interval = setupInterval()
-    
-    // Adjust interval based on error count every minute
-    const adjustmentInterval = setInterval(() => {
-      if (!isMountedRef.current) return
-      
-      clearInterval(interval)
-      interval = setupInterval()
-    }, 60000)
+    // Subscribe to voice status updates from singleton manager
+    voicePollingManager.subscribe(
+      componentId,
+      (status) => {
+        console.log(`Header ${componentId} received voice status update:`, status)
+        setVoiceStatus(status)
+        errorCountRef.current = 0
+      },
+      (error) => {
+        errorCountRef.current += 1
+        console.error(`Header ${componentId} voice status error (attempt ${errorCountRef.current}):`, error)
+        
+        // Only show toast for first few errors to avoid spam
+        if (errorCountRef.current <= 2) {
+          toast({
+            title: "Voice Status Error",
+            description: "Failed to get voice device status",
+            variant: "destructive"
+          })
+        }
+      }
+    )
 
+    // Cleanup on unmount
     return () => {
-      isMountedRef.current = false
-      clearInterval(interval)
-      clearInterval(adjustmentInterval)
+      console.log(`Header component ${componentId} unmounting - unsubscribing from voice polling manager`)
+      voicePollingManager.unsubscribe(componentId)
     }
-  }, [])
+  }, [componentId, toast])
 
   const handleLogout = () => {
     console.log('User logging out')
