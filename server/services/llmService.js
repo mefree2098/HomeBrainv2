@@ -5,13 +5,21 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Initialize OpenAI only if API key is available
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+}
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+// Initialize Anthropic only if API key is available  
+let anthropic = null;
+if (process.env.ANTHROPIC_API_KEY) {
+  anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  });
+}
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
@@ -21,6 +29,10 @@ async function sleep(ms) {
 }
 
 async function sendRequestToOpenAI(model, message) {
+  if (!openai) {
+    throw new Error('OpenAI API key not configured');
+  }
+  
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
       const response = await openai.chat.completions.create({
@@ -38,6 +50,10 @@ async function sendRequestToOpenAI(model, message) {
 }
 
 async function sendRequestToAnthropic(model, message) {
+  if (!anthropic) {
+    throw new Error('Anthropic API key not configured');
+  }
+  
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
       console.log(`Sending request to Anthropic with model: ${model} and message: ${message}`);
