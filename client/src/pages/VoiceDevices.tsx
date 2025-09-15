@@ -26,6 +26,12 @@ export function VoiceDevices() {
   // Refs for preventing memory leaks and managing state
   const isMountedRef = useRef(true)
   const fetchingRef = useRef(false)
+  const toastRef = useRef(toast)
+
+  // Update toast ref when it changes
+  useEffect(() => {
+    toastRef.current = toast
+  }, [toast])
 
   const fetchVoiceDevices = useCallback(async () => {
     // Prevent multiple simultaneous requests
@@ -45,18 +51,20 @@ export function VoiceDevices() {
       if (!isMountedRef.current) return
       
       console.error('Failed to fetch voice devices:', error)
-      toast({
-        title: "Error",
-        description: "Failed to load voice devices",
-        variant: "destructive"
-      })
+      if (toastRef.current) {
+        toastRef.current({
+          title: "Error",
+          description: "Failed to load voice devices",
+          variant: "destructive"
+        })
+      }
     } finally {
       if (isMountedRef.current) {
         setLoading(false)
       }
       fetchingRef.current = false
     }
-  }, [toast])
+  }, [])
 
   useEffect(() => {
     isMountedRef.current = true
@@ -72,7 +80,7 @@ export function VoiceDevices() {
       isMountedRef.current = false
       clearInterval(interval)
     }
-  }, [fetchVoiceDevices])
+  }, [])
 
   const handleTestDevice = async (deviceId: string, deviceName: string) => {
     setTestingDevice(deviceId)

@@ -23,6 +23,12 @@ export function Header() {
   const fetchingRef = useRef(false)
   const errorCountRef = useRef(0)
   const lastSuccessRef = useRef(Date.now())
+  const toastRef = useRef(toast)
+
+  // Update toast ref when it changes
+  useEffect(() => {
+    toastRef.current = toast
+  }, [toast])
 
   const fetchVoiceStatus = useCallback(async () => {
     // Prevent multiple simultaneous requests
@@ -48,8 +54,8 @@ export function Header() {
       console.error(`Failed to fetch voice status (attempt ${errorCountRef.current}):`, error)
       
       // Only show toast for first few errors to avoid spam
-      if (errorCountRef.current <= 2) {
-        toast({
+      if (errorCountRef.current <= 2 && toastRef.current) {
+        toastRef.current({
           title: "Voice Status Error",
           description: "Failed to get voice device status",
           variant: "destructive"
@@ -65,7 +71,7 @@ export function Header() {
     } finally {
       fetchingRef.current = false
     }
-  }, [toast])
+  }, [])
 
   useEffect(() => {
     isMountedRef.current = true
@@ -102,7 +108,7 @@ export function Header() {
       clearInterval(interval)
       clearInterval(adjustmentInterval)
     }
-  }, [fetchVoiceStatus])
+  }, [])
 
   const handleLogout = () => {
     console.log('User logging out')

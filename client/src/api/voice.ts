@@ -14,7 +14,7 @@ export const getVoiceStatus = async () => {
   
   // Check if we have a recent cached response
   const cached = requestCache.get(cacheKey);
-  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+  if (cached && cached.data && (now - cached.timestamp) < CACHE_DURATION) {
     console.log('Using cached voice status');
     return cached.data;
   }
@@ -48,12 +48,18 @@ export const getVoiceStatus = async () => {
     }
   })();
   
-  // Store the promise to prevent duplicate requests
-  requestCache.set(cacheKey, {
-    data: null,
-    timestamp: now,
-    promise: requestPromise
-  });
+  // Store the promise to prevent duplicate requests (don't cache null data)
+  if (!requestCache.has(cacheKey)) {
+    requestCache.set(cacheKey, {
+      data: null,
+      timestamp: 0,
+      promise: requestPromise
+    });
+  } else {
+    // Update existing entry with the promise
+    const existing = requestCache.get(cacheKey);
+    existing.promise = requestPromise;
+  }
   
   return await requestPromise;
 }
@@ -68,7 +74,7 @@ export const getVoiceDevices = async () => {
   
   // Check if we have a recent cached response
   const cached = requestCache.get(cacheKey);
-  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+  if (cached && cached.data && (now - cached.timestamp) < CACHE_DURATION) {
     console.log('Using cached voice devices');
     return cached.data;
   }
@@ -102,12 +108,18 @@ export const getVoiceDevices = async () => {
     }
   })();
   
-  // Store the promise to prevent duplicate requests
-  requestCache.set(cacheKey, {
-    data: null,
-    timestamp: now,
-    promise: requestPromise
-  });
+  // Store the promise to prevent duplicate requests (don't cache null data)
+  if (!requestCache.has(cacheKey)) {
+    requestCache.set(cacheKey, {
+      data: null,
+      timestamp: 0,
+      promise: requestPromise
+    });
+  } else {
+    // Update existing entry with the promise
+    const existing = requestCache.get(cacheKey);
+    existing.promise = requestPromise;
+  }
   
   return await requestPromise;
 }

@@ -40,9 +40,10 @@ export function Dashboard() {
           getVoiceDevices()
         ])
         
-        setDevices(devicesData.devices)
-        setScenes(scenesData.scenes)
-        setVoiceDevices(voiceData.devices)
+        // Add null checks and provide fallback empty arrays
+        setDevices(devicesData?.devices || [])
+        setScenes(scenesData?.scenes || [])
+        setVoiceDevices(voiceData?.devices || [])
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error)
         toast({
