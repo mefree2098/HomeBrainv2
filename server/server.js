@@ -9,6 +9,7 @@ const authRoutes = require("./routes/authRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const sceneRoutes = require("./routes/sceneRoutes");
 const automationRoutes = require("./routes/automationRoutes");
+const userProfileRoutes = require("./routes/userProfileRoutes");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 
@@ -46,6 +47,8 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/scenes', sceneRoutes);
 // Automation Routes
 app.use('/api/automations', automationRoutes);
+// User Profile Routes
+app.use('/api/profiles', userProfileRoutes);
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {
