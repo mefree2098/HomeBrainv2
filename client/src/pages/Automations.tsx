@@ -21,9 +21,26 @@ import { getAutomations, createAutomationFromText, toggleAutomation } from "@/ap
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 
+interface AutomationTrigger {
+  type: string
+  conditions: any
+}
+
+interface Automation {
+  _id: string
+  name: string
+  description: string
+  trigger: AutomationTrigger
+  actions: any[]
+  enabled: boolean
+  lastRun?: string
+  category: string
+  priority: number
+}
+
 export function Automations() {
   const { toast } = useToast()
-  const [automations, setAutomations] = useState([])
+  const [automations, setAutomations] = useState<Automation[]>([])
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -55,7 +72,7 @@ export function Automations() {
       console.log('Toggling automation:', { automationId, enabled })
       await toggleAutomation({ automationId, enabled })
 
-      setAutomations(prev => prev.map(automation =>
+      setAutomations(prev => prev.map((automation: Automation) =>
         automation._id === automationId
           ? { ...automation, enabled }
           : automation
@@ -101,11 +118,61 @@ export function Automations() {
     }
   }
 
-  const getTriggerIcon = (trigger: string) => {
-    if (trigger.includes('time') || trigger.includes('07:00')) return <Clock className="h-4 w-4" />
-    if (trigger.includes('sunset') || trigger.includes('sunrise')) return <Sun className="h-4 w-4" />
-    if (trigger.includes('motion') || trigger.includes('presence')) return <Shield className="h-4 w-4" />
+  const getTriggerIcon = (trigger: AutomationTrigger | any) => {
+    if (!trigger || typeof trigger !== 'object') {
+      return <Zap className="h-4 w-4" />
+    }
+
+    const triggerType = trigger.type || ''
+    const conditions = trigger.conditions || {}
+    const conditionsStr = JSON.stringify(conditions).toLowerCase()
+
+    if (triggerType === 'time' || triggerType === 'schedule' || conditionsStr.includes('07:00') || conditionsStr.includes('time')) {
+      return <Clock className="h-4 w-4" />
+    }
+    if (conditionsStr.includes('sunset') || conditionsStr.includes('sunrise') || triggerType === 'weather') {
+      return <Sun className="h-4 w-4" />
+    }
+    if (triggerType === 'sensor' || conditionsStr.includes('motion') || conditionsStr.includes('presence') || triggerType === 'device_state') {
+      return <Shield className="h-4 w-4" />
+    }
     return <Zap className="h-4 w-4" />
+  }
+
+  const formatTrigger = (trigger: AutomationTrigger | any) => {
+    if (!trigger || typeof trigger !== 'object') {
+      return 'Unknown trigger'
+    }
+
+    const triggerType = trigger.type || 'unknown'
+    const conditions = trigger.conditions || {}
+
+    switch (triggerType) {
+      case 'time':
+      case 'schedule':
+        if (conditions.time) {
+          return `At ${conditions.time}`
+        }
+        return 'Time-based trigger'
+      case 'device_state':
+        if (conditions.device && conditions.state) {
+          return `When ${conditions.device} is ${conditions.state}`
+        }
+        return 'Device state change'
+      case 'sensor':
+        if (conditions.sensor) {
+          return `When ${conditions.sensor} detects activity`
+        }
+        return 'Sensor trigger'
+      case 'weather':
+        return 'Weather condition'
+      case 'location':
+        return 'Location-based'
+      case 'manual':
+        return 'Manual trigger'
+      default:
+        return triggerType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())
+    }
   }
 
   const formatLastRun = (lastRun: string | null) => {
@@ -208,7 +275,7 @@ export function Automations() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-700 dark:text-green-300">
-              {automations.filter(a => a.enabled).length}
+              {automations.filter((a: Automation) => a && a.enabled).length}
             </div>
             <p className="text-xs text-green-600/80 dark:text-green-400/80">
               Currently running
@@ -223,7 +290,7 @@ export function Automations() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-orange-700 dark:text-orange-300">
-              {automations.filter(a => !a.enabled).length}
+              {automations.filter((a: Automation) => a && !a.enabled).length}
             </div>
             <p className="text-xs text-orange-600/80 dark:text-orange-400/80">
               Temporarily disabled
@@ -238,7 +305,7 @@ export function Automations() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-purple-700 dark:text-purple-300">
-              {automations.filter(a => a.lastRun).length}
+              {automations.filter((a: Automation) => a && a.lastRun).length}
             </div>
             <p className="text-xs text-purple-600/80 dark:text-purple-400/80">
               Executions this week
@@ -249,27 +316,27 @@ export function Automations() {
 
       {/* Automations List */}
       <div className="space-y-4">
-        {automations.map((automation) => (
+        {automations.filter((automation) => automation && automation._id).map((automation: Automation) => (
           <Card key={automation._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-full ${automation.enabled ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
+                  <div className={`p-2 rounded-full ${automation.enabled === true ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
                     {getTriggerIcon(automation.trigger)}
                   </div>
                   <div>
-                    <CardTitle className="text-lg">{automation.name}</CardTitle>
+                    <CardTitle className="text-lg">{automation.name || 'Unnamed Automation'}</CardTitle>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {automation.description}
+                      {automation.description || 'No description'}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
-                  <Badge variant={automation.enabled ? "default" : "secondary"}>
-                    {automation.enabled ? "Active" : "Paused"}
+                  <Badge variant={automation.enabled === true ? "default" : "secondary"}>
+                    {automation.enabled === true ? "Active" : "Paused"}
                   </Badge>
                   <Switch
-                    checked={automation.enabled}
+                    checked={automation.enabled === true}
                     onCheckedChange={(enabled) => handleToggleAutomation(automation._id, enabled)}
                   />
                 </div>
@@ -279,11 +346,11 @@ export function Automations() {
               <div className="grid gap-4 md:grid-cols-3">
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Trigger</p>
-                  <p className="text-sm">{automation.trigger}</p>
+                  <p className="text-sm">{formatTrigger(automation.trigger)}</p>
                 </div>
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Actions</p>
-                  <p className="text-sm">{automation.actions.length} actions</p>
+                  <p className="text-sm">{automation.actions ? automation.actions.length : 0} actions</p>
                 </div>
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Last Run</p>
@@ -291,7 +358,7 @@ export function Automations() {
                 </div>
               </div>
               <div className="mt-4 text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
-                <strong>Voice control:</strong> "Hey Anna, {automation.enabled ? 'disable' : 'enable'} {automation.name}"
+                <strong>Voice control:</strong> "Hey Anna, {automation.enabled === true ? 'disable' : 'enable'} {automation.name || 'this automation'}"
               </div>
             </CardContent>
           </Card>
