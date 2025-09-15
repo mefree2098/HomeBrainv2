@@ -59,7 +59,10 @@ router.post('/logout', async (req, res) => {
 router.post('/refresh', async (req, res) => {
   const { refreshToken } = req.body;
 
+  console.log('Refresh token request received');
+
   if (!refreshToken) {
+    console.log('No refresh token provided in request');
     return res.status(401).json({
       success: false,
       message: 'Refresh token is required'
@@ -67,20 +70,34 @@ router.post('/refresh', async (req, res) => {
   }
 
   try {
+    console.log('Attempting to verify refresh token');
+    
+    if (!process.env.REFRESH_TOKEN_SECRET) {
+      console.error('REFRESH_TOKEN_SECRET environment variable is not set');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error'
+      });
+    }
+    
     // Verify the refresh token
     const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
 
     // Find the user
+    console.log(`Looking up user with ID: ${decoded.sub}`);
     const user = await UserService.get(decoded.sub);
 
     if (!user) {
+      console.log('User not found in database');
       return res.status(403).json({
         success: false,
         message: 'User not found'
       });
     }
 
+    console.log('User found, comparing refresh tokens');
     if (user.refreshToken !== refreshToken) {
+      console.log('Refresh token mismatch - stored token does not match provided token');
       return res.status(403).json({
         success: false,
         message: 'Invalid refresh token'
@@ -88,13 +105,16 @@ router.post('/refresh', async (req, res) => {
     }
 
     // Generate new tokens
+    console.log('Generating new tokens');
     const newAccessToken = generateAccessToken(user);
     const newRefreshToken = generateRefreshToken(user);
 
     // Update user's refresh token in database
+    console.log('Updating user refresh token in database');
     user.refreshToken = newRefreshToken;
     await user.save();
 
+    console.log('Token refresh successful');
     // Return new tokens
     return res.status(200).json({
       success: true,
@@ -107,11 +127,20 @@ router.post('/refresh', async (req, res) => {
 
   } catch (error) {
     console.error(`Token refresh error: ${error.message}`);
+    console.error('Full error details:', error);
 
     if (error.name === 'TokenExpiredError') {
       return res.status(403).json({
         success: false,
         message: 'Refresh token has expired'
+      });
+    }
+
+    if (error.name === 'JsonWebTokenError') {
+      console.error('JWT verification failed - possible signature mismatch');
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid refresh token signature'
       });
     }
 

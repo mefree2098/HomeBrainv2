@@ -87,6 +87,8 @@ const setupInterceptors = (apiInstance: typeof axios) => {
           }
           return getApiInstance(originalRequest.url || '')(originalRequest);
         } catch (err) {
+          console.error('Token refresh failed:', err);
+          console.log('Clearing invalid tokens and redirecting to login');
           localStorage.removeItem('refreshToken');
           localStorage.removeItem('accessToken');
           accessToken = null;
