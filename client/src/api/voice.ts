@@ -3,100 +3,104 @@ import api from './api';
 // Description: Get voice system status
 // Endpoint: GET /api/voice/status
 // Request: {}
-// Response: { listening: boolean, connected: boolean, activeDevices: number }
-export const getVoiceStatus = () => {
+// Response: { listening: boolean, connected: boolean, activeDevices: number, totalDevices: number, deviceStats: object }
+export const getVoiceStatus = async () => {
   console.log('Fetching voice status from API')
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        listening: true,
-        connected: true,
-        activeDevices: 5
-      });
-    }, 200);
-  });
-  // try {
-  //   return await api.get('/api/voice/status');
-  // } catch (error) {
-  //   throw new Error(error?.response?.data?.message || error.message);
-  // }
+  try {
+    const response = await api.get('/api/voice/status');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching voice status:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
 }
 
 // Description: Get all voice devices
 // Endpoint: GET /api/voice/devices
 // Request: {}
-// Response: { devices: Array<{ _id: string, name: string, room: string, status: string, lastSeen: string, batteryLevel?: number }> }
-export const getVoiceDevices = () => {
+// Response: { success: boolean, devices: Array<{ _id: string, name: string, room: string, deviceType: string, status: string, lastSeen: string, batteryLevel?: number, powerSource: string, connectionType: string, ipAddress?: string, volume: number, microphoneSensitivity: number, firmwareVersion?: string, uptime: number }>, count: number }
+export const getVoiceDevices = async () => {
   console.log('Fetching voice devices from API')
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        devices: [
-          {
-            _id: '1',
-            name: 'Living Room Voice Hub',
-            room: 'Living Room',
-            status: 'online',
-            lastSeen: '2024-01-15T10:30:00Z',
-            batteryLevel: null
-          },
-          {
-            _id: '2',
-            name: 'Kitchen Assistant',
-            room: 'Kitchen',
-            status: 'online',
-            lastSeen: '2024-01-15T10:29:00Z',
-            batteryLevel: 85
-          },
-          {
-            _id: '3',
-            name: 'Bedroom Speaker',
-            room: 'Bedroom',
-            status: 'online',
-            lastSeen: '2024-01-15T10:28:00Z',
-            batteryLevel: 92
-          },
-          {
-            _id: '4',
-            name: 'Office Hub',
-            room: 'Office',
-            status: 'offline',
-            lastSeen: '2024-01-15T08:15:00Z',
-            batteryLevel: 15
-          },
-          {
-            _id: '5',
-            name: 'Garage Monitor',
-            room: 'Garage',
-            status: 'online',
-            lastSeen: '2024-01-15T10:25:00Z',
-            batteryLevel: null
-          }
-        ]
-      });
-    }, 500);
-  });
-  // try {
-  //   return await api.get('/api/voice/devices');
-  // } catch (error) {
-  //   throw new Error(error?.response?.data?.message || error.message);
-  // }
+  try {
+    const response = await api.get('/api/voice/devices');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching voice devices:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
 }
 
 // Description: Test voice device
 // Endpoint: POST /api/voice/test
 // Request: { deviceId: string }
-// Response: { success: boolean, message: string }
-export const testVoiceDevice = (data: { deviceId: string }) => {
+// Response: { success: boolean, message: string, deviceName: string, room: string, testResults: object }
+export const testVoiceDevice = async (data: { deviceId: string }) => {
   console.log('Testing voice device:', data)
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({ success: true, message: 'Voice device test completed' });
-    }, 2000);
-  });
-  // try {
-  //   return await api.post('/api/voice/test', data);
-  // } catch (error) {
-  //   throw new Error(error?.response?.data?.message || error.message);
-  // }
+  try {
+    const response = await api.post('/api/voice/test', data);
+    return response.data;
+  } catch (error) {
+    console.error('Error testing voice device:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Get voice device by ID
+// Endpoint: GET /api/voice/devices/:id
+// Request: {}
+// Response: { success: boolean, device: object }
+export const getVoiceDeviceById = async (deviceId: string) => {
+  console.log('Fetching voice device by ID:', deviceId)
+  try {
+    const response = await api.get(`/api/voice/devices/${deviceId}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching voice device by ID:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Update voice device status
+// Endpoint: PUT /api/voice/devices/:id/status
+// Request: { status: string }
+// Response: { success: boolean, message: string, device: object }
+export const updateVoiceDeviceStatus = async (deviceId: string, status: string) => {
+  console.log('Updating voice device status:', deviceId, status)
+  try {
+    const response = await api.put(`/api/voice/devices/${deviceId}/status`, { status });
+    return response.data;
+  } catch (error) {
+    console.error('Error updating voice device status:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Get voice devices by room
+// Endpoint: GET /api/voice/devices/room/:room
+// Request: {}
+// Response: { success: boolean, devices: Array<object>, room: string, count: number }
+export const getVoiceDevicesByRoom = async (room: string) => {
+  console.log('Fetching voice devices by room:', room)
+  try {
+    const response = await api.get(`/api/voice/devices/room/${encodeURIComponent(room)}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching voice devices by room:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Get voice devices by status
+// Endpoint: GET /api/voice/devices/status/:status
+// Request: {}
+// Response: { success: boolean, devices: Array<object>, status: string, count: number }
+export const getVoiceDevicesByStatus = async (status: string) => {
+  console.log('Fetching voice devices by status:', status)
+  try {
+    const response = await api.get(`/api/voice/devices/status/${status}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching voice devices by status:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
 }
