@@ -400,7 +400,7 @@ export function Settings() {
                   </div>
                   <div>
                     <label className="text-sm font-medium">Timezone</label>
-                    <Select onValueChange={(value) => setValue("timezone", value)}>
+                    <Select value={watch("timezone")} onValueChange={(value) => setValue("timezone", value)}>
                       <SelectTrigger className="mt-1">
                         <SelectValue placeholder="Select timezone" />
                       </SelectTrigger>
@@ -431,7 +431,7 @@ export function Settings() {
                       Receive notifications for device status and automations
                     </p>
                   </div>
-                  <Switch {...register("enableNotifications")} />
+                  <Switch checked={watch("enableNotifications")} onCheckedChange={(checked) => setValue("enableNotifications", checked)} />
                 </div>
                 <div className="flex items-center justify-between">
                   <div>
@@ -440,7 +440,7 @@ export function Settings() {
                       Hear spoken confirmations for voice commands
                     </p>
                   </div>
-                  <Switch {...register("enableVoiceConfirmation")} />
+                  <Switch checked={watch("enableVoiceConfirmation")} onCheckedChange={(checked) => setValue("enableVoiceConfirmation", checked)} />
                 </div>
               </CardContent>
             </Card>
@@ -611,7 +611,7 @@ export function Settings() {
               <CardContent className="space-y-6">
                 <div>
                   <label className="text-sm font-medium">AI Provider</label>
-                  <Select onValueChange={(value) => setValue("llmProvider", value)}>
+                  <Select value={watch("llmProvider")} onValueChange={(value) => setValue("llmProvider", value)}>
                     <SelectTrigger className="mt-1">
                       <SelectValue placeholder="Select AI provider" />
                     </SelectTrigger>
@@ -669,7 +669,7 @@ export function Settings() {
                   
                   <div>
                     <label className="text-sm font-medium">OpenAI Model</label>
-                    <Select onValueChange={(value) => setValue("openaiModel", value)}>
+                    <Select value={watch("openaiModel")} onValueChange={(value) => setValue("openaiModel", value)}>
                       <SelectTrigger className="mt-1">
                         <SelectValue placeholder="Select OpenAI model" />
                       </SelectTrigger>
@@ -726,7 +726,7 @@ export function Settings() {
                   
                   <div>
                     <label className="text-sm font-medium">Anthropic Model</label>
-                    <Select onValueChange={(value) => setValue("anthropicModel", value)}>
+                    <Select value={watch("anthropicModel")} onValueChange={(value) => setValue("anthropicModel", value)}>
                       <SelectTrigger className="mt-1">
                         <SelectValue placeholder="Select Anthropic model" />
                       </SelectTrigger>
@@ -812,7 +812,7 @@ export function Settings() {
                       Enhanced security features and monitoring
                     </p>
                   </div>
-                  <Switch {...register("enableSecurityMode")} />
+                  <Switch checked={watch("enableSecurityMode")} onCheckedChange={(checked) => setValue("enableSecurityMode", checked)} />
                 </div>
                 <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
                   <p className="text-sm text-yellow-800 dark:text-yellow-200">

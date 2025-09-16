@@ -13,8 +13,8 @@ export function Layout({ children }: LayoutProps) {
       <Header />
       <div className="flex h-[calc(100vh-4rem)] pt-16">
         <Sidebar />
-        <main className="flex-1 overflow-y-auto p-6 ml-64">
-          <div className="mx-auto max-w-7xl">
+        <main className="flex-1 overflow-y-auto p-4 ml-64">
+          <div className="mx-auto max-w-full px-4">
             {children}
           </div>
         </main>

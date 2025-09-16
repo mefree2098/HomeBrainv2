@@ -13,6 +13,7 @@ const userProfileRoutes = require("./routes/userProfileRoutes");
 const voiceDeviceRoutes = require("./routes/voiceDeviceRoutes");
 const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 
@@ -58,6 +59,8 @@ app.use('/api/voice', voiceDeviceRoutes);
 app.use('/api/elevenlabs', elevenLabsRoutes);
 // Settings Routes
 app.use('/api/settings', settingsRoutes);
+// Security Alarm Routes
+app.use('/api/security-alarm', securityAlarmRoutes);
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {

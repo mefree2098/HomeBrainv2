@@ -22,6 +22,7 @@ import { useToast } from "@/hooks/useToast"
 import { DashboardWidget } from "@/components/dashboard/DashboardWidget"
 import { QuickActions } from "@/components/dashboard/QuickActions"
 import { VoiceCommandPanel } from "@/components/dashboard/VoiceCommandPanel"
+import { SecurityAlarmWidget } from "@/components/dashboard/SecurityAlarmWidget"
 
 export function Dashboard() {
   const { toast } = useToast()
@@ -128,7 +129,7 @@ export function Dashboard() {
       </div>
 
       {/* Stats Overview */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 border-blue-200 dark:border-blue-800">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Devices</CardTitle>
@@ -190,15 +191,20 @@ export function Dashboard() {
         </Card>
       </div>
 
-      {/* Quick Actions */}
-      <QuickActions 
-        scenes={scenes} 
-        onSceneActivate={handleSceneActivation}
-      />
+      {/* Security Alarm and Quick Actions */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <SecurityAlarmWidget />
+        <div className="lg:col-span-2">
+          <QuickActions 
+            scenes={scenes} 
+            onSceneActivate={handleSceneActivation}
+          />
+        </div>
+      </div>
 
       {/* Device Widgets */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {devices.slice(0, 6).map((device) => (
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
+        {devices.slice(0, 12).map((device) => (
           <DashboardWidget
             key={device._id}
             device={device}
