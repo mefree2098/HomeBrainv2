@@ -30,6 +30,8 @@ export function UserProfiles() {
   const { register, handleSubmit, reset, setValue, watch } = useForm()
 
   useEffect(() => {
+    let cancelled = false;
+
     const fetchData = async () => {
       try {
         console.log('Fetching user profiles and voices data')
@@ -38,21 +40,35 @@ export function UserProfiles() {
           getAvailableVoices()
         ])
 
-        setProfiles(profilesData.profiles)
-        setVoices(voicesData.voices)
+        // Only update state if component hasn't been unmounted
+        if (!cancelled) {
+          setProfiles(profilesData.profiles)
+          setVoices(voicesData.voices)
+        }
       } catch (error) {
         console.error('Failed to fetch data:', error)
-        toast({
-          title: "Error",
-          description: "Failed to load user profiles",
-          variant: "destructive"
-        })
+        // Only show error if component hasn't been unmounted
+        if (!cancelled) {
+          toast({
+            title: "Error",
+            description: "Failed to load user profiles",
+            variant: "destructive"
+          })
+        }
       } finally {
-        setLoading(false)
+        // Only update loading state if component hasn't been unmounted
+        if (!cancelled) {
+          setLoading(false)
+        }
       }
     }
 
     fetchData()
+
+    // Cleanup function to prevent state updates if component unmounts
+    return () => {
+      cancelled = true;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // toast is stable from useToast hook, safe to exclude
 
