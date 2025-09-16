@@ -53,7 +53,8 @@ export function UserProfiles() {
     }
 
     fetchData()
-  }, [toast])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // toast is stable from useToast hook, safe to exclude
 
   const handleCreateProfile = async (data: any) => {
     try {

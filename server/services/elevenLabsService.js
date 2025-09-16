@@ -104,20 +104,42 @@ class ElevenLabsService {
    */
   async textToSpeech(text, voiceId, options = {}) {
     try {
+      // Input validation
+      if (!text || typeof text !== 'string') {
+        throw new Error('Text is required and must be a string');
+      }
+      
+      if (!voiceId || typeof voiceId !== 'string') {
+        throw new Error('Voice ID is required and must be a string');
+      }
+      
+      if (text.trim().length === 0) {
+        throw new Error('Text cannot be empty');
+      }
+      
+      if (text.length > 5000) {
+        throw new Error('Text is too long. Maximum 5000 characters allowed.');
+      }
+      
       console.log(`Generating speech for voice ${voiceId}: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
       
       if (!this.apiKey) {
         throw new Error('ElevenLabs API key not configured');
       }
 
+      // Validate and normalize voice settings
+      const stability = Math.max(0.0, Math.min(1.0, options.stability || 0.5));
+      const similarity_boost = Math.max(0.0, Math.min(1.0, options.similarity_boost || 0.75));
+      const style = Math.max(0.0, Math.min(1.0, options.style || 0.0));
+      
       const requestBody = {
         text: text,
         model_id: options.model_id || 'eleven_monolingual_v1',
         voice_settings: {
-          stability: options.stability || 0.5,
-          similarity_boost: options.similarity_boost || 0.75,
-          style: options.style || 0.0,
-          use_speaker_boost: options.use_speaker_boost || true
+          stability: stability,
+          similarity_boost: similarity_boost,
+          style: style,
+          use_speaker_boost: options.use_speaker_boost !== undefined ? !!options.use_speaker_boost : true
         }
       };
 

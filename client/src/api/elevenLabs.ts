@@ -70,7 +70,17 @@ export const textToSpeechElevenLabs = async (data: {
     return new Blob([response.data], { type: 'audio/mpeg' });
   } catch (error) {
     console.error('Error converting text to speech:', error);
-    throw new Error(error?.response?.data?.message || error.message);
+    
+    // Handle blob response errors differently
+    if (error?.response?.status === 503) {
+      throw new Error('ElevenLabs service is not configured. Please set up your API key in settings.');
+    } else if (error?.response?.status === 429) {
+      throw new Error('Too many requests. Please wait a moment before trying again.');
+    } else if (error?.response?.status === 400) {
+      throw new Error('Invalid request. Please check your text and voice selection.');
+    } else {
+      throw new Error(error?.response?.statusText || error.message || 'Failed to generate speech');
+    }
   }
 }
 
@@ -89,7 +99,17 @@ export const generateVoicePreview = async (data: { voiceId: string; text?: strin
     return new Blob([response.data], { type: 'audio/mpeg' });
   } catch (error) {
     console.error('Error generating voice preview:', error);
-    throw new Error(error?.response?.data?.message || error.message);
+    
+    // Handle blob response errors differently
+    if (error?.response?.status === 503) {
+      throw new Error('ElevenLabs service is not configured. Please set up your API key in settings.');
+    } else if (error?.response?.status === 429) {
+      throw new Error('Too many requests. Please wait a moment before trying again.');
+    } else if (error?.response?.status === 400) {
+      throw new Error('Invalid voice ID or request. Please try a different voice.');
+    } else {
+      throw new Error(error?.response?.statusText || error.message || 'Failed to generate voice preview');
+    }
   }
 }
 
