@@ -169,4 +169,270 @@ router.post('/test-elevenlabs', auth, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/settings/test-openai
+ * Test OpenAI API key connectivity
+ */
+router.post('/test-openai', auth, async (req, res) => {
+  try {
+    console.log('POST /api/settings/test-openai - Testing OpenAI connectivity');
+    
+    const { apiKey, model } = req.body;
+    
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('API key received:', apiKey ? `${apiKey.substring(0, 8)}...` : 'undefined/null');
+    console.log('Model specified:', model || 'none');
+    
+    if (!apiKey || apiKey.trim() === '') {
+      console.log('API key validation failed - empty or missing');
+      return res.status(400).json({
+        success: false,
+        message: 'API key is required for testing'
+      });
+    }
+    
+    // Test the API key by making a request to OpenAI
+    const OpenAI = require('openai');
+    
+    try {
+      console.log('Creating OpenAI client and testing connection...');
+      const openai = new OpenAI({
+        apiKey: apiKey.trim()
+      });
+      
+      // Make a simple completion request to test the key
+      const testModel = model || 'gpt-3.5-turbo';
+      console.log(`Testing with model: ${testModel}`);
+      
+      const response = await openai.chat.completions.create({
+        model: testModel,
+        messages: [{ role: 'user', content: 'Hello, this is a test.' }],
+        max_tokens: 10
+      });
+      
+      console.log('OpenAI API key test successful');
+      res.status(200).json({
+        success: true,
+        message: 'OpenAI API key is valid',
+        model: testModel
+      });
+      
+    } catch (apiError) {
+      console.log('OpenAI API key test failed:', apiError.message);
+      console.log('OpenAI API error details:', apiError);
+      
+      if (apiError.status === 401) {
+        res.status(400).json({
+          success: false,
+          message: 'Invalid OpenAI API key - authentication failed'
+        });
+      } else if (apiError.status === 403) {
+        res.status(400).json({
+          success: false,
+          message: 'OpenAI API key lacks necessary permissions'
+        });
+      } else if (apiError.status === 429) {
+        res.status(400).json({
+          success: false,
+          message: 'OpenAI API rate limit exceeded'
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          message: 'Failed to connect to OpenAI API',
+          error: apiError.message
+        });
+      }
+    }
+
+  } catch (error) {
+    console.error('Error in POST /api/settings/test-openai:', error.message);
+    console.error('Full error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test OpenAI API key',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/settings/test-anthropic
+ * Test Anthropic API key connectivity
+ */
+router.post('/test-anthropic', auth, async (req, res) => {
+  try {
+    console.log('POST /api/settings/test-anthropic - Testing Anthropic connectivity');
+    
+    const { apiKey, model } = req.body;
+    
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('API key received:', apiKey ? `${apiKey.substring(0, 8)}...` : 'undefined/null');
+    console.log('Model specified:', model || 'none');
+    
+    if (!apiKey || apiKey.trim() === '') {
+      console.log('API key validation failed - empty or missing');
+      return res.status(400).json({
+        success: false,
+        message: 'API key is required for testing'
+      });
+    }
+    
+    // Test the API key by making a request to Anthropic
+    const Anthropic = require('@anthropic-ai/sdk');
+    
+    try {
+      console.log('Creating Anthropic client and testing connection...');
+      const anthropic = new Anthropic({
+        apiKey: apiKey.trim()
+      });
+      
+      // Make a simple message request to test the key
+      const testModel = model || 'claude-3-haiku-20240307';
+      console.log(`Testing with model: ${testModel}`);
+      
+      const response = await anthropic.messages.create({
+        model: testModel,
+        messages: [{ role: 'user', content: 'Hello, this is a test.' }],
+        max_tokens: 10
+      });
+      
+      console.log('Anthropic API key test successful');
+      res.status(200).json({
+        success: true,
+        message: 'Anthropic API key is valid',
+        model: testModel
+      });
+      
+    } catch (apiError) {
+      console.log('Anthropic API key test failed:', apiError.message);
+      console.log('Anthropic API error details:', apiError);
+      
+      if (apiError.status === 401) {
+        res.status(400).json({
+          success: false,
+          message: 'Invalid Anthropic API key - authentication failed'
+        });
+      } else if (apiError.status === 403) {
+        res.status(400).json({
+          success: false,
+          message: 'Anthropic API key lacks necessary permissions'
+        });
+      } else if (apiError.status === 429) {
+        res.status(400).json({
+          success: false,
+          message: 'Anthropic API rate limit exceeded'
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          message: 'Failed to connect to Anthropic API',
+          error: apiError.message
+        });
+      }
+    }
+
+  } catch (error) {
+    console.error('Error in POST /api/settings/test-anthropic:', error.message);
+    console.error('Full error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test Anthropic API key',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/settings/test-local-llm
+ * Test local LLM endpoint connectivity
+ */
+router.post('/test-local-llm', auth, async (req, res) => {
+  try {
+    console.log('POST /api/settings/test-local-llm - Testing local LLM connectivity');
+    
+    const { endpoint, model } = req.body;
+    
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('Endpoint received:', endpoint || 'undefined/null');
+    console.log('Model specified:', model || 'none');
+    
+    if (!endpoint || endpoint.trim() === '') {
+      console.log('Endpoint validation failed - empty or missing');
+      return res.status(400).json({
+        success: false,
+        message: 'Endpoint URL is required for testing'
+      });
+    }
+    
+    // Test the endpoint by making a health check or simple request
+    const axios = require('axios');
+    
+    try {
+      console.log('Testing local LLM endpoint connectivity...');
+      
+      // First try a health check endpoint
+      let testUrl = endpoint.trim();
+      if (!testUrl.startsWith('http://') && !testUrl.startsWith('https://')) {
+        testUrl = 'http://' + testUrl;
+      }
+      
+      // Try common LLM server endpoints for health check
+      let response;
+      try {
+        response = await axios.get(`${testUrl}/health`, { timeout: 5000 });
+      } catch (healthError) {
+        console.log('Health endpoint not available, trying completions endpoint...');
+        // Try a simple completion request instead
+        response = await axios.post(`${testUrl}/v1/completions`, {
+          model: model || 'default',
+          prompt: 'Test',
+          max_tokens: 1
+        }, { 
+          timeout: 10000,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      console.log('Local LLM endpoint test successful');
+      res.status(200).json({
+        success: true,
+        message: 'Local LLM endpoint is accessible',
+        endpoint: testUrl
+      });
+      
+    } catch (apiError) {
+      console.log('Local LLM endpoint test failed:', apiError.message);
+      console.log('Local LLM error details:', apiError.code);
+      
+      if (apiError.code === 'ECONNREFUSED') {
+        res.status(400).json({
+          success: false,
+          message: 'Cannot connect to local LLM endpoint - connection refused'
+        });
+      } else if (apiError.code === 'ETIMEDOUT') {
+        res.status(400).json({
+          success: false,
+          message: 'Local LLM endpoint connection timed out'
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          message: 'Failed to connect to local LLM endpoint',
+          error: apiError.message
+        });
+      }
+    }
+
+  } catch (error) {
+    console.error('Error in POST /api/settings/test-local-llm:', error.message);
+    console.error('Full error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test local LLM endpoint',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;

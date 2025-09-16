@@ -55,6 +55,37 @@ const SettingsSchema = new mongoose.Schema({
     default: ''
   },
   
+  // AI/LLM Provider Settings
+  llmProvider: {
+    type: String,
+    enum: ['openai', 'anthropic', 'local'],
+    default: 'openai'
+  },
+  openaiApiKey: {
+    type: String,
+    default: ''
+  },
+  openaiModel: {
+    type: String,
+    default: 'gpt-4'
+  },
+  anthropicApiKey: {
+    type: String,
+    default: ''
+  },
+  anthropicModel: {
+    type: String,
+    default: 'claude-3-sonnet-20240229'
+  },
+  localLlmEndpoint: {
+    type: String,
+    default: 'http://localhost:8080'
+  },
+  localLlmModel: {
+    type: String,
+    default: 'llama2-7b'
+  },
+  
   // Security Settings
   enableSecurityMode: {
     type: Boolean,
@@ -125,6 +156,12 @@ SettingsSchema.methods.toSanitized = function() {
   }
   if (sanitized.smartthingsToken) {
     sanitized.smartthingsToken = sanitized.smartthingsToken.replace(/.(?=.{4})/g, '*');
+  }
+  if (sanitized.openaiApiKey) {
+    sanitized.openaiApiKey = sanitized.openaiApiKey.replace(/.(?=.{4})/g, '*');
+  }
+  if (sanitized.anthropicApiKey) {
+    sanitized.anthropicApiKey = sanitized.anthropicApiKey.replace(/.(?=.{4})/g, '*');
   }
   
   return sanitized;

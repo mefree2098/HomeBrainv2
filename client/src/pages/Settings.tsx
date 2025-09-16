@@ -16,16 +16,30 @@ import {
   Smartphone,
   Home,
   Save,
-  TestTube
+  TestTube,
+  Brain,
+  Cpu,
+  Server
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
-import { getSettings, updateSettings, testElevenLabsApiKey, getSetting } from "@/api/settings"
+import { 
+  getSettings, 
+  updateSettings, 
+  testElevenLabsApiKey, 
+  testOpenAIApiKey, 
+  testAnthropicApiKey, 
+  testLocalLLM, 
+  getSetting 
+} from "@/api/settings"
 
 export function Settings() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [testingApiKey, setTestingApiKey] = useState(false)
+  const [testingOpenAI, setTestingOpenAI] = useState(false)
+  const [testingAnthropic, setTestingAnthropic] = useState(false)
+  const [testingLocalLLM, setTestingLocalLLM] = useState(false)
   const { register, handleSubmit, setValue, watch, reset } = useForm({
     defaultValues: {
       location: "New York, NY",
@@ -38,6 +52,13 @@ export function Settings() {
       insteonPort: "/dev/ttyUSB0",
       smartthingsToken: "",
       elevenlabsApiKey: "",
+      llmProvider: "openai",
+      openaiApiKey: "",
+      openaiModel: "gpt-4",
+      anthropicApiKey: "",
+      anthropicModel: "claude-3-sonnet-20240229",
+      localLlmEndpoint: "http://localhost:8080",
+      localLlmModel: "llama2-7b",
       enableSecurityMode: false
     }
   })
@@ -56,7 +77,7 @@ export function Settings() {
           Object.entries(response.settings).forEach(([key, value]) => {
             if (value !== undefined) {
               // For masked sensitive fields, show a placeholder indicating key is configured
-              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken') && 
+              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'openaiApiKey' || key === 'anthropicApiKey') && 
                   typeof value === 'string' && value.includes('*')) {
                 console.log(`Found masked field: ${key}, showing placeholder`);
                 setValue(key, '••••••••••••••••••••••••••••••••••••••••••••••••••'); // Placeholder to show key is configured
@@ -96,6 +117,12 @@ export function Settings() {
       }
       if (settingsToSave.smartthingsToken && settingsToSave.smartthingsToken.startsWith('••••')) {
         delete settingsToSave.smartthingsToken; // Don't update if it's just the placeholder
+      }
+      if (settingsToSave.openaiApiKey && settingsToSave.openaiApiKey.startsWith('••••')) {
+        delete settingsToSave.openaiApiKey; // Don't update if it's just the placeholder
+      }
+      if (settingsToSave.anthropicApiKey && settingsToSave.anthropicApiKey.startsWith('••••')) {
+        delete settingsToSave.anthropicApiKey; // Don't update if it's just the placeholder
       }
       
       const response = await updateSettings(settingsToSave);
@@ -172,6 +199,159 @@ export function Settings() {
       });
     } finally {
       setTestingApiKey(false);
+    }
+  }
+
+  const handleTestOpenAIKey = async () => {
+    const formApiKey = watch('openaiApiKey');
+    const formModel = watch('openaiModel');
+    
+    // If no API key in form field or it's the placeholder, get the existing one from the backend
+    let apiKeyToTest = formApiKey;
+    
+    if (!apiKeyToTest || apiKeyToTest.trim() === '' || apiKeyToTest.startsWith('••••')) {
+      try {
+        console.log('No API key in form, fetching existing key from backend...');
+        const settingResponse = await getSetting('openaiApiKey');
+        
+        if (settingResponse.success && settingResponse.value) {
+          apiKeyToTest = settingResponse.value;
+          console.log('Using existing API key from backend for test');
+        } else {
+          toast({
+            title: "Error", 
+            description: "No OpenAI API key found. Please enter an API key to test.",
+            variant: "destructive"
+          });
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to fetch existing API key:', error);
+        toast({
+          title: "Error",
+          description: "Please enter an OpenAI API key to test",
+          variant: "destructive"
+        });
+        return;
+      }
+    }
+
+    setTestingOpenAI(true);
+    try {
+      console.log('Testing OpenAI API key...');
+      
+      const response = await testOpenAIApiKey(apiKeyToTest, formModel);
+      
+      if (response.success) {
+        toast({
+          title: "API Key Valid",
+          description: `Connected successfully to OpenAI API with model ${response.model || formModel}.`
+        });
+      }
+    } catch (error) {
+      console.error('OpenAI API key test failed:', error);
+      toast({
+        title: "API Key Invalid",
+        description: error.message || "Failed to connect to OpenAI API",
+        variant: "destructive"
+      });
+    } finally {
+      setTestingOpenAI(false);
+    }
+  }
+
+  const handleTestAnthropicKey = async () => {
+    const formApiKey = watch('anthropicApiKey');
+    const formModel = watch('anthropicModel');
+    
+    // If no API key in form field or it's the placeholder, get the existing one from the backend
+    let apiKeyToTest = formApiKey;
+    
+    if (!apiKeyToTest || apiKeyToTest.trim() === '' || apiKeyToTest.startsWith('••••')) {
+      try {
+        console.log('No API key in form, fetching existing key from backend...');
+        const settingResponse = await getSetting('anthropicApiKey');
+        
+        if (settingResponse.success && settingResponse.value) {
+          apiKeyToTest = settingResponse.value;
+          console.log('Using existing API key from backend for test');
+        } else {
+          toast({
+            title: "Error", 
+            description: "No Anthropic API key found. Please enter an API key to test.",
+            variant: "destructive"
+          });
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to fetch existing API key:', error);
+        toast({
+          title: "Error",
+          description: "Please enter an Anthropic API key to test",
+          variant: "destructive"
+        });
+        return;
+      }
+    }
+
+    setTestingAnthropic(true);
+    try {
+      console.log('Testing Anthropic API key...');
+      
+      const response = await testAnthropicApiKey(apiKeyToTest, formModel);
+      
+      if (response.success) {
+        toast({
+          title: "API Key Valid",
+          description: `Connected successfully to Anthropic API with model ${response.model || formModel}.`
+        });
+      }
+    } catch (error) {
+      console.error('Anthropic API key test failed:', error);
+      toast({
+        title: "API Key Invalid",
+        description: error.message || "Failed to connect to Anthropic API",
+        variant: "destructive"
+      });
+    } finally {
+      setTestingAnthropic(false);
+    }
+  }
+
+  const handleTestLocalLLM = async () => {
+    const formEndpoint = watch('localLlmEndpoint');
+    const formModel = watch('localLlmModel');
+    
+    if (!formEndpoint || formEndpoint.trim() === '') {
+      toast({
+        title: "Error", 
+        description: "Please enter a local LLM endpoint to test.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setTestingLocalLLM(true);
+    try {
+      console.log('Testing local LLM endpoint...');
+      
+      const response = await testLocalLLM(formEndpoint, formModel);
+      
+      if (response.success) {
+        toast({
+          title: "Connection Successful",
+          description: `Connected successfully to local LLM at ${response.endpoint || formEndpoint}.`
+        });
+      }
+    } catch (error) {
+      console.error('Local LLM endpoint test failed:', error);
+      toast({
+        title: "Connection Failed",
+        description: error.message || "Failed to connect to local LLM endpoint",
+        variant: "destructive"
+      });
+    } finally {
+      setTestingLocalLLM(false);
     }
   }
 
@@ -417,6 +597,200 @@ export function Settings() {
                   <p className="text-xs text-muted-foreground mt-1">
                     Required for text-to-speech voice responses. If configured, field shows dots for security. Enter a new key to update or click "Test" to verify current key.
                   </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Brain className="h-5 w-5 text-purple-600" />
+                  AI/LLM Providers
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div>
+                  <label className="text-sm font-medium">AI Provider</label>
+                  <Select onValueChange={(value) => setValue("llmProvider", value)}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="Select AI provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="openai">OpenAI</SelectItem>
+                      <SelectItem value="anthropic">Anthropic</SelectItem>
+                      <SelectItem value="local">Local LLM</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Choose your preferred AI provider for voice command processing
+                  </p>
+                </div>
+
+                {/* OpenAI Settings */}
+                <div className="space-y-4 p-4 border rounded-lg bg-blue-50/50">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-4 w-4 text-blue-600" />
+                    <h4 className="font-medium text-blue-900">OpenAI Configuration</h4>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium">OpenAI API Key</label>
+                    <div className="flex gap-2 mt-1">
+                      <Input
+                        {...register("openaiApiKey")}
+                        type="password"
+                        placeholder={watch("openaiApiKey")?.startsWith('••••') ? "API key configured" : "Enter OpenAI API key"}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleTestOpenAIKey}
+                        disabled={testingOpenAI}
+                        className="shrink-0"
+                      >
+                        {testingOpenAI ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Testing...
+                          </>
+                        ) : (
+                          <>
+                            <TestTube className="h-4 w-4 mr-2" />
+                            Test
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Required for OpenAI GPT models. Get your API key from OpenAI Platform.
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium">OpenAI Model</label>
+                    <Select onValueChange={(value) => setValue("openaiModel", value)}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select OpenAI model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="gpt-4">GPT-4</SelectItem>
+                        <SelectItem value="gpt-4-turbo">GPT-4 Turbo</SelectItem>
+                        <SelectItem value="gpt-3.5-turbo">GPT-3.5 Turbo</SelectItem>
+                        <SelectItem value="gpt-4o">GPT-4o</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Anthropic Settings */}
+                <div className="space-y-4 p-4 border rounded-lg bg-orange-50/50">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-4 w-4 text-orange-600" />
+                    <h4 className="font-medium text-orange-900">Anthropic Configuration</h4>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium">Anthropic API Key</label>
+                    <div className="flex gap-2 mt-1">
+                      <Input
+                        {...register("anthropicApiKey")}
+                        type="password"
+                        placeholder={watch("anthropicApiKey")?.startsWith('••••') ? "API key configured" : "Enter Anthropic API key"}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleTestAnthropicKey}
+                        disabled={testingAnthropic}
+                        className="shrink-0"
+                      >
+                        {testingAnthropic ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Testing...
+                          </>
+                        ) : (
+                          <>
+                            <TestTube className="h-4 w-4 mr-2" />
+                            Test
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Required for Anthropic Claude models. Get your API key from Anthropic Console.
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium">Anthropic Model</label>
+                    <Select onValueChange={(value) => setValue("anthropicModel", value)}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select Anthropic model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="claude-3-sonnet-20240229">Claude 3 Sonnet</SelectItem>
+                        <SelectItem value="claude-3-haiku-20240307">Claude 3 Haiku</SelectItem>
+                        <SelectItem value="claude-3-opus-20240229">Claude 3 Opus</SelectItem>
+                        <SelectItem value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Local LLM Settings */}
+                <div className="space-y-4 p-4 border rounded-lg bg-green-50/50">
+                  <div className="flex items-center gap-2">
+                    <Server className="h-4 w-4 text-green-600" />
+                    <h4 className="font-medium text-green-900">Local LLM Configuration</h4>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium">Local LLM Endpoint</label>
+                    <div className="flex gap-2 mt-1">
+                      <Input
+                        {...register("localLlmEndpoint")}
+                        placeholder="http://localhost:8080"
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleTestLocalLLM}
+                        disabled={testingLocalLLM}
+                        className="shrink-0"
+                      >
+                        {testingLocalLLM ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Testing...
+                          </>
+                        ) : (
+                          <>
+                            <TestTube className="h-4 w-4 mr-2" />
+                            Test
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      URL endpoint for your local LLM server (e.g., llama.cpp, Ollama, etc.)
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium">Local LLM Model</label>
+                    <Input
+                      {...register("localLlmModel")}
+                      placeholder="llama2-7b"
+                      className="mt-1"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Name of the model to use on your local LLM server
+                    </p>
+                  </div>
                 </div>
               </CardContent>
             </Card>

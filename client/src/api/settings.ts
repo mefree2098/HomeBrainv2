@@ -30,6 +30,13 @@ export const updateSettings = async (settings: {
   smartthingsToken?: string;
   elevenlabsApiKey?: string;
   enableSecurityMode?: boolean;
+  llmProvider?: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
+  anthropicApiKey?: string;
+  anthropicModel?: string;
+  localLlmEndpoint?: string;
+  localLlmModel?: string;
 }) => {
   try {
     const response = await api.put('/api/settings', settings);
@@ -61,6 +68,48 @@ export const getSetting = async (key: string) => {
 export const testElevenLabsApiKey = async (apiKey: string) => {
   try {
     const response = await api.post('/api/settings/test-elevenlabs', { apiKey });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Test OpenAI API key connectivity
+// Endpoint: POST /api/settings/test-openai
+// Request: { apiKey: string, model?: string }
+// Response: { success: boolean, message: string, models?: string[] }
+export const testOpenAIApiKey = async (apiKey: string, model?: string) => {
+  try {
+    const response = await api.post('/api/settings/test-openai', { apiKey, model });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Test Anthropic API key connectivity
+// Endpoint: POST /api/settings/test-anthropic
+// Request: { apiKey: string, model?: string }
+// Response: { success: boolean, message: string }
+export const testAnthropicApiKey = async (apiKey: string, model?: string) => {
+  try {
+    const response = await api.post('/api/settings/test-anthropic', { apiKey, model });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Test local LLM endpoint connectivity
+// Endpoint: POST /api/settings/test-local-llm
+// Request: { endpoint: string, model?: string }
+// Response: { success: boolean, message: string, models?: string[] }
+export const testLocalLLM = async (endpoint: string, model?: string) => {
+  try {
+    const response = await api.post('/api/settings/test-local-llm', { endpoint, model });
     return response.data;
   } catch (error) {
     console.error(error);
