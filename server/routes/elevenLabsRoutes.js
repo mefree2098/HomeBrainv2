@@ -225,13 +225,25 @@ router.post('/preview', auth, async (req, res) => {
     console.error('Full error:', error);
     
     if (error.message.includes('API key not configured')) {
-      res.status(503).json({
+      return res.status(503).json({
         success: false,
         message: 'ElevenLabs API key is not configured. Please configure it in the settings.',
         error: error.message
       });
+    } else if (error.message.includes('rate limit') || error.message.includes('quota')) {
+      return res.status(429).json({
+        success: false,
+        message: 'ElevenLabs API rate limit exceeded. Please try again later.',
+        error: error.message
+      });
+    } else if (error.message.includes('Invalid voice')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid voice ID provided',
+        error: error.message
+      });
     } else {
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
         message: 'Failed to generate voice preview',
         error: error.message

@@ -236,7 +236,7 @@ export function UserProfiles() {
                 <div>
                   <label className="text-sm font-medium">Voice</label>
                   <div className="flex gap-2 mt-1">
-                    <Select onValueChange={(value) => setValue("voiceId", value)}>
+                    <Select onValueChange={(value) => setValue("voiceId", value)} value={watch("voiceId") || ""}>
                       <SelectTrigger className="flex-1">
                         <SelectValue placeholder="Select voice" />
                       </SelectTrigger>
@@ -325,7 +325,7 @@ export function UserProfiles() {
                 <div>
                   <label className="text-sm font-medium">Voice</label>
                   <div className="flex gap-2 mt-1">
-                    <Select onValueChange={(value) => setValueEdit("voiceId", value)} value={watchEdit("voiceId")}>
+                    <Select onValueChange={(value) => setValueEdit("voiceId", value)} value={watchEdit("voiceId") || ""}>
                       <SelectTrigger className="flex-1">
                         <SelectValue placeholder="Select voice" />
                       </SelectTrigger>
