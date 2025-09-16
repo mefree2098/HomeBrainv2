@@ -12,7 +12,8 @@ import {
   Mic,
   Volume2,
   User,
-  Settings
+  Settings,
+  Play
 } from "lucide-react"
 import { getUserProfiles, saveUserProfile, getAvailableVoices, updateUserProfile } from "@/api/profiles"
 import { generateVoicePreview, playAudioBlob } from "@/api/elevenLabs"

@@ -6,7 +6,8 @@ import api from './api';
 // Response: { success: boolean, settings: { location?: string, timezone?: string, wakeWordSensitivity?: number, voiceVolume?: number, microphoneSensitivity?: number, enableVoiceConfirmation?: boolean, enableNotifications?: boolean, insteonPort?: string, smartthingsToken?: string, elevenlabsApiKey?: string, enableSecurityMode?: boolean } }
 export const getSettings = async () => {
   try {
-    return await api.get('/api/settings');
+    const response = await api.get('/api/settings');
+    return response.data;
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);
@@ -31,7 +32,8 @@ export const updateSettings = async (settings: {
   enableSecurityMode?: boolean;
 }) => {
   try {
-    return await api.put('/api/settings', settings);
+    const response = await api.put('/api/settings', settings);
+    return response.data;
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);
@@ -44,7 +46,8 @@ export const updateSettings = async (settings: {
 // Response: { success: boolean, key: string, value: any }
 export const getSetting = async (key: string) => {
   try {
-    return await api.get(`/api/settings/${key}`);
+    const response = await api.get(`/api/settings/${key}`);
+    return response.data;
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);
@@ -57,7 +60,8 @@ export const getSetting = async (key: string) => {
 // Response: { success: boolean, message: string, voiceCount?: number }
 export const testElevenLabsApiKey = async (apiKey: string) => {
   try {
-    return await api.post('/api/settings/test-elevenlabs', { apiKey });
+    const response = await api.post('/api/settings/test-elevenlabs', { apiKey });
+    return response.data;
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);
