@@ -63,7 +63,8 @@ export const textToSpeechElevenLabs = async (data: {
   console.log('Converting text to speech with ElevenLabs:', data);
   try {
     const response = await api.post('/api/elevenlabs/text-to-speech', data, {
-      responseType: 'blob'
+      responseType: 'blob',
+      transformResponse: [] // Disable JSON parsing for blob responses
     });
     
     // Return the audio blob
@@ -92,7 +93,8 @@ export const generateVoicePreview = async (data: { voiceId: string; text?: strin
   console.log('Generating voice preview with ElevenLabs:', data);
   try {
     const response = await api.post('/api/elevenlabs/preview', data, {
-      responseType: 'blob'
+      responseType: 'blob',
+      transformResponse: [] // Disable JSON parsing for blob responses
     });
     
     // Check if response is actually a blob (successful audio response)
