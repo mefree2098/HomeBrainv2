@@ -52,13 +52,14 @@ export function Settings() {
         if (response.success && response.settings) {
           console.log('Loaded settings:', response.settings);
           
-          // Update form values with loaded settings, but skip masked sensitive fields
+          // Update form values with loaded settings, handle masked sensitive fields
           Object.entries(response.settings).forEach(([key, value]) => {
             if (value !== undefined) {
-              // Skip masked sensitive fields (they contain asterisks)
+              // For masked sensitive fields, show a placeholder indicating key is configured
               if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken') && 
                   typeof value === 'string' && value.includes('*')) {
-                console.log(`Skipping masked field: ${key}`);
+                console.log(`Found masked field: ${key}, showing placeholder`);
+                setValue(key, '••••••••••••••••••••••••••••••••••••••••••••••••••'); // Placeholder to show key is configured
                 return;
               }
               setValue(key, value);
@@ -88,7 +89,16 @@ export function Settings() {
     try {
       console.log('Saving settings:', data)
       
-      const response = await updateSettings(data);
+      // Don't send placeholder values to backend - preserve existing sensitive fields
+      const settingsToSave = { ...data };
+      if (settingsToSave.elevenlabsApiKey && settingsToSave.elevenlabsApiKey.startsWith('••••')) {
+        delete settingsToSave.elevenlabsApiKey; // Don't update if it's just the placeholder
+      }
+      if (settingsToSave.smartthingsToken && settingsToSave.smartthingsToken.startsWith('••••')) {
+        delete settingsToSave.smartthingsToken; // Don't update if it's just the placeholder
+      }
+      
+      const response = await updateSettings(settingsToSave);
       
       if (response.success) {
         toast({
@@ -111,10 +121,10 @@ export function Settings() {
   const handleTestElevenLabsKey = async () => {
     const formApiKey = watch('elevenlabsApiKey');
     
-    // If no API key in form field, try to get the existing one from the backend
+    // If no API key in form field or it's the placeholder, get the existing one from the backend
     let apiKeyToTest = formApiKey;
     
-    if (!apiKeyToTest || apiKeyToTest.trim() === '') {
+    if (!apiKeyToTest || apiKeyToTest.trim() === '' || apiKeyToTest.startsWith('••••')) {
       try {
         console.log('No API key in form, fetching existing key from backend...');
         const settingResponse = await getSetting('elevenlabsApiKey');
@@ -381,7 +391,7 @@ export function Settings() {
                     <Input
                       {...register("elevenlabsApiKey")}
                       type="password"
-                      placeholder="Enter ElevenLabs API key"
+                      placeholder={watch("elevenlabsApiKey")?.startsWith('••••') ? "API key configured" : "Enter ElevenLabs API key"}
                       className="flex-1"
                     />
                     <Button
@@ -405,7 +415,7 @@ export function Settings() {
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Required for text-to-speech voice responses. Click "Test" to verify connectivity.
+                    Required for text-to-speech voice responses. If configured, field shows dots for security. Enter a new key to update or click "Test" to verify current key.
                   </p>
                 </div>
               </CardContent>
