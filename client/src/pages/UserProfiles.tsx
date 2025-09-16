@@ -15,7 +15,7 @@ import {
   Settings,
   Play
 } from "lucide-react"
-import { getUserProfiles, saveUserProfile, getAvailableVoices } from "@/api/profiles"
+import { getUserProfiles, saveUserProfile, getAvailableVoices, updateUserProfile } from "@/api/profiles"
 import { generateVoicePreview, playAudioBlob } from "@/api/elevenLabs"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
@@ -26,8 +26,17 @@ export function UserProfiles() {
   const [voices, setVoices] = useState([])
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [editingProfile, setEditingProfile] = useState<any>(null)
   const [playingVoice, setPlayingVoice] = useState<string | null>(null)
   const { register, handleSubmit, reset, setValue, watch } = useForm()
+  const { 
+    register: registerEdit, 
+    handleSubmit: handleSubmitEdit, 
+    reset: resetEdit, 
+    setValue: setValueEdit, 
+    watch: watchEdit 
+  } = useForm()
 
   useEffect(() => {
     let cancelled = false;
@@ -130,6 +139,54 @@ export function UserProfiles() {
     }
   }
 
+  const handleEditProfile = (profile: any) => {
+    console.log('Opening edit dialog for profile:', profile.name)
+    setEditingProfile(profile)
+    
+    // Pre-fill the edit form with existing profile data
+    setValueEdit("name", profile.name)
+    setValueEdit("voiceId", profile.voiceId)
+    setValueEdit("wakeWords", profile.wakeWords.join(', '))
+    setValueEdit("systemPrompt", profile.systemPrompt || '')
+    
+    setIsEditDialogOpen(true)
+  }
+
+  const handleUpdateProfile = async (data: any) => {
+    try {
+      console.log('Updating user profile:', editingProfile._id, data)
+      const wakeWords = data.wakeWords.split(',').map((word: string) => word.trim()).filter(Boolean)
+
+      const result = await updateUserProfile(editingProfile._id, {
+        name: data.name,
+        wakeWords,
+        voiceId: data.voiceId,
+        systemPrompt: data.systemPrompt
+      })
+
+      // Update the profile in the local state
+      setProfiles(prev => prev.map(p => 
+        p._id === editingProfile._id ? result.profile : p
+      ))
+      
+      setIsEditDialogOpen(false)
+      setEditingProfile(null)
+      resetEdit()
+
+      toast({
+        title: "Profile Updated",
+        description: "User profile has been updated successfully"
+      })
+    } catch (error) {
+      console.error('Failed to update profile:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update user profile",
+        variant: "destructive"
+      })
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -159,9 +216,12 @@ export function UserProfiles() {
               Create Profile
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-white max-w-2xl">
+          <DialogContent className="bg-white max-w-2xl" aria-describedby="create-profile-description">
             <DialogHeader>
               <DialogTitle>Create User Profile</DialogTitle>
+              <p id="create-profile-description" className="text-sm text-muted-foreground">
+                Create a new user profile with personalized voice recognition and AI settings
+              </p>
             </DialogHeader>
             <form onSubmit={handleSubmit(handleCreateProfile)} className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
@@ -236,6 +296,95 @@ export function UserProfiles() {
               <div className="flex gap-2 pt-4">
                 <Button type="submit" className="flex-1">Create Profile</Button>
                 <Button type="button" variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Profile Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="bg-white max-w-2xl" aria-describedby="edit-profile-description">
+            <DialogHeader>
+              <DialogTitle>Edit User Profile</DialogTitle>
+              <p id="edit-profile-description" className="text-sm text-muted-foreground">
+                Modify the settings for {editingProfile?.name || 'this profile'}
+              </p>
+            </DialogHeader>
+            <form onSubmit={handleSubmitEdit(handleUpdateProfile)} className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-sm font-medium">Name</label>
+                  <Input
+                    {...registerEdit("name", { required: true })}
+                    placeholder="e.g., Anna"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Voice</label>
+                  <div className="flex gap-2 mt-1">
+                    <Select onValueChange={(value) => setValueEdit("voiceId", value)} value={watchEdit("voiceId")}>
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Select voice" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {voices.map((voice) => (
+                          <SelectItem key={voice.id} value={voice.id}>
+                            {voice.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button 
+                      type="button"
+                      variant="outline" 
+                      size="sm" 
+                      className="px-3"
+                      disabled={!watchEdit("voiceId") || playingVoice === watchEdit("voiceId")}
+                      onClick={() => {
+                        const selectedVoiceId = watchEdit("voiceId")
+                        const selectedVoice = voices.find(v => v.id === selectedVoiceId)
+                        if (selectedVoice) {
+                          handlePlayVoicePreview(selectedVoice.id, selectedVoice.name)
+                        }
+                      }}
+                    >
+                      {playingVoice === watchEdit("voiceId") ? (
+                        <div className="animate-spin rounded-full h-3 w-3 border-b border-current" />
+                      ) : (
+                        <Play className="h-3 w-3" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Wake Words</label>
+                <Input
+                  {...registerEdit("wakeWords", { required: true })}
+                  placeholder="e.g., Anna, Hey Anna"
+                  className="mt-1"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Separate multiple wake words with commas
+                </p>
+              </div>
+              <div>
+                <label className="text-sm font-medium">AI System Prompt</label>
+                <Textarea
+                  {...registerEdit("systemPrompt")}
+                  placeholder="You are Anna, a helpful and friendly home assistant..."
+                  className="mt-1 min-h-[100px]"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  This defines the AI personality and behavior for this user
+                </p>
+              </div>
+              <div className="flex gap-2 pt-4">
+                <Button type="submit" className="flex-1">Update Profile</Button>
+                <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)}>
                   Cancel
                 </Button>
               </div>
@@ -360,7 +509,12 @@ export function UserProfiles() {
               </div>
 
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" className="flex-1">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="flex-1"
+                  onClick={() => handleEditProfile(profile)}
+                >
                   <Settings className="h-3 w-3 mr-1" />
                   Edit
                 </Button>

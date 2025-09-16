@@ -5,8 +5,15 @@ class ElevenLabsService {
     this.apiKey = process.env.ELEVENLABS_API_KEY;
     this.baseUrl = 'https://api.elevenlabs.io/v1';
     
+    console.log('ElevenLabs Service Initialization:');
+    console.log('- API Key present:', !!this.apiKey);
+    console.log('- API Key length:', this.apiKey ? this.apiKey.length : 0);
+    console.log('- API Key preview:', this.apiKey ? `${this.apiKey.substring(0, 8)}...` : 'Not set');
+    
     if (!this.apiKey) {
       console.warn('ElevenLabs API key not found in environment variables. Voice functionality will be limited.');
+    } else {
+      console.log('ElevenLabs API key configured successfully!');
     }
   }
 
