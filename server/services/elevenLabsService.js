@@ -163,21 +163,59 @@ class ElevenLabsService {
         }
       };
 
-      const response = await axios.post(
-        `${this.baseUrl}/text-to-speech/${voiceId}`,
-        requestBody,
-        {
-          headers: {
-            'xi-api-key': apiKey,
-            'Content-Type': 'application/json',
-            'Accept': 'audio/mpeg'
-          },
-          responseType: 'arraybuffer'
+      // Retry logic for network issues
+      let lastError;
+      const maxRetries = 3;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          console.log(`Attempt ${attempt}/${maxRetries} - Making request to ElevenLabs TTS API`);
+          
+          const response = await axios.post(
+            `${this.baseUrl}/text-to-speech/${voiceId}`,
+            requestBody,
+            {
+              headers: {
+                'xi-api-key': apiKey,
+                'Content-Type': 'application/json',
+                'Accept': 'audio/mpeg'
+              },
+              responseType: 'arraybuffer',
+              timeout: 30000 // 30 second timeout
+            }
+          );
+          
+          console.log(`Generated ${response.data.byteLength} bytes of audio data on attempt ${attempt}`);
+          return Buffer.from(response.data);
+          
+        } catch (retryError) {
+          lastError = retryError;
+          console.log(`Attempt ${attempt} failed:`, retryError.code || retryError.message);
+          
+          // Don't retry on authentication errors
+          if (retryError.response?.status === 401 || retryError.response?.status === 403) {
+            console.log('Authentication error - not retrying');
+            break;
+          }
+          
+          // Don't retry on client errors (4xx except 429)
+          if (retryError.response?.status >= 400 && retryError.response?.status < 500 && retryError.response?.status !== 429) {
+            console.log('Client error - not retrying');
+            break;
+          }
+          
+          // Wait before retry (exponential backoff)
+          if (attempt < maxRetries) {
+            const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // 1s, 2s, 4s max
+            console.log(`Waiting ${waitTime}ms before retry...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          }
         }
-      );
-
-      console.log(`Generated ${response.data.byteLength} bytes of audio data`);
-      return Buffer.from(response.data);
+      }
+      
+      // All retries failed
+      console.error('All retry attempts failed');
+      throw lastError;
 
     } catch (error) {
       console.error('Error generating speech with ElevenLabs:', error.response?.data || error.message);

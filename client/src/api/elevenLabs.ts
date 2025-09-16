@@ -95,21 +95,52 @@ export const generateVoicePreview = async (data: { voiceId: string; text?: strin
       responseType: 'blob'
     });
     
-    // Return the audio blob
-    return new Blob([response.data], { type: 'audio/mpeg' });
+    // Check if response is actually a blob (successful audio response)
+    if (response.data instanceof Blob && response.data.type.startsWith('audio/')) {
+      return response.data;
+    } else {
+      // If we get here, the response might be an error message in blob format
+      console.warn('Received non-audio blob response:', response.data);
+      return new Blob([response.data], { type: 'audio/mpeg' });
+    }
   } catch (error) {
     console.error('Error generating voice preview:', error);
     
-    // Handle blob response errors differently
-    if (error?.response?.status === 503) {
-      throw new Error('ElevenLabs service is not configured. Please set up your API key in settings.');
-    } else if (error?.response?.status === 429) {
-      throw new Error('Too many requests. Please wait a moment before trying again.');
-    } else if (error?.response?.status === 400) {
-      throw new Error('Invalid voice ID or request. Please try a different voice.');
-    } else {
-      throw new Error(error?.response?.statusText || error.message || 'Failed to generate voice preview');
+    // Try to extract meaningful error message
+    let errorMessage = 'Failed to generate voice preview';
+    
+    if (error?.response?.data) {
+      try {
+        // If error response is a blob, try to read it as text
+        if (error.response.data instanceof Blob) {
+          const errorText = await error.response.data.text();
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.message || errorJson.error || errorMessage;
+        } else if (typeof error.response.data === 'object') {
+          errorMessage = error.response.data.message || error.response.data.error || errorMessage;
+        } else if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data;
+        }
+      } catch (parseError) {
+        console.warn('Could not parse error response:', parseError);
+        // Fall through to status-based error handling
+      }
     }
+    
+    // Handle specific HTTP status codes
+    if (error?.response?.status === 503) {
+      errorMessage = 'ElevenLabs service is not configured. Please set up your API key in settings.';
+    } else if (error?.response?.status === 429) {
+      errorMessage = 'Too many requests. Please wait a moment before trying again.';
+    } else if (error?.response?.status === 400) {
+      errorMessage = 'Invalid voice ID or request. Please try a different voice.';
+    } else if (error?.response?.status === 500) {
+      errorMessage = 'Server error occurred. Please try again in a moment.';
+    } else if (error?.code === 'ECONNRESET' || error?.message?.includes('socket hang up')) {
+      errorMessage = 'Network connection issue. Please try again.';
+    }
+    
+    throw new Error(errorMessage);
   }
 }
 
