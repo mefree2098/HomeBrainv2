@@ -10,7 +10,7 @@ export const getSettings = async () => {
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
@@ -36,7 +36,7 @@ export const updateSettings = async (settings: {
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
@@ -50,7 +50,7 @@ export const getSetting = async (key: string) => {
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
@@ -64,6 +64,6 @@ export const testElevenLabsApiKey = async (apiKey: string) => {
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };

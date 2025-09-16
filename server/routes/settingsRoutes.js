@@ -101,7 +101,12 @@ router.post('/test-elevenlabs', auth, async (req, res) => {
     
     const { apiKey } = req.body;
     
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('API key received:', apiKey ? `${apiKey.substring(0, 8)}...` : 'undefined/null');
+    console.log('API key length:', apiKey ? apiKey.length : 0);
+    
     if (!apiKey || apiKey.trim() === '') {
+      console.log('API key validation failed - empty or missing');
       return res.status(400).json({
         success: false,
         message: 'API key is required for testing'
@@ -112,6 +117,7 @@ router.post('/test-elevenlabs', auth, async (req, res) => {
     const axios = require('axios');
     
     try {
+      console.log('Making request to ElevenLabs API...');
       const response = await axios.get('https://api.elevenlabs.io/v1/voices', {
         headers: {
           'xi-api-key': apiKey.trim(),
@@ -131,11 +137,17 @@ router.post('/test-elevenlabs', auth, async (req, res) => {
       
     } catch (apiError) {
       console.log('ElevenLabs API key test failed:', apiError.response?.status, apiError.message);
+      console.log('ElevenLabs API error response:', apiError.response?.data);
       
       if (apiError.response?.status === 401) {
         res.status(400).json({
           success: false,
-          message: 'Invalid ElevenLabs API key'
+          message: 'Invalid ElevenLabs API key - authentication failed'
+        });
+      } else if (apiError.response?.status === 403) {
+        res.status(400).json({
+          success: false,
+          message: 'ElevenLabs API key lacks necessary permissions'
         });
       } else {
         res.status(400).json({

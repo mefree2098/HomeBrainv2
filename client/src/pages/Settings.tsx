@@ -20,7 +20,7 @@ import {
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
-import { getSettings, updateSettings, testElevenLabsApiKey } from "@/api/settings"
+import { getSettings, updateSettings, testElevenLabsApiKey, getSetting } from "@/api/settings"
 
 export function Settings() {
   const { toast } = useToast()
@@ -52,9 +52,15 @@ export function Settings() {
         if (response.success && response.settings) {
           console.log('Loaded settings:', response.settings);
           
-          // Update form values with loaded settings
+          // Update form values with loaded settings, but skip masked sensitive fields
           Object.entries(response.settings).forEach(([key, value]) => {
             if (value !== undefined) {
+              // Skip masked sensitive fields (they contain asterisks)
+              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken') && 
+                  typeof value === 'string' && value.includes('*')) {
+                console.log(`Skipping masked field: ${key}`);
+                return;
+              }
               setValue(key, value);
             }
           });
@@ -103,22 +109,43 @@ export function Settings() {
   }
 
   const handleTestElevenLabsKey = async () => {
-    const apiKey = watch('elevenlabsApiKey');
+    const formApiKey = watch('elevenlabsApiKey');
     
-    if (!apiKey || apiKey.trim() === '') {
-      toast({
-        title: "Error",
-        description: "Please enter an ElevenLabs API key to test",
-        variant: "destructive"
-      });
-      return;
+    // If no API key in form field, try to get the existing one from the backend
+    let apiKeyToTest = formApiKey;
+    
+    if (!apiKeyToTest || apiKeyToTest.trim() === '') {
+      try {
+        console.log('No API key in form, fetching existing key from backend...');
+        const settingResponse = await getSetting('elevenlabsApiKey');
+        
+        if (settingResponse.success && settingResponse.value) {
+          apiKeyToTest = settingResponse.value;
+          console.log('Using existing API key from backend for test');
+        } else {
+          toast({
+            title: "Error", 
+            description: "No ElevenLabs API key found. Please enter an API key to test.",
+            variant: "destructive"
+          });
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to fetch existing API key:', error);
+        toast({
+          title: "Error",
+          description: "Please enter an ElevenLabs API key to test",
+          variant: "destructive"
+        });
+        return;
+      }
     }
 
     setTestingApiKey(true);
     try {
       console.log('Testing ElevenLabs API key...');
       
-      const response = await testElevenLabsApiKey(apiKey);
+      const response = await testElevenLabsApiKey(apiKeyToTest);
       
       if (response.success) {
         toast({
