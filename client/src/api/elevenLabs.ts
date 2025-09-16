@@ -1,0 +1,146 @@
+import api from './api';
+
+// Description: Get all available voices from ElevenLabs
+// Endpoint: GET /api/elevenlabs/voices
+// Request: {}
+// Response: { success: boolean, voices: Array<{ id: string, name: string, preview_url: string, category: string, labels: object, description: string }>, count: number }
+export const getElevenLabsVoices = async () => {
+  console.log('Fetching ElevenLabs voices from API');
+  try {
+    const response = await api.get('/api/elevenlabs/voices');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching ElevenLabs voices:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Get voice details by ID from ElevenLabs
+// Endpoint: GET /api/elevenlabs/voices/:voiceId
+// Request: {}
+// Response: { success: boolean, voice: { id: string, name: string, preview_url: string, category: string, labels: object, description: string, settings: object } }
+export const getElevenLabsVoiceById = async (voiceId: string) => {
+  console.log('Fetching ElevenLabs voice by ID:', voiceId);
+  try {
+    const response = await api.get(`/api/elevenlabs/voices/${voiceId}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching ElevenLabs voice by ID:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Validate if voice ID exists in ElevenLabs
+// Endpoint: POST /api/elevenlabs/voices/:voiceId/validate
+// Request: {}
+// Response: { success: boolean, valid: boolean, voiceId: string }
+export const validateElevenLabsVoiceId = async (voiceId: string) => {
+  console.log('Validating ElevenLabs voice ID:', voiceId);
+  try {
+    const response = await api.post(`/api/elevenlabs/voices/${voiceId}/validate`);
+    return response.data;
+  } catch (error) {
+    console.error('Error validating ElevenLabs voice ID:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Convert text to speech using ElevenLabs TTS
+// Endpoint: POST /api/elevenlabs/text-to-speech
+// Request: { text: string, voiceId: string, options?: { stability?: number, similarity_boost?: number, style?: number, use_speaker_boost?: boolean, model_id?: string } }
+// Response: Audio file (audio/mpeg) as blob
+export const textToSpeechElevenLabs = async (data: {
+  text: string;
+  voiceId: string;
+  options?: {
+    stability?: number;
+    similarity_boost?: number;
+    style?: number;
+    use_speaker_boost?: boolean;
+    model_id?: string;
+  };
+}) => {
+  console.log('Converting text to speech with ElevenLabs:', data);
+  try {
+    const response = await api.post('/api/elevenlabs/text-to-speech', data, {
+      responseType: 'blob'
+    });
+    
+    // Return the audio blob
+    return new Blob([response.data], { type: 'audio/mpeg' });
+  } catch (error) {
+    console.error('Error converting text to speech:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Generate voice preview with ElevenLabs
+// Endpoint: POST /api/elevenlabs/preview
+// Request: { voiceId: string, text?: string }
+// Response: Audio file (audio/mpeg) as blob
+export const generateVoicePreview = async (data: { voiceId: string; text?: string }) => {
+  console.log('Generating voice preview with ElevenLabs:', data);
+  try {
+    const response = await api.post('/api/elevenlabs/preview', data, {
+      responseType: 'blob'
+    });
+    
+    // Return the audio blob
+    return new Blob([response.data], { type: 'audio/mpeg' });
+  } catch (error) {
+    console.error('Error generating voice preview:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Get ElevenLabs integration status
+// Endpoint: GET /api/elevenlabs/status
+// Request: {}
+// Response: { success: boolean, status: { configured: boolean, apiKeyValid: boolean, totalVoices: number, service: string, baseUrl: string } }
+export const getElevenLabsStatus = async () => {
+  console.log('Fetching ElevenLabs integration status');
+  try {
+    const response = await api.get('/api/elevenlabs/status');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching ElevenLabs status:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Utility function to create audio URL from blob for playback
+export const createAudioUrl = (audioBlob: Blob): string => {
+  return URL.createObjectURL(audioBlob);
+}
+
+// Utility function to download audio file
+export const downloadAudioFile = (audioBlob: Blob, filename: string = 'speech.mp3') => {
+  const url = createAudioUrl(audioBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Utility function to play audio blob
+export const playAudioBlob = (audioBlob: Blob): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const url = createAudioUrl(audioBlob);
+    const audio = new Audio(url);
+    
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      resolve();
+    };
+    
+    audio.onerror = (error) => {
+      URL.revokeObjectURL(url);
+      reject(error);
+    };
+    
+    audio.play().catch(reject);
+  });
+}

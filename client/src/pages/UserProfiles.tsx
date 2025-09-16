@@ -16,6 +16,7 @@ import {
   Play
 } from "lucide-react"
 import { getUserProfiles, saveUserProfile, getAvailableVoices } from "@/api/profiles"
+import { generateVoicePreview, playAudioBlob } from "@/api/elevenLabs"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 
@@ -25,6 +26,7 @@ export function UserProfiles() {
   const [voices, setVoices] = useState([])
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [playingVoice, setPlayingVoice] = useState<string | null>(null)
   const { register, handleSubmit, reset, setValue, watch } = useForm()
 
   useEffect(() => {
@@ -83,6 +85,34 @@ export function UserProfiles() {
     }
   }
 
+  const handlePlayVoicePreview = async (voiceId: string, voiceName: string) => {
+    try {
+      setPlayingVoice(voiceId)
+      console.log('Playing voice preview for:', voiceName)
+      
+      const audioBlob = await generateVoicePreview({ 
+        voiceId,
+        text: `Hello! This is ${voiceName} from your HomeBrain system. I'm ready to assist you with your smart home needs.`
+      })
+      
+      await playAudioBlob(audioBlob)
+      
+      toast({
+        title: "Voice Preview",
+        description: `Playing preview of ${voiceName}`
+      })
+    } catch (error) {
+      console.error('Failed to play voice preview:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to play voice preview",
+        variant: "destructive"
+      })
+    } finally {
+      setPlayingVoice(null)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -128,18 +158,40 @@ export function UserProfiles() {
                 </div>
                 <div>
                   <label className="text-sm font-medium">Voice</label>
-                  <Select onValueChange={(value) => setValue("voiceId", value)}>
-                    <SelectTrigger className="mt-1">
-                      <SelectValue placeholder="Select voice" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {voices.map((voice) => (
-                        <SelectItem key={voice.id} value={voice.id}>
-                          {voice.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex gap-2 mt-1">
+                    <Select onValueChange={(value) => setValue("voiceId", value)}>
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Select voice" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {voices.map((voice) => (
+                          <SelectItem key={voice.id} value={voice.id}>
+                            {voice.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button 
+                      type="button"
+                      variant="outline" 
+                      size="sm" 
+                      className="px-3"
+                      disabled={!watch("voiceId") || playingVoice === watch("voiceId")}
+                      onClick={() => {
+                        const selectedVoiceId = watch("voiceId")
+                        const selectedVoice = voices.find(v => v.id === selectedVoiceId)
+                        if (selectedVoice) {
+                          handlePlayVoicePreview(selectedVoice.id, selectedVoice.name)
+                        }
+                      }}
+                    >
+                      {playingVoice === watch("voiceId") ? (
+                        <div className="animate-spin rounded-full h-3 w-3 border-b border-current" />
+                      ) : (
+                        <Play className="h-3 w-3" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </div>
               <div>
@@ -264,8 +316,21 @@ export function UserProfiles() {
                   <span className="text-sm">
                     {voices.find(v => v.id === profile.voiceId)?.name || 'Unknown Voice'}
                   </span>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                    <Play className="h-3 w-3" />
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-6 w-6 p-0"
+                    disabled={playingVoice === profile.voiceId}
+                    onClick={() => handlePlayVoicePreview(
+                      profile.voiceId, 
+                      voices.find(v => v.id === profile.voiceId)?.name || 'Unknown Voice'
+                    )}
+                  >
+                    {playingVoice === profile.voiceId ? (
+                      <div className="animate-spin rounded-full h-3 w-3 border-b border-current" />
+                    ) : (
+                      <Play className="h-3 w-3" />
+                    )}
                   </Button>
                 </div>
               </div>
