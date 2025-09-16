@@ -15,15 +15,18 @@ import {
   Shield,
   Smartphone,
   Home,
-  Save
+  Save,
+  TestTube
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
+import { getSettings, updateSettings, testElevenLabsApiKey } from "@/api/settings"
 
 export function Settings() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
-  const { register, handleSubmit, setValue } = useForm({
+  const [testingApiKey, setTestingApiKey] = useState(false)
+  const { register, handleSubmit, setValue, watch, reset } = useForm({
     defaultValues: {
       location: "New York, NY",
       timezone: "America/New_York",
@@ -39,26 +42,99 @@ export function Settings() {
     }
   })
 
+  // Load settings on component mount
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        console.log('Loading settings from backend...');
+        const response = await getSettings();
+        
+        if (response.success && response.settings) {
+          console.log('Loaded settings:', response.settings);
+          
+          // Update form values with loaded settings
+          Object.entries(response.settings).forEach(([key, value]) => {
+            if (value !== undefined) {
+              setValue(key, value);
+            }
+          });
+          
+          toast({
+            title: "Settings Loaded",
+            description: "Your settings have been loaded successfully"
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load settings:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load settings, using defaults",
+          variant: "destructive"
+        });
+      }
+    };
+
+    loadSettings();
+  }, [setValue, toast]);
+
   const handleSaveSettings = async (data: any) => {
     setLoading(true)
     try {
       console.log('Saving settings:', data)
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000))
       
-      toast({
-        title: "Settings Saved",
-        description: "Your settings have been saved successfully"
-      })
+      const response = await updateSettings(data);
+      
+      if (response.success) {
+        toast({
+          title: "Settings Saved",
+          description: response.message || "Your settings have been saved successfully"
+        })
+      }
     } catch (error) {
       console.error('Failed to save settings:', error)
       toast({
         title: "Error",
-        description: "Failed to save settings",
+        description: error.message || "Failed to save settings",
         variant: "destructive"
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleTestElevenLabsKey = async () => {
+    const apiKey = watch('elevenlabsApiKey');
+    
+    if (!apiKey || apiKey.trim() === '') {
+      toast({
+        title: "Error",
+        description: "Please enter an ElevenLabs API key to test",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setTestingApiKey(true);
+    try {
+      console.log('Testing ElevenLabs API key...');
+      
+      const response = await testElevenLabsApiKey(apiKey);
+      
+      if (response.success) {
+        toast({
+          title: "API Key Valid",
+          description: `Connected successfully! Found ${response.voiceCount || 0} available voices.`
+        });
+      }
+    } catch (error) {
+      console.error('ElevenLabs API key test failed:', error);
+      toast({
+        title: "API Key Invalid",
+        description: error.message || "Failed to connect to ElevenLabs API",
+        variant: "destructive"
+      });
+    } finally {
+      setTestingApiKey(false);
     }
   }
 
@@ -274,14 +350,35 @@ export function Settings() {
               <CardContent className="space-y-4">
                 <div>
                   <label className="text-sm font-medium">ElevenLabs API Key</label>
-                  <Input
-                    {...register("elevenlabsApiKey")}
-                    type="password"
-                    placeholder="Enter ElevenLabs API key"
-                    className="mt-1"
-                  />
+                  <div className="flex gap-2 mt-1">
+                    <Input
+                      {...register("elevenlabsApiKey")}
+                      type="password"
+                      placeholder="Enter ElevenLabs API key"
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleTestElevenLabsKey}
+                      disabled={testingApiKey}
+                      className="shrink-0"
+                    >
+                      {testingApiKey ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Testing...
+                        </>
+                      ) : (
+                        <>
+                          <TestTube className="h-4 w-4 mr-2" />
+                          Test
+                        </>
+                      )}
+                    </Button>
+                  </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Required for text-to-speech voice responses
+                    Required for text-to-speech voice responses. Click "Test" to verify connectivity.
                   </p>
                 </div>
               </CardContent>

@@ -1,19 +1,24 @@
 const axios = require('axios');
+const settingsService = require('./settingsService');
 
 class ElevenLabsService {
   constructor() {
-    this.apiKey = process.env.ELEVENLABS_API_KEY;
     this.baseUrl = 'https://api.elevenlabs.io/v1';
-    
-    console.log('ElevenLabs Service Initialization:');
-    console.log('- API Key present:', !!this.apiKey);
-    console.log('- API Key length:', this.apiKey ? this.apiKey.length : 0);
-    console.log('- API Key preview:', this.apiKey ? `${this.apiKey.substring(0, 8)}...` : 'Not set');
-    
-    if (!this.apiKey) {
-      console.warn('ElevenLabs API key not found in environment variables. Voice functionality will be limited.');
-    } else {
-      console.log('ElevenLabs API key configured successfully!');
+    console.log('ElevenLabs Service initialized - API key will be retrieved from settings');
+  }
+
+  /**
+   * Get the API key from settings (prioritizes database over environment variables)
+   * @returns {Promise<string|null>} The ElevenLabs API key
+   * @private
+   */
+  async _getApiKey() {
+    try {
+      const apiKey = await settingsService.getElevenLabsApiKey();
+      return apiKey;
+    } catch (error) {
+      console.error('Error retrieving ElevenLabs API key from settings:', error.message);
+      return null;
     }
   }
 
@@ -25,14 +30,18 @@ class ElevenLabsService {
     try {
       console.log('Fetching voices from ElevenLabs API');
       
-      if (!this.apiKey) {
+      const apiKey = await this._getApiKey();
+      
+      if (!apiKey) {
         console.log('ElevenLabs API key not configured, returning mock data');
         return this._getMockVoices();
       }
 
+      console.log('ElevenLabs API key retrieved from settings, making API call');
+      
       const response = await axios.get(`${this.baseUrl}/voices`, {
         headers: {
-          'xi-api-key': this.apiKey,
+          'xi-api-key': apiKey,
           'Content-Type': 'application/json'
         }
       });
@@ -67,7 +76,9 @@ class ElevenLabsService {
     try {
       console.log(`Fetching voice details for ID: ${voiceId}`);
       
-      if (!this.apiKey) {
+      const apiKey = await this._getApiKey();
+      
+      if (!apiKey) {
         console.log('ElevenLabs API key not configured, returning mock data');
         const mockVoices = this._getMockVoices();
         return mockVoices.find(voice => voice.id === voiceId) || null;
@@ -75,7 +86,7 @@ class ElevenLabsService {
 
       const response = await axios.get(`${this.baseUrl}/voices/${voiceId}`, {
         headers: {
-          'xi-api-key': this.apiKey,
+          'xi-api-key': apiKey,
           'Content-Type': 'application/json'
         }
       });
@@ -130,7 +141,9 @@ class ElevenLabsService {
       
       console.log(`Generating speech for voice ${voiceId}: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
       
-      if (!this.apiKey) {
+      const apiKey = await this._getApiKey();
+      
+      if (!apiKey) {
         throw new Error('ElevenLabs API key not configured');
       }
 
@@ -155,7 +168,7 @@ class ElevenLabsService {
         requestBody,
         {
           headers: {
-            'xi-api-key': this.apiKey,
+            'xi-api-key': apiKey,
             'Content-Type': 'application/json',
             'Accept': 'audio/mpeg'
           },
@@ -182,7 +195,9 @@ class ElevenLabsService {
     try {
       console.log(`Validating voice ID: ${voiceId}`);
       
-      if (!this.apiKey) {
+      const apiKey = await this._getApiKey();
+      
+      if (!apiKey) {
         // When API key is not available, validate against mock data
         const mockVoices = this._getMockVoices();
         return mockVoices.some(voice => voice.id === voiceId);

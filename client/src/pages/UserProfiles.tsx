@@ -5,15 +5,14 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { VoiceSelector } from "@/components/VoiceSelector"
 import {
   Users,
   Plus,
   Mic,
   Volume2,
   User,
-  Settings,
-  Play
+  Settings
 } from "lucide-react"
 import { getUserProfiles, saveUserProfile, getAvailableVoices, updateUserProfile } from "@/api/profiles"
 import { generateVoicePreview, playAudioBlob } from "@/api/elevenLabs"
@@ -235,40 +234,15 @@ export function UserProfiles() {
                 </div>
                 <div>
                   <label className="text-sm font-medium">Voice</label>
-                  <div className="flex gap-2 mt-1">
-                    <Select onValueChange={(value) => setValue("voiceId", value)} value={watch("voiceId") || ""}>
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="Select voice" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {voices.map((voice) => (
-                          <SelectItem key={voice.id} value={voice.id}>
-                            {voice.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button 
-                      type="button"
-                      variant="outline" 
-                      size="sm" 
-                      className="px-3"
-                      disabled={!watch("voiceId") || playingVoice === watch("voiceId")}
-                      onClick={() => {
-                        const selectedVoiceId = watch("voiceId")
-                        const selectedVoice = voices.find(v => v.id === selectedVoiceId)
-                        if (selectedVoice) {
-                          handlePlayVoicePreview(selectedVoice.id, selectedVoice.name)
-                        }
-                      }}
-                    >
-                      {playingVoice === watch("voiceId") ? (
-                        <div className="animate-spin rounded-full h-3 w-3 border-b border-current" />
-                      ) : (
-                        <Play className="h-3 w-3" />
-                      )}
-                    </Button>
-                  </div>
+                  <VoiceSelector
+                    voices={voices}
+                    value={watch("voiceId")}
+                    onValueChange={(value) => setValue("voiceId", value)}
+                    onPlayPreview={handlePlayVoicePreview}
+                    playingVoice={playingVoice}
+                    placeholder="Select voice"
+                    className="mt-1"
+                  />
                 </div>
               </div>
               <div>
@@ -324,40 +298,15 @@ export function UserProfiles() {
                 </div>
                 <div>
                   <label className="text-sm font-medium">Voice</label>
-                  <div className="flex gap-2 mt-1">
-                    <Select onValueChange={(value) => setValueEdit("voiceId", value)} value={watchEdit("voiceId") || ""}>
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="Select voice" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {voices.map((voice) => (
-                          <SelectItem key={voice.id} value={voice.id}>
-                            {voice.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button 
-                      type="button"
-                      variant="outline" 
-                      size="sm" 
-                      className="px-3"
-                      disabled={!watchEdit("voiceId") || playingVoice === watchEdit("voiceId")}
-                      onClick={() => {
-                        const selectedVoiceId = watchEdit("voiceId")
-                        const selectedVoice = voices.find(v => v.id === selectedVoiceId)
-                        if (selectedVoice) {
-                          handlePlayVoicePreview(selectedVoice.id, selectedVoice.name)
-                        }
-                      }}
-                    >
-                      {playingVoice === watchEdit("voiceId") ? (
-                        <div className="animate-spin rounded-full h-3 w-3 border-b border-current" />
-                      ) : (
-                        <Play className="h-3 w-3" />
-                      )}
-                    </Button>
-                  </div>
+                  <VoiceSelector
+                    voices={voices}
+                    value={watchEdit("voiceId")}
+                    onValueChange={(value) => setValueEdit("voiceId", value)}
+                    onPlayPreview={handlePlayVoicePreview}
+                    playingVoice={playingVoice}
+                    placeholder="Select voice"
+                    className="mt-1"
+                  />
                 </div>
               </div>
               <div>
