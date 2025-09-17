@@ -147,11 +147,21 @@ export function SecurityAlarmWidget() {
       }
     } catch (error) {
       console.error('Failed to sync with SmartThings:', error)
-      toast({
-        title: "Sync Error",
-        description: error.message || "Failed to sync with SmartThings",
-        variant: "destructive"
-      })
+      
+      // Handle specific SmartThings configuration errors
+      if (error.message === 'SmartThings token not configured') {
+        toast({
+          title: "Configuration Required",
+          description: "Please configure your SmartThings token in system settings to enable sync functionality.",
+          variant: "destructive"
+        })
+      } else {
+        toast({
+          title: "Sync Error", 
+          description: error.message || "Failed to sync with SmartThings",
+          variant: "destructive"
+        })
+      }
     } finally {
       setSyncing(false)
     }

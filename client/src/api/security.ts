@@ -114,6 +114,10 @@ export const syncSecurityWithSmartThings = async () => {
     return response.data;
   } catch (error) {
     console.error(error);
+    // Handle specific SmartThings configuration errors
+    if (error?.response?.status === 400 && error?.response?.data?.message === 'SmartThings token not configured') {
+      throw new Error('SmartThings token not configured');
+    }
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };

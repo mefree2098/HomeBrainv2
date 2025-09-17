@@ -162,7 +162,6 @@ const SecurityAlarmSchema = new mongoose.Schema({
 });
 
 // Index for faster queries
-SecurityAlarmSchema.index({ smartthingsDeviceId: 1 });
 SecurityAlarmSchema.index({ alarmState: 1 });
 SecurityAlarmSchema.index({ 'zones.deviceId': 1 });
 
