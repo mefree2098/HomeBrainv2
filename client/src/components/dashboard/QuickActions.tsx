@@ -43,22 +43,22 @@ export function QuickActions({ scenes, onSceneActivate }: QuickActionsProps) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {scenes.slice(0, 5).map((scene) => (
             <Button
               key={scene._id}
               onClick={() => onSceneActivate(scene._id)}
-              className={`h-auto p-4 flex flex-col items-center gap-2 bg-gradient-to-r ${getSceneColor(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
+              className={`h-16 p-2 flex flex-col items-center justify-center gap-1 bg-gradient-to-r ${getSceneColor(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
+              title={scene.description} // Show full description on hover
             >
               {getSceneIcon(scene.name)}
-              <div className="text-center">
-                <div className="font-medium text-sm">{scene.name}</div>
-                <div className="text-xs opacity-90">{scene.description}</div>
+              <div className="font-medium text-xs text-center leading-tight truncate max-w-full">
+                {scene.name}
               </div>
             </Button>
           ))}
         </div>
-        <div className="mt-4 text-xs text-muted-foreground text-center">
+        <div className="mt-3 text-xs text-muted-foreground text-center">
           Say: "Hey Anna, activate [scene name]" to control with voice
         </div>
       </CardContent>

@@ -314,7 +314,7 @@ export function SecurityAlarmWidget() {
                 )}
                 Arm Stay
               </Button>
-              
+
               <Button
                 size="sm"
                 variant="outline"
@@ -331,20 +331,22 @@ export function SecurityAlarmWidget() {
               </Button>
             </div>
           ) : (
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={handleDisarm}
-              disabled={disarming}
-              className="w-full flex items-center gap-1"
-            >
-              {disarming ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <ShieldX className="h-3 w-3" />
-              )}
-              Disarm
-            </Button>
+            alarmStatus && (alarmStatus.alarmState === 'armedStay' || alarmStatus.alarmState === 'armedAway' || alarmStatus.alarmState === 'triggered') && (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleDisarm}
+                disabled={disarming}
+                className="w-full flex items-center gap-1"
+              >
+                {disarming ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ShieldX className="h-3 w-3" />
+                )}
+                Disarm
+              </Button>
+            )
           )}
 
           {/* Sync Button */}
