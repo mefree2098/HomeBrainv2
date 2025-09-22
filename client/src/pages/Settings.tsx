@@ -23,7 +23,14 @@ import {
   ExternalLink,
   CheckCircle,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  Trash2,
+  RefreshCw,
+  Database,
+  FileDown,
+  Activity,
+  HardDrive,
+  Wrench
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
@@ -43,6 +50,19 @@ import {
   testSmartThingsConnection,
   disconnectSmartThings
 } from "@/api/smartThings"
+import {
+  clearAllFakeData,
+  injectFakeData,
+  forceSmartThingsSync,
+  forceInsteonSync,
+  clearSmartThingsDevices,
+  clearInsteonDevices,
+  resetSettingsToDefaults,
+  clearSmartThingsIntegration,
+  clearVoiceCommandHistory,
+  performHealthCheck,
+  exportConfiguration
+} from "@/api/maintenance"
 
 export function Settings() {
   const { toast } = useToast()
@@ -55,6 +75,20 @@ export function Settings() {
   const [testingSmartThings, setTestingSmartThings] = useState(false)
   const [configuringSmartThings, setConfiguringSmartThings] = useState(false)
   const [disconnectingSmartThings, setDisconnectingSmartThings] = useState(false)
+
+  // Maintenance operation states
+  const [clearingFakeData, setClearingFakeData] = useState(false)
+  const [injectingFakeData, setInjectingFakeData] = useState(false)
+  const [syncingSmartThings, setSyncingSmartThings] = useState(false)
+  const [syncingInsteon, setSyncingInsteon] = useState(false)
+  const [clearingSTDevices, setClearingSTDevices] = useState(false)
+  const [clearingInsteonDevices, setClearingInsteonDevices] = useState(false)
+  const [resettingSettings, setResettingSettings] = useState(false)
+  const [clearingSTIntegration, setClearingSTIntegration] = useState(false)
+  const [clearingVoiceHistory, setClearingVoiceHistory] = useState(false)
+  const [runningHealthCheck, setRunningHealthCheck] = useState(false)
+  const [exportingConfig, setExportingConfig] = useState(false)
+  const [healthData, setHealthData] = useState(null)
   const { register, handleSubmit, setValue, watch, reset } = useForm({
     defaultValues: {
       location: "New York, NY",
@@ -568,6 +602,284 @@ export function Settings() {
     }
   };
 
+  // Maintenance handler functions
+  const handleClearFakeData = async () => {
+    setClearingFakeData(true);
+    try {
+      console.log('Clearing fake data...');
+      const response = await clearAllFakeData();
+
+      if (response.success) {
+        toast({
+          title: "Data Cleared",
+          description: `Successfully cleared ${Object.values(response.results).reduce((a, b) => a + b, 0)} items`
+        });
+      }
+    } catch (error) {
+      console.error('Clear fake data failed:', error);
+      toast({
+        title: "Clear Failed",
+        description: error.message || "Failed to clear fake data",
+        variant: "destructive"
+      });
+    } finally {
+      setClearingFakeData(false);
+    }
+  };
+
+  const handleInjectFakeData = async () => {
+    setInjectingFakeData(true);
+    try {
+      console.log('Injecting fake data...');
+      const response = await injectFakeData();
+
+      if (response.success) {
+        toast({
+          title: "Data Injected",
+          description: `Successfully injected ${Object.values(response.results).reduce((a, b) => a + b, 0)} items`
+        });
+      }
+    } catch (error) {
+      console.error('Inject fake data failed:', error);
+      toast({
+        title: "Inject Failed",
+        description: error.message || "Failed to inject fake data",
+        variant: "destructive"
+      });
+    } finally {
+      setInjectingFakeData(false);
+    }
+  };
+
+  const handleSyncSmartThings = async () => {
+    setSyncingSmartThings(true);
+    try {
+      console.log('Syncing SmartThings devices...');
+      const response = await forceSmartThingsSync();
+
+      if (response.success) {
+        toast({
+          title: "Sync Complete",
+          description: `Successfully synced ${response.deviceCount} SmartThings devices`
+        });
+      }
+    } catch (error) {
+      console.error('SmartThings sync failed:', error);
+      toast({
+        title: "Sync Failed",
+        description: error.message || "Failed to sync SmartThings devices",
+        variant: "destructive"
+      });
+    } finally {
+      setSyncingSmartThings(false);
+    }
+  };
+
+  const handleSyncInsteon = async () => {
+    setSyncingInsteon(true);
+    try {
+      console.log('Syncing INSTEON devices...');
+      const response = await forceInsteonSync();
+
+      if (response.success) {
+        toast({
+          title: "Sync Complete",
+          description: response.message
+        });
+      }
+    } catch (error) {
+      console.error('INSTEON sync failed:', error);
+      toast({
+        title: "Sync Failed",
+        description: error.message || "Failed to sync INSTEON devices",
+        variant: "destructive"
+      });
+    } finally {
+      setSyncingInsteon(false);
+    }
+  };
+
+  const handleClearSTDevices = async () => {
+    setClearingSTDevices(true);
+    try {
+      console.log('Clearing SmartThings devices...');
+      const response = await clearSmartThingsDevices();
+
+      if (response.success) {
+        toast({
+          title: "Devices Cleared",
+          description: `Successfully cleared ${response.deletedCount} SmartThings devices`
+        });
+      }
+    } catch (error) {
+      console.error('Clear SmartThings devices failed:', error);
+      toast({
+        title: "Clear Failed",
+        description: error.message || "Failed to clear SmartThings devices",
+        variant: "destructive"
+      });
+    } finally {
+      setClearingSTDevices(false);
+    }
+  };
+
+  const handleClearInsteonDevices = async () => {
+    setClearingInsteonDevices(true);
+    try {
+      console.log('Clearing INSTEON devices...');
+      const response = await clearInsteonDevices();
+
+      if (response.success) {
+        toast({
+          title: "Devices Cleared",
+          description: `Successfully cleared ${response.deletedCount} INSTEON devices`
+        });
+      }
+    } catch (error) {
+      console.error('Clear INSTEON devices failed:', error);
+      toast({
+        title: "Clear Failed",
+        description: error.message || "Failed to clear INSTEON devices",
+        variant: "destructive"
+      });
+    } finally {
+      setClearingInsteonDevices(false);
+    }
+  };
+
+  const handleResetSettings = async () => {
+    setResettingSettings(true);
+    try {
+      console.log('Resetting settings to defaults...');
+      const response = await resetSettingsToDefaults();
+
+      if (response.success) {
+        toast({
+          title: "Settings Reset",
+          description: "All settings have been reset to defaults"
+        });
+      }
+    } catch (error) {
+      console.error('Reset settings failed:', error);
+      toast({
+        title: "Reset Failed",
+        description: error.message || "Failed to reset settings",
+        variant: "destructive"
+      });
+    } finally {
+      setResettingSettings(false);
+    }
+  };
+
+  const handleClearSTIntegration = async () => {
+    setClearingSTIntegration(true);
+    try {
+      console.log('Clearing SmartThings integration...');
+      const response = await clearSmartThingsIntegration();
+
+      if (response.success) {
+        toast({
+          title: "Integration Cleared",
+          description: "SmartThings integration configuration cleared"
+        });
+        loadSmartThingsStatus();
+      }
+    } catch (error) {
+      console.error('Clear SmartThings integration failed:', error);
+      toast({
+        title: "Clear Failed",
+        description: error.message || "Failed to clear SmartThings integration",
+        variant: "destructive"
+      });
+    } finally {
+      setClearingSTIntegration(false);
+    }
+  };
+
+  const handleClearVoiceHistory = async () => {
+    setClearingVoiceHistory(true);
+    try {
+      console.log('Clearing voice command history...');
+      const response = await clearVoiceCommandHistory();
+
+      if (response.success) {
+        toast({
+          title: "History Cleared",
+          description: `Successfully cleared ${response.deletedCount} voice commands`
+        });
+      }
+    } catch (error) {
+      console.error('Clear voice history failed:', error);
+      toast({
+        title: "Clear Failed",
+        description: error.message || "Failed to clear voice command history",
+        variant: "destructive"
+      });
+    } finally {
+      setClearingVoiceHistory(false);
+    }
+  };
+
+  const handleHealthCheck = async () => {
+    setRunningHealthCheck(true);
+    try {
+      console.log('Running system health check...');
+      const response = await performHealthCheck();
+
+      if (response.success) {
+        setHealthData(response.health);
+        toast({
+          title: "Health Check Complete",
+          description: "System health check completed successfully"
+        });
+      }
+    } catch (error) {
+      console.error('Health check failed:', error);
+      toast({
+        title: "Health Check Failed",
+        description: error.message || "Failed to perform health check",
+        variant: "destructive"
+      });
+    } finally {
+      setRunningHealthCheck(false);
+    }
+  };
+
+  const handleExportConfig = async () => {
+    setExportingConfig(true);
+    try {
+      console.log('Exporting configuration...');
+      const response = await exportConfiguration();
+
+      if (response.success) {
+        // Download the configuration as JSON file
+        const blob = new Blob([JSON.stringify(response.config, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `homebrain-config-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        toast({
+          title: "Export Complete",
+          description: "Configuration exported successfully"
+        });
+      }
+    } catch (error) {
+      console.error('Export config failed:', error);
+      toast({
+        title: "Export Failed",
+        description: error.message || "Failed to export configuration",
+        variant: "destructive"
+      });
+    } finally {
+      setExportingConfig(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -588,6 +900,7 @@ export function Settings() {
             <TabsTrigger value="voice">Voice & Audio</TabsTrigger>
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
+            <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           </TabsList>
 
           <TabsContent value="general" className="space-y-6">
@@ -1184,6 +1497,374 @@ export function Settings() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="maintenance" className="space-y-6">
+            {/* Data Management Section */}
+            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Database className="h-5 w-5 text-blue-600" />
+                  Data Management
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <h4 className="font-medium">Clear Fake Data</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Remove all demo/fake data from the system (devices, scenes, automations, etc.)
+                    </p>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleClearFakeData}
+                      disabled={clearingFakeData}
+                      className="w-full"
+                    >
+                      {clearingFakeData ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Clearing...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Clear All Data
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h4 className="font-medium">Inject Fake Data</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Add demo/fake data for testing and demonstration purposes
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleInjectFakeData}
+                      disabled={injectingFakeData}
+                      className="w-full"
+                    >
+                      {injectingFakeData ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Injecting...
+                        </>
+                      ) : (
+                        <>
+                          <Database className="h-4 w-4 mr-2" />
+                          Inject Demo Data
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Device Integration Management */}
+            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <RefreshCw className="h-5 w-5 text-green-600" />
+                  Device Integration Management
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {/* SmartThings Operations */}
+                <div className="space-y-4">
+                  <h4 className="font-medium text-blue-600">SmartThings Operations</h4>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSyncSmartThings}
+                      disabled={syncingSmartThings}
+                      className="w-full"
+                    >
+                      {syncingSmartThings ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Force Sync
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleClearSTDevices}
+                      disabled={clearingSTDevices}
+                      className="w-full"
+                    >
+                      {clearingSTDevices ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Clearing...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Clear Devices
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleClearSTIntegration}
+                      disabled={clearingSTIntegration}
+                      className="w-full"
+                    >
+                      {clearingSTIntegration ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Clearing...
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="h-4 w-4 mr-2" />
+                          Reset Integration
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* INSTEON Operations */}
+                <div className="space-y-4">
+                  <h4 className="font-medium text-purple-600">INSTEON Operations</h4>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSyncInsteon}
+                      disabled={syncingInsteon}
+                      className="w-full"
+                    >
+                      {syncingInsteon ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Force Sync
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleClearInsteonDevices}
+                      disabled={clearingInsteonDevices}
+                      className="w-full"
+                    >
+                      {clearingInsteonDevices ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Clearing...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Clear INSTEON Devices
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* System Maintenance */}
+            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Wrench className="h-5 w-5 text-orange-600" />
+                  System Maintenance
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <h4 className="font-medium">Reset Settings</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Reset all system settings to their default values
+                    </p>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleResetSettings}
+                      disabled={resettingSettings}
+                      className="w-full"
+                    >
+                      {resettingSettings ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Resetting...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Reset Settings
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h4 className="font-medium">Clear Voice History</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Remove all stored voice command history and logs
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleClearVoiceHistory}
+                      disabled={clearingVoiceHistory}
+                      className="w-full"
+                    >
+                      {clearingVoiceHistory ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Clearing...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Clear History
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* System Diagnostics */}
+            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5 text-red-600" />
+                  System Diagnostics
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <h4 className="font-medium">System Health Check</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Run comprehensive system health diagnostics
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleHealthCheck}
+                      disabled={runningHealthCheck}
+                      className="w-full"
+                    >
+                      {runningHealthCheck ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Checking...
+                        </>
+                      ) : (
+                        <>
+                          <Activity className="h-4 w-4 mr-2" />
+                          Run Health Check
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h4 className="font-medium">Export Configuration</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Export system configuration as JSON file for backup
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleExportConfig}
+                      disabled={exportingConfig}
+                      className="w-full"
+                    >
+                      {exportingConfig ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Exporting...
+                        </>
+                      ) : (
+                        <>
+                          <FileDown className="h-4 w-4 mr-2" />
+                          Export Config
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Health Data Display */}
+                {healthData && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-lg border">
+                    <h5 className="font-medium mb-3">System Health Status</h5>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <h6 className="font-medium text-sm text-blue-600">Database</h6>
+                        <ul className="text-sm text-muted-foreground mt-1">
+                          <li>Devices: {healthData.database?.collections?.devices || 0}</li>
+                          <li>Scenes: {healthData.database?.collections?.scenes || 0}</li>
+                          <li>Automations: {healthData.database?.collections?.automations || 0}</li>
+                          <li>Voice Devices: {healthData.database?.collections?.voiceDevices || 0}</li>
+                          <li>User Profiles: {healthData.database?.collections?.userProfiles || 0}</li>
+                        </ul>
+                      </div>
+                      <div>
+                        <h6 className="font-medium text-sm text-green-600">System Status</h6>
+                        <ul className="text-sm text-muted-foreground mt-1">
+                          <li>Total Devices: {healthData.devices?.total || 0}</li>
+                          <li>Online Devices: {healthData.devices?.online || 0}</li>
+                          <li>Offline Devices: {healthData.devices?.offline || 0}</li>
+                          <li>Voice System: {healthData.voiceSystem?.online || 0}/{healthData.voiceSystem?.devices || 0} online</li>
+                          <li>SmartThings: {healthData.integrations?.smartthings?.connected ? 'Connected' : 'Disconnected'}</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Warning Notice */}
+            <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+              <p className="text-sm text-red-800 dark:text-red-200">
+                <strong>⚠️ Warning:</strong> The maintenance operations above can permanently delete data.
+                Always export your configuration before performing destructive operations. Use these tools carefully in production environments.
+              </p>
+            </div>
           </TabsContent>
 
           <div className="flex justify-end">
