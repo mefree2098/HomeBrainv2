@@ -1,9 +1,32 @@
 const SecurityAlarm = require('../models/SecurityAlarm');
 const smartThingsService = require('./smartThingsService');
+const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 
 class SecurityAlarmService {
   constructor() {
     this.smartthingsBaseUrl = 'https://api.smartthings.com/v1';
+  }
+
+  /**
+   * Check if SmartThings STHM is properly configured for security operations
+   * @returns {Promise<boolean>} True if STHM is configured and connected
+   */
+  async isSmartThingsConfiguredForSthm() {
+    try {
+      const integration = await SmartThingsIntegration.getIntegration();
+
+      // Check if integration is configured and connected
+      if (!integration.isConfigured || !integration.isConnected) {
+        return false;
+      }
+
+      // Check if STHM device IDs are configured
+      const sthm = integration.sthm || {};
+      return !!(sthm.armAwayDeviceId && sthm.armStayDeviceId && sthm.disarmDeviceId);
+    } catch (error) {
+      console.error('SecurityAlarmService: Error checking SmartThings configuration:', error.message);
+      return false;
+    }
   }
 
   /**
@@ -39,17 +62,20 @@ class SecurityAlarmService {
         throw new Error('Alarm is already armed');
       }
 
-      // Send command to SmartThings using the new service
-      try {
-        if (mode === 'stay') {
-          await smartThingsService.armSthmStay();
-        } else if (mode === 'away') {
-          await smartThingsService.armSthmAway();
+      // Send command to SmartThings if properly configured
+      const isSthmConfigured = await this.isSmartThingsConfiguredForSthm();
+      if (isSthmConfigured) {
+        try {
+          if (mode === 'stay') {
+            await smartThingsService.armSthmStay();
+          } else if (mode === 'away') {
+            await smartThingsService.armSthmAway();
+          }
+          console.log('SecurityAlarmService: SmartThings command sent successfully');
+        } catch (smartThingsError) {
+          console.warn('SecurityAlarmService: SmartThings command failed, continuing with local arming:', smartThingsError.message);
+          // Continue with local arming even if SmartThings fails
         }
-        console.log('SecurityAlarmService: SmartThings command sent successfully');
-      } catch (smartThingsError) {
-        console.warn('SecurityAlarmService: SmartThings command failed, continuing with local arming:', smartThingsError.message);
-        // Continue with local arming even if SmartThings fails
       }
 
       // Update local alarm state
@@ -79,13 +105,16 @@ class SecurityAlarmService {
         throw new Error('Alarm is already disarmed');
       }
 
-      // Send command to SmartThings using the new service
-      try {
-        await smartThingsService.disarmSthm();
-        console.log('SecurityAlarmService: SmartThings disarm command sent successfully');
-      } catch (smartThingsError) {
-        console.warn('SecurityAlarmService: SmartThings command failed, continuing with local disarming:', smartThingsError.message);
-        // Continue with local disarming even if SmartThings fails
+      // Send command to SmartThings if properly configured
+      const isSthmConfigured = await this.isSmartThingsConfiguredForSthm();
+      if (isSthmConfigured) {
+        try {
+          await smartThingsService.disarmSthm();
+          console.log('SecurityAlarmService: SmartThings disarm command sent successfully');
+        } catch (smartThingsError) {
+          console.warn('SecurityAlarmService: SmartThings command failed, continuing with local disarming:', smartThingsError.message);
+          // Continue with local disarming even if SmartThings fails
+        }
       }
 
       // Update local alarm state

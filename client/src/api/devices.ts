@@ -6,7 +6,11 @@ import api from './api';
 // Response: { success: boolean, data: { devices: Array<Device> } }
 export const getDevices = async (filters?: { room?: string; type?: string; status?: boolean; isOnline?: boolean }) => {
   try {
-    console.log('Fetching devices from API with filters:', filters);
+    if (filters && Object.keys(filters).length > 0) {
+      console.log('Fetching devices from API with filters:', filters);
+    } else {
+      console.log('Fetching all devices from API');
+    }
     
     const params = new URLSearchParams();
     if (filters?.room) params.append('room', filters.room);
