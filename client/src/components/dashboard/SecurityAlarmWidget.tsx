@@ -20,6 +20,9 @@ import {
 } from "@/api/security"
 import { useToast } from "@/hooks/useToast"
 
+// Debug mode controlled by environment variable
+const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === 'true';
+
 export function SecurityAlarmWidget() {
   const { toast } = useToast()
   const [alarmStatus, setAlarmStatus] = useState(null)
@@ -30,11 +33,11 @@ export function SecurityAlarmWidget() {
 
   const fetchAlarmStatus = async () => {
     try {
-      console.log('Fetching security alarm status')
+      if (DEBUG_MODE) console.log('Fetching security alarm status')
       const response = await getSecurityStatus()
-      
+
       if (response.success && response.status) {
-        console.log('Loaded alarm status:', response.status)
+        if (DEBUG_MODE) console.log('Loaded alarm status:', response.status)
         setAlarmStatus(response.status)
       }
     } catch (error) {
@@ -60,7 +63,7 @@ export function SecurityAlarmWidget() {
   const handleArmStay = async () => {
     setArming(true)
     try {
-      console.log('Arming security system in stay mode')
+      if (DEBUG_MODE) console.log('Arming security system in stay mode')
       const response = await armSecuritySystem('stay')
       
       if (response.success) {
@@ -85,7 +88,7 @@ export function SecurityAlarmWidget() {
   const handleArmAway = async () => {
     setArming(true)
     try {
-      console.log('Arming security system in away mode')
+      if (DEBUG_MODE) console.log('Arming security system in away mode')
       const response = await armSecuritySystem('away')
       
       if (response.success) {
@@ -110,7 +113,7 @@ export function SecurityAlarmWidget() {
   const handleDisarm = async () => {
     setDisarming(true)
     try {
-      console.log('Disarming security system')
+      if (DEBUG_MODE) console.log('Disarming security system')
       const response = await disarmSecuritySystem()
       
       if (response.success) {
@@ -135,7 +138,7 @@ export function SecurityAlarmWidget() {
   const handleSync = async () => {
     setSyncing(true)
     try {
-      console.log('Syncing with SmartThings')
+      if (DEBUG_MODE) console.log('Syncing with SmartThings')
       const response = await syncSecurityWithSmartThings()
       
       if (response.success) {

@@ -3,6 +3,9 @@
 
 import { getVoiceStatus } from '@/api/voice';
 
+// Debug mode controlled by environment variable
+const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === 'true';
+
 interface VoicePollingCallback {
   id: string;
   callback: (status: any) => void;
@@ -28,24 +31,24 @@ class VoicePollingManager {
 
   // Register a component to receive voice status updates
   subscribe(id: string, callback: (status: any) => void, onError?: (error: Error) => void): void {
-    console.log(`VoicePollingManager: Subscribing component ${id}`);
-    
+    if (DEBUG_MODE) console.log(`VoicePollingManager: Subscribing component ${id}`);
+
     this.callbacks.set(id, { id, callback, onError });
-    
+
     // If we have current status, immediately call the callback
     if (this.currentStatus) {
       callback(this.currentStatus);
     }
-    
+
     // Start polling if not already started
     this.startPolling();
   }
 
   // Unregister a component
   unsubscribe(id: string): void {
-    console.log(`VoicePollingManager: Unsubscribing component ${id}`);
+    if (DEBUG_MODE) console.log(`VoicePollingManager: Unsubscribing component ${id}`);
     this.callbacks.delete(id);
-    
+
     // Stop polling if no more callbacks
     if (this.callbacks.size === 0) {
       this.stopPolling();
@@ -60,24 +63,24 @@ class VoicePollingManager {
   // Force a refresh (useful for user-triggered updates)
   async refresh(): Promise<void> {
     if (this.isPolling) {
-      console.log('VoicePollingManager: Refresh requested but polling already in progress');
+      if (DEBUG_MODE) console.log('VoicePollingManager: Refresh requested but polling already in progress');
       return;
     }
-    
+
     await this.fetchAndNotify();
   }
 
   private startPolling(): void {
     if (this.pollInterval) {
-      console.log('VoicePollingManager: Polling already active');
+      if (DEBUG_MODE) console.log('VoicePollingManager: Polling already active');
       return;
     }
 
-    console.log('VoicePollingManager: Starting voice status polling');
-    
+    if (DEBUG_MODE) console.log('VoicePollingManager: Starting voice status polling');
+
     // Initial fetch
     this.fetchAndNotify();
-    
+
     // Set up polling interval with exponential backoff on errors
     const getInterval = () => {
       const baseInterval = 30000; // 30 seconds
@@ -88,8 +91,8 @@ class VoicePollingManager {
 
     const setupInterval = () => {
       const intervalTime = getInterval();
-      console.log(`VoicePollingManager: Setting up polling with ${intervalTime/1000}s interval`);
-      
+      if (DEBUG_MODE) console.log(`VoicePollingManager: Setting up polling with ${intervalTime/1000}s interval`);
+
       this.pollInterval = setInterval(() => {
         this.fetchAndNotify();
       }, intervalTime);
@@ -100,7 +103,7 @@ class VoicePollingManager {
 
   private stopPolling(): void {
     if (this.pollInterval) {
-      console.log('VoicePollingManager: Stopping voice status polling');
+      if (DEBUG_MODE) console.log('VoicePollingManager: Stopping voice status polling');
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
@@ -108,15 +111,15 @@ class VoicePollingManager {
 
   private async fetchAndNotify(): Promise<void> {
     if (this.isPolling) {
-      console.log('VoicePollingManager: Fetch already in progress, skipping');
+      if (DEBUG_MODE) console.log('VoicePollingManager: Fetch already in progress, skipping');
       return;
     }
 
     this.isPolling = true;
     const now = Date.now();
-    
+
     try {
-      console.log('VoicePollingManager: Fetching voice status');
+      if (DEBUG_MODE) console.log('VoicePollingManager: Fetching voice status');
       const status = await getVoiceStatus();
       
       this.currentStatus = status;

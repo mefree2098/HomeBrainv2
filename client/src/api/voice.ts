@@ -5,14 +5,19 @@ const requestCache = new Map<string, { data: any; timestamp: number; promise?: P
 const CACHE_DURATION = 10000; // 10 seconds cache (more aggressive)
 const IN_FLIGHT_REQUESTS = new Map<string, Promise<any>>(); // Track in-flight requests globally
 
-// Debug function to monitor cache usage
+// Debug mode controlled by environment variable
+const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_API_DEBUG === 'true';
+
+// Debug function to monitor cache usage (only in debug mode)
 const logCacheStats = () => {
-  console.log('Voice API Cache Stats:', {
-    cached: requestCache.size,
-    inFlight: IN_FLIGHT_REQUESTS.size,
-    keys: Array.from(requestCache.keys()),
-    flightKeys: Array.from(IN_FLIGHT_REQUESTS.keys())
-  });
+  if (DEBUG_MODE) {
+    console.log('Voice API Cache Stats:', {
+      cached: requestCache.size,
+      inFlight: IN_FLIGHT_REQUESTS.size,
+      keys: Array.from(requestCache.keys()),
+      flightKeys: Array.from(IN_FLIGHT_REQUESTS.keys())
+    });
+  }
 };
 
 // Description: Get voice system status
@@ -26,17 +31,17 @@ export const getVoiceStatus = async () => {
   // Check if we have a recent cached response
   const cached = requestCache.get(cacheKey);
   if (cached && cached.data && (now - cached.timestamp) < CACHE_DURATION) {
-    console.log('Using cached voice status (10s cache)');
+    if (DEBUG_MODE) console.log('Using cached voice status (10s cache)');
     return cached.data;
   }
-  
+
   // Check for global in-flight request
   if (IN_FLIGHT_REQUESTS.has(cacheKey)) {
-    console.log('Waiting for global in-flight voice status request');
+    if (DEBUG_MODE) console.log('Waiting for global in-flight voice status request');
     return await IN_FLIGHT_REQUESTS.get(cacheKey);
   }
-  
-  console.log('Fetching voice status from API')
+
+  if (DEBUG_MODE) console.log('Fetching voice status from API');
   logCacheStats();
   
   // Create and track the promise globally
@@ -80,17 +85,17 @@ export const getVoiceDevices = async () => {
   // Check if we have a recent cached response
   const cached = requestCache.get(cacheKey);
   if (cached && cached.data && (now - cached.timestamp) < CACHE_DURATION) {
-    console.log('Using cached voice devices (10s cache)');
+    if (DEBUG_MODE) console.log('Using cached voice devices (10s cache)');
     return cached.data;
   }
-  
+
   // Check for global in-flight request
   if (IN_FLIGHT_REQUESTS.has(cacheKey)) {
-    console.log('Waiting for global in-flight voice devices request');
+    if (DEBUG_MODE) console.log('Waiting for global in-flight voice devices request');
     return await IN_FLIGHT_REQUESTS.get(cacheKey);
   }
-  
-  console.log('Fetching voice devices from API')
+
+  if (DEBUG_MODE) console.log('Fetching voice devices from API');
   logCacheStats();
   
   // Create and track the promise globally

@@ -8,6 +8,9 @@ import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/useToast"
 import { voicePollingManager } from "@/services/voicePollingManager"
 
+// Debug mode controlled by environment variable
+const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === 'true';
+
 export function Header() {
   const { logout } = useAuth()
   const navigate = useNavigate()
@@ -22,13 +25,13 @@ export function Header() {
   const errorCountRef = useRef(0)
 
   useEffect(() => {
-    console.log(`Header component ${componentId} mounting - subscribing to voice polling manager`)
-    
+    if (DEBUG_MODE) console.log(`Header component ${componentId} mounting - subscribing to voice polling manager`)
+
     // Subscribe to voice status updates from singleton manager
     voicePollingManager.subscribe(
       componentId,
       (status) => {
-        console.log(`Header ${componentId} received voice status update:`, status)
+        if (DEBUG_MODE) console.log(`Header ${componentId} received voice status update:`, status)
         setVoiceStatus(status)
         errorCountRef.current = 0
       },
@@ -49,7 +52,7 @@ export function Header() {
 
     // Cleanup on unmount
     return () => {
-      console.log(`Header component ${componentId} unmounting - unsubscribing from voice polling manager`)
+      if (DEBUG_MODE) console.log(`Header component ${componentId} unmounting - unsubscribing from voice polling manager`)
       voicePollingManager.unsubscribe(componentId)
     }
   }, [componentId, toast])
@@ -61,7 +64,7 @@ export function Header() {
   }
 
   const toggleVoiceListening = () => {
-    console.log('Toggling voice listening:', !voiceStatus.listening)
+    if (DEBUG_MODE) console.log('Toggling voice listening:', !voiceStatus.listening)
     setVoiceStatus(prev => ({ ...prev, listening: !prev.listening }))
     toast({
       title: voiceStatus.listening ? "Voice Disabled" : "Voice Enabled",
