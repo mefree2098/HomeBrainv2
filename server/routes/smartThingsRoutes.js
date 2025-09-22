@@ -5,11 +5,14 @@ const smartThingsService = require('../services/smartThingsService');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
 
+// Create auth middleware instance
+const auth = requireUser();
+
 // Description: Get SmartThings integration status
 // Endpoint: GET /api/smartthings/status
 // Request: {}
 // Response: { success: boolean, integration: Object }
-router.get('/status', requireUser, async (req, res) => {
+router.get('/status', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Getting integration status');
 
@@ -34,7 +37,7 @@ router.get('/status', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/configure
 // Request: { clientId: string, clientSecret: string, redirectUri?: string }
 // Response: { success: boolean, message: string }
-router.post('/configure', requireUser, async (req, res) => {
+router.post('/configure', auth, async (req, res) => {
   try {
     const { clientId, clientSecret, redirectUri } = req.body;
 
@@ -76,7 +79,7 @@ router.post('/configure', requireUser, async (req, res) => {
 // Endpoint: GET /api/smartthings/auth/url
 // Request: {}
 // Response: { success: boolean, authUrl: string }
-router.get('/auth/url', requireUser, async (req, res) => {
+router.get('/auth/url', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Generating authorization URL');
 
@@ -129,7 +132,7 @@ router.get('/callback', async (req, res) => {
 // Endpoint: POST /api/smartthings/test
 // Request: {}
 // Response: { success: boolean, message: string, deviceCount?: number }
-router.post('/test', requireUser, async (req, res) => {
+router.post('/test', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Testing connection');
 
@@ -150,7 +153,7 @@ router.post('/test', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/disconnect
 // Request: {}
 // Response: { success: boolean, message: string }
-router.post('/disconnect', requireUser, async (req, res) => {
+router.post('/disconnect', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Disconnecting integration');
 
@@ -174,7 +177,7 @@ router.post('/disconnect', requireUser, async (req, res) => {
 // Endpoint: GET /api/smartthings/devices
 // Request: {}
 // Response: { success: boolean, devices: Array }
-router.get('/devices', requireUser, async (req, res) => {
+router.get('/devices', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Fetching devices');
 
@@ -198,7 +201,7 @@ router.get('/devices', requireUser, async (req, res) => {
 // Endpoint: GET /api/smartthings/devices/:deviceId
 // Request: {}
 // Response: { success: boolean, device: Object }
-router.get('/devices/:deviceId', requireUser, async (req, res) => {
+router.get('/devices/:deviceId', auth, async (req, res) => {
   try {
     const { deviceId } = req.params;
 
@@ -224,7 +227,7 @@ router.get('/devices/:deviceId', requireUser, async (req, res) => {
 // Endpoint: GET /api/smartthings/devices/:deviceId/status
 // Request: {}
 // Response: { success: boolean, status: Object }
-router.get('/devices/:deviceId/status', requireUser, async (req, res) => {
+router.get('/devices/:deviceId/status', auth, async (req, res) => {
   try {
     const { deviceId } = req.params;
 
@@ -250,7 +253,7 @@ router.get('/devices/:deviceId/status', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/devices/:deviceId/commands
 // Request: { commands: Array }
 // Response: { success: boolean, result: Object }
-router.post('/devices/:deviceId/commands', requireUser, async (req, res) => {
+router.post('/devices/:deviceId/commands', auth, async (req, res) => {
   try {
     const { deviceId } = req.params;
     const { commands } = req.body;
@@ -284,7 +287,7 @@ router.post('/devices/:deviceId/commands', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/devices/:deviceId/on
 // Request: {}
 // Response: { success: boolean, result: Object }
-router.post('/devices/:deviceId/on', requireUser, async (req, res) => {
+router.post('/devices/:deviceId/on', auth, async (req, res) => {
   try {
     const { deviceId } = req.params;
 
@@ -310,7 +313,7 @@ router.post('/devices/:deviceId/on', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/devices/:deviceId/off
 // Request: {}
 // Response: { success: boolean, result: Object }
-router.post('/devices/:deviceId/off', requireUser, async (req, res) => {
+router.post('/devices/:deviceId/off', auth, async (req, res) => {
   try {
     const { deviceId } = req.params;
 
@@ -336,7 +339,7 @@ router.post('/devices/:deviceId/off', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/devices/:deviceId/level
 // Request: { level: number }
 // Response: { success: boolean, result: Object }
-router.post('/devices/:deviceId/level', requireUser, async (req, res) => {
+router.post('/devices/:deviceId/level', auth, async (req, res) => {
   try {
     const { deviceId } = req.params;
     const { level } = req.body;
@@ -370,7 +373,7 @@ router.post('/devices/:deviceId/level', requireUser, async (req, res) => {
 // Endpoint: GET /api/smartthings/scenes
 // Request: {}
 // Response: { success: boolean, scenes: Array }
-router.get('/scenes', requireUser, async (req, res) => {
+router.get('/scenes', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Fetching scenes');
 
@@ -394,7 +397,7 @@ router.get('/scenes', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/scenes/:sceneId/execute
 // Request: {}
 // Response: { success: boolean, result: Object }
-router.post('/scenes/:sceneId/execute', requireUser, async (req, res) => {
+router.post('/scenes/:sceneId/execute', auth, async (req, res) => {
   try {
     const { sceneId } = req.params;
 
@@ -420,7 +423,7 @@ router.post('/scenes/:sceneId/execute', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/sthm/configure
 // Request: { armAwayDeviceId?: string, armStayDeviceId?: string, disarmDeviceId?: string }
 // Response: { success: boolean, message: string }
-router.post('/sthm/configure', requireUser, async (req, res) => {
+router.post('/sthm/configure', auth, async (req, res) => {
   try {
     const { armAwayDeviceId, armStayDeviceId, disarmDeviceId } = req.body;
 
@@ -450,7 +453,7 @@ router.post('/sthm/configure', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/sthm/arm-stay
 // Request: {}
 // Response: { success: boolean, result: Object }
-router.post('/sthm/arm-stay', requireUser, async (req, res) => {
+router.post('/sthm/arm-stay', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Arming STHM (Stay mode)');
 
@@ -474,7 +477,7 @@ router.post('/sthm/arm-stay', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/sthm/arm-away
 // Request: {}
 // Response: { success: boolean, result: Object }
-router.post('/sthm/arm-away', requireUser, async (req, res) => {
+router.post('/sthm/arm-away', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Arming STHM (Away mode)');
 
@@ -498,7 +501,7 @@ router.post('/sthm/arm-away', requireUser, async (req, res) => {
 // Endpoint: POST /api/smartthings/sthm/disarm
 // Request: {}
 // Response: { success: boolean, result: Object }
-router.post('/sthm/disarm', requireUser, async (req, res) => {
+router.post('/sthm/disarm', auth, async (req, res) => {
   try {
     console.log('SmartThings Routes: Disarming STHM');
 
