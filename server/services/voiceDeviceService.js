@@ -103,7 +103,8 @@ class VoiceDeviceService {
         }
       };
 
-      console.log('VoiceDeviceService: System status calculated:', status);
+      // Log a cleaner status summary instead of the full object
+      console.log(`VoiceDeviceService: System status - ${onlineDevices}/${totalDevices} devices online, listening: ${listening}, connected: ${connected}`);
       return status;
     } catch (error) {
       console.error('VoiceDeviceService: Error getting system status:', error.message);
