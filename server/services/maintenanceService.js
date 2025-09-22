@@ -185,23 +185,53 @@ class MaintenanceService {
         {
           name: 'Sunrise Automation',
           description: 'Gradually turn on lights at sunrise',
-          trigger: { type: 'time', value: '07:00' },
-          actions: [],
-          isEnabled: true
+          trigger: {
+            type: 'time',
+            conditions: { time: '07:00', days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] }
+          },
+          actions: [
+            {
+              type: 'device_control',
+              target: 'living_room_lights',
+              parameters: { action: 'turnOn', brightness: 50 }
+            }
+          ],
+          enabled: true,
+          category: 'comfort'
         },
         {
           name: 'Sunset Security',
           description: 'Turn on outdoor lights at sunset',
-          trigger: { type: 'sunset' },
-          actions: [],
-          isEnabled: true
+          trigger: {
+            type: 'schedule',
+            conditions: { event: 'sunset', offset: 0 }
+          },
+          actions: [
+            {
+              type: 'device_control',
+              target: 'outdoor_lights',
+              parameters: { action: 'turnOn', brightness: 100 }
+            }
+          ],
+          enabled: true,
+          category: 'security'
         },
         {
           name: 'Motion Detection',
           description: 'Turn on lights when motion is detected',
-          trigger: { type: 'device', deviceId: null, condition: 'motion' },
-          actions: [],
-          isEnabled: true
+          trigger: {
+            type: 'sensor',
+            conditions: { sensor: 'motion_sensor', state: 'active', room: 'living_room' }
+          },
+          actions: [
+            {
+              type: 'device_control',
+              target: 'room_lights',
+              parameters: { action: 'turnOn', brightness: 75 }
+            }
+          ],
+          enabled: true,
+          category: 'convenience'
         }
       ];
 
