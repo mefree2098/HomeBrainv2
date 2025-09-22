@@ -50,16 +50,11 @@ router.post('/configure', auth, async (req, res) => {
       });
     }
 
-    const integration = await SmartThingsIntegration.getIntegration();
-    integration.clientId = clientId;
-    integration.clientSecret = clientSecret;
-
-    if (redirectUri) {
-      integration.redirectUri = redirectUri;
-    }
-
-    integration.isConfigured = true;
-    await integration.save();
+    const integration = await SmartThingsIntegration.configureIntegration({
+      clientId,
+      clientSecret,
+      redirectUri
+    });
 
     console.log('SmartThings Routes: OAuth configuration updated successfully');
     res.json({

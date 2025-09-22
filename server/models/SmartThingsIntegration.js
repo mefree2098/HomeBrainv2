@@ -108,16 +108,76 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
   let integration = await this.findOne();
 
   if (!integration) {
-    console.log('SmartThingsIntegration: No integration found, creating default configuration');
-    integration = new this({
+    console.log('SmartThingsIntegration: No integration found, returning unconfigured status');
+    // Return a plain object with default unconfigured state instead of trying to save invalid document
+    return {
       clientId: process.env.SMARTTHINGS_CLIENT_ID || '',
       clientSecret: process.env.SMARTTHINGS_CLIENT_SECRET || '',
-      redirectUri: process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback'
-    });
-    await integration.save();
-    console.log('SmartThingsIntegration: Default integration configuration created');
+      redirectUri: process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback',
+      accessToken: '',
+      refreshToken: '',
+      tokenType: 'Bearer',
+      expiresAt: null,
+      scope: ['r:devices:*', 'x:devices:*', 'r:scenes:*', 'x:scenes:*', 'r:locations:*'],
+      isConfigured: false,
+      isConnected: false,
+      lastSync: null,
+      lastError: '',
+      connectedDevices: [],
+      sthm: {
+        armAwayDeviceId: '',
+        armStayDeviceId: '',
+        disarmDeviceId: ''
+      },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      // Add methods that would be expected
+      isTokenValid: () => false,
+      toSanitized: function() {
+        const sanitized = { ...this };
+        if (sanitized.clientSecret) {
+          sanitized.clientSecret = sanitized.clientSecret.replace(/.(?=.{4})/g, '*');
+        }
+        if (sanitized.accessToken) {
+          sanitized.accessToken = sanitized.accessToken.replace(/.(?=.{4})/g, '*');
+        }
+        if (sanitized.refreshToken) {
+          sanitized.refreshToken = sanitized.refreshToken.replace(/.(?=.{4})/g, '*');
+        }
+        return sanitized;
+      }
+    };
   }
 
+  return integration;
+};
+
+// Static method to create or update integration with OAuth configuration
+SmartThingsIntegrationSchema.statics.configureIntegration = async function(config) {
+  console.log('SmartThingsIntegration: Configuring integration with OAuth settings');
+
+  let integration = await this.findOne();
+
+  if (!integration) {
+    console.log('SmartThingsIntegration: Creating new integration configuration');
+    integration = new this({
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+      redirectUri: config.redirectUri || process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback',
+      isConfigured: true
+    });
+  } else {
+    console.log('SmartThingsIntegration: Updating existing integration configuration');
+    integration.clientId = config.clientId;
+    integration.clientSecret = config.clientSecret;
+    if (config.redirectUri) {
+      integration.redirectUri = config.redirectUri;
+    }
+    integration.isConfigured = true;
+  }
+
+  await integration.save();
+  console.log('SmartThingsIntegration: OAuth configuration saved successfully');
   return integration;
 };
 

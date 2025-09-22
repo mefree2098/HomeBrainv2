@@ -136,6 +136,15 @@ export function Settings() {
       }
     } catch (error) {
       console.error('Failed to load SmartThings status:', error);
+      // Set default unconfigured state when loading fails
+      setSmartthingsStatus({
+        isConfigured: false,
+        isConnected: false,
+        clientId: '',
+        clientSecret: '',
+        redirectUri: '',
+        deviceCount: 0
+      });
       // Don't show error toast for status loading as it's not critical
     }
   };
