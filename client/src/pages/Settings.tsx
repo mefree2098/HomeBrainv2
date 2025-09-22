@@ -19,19 +19,30 @@ import {
   TestTube,
   Brain,
   Cpu,
-  Server
+  Server,
+  ExternalLink,
+  CheckCircle,
+  XCircle,
+  AlertCircle
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
-import { 
-  getSettings, 
-  updateSettings, 
-  testElevenLabsApiKey, 
-  testOpenAIApiKey, 
-  testAnthropicApiKey, 
-  testLocalLLM, 
-  getSetting 
+import {
+  getSettings,
+  updateSettings,
+  testElevenLabsApiKey,
+  testOpenAIApiKey,
+  testAnthropicApiKey,
+  testLocalLLM,
+  getSetting
 } from "@/api/settings"
+import {
+  getSmartThingsStatus,
+  configureSmartThingsOAuth,
+  getSmartThingsAuthUrl,
+  testSmartThingsConnection,
+  disconnectSmartThings
+} from "@/api/smartThings"
 
 export function Settings() {
   const { toast } = useToast()
@@ -40,6 +51,10 @@ export function Settings() {
   const [testingOpenAI, setTestingOpenAI] = useState(false)
   const [testingAnthropic, setTestingAnthropic] = useState(false)
   const [testingLocalLLM, setTestingLocalLLM] = useState(false)
+  const [smartthingsStatus, setSmartthingsStatus] = useState(null)
+  const [testingSmartThings, setTestingSmartThings] = useState(false)
+  const [configuringSmartThings, setConfiguringSmartThings] = useState(false)
+  const [disconnectingSmartThings, setDisconnectingSmartThings] = useState(false)
   const { register, handleSubmit, setValue, watch, reset } = useForm({
     defaultValues: {
       location: "New York, NY",
@@ -51,6 +66,9 @@ export function Settings() {
       enableNotifications: true,
       insteonPort: "/dev/ttyUSB0",
       smartthingsToken: "",
+      smartthingsClientId: "",
+      smartthingsClientSecret: "",
+      smartthingsRedirectUri: "",
       elevenlabsApiKey: "",
       llmProvider: "openai",
       openaiApiKey: "",
@@ -77,7 +95,7 @@ export function Settings() {
           Object.entries(response.settings).forEach(([key, value]) => {
             if (value !== undefined) {
               // For masked sensitive fields, show a placeholder indicating key is configured
-              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'openaiApiKey' || key === 'anthropicApiKey') && 
+              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey') &&
                   typeof value === 'string' && value.includes('*')) {
                 console.log(`Found masked field: ${key}, showing placeholder`);
                 setValue(key, '••••••••••••••••••••••••••••••••••••••••••••••••••'); // Placeholder to show key is configured
@@ -103,7 +121,50 @@ export function Settings() {
     };
 
     loadSettings();
+    loadSmartThingsStatus();
   }, [setValue, toast]);
+
+  // Load SmartThings integration status
+  const loadSmartThingsStatus = async () => {
+    try {
+      console.log('Loading SmartThings integration status...');
+      const response = await getSmartThingsStatus();
+
+      if (response.success && response.integration) {
+        console.log('SmartThings status loaded:', response.integration);
+        setSmartthingsStatus(response.integration);
+      }
+    } catch (error) {
+      console.error('Failed to load SmartThings status:', error);
+      // Don't show error toast for status loading as it's not critical
+    }
+  };
+
+  // Handle OAuth callback from URL parameters
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const smartthingsResult = urlParams.get('smartthings');
+    const message = urlParams.get('message');
+
+    if (smartthingsResult === 'success') {
+      toast({
+        title: "SmartThings Connected",
+        description: "SmartThings integration has been successfully configured!"
+      });
+      // Reload status and settings after successful OAuth
+      loadSmartThingsStatus();
+      // Clear URL parameters
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (smartthingsResult === 'error') {
+      toast({
+        title: "SmartThings Connection Failed",
+        description: message || "Failed to connect SmartThings integration",
+        variant: "destructive"
+      });
+      // Clear URL parameters
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [toast]);
 
   const handleSaveSettings = async (data: any) => {
     setLoading(true)
@@ -117,6 +178,9 @@ export function Settings() {
       }
       if (settingsToSave.smartthingsToken && settingsToSave.smartthingsToken.startsWith('••••')) {
         delete settingsToSave.smartthingsToken; // Don't update if it's just the placeholder
+      }
+      if (settingsToSave.smartthingsClientSecret && settingsToSave.smartthingsClientSecret.startsWith('••••')) {
+        delete settingsToSave.smartthingsClientSecret; // Don't update if it's just the placeholder
       }
       if (settingsToSave.openaiApiKey && settingsToSave.openaiApiKey.startsWith('••••')) {
         delete settingsToSave.openaiApiKey; // Don't update if it's just the placeholder
@@ -355,6 +419,146 @@ export function Settings() {
     }
   }
 
+  const handleConfigureSmartThings = async () => {
+    const clientId = watch('smartthingsClientId');
+    const clientSecret = watch('smartthingsClientSecret');
+    const redirectUri = watch('smartthingsRedirectUri');
+
+    if (!clientId || !clientSecret) {
+      toast({
+        title: "Error",
+        description: "Client ID and Client Secret are required for SmartThings OAuth",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setConfiguringSmartThings(true);
+    try {
+      console.log('Configuring SmartThings OAuth...');
+
+      const response = await configureSmartThingsOAuth({
+        clientId,
+        clientSecret,
+        redirectUri: redirectUri || undefined
+      });
+
+      if (response.success) {
+        toast({
+          title: "Configuration Saved",
+          description: "SmartThings OAuth configuration has been saved. You can now connect your SmartThings account."
+        });
+        // Reload status after configuration
+        loadSmartThingsStatus();
+      }
+    } catch (error) {
+      console.error('SmartThings OAuth configuration failed:', error);
+      toast({
+        title: "Configuration Failed",
+        description: error.message || "Failed to configure SmartThings OAuth",
+        variant: "destructive"
+      });
+    } finally {
+      setConfiguringSmartThings(false);
+    }
+  };
+
+  const handleConnectSmartThings = async () => {
+    try {
+      console.log('Getting SmartThings authorization URL...');
+
+      const response = await getSmartThingsAuthUrl();
+
+      if (response.success && response.authUrl) {
+        console.log('Redirecting to SmartThings authorization...');
+        window.location.href = response.authUrl;
+      }
+    } catch (error) {
+      console.error('Failed to get SmartThings authorization URL:', error);
+      toast({
+        title: "Connection Failed",
+        description: error.message || "Failed to get SmartThings authorization URL. Please ensure OAuth is configured first.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleTestSmartThings = async () => {
+    setTestingSmartThings(true);
+    try {
+      console.log('Testing SmartThings connection...');
+
+      const response = await testSmartThingsConnection();
+
+      if (response.success) {
+        toast({
+          title: "Connection Successful",
+          description: `SmartThings connection is working! Found ${response.deviceCount || 0} devices.`
+        });
+      }
+    } catch (error) {
+      console.error('SmartThings connection test failed:', error);
+      toast({
+        title: "Connection Failed",
+        description: error.message || "Failed to connect to SmartThings API",
+        variant: "destructive"
+      });
+    } finally {
+      setTestingSmartThings(false);
+    }
+  };
+
+  const handleDisconnectSmartThings = async () => {
+    setDisconnectingSmartThings(true);
+    try {
+      console.log('Disconnecting SmartThings integration...');
+
+      const response = await disconnectSmartThings();
+
+      if (response.success) {
+        toast({
+          title: "Disconnected",
+          description: "SmartThings integration has been disconnected successfully."
+        });
+        // Reload status after disconnection
+        loadSmartThingsStatus();
+      }
+    } catch (error) {
+      console.error('SmartThings disconnection failed:', error);
+      toast({
+        title: "Disconnection Failed",
+        description: error.message || "Failed to disconnect SmartThings integration",
+        variant: "destructive"
+      });
+    } finally {
+      setDisconnectingSmartThings(false);
+    }
+  };
+
+  const getSmartThingsStatusIcon = () => {
+    if (!smartthingsStatus) return <AlertCircle className="h-4 w-4 text-gray-500" />;
+
+    if (smartthingsStatus.isConnected) {
+      return <CheckCircle className="h-4 w-4 text-green-600" />;
+    } else if (smartthingsStatus.isConfigured) {
+      return <AlertCircle className="h-4 w-4 text-yellow-600" />;
+    } else {
+      return <XCircle className="h-4 w-4 text-red-600" />;
+    }
+  };
+
+  const getSmartThingsStatusText = () => {
+    if (!smartthingsStatus) return "Loading...";
+
+    if (smartthingsStatus.isConnected) {
+      return "Connected and authenticated";
+    } else if (smartthingsStatus.isConfigured) {
+      return "Configured but not connected";
+    } else {
+      return "Not configured";
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -542,17 +746,166 @@ export function Settings() {
                     Serial port for INSTEON PowerLinc Modem
                   </p>
                 </div>
-                <div>
-                  <label className="text-sm font-medium">SmartThings Token</label>
-                  <Input
-                    {...register("smartthingsToken")}
-                    type="password"
-                    placeholder="Enter SmartThings API token"
-                    className="mt-1"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Personal access token for SmartThings integration
-                  </p>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 p-3 bg-blue-50/50 rounded-lg border">
+                    {getSmartThingsStatusIcon()}
+                    <div>
+                      <p className="font-medium text-sm">SmartThings Integration Status</p>
+                      <p className="text-xs text-muted-foreground">{getSmartThingsStatusText()}</p>
+                      {smartthingsStatus?.isConnected && smartthingsStatus?.deviceCount && (
+                        <p className="text-xs text-green-600">{smartthingsStatus.deviceCount} devices available</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4">
+                    <div>
+                      <label className="text-sm font-medium">SmartThings Client ID</label>
+                      <Input
+                        {...register("smartthingsClientId")}
+                        placeholder="Enter SmartThings Client ID"
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        OAuth Client ID from your SmartThings Developer app
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium">SmartThings Client Secret</label>
+                      <Input
+                        {...register("smartthingsClientSecret")}
+                        type="password"
+                        placeholder={watch("smartthingsClientSecret")?.startsWith('••••') ? "Client secret configured" : "Enter SmartThings Client Secret"}
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        OAuth Client Secret from your SmartThings Developer app
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium">Redirect URI (Optional)</label>
+                      <Input
+                        {...register("smartthingsRedirectUri")}
+                        placeholder="https://yourdomain.com/api/smartthings/callback"
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Custom redirect URI (defaults to current domain + /api/smartthings/callback)
+                      </p>
+                    </div>
+
+                    <div className="flex gap-2 flex-wrap">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleConfigureSmartThings}
+                        disabled={configuringSmartThings || !watch('smartthingsClientId') || !watch('smartthingsClientSecret')}
+                      >
+                        {configuringSmartThings ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Configuring...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-4 w-4 mr-2" />
+                            Configure OAuth
+                          </>
+                        )}
+                      </Button>
+
+                      {smartthingsStatus?.isConfigured && !smartthingsStatus?.isConnected && (
+                        <Button
+                          type="button"
+                          variant="default"
+                          size="sm"
+                          onClick={handleConnectSmartThings}
+                          className="bg-green-600 hover:bg-green-700"
+                        >
+                          <ExternalLink className="h-4 w-4 mr-2" />
+                          Connect SmartThings
+                        </Button>
+                      )}
+
+                      {smartthingsStatus?.isConnected && (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleTestSmartThings}
+                            disabled={testingSmartThings}
+                          >
+                            {testingSmartThings ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                Testing...
+                              </>
+                            ) : (
+                              <>
+                                <TestTube className="h-4 w-4 mr-2" />
+                                Test Connection
+                              </>
+                            )}
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={handleDisconnectSmartThings}
+                            disabled={disconnectingSmartThings}
+                          >
+                            {disconnectingSmartThings ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                                Disconnecting...
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="h-4 w-4 mr-2" />
+                                Disconnect
+                              </>
+                            )}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                      <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                        <strong>OAuth Setup Required:</strong> To use SmartThings integration, you need to create a
+                        Developer Application in the SmartThings Developer Workspace and provide the Client ID and
+                        Client Secret above. The old API token method is deprecated.
+                      </p>
+                    </div>
+
+                    {/* Legacy token field - kept for backward compatibility but marked as deprecated */}
+                    <details className="group">
+                      <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
+                        Legacy Token Configuration (Deprecated)
+                      </summary>
+                      <div className="mt-2 space-y-2">
+                        <div>
+                          <label className="text-sm font-medium text-muted-foreground">SmartThings Token (Legacy)</label>
+                          <Input
+                            {...register("smartthingsToken")}
+                            type="password"
+                            placeholder="Enter SmartThings API token"
+                            className="mt-1 opacity-60"
+                            disabled
+                          />
+                          <p className="text-xs text-muted-foreground mt-1">
+                            <strong>Deprecated:</strong> Personal access tokens are no longer supported by SmartThings.
+                            Please use OAuth configuration above.
+                          </p>
+                        </div>
+                      </div>
+                    </details>
+                  </div>
                 </div>
               </CardContent>
             </Card>
