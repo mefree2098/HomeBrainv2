@@ -7,6 +7,10 @@ require('./Scene');
 require('./Automation');
 require('./VoiceDevice');
 require('./UserProfile');
+require('./Settings');
+require('./SecurityAlarm');
+require('./VoiceCommand');
+require('./SmartThingsIntegration');
 
 const dbInit = async (options = {}) => {
   const mongoUrl = process.env.DATABASE_URL || 'mongodb://localhost/myDb';

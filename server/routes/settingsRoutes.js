@@ -435,4 +435,77 @@ router.post('/test-local-llm', auth, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/settings/test-smartthings
+ * Test SmartThings API connectivity
+ */
+router.post('/test-smartthings', auth, async (req, res) => {
+  try {
+    console.log('POST /api/settings/test-smartthings - Testing SmartThings connectivity');
+
+    const { token, useOAuth } = req.body;
+
+    // Import the SmartThings service
+    const smartThingsService = require('../services/smartThingsService');
+
+    if (useOAuth === false && token) {
+      // Test with provided PAT
+      console.log('Testing SmartThings with Personal Access Token');
+
+      const axios = require('axios');
+      const response = await axios.get('https://api.smartthings.com/v1/devices', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      });
+
+      console.log('SmartThings PAT test successful');
+      res.status(200).json({
+        success: true,
+        message: 'SmartThings Personal Access Token is valid',
+        deviceCount: response.data.items?.length || 0
+      });
+    } else {
+      // Test with OAuth integration
+      console.log('Testing SmartThings with OAuth');
+
+      const result = await smartThingsService.testConnection();
+
+      console.log('SmartThings OAuth test successful');
+      res.status(200).json(result);
+    }
+
+  } catch (error) {
+    console.log('SmartThings connectivity test failed:', error.message);
+    console.log('SmartThings error details:', error.response?.data || error.code);
+
+    if (error.response?.status === 401) {
+      return res.status(400).json({
+        success: false,
+        message: 'SmartThings authentication failed - invalid token or OAuth not configured'
+      });
+    } else if (error.response?.status === 403) {
+      return res.status(400).json({
+        success: false,
+        message: 'SmartThings access forbidden - check token permissions'
+      });
+    } else if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot connect to SmartThings API - network issue'
+      });
+    }
+
+    console.error('Error in POST /api/settings/test-smartthings:', error.message);
+    console.error('Full error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test SmartThings connectivity',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;

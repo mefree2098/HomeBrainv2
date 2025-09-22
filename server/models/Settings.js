@@ -50,6 +50,23 @@ const SettingsSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // SmartThings OAuth Configuration
+  smartthingsClientId: {
+    type: String,
+    default: ''
+  },
+  smartthingsClientSecret: {
+    type: String,
+    default: ''
+  },
+  smartthingsRedirectUri: {
+    type: String,
+    default: ''
+  },
+  smartthingsUseOAuth: {
+    type: Boolean,
+    default: true
+  },
   elevenlabsApiKey: {
     type: String,
     default: ''
@@ -156,6 +173,9 @@ SettingsSchema.methods.toSanitized = function() {
   }
   if (sanitized.smartthingsToken) {
     sanitized.smartthingsToken = sanitized.smartthingsToken.replace(/.(?=.{4})/g, '*');
+  }
+  if (sanitized.smartthingsClientSecret) {
+    sanitized.smartthingsClientSecret = sanitized.smartthingsClientSecret.replace(/.(?=.{4})/g, '*');
   }
   if (sanitized.openaiApiKey) {
     sanitized.openaiApiKey = sanitized.openaiApiKey.replace(/.(?=.{4})/g, '*');

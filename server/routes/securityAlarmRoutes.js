@@ -84,15 +84,7 @@ router.post('/arm', auth, async (req, res) => {
       });
     }
     
-    // Get SmartThings token from settings
-    let smartthingsToken = null;
-    try {
-      smartthingsToken = await settingsService.getSetting('smartthingsToken');
-    } catch (settingsError) {
-      console.log('Could not retrieve SmartThings token:', settingsError.message);
-    }
-    
-    const alarm = await securityAlarmService.armAlarm(mode, userId, smartthingsToken);
+    const alarm = await securityAlarmService.armAlarm(mode, userId);
     
     console.log(`Successfully armed security system in ${mode} mode`);
     res.status(200).json({
@@ -123,15 +115,7 @@ router.post('/disarm', auth, async (req, res) => {
     const userId = req.user?.id || req.user?._id;
     console.log('User ID:', userId);
     
-    // Get SmartThings token from settings
-    let smartthingsToken = null;
-    try {
-      smartthingsToken = await settingsService.getSetting('smartthingsToken');
-    } catch (settingsError) {
-      console.log('Could not retrieve SmartThings token:', settingsError.message);
-    }
-    
-    const alarm = await securityAlarmService.disarmAlarm(userId, smartthingsToken);
+    const alarm = await securityAlarmService.disarmAlarm(userId);
     
     console.log('Successfully disarmed security system');
     res.status(200).json({
@@ -271,26 +255,7 @@ router.post('/sync', auth, async (req, res) => {
   try {
     console.log('POST /api/security-alarm/sync - Syncing with SmartThings');
     
-    // Get SmartThings token from settings
-    let smartthingsToken = null;
-    try {
-      smartthingsToken = await settingsService.getSetting('smartthingsToken');
-    } catch (settingsError) {
-      console.log('Could not retrieve SmartThings token:', settingsError.message);
-      return res.status(400).json({
-        success: false,
-        message: 'SmartThings token not configured'
-      });
-    }
-    
-    if (!smartthingsToken) {
-      return res.status(400).json({
-        success: false,
-        message: 'SmartThings token not configured'
-      });
-    }
-    
-    const alarm = await securityAlarmService.syncWithSmartThings(smartthingsToken);
+    const alarm = await securityAlarmService.syncWithSmartThings();
     
     console.log('Successfully synced with SmartThings');
     res.status(200).json({

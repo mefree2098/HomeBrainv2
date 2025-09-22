@@ -16,8 +16,8 @@ export const getSettings = async () => {
 
 // Description: Update application settings
 // Endpoint: PUT /api/settings
-// Request: { location?: string, timezone?: string, wakeWordSensitivity?: number, voiceVolume?: number, microphoneSensitivity?: number, enableVoiceConfirmation?: boolean, enableNotifications?: boolean, insteonPort?: string, smartthingsToken?: string, elevenlabsApiKey?: string, enableSecurityMode?: boolean }
-// Response: { success: boolean, message: string, settings: { location?: string, timezone?: string, wakeWordSensitivity?: number, voiceVolume?: number, microphoneSensitivity?: number, enableVoiceConfirmation?: boolean, enableNotifications?: boolean, insteonPort?: string, smartthingsToken?: string, elevenlabsApiKey?: string, enableSecurityMode?: boolean } }
+// Request: { location?: string, timezone?: string, wakeWordSensitivity?: number, voiceVolume?: number, microphoneSensitivity?: number, enableVoiceConfirmation?: boolean, enableNotifications?: boolean, insteonPort?: string, smartthingsToken?: string, smartthingsClientId?: string, smartthingsClientSecret?: string, smartthingsRedirectUri?: string, smartthingsUseOAuth?: boolean, elevenlabsApiKey?: string, enableSecurityMode?: boolean }
+// Response: { success: boolean, message: string, settings: { location?: string, timezone?: string, wakeWordSensitivity?: number, voiceVolume?: number, microphoneSensitivity?: number, enableVoiceConfirmation?: boolean, enableNotifications?: boolean, insteonPort?: string, smartthingsToken?: string, smartthingsClientId?: string, smartthingsClientSecret?: string, smartthingsRedirectUri?: string, smartthingsUseOAuth?: boolean, elevenlabsApiKey?: string, enableSecurityMode?: boolean } }
 export const updateSettings = async (settings: {
   location?: string;
   timezone?: string;
@@ -28,6 +28,10 @@ export const updateSettings = async (settings: {
   enableNotifications?: boolean;
   insteonPort?: string;
   smartthingsToken?: string;
+  smartthingsClientId?: string;
+  smartthingsClientSecret?: string;
+  smartthingsRedirectUri?: string;
+  smartthingsUseOAuth?: boolean;
   elevenlabsApiKey?: string;
   enableSecurityMode?: boolean;
   llmProvider?: string;
@@ -110,6 +114,20 @@ export const testAnthropicApiKey = async (apiKey: string, model?: string) => {
 export const testLocalLLM = async (endpoint: string, model?: string) => {
   try {
     const response = await api.post('/api/settings/test-local-llm', { endpoint, model });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Test SmartThings token connectivity
+// Endpoint: POST /api/settings/test-smartthings
+// Request: { token?: string, useOAuth?: boolean }
+// Response: { success: boolean, message: string, deviceCount?: number }
+export const testSmartThingsToken = async (token?: string, useOAuth?: boolean) => {
+  try {
+    const response = await api.post('/api/settings/test-smartthings', { token, useOAuth });
     return response.data;
   } catch (error) {
     console.error(error);

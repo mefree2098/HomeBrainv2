@@ -1,5 +1,5 @@
 const SecurityAlarm = require('../models/SecurityAlarm');
-const axios = require('axios');
+const smartThingsService = require('./smartThingsService');
 
 class SecurityAlarmService {
   constructor() {
@@ -26,32 +26,35 @@ class SecurityAlarmService {
    * Arm the security system
    * @param {string} mode - 'stay' or 'away'
    * @param {string} userId - User ID who is arming the system
-   * @param {string} smartthingsToken - SmartThings API token
    * @returns {Promise<Object>} Updated alarm system
    */
-  async armAlarm(mode, userId, smartthingsToken) {
+  async armAlarm(mode, userId) {
     try {
       console.log(`SecurityAlarmService: Arming alarm in ${mode} mode`);
-      
+
       const alarm = await SecurityAlarm.getMainAlarm();
-      
+
       // Check if already armed
       if (alarm.alarmState === 'armedStay' || alarm.alarmState === 'armedAway') {
         throw new Error('Alarm is already armed');
       }
-      
-      // If SmartThings integration is configured, send command to SmartThings
-      if (alarm.smartthingsDeviceId && smartthingsToken) {
-        await this.sendSmartThingsCommand(
-          alarm.smartthingsDeviceId,
-          mode === 'stay' ? 'armStay' : 'armAway',
-          smartthingsToken
-        );
+
+      // Send command to SmartThings using the new service
+      try {
+        if (mode === 'stay') {
+          await smartThingsService.armSthmStay();
+        } else if (mode === 'away') {
+          await smartThingsService.armSthmAway();
+        }
+        console.log('SecurityAlarmService: SmartThings command sent successfully');
+      } catch (smartThingsError) {
+        console.warn('SecurityAlarmService: SmartThings command failed, continuing with local arming:', smartThingsError.message);
+        // Continue with local arming even if SmartThings fails
       }
-      
+
       // Update local alarm state
       await alarm.arm(mode, userId);
-      
+
       console.log(`SecurityAlarmService: Successfully armed alarm in ${mode} mode`);
       return alarm;
     } catch (error) {
@@ -63,32 +66,31 @@ class SecurityAlarmService {
   /**
    * Disarm the security system
    * @param {string} userId - User ID who is disarming the system
-   * @param {string} smartthingsToken - SmartThings API token
    * @returns {Promise<Object>} Updated alarm system
    */
-  async disarmAlarm(userId, smartthingsToken) {
+  async disarmAlarm(userId) {
     try {
       console.log('SecurityAlarmService: Disarming alarm');
-      
+
       const alarm = await SecurityAlarm.getMainAlarm();
-      
+
       // Check if already disarmed
       if (alarm.alarmState === 'disarmed') {
         throw new Error('Alarm is already disarmed');
       }
-      
-      // If SmartThings integration is configured, send command to SmartThings
-      if (alarm.smartthingsDeviceId && smartthingsToken) {
-        await this.sendSmartThingsCommand(
-          alarm.smartthingsDeviceId,
-          'disarm',
-          smartthingsToken
-        );
+
+      // Send command to SmartThings using the new service
+      try {
+        await smartThingsService.disarmSthm();
+        console.log('SecurityAlarmService: SmartThings disarm command sent successfully');
+      } catch (smartThingsError) {
+        console.warn('SecurityAlarmService: SmartThings command failed, continuing with local disarming:', smartThingsError.message);
+        // Continue with local disarming even if SmartThings fails
       }
-      
+
       // Update local alarm state
       await alarm.disarm(userId);
-      
+
       console.log('SecurityAlarmService: Successfully disarmed alarm');
       return alarm;
     } catch (error) {
@@ -195,32 +197,28 @@ class SecurityAlarmService {
 
   /**
    * Sync alarm status with SmartThings
-   * @param {string} smartthingsToken - SmartThings API token
    * @returns {Promise<Object>} Updated alarm system
    */
-  async syncWithSmartThings(smartthingsToken) {
+  async syncWithSmartThings() {
     try {
       console.log('SecurityAlarmService: Syncing with SmartThings');
-      
+
       const alarm = await SecurityAlarm.getMainAlarm();
-      
+
       if (!alarm.smartthingsDeviceId) {
         throw new Error('No SmartThings device ID configured');
       }
-      
-      // Get device status from SmartThings
-      const deviceStatus = await this.getSmartThingsDeviceStatus(
-        alarm.smartthingsDeviceId,
-        smartthingsToken
-      );
-      
+
+      // Get device status from SmartThings using the new service
+      const deviceStatus = await smartThingsService.getDeviceStatus(alarm.smartthingsDeviceId);
+
       // Update local alarm state based on SmartThings status
       if (deviceStatus && deviceStatus.components && deviceStatus.components.main) {
         const securitySystemStatus = deviceStatus.components.main.securitySystem;
-        
+
         if (securitySystemStatus) {
           const smartthingsState = securitySystemStatus.securitySystemStatus.value;
-          
+
           // Map SmartThings states to our alarm states
           let newAlarmState = alarm.alarmState;
           switch (smartthingsState) {
@@ -239,95 +237,32 @@ class SecurityAlarmService {
             default:
               console.warn(`Unknown SmartThings alarm state: ${smartthingsState}`);
           }
-          
+
           if (newAlarmState !== alarm.alarmState) {
             alarm.alarmState = newAlarmState;
             await alarm.save();
           }
         }
-        
+
         alarm.lastSyncWithSmartThings = new Date();
         alarm.isOnline = true;
         await alarm.save();
       }
-      
+
       console.log('SecurityAlarmService: Successfully synced with SmartThings');
       return alarm;
     } catch (error) {
       console.error('SecurityAlarmService: Error syncing with SmartThings:', error.message);
-      
+
       // Mark as offline if sync fails
       const alarm = await SecurityAlarm.getMainAlarm();
       alarm.isOnline = false;
       await alarm.save();
-      
+
       throw new Error('Failed to sync with SmartThings');
     }
   }
 
-  /**
-   * Send command to SmartThings device
-   * @param {string} deviceId - SmartThings device ID
-   * @param {string} command - Command to send
-   * @param {string} token - SmartThings API token
-   * @returns {Promise<Object>} SmartThings API response
-   */
-  async sendSmartThingsCommand(deviceId, command, token) {
-    try {
-      console.log(`SecurityAlarmService: Sending SmartThings command: ${command} to device: ${deviceId}`);
-      
-      const url = `${this.smartthingsBaseUrl}/devices/${deviceId}/commands`;
-      const payload = {
-        commands: [{
-          component: 'main',
-          capability: 'securitySystem',
-          command: command
-        }]
-      };
-      
-      const response = await axios.post(url, payload, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
-      
-      console.log('SecurityAlarmService: Successfully sent SmartThings command');
-      return response.data;
-    } catch (error) {
-      console.error('SecurityAlarmService: Error sending SmartThings command:', error.response?.data || error.message);
-      throw new Error('Failed to send command to SmartThings');
-    }
-  }
-
-  /**
-   * Get SmartThings device status
-   * @param {string} deviceId - SmartThings device ID
-   * @param {string} token - SmartThings API token
-   * @returns {Promise<Object>} Device status from SmartThings
-   */
-  async getSmartThingsDeviceStatus(deviceId, token) {
-    try {
-      console.log(`SecurityAlarmService: Getting SmartThings device status for: ${deviceId}`);
-      
-      const url = `${this.smartthingsBaseUrl}/devices/${deviceId}/status`;
-      
-      const response = await axios.get(url, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
-      
-      console.log('SecurityAlarmService: Successfully retrieved SmartThings device status');
-      return response.data;
-    } catch (error) {
-      console.error('SecurityAlarmService: Error getting SmartThings device status:', error.response?.data || error.message);
-      throw new Error('Failed to get device status from SmartThings');
-    }
-  }
 
   /**
    * Configure SmartThings integration
