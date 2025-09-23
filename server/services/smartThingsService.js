@@ -494,7 +494,16 @@ class SmartThingsService {
       console.log('SmartThingsService: Disconnecting SmartThings integration');
 
       const integration = await SmartThingsIntegration.getIntegration();
-      await integration.clearTokens('User disconnected');
+
+      // Check if integration has clearTokens method (actual database document)
+      if (integration && typeof integration.clearTokens === 'function') {
+        await integration.clearTokens('User disconnected');
+        console.log('SmartThingsService: Tokens cleared from database integration');
+      } else {
+        // If no actual integration exists, just delete any existing documents
+        await SmartThingsIntegration.deleteMany({});
+        console.log('SmartThingsService: Cleared any existing integration documents');
+      }
 
       console.log('SmartThingsService: Successfully disconnected');
     } catch (error) {

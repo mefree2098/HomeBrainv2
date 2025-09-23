@@ -49,12 +49,18 @@ router.post('/fake-data', async (req, res) => {
 // Description: Force re-sync all devices from SmartThings
 // Endpoint: POST /api/maintenance/sync/smartthings
 // Request: {}
-// Response: { success: boolean, message: string, deviceCount: number }
+// Response: { success: boolean, message: string, deviceCount: number, error?: string }
 router.post('/sync/smartthings', async (req, res) => {
   try {
     console.log('MaintenanceRoutes: POST /sync/smartthings - Force syncing SmartThings devices');
 
     const result = await maintenanceService.forceSmartThingsSync();
+
+    // Check if the result indicates a configuration issue
+    if (!result.success && result.error === 'NOT_CONFIGURED') {
+      console.log('MaintenanceRoutes: SmartThings sync failed - not configured');
+      return res.status(400).json(result);
+    }
 
     console.log('MaintenanceRoutes: Successfully synced SmartThings devices');
     res.status(200).json(result);

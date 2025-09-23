@@ -322,6 +322,17 @@ class MaintenanceService {
     } catch (error) {
       console.error('MaintenanceService: Error during SmartThings sync:', error.message);
       console.error(error.stack);
+
+      // Handle specific authentication errors more gracefully
+      if (error.message.includes('No access token available') || error.message.includes('Please authorize')) {
+        return {
+          success: false,
+          message: 'SmartThings integration is not configured or authorized. Please configure SmartThings in settings first.',
+          deviceCount: 0,
+          error: 'NOT_CONFIGURED'
+        };
+      }
+
       throw new Error('Failed to sync SmartThings devices');
     }
   }

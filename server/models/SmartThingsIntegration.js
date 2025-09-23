@@ -133,6 +133,12 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
       updatedAt: new Date(),
       // Add methods that would be expected
       isTokenValid: () => false,
+      clearTokens: async function(errorMessage = '') {
+        // For the mock object, we don't actually need to do anything
+        // since there's no database record to update
+        console.log('SmartThingsIntegration: Mock clearTokens called - no database record to clear');
+        return Promise.resolve();
+      },
       toSanitized: function() {
         const sanitized = { ...this };
         if (sanitized.clientSecret) {

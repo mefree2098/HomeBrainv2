@@ -31,14 +31,16 @@ export const injectFakeData = async () => {
 // Description: Force re-sync all devices from SmartThings
 // Endpoint: POST /api/maintenance/sync/smartthings
 // Request: {}
-// Response: { success: boolean, message: string, deviceCount: number }
+// Response: { success: boolean, message: string, deviceCount: number, error?: string }
 export const forceSmartThingsSync = async () => {
   try {
     const response = await api.post('/api/maintenance/sync/smartthings');
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    // Handle both 400 (not configured) and 500 (other errors) responses
+    const errorMessage = error?.response?.data?.message || error?.response?.data?.error || error.message;
+    throw new Error(errorMessage);
   }
 };
 
@@ -108,7 +110,8 @@ export const clearSmartThingsIntegration = async () => {
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    const errorMessage = error?.response?.data?.message || error?.response?.data?.error || error.message;
+    throw new Error(errorMessage);
   }
 };
 
