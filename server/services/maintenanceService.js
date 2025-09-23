@@ -262,18 +262,24 @@ class MaintenanceService {
         {
           name: 'Sarah',
           wakeWords: ['Anna', 'Hey Anna'],
-          preferredVoice: 'Rachel',
+          voiceId: 'Rachel',
+          voiceName: 'Rachel',
           systemPrompt: 'You are Anna, a helpful and friendly home assistant.',
-          isActive: true,
-          voicePattern: {}
+          personality: 'friendly',
+          responseStyle: 'conversational',
+          active: true,
+          permissions: ['device_control', 'scene_control', 'automation_control']
         },
         {
           name: 'Mike',
           wakeWords: ['Henry', 'Hey Henry'],
-          preferredVoice: 'Josh',
+          voiceId: 'Josh',
+          voiceName: 'Josh',
           systemPrompt: 'You are Henry, a knowledgeable and efficient home assistant.',
-          isActive: true,
-          voicePattern: {}
+          personality: 'professional',
+          responseStyle: 'concise',
+          active: true,
+          permissions: ['device_control', 'scene_control', 'automation_control', 'system_settings']
         }
       ];
 
