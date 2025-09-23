@@ -17,7 +17,9 @@ const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
+const discoveryRoutes = require("./routes/discoveryRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
+const DiscoveryService = require("./services/discoveryService");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 const http = require("http");
@@ -72,6 +74,8 @@ app.use('/api/smartthings', smartThingsRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 // Remote Device Routes
 app.use('/api/remote-devices', remoteDeviceRoutes);
+// Discovery Routes
+app.use('/api/discovery', discoveryRoutes);
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {
@@ -92,10 +96,23 @@ const server = http.createServer(app);
 const voiceWsServer = new VoiceWebSocketServer();
 voiceWsServer.initialize(server);
 
+// Initialize Discovery service
+const discoveryService = new DiscoveryService();
+app.locals.discoveryService = discoveryService;
+
+// Auto-start discovery service (can be disabled via API)
+try {
+  discoveryService.start();
+  console.log('Auto-discovery service started');
+} catch (error) {
+  console.warn('Auto-discovery service failed to start:', error.message);
+}
+
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('Received SIGTERM, shutting down gracefully');
   voiceWsServer.stop();
+  discoveryService.stop();
   server.close(() => {
     console.log('Server stopped');
     process.exit(0);
@@ -105,6 +122,7 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
   console.log('Received SIGINT, shutting down gracefully');
   voiceWsServer.stop();
+  discoveryService.stop();
   server.close(() => {
     console.log('Server stopped');
     process.exit(0);

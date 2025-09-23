@@ -7,6 +7,8 @@ A voice-enabled remote device application for Raspberry Pi that connects to the 
 - **Wake Word Detection**: Responds to customizable wake words like "Anna", "Henry", "Home Brain"
 - **Voice Command Processing**: Captures and forwards voice commands to the hub
 - **Text-to-Speech Playback**: Plays responses from the hub through local speakers
+- **Automatic Hub Discovery**: Automatically discovers HomeBrain hubs on the network
+- **Zero-Config Setup**: Auto-connects to hubs with minimal user intervention
 - **Real-time Communication**: WebSocket connection with the hub for low-latency interaction
 - **Audio Configuration**: Supports various microphone and speaker configurations
 - **Service Management**: Systemd integration for automatic startup and monitoring
@@ -24,18 +26,39 @@ A voice-enabled remote device application for Raspberry Pi that connects to the 
 
 ## Quick Installation
 
-### Option 1: Automated Installation Script
+### Option 1: Automatic Discovery (Recommended)
+
+The easiest way to set up a remote device is using automatic discovery:
+
+```bash
+# Download and install the remote device software
+curl -fsSL https://raw.githubusercontent.com/homebrain/remote-device/main/install.sh | bash
+
+# Start auto-discovery mode
+cd ~/homebrain-remote
+node index.js --auto-discover --device-name "Kitchen Speaker"
+```
+
+This will:
+1. **Scan your network** for HomeBrain hubs
+2. **Automatically connect** to the first hub found
+3. **Request approval** from the hub
+4. **Wait for approval** - you'll see a message to approve in the web interface
+5. **Complete setup automatically** once approved
+
+### Option 2: Manual Registration (Traditional)
 
 ```bash
 # Download and run the installation script
 curl -fsSL https://raw.githubusercontent.com/homebrain/remote-device/main/install.sh | bash
 
-# Or if you have the files locally:
-chmod +x install.sh
-./install.sh
+# Get a registration code from your HomeBrain web interface
+# Then register the device:
+cd ~/homebrain-remote
+./register.sh YOUR_REGISTRATION_CODE
 ```
 
-### Option 2: Manual Installation
+### Option 3: Manual Installation
 
 1. **Update system and install dependencies**:
    ```bash

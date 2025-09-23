@@ -19,6 +19,8 @@ import {
 import { getVoiceDevices, testVoiceDevice } from "@/api/voice"
 import { deleteRemoteDevice } from "@/api/remoteDevices"
 import { RemoteDeviceSetup } from "@/components/remote/RemoteDeviceSetup"
+import { PendingDevices } from "@/components/discovery/PendingDevices"
+import { AutoDiscoverySettings } from "@/components/discovery/AutoDiscoverySettings"
 import { useToast } from "@/hooks/useToast"
 
 export function VoiceDevices() {
@@ -27,6 +29,8 @@ export function VoiceDevices() {
   const [loading, setLoading] = useState(true)
   const [testingDevice, setTestingDevice] = useState<string | null>(null)
   const [deletingDevice, setDeletingDevice] = useState<string | null>(null)
+  const [autoDiscoveryEnabled, setAutoDiscoveryEnabled] = useState(false)
+  const [showAutoDiscovery, setShowAutoDiscovery] = useState(false)
 
   const componentId = useRef(`voice-devices-${Date.now()}-${Math.random()}`).current
 
@@ -192,10 +196,30 @@ export function VoiceDevices() {
             Monitor and manage your distributed voice devices
           </p>
         </div>
-        <div>
+        <div className="flex gap-2">
           <RemoteDeviceSetup onDeviceRegistered={refreshDevices} />
+          <Button
+            variant="outline"
+            onClick={() => setShowAutoDiscovery(!showAutoDiscovery)}
+          >
+            <Settings className="h-4 w-4 mr-2" />
+            Auto-Discovery
+          </Button>
         </div>
       </div>
+
+      {/* Auto-Discovery Settings */}
+      {showAutoDiscovery && (
+        <AutoDiscoverySettings
+          onStatusChange={setAutoDiscoveryEnabled}
+        />
+      )}
+
+      {/* Pending Devices */}
+      <PendingDevices
+        onDeviceApproved={refreshDevices}
+        isVisible={autoDiscoveryEnabled}
+      />
 
       {/* Device Stats */}
       <div className="grid gap-4 md:grid-cols-4">
