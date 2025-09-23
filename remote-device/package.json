@@ -1,0 +1,41 @@
+{
+  "name": "homebrain-remote-device",
+  "version": "1.0.0",
+  "description": "HomeBrain Remote Voice Device for Raspberry Pi",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test-audio.js",
+    "install-deps": "npm install && sudo apt-get update && sudo apt-get install -y alsa-utils pulseaudio",
+    "setup-audio": "node setup-audio.js"
+  },
+  "keywords": [
+    "voice",
+    "smart-home",
+    "raspberry-pi",
+    "wake-word",
+    "homebrain"
+  ],
+  "author": "HomeBrain",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0",
+    "node-record-lpcm16": "^1.0.1",
+    "speaker": "^0.5.4",
+    "node-fetch": "^2.7.0",
+    "yargs": "^17.7.2",
+    "node-wav": "^0.0.2",
+    "audio-buffer-utils": "^5.1.2",
+    "node-portaudio": "^2.0.1"
+  },
+  "optionalDependencies": {
+    "@picovoice/porcupine-node": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/homebrain/remote-device.git"
+  }
+}

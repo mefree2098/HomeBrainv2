@@ -12,9 +12,13 @@ import {
   TestTube,
   MapPin,
   Activity,
-  AlertTriangle
+  AlertTriangle,
+  Trash2,
+  Settings
 } from "lucide-react"
 import { getVoiceDevices, testVoiceDevice } from "@/api/voice"
+import { deleteRemoteDevice } from "@/api/remoteDevices"
+import { RemoteDeviceSetup } from "@/components/remote/RemoteDeviceSetup"
 import { useToast } from "@/hooks/useToast"
 
 export function VoiceDevices() {
@@ -22,7 +26,8 @@ export function VoiceDevices() {
   const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
   const [testingDevice, setTestingDevice] = useState<string | null>(null)
-  
+  const [deletingDevice, setDeletingDevice] = useState<string | null>(null)
+
   const componentId = useRef(`voice-devices-${Date.now()}-${Math.random()}`).current
 
   useEffect(() => {
@@ -87,6 +92,50 @@ export function VoiceDevices() {
     }
   }
 
+  const refreshDevices = async () => {
+    try {
+      console.log('Refreshing voice devices data')
+      const data = await getVoiceDevices()
+      setDevices(data.devices || [])
+    } catch (error) {
+      console.error('Failed to refresh voice devices:', error)
+      toast({
+        title: "Error",
+        description: "Failed to refresh voice devices",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleDeleteDevice = async (deviceId: string, deviceName: string) => {
+    if (!confirm(`Are you sure you want to delete ${deviceName}? This action cannot be undone.`)) {
+      return;
+    }
+
+    setDeletingDevice(deviceId)
+    try {
+      console.log('Deleting voice device:', { deviceId, deviceName })
+      await deleteRemoteDevice(deviceId)
+
+      // Refresh devices list
+      await refreshDevices()
+
+      toast({
+        title: "Device Deleted",
+        description: `${deviceName} has been removed successfully`
+      })
+    } catch (error) {
+      console.error('Failed to delete device:', error)
+      toast({
+        title: "Delete Failed",
+        description: "Failed to delete voice device",
+        variant: "destructive"
+      })
+    } finally {
+      setDeletingDevice(null)
+    }
+  }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'online':
@@ -142,6 +191,9 @@ export function VoiceDevices() {
           <p className="text-muted-foreground mt-2">
             Monitor and manage your distributed voice devices
           </p>
+        </div>
+        <div>
+          <RemoteDeviceSetup onDeviceRegistered={refreshDevices} />
         </div>
       </div>
 
@@ -256,25 +308,41 @@ export function VoiceDevices() {
                 <span>{formatLastSeen(device.lastSeen)}</span>
               </div>
 
-              <Button
-                onClick={() => handleTestDevice(device._id, device.name)}
-                disabled={device.status === 'offline' || testingDevice === device._id}
-                variant={device.status === 'online' ? "default" : "outline"}
-                className="w-full"
-                size="sm"
-              >
-                {testingDevice === device._id ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
-                    Testing...
-                  </>
-                ) : (
-                  <>
-                    <TestTube className="h-4 w-4 mr-2" />
-                    Test Device
-                  </>
-                )}
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => handleTestDevice(device._id, device.name)}
+                  disabled={device.status === 'offline' || testingDevice === device._id}
+                  variant={device.status === 'online' ? "default" : "outline"}
+                  className="flex-1"
+                  size="sm"
+                >
+                  {testingDevice === device._id ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                      Testing...
+                    </>
+                  ) : (
+                    <>
+                      <TestTube className="h-4 w-4 mr-2" />
+                      Test Device
+                    </>
+                  )}
+                </Button>
+
+                <Button
+                  onClick={() => handleDeleteDevice(device._id, device.name)}
+                  disabled={deletingDevice === device._id}
+                  variant="outline"
+                  size="sm"
+                  className="px-3"
+                >
+                  {deletingDevice === device._id ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600" />
+                  ) : (
+                    <Trash2 className="h-4 w-4 text-red-600" />
+                  )}
+                </Button>
+              </div>
 
               <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
                 <strong>Wake words:</strong> "Hey Anna", "Henry", "Home Brain"

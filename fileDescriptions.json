@@ -107,8 +107,8 @@
 	"client/src/services/voicePollingManager.ts": "Singleton service managing voice status polling with dynamic interval, error handling, and multi-component subscription mechanism for real-time voice updates.",
 	"server/.env": "Environment configuration file for server, defining critical settings like database connection, JWT secrets, port, and ElevenLabs API credentials for application initialization.",
 	"server/.env.example": "Environment configuration template for HomeBrain server, specifying essential environment variables for port, database connection, JWT authentication, and optional ElevenLabs API integration.",
-	"server/package.json": "Node.js server configuration file specifying project dependencies, scripts for starting the server, seeding data, and managing development workflows.",
-	"server/server.js": "Express.js server configuration with comprehensive route setup for smart home application, handling authentication, devices, scenes, automations, and various API endpoints with database connection and error handling.",
+	"server/package.json": "Node.js server configuration file specifying project dependencies, scripts for starting, development, and database seeding, with key packages for authentication, database, AI integrations, and web services.",
+	"server/server.js": "Express server configuration with comprehensive route setup for authentication, devices, scenes, automations, and various API endpoints, including WebSocket integration for voice device communication and graceful server shutdown mechanisms.",
 	"server/config/database.js": "MongoDB connection utility with robust connection management, error handling, and graceful shutdown for database initialization and monitoring.",
 	"server/models/Automation.js": "Mongoose schema for home automation rules, defining complex triggers, actions, execution tracking, and metadata with support for various automation types and advanced configuration options.",
 	"server/models/Device.js": "Mongoose schema for smart home devices, modeling various device types with dynamic properties, status tracking, and metadata for comprehensive IoT device management.",
@@ -164,5 +164,16 @@
 	"server/utils/auth.js": "JWT token generation utility for creating access and refresh tokens with user ID payload and configurable expiration periods.",
 	"server/utils/password.js": "Password utility functions for secure password hashing, validation, and format checking using bcrypt, with methods to generate hash, compare passwords, and validate hash format.",
 	"shared/config/roles.js": "Role configuration module defining application user roles with admin and user constants and an array of all available roles.",
-	"shared/types/user.ts": "TypeScript type definition for User model, specifying structure and properties of user accounts in the application."
+	"shared/types/user.ts": "TypeScript type definition for User model, specifying structure and properties of user accounts in the application.",
+	"client/src/api/remoteDevices.ts": "API utility functions for remote device management, providing methods to register, activate, configure, update heartbeat, retrieve setup instructions, and delete remote devices.",
+	"server/routes/remoteDeviceRoutes.js": "Express router for managing remote voice device registration, activation, configuration, heartbeat tracking, and setup instructions with comprehensive device lifecycle management endpoints.",
+	"server/scripts/createRemoteDevicePackage.js": "Node.js script for generating a downloadable package for HomeBrain Remote Device, creating a tar.gz archive with installation files and setup scripts for Raspberry Pi deployment.",
+	"client/src/components/remote/RemoteDeviceSetup.tsx": "React component for remote device registration and setup, providing a multi-step dialog with device details input, registration process, and comprehensive setup instructions with dynamic configuration and copy-to-clipboard functionality.",
+	"remote-device/README.md": "Comprehensive README for HomeBrain Remote Device, detailing installation, configuration, usage, and troubleshooting for a voice-enabled Raspberry Pi application that connects to a smart home hub via WebSocket with wake word detection and voice command processing.",
+	"remote-device/index.js": "WebSocket-based remote device client for HomeBrain, managing device registration, audio streaming, wake word detection, and communication with a central hub using command-line configuration options.",
+	"remote-device/install.sh": "Bash installation script for HomeBrain Remote Device on Raspberry Pi, automating system setup, package installation, audio configuration, and device registration with comprehensive error handling and user guidance.",
+	"remote-device/package.json": "NPM package configuration for HomeBrain's remote voice device, managing dependencies, scripts, and metadata for a Raspberry Pi-based smart home audio system.",
+	"server/public/downloads/homebrain-remote-setup.sh": "Bash installation script for automating HomeBrain remote device setup, creating installation directory and executing device-specific installation process.",
+	"server/public/downloads/homebrain-remote-setup.tar.gz": "Compressed tarball archive for HomeBrain remote setup installation package, containing system configuration and deployment files.",
+	"server/websocket/voiceWebSocket.js": "WebSocket server for voice devices, managing real-time connections, authentication, voice commands, device status tracking, and handling device-specific events like wake word detection and heartbeats."
 }

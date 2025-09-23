@@ -16,8 +16,11 @@ const settingsRoutes = require("./routes/settingsRoutes");
 const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
+const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
+const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
+const http = require("http");
 
 if (!process.env.DATABASE_URL) {
   console.error("Error: DATABASE_URL variables in .env missing.");
@@ -67,6 +70,8 @@ app.use('/api/security-alarm', securityAlarmRoutes);
 app.use('/api/smartthings', smartThingsRoutes);
 // Maintenance Routes
 app.use('/api/maintenance', maintenanceRoutes);
+// Remote Device Routes
+app.use('/api/remote-devices', remoteDeviceRoutes);
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {
@@ -80,6 +85,33 @@ app.use((err, req, res, next) => {
   res.status(500).send("There was an error serving your request.");
 });
 
-app.listen(port, () => {
+// Create HTTP server
+const server = http.createServer(app);
+
+// Initialize WebSocket server
+const voiceWsServer = new VoiceWebSocketServer();
+voiceWsServer.initialize(server);
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM, shutting down gracefully');
+  voiceWsServer.stop();
+  server.close(() => {
+    console.log('Server stopped');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('Received SIGINT, shutting down gracefully');
+  voiceWsServer.stop();
+  server.close(() => {
+    console.log('Server stopped');
+    process.exit(0);
+  });
+});
+
+server.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
+  console.log(`WebSocket server ready for voice devices`);
 });
