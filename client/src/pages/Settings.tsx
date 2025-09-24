@@ -1349,11 +1349,11 @@ export function Settings() {
                         <SelectValue placeholder="Select OpenAI model" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="gpt-5">GPT-5</SelectItem>
-                        <SelectItem value="gpt-5-mini">GPT-5 Mini</SelectItem>
-                        <SelectItem value="gpt-5-thinking">GPT-5 Thinking</SelectItem>
-                        <SelectItem value="gpt-5-thinking-mini">GPT-5 Thinking Mini</SelectItem>
-                        <SelectItem value="gpt-5-thinking-nano">GPT-5 Thinking Nano</SelectItem>
+                        <SelectItem value="gpt-5">gpt-5</SelectItem>
+                        <SelectItem value="gpt-5-mini">gpt-5-mini</SelectItem>
+                        <SelectItem value="gpt-5-thinking">gpt-5-thinking</SelectItem>
+                        <SelectItem value="gpt-5-thinking-mini">gpt-5-thinking-mini</SelectItem>
+                        <SelectItem value="gpt-5-thinking-nano">gpt-5-thinking-nano</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
