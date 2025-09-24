@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import {
   Clock,
@@ -305,12 +305,15 @@ export function PendingDevices({ onDeviceApproved, isVisible }: PendingDevicesPr
         open={approvalDialog.isOpen}
         onOpenChange={(open) => setApprovalDialog({ isOpen: open, device: null })}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" aria-describedby="approve-device-description">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {approvalDialog.device && getDeviceIcon(approvalDialog.device.type)}
               Approve Device
             </DialogTitle>
+            <DialogDescription id="approve-device-description">
+              Configure and approve this discovered device to add it to your voice network.
+            </DialogDescription>
           </DialogHeader>
 
           {approvalDialog.device && (

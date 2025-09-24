@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Zap,
@@ -207,9 +207,12 @@ export function Automations() {
               Create Automation
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-white">
+          <DialogContent className="bg-white" aria-describedby="create-automation-description">
             <DialogHeader>
               <DialogTitle>Create Automation with Natural Language</DialogTitle>
+              <DialogDescription id="create-automation-description">
+                Describe your automation in natural language and let AI convert it into a working automation rule.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleSubmit(handleCreateAutomation)} className="space-y-4">
               <div>

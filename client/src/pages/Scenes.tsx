@@ -2,7 +2,7 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { 
@@ -151,9 +151,12 @@ export function Scenes() {
               Create Scene
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-white">
+          <DialogContent className="bg-white" aria-describedby="create-scene-description">
             <DialogHeader>
               <DialogTitle>Create New Scene</DialogTitle>
+              <DialogDescription id="create-scene-description">
+                Create a new scene to control multiple devices with a single command or action.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleSubmit(handleCreateScene)} className="space-y-4">
               <div>

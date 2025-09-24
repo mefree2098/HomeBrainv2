@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Copy, Plus, Smartphone, Speaker, Monitor, Mic, Download, Terminal, CheckCircle, XCircle } from "lucide-react";
@@ -155,12 +155,15 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
           Add Remote Device
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" aria-describedby="remote-device-setup-description">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {getDeviceIcon(deviceType)}
             Remote Device Setup
           </DialogTitle>
+          <DialogDescription id="remote-device-setup-description">
+            Add a new remote voice device to your HomeBrain network. This will register the device and provide setup instructions.
+          </DialogDescription>
         </DialogHeader>
 
         {step === 1 && (

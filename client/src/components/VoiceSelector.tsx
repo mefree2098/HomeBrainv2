@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -37,6 +37,14 @@ export function VoiceSelector({
 }: VoiceSelectorProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [isOpen, setIsOpen] = useState(false)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // Filter voices based on search query
   const filteredVoices = useMemo(() => {
@@ -68,6 +76,20 @@ export function VoiceSelector({
   // Get current selected voice
   const selectedVoice = voices.find(v => v.id === value);
 
+  // Safe value change handler
+  const handleValueChange = (newValue: string) => {
+    if (mountedRef.current && newValue && onValueChange) {
+      onValueChange(newValue)
+    }
+  }
+
+  // Safe open change handler
+  const handleOpenChange = (open: boolean) => {
+    if (mountedRef.current) {
+      setIsOpen(open)
+    }
+  }
+
   const formatVoiceLabel = (voice: Voice) => {
     let label = voice.name;
     
@@ -85,14 +107,19 @@ export function VoiceSelector({
     return label;
   };
 
+  // Don't render if component is unmounted or voices array is invalid
+  if (!mountedRef.current || !voices || !Array.isArray(voices)) {
+    return null;
+  }
+
   return (
     <div className={`flex gap-2 ${className}`}>
       <div className="flex-1">
-        <Select 
-          value={value || ""} 
-          onValueChange={onValueChange}
+        <Select
+          value={value || ""}
+          onValueChange={handleValueChange}
           open={isOpen}
-          onOpenChange={setIsOpen}
+          onOpenChange={handleOpenChange}
         >
           <SelectTrigger>
             <SelectValue placeholder={placeholder}>
@@ -106,7 +133,11 @@ export function VoiceSelector({
                 <Input
                   placeholder="Search voices..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    if (mountedRef.current) {
+                      setSearchQuery(e.target.value)
+                    }
+                  }}
                   className="pl-9"
                   onClick={(e) => e.stopPropagation()}
                 />
