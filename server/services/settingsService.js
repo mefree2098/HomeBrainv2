@@ -30,9 +30,15 @@ class SettingsService {
       
       // Validate required fields and sanitize input
       const allowedFields = [
-        'location', 'timezone', 'wakeWordSensitivity', 'voiceVolume', 
+        'location', 'timezone', 'wakeWordSensitivity', 'voiceVolume',
         'microphoneSensitivity', 'enableVoiceConfirmation', 'enableNotifications',
-        'insteonPort', 'smartthingsToken', 'elevenlabsApiKey', 'enableSecurityMode'
+        'insteonPort', 'smartthingsToken', 'elevenlabsApiKey', 'enableSecurityMode',
+        // AI Provider Settings
+        'llmProvider', 'openaiApiKey', 'openaiModel',
+        'anthropicApiKey', 'anthropicModel',
+        'localLlmEndpoint', 'localLlmModel',
+        // SmartThings OAuth Settings
+        'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth'
       ];
       
       const sanitizedUpdates = {};
@@ -96,25 +102,65 @@ class SettingsService {
   async getElevenLabsApiKey() {
     try {
       console.log('SettingsService: Getting ElevenLabs API key');
-      
+
       // First check database settings
       const dbApiKey = await this.getSetting('elevenlabsApiKey');
       if (dbApiKey && dbApiKey.trim() !== '') {
         console.log('SettingsService: Found ElevenLabs API key in database');
         return dbApiKey.trim();
       }
-      
+
       // Fallback to environment variable
       const envApiKey = process.env.ELEVENLABS_API_KEY;
       if (envApiKey && envApiKey.trim() !== '') {
         console.log('SettingsService: Found ElevenLabs API key in environment variables');
         return envApiKey.trim();
       }
-      
+
       console.log('SettingsService: No ElevenLabs API key found');
       return null;
     } catch (error) {
       console.error('SettingsService: Error getting ElevenLabs API key:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get OpenAI API key from database settings
+   * @returns {Promise<string|null>} API key or null if not set
+   */
+  async getOpenAIApiKey() {
+    try {
+      console.log('SettingsService: Getting OpenAI API key');
+      const dbApiKey = await this.getSetting('openaiApiKey');
+      if (dbApiKey && dbApiKey.trim() !== '') {
+        console.log('SettingsService: Found OpenAI API key in database');
+        return dbApiKey.trim();
+      }
+      console.log('SettingsService: No OpenAI API key found');
+      return null;
+    } catch (error) {
+      console.error('SettingsService: Error getting OpenAI API key:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get Anthropic API key from database settings
+   * @returns {Promise<string|null>} API key or null if not set
+   */
+  async getAnthropicApiKey() {
+    try {
+      console.log('SettingsService: Getting Anthropic API key');
+      const dbApiKey = await this.getSetting('anthropicApiKey');
+      if (dbApiKey && dbApiKey.trim() !== '') {
+        console.log('SettingsService: Found Anthropic API key in database');
+        return dbApiKey.trim();
+      }
+      console.log('SettingsService: No Anthropic API key found');
+      return null;
+    } catch (error) {
+      console.error('SettingsService: Error getting Anthropic API key:', error.message);
       return null;
     }
   }
