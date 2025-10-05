@@ -204,5 +204,6 @@
 	"server/services/letsEncryptService.js": "Let's Encrypt service for automated SSL certificate management, handling certificate generation, renewal, and challenge validation using the ACME protocol.",
 	"server/services/sslService.js": "SSL service for managing SSL certificates, providing methods for generating, uploading, activating, and renewing certificates with support for manual and Let's Encrypt certificate workflows.",
 	"server/utils/certificateValidator.js": "Certificate utility module using node-forge for parsing, validating, generating, and managing X.509 certificates and private keys with comprehensive cryptographic operations.",
-	"client/src/components/ssl/CertificateStatus.tsx": "React component for displaying and managing SSL/TLS certificates, rendering detailed status cards with certificate information, warnings, and action buttons for activation, deactivation, renewal, and deletion."
+	"client/src/components/ssl/CertificateStatus.tsx": "React component for displaying and managing SSL/TLS certificates, rendering detailed status cards with certificate information, warnings, and action buttons for activation, deactivation, renewal, and deletion.",
+	"server/scripts/makeUserAdmin.js": "CLI script for managing user admin privileges, allowing administrators to promote a user to admin role or list existing users by querying the database and updating user roles."
 }
