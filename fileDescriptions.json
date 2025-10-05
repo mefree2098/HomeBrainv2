@@ -191,5 +191,6 @@
 	"client/src/api/insteon.ts": "API utility functions for Insteon PLM (PowerLine Modem) management, providing methods for connection testing, device discovery, control, linking, and status monitoring.",
 	"server/routes/insteonRoutes.js": "Express router for Insteon PLM management, providing endpoints for connection testing, device control, linking, and status monitoring with comprehensive error handling.",
 	"server/scripts/testInsteon.js": "Comprehensive test script for Insteon PLM integration, performing connection tests, device discovery, database synchronization, and validating Insteon service functionality across multiple stages.",
-	"server/services/insteonService.js": "Comprehensive Insteon PowerLinc Modem (PLM) service for device discovery, control, status monitoring, and management with methods for connection, device import, status tracking, and device control."
+	"server/services/insteonService.js": "Comprehensive Insteon PowerLinc Modem (PLM) service for device discovery, control, status monitoring, and management with methods for connection, device import, status tracking, and device control.",
+	"server/scripts/testSmartThings.js": "Comprehensive diagnostic script for testing SmartThings integration, performing connection validation, device retrieval, scene management, and system configuration checks with detailed console reporting."
 }

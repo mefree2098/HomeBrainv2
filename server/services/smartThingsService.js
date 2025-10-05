@@ -463,9 +463,13 @@ class SmartThingsService {
       const devices = await this.getDevices();
 
       const integration = await SmartThingsIntegration.getIntegration();
-      integration.isConnected = true;
-      integration.lastError = '';
-      await integration.save();
+
+      // Only update if integration has save method (is an actual database document)
+      if (typeof integration.save === 'function') {
+        integration.isConnected = true;
+        integration.lastError = '';
+        await integration.save();
+      }
 
       console.log('SmartThingsService: Connection test successful');
       return {
@@ -477,9 +481,13 @@ class SmartThingsService {
       console.error('SmartThingsService: Connection test failed:', error.message);
 
       const integration = await SmartThingsIntegration.getIntegration();
-      integration.isConnected = false;
-      integration.lastError = error.message;
-      await integration.save();
+
+      // Only update if integration has save method (is an actual database document)
+      if (typeof integration.save === 'function') {
+        integration.isConnected = false;
+        integration.lastError = error.message;
+        await integration.save();
+      }
 
       throw error;
     }
