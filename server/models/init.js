@@ -12,6 +12,7 @@ require('./Settings');
 require('./SecurityAlarm');
 require('./VoiceCommand');
 require('./SmartThingsIntegration');
+require('./SSLCertificate');
 
 const dbInit = async (options = {}) => {
   const mongoUrl = process.env.DATABASE_URL || 'mongodb://localhost/myDb';

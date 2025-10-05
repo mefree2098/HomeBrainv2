@@ -19,11 +19,15 @@ const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const discoveryRoutes = require("./routes/discoveryRoutes");
 const insteonRoutes = require("./routes/insteonRoutes");
+const sslRoutes = require("./routes/sslRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const DiscoveryService = require("./services/discoveryService");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 const http = require("http");
+const https = require("https");
+const fs = require("fs");
+const path = require("path");
 
 if (!process.env.DATABASE_URL) {
   console.error("Error: DATABASE_URL variables in .env missing.");
@@ -79,6 +83,11 @@ app.use('/api/remote-devices', remoteDeviceRoutes);
 app.use('/api/discovery', discoveryRoutes);
 // Insteon Routes
 app.use('/api/insteon', insteonRoutes);
+// SSL Routes
+app.use('/api/ssl', sslRoutes);
+
+// Serve Let's Encrypt challenge files
+app.use('/.well-known/acme-challenge', express.static(path.join(__dirname, 'public', '.well-known', 'acme-challenge')));
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {
@@ -93,11 +102,48 @@ app.use((err, req, res, next) => {
 });
 
 // Create HTTP server
-const server = http.createServer(app);
+const httpServer = http.createServer(app);
 
-// Initialize WebSocket server
+// Create HTTPS server if SSL certificate is available
+let httpsServer = null;
+const sslService = require('./services/sslService');
+
+async function setupHttpsServer() {
+  try {
+    const sslConfig = await sslService.getActiveCertificateForServer();
+
+    if (sslConfig) {
+      console.log(`SSL certificate found for ${sslConfig.domain}, enabling HTTPS...`);
+
+      httpsServer = https.createServer({
+        key: sslConfig.key,
+        cert: sslConfig.cert
+      }, app);
+
+      const httpsPort = process.env.HTTPS_PORT || 3443;
+
+      httpsServer.listen(httpsPort, () => {
+        console.log(`HTTPS server running at https://localhost:${httpsPort}`);
+      });
+
+      // Initialize WebSocket server on HTTPS
+      const httpsVoiceWsServer = new VoiceWebSocketServer();
+      httpsVoiceWsServer.initialize(httpsServer);
+
+      return httpsVoiceWsServer;
+    } else {
+      console.log('No active SSL certificate found, HTTPS disabled');
+      return null;
+    }
+  } catch (error) {
+    console.error('Error setting up HTTPS server:', error.message);
+    return null;
+  }
+}
+
+// Initialize WebSocket server on HTTP
 const voiceWsServer = new VoiceWebSocketServer();
-voiceWsServer.initialize(server);
+voiceWsServer.initialize(httpServer);
 
 // Initialize Discovery service
 const discoveryService = new DiscoveryService();
@@ -116,9 +162,16 @@ process.on('SIGTERM', () => {
   console.log('Received SIGTERM, shutting down gracefully');
   voiceWsServer.stop();
   discoveryService.stop();
-  server.close(() => {
-    console.log('Server stopped');
-    process.exit(0);
+  httpServer.close(() => {
+    console.log('HTTP server stopped');
+    if (httpsServer) {
+      httpsServer.close(() => {
+        console.log('HTTPS server stopped');
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
   });
 });
 
@@ -126,13 +179,24 @@ process.on('SIGINT', () => {
   console.log('Received SIGINT, shutting down gracefully');
   voiceWsServer.stop();
   discoveryService.stop();
-  server.close(() => {
-    console.log('Server stopped');
-    process.exit(0);
+  httpServer.close(() => {
+    console.log('HTTP server stopped');
+    if (httpsServer) {
+      httpsServer.close(() => {
+        console.log('HTTPS server stopped');
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
   });
 });
 
-server.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+// Start HTTP server
+httpServer.listen(port, async () => {
+  console.log(`HTTP server running at http://localhost:${port}`);
   console.log(`WebSocket server ready for voice devices`);
+
+  // Try to setup HTTPS server after HTTP is running
+  await setupHttpsServer();
 });

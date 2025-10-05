@@ -1,11 +1,12 @@
-import { 
-  Home, 
-  Lightbulb, 
-  Palette, 
-  Zap, 
-  Mic, 
-  Users, 
+import {
+  Home,
+  Lightbulb,
+  Palette,
+  Zap,
+  Mic,
+  Users,
   Settings,
+  Shield,
   ChevronRight
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
@@ -20,6 +21,7 @@ const navigation = [
   { name: 'Voice Devices', href: '/voice-devices', icon: Mic },
   { name: 'User Profiles', href: '/profiles', icon: Users },
   { name: 'Settings', href: '/settings', icon: Settings },
+  { name: 'SSL Certificates', href: '/ssl', icon: Shield },
 ]
 
 export function Sidebar() {
