@@ -15,9 +15,10 @@ import {
   Play,
   Pause,
   MessageSquare,
-  Send
+  Send,
+  History
 } from "lucide-react"
-import { getAutomations, createAutomationFromText, toggleAutomation } from "@/api/automations"
+import { getAutomations, createAutomationFromText, toggleAutomation, getAutomationHistory } from "@/api/automations"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 
@@ -44,6 +45,10 @@ export function Automations() {
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [selectedAutomation, setSelectedAutomation] = useState<string | null>(null)
+  const [automationHistory, setAutomationHistory] = useState<any[]>([])
+  const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false)
+  const [loadingHistory, setLoadingHistory] = useState(false)
   const { register, handleSubmit, reset } = useForm()
 
   useEffect(() => {
@@ -97,7 +102,7 @@ export function Automations() {
     try {
       console.log('Creating automation from text:', data.text)
       const result = await createAutomationFromText({ text: data.text })
-      
+
       setAutomations(prev => [...prev, result.automation])
       setIsCreateDialogOpen(false)
       reset()
@@ -110,11 +115,32 @@ export function Automations() {
       console.error('Failed to create automation:', error)
       toast({
         title: "Error",
-        description: "Failed to create automation",
+        description: error.message || "Failed to create automation",
         variant: "destructive"
       })
     } finally {
       setIsProcessing(false)
+    }
+  }
+
+  const handleViewHistory = async (automationId: string) => {
+    setSelectedAutomation(automationId)
+    setIsHistoryDialogOpen(true)
+    setLoadingHistory(true)
+
+    try {
+      console.log('Fetching history for automation:', automationId)
+      const result = await getAutomationHistory(automationId, 20)
+      setAutomationHistory(result.history || [])
+    } catch (error) {
+      console.error('Failed to fetch automation history:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to load automation history",
+        variant: "destructive"
+      })
+    } finally {
+      setLoadingHistory(false)
     }
   }
 
@@ -360,8 +386,19 @@ export function Automations() {
                   <p className="text-sm">{formatLastRun(automation.lastRun)}</p>
                 </div>
               </div>
-              <div className="mt-4 text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
-                <strong>Voice control:</strong> "Hey Anna, {automation.enabled === true ? 'disable' : 'enable'} {automation.name || 'this automation'}"
+              <div className="mt-4 flex items-center justify-between gap-2">
+                <div className="flex-1 text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
+                  <strong>Voice control:</strong> "Hey Anna, {automation.enabled === true ? 'disable' : 'enable'} {automation.name || 'this automation'}"
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleViewHistory(automation._id)}
+                  className="flex items-center gap-2"
+                >
+                  <History className="h-4 w-4" />
+                  History
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -386,6 +423,104 @@ export function Automations() {
           </CardContent>
         </Card>
       )}
+
+      {/* History Dialog */}
+      <Dialog open={isHistoryDialogOpen} onOpenChange={setIsHistoryDialogOpen}>
+        <DialogContent className="bg-white max-w-3xl max-h-[80vh] overflow-y-auto" aria-describedby="automation-history-description">
+          <DialogHeader>
+            <DialogTitle>Automation Execution History</DialogTitle>
+            <DialogDescription id="automation-history-description">
+              View the execution history and results for this automation.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {loadingHistory ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              </div>
+            ) : automationHistory.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <History className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                <p>No execution history found for this automation.</p>
+              </div>
+            ) : (
+              automationHistory.map((entry: any, index: number) => (
+                <Card key={entry._id || index} className="border-0 shadow">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant={
+                            entry.status === 'success' ? 'default' :
+                            entry.status === 'partial_success' ? 'secondary' :
+                            'destructive'
+                          }
+                        >
+                          {entry.status === 'success' ? 'Success' :
+                           entry.status === 'partial_success' ? 'Partial Success' :
+                           'Failed'}
+                        </Badge>
+                        <span className="text-sm text-muted-foreground">
+                          {new Date(entry.startedAt).toLocaleString()}
+                        </span>
+                      </div>
+                      {entry.durationMs && (
+                        <span className="text-xs text-muted-foreground">
+                          {entry.durationMs}ms
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <p className="font-medium text-muted-foreground">Total Actions</p>
+                        <p className="text-lg font-semibold">{entry.totalActions}</p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-green-600">Successful</p>
+                        <p className="text-lg font-semibold text-green-600">{entry.successfulActions}</p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-red-600">Failed</p>
+                        <p className="text-lg font-semibold text-red-600">{entry.failedActions}</p>
+                      </div>
+                    </div>
+                    {entry.error && entry.error.message && (
+                      <div className="mt-3 p-2 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-600">
+                        <strong>Error:</strong> {entry.error.message}
+                      </div>
+                    )}
+                    {entry.actionResults && entry.actionResults.length > 0 && (
+                      <details className="mt-3">
+                        <summary className="cursor-pointer text-sm font-medium text-blue-600 hover:text-blue-700">
+                          View Action Details ({entry.actionResults.length} actions)
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          {entry.actionResults.map((action: any, actionIndex: number) => (
+                            <div
+                              key={actionIndex}
+                              className={`p-2 rounded text-xs ${action.success ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium">{action.actionType}</span>
+                                <Badge variant={action.success ? 'default' : 'destructive'} className="text-xs">
+                                  {action.success ? 'Success' : 'Failed'}
+                                </Badge>
+                              </div>
+                              {action.error && (
+                                <p className="mt-1 text-red-600">{action.error}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </CardContent>
+                </Card>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

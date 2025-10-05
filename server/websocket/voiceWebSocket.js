@@ -285,38 +285,108 @@ class VoiceWebSocketServer {
       const voiceCommand = new VoiceCommand({
         deviceId: deviceId,
         originalText: command,
-        intent: 'voice_command',
-        confidence: confidence,
-        timestamp: timestamp ? new Date(timestamp) : new Date(),
-        status: 'processing'
+        processedText: command,
+        wakeWord: 'anna', // Default wake word
+        sourceRoom: connection.device.room,
+        intent: {
+          action: 'unknown',
+          confidence: confidence || 0.5,
+          entities: {}
+        },
+        execution: {
+          status: 'pending'
+        },
+        llmProcessing: {
+          provider: 'local',
+          model: 'unknown'
+        }
       });
 
       await voiceCommand.save();
 
-      // Here you would integrate with your LLM service to process the command
-      // For now, send a simple acknowledgment
+      // Acknowledge command receipt
       this.sendMessage(deviceId, {
         type: 'command_processing',
         commandId: voiceCommand._id,
         message: 'Processing your command...'
       });
 
-      // Simulate processing and response
-      setTimeout(() => {
+      // Check if this is an automation creation request
+      const automationKeywords = ['automation', 'automate', 'when', 'every', 'if', 'create rule'];
+      const isAutomationRequest = automationKeywords.some(keyword =>
+        command.toLowerCase().includes(keyword)
+      );
+
+      if (isAutomationRequest) {
+        console.log(`Voice command identified as automation request: ${command}`);
+
+        // Import automation service (do it here to avoid circular dependency)
+        const automationService = require('../services/automationService');
+
+        try {
+          // Create automation from voice command with room context
+          const result = await automationService.createAutomationFromText(
+            command,
+            connection.device.room
+          );
+
+          // Update voice command with success
+          voiceCommand.intent.action = 'automation_create';
+          voiceCommand.execution.status = 'success';
+          voiceCommand.execution.completedAt = new Date();
+          voiceCommand.response = {
+            text: `Automation "${result.automation.name}" created successfully!`,
+            responseTime: Date.now() - voiceCommand.createdAt.getTime()
+          };
+          await voiceCommand.save();
+
+          // Send success response
+          this.sendMessage(deviceId, {
+            type: 'tts_response',
+            commandId: voiceCommand._id,
+            text: `Automation "${result.automation.name}" created successfully!`,
+            voice: 'default'
+          });
+
+        } catch (automationError) {
+          console.error(`Failed to create automation from voice command:`, automationError);
+
+          // Update voice command with failure
+          voiceCommand.execution.status = 'failed';
+          voiceCommand.execution.completedAt = new Date();
+          voiceCommand.execution.errorMessage = automationError.message;
+          await voiceCommand.save();
+
+          // Send error response
+          this.sendMessage(deviceId, {
+            type: 'tts_response',
+            commandId: voiceCommand._id,
+            text: `Sorry, I couldn't create that automation. ${automationError.message}`,
+            voice: 'default'
+          });
+        }
+      } else {
+        // Regular command processing (non-automation)
+        // Here you would integrate with your LLM service for other commands
+        voiceCommand.execution.status = 'success';
+        voiceCommand.execution.completedAt = new Date();
+        voiceCommand.response = {
+          text: `Command "${command}" received and processed.`,
+          responseTime: Date.now() - voiceCommand.createdAt.getTime()
+        };
+        await voiceCommand.save();
+
         this.sendMessage(deviceId, {
           type: 'tts_response',
           commandId: voiceCommand._id,
           text: `Command "${command}" received and processed.`,
           voice: 'default'
         });
-      }, 1000);
-
-      // Update command status
-      voiceCommand.status = 'completed';
-      await voiceCommand.save();
+      }
 
     } catch (error) {
       console.error(`Voice command handling error for device ${deviceId}:`, error);
+      console.error('Full error:', error.stack);
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: 'Failed to process voice command'

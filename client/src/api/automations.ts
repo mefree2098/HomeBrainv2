@@ -154,3 +154,38 @@ export const getAutomationStats = async () => {
     throw new Error(error?.response?.data?.message || error.message);
   }
 }
+
+// Description: Get automation execution history
+// Endpoint: GET /api/automations/history/:id?
+// Request: { automationId?: string, limit?: number }
+// Response: { success: boolean, history: Array<object>, count: number }
+export const getAutomationHistory = async (automationId?: string, limit?: number) => {
+  console.log('Fetching automation history', { automationId, limit })
+  try {
+    const url = automationId
+      ? `/api/automations/history/${automationId}`
+      : '/api/automations/history';
+    const params = limit ? { limit } : {};
+    const response = await api.get(url, { params });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Get execution statistics
+// Endpoint: GET /api/automations/execution-stats
+// Request: { startDate?: string, endDate?: string }
+// Response: { success: boolean, stats: object }
+export const getExecutionStats = async (startDate?: string, endDate?: string) => {
+  console.log('Fetching execution statistics', { startDate, endDate })
+  try {
+    const params = (startDate && endDate) ? { startDate, endDate } : {};
+    const response = await api.get('/api/automations/execution-stats', { params });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}

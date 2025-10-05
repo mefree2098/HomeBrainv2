@@ -415,4 +415,70 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// Description: Get automation execution history
+// Endpoint: GET /api/automations/history/:id?
+// Request: { limit?: number }
+// Response: { success: boolean, history: Array<object> }
+router.get('/history/:id?', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { limit } = req.query;
+
+    console.log(`AutomationRoutes: GET /api/automations/history${id ? `/${id}` : ''} - Fetching execution history`);
+
+    const history = await automationService.getAutomationHistory(id || null, limit ? parseInt(limit) : 50);
+
+    console.log(`AutomationRoutes: Retrieved ${history.length} history entries`);
+    res.status(200).json({
+      success: true,
+      history: history,
+      count: history.length
+    });
+  } catch (error) {
+    console.error('AutomationRoutes: Error fetching automation history:', error.message);
+    console.error('AutomationRoutes: Full error:', error);
+
+    if (error.message.includes('Invalid')) {
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to fetch automation history'
+      });
+    }
+  }
+});
+
+// Description: Get execution statistics
+// Endpoint: GET /api/automations/execution-stats
+// Request: { startDate?: string, endDate?: string }
+// Response: { success: boolean, stats: object }
+router.get('/execution-stats', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    console.log('AutomationRoutes: GET /api/automations/execution-stats - Fetching execution statistics');
+
+    const dateRange = (startDate && endDate) ? { start: startDate, end: endDate } : null;
+    const stats = await automationService.getExecutionStats(dateRange);
+
+    console.log('AutomationRoutes: Retrieved execution statistics');
+    res.status(200).json({
+      success: true,
+      stats: stats
+    });
+  } catch (error) {
+    console.error('AutomationRoutes: Error fetching execution statistics:', error.message);
+    console.error('AutomationRoutes: Full error:', error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch execution statistics'
+    });
+  }
+});
+
 module.exports = router;

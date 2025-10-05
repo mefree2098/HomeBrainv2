@@ -5,6 +5,7 @@ require('./User');
 require('./Device');
 require('./Scene');
 require('./Automation');
+require('./AutomationHistory');
 require('./VoiceDevice');
 require('./UserProfile');
 require('./Settings');
