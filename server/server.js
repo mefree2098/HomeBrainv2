@@ -18,6 +18,7 @@ const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const discoveryRoutes = require("./routes/discoveryRoutes");
+const insteonRoutes = require("./routes/insteonRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const DiscoveryService = require("./services/discoveryService");
 const { connectDB } = require("./config/database");
@@ -76,6 +77,8 @@ app.use('/api/maintenance', maintenanceRoutes);
 app.use('/api/remote-devices', remoteDeviceRoutes);
 // Discovery Routes
 app.use('/api/discovery', discoveryRoutes);
+// Insteon Routes
+app.use('/api/insteon', insteonRoutes);
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {

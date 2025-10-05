@@ -107,8 +107,8 @@
 	"client/src/services/voicePollingManager.ts": "Singleton service managing voice status polling with dynamic interval, error handling, and multi-component subscription mechanism for real-time voice updates.",
 	"server/.env": "Environment configuration file for server, defining critical settings like database connection, JWT secrets, port, and ElevenLabs API credentials for application initialization.",
 	"server/.env.example": "Environment configuration template for HomeBrain server, specifying essential environment variables for port, database connection, JWT authentication, and optional ElevenLabs API integration.",
-	"server/package.json": "Node.js server configuration file specifying project dependencies, scripts for starting, development, and database seeding, with key packages for authentication, database, AI integrations, and web services.",
-	"server/server.js": "Express server configuration with comprehensive route setup for smart home services, including authentication, device management, voice control, and discovery, with WebSocket and graceful shutdown mechanisms.",
+	"server/package.json": "Node.js server configuration file specifying project dependencies, scripts for starting the server, seeding data, and managing development workflows.",
+	"server/server.js": "Express server configuration with comprehensive route management, database connection, WebSocket integration, and auto-discovery service for a smart home or IoT platform, handling multiple API endpoints and implementing graceful server shutdown mechanisms.",
 	"server/config/database.js": "MongoDB connection utility with robust connection management, error handling, and graceful shutdown for database initialization and monitoring.",
 	"server/models/Automation.js": "Mongoose schema for home automation rules, defining complex triggers, actions, execution tracking, and metadata with support for various automation types and advanced configuration options.",
 	"server/models/Device.js": "Mongoose schema for smart home devices, modeling various device types with dynamic properties, status tracking, and metadata for comprehensive IoT device management.",
@@ -187,5 +187,9 @@
 	"docs/jetson-setup.md": "Comprehensive setup guide for installing and configuring the HomeBrain smart home platform on NVIDIA Jetson Orin Nano, covering hardware requirements, system configuration, software installation, service setup, and initial deployment steps.",
 	"docs/troubleshooting.md": "Comprehensive troubleshooting documentation for HomeBrain, providing detailed diagnostic steps, solutions for system, network, audio, integration, and performance issues, with advanced recovery procedures and support guidance.",
 	"scripts/install-jetson.sh": "Bash installation script for HomeBrain on NVIDIA Jetson Orin Nano, automating system setup, dependency installation, service configuration, and environment initialization with comprehensive error handling and user guidance.",
-	"scripts/setup-services.sh": "Bash script for comprehensive HomeBrain service management, providing commands for starting, stopping, updating, backing up, and monitoring system services with advanced configuration and health check utilities."
+	"scripts/setup-services.sh": "Bash script for comprehensive HomeBrain service management, providing commands for starting, stopping, updating, backing up, and monitoring system services with advanced configuration and health check utilities.",
+	"client/src/api/insteon.ts": "API utility functions for Insteon PLM (PowerLine Modem) management, providing methods for connection testing, device discovery, control, linking, and status monitoring.",
+	"server/routes/insteonRoutes.js": "Express router for Insteon PLM management, providing endpoints for connection testing, device control, linking, and status monitoring with comprehensive error handling.",
+	"server/scripts/testInsteon.js": "Comprehensive test script for Insteon PLM integration, performing connection tests, device discovery, database synchronization, and validating Insteon service functionality across multiple stages.",
+	"server/services/insteonService.js": "Comprehensive Insteon PowerLinc Modem (PLM) service for device discovery, control, status monitoring, and management with methods for connection, device import, status tracking, and device control."
 }

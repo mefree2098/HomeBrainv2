@@ -46,6 +46,13 @@ const schema = new mongoose.Schema({
   properties: {
     type: mongoose.Schema.Types.Mixed,
     default: {},
+    // Common Insteon properties:
+    // source: 'insteon' | 'smartthings' | 'other'
+    // insteonAddress: string (e.g., '1A.2B.3C')
+    // insteonGroup: number
+    // insteonType: string
+    // deviceCategory: number
+    // subcategory: number
   },
   // Device metadata
   brand: {
