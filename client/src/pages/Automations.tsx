@@ -128,9 +128,16 @@ export function Automations() {
       })
     } catch (error) {
       console.error('Failed to create automation:', error)
+
+      // Check if it's an API key configuration error
+      const errorMessage = error.message || "Failed to create automation"
+      const isApiKeyError = errorMessage.includes("API key not configured") || errorMessage.includes("All LLM providers failed")
+
       toast({
         title: "Error",
-        description: error.message || "Failed to create automation",
+        description: isApiKeyError
+          ? "LLM API keys not configured. Please configure at least one LLM provider (OpenAI, Anthropic, or Local LLM) in Settings to use natural language features."
+          : errorMessage,
         variant: "destructive"
       })
     } finally {
@@ -320,7 +327,11 @@ export function Automations() {
                   className="mt-1 min-h-[100px]"
                 />
               </div>
-              <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded">
+              <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded border border-blue-200 mb-3">
+                <p className="font-medium mb-1 text-blue-800">⚙️ Requires LLM Configuration</p>
+                <p className="text-blue-700">This feature requires an LLM API key (OpenAI, Anthropic, or Local LLM) configured in Settings.</p>
+              </div>
+              <div className="text-xs text-muted-foreground bg-purple-50 p-3 rounded">
                 <p className="font-medium mb-2">Examples:</p>
                 <ul className="space-y-1">
                   <li>• "Turn on porch light when motion is detected after sunset"</li>

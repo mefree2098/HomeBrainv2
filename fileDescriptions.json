@@ -100,7 +100,7 @@
 	"client/src/pages/Devices.tsx": "Smart devices management page with grid/list view, search, filtering, and room-based device control functionality using React and custom UI components.",
 	"client/src/pages/Login.tsx": "Login page component with form validation, authentication logic, and responsive UI for user sign-in using react-hook-form and custom authentication context.",
 	"client/src/pages/Register.tsx": "React component for user registration with form validation, authentication, and responsive UI using react-hook-form and shadcn components.",
-	"client/src/pages/Scenes.tsx": "Smart Scenes management page with functionality to create, edit, activate, and delete scenes using natural language processing and device interactions.",
+	"client/src/pages/Scenes.tsx": "Smart Scenes management page with functionality to create, edit, activate, and delete scenes using UI components, device interactions, and natural language scene generation.",
 	"client/src/pages/Settings.tsx": "Comprehensive settings page for Home Brain system, managing location, voice, integrations, security, and maintenance with dynamic configuration for AI providers, device integrations, and system diagnostics.",
 	"client/src/pages/UserProfiles.tsx": "User profiles management page with voice recognition configuration, allowing creation, editing, and preview of personalized AI voice profiles with detailed UI for managing voice settings and system prompts.",
 	"client/src/pages/VoiceDevices.tsx": "React component for monitoring and managing distributed voice devices, displaying device status, battery levels, and providing testing functionality with comprehensive device statistics and interactive UI.",
