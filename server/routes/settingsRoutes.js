@@ -451,6 +451,86 @@ router.post('/test-local-llm', auth, async (req, res) => {
   }
 });
 
+// Description: Get LLM priority list
+// Endpoint: GET /api/settings/llm-priority
+// Request: {}
+// Response: { success: boolean, priorityList: Array<string> }
+router.get('/llm-priority', auth, async (req, res) => {
+  try {
+    console.log('GET /api/settings/llm-priority - Fetching LLM priority list');
+
+    const settings = await settingsService.getSettings();
+    const priorityList = settings.llmPriorityList || ['local', 'openai', 'anthropic'];
+
+    console.log('Successfully retrieved LLM priority list:', priorityList);
+    res.status(200).json({
+      success: true,
+      priorityList: priorityList
+    });
+
+  } catch (error) {
+    console.error('Error in GET /api/settings/llm-priority:', error.message);
+    console.error('Full error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch LLM priority list',
+      error: error.message
+    });
+  }
+});
+
+// Description: Update LLM priority list
+// Endpoint: PUT /api/settings/llm-priority
+// Request: { priorityList: Array<string> }
+// Response: { success: boolean, message: string, priorityList: Array<string> }
+router.put('/llm-priority', auth, async (req, res) => {
+  try {
+    console.log('PUT /api/settings/llm-priority - Updating LLM priority list');
+
+    const { priorityList } = req.body;
+
+    if (!priorityList || !Array.isArray(priorityList)) {
+      console.log('Invalid priority list format');
+      return res.status(400).json({
+        success: false,
+        message: 'Priority list must be an array'
+      });
+    }
+
+    // Validate that all providers are valid
+    const validProviders = ['openai', 'anthropic', 'local'];
+    const invalidProviders = priorityList.filter(p => !validProviders.includes(p));
+
+    if (invalidProviders.length > 0) {
+      console.log('Invalid providers in priority list:', invalidProviders);
+      return res.status(400).json({
+        success: false,
+        message: `Invalid providers: ${invalidProviders.join(', ')}`
+      });
+    }
+
+    console.log('New priority list:', priorityList);
+
+    const settings = await settingsService.updateSettings({ llmPriorityList: priorityList });
+
+    console.log('Successfully updated LLM priority list');
+    res.status(200).json({
+      success: true,
+      message: 'LLM priority list updated successfully',
+      priorityList: settings.llmPriorityList
+    });
+
+  } catch (error) {
+    console.error('Error in PUT /api/settings/llm-priority:', error.message);
+    console.error('Full error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update LLM priority list',
+      error: error.message
+    });
+  }
+});
+
 /**
  * POST /api/settings/test-smartthings
  * Test SmartThings API connectivity

@@ -134,3 +134,31 @@ export const testSmartThingsToken = async (token?: string, useOAuth?: boolean) =
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
+
+// Description: Get LLM priority list
+// Endpoint: GET /api/settings/llm-priority
+// Request: {}
+// Response: { success: boolean, priorityList: Array<string> }
+export const getLLMPriorityList = async () => {
+  try {
+    const response = await api.get('/api/settings/llm-priority');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Update LLM priority list
+// Endpoint: PUT /api/settings/llm-priority
+// Request: { priorityList: Array<string> }
+// Response: { success: boolean, message: string, priorityList: Array<string> }
+export const updateLLMPriorityList = async (priorityList: string[]) => {
+  try {
+    const response = await api.put('/api/settings/llm-priority', { priorityList });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};

@@ -36,7 +36,7 @@ class SettingsService {
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',
         'anthropicApiKey', 'anthropicModel',
-        'localLlmEndpoint', 'localLlmModel',
+        'localLlmEndpoint', 'localLlmModel', 'llmPriorityList',
         // SmartThings OAuth Settings
         'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth'
       ];

@@ -102,7 +102,19 @@ const SettingsSchema = new mongoose.Schema({
     type: String,
     default: 'llama2-7b'
   },
-  
+  llmPriorityList: {
+    type: [String],
+    default: ['local', 'openai', 'anthropic'],
+    validate: {
+      validator: function(arr) {
+        // Ensure array only contains valid provider names
+        const validProviders = ['openai', 'anthropic', 'local'];
+        return arr.every(provider => validProviders.includes(provider));
+      },
+      message: 'Invalid LLM provider in priority list'
+    }
+  },
+
   // Security Settings
   enableSecurityMode: {
     type: Boolean,

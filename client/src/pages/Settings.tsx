@@ -21,6 +21,9 @@ import {
   Cpu,
   Server,
   ExternalLink,
+  ArrowUp,
+  ArrowDown,
+  List,
   CheckCircle,
   XCircle,
   AlertCircle,
@@ -41,7 +44,9 @@ import {
   testOpenAIApiKey,
   testAnthropicApiKey,
   testLocalLLM,
-  getSetting
+  getSetting,
+  getLLMPriorityList,
+  updateLLMPriorityList
 } from "@/api/settings"
 import {
   getSmartThingsStatus,
@@ -89,6 +94,8 @@ export function Settings() {
   const [runningHealthCheck, setRunningHealthCheck] = useState(false)
   const [exportingConfig, setExportingConfig] = useState(false)
   const [healthData, setHealthData] = useState(null)
+  const [llmPriorityList, setLlmPriorityList] = useState<string[]>(['local', 'openai', 'anthropic'])
+  const [savingPriority, setSavingPriority] = useState(false)
   const { register, handleSubmit, setValue, watch, reset } = useForm({
     defaultValues: {
       location: "New York, NY",
@@ -156,7 +163,25 @@ export function Settings() {
 
     loadSettings();
     loadSmartThingsStatus();
+    loadLLMPriorityList();
   }, [setValue, toast]);
+
+  // Load LLM priority list
+  const loadLLMPriorityList = async () => {
+    try {
+      console.log('Loading LLM priority list...');
+      const response = await getLLMPriorityList();
+
+      if (response.success && response.priorityList) {
+        console.log('LLM priority list loaded:', response.priorityList);
+        setLlmPriorityList(response.priorityList);
+      }
+    } catch (error) {
+      console.error('Failed to load LLM priority list:', error);
+      // Use default priority list on error
+      setLlmPriorityList(['local', 'openai', 'anthropic']);
+    }
+  };
 
   // Load SmartThings integration status
   const loadSmartThingsStatus = async () => {
@@ -880,6 +905,63 @@ export function Settings() {
     }
   };
 
+  // LLM Priority List handlers
+  const movePriorityUp = (index: number) => {
+    if (index === 0) return; // Already at top
+    const newList = [...llmPriorityList];
+    [newList[index - 1], newList[index]] = [newList[index], newList[index - 1]];
+    setLlmPriorityList(newList);
+  };
+
+  const movePriorityDown = (index: number) => {
+    if (index === llmPriorityList.length - 1) return; // Already at bottom
+    const newList = [...llmPriorityList];
+    [newList[index], newList[index + 1]] = [newList[index + 1], newList[index]];
+    setLlmPriorityList(newList);
+  };
+
+  const handleSavePriorityList = async () => {
+    setSavingPriority(true);
+    try {
+      console.log('Saving LLM priority list:', llmPriorityList);
+      const response = await updateLLMPriorityList(llmPriorityList);
+
+      if (response.success) {
+        toast({
+          title: "Priority List Saved",
+          description: "LLM priority list has been updated successfully"
+        });
+      }
+    } catch (error) {
+      console.error('Failed to save LLM priority list:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to save LLM priority list",
+        variant: "destructive"
+      });
+    } finally {
+      setSavingPriority(false);
+    }
+  };
+
+  const getProviderDisplayName = (provider: string) => {
+    const names = {
+      'openai': 'OpenAI',
+      'anthropic': 'Anthropic Claude',
+      'local': 'Local LLM'
+    };
+    return names[provider] || provider;
+  };
+
+  const getProviderIcon = (provider: string) => {
+    const icons = {
+      'openai': <Cpu className="h-4 w-4 text-blue-600" />,
+      'anthropic': <Cpu className="h-4 w-4 text-orange-600" />,
+      'local': <Server className="h-4 w-4 text-green-600" />
+    };
+    return icons[provider] || <Brain className="h-4 w-4" />;
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -1467,6 +1549,98 @@ export function Settings() {
                       Name of the model to use on your local LLM server
                     </p>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <List className="h-5 w-5 text-indigo-600" />
+                  LLM Priority List
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Configure the order in which LLM providers are tried when processing voice commands.
+                  The system will attempt to use providers from top to bottom. If a provider fails or is not configured,
+                  it will automatically fall back to the next one in the list.
+                </p>
+
+                <div className="space-y-2">
+                  {llmPriorityList.map((provider, index) => (
+                    <div
+                      key={provider}
+                      className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center justify-center w-8 h-8 rounded-full bg-white dark:bg-gray-700 border-2 border-gray-300 dark:border-gray-600">
+                          <span className="text-sm font-bold text-gray-600 dark:text-gray-300">{index + 1}</span>
+                        </div>
+                        {getProviderIcon(provider)}
+                        <div>
+                          <p className="font-medium">{getProviderDisplayName(provider)}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {index === 0 ? 'Primary provider' : index === 1 ? 'First fallback' : 'Second fallback'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => movePriorityUp(index)}
+                          disabled={index === 0}
+                          className="h-8 w-8 p-0"
+                        >
+                          <ArrowUp className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => movePriorityDown(index)}
+                          disabled={index === llmPriorityList.length - 1}
+                          className="h-8 w-8 p-0"
+                        >
+                          <ArrowDown className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex justify-end pt-4">
+                  <Button
+                    type="button"
+                    onClick={handleSavePriorityList}
+                    disabled={savingPriority}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    {savingPriority ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4" />
+                        Save Priority List
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <p className="text-sm text-blue-800 dark:text-blue-200">
+                    <strong>How it works:</strong> When processing a voice command or automation, the system will try each
+                    provider in order. If the primary provider is unavailable or returns an error, it automatically falls
+                    back to the next provider in the list. This ensures your system remains operational even if one provider
+                    has issues.
+                  </p>
                 </div>
               </CardContent>
             </Card>
