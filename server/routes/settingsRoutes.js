@@ -205,7 +205,9 @@ router.post('/test-openai', auth, async (req, res) => {
       console.log(`Testing with model: ${testModel}`);
 
       // Check if this is a newer model that requires max_completion_tokens
-      const isNewerModel = testModel.includes('gpt-4') || testModel.includes('o1');
+      const isNewerModel = testModel.includes('gpt-4') ||
+                           testModel.includes('gpt-5') ||
+                           testModel.includes('o1');
       const tokenParam = isNewerModel ? { max_completion_tokens: 10 } : { max_tokens: 10 };
 
       const response = await openai.chat.completions.create({
