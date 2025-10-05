@@ -203,11 +203,15 @@ router.post('/test-openai', auth, async (req, res) => {
       // Make a simple completion request to test the key
       const testModel = model || 'gpt-3.5-turbo';
       console.log(`Testing with model: ${testModel}`);
-      
+
+      // Check if this is a newer model that requires max_completion_tokens
+      const isNewerModel = testModel.includes('gpt-4') || testModel.includes('o1');
+      const tokenParam = isNewerModel ? { max_completion_tokens: 10 } : { max_tokens: 10 };
+
       const response = await openai.chat.completions.create({
         model: testModel,
         messages: [{ role: 'user', content: 'Hello, this is a test.' }],
-        max_tokens: 10
+        ...tokenParam
       });
       
       console.log('OpenAI API key test successful');
@@ -220,7 +224,7 @@ router.post('/test-openai', auth, async (req, res) => {
     } catch (apiError) {
       console.log('OpenAI API key test failed:', apiError.message);
       console.log('OpenAI API error details:', apiError);
-      
+
       if (apiError.status === 401) {
         res.status(400).json({
           success: false,
@@ -231,10 +235,20 @@ router.post('/test-openai', auth, async (req, res) => {
           success: false,
           message: 'OpenAI API key lacks necessary permissions'
         });
+      } else if (apiError.status === 404) {
+        res.status(400).json({
+          success: false,
+          message: `Model "${testModel}" not found or you don't have access to it. Try using gpt-3.5-turbo or gpt-4 instead.`
+        });
       } else if (apiError.status === 429) {
         res.status(400).json({
           success: false,
           message: 'OpenAI API rate limit exceeded'
+        });
+      } else if (apiError.code === 'unsupported_parameter') {
+        res.status(400).json({
+          success: false,
+          message: `Model configuration error: ${apiError.message}`
         });
       } else {
         res.status(400).json({

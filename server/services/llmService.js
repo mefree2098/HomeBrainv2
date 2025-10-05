@@ -32,17 +32,26 @@ async function sendRequestToOpenAI(model, message) {
   if (!openai) {
     throw new Error('OpenAI API key not configured');
   }
-  
+
+  // Use a valid default model if an invalid one is provided
+  const validModel = model && model.startsWith('gpt-') ? model : 'gpt-3.5-turbo';
+  console.log(`Using OpenAI model: ${validModel}`);
+
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
+      // Check if this is a newer model that requires max_completion_tokens
+      const isNewerModel = validModel.includes('gpt-4') || validModel.includes('o1');
+      const tokenParam = isNewerModel ? { max_completion_tokens: 1024 } : { max_tokens: 1024 };
+
       const response = await openai.chat.completions.create({
-        model: model,
+        model: validModel,
         messages: [{ role: 'user', content: message }],
-        max_tokens: 1024,
+        ...tokenParam,
       });
       return response.choices[0].message.content;
     } catch (error) {
-      console.error(`Error sending request to OpenAI (attempt ${i + 1}):`, error.message, error.stack);
+      console.error(`Error sending request to OpenAI (attempt ${i + 1}):`, error.message);
+      if (error.stack) console.error('Stack:', error.stack);
       if (i === MAX_RETRIES - 1) throw error;
       await sleep(RETRY_DELAY);
     }
