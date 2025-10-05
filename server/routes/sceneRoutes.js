@@ -94,24 +94,24 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-/**
- * POST /api/scenes
- * Create a new scene
- */
+// Description: Create a new scene
+// Endpoint: POST /api/scenes
+// Request: { name: string, description?: string, devices?: Array<string>, deviceActions?: Array<object>, category?: string, icon?: string, color?: string }
+// Response: { success: boolean, message: string, scene: object }
 router.post('/', async (req, res) => {
   try {
     console.log('SceneRoutes: POST /api/scenes - Creating new scene');
     console.log('SceneRoutes: Scene data received:', req.body);
-    
+
     const { name, description, devices, deviceActions, category, icon, color } = req.body;
-    
+
     if (!name || name.trim() === '') {
       return res.status(400).json({
         success: false,
         error: 'Scene name is required'
       });
     }
-    
+
     const sceneData = {
       name: name.trim(),
       description: description ? description.trim() : '',
@@ -121,9 +121,9 @@ router.post('/', async (req, res) => {
       icon: icon || 'home',
       color: color || '#3b82f6'
     };
-    
+
     const newScene = await sceneService.createScene(sceneData);
-    
+
     console.log(`SceneRoutes: Scene created successfully with ID: ${newScene._id}`);
     res.status(201).json({
       success: true,
@@ -133,7 +133,7 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('SceneRoutes: Error creating scene:', error.message);
     console.error('SceneRoutes: Full error:', error);
-    
+
     if (error.message.includes('required') || error.message.includes('not found')) {
       res.status(400).json({
         success: false,
@@ -143,6 +143,46 @@ router.post('/', async (req, res) => {
       res.status(500).json({
         success: false,
         error: error.message || 'Failed to create scene'
+      });
+    }
+  }
+});
+
+// Description: Create scene from natural language
+// Endpoint: POST /api/scenes/natural-language
+// Request: { description: string }
+// Response: { success: boolean, scene: object, message: string }
+router.post('/natural-language', async (req, res) => {
+  try {
+    console.log('SceneRoutes: POST /api/scenes/natural-language - Creating scene from natural language');
+    console.log('SceneRoutes: Description received:', req.body);
+
+    const { description } = req.body;
+
+    if (!description || description.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'Scene description is required'
+      });
+    }
+
+    const result = await sceneService.createSceneFromNaturalLanguage(description.trim());
+
+    console.log(`SceneRoutes: Scene created from natural language successfully with ID: ${result.scene._id}`);
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('SceneRoutes: Error creating scene from natural language:', error.message);
+    console.error('SceneRoutes: Full error:', error);
+
+    if (error.message.includes('required') || error.message.includes('unavailable')) {
+      res.status(400).json({
+        success: false,
+        error: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to create scene from natural language'
       });
     }
   }

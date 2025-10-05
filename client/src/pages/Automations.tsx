@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Zap,
@@ -16,9 +17,11 @@ import {
   Pause,
   MessageSquare,
   Send,
-  History
+  History,
+  Edit,
+  Trash2
 } from "lucide-react"
-import { getAutomations, createAutomationFromText, toggleAutomation, getAutomationHistory } from "@/api/automations"
+import { getAutomations, createAutomationFromText, toggleAutomation, getAutomationHistory, updateAutomation, deleteAutomation } from "@/api/automations"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 
@@ -44,12 +47,13 @@ export function Automations() {
   const [automations, setAutomations] = useState<Automation[]>([])
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
-  const [selectedAutomation, setSelectedAutomation] = useState<string | null>(null)
+  const [selectedAutomation, setSelectedAutomation] = useState<any>(null)
   const [automationHistory, setAutomationHistory] = useState<any[]>([])
   const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(false)
-  const { register, handleSubmit, reset } = useForm()
+  const { register, handleSubmit, reset, setValue } = useForm()
 
   useEffect(() => {
     const fetchAutomations = async () => {
@@ -124,7 +128,6 @@ export function Automations() {
   }
 
   const handleViewHistory = async (automationId: string) => {
-    setSelectedAutomation(automationId)
     setIsHistoryDialogOpen(true)
     setLoadingHistory(true)
 
@@ -141,6 +144,69 @@ export function Automations() {
       })
     } finally {
       setLoadingHistory(false)
+    }
+  }
+
+  const handleEditAutomation = (automation: Automation) => {
+    setSelectedAutomation(automation)
+    setValue('editName', automation.name)
+    setValue('editDescription', automation.description)
+    setIsEditDialogOpen(true)
+  }
+
+  const handleUpdateAutomation = async (data: any) => {
+    if (!selectedAutomation) return
+
+    try {
+      console.log('Updating automation:', selectedAutomation._id, data)
+      const result = await updateAutomation(selectedAutomation._id, {
+        name: data.editName,
+        description: data.editDescription
+      })
+
+      setAutomations(prev => prev.map(automation =>
+        automation._id === selectedAutomation._id ? result.automation : automation
+      ))
+      setIsEditDialogOpen(false)
+      setSelectedAutomation(null)
+      reset()
+
+      toast({
+        title: "Automation Updated",
+        description: "Automation has been updated successfully"
+      })
+    } catch (error) {
+      console.error('Failed to update automation:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update automation",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleDeleteAutomation = async (automationId: string, automationName: string) => {
+    if (!confirm(`Are you sure you want to delete the "${automationName}" automation?`)) {
+      return
+    }
+
+    try {
+      console.log('Deleting automation:', automationId)
+      await deleteAutomation(automationId)
+
+      setAutomations(prev => prev.filter(automation => automation._id !== automationId))
+
+      toast({
+        title: "Automation Deleted",
+        description: `"${automationName}" automation has been deleted successfully`
+      })
+    } catch (error) {
+      console.error('Failed to delete automation:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete automation",
+        variant: "destructive"
+      })
     }
   }
 
@@ -386,19 +452,43 @@ export function Automations() {
                   <p className="text-sm">{formatLastRun(automation.lastRun)}</p>
                 </div>
               </div>
-              <div className="mt-4 flex items-center justify-between gap-2">
-                <div className="flex-1 text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
-                  <strong>Voice control:</strong> "Hey Anna, {automation.enabled === true ? 'disable' : 'enable'} {automation.name || 'this automation'}"
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1 text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
+                    <strong>Voice control:</strong> "Hey Anna, {automation.enabled === true ? 'disable' : 'enable'} {automation.name || 'this automation'}"
+                  </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleViewHistory(automation._id)}
-                  className="flex items-center gap-2"
-                >
-                  <History className="h-4 w-4" />
-                  History
-                </Button>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleEditAutomation(automation)}
+                      className="flex items-center gap-2 hover:bg-blue-50"
+                    >
+                      <Edit className="h-4 w-4" />
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDeleteAutomation(automation._id, automation.name)}
+                      className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </Button>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleViewHistory(automation._id)}
+                    className="flex items-center gap-2"
+                  >
+                    <History className="h-4 w-4" />
+                    History
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -423,6 +513,45 @@ export function Automations() {
           </CardContent>
         </Card>
       )}
+
+      {/* Edit Automation Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="bg-white" aria-describedby="edit-automation-description">
+          <DialogHeader>
+            <DialogTitle>Edit Automation</DialogTitle>
+            <DialogDescription id="edit-automation-description">
+              Update the name and description of your automation.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit(handleUpdateAutomation)} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Automation Name</label>
+              <Input
+                {...register("editName", { required: true })}
+                placeholder="e.g., Morning Routine"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Description</label>
+              <Textarea
+                {...register("editDescription")}
+                placeholder="Describe what this automation does..."
+                className="mt-1"
+              />
+            </div>
+            <div className="flex gap-2 pt-4">
+              <Button type="submit" className="flex-1">Update Automation</Button>
+              <Button type="button" variant="outline" onClick={() => {
+                setIsEditDialogOpen(false)
+                setSelectedAutomation(null)
+              }}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* History Dialog */}
       <Dialog open={isHistoryDialogOpen} onOpenChange={setIsHistoryDialogOpen}>

@@ -278,13 +278,13 @@ class SceneService {
   async getSceneStats() {
     try {
       console.log('SceneService: Calculating scene statistics');
-      
+
       const totalScenes = await Scene.countDocuments();
       const activeScenes = await Scene.countDocuments({ active: true });
       const scenesByCategory = await Scene.aggregate([
         { $group: { _id: '$category', count: { $sum: 1 } } }
       ]);
-      
+
       const stats = {
         totalScenes,
         activeScenes,
@@ -300,6 +300,199 @@ class SceneService {
     } catch (error) {
       console.error('SceneService: Error calculating scene statistics:', error);
       throw new Error(`Failed to get scene statistics: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create scene from natural language description
+   * @param {string} description - Natural language description of the scene
+   * @returns {Promise<Object>} Created scene object
+   */
+  async createSceneFromNaturalLanguage(description) {
+    try {
+      console.log('SceneService: Creating scene from natural language:', description);
+
+      if (!description || description.trim() === '') {
+        throw new Error('Scene description is required');
+      }
+
+      // Import LLM service
+      const { sendLLMRequest } = require('./llmService');
+
+      // Build device context
+      const devices = await Device.find({ isOnline: true }).lean();
+      const devicesByRoom = {};
+
+      devices.forEach(device => {
+        if (!devicesByRoom[device.room]) {
+          devicesByRoom[device.room] = [];
+        }
+
+        devicesByRoom[device.room].push({
+          id: device._id.toString(),
+          name: device.name,
+          type: device.type,
+          capabilities: this._getDeviceCapabilities(device.type)
+        });
+      });
+
+      const deviceList = Object.entries(devicesByRoom).map(([room, devices]) => {
+        return `Room: ${room}\n${devices.map(d =>
+          `  - ${d.name} (ID: ${d.id}, Type: ${d.type}, Actions: ${d.capabilities.join(', ')})`
+        ).join('\n')}`;
+      }).join('\n\n');
+
+      // Build LLM prompt
+      const prompt = `You are an expert at creating smart home scenes. Parse the following scene description into a structured JSON format.
+
+IMPORTANT RULES:
+1. ONLY use device IDs from the provided device list below
+2. DO NOT make up or invent device names or IDs
+3. Use actual device IDs from the list
+4. Match device capabilities to allowed actions for each device type
+5. Return ONLY valid JSON with NO additional text or explanation
+
+AVAILABLE DEVICES:
+${deviceList}
+
+REQUIRED JSON STRUCTURE:
+{
+  "name": "Brief scene name (max 50 chars)",
+  "description": "Detailed description of what this scene does",
+  "deviceActions": [
+    {
+      "deviceId": "EXACT_DEVICE_ID_FROM_LIST_ABOVE",
+      "action": "turn_on|turn_off|set_brightness|set_temperature|lock|unlock|open|close",
+      "value": 0-100 or temperature number or null
+    }
+  ],
+  "category": "entertainment|security|comfort|energy|custom",
+  "icon": "home|moon|sun|shield|heart|star|settings",
+  "color": "#hexcolor"
+}
+
+DEVICE ACTION COMPATIBILITY:
+- light: turn_on, turn_off, set_brightness (value: 0-100), set_color (value: #hex)
+- thermostat: turn_on, turn_off, set_temperature (value: degrees)
+- lock: lock, unlock
+- switch: turn_on, turn_off
+- garage: open, close
+- sensor: (read-only, cannot be controlled)
+
+USER REQUEST: "${description}"
+
+Return ONLY the JSON object, nothing else:`;
+
+      let parsedScene = null;
+      let lastError = null;
+      const MAX_RETRIES = 3;
+
+      // Try up to MAX_RETRIES times
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        console.log(`SceneService: LLM attempt ${attempt}/${MAX_RETRIES}`);
+
+        try {
+          // Send request to LLM
+          let llmResponse;
+          try {
+            llmResponse = await sendLLMRequest('anthropic', 'claude-3-haiku-20240307', prompt);
+          } catch (anthropicError) {
+            console.log('SceneService: Anthropic failed, trying OpenAI:', anthropicError.message);
+            llmResponse = await sendLLMRequest('openai', 'gpt-3.5-turbo', prompt);
+          }
+
+          console.log('SceneService: LLM response received');
+
+          // Parse LLM response
+          const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) {
+            lastError = 'No valid JSON found in LLM response';
+            console.error('SceneService:', lastError);
+            continue;
+          }
+
+          parsedScene = JSON.parse(jsonMatch[0]);
+
+          // Validate scene structure
+          if (!parsedScene.name) {
+            throw new Error('Scene name is required');
+          }
+
+          if (!parsedScene.deviceActions || !Array.isArray(parsedScene.deviceActions)) {
+            throw new Error('Device actions are required');
+          }
+
+          // Validate device references
+          for (const action of parsedScene.deviceActions) {
+            if (!action.deviceId) {
+              throw new Error('Device ID is required for each action');
+            }
+
+            const device = await Device.findById(action.deviceId);
+            if (!device) {
+              throw new Error(`Device with ID ${action.deviceId} not found`);
+            }
+          }
+
+          console.log('SceneService: Scene structure validated successfully');
+          break; // Success!
+
+        } catch (parseError) {
+          lastError = `Parse error: ${parseError.message}`;
+          console.error('SceneService:', lastError);
+        }
+      }
+
+      // If we exhausted all retries, throw error
+      if (!parsedScene) {
+        throw new Error(`Failed to create valid scene after ${MAX_RETRIES} attempts. Last error: ${lastError}`);
+      }
+
+      // Create the scene using validated data
+      const sceneData = {
+        name: parsedScene.name,
+        description: parsedScene.description || description.trim(),
+        deviceActions: parsedScene.deviceActions,
+        category: parsedScene.category || 'custom',
+        icon: parsedScene.icon || 'home',
+        color: parsedScene.color || '#3b82f6'
+      };
+
+      const newScene = await this.createScene(sceneData);
+
+      console.log('SceneService: Scene created from natural language successfully');
+      return {
+        success: true,
+        scene: newScene,
+        message: 'Scene created successfully from natural language'
+      };
+
+    } catch (error) {
+      console.error('SceneService: Error creating scene from natural language:', error);
+      throw new Error(`Failed to create scene from natural language: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get device capabilities based on device type
+   * @param {string} deviceType - The device type
+   * @returns {Array<string>} Array of capability strings
+   * @private
+   */
+  _getDeviceCapabilities(deviceType) {
+    switch (deviceType) {
+      case 'light':
+        return ['turn_on', 'turn_off', 'set_brightness', 'set_color'];
+      case 'thermostat':
+        return ['turn_on', 'turn_off', 'set_temperature'];
+      case 'lock':
+        return ['lock', 'unlock'];
+      case 'switch':
+        return ['turn_on', 'turn_off'];
+      case 'garage':
+        return ['open', 'close'];
+      default:
+        return ['turn_on', 'turn_off'];
     }
   }
 }

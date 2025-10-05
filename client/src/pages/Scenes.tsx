@@ -5,17 +5,21 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { 
-  Play, 
-  Plus, 
-  Moon, 
-  Sun, 
-  Shield, 
+import {
+  Play,
+  Plus,
+  Moon,
+  Sun,
+  Shield,
   Heart,
   Palette,
-  Settings
+  Settings,
+  MessageSquare,
+  Send,
+  Edit,
+  Trash2
 } from "lucide-react"
-import { getScenes, activateScene, createScene } from "@/api/scenes"
+import { getScenes, activateScene, createScene, createSceneFromNaturalLanguage, updateScene, deleteScene } from "@/api/scenes"
 import { getDevices } from "@/api/devices"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
@@ -26,7 +30,11 @@ export function Scenes() {
   const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
-  const { register, handleSubmit, reset } = useForm()
+  const [isNaturalLanguageDialogOpen, setIsNaturalLanguageDialogOpen] = useState(false)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [selectedScene, setSelectedScene] = useState<any>(null)
+  const { register, handleSubmit, reset, setValue } = useForm()
 
   useEffect(() => {
     const fetchData = async () => {
@@ -87,11 +95,11 @@ export function Scenes() {
         description: data.description,
         devices: [] // In a real app, this would be selected devices
       })
-      
+
       setScenes(prev => [...prev, result.scene])
       setIsCreateDialogOpen(false)
       reset()
-      
+
       toast({
         title: "Scene Created",
         description: "New scene has been created successfully"
@@ -101,6 +109,95 @@ export function Scenes() {
       toast({
         title: "Error",
         description: error.message || "Failed to create scene",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleCreateSceneFromNaturalLanguage = async (data: any) => {
+    setIsProcessing(true)
+    try {
+      console.log('Creating scene from natural language:', data.description)
+      const result = await createSceneFromNaturalLanguage({ description: data.description })
+
+      setScenes(prev => [...prev, result.scene])
+      setIsNaturalLanguageDialogOpen(false)
+      reset()
+
+      toast({
+        title: "Scene Created",
+        description: "Your scene has been created successfully from natural language"
+      })
+    } catch (error) {
+      console.error('Failed to create scene from natural language:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create scene from natural language",
+        variant: "destructive"
+      })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleEditScene = (scene: any) => {
+    setSelectedScene(scene)
+    setValue('editName', scene.name)
+    setValue('editDescription', scene.description)
+    setIsEditDialogOpen(true)
+  }
+
+  const handleUpdateScene = async (data: any) => {
+    if (!selectedScene) return
+
+    try {
+      console.log('Updating scene:', selectedScene._id, data)
+      const result = await updateScene(selectedScene._id, {
+        name: data.editName,
+        description: data.editDescription
+      })
+
+      setScenes(prev => prev.map(scene =>
+        scene._id === selectedScene._id ? result.scene : scene
+      ))
+      setIsEditDialogOpen(false)
+      setSelectedScene(null)
+      reset()
+
+      toast({
+        title: "Scene Updated",
+        description: "Scene has been updated successfully"
+      })
+    } catch (error) {
+      console.error('Failed to update scene:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update scene",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleDeleteScene = async (sceneId: string, sceneName: string) => {
+    if (!confirm(`Are you sure you want to delete the "${sceneName}" scene?`)) {
+      return
+    }
+
+    try {
+      console.log('Deleting scene:', sceneId)
+      await deleteScene(sceneId)
+
+      setScenes(prev => prev.filter(scene => scene._id !== sceneId))
+
+      toast({
+        title: "Scene Deleted",
+        description: `"${sceneName}" scene has been deleted successfully`
+      })
+    } catch (error) {
+      console.error('Failed to delete scene:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete scene",
         variant: "destructive"
       })
     }
@@ -143,47 +240,102 @@ export function Scenes() {
             Create and manage scenes for different occasions
           </p>
         </div>
-        
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-lg">
-              <Plus className="h-4 w-4 mr-2" />
-              Create Scene
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="bg-white" aria-describedby="create-scene-description">
-            <DialogHeader>
-              <DialogTitle>Create New Scene</DialogTitle>
-              <DialogDescription id="create-scene-description">
-                Create a new scene to control multiple devices with a single command or action.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleSubmit(handleCreateScene)} className="space-y-4">
-              <div>
-                <label className="text-sm font-medium">Scene Name</label>
-                <Input
-                  {...register("name", { required: true })}
-                  placeholder="e.g., Cozy Evening"
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium">Description</label>
-                <Textarea
-                  {...register("description")}
-                  placeholder="Describe what this scene does..."
-                  className="mt-1"
-                />
-              </div>
-              <div className="flex gap-2 pt-4">
-                <Button type="submit" className="flex-1">Create Scene</Button>
-                <Button type="button" variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
+
+        <div className="flex gap-2">
+          <Dialog open={isNaturalLanguageDialogOpen} onOpenChange={setIsNaturalLanguageDialogOpen}>
+            <DialogTrigger asChild>
+              <Button className="bg-gradient-to-r from-purple-500 to-pink-600 hover:from-purple-600 hover:to-pink-700 text-white shadow-lg">
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Natural Language
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="bg-white" aria-describedby="natural-language-scene-description">
+              <DialogHeader>
+                <DialogTitle>Create Scene with Natural Language</DialogTitle>
+                <DialogDescription id="natural-language-scene-description">
+                  Describe your scene in natural language and let AI convert it into a working scene.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleSubmit(handleCreateSceneFromNaturalLanguage)} className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium">Describe your scene</label>
+                  <Textarea
+                    {...register("description", { required: true })}
+                    placeholder="e.g., Movie night scene: dim living room lights to 20%, turn off kitchen lights, and close the living room blinds"
+                    className="mt-1 min-h-[100px]"
+                  />
+                </div>
+                <div className="text-xs text-muted-foreground bg-purple-50 p-3 rounded">
+                  <p className="font-medium mb-2">Examples:</p>
+                  <ul className="space-y-1">
+                    <li>• "Create a romantic dinner scene with bedroom lights at 50% and soft music"</li>
+                    <li>• "Good morning scene: open all blinds and turn on kitchen lights"</li>
+                    <li>• "Away mode: turn off all lights, lock all doors, and set thermostat to 68°"</li>
+                  </ul>
+                </div>
+                <div className="flex gap-2 pt-4">
+                  <Button type="submit" className="flex-1" disabled={isProcessing}>
+                    {isProcessing ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4 mr-2" />
+                        Create Scene
+                      </>
+                    )}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setIsNaturalLanguageDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+            <DialogTrigger asChild>
+              <Button className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-lg">
+                <Plus className="h-4 w-4 mr-2" />
+                Create Scene
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="bg-white" aria-describedby="create-scene-description">
+              <DialogHeader>
+                <DialogTitle>Create New Scene</DialogTitle>
+                <DialogDescription id="create-scene-description">
+                  Create a new scene to control multiple devices with a single command or action.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleSubmit(handleCreateScene)} className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium">Scene Name</label>
+                  <Input
+                    {...register("name", { required: true })}
+                    placeholder="e.g., Cozy Evening"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Description</label>
+                  <Textarea
+                    {...register("description")}
+                    placeholder="Describe what this scene does..."
+                    className="mt-1"
+                  />
+                </div>
+                <div className="flex gap-2 pt-4">
+                  <Button type="submit" className="flex-1">Create Scene</Button>
+                  <Button type="button" variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* Scene Stats */}
@@ -264,16 +416,34 @@ export function Scenes() {
                 <span>{scene.deviceActions?.length || scene.devices?.length || 0} devices</span>
                 <span>Voice enabled</span>
               </div>
-              
-              <Button
-                onClick={() => handleSceneActivation(scene._id, scene.name)}
-                className={`w-full bg-gradient-to-r ${getSceneGradient(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
-                disabled={scene.active}
-              >
-                <Play className="h-4 w-4 mr-2" />
-                {scene.active ? "Scene Active" : "Activate Scene"}
-              </Button>
-              
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => handleSceneActivation(scene._id, scene.name)}
+                  className={`flex-1 bg-gradient-to-r ${getSceneGradient(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
+                  disabled={scene.active}
+                >
+                  <Play className="h-4 w-4 mr-2" />
+                  {scene.active ? "Scene Active" : "Activate Scene"}
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={() => handleEditScene(scene)}
+                  className="hover:bg-blue-50"
+                >
+                  <Edit className="h-4 w-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={() => handleDeleteScene(scene._id, scene.name)}
+                  className="hover:bg-red-50 hover:text-red-600"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+
               <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
                 <strong>Voice command:</strong> "Hey Anna, activate {scene.name}"
               </div>
@@ -281,6 +451,45 @@ export function Scenes() {
           </Card>
         ))}
       </div>
+
+      {/* Edit Scene Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="bg-white" aria-describedby="edit-scene-description">
+          <DialogHeader>
+            <DialogTitle>Edit Scene</DialogTitle>
+            <DialogDescription id="edit-scene-description">
+              Update the name and description of your scene.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit(handleUpdateScene)} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Scene Name</label>
+              <Input
+                {...register("editName", { required: true })}
+                placeholder="e.g., Cozy Evening"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Description</label>
+              <Textarea
+                {...register("editDescription")}
+                placeholder="Describe what this scene does..."
+                className="mt-1"
+              />
+            </div>
+            <div className="flex gap-2 pt-4">
+              <Button type="submit" className="flex-1">Update Scene</Button>
+              <Button type="button" variant="outline" onClick={() => {
+                setIsEditDialogOpen(false)
+                setSelectedScene(null)
+              }}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {scenes.length === 0 && (
         <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
