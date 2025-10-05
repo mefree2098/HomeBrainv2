@@ -40,7 +40,11 @@ async function sendRequestToOpenAI(model, message) {
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
       // Check if this is a newer model that requires max_completion_tokens
-      const isNewerModel = validModel.includes('gpt-4') || validModel.includes('o1');
+      // GPT-4, GPT-5, and O1 series use max_completion_tokens
+      // GPT-3.5 and older use max_tokens
+      const isNewerModel = validModel.includes('gpt-4') ||
+                           validModel.includes('gpt-5') ||
+                           validModel.includes('o1');
       const tokenParam = isNewerModel ? { max_completion_tokens: 1024 } : { max_tokens: 1024 };
 
       const response = await openai.chat.completions.create({

@@ -483,7 +483,7 @@ async function createAutomationFromText(text, roomContext = null) {
     const scenes = await buildSceneContext();
 
     // Build detailed prompt with all context
-    const prompt = buildAutomationPrompt(text, devicesByRoom, scenes, roomContext);
+    let prompt = buildAutomationPrompt(text, devicesByRoom, scenes, roomContext);
 
     let parsedAutomation = null;
     let lastError = null;
