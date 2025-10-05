@@ -100,7 +100,7 @@
 	"client/src/pages/Devices.tsx": "Smart devices management page with grid/list view, search, filtering, and room-based device control functionality using React and custom UI components.",
 	"client/src/pages/Login.tsx": "Login page component with form validation, authentication logic, and responsive UI for user sign-in using react-hook-form and custom authentication context.",
 	"client/src/pages/Register.tsx": "React component for user registration with form validation, authentication, and responsive UI using react-hook-form and shadcn components.",
-	"client/src/pages/Scenes.tsx": "Smart Scenes management page with dynamic scene creation, activation, editing, and deletion using natural language processing and AI-powered scene generation.",
+	"client/src/pages/Scenes.tsx": "Smart Scenes management page with functionality to create, edit, activate, and delete scenes using natural language processing and device interactions.",
 	"client/src/pages/Settings.tsx": "Comprehensive settings page for Home Brain system, managing location, voice, integrations, security, and maintenance with dynamic configuration for AI providers, device integrations, and system diagnostics.",
 	"client/src/pages/UserProfiles.tsx": "User profiles management page with voice recognition configuration, allowing creation, editing, and preview of personalized AI voice profiles with detailed UI for managing voice settings and system prompts.",
 	"client/src/pages/VoiceDevices.tsx": "React component for monitoring and managing distributed voice devices, displaying device status, battery levels, and providing testing functionality with comprehensive device statistics and interactive UI.",
@@ -205,5 +205,7 @@
 	"server/services/sslService.js": "SSL service for managing SSL certificates, providing methods for generating, uploading, activating, and renewing certificates with support for manual and Let's Encrypt certificate workflows.",
 	"server/utils/certificateValidator.js": "Certificate utility module using node-forge for parsing, validating, generating, and managing X.509 certificates and private keys with comprehensive cryptographic operations.",
 	"client/src/components/ssl/CertificateStatus.tsx": "React component for displaying and managing SSL/TLS certificates, rendering detailed status cards with certificate information, warnings, and action buttons for activation, deactivation, renewal, and deletion.",
-	"server/scripts/makeUserAdmin.js": "CLI script for managing user admin privileges, allowing administrators to promote a user to admin role or list existing users by querying the database and updating user roles."
+	"server/scripts/makeUserAdmin.js": "CLI script for managing user admin privileges, allowing administrators to promote a user to admin role or list existing users by querying the database and updating user roles.",
+	"client/src/components/automations/AutomationEditDialog.tsx": "Comprehensive dialog component for creating and editing home automation rules, supporting complex trigger conditions and multi-step actions across devices, scenes, and notifications.",
+	"client/src/components/scenes/SceneEditDialog.tsx": "Interactive dialog component for creating and editing smart home scenes, allowing users to configure device actions, set scene details, and manage device-specific settings across different rooms and device types."
 }

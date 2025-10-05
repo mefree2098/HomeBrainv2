@@ -22,8 +22,11 @@ import {
   Trash2
 } from "lucide-react"
 import { getAutomations, createAutomationFromText, toggleAutomation, getAutomationHistory, updateAutomation, deleteAutomation } from "@/api/automations"
+import { getDevices } from "@/api/devices"
+import { getScenes } from "@/api/scenes"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
+import { AutomationEditDialog } from "@/components/automations/AutomationEditDialog"
 
 interface AutomationTrigger {
   type: string
@@ -45,6 +48,8 @@ interface Automation {
 export function Automations() {
   const { toast } = useToast()
   const [automations, setAutomations] = useState<Automation[]>([])
+  const [devices, setDevices] = useState<any[]>([])
+  const [scenes, setScenes] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
@@ -56,16 +61,22 @@ export function Automations() {
   const { register, handleSubmit, reset, setValue } = useForm()
 
   useEffect(() => {
-    const fetchAutomations = async () => {
+    const fetchData = async () => {
       try {
-        console.log('Fetching automations data')
-        const data = await getAutomations()
-        setAutomations(data.automations)
+        console.log('Fetching automations, devices, and scenes data')
+        const [automationsData, devicesData, scenesData] = await Promise.all([
+          getAutomations(),
+          getDevices(),
+          getScenes()
+        ])
+        setAutomations(automationsData.automations)
+        setDevices(devicesData.devices)
+        setScenes(scenesData.scenes)
       } catch (error) {
-        console.error('Failed to fetch automations:', error)
+        console.error('Failed to fetch data:', error)
         toast({
           title: "Error",
-          description: "Failed to load automations",
+          description: "Failed to load data",
           variant: "destructive"
         })
       } finally {
@@ -73,7 +84,7 @@ export function Automations() {
       }
     }
 
-    fetchAutomations()
+    fetchData()
   }, [toast])
 
   const handleToggleAutomation = async (automationId: string, enabled: boolean) => {
@@ -149,27 +160,21 @@ export function Automations() {
 
   const handleEditAutomation = (automation: Automation) => {
     setSelectedAutomation(automation)
-    setValue('editName', automation.name)
-    setValue('editDescription', automation.description)
     setIsEditDialogOpen(true)
   }
 
-  const handleUpdateAutomation = async (data: any) => {
+  const handleUpdateAutomation = async (automationData: any) => {
     if (!selectedAutomation) return
 
     try {
-      console.log('Updating automation:', selectedAutomation._id, data)
-      const result = await updateAutomation(selectedAutomation._id, {
-        name: data.editName,
-        description: data.editDescription
-      })
+      console.log('Updating automation:', selectedAutomation._id, automationData)
+      const result = await updateAutomation(selectedAutomation._id, automationData)
 
       setAutomations(prev => prev.map(automation =>
         automation._id === selectedAutomation._id ? result.automation : automation
       ))
       setIsEditDialogOpen(false)
       setSelectedAutomation(null)
-      reset()
 
       toast({
         title: "Automation Updated",
@@ -515,43 +520,14 @@ export function Automations() {
       )}
 
       {/* Edit Automation Dialog */}
-      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="bg-white" aria-describedby="edit-automation-description">
-          <DialogHeader>
-            <DialogTitle>Edit Automation</DialogTitle>
-            <DialogDescription id="edit-automation-description">
-              Update the name and description of your automation.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleSubmit(handleUpdateAutomation)} className="space-y-4">
-            <div>
-              <label className="text-sm font-medium">Automation Name</label>
-              <Input
-                {...register("editName", { required: true })}
-                placeholder="e.g., Morning Routine"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Description</label>
-              <Textarea
-                {...register("editDescription")}
-                placeholder="Describe what this automation does..."
-                className="mt-1"
-              />
-            </div>
-            <div className="flex gap-2 pt-4">
-              <Button type="submit" className="flex-1">Update Automation</Button>
-              <Button type="button" variant="outline" onClick={() => {
-                setIsEditDialogOpen(false)
-                setSelectedAutomation(null)
-              }}>
-                Cancel
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <AutomationEditDialog
+        open={isEditDialogOpen}
+        onOpenChange={setIsEditDialogOpen}
+        automation={selectedAutomation}
+        devices={devices}
+        scenes={scenes}
+        onSave={handleUpdateAutomation}
+      />
 
       {/* History Dialog */}
       <Dialog open={isHistoryDialogOpen} onOpenChange={setIsHistoryDialogOpen}>

@@ -23,6 +23,7 @@ import { getScenes, activateScene, createScene, createSceneFromNaturalLanguage, 
 import { getDevices } from "@/api/devices"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
+import { SceneEditDialog } from "@/components/scenes/SceneEditDialog"
 
 export function Scenes() {
   const { toast } = useToast()
@@ -142,27 +143,21 @@ export function Scenes() {
 
   const handleEditScene = (scene: any) => {
     setSelectedScene(scene)
-    setValue('editName', scene.name)
-    setValue('editDescription', scene.description)
     setIsEditDialogOpen(true)
   }
 
-  const handleUpdateScene = async (data: any) => {
+  const handleUpdateScene = async (sceneData: any) => {
     if (!selectedScene) return
 
     try {
-      console.log('Updating scene:', selectedScene._id, data)
-      const result = await updateScene(selectedScene._id, {
-        name: data.editName,
-        description: data.editDescription
-      })
+      console.log('Updating scene:', selectedScene._id, sceneData)
+      const result = await updateScene(selectedScene._id, sceneData)
 
       setScenes(prev => prev.map(scene =>
         scene._id === selectedScene._id ? result.scene : scene
       ))
       setIsEditDialogOpen(false)
       setSelectedScene(null)
-      reset()
 
       toast({
         title: "Scene Updated",
@@ -453,43 +448,13 @@ export function Scenes() {
       </div>
 
       {/* Edit Scene Dialog */}
-      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="bg-white" aria-describedby="edit-scene-description">
-          <DialogHeader>
-            <DialogTitle>Edit Scene</DialogTitle>
-            <DialogDescription id="edit-scene-description">
-              Update the name and description of your scene.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleSubmit(handleUpdateScene)} className="space-y-4">
-            <div>
-              <label className="text-sm font-medium">Scene Name</label>
-              <Input
-                {...register("editName", { required: true })}
-                placeholder="e.g., Cozy Evening"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Description</label>
-              <Textarea
-                {...register("editDescription")}
-                placeholder="Describe what this scene does..."
-                className="mt-1"
-              />
-            </div>
-            <div className="flex gap-2 pt-4">
-              <Button type="submit" className="flex-1">Update Scene</Button>
-              <Button type="button" variant="outline" onClick={() => {
-                setIsEditDialogOpen(false)
-                setSelectedScene(null)
-              }}>
-                Cancel
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <SceneEditDialog
+        open={isEditDialogOpen}
+        onOpenChange={setIsEditDialogOpen}
+        scene={selectedScene}
+        devices={devices}
+        onSave={handleUpdateScene}
+      />
 
       {scenes.length === 0 && (
         <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
