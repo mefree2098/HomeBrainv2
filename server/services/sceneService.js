@@ -396,12 +396,14 @@ Return ONLY the JSON object, nothing else:`;
           console.log('SceneService: Sending request to LLM with fallback');
           const llmResponse = await sendLLMRequestWithFallback(prompt);
           console.log('SceneService: LLM response received');
+          console.log('SceneService: LLM Response Preview:', llmResponse.substring(0, 500));
 
           // Parse LLM response
           const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
           if (!jsonMatch) {
             lastError = 'No valid JSON found in LLM response';
             console.error('SceneService:', lastError);
+            console.error('SceneService: Full LLM Response:', llmResponse);
             continue;
           }
 

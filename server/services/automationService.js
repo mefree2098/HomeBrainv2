@@ -497,12 +497,14 @@ async function createAutomationFromText(text, roomContext = null) {
         console.log('AutomationService: Sending request to LLM with fallback');
         const llmResponse = await sendLLMRequestWithFallback(prompt);
         console.log('AutomationService: LLM response received');
+        console.log('AutomationService: LLM Response Preview:', llmResponse.substring(0, 500));
 
         // Parse LLM response
         const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
           lastError = 'No valid JSON found in LLM response';
           console.error('AutomationService:', lastError);
+          console.error('AutomationService: Full LLM Response:', llmResponse);
           continue;
         }
 
