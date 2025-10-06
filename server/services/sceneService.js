@@ -317,7 +317,7 @@ class SceneService {
       }
 
       // Import LLM service
-      const { sendLLMRequest } = require('./llmService');
+      const { sendLLMRequestWithFallback } = require('./llmService');
 
       // Build device context
       const devices = await Device.find({ isOnline: true }).lean();
@@ -392,15 +392,9 @@ Return ONLY the JSON object, nothing else:`;
         console.log(`SceneService: LLM attempt ${attempt}/${MAX_RETRIES}`);
 
         try {
-          // Send request to LLM
-          let llmResponse;
-          try {
-            llmResponse = await sendLLMRequest('anthropic', 'claude-3-haiku-20240307', prompt);
-          } catch (anthropicError) {
-            console.log('SceneService: Anthropic failed, trying OpenAI:', anthropicError.message);
-            llmResponse = await sendLLMRequest('openai', 'gpt-3.5-turbo', prompt);
-          }
-
+          // Send request to LLM with automatic fallback based on priority
+          console.log('SceneService: Sending request to LLM with fallback');
+          const llmResponse = await sendLLMRequestWithFallback(prompt);
           console.log('SceneService: LLM response received');
 
           // Parse LLM response

@@ -131,16 +131,9 @@ export function Scenes() {
       })
     } catch (error) {
       console.error('Failed to create scene from natural language:', error)
-
-      // Check if it's an API key configuration error
-      const errorMessage = error.message || "Failed to create scene from natural language"
-      const isApiKeyError = errorMessage.includes("API key not configured") || errorMessage.includes("All LLM providers failed")
-
       toast({
         title: "Error",
-        description: isApiKeyError
-          ? "LLM API keys not configured. Please configure at least one LLM provider (OpenAI, Anthropic, or Local LLM) in Settings to use natural language features."
-          : errorMessage,
+        description: error.message || "Failed to create scene from natural language",
         variant: "destructive"
       })
     } finally {
@@ -267,11 +260,7 @@ export function Scenes() {
                     className="mt-1 min-h-[100px]"
                   />
                 </div>
-                <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded border border-blue-200">
-                  <p className="font-medium mb-1 text-blue-800">⚙️ Requires LLM Configuration</p>
-                  <p className="text-blue-700">This feature requires an LLM API key (OpenAI, Anthropic, or Local LLM) configured in Settings.</p>
-                </div>
-                <div className="text-xs text-muted-foreground bg-purple-50 p-3 rounded">
+                <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded">
                   <p className="font-medium mb-2">Examples:</p>
                   <ul className="space-y-1">
                     <li>• "Create a romantic dinner scene with bedroom lights at 50% and soft music"</li>

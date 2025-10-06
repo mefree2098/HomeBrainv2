@@ -2,7 +2,7 @@ const Automation = require('../models/Automation');
 const AutomationHistory = require('../models/AutomationHistory');
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
-const { sendLLMRequest } = require('./llmService');
+const { sendLLMRequestWithFallback } = require('./llmService');
 const deviceService = require('./deviceService');
 const mongoose = require('mongoose');
 
@@ -493,15 +493,9 @@ async function createAutomationFromText(text, roomContext = null) {
       console.log(`AutomationService: LLM attempt ${attempt}/${MAX_LLM_RETRIES}`);
 
       try {
-        // Send request to LLM
-        let llmResponse;
-        try {
-          llmResponse = await sendLLMRequest('anthropic', 'claude-3-haiku-20240307', prompt);
-        } catch (anthropicError) {
-          console.log('AutomationService: Anthropic failed, trying OpenAI:', anthropicError.message);
-          llmResponse = await sendLLMRequest('openai', 'gpt-3.5-turbo', prompt);
-        }
-
+        // Send request to LLM with automatic fallback based on priority
+        console.log('AutomationService: Sending request to LLM with fallback');
+        const llmResponse = await sendLLMRequestWithFallback(prompt);
         console.log('AutomationService: LLM response received');
 
         // Parse LLM response
