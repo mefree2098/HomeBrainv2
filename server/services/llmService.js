@@ -37,29 +37,18 @@ async function sendRequestToOpenAI(model, message, apiKey = null) {
     throw new Error('OpenAI API key not configured');
   }
 
-  // Map invalid or non-existent models to valid ones
-  let validModel = model || 'gpt-3.5-turbo';
-
-  // Map gpt-5 (doesn't exist) to gpt-4
-  if (validModel === 'gpt-5' || validModel === 'gpt-5-thinking-nano') {
-    console.log(`Warning: Model "${validModel}" does not exist. Using gpt-4 instead.`);
-    validModel = 'gpt-4';
-  }
-
-  // Ensure it's a valid GPT model, default to gpt-3.5-turbo if not
-  if (!validModel.startsWith('gpt-') && !validModel.startsWith('o1-')) {
-    console.log(`Warning: Invalid model "${validModel}". Using gpt-3.5-turbo instead.`);
-    validModel = 'gpt-3.5-turbo';
-  }
-
+  // Use the model as configured, defaulting to gpt-3.5-turbo if not provided
+  const validModel = model || 'gpt-3.5-turbo';
   console.log(`Using OpenAI model: ${validModel}`);
 
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
       // Check if this is a newer model that requires max_completion_tokens
-      // GPT-4 and O1 series use max_completion_tokens
+      // GPT-4, GPT-5, and O1 series use max_completion_tokens
       // GPT-3.5 and older use max_tokens
-      const isNewerModel = validModel.includes('gpt-4') || validModel.includes('o1');
+      const isNewerModel = validModel.includes('gpt-4') ||
+                           validModel.includes('gpt-5') ||
+                           validModel.includes('o1');
       const tokenParam = isNewerModel ? { max_completion_tokens: 1024 } : { max_tokens: 1024 };
 
       const response = await openaiClient.chat.completions.create({
