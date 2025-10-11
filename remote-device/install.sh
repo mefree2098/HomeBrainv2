@@ -150,18 +150,49 @@ npm install
 # Configure audio
 print_status "Configuring audio system..."
 
+# Detect suitable ALSA cards (prefer a device that supports both playback and capture)
+print_status "Detecting audio devices..."
+DEFAULT_PLAYBACK_CARD=
+DEFAULT_CAPTURE_CARD=
+
+readarray -t CAPTURE_CARDS < <(arecord -l 2>/dev/null | awk '/^card [0-9]+:/ {gsub(":","",$2); print $2}' | sort -n | uniq)
+readarray -t PLAYBACK_CARDS < <(aplay -l 2>/dev/null | awk '/^card [0-9]+:/ {gsub(":","",$2); print $2}' | sort -n | uniq)
+
+for card in "${CAPTURE_CARDS[@]}"; do
+    if printf '%s\n' "${PLAYBACK_CARDS[@]}" | grep -qx "$card"; then
+        DEFAULT_CAPTURE_CARD="$card"
+        DEFAULT_PLAYBACK_CARD="$card"
+        break
+    fi
+done
+
+# Fallback to first detected capture/playback cards if no shared device exists
+if [[ -z "$DEFAULT_CAPTURE_CARD" && ${#CAPTURE_CARDS[@]} -gt 0 ]]; then
+    DEFAULT_CAPTURE_CARD="${CAPTURE_CARDS[0]}"
+fi
+
+if [[ -z "$DEFAULT_PLAYBACK_CARD" && ${#PLAYBACK_CARDS[@]} -gt 0 ]]; then
+    DEFAULT_PLAYBACK_CARD="${PLAYBACK_CARDS[0]}"
+fi
+
+# Final fallback if detection failed
+DEFAULT_CAPTURE_CARD="${DEFAULT_CAPTURE_CARD:-0}"
+DEFAULT_PLAYBACK_CARD="${DEFAULT_PLAYBACK_CARD:-0}"
+
+print_status "Using ALSA playback card ${DEFAULT_PLAYBACK_CARD}, capture card ${DEFAULT_CAPTURE_CARD}"
+
 # Create ALSA configuration
-sudo tee /etc/asound.conf > /dev/null << 'EOF'
+sudo tee /etc/asound.conf > /dev/null << EOF
 # HomeBrain Remote Device Audio Configuration
 pcm.!default {
     type asym
-    playback.pcm "plughw:0,0"
-    capture.pcm "plughw:1,0"
+    playback.pcm "plughw:${DEFAULT_PLAYBACK_CARD},0"
+    capture.pcm "plughw:${DEFAULT_CAPTURE_CARD},0"
 }
 
 ctl.!default {
     type hw
-    card 0
+    card ${DEFAULT_PLAYBACK_CARD}
 }
 EOF
 

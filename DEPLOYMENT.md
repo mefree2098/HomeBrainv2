@@ -339,7 +339,7 @@ Pick only one path; you do not need both.
    cd ~/remote-device
    bash install.sh
    ```
-   The script installs ALSA/SOX utilities, Node.js 18, and creates `/home/pi/homebrain-remote` with helper scripts.
+   The script installs ALSA/SOX utilities, Node.js 18, auto-detects matching capture/playback ALSA cards (favoring USB devices), and creates `/home/pi/homebrain-remote` with helper scripts. To override the defaults later, edit `/etc/asound.conf` on the Pi.
 
 5. **Verify audio and register the device**
    ```bash
