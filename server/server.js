@@ -21,6 +21,8 @@ const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
 const discoveryRoutes = require("./routes/discoveryRoutes");
 const insteonRoutes = require("./routes/insteonRoutes");
 const sslRoutes = require("./routes/sslRoutes");
+const ollamaRoutes = require("./routes/ollamaRoutes");
+const resourceRoutes = require("./routes/resourceRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const DiscoveryService = require("./services/discoveryService");
 const remoteUpdateService = require("./services/remoteUpdateService");
@@ -89,6 +91,10 @@ app.use('/api/discovery', discoveryRoutes);
 app.use('/api/insteon', insteonRoutes);
 // SSL Routes
 app.use('/api/ssl', sslRoutes);
+// Ollama Routes
+app.use('/api/ollama', ollamaRoutes);
+// Resource Monitor Routes
+app.use('/api/resources', resourceRoutes);
 
 // Serve Let's Encrypt challenge files
 app.use('/.well-known/acme-challenge', express.static(path.join(__dirname, 'public', '.well-known', 'acme-challenge')));

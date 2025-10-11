@@ -15,6 +15,7 @@ import { VoiceDevices } from "./pages/VoiceDevices"
 import { UserProfiles } from "./pages/UserProfiles"
 import { Settings } from "./pages/Settings"
 import SSLManagement from "./pages/SSLManagement"
+import OllamaManagement from "./pages/OllamaManagement"
 
 function App() {
   return (
@@ -32,6 +33,7 @@ function App() {
           <Route path="/profiles" element={<ProtectedRoute><Layout><UserProfiles /></Layout></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Layout><Settings /></Layout></ProtectedRoute>} />
           <Route path="/ssl" element={<ProtectedRoute><Layout><SSLManagement /></Layout></ProtectedRoute>} />
+          <Route path="/ollama" element={<ProtectedRoute><Layout><OllamaManagement /></Layout></ProtectedRoute>} />
           <Route path="*" element={<BlankPage />} />
         </Routes>
       </Router>

@@ -7,7 +7,8 @@ import {
   Users,
   Settings,
   Shield,
-  ChevronRight
+  ChevronRight,
+  Brain
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -20,6 +21,7 @@ const navigation = [
   { name: 'Automations', href: '/automations', icon: Zap },
   { name: 'Voice Devices', href: '/voice-devices', icon: Mic },
   { name: 'User Profiles', href: '/profiles', icon: Users },
+  { name: 'Ollama / LLM', href: '/ollama', icon: Brain },
   { name: 'Settings', href: '/settings', icon: Settings },
   { name: 'SSL Certificates', href: '/ssl', icon: Shield },
 ]
