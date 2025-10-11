@@ -70,9 +70,9 @@ class OllamaService {
       config.serviceStatus = 'installing';
       await config.save();
 
-      // Download and install Ollama
-      const installCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
-      console.log('Running Ollama installation script...');
+      // Download and install Ollama with sudo
+      const installCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
+      console.log('Running Ollama installation script with sudo...');
 
       const { stdout, stderr } = await execAsync(installCommand, {
         maxBuffer: 10 * 1024 * 1024,
@@ -229,9 +229,9 @@ class OllamaService {
       config.serviceStatus = 'installing';
       await config.save();
 
-      // Run update command (same as install)
-      const updateCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
-      console.log('Running Ollama update script...');
+      // Run update command (same as install) with sudo
+      const updateCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
+      console.log('Running Ollama update script with sudo...');
 
       const { stdout, stderr } = await execAsync(updateCommand, {
         maxBuffer: 10 * 1024 * 1024,
