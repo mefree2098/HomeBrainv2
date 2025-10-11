@@ -197,8 +197,14 @@ Edit `config.json`:
     "sensitivity": 0.7
   },
   "wakeWord": {
-    "enabled": ["Anna", "Henry"],
-    "sensitivity": 0.7,
+    "enabled": ["Anna"],
+    "keywordPaths": [
+      "/home/pi/homebrain/remote-device/wake-words/anna_raspberry-pi.ppn"
+    ],
+    "modelPath": "/home/pi/homebrain/remote-device/porcupine/porcupine_params.pv",
+    "accessKey": "YOUR_PICOVOICE_ACCESS_KEY",
+    "sensitivity": 0.65,
+    "reportedConfidence": 0.9,
     "timeout": 5000
   },
   "debug": {
@@ -207,6 +213,23 @@ Edit `config.json`:
   }
 }
 ```
+
+#### Wake Word Engine (Porcupine)
+
+1. **Install the Porcupine binding** (optional dependency) on the device:
+   ```bash
+   cd ~/homebrain/remote-device
+   npm install @picovoice/porcupine-node
+   ```
+2. **Configure your Picovoice AccessKey** (keep it secret):
+   ```bash
+   export PICOVOICE_ACCESS_KEY="YOUR_PICOVOICE_ACCESS_KEY"
+   # or set in /etc/environment or your systemd unit Environment directive
+   ```
+3. **Download keyword `.ppn` files** from the Picovoice Console and copy them to a readable directory, e.g. `/home/pi/homebrain/remote-device/wake-words/`.
+4. *(Optional)* If you maintain a custom `porcupine_params.pv` model or library override, note their paths for the config.
+5. **Update `config.json`** with the keyword paths, access key (or rely on the environment variable), sensitivity, and optional model/library overrides (see example above).
+6. **Restart the service** or rerun `./start.sh` so the new wake-word engine configuration is loaded.
 
 #### Audio Configuration
 
@@ -330,15 +353,26 @@ sudo systemctl status homebrain-remote
 ```json
 {
   "wakeWord": {
-    "customModels": {
-      "Anna": "/home/pi/homebrain/remote-device/wake-words/anna.ppn",
-      "Henry": "/home/pi/homebrain/remote-device/wake-words/henry.ppn"
-    },
+    "keywords": [
+      {
+        "label": "Anna",
+        "path": "/home/pi/homebrain/remote-device/wake-words/anna_raspberry-pi.ppn",
+        "sensitivity": 0.6
+      },
+      {
+        "label": "Henry",
+        "path": "/home/pi/homebrain/remote-device/wake-words/henry_raspberry-pi.ppn",
+        "sensitivity": 0.7
+      }
+    ],
     "enabled": ["Anna", "Henry"],
-    "sensitivity": 0.7
+    "modelPath": "/home/pi/homebrain/remote-device/porcupine/porcupine_params.pv",
+    "accessKey": "YOUR_PICOVOICE_ACCESS_KEY",
+    "reportedConfidence": 0.9
   }
 }
 ```
+> Tip: Instead of storing the AccessKey in the config file, export `PICOVOICE_ACCESS_KEY` (or `PV_ACCESS_KEY`) in your service environment.
 
 ### Audio Optimization
 
