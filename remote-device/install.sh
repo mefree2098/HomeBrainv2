@@ -40,6 +40,9 @@ if [[ $EUID -eq 0 ]]; then
    exit 1
 fi
 
+# Resolve the directory containing this script before changing directories
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Detect system
 print_status "Detecting system..."
 OS=$(uname -s)
@@ -71,6 +74,7 @@ sudo apt-get install -y \
     curl \
     git \
     build-essential \
+    rsync \
     python3 \
     python3-pip \
     alsa-utils \
@@ -108,13 +112,16 @@ mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
 # Copy or download the remote device files
-if [[ -f "$(dirname "$0")/package.json" ]]; then
-    print_status "Copying local files..."
-    cp -r "$(dirname "$0")"/* .
+if [[ -f "$SCRIPT_DIR/package.json" ]]; then
+    print_status "Copying application files..."
+    rsync -a --delete \
+        --exclude 'node_modules' \
+        --exclude '.git' \
+        --exclude '.DS_Store' \
+        "$SCRIPT_DIR"/ "$INSTALL_DIR"/
 else
-    print_status "Downloading HomeBrain Remote Device..."
-    # In production, this would download from a repository
-  cat > package.json << 'EOF'
+    print_status "Source files not found. Creating minimal HomeBrain Remote package..."
+cat > package.json << 'EOF'
 {
   "name": "homebrain-remote-device",
   "version": "1.0.0",
@@ -145,7 +152,11 @@ fi
 
 # Install Node.js dependencies
 print_status "Installing Node.js dependencies..."
-npm install
+if [ -d "$INSTALL_DIR/node_modules" ]; then
+    print_warning "Dependencies already present (skipping npm install)"
+else
+    npm install
+fi
 
 # Configure audio
 print_status "Configuring audio system..."
