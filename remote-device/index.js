@@ -9,13 +9,21 @@ const yargs = require('yargs');
 const { hideBin } = require('yargs/helpers');
 const dgram = require('dgram');
 const os = require('os');
+const crypto = require('crypto');
 const { exec } = require('child_process');
+const packageInfo = require('./package.json');
 
 const DEFAULT_WAKE_WORD_SENSITIVITY = 0.65;
 const DEFAULT_WAKE_WORD_CONFIDENCE = 0.9;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
+const PACKAGE_VERSION = packageInfo.version;
+const WAKE_WORD_USER_AGENT = `HomeBrain-Remote/${PACKAGE_VERSION}`;
 
 const clamp = (value, min, max) => Math.min(Math.max(Number(value) || 0, min), max);
+const slugify = (value) => {
+  if (!value) return '';
+  return value.toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+};
 
 // Parse command line arguments
 const argv = yargs(hideBin(process.argv))
@@ -72,6 +80,10 @@ class HomeBrainRemoteDevice {
     this.recordingStream = null;
 
     this.configDirectory = path.dirname(path.resolve(argv.config || './config.json'));
+    this.packageVersion = PACKAGE_VERSION;
+    this.hubHttpBaseUrl = this.deriveInitialHubBaseUrl();
+    this.wakeWordCacheDir = this.config.wakeWord?.cacheDir || path.join(this.configDirectory, 'wake-words');
+    this.wakeWordAssetSignature = null;
 
     // Wake word detection
     this.wakeWordDisplayNames = ['Anna', 'Henry', 'Home Brain', 'Homebrain'];
@@ -89,6 +101,8 @@ class HomeBrainRemoteDevice {
     this.wakeWordReportedConfidence = clamp(this.config.wakeWord.reportedConfidence ?? DEFAULT_WAKE_WORD_CONFIDENCE, 0, 1);
     this.wakeWordEngineFailed = false;
     this.testModeActive = false;
+    this.testModeListenerAttached = false;
+    this.testModeListener = null;
 
     // Auto-discovery
     this.discoveryPort = 12345;
@@ -106,7 +120,7 @@ class HomeBrainRemoteDevice {
       uptime: 0
     };
 
-    console.log(`HomeBrain Remote Device v${require('./package.json').version}`);
+    console.log(`HomeBrain Remote Device v${PACKAGE_VERSION}`);
     if (argv.verbose) {
       console.log('Configuration:', JSON.stringify(this.config, null, 2));
     }
@@ -137,8 +151,11 @@ class HomeBrainRemoteDevice {
       // Connect to hub
       await this.connectToHub();
 
-      // Start wake word detection
-      await this.startWakeWordDetection();
+      if (this.hasLocalWakeWordModels()) {
+        await this.startWakeWordDetection();
+      } else {
+        console.log('Wake word models not yet available; waiting for hub configuration...');
+      }
 
       // Start heartbeat
       this.startHeartbeat();
@@ -172,6 +189,7 @@ class HomeBrainRemoteDevice {
     console.log(`Using Hub URL: ${hubUrl}`);
     this.config.hubUrl = hubUrl;
     this.config.registrationCode = registrationCode;
+    this.setHubHttpBase(hubUrl);
 
     try {
       // Get network information
@@ -185,7 +203,7 @@ class HomeBrainRemoteDevice {
         body: JSON.stringify({
           registrationCode: registrationCode,
           ipAddress: networkInfo.ipAddress,
-          firmwareVersion: require('./package.json').version
+          firmwareVersion: PACKAGE_VERSION
         })
       });
 
@@ -200,6 +218,7 @@ class HomeBrainRemoteDevice {
       this.config.deviceId = this.deviceId;
       this.config.hubUrl = hubUrl;
       this.config.hubWsUrl = data.hubUrl;
+      this.setHubHttpBase(data.hubUrl || hubUrl);
 
       await this.saveConfig();
 
@@ -225,7 +244,8 @@ class HomeBrainRemoteDevice {
   }
 
   async connectToHub() {
-    const baseHttp = argv.hub || this.config.hubUrl || process.env.HUB_URL || 'http://localhost:3000';
+    const baseHttp = this.getHubHttpBase();
+    this.setHubHttpBase(baseHttp);
     const wsUrl = this.buildWebSocketUrl(baseHttp);
 
     console.log(`Connecting to hub: ${wsUrl}`);
@@ -244,7 +264,11 @@ class HomeBrainRemoteDevice {
       });
 
       this.ws.on('message', (data) => {
-        this.handleMessage(data);
+        this.handleMessage(data).catch((error) => {
+          if (argv.verbose) {
+            console.error('Failed to process hub message:', error.message);
+          }
+        });
       });
 
       this.ws.on('close', (code, reason) => {
@@ -280,7 +304,7 @@ class HomeBrainRemoteDevice {
       type: 'authenticate',
       registrationCode: this.config.registrationCode || 'auto',
       deviceInfo: {
-        version: require('./package.json').version,
+        version: PACKAGE_VERSION,
         platform: process.platform,
         arch: process.arch,
         nodeVersion: process.version
@@ -288,26 +312,51 @@ class HomeBrainRemoteDevice {
     });
   }
 
-  handleMessage(rawData) {
+  async handleMessage(rawData) {
+    let message;
     try {
-      const message = JSON.parse(rawData.toString());
+      message = JSON.parse(rawData.toString());
+    } catch (error) {
+      console.error('Failed to parse message from hub:', error.message);
+      this.stats.errors++;
+      return;
+    }
 
-      if (argv.verbose) {
-        console.log('Received message:', message.type);
-      }
+    if (argv.verbose) {
+      console.log('Received message:', message.type);
+    }
 
+    try {
       switch (message.type) {
         case 'welcome':
           console.log('Received welcome from hub');
           break;
 
-        case 'auth_success':
+        case 'auth_success': {
           console.log('Authentication successful');
           this.isAuthenticated = true;
           if (message.config) {
-            this.updateConfig(message.config);
+            const detectorNeedsRestart = await this.applyConfigUpdate(message.config);
+            await this.saveConfig();
+            if (detectorNeedsRestart) {
+              await this.restartWakeWordDetection();
+            } else if (!this.isWakeWordDetectorActive() && this.hasLocalWakeWordModels()) {
+              await this.startWakeWordDetection();
+            }
           }
           break;
+        }
+
+        case 'config_update': {
+          if (message.config) {
+            const detectorNeedsRestart = await this.applyConfigUpdate(message.config);
+            await this.saveConfig();
+            if (detectorNeedsRestart) {
+              await this.restartWakeWordDetection();
+            }
+          }
+          break;
+        }
 
         case 'auth_failed':
           console.error('Authentication failed:', message.message);
@@ -318,7 +367,6 @@ class HomeBrainRemoteDevice {
           console.log('Wake word acknowledged, listening for command...');
           this.startVoiceRecording();
 
-          // Set timeout for voice command
           setTimeout(() => {
             if (this.isRecording) {
               this.stopVoiceRecording();
@@ -340,7 +388,6 @@ class HomeBrainRemoteDevice {
           break;
 
         case 'heartbeat_ack':
-          // Heartbeat acknowledged
           break;
 
         case 'update_available':
@@ -356,10 +403,13 @@ class HomeBrainRemoteDevice {
         default:
           console.warn('Unknown message type:', message.type);
       }
-
     } catch (error) {
-      console.error('Error processing message:', error.message);
       this.stats.errors++;
+      console.error('Error processing message from hub:', error.message);
+      if (argv.verbose && error.stack) {
+        console.error(error.stack);
+      }
+      throw error;
     }
   }
 
@@ -374,7 +424,13 @@ class HomeBrainRemoteDevice {
     return false;
   }
 
-  updateConfig(config) {
+  async applyConfigUpdate(config) {
+    if (!config) {
+      return false;
+    }
+
+    let restartNeeded = false;
+
     if (config.wakeWord) {
       this.config.wakeWord = {
         ...this.config.wakeWord,
@@ -390,6 +446,8 @@ class HomeBrainRemoteDevice {
       this.config.wakeWords = config.wakeWords;
     }
 
+    const previousNamesSignature = JSON.stringify(this.wakeWordDisplayNames);
+
     if (Array.isArray(config.wakeWord?.enabled) && config.wakeWord.enabled.length > 0) {
       this.wakeWordDisplayNames = config.wakeWord.enabled;
       this.wakeWords = config.wakeWord.enabled.map((w) => w.toLowerCase());
@@ -398,6 +456,10 @@ class HomeBrainRemoteDevice {
       this.wakeWordDisplayNames = config.wakeWords;
       this.wakeWords = config.wakeWords.map((w) => w.toLowerCase());
       console.log(`Updated wake words: ${this.wakeWordDisplayNames.join(', ')}`);
+    }
+
+    if (JSON.stringify(this.wakeWordDisplayNames) !== previousNamesSignature) {
+      restartNeeded = true;
     }
 
     if (config.volume !== undefined) {
@@ -411,6 +473,192 @@ class HomeBrainRemoteDevice {
     if (typeof config.wakeWord?.reportedConfidence === 'number') {
       this.wakeWordReportedConfidence = clamp(config.wakeWord.reportedConfidence, 0, 1);
     }
+
+    const assetsChanged = await this.syncWakeWordAssetsFromConfig(config);
+    restartNeeded = restartNeeded || assetsChanged;
+
+    return restartNeeded;
+  }
+
+  hasLocalWakeWordModels() {
+    const keywords = this.config.wakeWord?.keywords;
+    if (!Array.isArray(keywords) || keywords.length === 0) {
+      return false;
+    }
+    return keywords.every((keyword) => keyword.path && fs.existsSync(keyword.path));
+  }
+
+  isWakeWordDetectorActive() {
+    return Boolean(this.recordingStream && this.porcupineInitialized && !this.wakeWordEngineFailed);
+  }
+
+  generateWakeWordAssetSignature(keywords = []) {
+    return JSON.stringify(keywords.map((keyword) => ({
+      label: keyword.label || '',
+      path: keyword.path ? path.resolve(keyword.path) : '',
+      sensitivity: typeof keyword.sensitivity === 'number' ? Number(keyword.sensitivity.toFixed(3)) : null
+    })));
+  }
+
+  async ensureWakeWordDirectory() {
+    const targetDir = this.config.wakeWord?.cacheDir || this.wakeWordCacheDir || path.join(this.configDirectory, 'wake-words');
+    await fs.promises.mkdir(targetDir, { recursive: true });
+    this.wakeWordCacheDir = targetDir;
+    this.config.wakeWord = {
+      ...this.config.wakeWord,
+      cacheDir: targetDir
+    };
+    return targetDir;
+  }
+
+  async computeFileChecksum(filePath) {
+    return new Promise((resolve, reject) => {
+      const hash = crypto.createHash('sha256');
+      const stream = fs.createReadStream(filePath);
+      stream.on('data', (chunk) => hash.update(chunk));
+      stream.on('end', () => resolve(hash.digest('hex')));
+      stream.on('error', (error) => reject(error));
+    });
+  }
+
+  async needsWakeWordDownload(localPath, expectedChecksum) {
+    try {
+      await fs.promises.access(localPath, fs.constants.R_OK);
+      if (!expectedChecksum) {
+        return false;
+      }
+      const currentChecksum = await this.computeFileChecksum(localPath);
+      return currentChecksum !== expectedChecksum;
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return true;
+      }
+      throw error;
+    }
+  }
+
+  async downloadWakeWordAsset(url) {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': WAKE_WORD_USER_AGENT,
+        'Accept': 'application/octet-stream'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to download wake word asset (${response.status} ${response.statusText})`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  async syncWakeWordAssetsFromConfig(config) {
+    const wakeWordConfig = config?.wakeWord || {};
+    const assets = Array.isArray(wakeWordConfig.assets) ? wakeWordConfig.assets : [];
+
+    if (!assets.length) {
+      return false;
+    }
+
+    const cacheDir = await this.ensureWakeWordDirectory();
+    const keywords = [];
+    const normalizedAssets = [];
+    let assetsChanged = false;
+
+    for (const asset of assets) {
+      const label = asset.label || asset.slug || 'wake_word';
+      const slug = asset.slug ? slugify(asset.slug) : slugify(label);
+      if (!slug) {
+        console.warn('Skipping wake word asset with invalid slug:', asset);
+        continue;
+      }
+
+      const fileName = asset.fileName || `${slug}.ppn`;
+      const localPath = path.resolve(cacheDir, fileName);
+      const downloadUrl = asset.downloadUrl ? this.buildAbsoluteHubUrl(asset.downloadUrl) : null;
+
+      if (!downloadUrl) {
+        console.warn(`Wake word asset "${label}" is missing a download URL`);
+        continue;
+      }
+
+      const expectedChecksum = asset.checksum || null;
+      if (await this.needsWakeWordDownload(localPath, expectedChecksum)) {
+        console.log(`Downloading wake word model for "${label}"...`);
+        const buffer = await this.downloadWakeWordAsset(downloadUrl);
+        const actualChecksum = crypto.createHash('sha256').update(buffer).digest('hex');
+        if (expectedChecksum && actualChecksum !== expectedChecksum) {
+          throw new Error(`Checksum mismatch for wake word "${label}" (expected ${expectedChecksum}, received ${actualChecksum})`);
+        }
+        await fs.promises.writeFile(localPath, buffer);
+        assetsChanged = true;
+      }
+
+      keywords.push({
+        label,
+        path: localPath,
+        sensitivity: typeof asset.sensitivity === 'number' ? clamp(asset.sensitivity, 0, 1) : undefined
+      });
+
+      normalizedAssets.push({
+        ...asset,
+        label,
+        slug,
+        fileName,
+        localPath
+      });
+    }
+
+    if (keywords.length === 0) {
+      console.warn('No wake word keywords available after synchronization.');
+    }
+
+    const newSignature = this.generateWakeWordAssetSignature(keywords);
+    if (newSignature !== this.wakeWordAssetSignature) {
+      assetsChanged = true;
+      this.wakeWordAssetSignature = newSignature;
+    }
+
+    this.config.wakeWord = {
+      ...this.config.wakeWord,
+      ...wakeWordConfig,
+      cacheDir,
+      keywords,
+      assets: normalizedAssets
+    };
+
+    return assetsChanged;
+  }
+
+  async restartWakeWordDetection() {
+    console.log('Restarting wake word detection with updated configuration...');
+    this.disableTestMode();
+    this.releaseWakeWordEngine();
+
+    if (this.recordingStream) {
+      try {
+        this.recordingStream.stop();
+      } catch (error) {
+        console.warn('Failed to stop existing recording stream during restart:', error.message);
+      }
+      this.recordingStream = null;
+    }
+
+    this.isWakeWordListening = false;
+    this.wakeWordEngineFailed = false;
+
+    await this.startWakeWordDetection();
+  }
+
+  disableTestMode() {
+    if (this.testModeListenerAttached && this.testModeListener) {
+      process.stdin.removeListener('data', this.testModeListener);
+      this.testModeListenerAttached = false;
+      this.testModeListener = null;
+    }
+    this.testModeActive = false;
   }
 
   async initializeWakeWordEngine() {
@@ -605,9 +853,15 @@ class HomeBrainRemoteDevice {
   }
 
   async startWakeWordDetection() {
+    if (!this.hasLocalWakeWordModels()) {
+      console.warn('Wake word models are not available yet; detection will start after assets are synced.');
+      return;
+    }
+
     console.log('Starting wake word detection...');
 
-    this.isWakeWordListening = true;
+    this.disableTestMode();
+    this.isWakeWordListening = false;
 
     if (this.recordingStream) {
       try {
@@ -621,7 +875,7 @@ class HomeBrainRemoteDevice {
     try {
       await this.initializeWakeWordEngine();
 
-      this.testModeActive = false;
+      this.wakeWordEngineFailed = false;
       this.wakeWordAudioBuffer = Buffer.alloc(0);
 
       const recordingOptions = {
@@ -646,6 +900,7 @@ class HomeBrainRemoteDevice {
         this.handleWakeWordEngineFailure(streamError);
       });
 
+      this.isWakeWordListening = true;
       console.log('Wake word detection active (Porcupine)');
 
     } catch (error) {
@@ -660,6 +915,7 @@ class HomeBrainRemoteDevice {
     }
 
     this.wakeWordEngineFailed = true;
+    this.isWakeWordListening = false;
     console.error('Wake word engine failure:', error.message);
 
     this.releaseWakeWordEngine();
@@ -816,6 +1072,81 @@ class HomeBrainRemoteDevice {
     });
   }
 
+  normaliseHubBaseUrl(value) {
+    if (!value) return null;
+    let candidate = value.toString().trim();
+    if (!candidate) return null;
+    if (!/^https?:\/\//i.test(candidate) && !/^wss?:\/\//i.test(candidate)) {
+      candidate = `http://${candidate}`;
+    }
+
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') {
+        parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        parsed.protocol = 'http:';
+      }
+      parsed.pathname = '/';
+      parsed.search = '';
+      parsed.hash = '';
+      const normalized = parsed.toString().replace(/\/+$/, '');
+      return normalized || null;
+    } catch (error) {
+      console.warn(`Invalid hub URL "${value}": ${error.message}`);
+      return null;
+    }
+  }
+
+  deriveInitialHubBaseUrl() {
+    const candidates = [
+      argv.hub,
+      this.config.hubUrl,
+      process.env.HUB_URL,
+      this.config.hubWsUrl
+    ];
+
+    for (const candidate of candidates) {
+      const normalized = this.normaliseHubBaseUrl(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return null;
+  }
+
+  setHubHttpBase(value) {
+    const normalized = this.normaliseHubBaseUrl(value);
+    if (normalized) {
+      this.hubHttpBaseUrl = normalized;
+    }
+    return this.hubHttpBaseUrl;
+  }
+
+  getHubHttpBase() {
+    if (!this.hubHttpBaseUrl) {
+      this.hubHttpBaseUrl = this.deriveInitialHubBaseUrl();
+    }
+    return this.hubHttpBaseUrl || 'http://localhost:3000';
+  }
+
+  buildAbsoluteHubUrl(pathOrUrl) {
+    const base = `${this.getHubHttpBase()}/`;
+    if (!pathOrUrl) {
+      return base.replace(/\/+$/, '');
+    }
+
+    try {
+      return new URL(pathOrUrl, base).toString();
+    } catch (error) {
+      console.warn(`Failed to resolve hub URL for ${pathOrUrl}: ${error.message}`);
+      const suffix = pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
+      return `${this.getHubHttpBase()}${suffix}`;
+    }
+  }
+
   buildWebSocketUrl(baseUrl) {
     try {
       const url = new URL(baseUrl);
@@ -915,20 +1246,23 @@ class HomeBrainRemoteDevice {
       console.warn('Unable to initialize test mode input listener:', error.message);
     }
 
-    process.stdin.on('data', (data) => {
-      const input = data.toString().trim();
-      if (input === '') {
-        this.onWakeWordDetected('anna', 0.95, 'Anna');
-      } else if (input.startsWith('/')) {
-        // Handle commands
-        const command = input.substring(1);
-        if (command === 'stats') {
-          console.log('Stats:', this.stats);
-        } else if (command === 'quit') {
-          this.shutdown();
+    if (!this.testModeListenerAttached) {
+      this.testModeListener = (data) => {
+        const input = data.toString().trim();
+        if (input === '') {
+          this.onWakeWordDetected('anna', 0.95, 'Anna');
+        } else if (input.startsWith('/')) {
+          const command = input.substring(1);
+          if (command === 'stats') {
+            console.log('Stats:', this.stats);
+          } else if (command === 'quit') {
+            this.shutdown();
+          }
         }
-      }
-    });
+      };
+      process.stdin.on('data', this.testModeListener);
+      this.testModeListenerAttached = true;
+    }
   }
 
   async saveConfig() {
@@ -984,7 +1318,7 @@ class HomeBrainRemoteDevice {
       deviceId: this.generateDeviceId(),
       name: argv['device-name'] || `Remote Device ${os.hostname()}`,
       deviceType: 'speaker',
-      version: require('./package.json').version,
+      version: PACKAGE_VERSION,
       capabilities: ['voice_commands', 'wake_word'],
       timestamp: new Date().toISOString()
     };
@@ -1072,7 +1406,7 @@ class HomeBrainRemoteDevice {
       name: argv['device-name'] || `Remote Device ${os.hostname()}`,
       deviceType: 'speaker',
       macAddress: this.getMacAddress(),
-      firmwareVersion: require('./package.json').version,
+      firmwareVersion: PACKAGE_VERSION,
       capabilities: ['voice_commands', 'wake_word'],
       timestamp: new Date().toISOString()
     };
@@ -1174,7 +1508,11 @@ class HomeBrainRemoteDevice {
       await this.connectToHub();
 
       // Start wake word detection
-      await this.startWakeWordDetection();
+      if (this.hasLocalWakeWordModels()) {
+        await this.startWakeWordDetection();
+      } else {
+        console.log('Wake word models not yet available; waiting for hub configuration...');
+      }
 
       // Start heartbeat
       this.startHeartbeat();
@@ -1262,7 +1600,7 @@ class HomeBrainRemoteDevice {
     console.log('='.repeat(50));
     console.log('UPDATE AVAILABLE');
     console.log('='.repeat(50));
-    console.log(`Current version: ${require('./package.json').version}`);
+    console.log(`Current version: ${PACKAGE_VERSION}`);
     console.log(`New version: ${version}`);
     console.log(`Download size: ${(size / 1024 / 1024).toFixed(2)} MB`);
     console.log(`Mandatory: ${mandatory ? 'Yes' : 'No'}`);
@@ -1327,6 +1665,8 @@ class HomeBrainRemoteDevice {
     }
 
     this.releaseWakeWordEngine();
+    this.disableTestMode();
+    this.isWakeWordListening = false;
 
     if (this.ws) {
       this.ws.close();

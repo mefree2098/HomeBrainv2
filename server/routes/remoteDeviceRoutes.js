@@ -3,6 +3,8 @@ const router = express.Router();
 const VoiceDevice = require('../models/VoiceDevice');
 const { requireUser } = require('./middlewares/auth');
 const crypto = require('crypto');
+const wakeWordAssets = require('../utils/wakeWordAssets');
+const fs = require('fs');
 
 // Description: Register a new remote device
 // Endpoint: POST /api/remote-devices/register
@@ -57,6 +59,119 @@ router.post('/register', requireUser(), async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to register device'
+    });
+  }
+});
+
+async function validateDeviceAccess(deviceId, registrationCode) {
+  if (!registrationCode) {
+    return null;
+  }
+
+  const device = await VoiceDevice.findById(deviceId);
+  if (!device) {
+    return null;
+  }
+
+  if (device.settings?.registrationCode !== registrationCode) {
+    return null;
+  }
+
+  return device;
+}
+
+router.get('/:deviceId/wake-words', async (req, res) => {
+  const { deviceId } = req.params;
+  const { code, platform, arch } = req.query;
+
+  try {
+    const device = await validateDeviceAccess(deviceId, code);
+    if (!device) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid device credentials'
+      });
+    }
+
+    const assets = wakeWordAssets.getAssetsForWakeWords(device.supportedWakeWords, {
+      platform,
+      arch,
+      allowGeneric: true
+    });
+
+    res.status(200).json({
+      success: true,
+      wakeWords: device.supportedWakeWords,
+      assets: assets.map((asset) => ({
+        label: asset.label,
+        slug: asset.slug,
+        fileName: asset.fileName,
+        size: asset.size,
+        checksum: asset.checksum,
+        updatedAt: asset.updatedAt,
+        downloadPath: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}`,
+        platform: asset.platform,
+        arch: asset.arch
+      }))
+    });
+
+  } catch (error) {
+    console.error(`GET /api/remote-devices/${deviceId}/wake-words - Error:`, error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch wake word assets'
+    });
+  }
+});
+
+router.get('/:deviceId/wake-words/:slug', async (req, res) => {
+  const { deviceId, slug } = req.params;
+  const { code, platform, arch } = req.query;
+
+  try {
+    const device = await validateDeviceAccess(deviceId, code);
+    if (!device) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid device credentials'
+      });
+    }
+
+    const normalisedSlug = slug.toLowerCase().replace(/\.ppn$/i, '');
+    const asset = wakeWordAssets.getAssetForWakeWord(normalisedSlug, {
+      slug: normalisedSlug,
+      platform,
+      arch,
+      allowGeneric: true
+    });
+
+    if (!asset) {
+      return res.status(404).json({
+        success: false,
+        message: `Wake word asset not found for slug: ${normalisedSlug}`
+      });
+    }
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', asset.size);
+    res.setHeader('ETag', asset.checksum);
+    res.setHeader('Content-Disposition', `attachment; filename="${asset.fileName}"`);
+
+    const readStream = fs.createReadStream(asset.absolutePath);
+    readStream.on('error', (streamError) => {
+      console.error(`Failed to stream wake word asset ${asset.fileName}:`, streamError.message);
+      res.status(500).end();
+    });
+
+    readStream.pipe(res);
+
+  } catch (error) {
+    console.error(`GET /api/remote-devices/${deviceId}/wake-words/${slug} - Error:`, error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to download wake word asset'
     });
   }
 });

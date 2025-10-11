@@ -1,6 +1,7 @@
 const WebSocket = require('ws');
 const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
+const wakeWordAssets = require('../utils/wakeWordAssets');
 
 class VoiceWebSocketServer {
   constructor() {
@@ -74,7 +75,8 @@ class VoiceWebSocketServer {
         ws: ws,
         device: device,
         lastPing: Date.now(),
-        authenticated: false
+        authenticated: false,
+        deviceInfo: null
       });
 
       // Update device status to online
@@ -182,7 +184,7 @@ class VoiceWebSocketServer {
     const connection = this.deviceConnections.get(deviceId);
     if (!connection) return;
 
-    const { registrationCode } = message;
+    const { registrationCode, deviceInfo = {} } = message;
 
     try {
       const device = await VoiceDevice.findById(deviceId);
@@ -203,13 +205,51 @@ class VoiceWebSocketServer {
         return;
       }
 
-      // Mark as authenticated
       connection.authenticated = true;
+      connection.deviceInfo = deviceInfo;
+
+      const platform = deviceInfo.platform || null;
+      const arch = deviceInfo.arch || null;
+      const assets = wakeWordAssets.getAssetsForWakeWords(device.supportedWakeWords, {
+        platform,
+        arch,
+        allowGeneric: true
+      });
+
+      if (!assets.length) {
+        console.warn(`No wake word assets available for device ${device.name}. Ensure files exist in server/public/wake-words.`);
+      }
+
+      const wakeWordAssetPayload = assets.map((asset) => {
+        const params = new URLSearchParams();
+        params.set('code', registrationCode);
+        if (asset.platform || platform) {
+          params.set('platform', asset.platform || platform);
+        }
+        if (asset.arch || arch) {
+          params.set('arch', asset.arch || arch);
+        }
+
+        return {
+          label: asset.label,
+          slug: asset.slug,
+          fileName: asset.fileName,
+          checksum: asset.checksum,
+          size: asset.size,
+          sensitivity: asset.sensitivity,
+          updatedAt: asset.updatedAt,
+          downloadUrl: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
+        };
+      });
 
       this.sendMessage(deviceId, {
         type: 'auth_success',
         config: {
           wakeWords: device.supportedWakeWords,
+          wakeWord: {
+            enabled: device.supportedWakeWords,
+            assets: wakeWordAssetPayload
+          },
           volume: device.volume,
           microphoneSensitivity: device.microphoneSensitivity,
           settings: {
