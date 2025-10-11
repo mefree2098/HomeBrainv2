@@ -11,6 +11,12 @@ const dgram = require('dgram');
 const os = require('os');
 const { exec } = require('child_process');
 
+const DEFAULT_WAKE_WORD_SENSITIVITY = 0.65;
+const DEFAULT_WAKE_WORD_CONFIDENCE = 0.9;
+const PCM_SAMPLE_WIDTH_BYTES = 2;
+
+const clamp = (value, min, max) => Math.min(Math.max(Number(value) || 0, min), max);
+
 // Parse command line arguments
 const argv = yargs(hideBin(process.argv))
   .option('register', {
@@ -52,6 +58,8 @@ const argv = yargs(hideBin(process.argv))
 class HomeBrainRemoteDevice {
   constructor(config) {
     this.config = config;
+    this.config.audio = this.config.audio || {};
+    this.config.wakeWord = this.config.wakeWord || {};
     this.ws = null;
     this.isConnected = false;
     this.isAuthenticated = false;
@@ -63,9 +71,24 @@ class HomeBrainRemoteDevice {
     this.maxReconnectAttempts = 10;
     this.recordingStream = null;
 
-    // Wake word detection (simplified for demo)
-    this.wakeWords = ['anna', 'henry', 'home brain', 'homebrain'];
+    this.configDirectory = path.dirname(path.resolve(argv.config || './config.json'));
+
+    // Wake word detection
+    this.wakeWordDisplayNames = ['Anna', 'Henry', 'Home Brain', 'Homebrain'];
+    this.wakeWords = this.wakeWordDisplayNames.map((word) => word.toLowerCase());
     this.isWakeWordListening = true;
+    this.wakeWordAudioBuffer = Buffer.alloc(0);
+    this.porcupine = null;
+    this.porcupineInitialized = false;
+    this.porcupineFrameLength = 0;
+    this.porcupineSampleRate = this.config.audio.sampleRate || 16000;
+    this.porcupineKeywordLabels = [];
+    this.porcupineSensitivities = [];
+    this.porcupineReportWords = [];
+    this.porcupineAccessKey = this.config.wakeWord.accessKey || process.env.PICOVOICE_ACCESS_KEY || process.env.PV_ACCESS_KEY || null;
+    this.wakeWordReportedConfidence = clamp(this.config.wakeWord.reportedConfidence ?? DEFAULT_WAKE_WORD_CONFIDENCE, 0, 1);
+    this.wakeWordEngineFailed = false;
+    this.testModeActive = false;
 
     // Auto-discovery
     this.discoveryPort = 12345;
@@ -115,13 +138,13 @@ class HomeBrainRemoteDevice {
       await this.connectToHub();
 
       // Start wake word detection
-      this.startWakeWordDetection();
+      await this.startWakeWordDetection();
 
       // Start heartbeat
       this.startHeartbeat();
 
       console.log('HomeBrain Remote Device initialized successfully');
-      console.log(`Device listening for wake words: ${this.wakeWords.join(', ')}`);
+      console.log(`Device listening for wake words: ${this.wakeWordDisplayNames.join(', ')}`);
 
     } catch (error) {
       console.error('Failed to initialize remote device:', error.message);
@@ -352,9 +375,29 @@ class HomeBrainRemoteDevice {
   }
 
   updateConfig(config) {
-    if (config.wakeWords) {
-      this.wakeWords = config.wakeWords.map(w => w.toLowerCase());
-      console.log(`Updated wake words: ${this.wakeWords.join(', ')}`);
+    if (config.wakeWord) {
+      this.config.wakeWord = {
+        ...this.config.wakeWord,
+        ...config.wakeWord
+      };
+
+      if (typeof config.wakeWord.accessKey === 'string' && config.wakeWord.accessKey.trim().length > 0) {
+        this.porcupineAccessKey = config.wakeWord.accessKey.trim();
+      }
+    }
+
+    if (Array.isArray(config.wakeWords)) {
+      this.config.wakeWords = config.wakeWords;
+    }
+
+    if (Array.isArray(config.wakeWord?.enabled) && config.wakeWord.enabled.length > 0) {
+      this.wakeWordDisplayNames = config.wakeWord.enabled;
+      this.wakeWords = config.wakeWord.enabled.map((w) => w.toLowerCase());
+      console.log(`Updated wake words: ${this.wakeWordDisplayNames.join(', ')}`);
+    } else if (Array.isArray(config.wakeWords) && config.wakeWords.length > 0) {
+      this.wakeWordDisplayNames = config.wakeWords;
+      this.wakeWords = config.wakeWords.map((w) => w.toLowerCase());
+      console.log(`Updated wake words: ${this.wakeWordDisplayNames.join(', ')}`);
     }
 
     if (config.volume !== undefined) {
@@ -364,55 +407,332 @@ class HomeBrainRemoteDevice {
     if (config.microphoneSensitivity !== undefined) {
       console.log(`Microphone sensitivity set to: ${config.microphoneSensitivity}%`);
     }
+
+    if (typeof config.wakeWord?.reportedConfidence === 'number') {
+      this.wakeWordReportedConfidence = clamp(config.wakeWord.reportedConfidence, 0, 1);
+    }
   }
 
-  startWakeWordDetection() {
-    console.log('Starting wake word detection...');
+  async initializeWakeWordEngine() {
+    if (this.porcupineInitialized && this.porcupine) {
+      return;
+    }
 
-    // Simple wake word detection using speech recognition
-    // In production, you would use Porcupine or similar
-    this.isWakeWordListening = true;
+    const wakeWordConfig = this.config.wakeWord || {};
+    const accessKeyCandidate = typeof wakeWordConfig.accessKey === 'string' && wakeWordConfig.accessKey.trim().length > 0
+      ? wakeWordConfig.accessKey.trim()
+      : this.porcupineAccessKey || process.env.PICOVOICE_ACCESS_KEY || process.env.PV_ACCESS_KEY;
+
+    if (!accessKeyCandidate) {
+      throw new Error('Porcupine AccessKey not configured. Set wakeWord.accessKey in config.json or PICOVOICE_ACCESS_KEY environment variable.');
+    }
+
+    this.porcupineAccessKey = accessKeyCandidate;
+
+    let porcupineModule;
 
     try {
-      this.recordingStream = recorder.record({
-        sampleRateHertz: this.config.audio?.sampleRate || 16000,
-        threshold: 0.5,
-        verbose: false,
-        recordProgram: 'arecord',
-        device: this.config.audio?.recordingDevice || 'default'
-      });
+      porcupineModule = require('@picovoice/porcupine-node');
+    } catch (error) {
+      throw new Error('Porcupine wake-word engine not installed. Run `npm install @picovoice/porcupine-node` on the device.');
+    }
 
-      this.recordingStream.stream().on('data', (data) => {
+    const { Porcupine } = porcupineModule;
+    if (!Porcupine) {
+      throw new Error('Invalid Porcupine module: missing Porcupine export');
+    }
+
+    const keywordPaths = [];
+    const keywordLabels = [];
+    const keywordSensitivities = [];
+
+    const resolveKeywordPath = (candidate) => {
+      if (!candidate || (typeof candidate === 'string' && candidate.trim().length === 0)) {
+        return null;
+      }
+
+      const rawPath = typeof candidate === 'string' ? candidate.trim() : candidate;
+      const absolutePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(this.configDirectory, rawPath);
+
+      if (!fs.existsSync(absolutePath)) {
+        throw new Error(`Wake word keyword file not found: ${absolutePath}`);
+      }
+
+      return absolutePath;
+    };
+
+    const addKeyword = (entry) => {
+      if (!entry) return;
+
+      if (typeof entry === 'string') {
+        const resolved = resolveKeywordPath(entry);
+        if (!resolved) return;
+        keywordPaths.push(resolved);
+        keywordLabels.push(this.formatWakeWordLabel(entry));
+        keywordSensitivities.push(null);
+      } else if (typeof entry === 'object' && entry.path) {
+        const resolved = resolveKeywordPath(entry.path);
+        if (!resolved) return;
+        keywordPaths.push(resolved);
+        keywordLabels.push(entry.label || this.formatWakeWordLabel(entry.path));
+        keywordSensitivities.push(typeof entry.sensitivity === 'number' ? entry.sensitivity : null);
+      }
+    };
+
+    if (Array.isArray(wakeWordConfig.keywordPaths)) {
+      wakeWordConfig.keywordPaths.forEach(addKeyword);
+    }
+
+    if (Array.isArray(wakeWordConfig.keywords)) {
+      wakeWordConfig.keywords.forEach(addKeyword);
+    }
+
+    if (Array.isArray(wakeWordConfig.keywordFiles)) {
+      wakeWordConfig.keywordFiles.forEach(addKeyword);
+    }
+
+    if (wakeWordConfig.keywordPath) {
+      addKeyword(wakeWordConfig.keywordPath);
+    }
+
+    if (wakeWordConfig.customWakeWordFile) {
+      addKeyword(wakeWordConfig.customWakeWordFile);
+    }
+
+    if (!keywordPaths.length) {
+      throw new Error('No wake-word keyword files configured. Update config.json with wakeWord.keywordPaths or wakeWord.customWakeWordFile.');
+    }
+
+    if (Array.isArray(wakeWordConfig.enabled) && wakeWordConfig.enabled.length > 0 && wakeWordConfig.enabled.length !== keywordPaths.length) {
+      console.warn(`Wake word configuration mismatch: ${wakeWordConfig.enabled.length} enabled entries but ${keywordPaths.length} keyword files.`);
+    }
+
+    const baseSensitivity = clamp(
+      typeof wakeWordConfig.sensitivity === 'number' ? wakeWordConfig.sensitivity : DEFAULT_WAKE_WORD_SENSITIVITY,
+      0,
+      1
+    );
+
+    const sensitivityValues = keywordPaths.map((_, index) => {
+      if (typeof keywordSensitivities[index] === 'number') {
+        return clamp(keywordSensitivities[index], 0, 1);
+      }
+      return baseSensitivity;
+    });
+
+    const sensitivities = Float32Array.from(sensitivityValues);
+
+    const args = [this.porcupineAccessKey, keywordPaths, sensitivities];
+    const modelPath = wakeWordConfig.modelPath || process.env.PORCUPINE_MODEL_PATH;
+    const libraryPath = wakeWordConfig.libraryPath || process.env.PORCUPINE_LIBRARY_PATH;
+
+    if (modelPath) {
+      args.push(modelPath);
+      if (libraryPath) {
+        args.push(libraryPath);
+      }
+    }
+
+    try {
+      const createPorcupine = typeof Porcupine.fromKeywordPaths === 'function'
+        ? Porcupine.fromKeywordPaths.bind(Porcupine)
+        : typeof Porcupine.create === 'function'
+          ? Porcupine.create.bind(Porcupine)
+          : null;
+
+      if (!createPorcupine) {
+        throw new Error('Unsupported Porcupine binding version (missing fromKeywordPaths/create factory method)');
+      }
+
+      this.porcupine = await createPorcupine(...args);
+      this.porcupineFrameLength = this.porcupine.frameLength;
+      this.porcupineSampleRate = this.porcupine.sampleRate;
+      this.porcupineKeywordLabels = keywordLabels;
+      this.porcupineSensitivities = sensitivityValues;
+      this.porcupineReportWords = [];
+      this.wakeWordAudioBuffer = Buffer.alloc(0);
+      this.porcupineInitialized = true;
+      this.wakeWordEngineFailed = false;
+
+      const configuredNames = Array.isArray(wakeWordConfig.enabled) ? wakeWordConfig.enabled : null;
+      if (configuredNames && configuredNames.length === keywordLabels.length) {
+        this.wakeWordDisplayNames = configuredNames;
+        this.wakeWords = configuredNames.map((w) => w.toLowerCase());
+      } else if (!configuredNames || configuredNames.length === 0) {
+        this.wakeWordDisplayNames = keywordLabels;
+        this.wakeWords = keywordLabels.map((w) => w.toLowerCase());
+      }
+
+      this.porcupineReportWords = this.wakeWords.slice(0, keywordLabels.length);
+
+      if (argv.verbose) {
+        keywordPaths.forEach((kp, index) => {
+          const label = keywordLabels[index] || kp;
+          const sensitivity = sensitivityValues[index];
+          console.log(`Porcupine keyword ready: ${label} (path: ${kp}, sensitivity: ${sensitivity.toFixed(2)})`);
+        });
+      }
+
+    } catch (error) {
+      throw new Error(`Failed to initialize Porcupine: ${error.message}`);
+    }
+  }
+
+  formatWakeWordLabel(source) {
+    if (!source) return 'wake_word';
+
+    const base = typeof source === 'string'
+      ? path.basename(source, path.extname(source))
+      : String(source);
+
+    return base.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || 'wake_word';
+  }
+
+  releaseWakeWordEngine() {
+    if (this.porcupine) {
+      try {
+        if (typeof this.porcupine.release === 'function') {
+          this.porcupine.release();
+        }
+      } catch (error) {
+        console.warn('Failed to release Porcupine engine cleanly:', error.message);
+      }
+    }
+
+    this.porcupine = null;
+    this.porcupineInitialized = false;
+    this.wakeWordAudioBuffer = Buffer.alloc(0);
+  }
+
+  async startWakeWordDetection() {
+    console.log('Starting wake word detection...');
+
+    this.isWakeWordListening = true;
+
+    if (this.recordingStream) {
+      try {
+        this.recordingStream.stop();
+      } catch (error) {
+        console.warn('Unable to stop existing recording stream cleanly:', error.message);
+      }
+      this.recordingStream = null;
+    }
+
+    try {
+      await this.initializeWakeWordEngine();
+
+      this.testModeActive = false;
+      this.wakeWordAudioBuffer = Buffer.alloc(0);
+
+      const recordingOptions = {
+        sampleRate: this.porcupineSampleRate,
+        sampleRateHertz: this.porcupineSampleRate,
+        threshold: this.config.audio.threshold ?? 0.5,
+        verbose: false,
+        recordProgram: this.config.audio.recordProgram || 'arecord',
+        device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
+      };
+
+      this.recordingStream = recorder.record(recordingOptions);
+      const micStream = this.recordingStream.stream();
+
+      micStream.on('data', (data) => {
         if (this.isWakeWordListening && !this.isRecording) {
           this.processAudioForWakeWord(data);
         }
       });
 
-      console.log('Wake word detection active');
+      micStream.on('error', (streamError) => {
+        this.handleWakeWordEngineFailure(streamError);
+      });
+
+      console.log('Wake word detection active (Porcupine)');
 
     } catch (error) {
       console.error('Failed to start wake word detection:', error.message);
-      console.log('Running in test mode without audio input...');
-
-      // Test mode - simulate wake word detection
-      this.startTestMode();
+      this.handleWakeWordEngineFailure(error);
     }
+  }
+
+  handleWakeWordEngineFailure(error) {
+    if (this.wakeWordEngineFailed) {
+      return;
+    }
+
+    this.wakeWordEngineFailed = true;
+    console.error('Wake word engine failure:', error.message);
+
+    this.releaseWakeWordEngine();
+
+    if (this.recordingStream) {
+      try {
+        this.recordingStream.stop();
+      } catch (streamError) {
+        console.warn('Unable to stop recording stream during failure:', streamError.message);
+      }
+      this.recordingStream = null;
+    }
+
+    console.log('Falling back to test mode. Press ENTER to simulate wake word triggers while troubleshooting Porcupine.');
+    this.startTestMode();
   }
 
   processAudioForWakeWord(audioData) {
-    // Simplified wake word detection
-    // In production, integrate with Porcupine or other wake word engines
+    if (!this.porcupine || !this.porcupineInitialized) {
+      return;
+    }
 
-    // For demo purposes, we'll simulate wake word detection
-    if (Math.random() < 0.001) { // Very low probability for demo
-      this.onWakeWordDetected('anna', 0.85);
+    if (!audioData || audioData.length === 0) {
+      return;
+    }
+
+    if (!Buffer.isBuffer(audioData)) {
+      audioData = Buffer.from(audioData);
+    }
+
+    this.wakeWordAudioBuffer = Buffer.concat([this.wakeWordAudioBuffer, audioData]);
+
+    const frameBytes = this.porcupineFrameLength * PCM_SAMPLE_WIDTH_BYTES;
+
+    while (this.wakeWordAudioBuffer.length >= frameBytes) {
+      const frameBuffer = this.wakeWordAudioBuffer.subarray(0, frameBytes);
+      this.wakeWordAudioBuffer = this.wakeWordAudioBuffer.subarray(frameBytes);
+
+      let keywordIndex = -1;
+
+      try {
+        const pcm = new Int16Array(frameBuffer.buffer, frameBuffer.byteOffset, this.porcupineFrameLength);
+        keywordIndex = this.porcupine.process(pcm);
+      } catch (error) {
+        console.error('Porcupine processing error:', error.message);
+        this.handleWakeWordEngineFailure(error);
+        return;
+      }
+
+      if (keywordIndex >= 0) {
+        const label = this.porcupineKeywordLabels[keywordIndex] || this.wakeWordDisplayNames[keywordIndex] || `keyword_${keywordIndex}`;
+        const reportedWakeWord = this.porcupineReportWords[keywordIndex] || label.toLowerCase();
+        const confidenceSource = this.porcupineSensitivities[keywordIndex];
+        const confidence = clamp(
+          typeof confidenceSource === 'number' ? confidenceSource : this.wakeWordReportedConfidence,
+          0,
+          1
+        );
+
+        this.onWakeWordDetected(reportedWakeWord, confidence, label);
+        this.wakeWordAudioBuffer = Buffer.alloc(0);
+        break;
+      }
     }
   }
 
-  onWakeWordDetected(wakeWord, confidence) {
+  onWakeWordDetected(wakeWord, confidence, displayName) {
     if (!this.isAuthenticated) return;
 
-    console.log(`Wake word detected: "${wakeWord}" (confidence: ${confidence})`);
+    const normalizedConfidence = clamp(confidence ?? this.wakeWordReportedConfidence, 0, 1);
+    const label = displayName || wakeWord;
+
+    console.log(`Wake word detected: "${label}" (confidence: ${normalizedConfidence.toFixed(2)})`);
 
     this.stats.wakeWordsDetected++;
     this.lastInteraction = new Date();
@@ -420,9 +740,11 @@ class HomeBrainRemoteDevice {
     this.sendMessage({
       type: 'wake_word_detected',
       wakeWord: wakeWord,
-      confidence: confidence,
+      confidence: normalizedConfidence,
       timestamp: this.lastInteraction.toISOString()
     });
+
+    this.wakeWordAudioBuffer = Buffer.alloc(0);
 
     // Brief pause to prevent multiple detections
     this.isWakeWordListening = false;
@@ -581,12 +903,22 @@ class HomeBrainRemoteDevice {
   }
 
   startTestMode() {
+    if (this.testModeActive) return;
+
+    this.testModeActive = true;
     console.log('Starting test mode - press ENTER to simulate wake word detection');
+
+    try {
+      process.stdin.setEncoding('utf8');
+      process.stdin.resume();
+    } catch (error) {
+      console.warn('Unable to initialize test mode input listener:', error.message);
+    }
 
     process.stdin.on('data', (data) => {
       const input = data.toString().trim();
       if (input === '') {
-        this.onWakeWordDetected('anna', 0.95);
+        this.onWakeWordDetected('anna', 0.95, 'Anna');
       } else if (input.startsWith('/')) {
         // Handle commands
         const command = input.substring(1);
@@ -842,7 +1174,7 @@ class HomeBrainRemoteDevice {
       await this.connectToHub();
 
       // Start wake word detection
-      this.startWakeWordDetection();
+      await this.startWakeWordDetection();
 
       // Start heartbeat
       this.startHeartbeat();
@@ -993,6 +1325,8 @@ class HomeBrainRemoteDevice {
     if (this.recordingStream) {
       this.recordingStream.stop();
     }
+
+    this.releaseWakeWordEngine();
 
     if (this.ws) {
       this.ws.close();
