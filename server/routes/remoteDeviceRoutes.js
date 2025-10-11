@@ -104,7 +104,7 @@ router.post('/activate', async (req, res) => {
     await device.save();
 
     // Generate hub WebSocket URL
-    const hubUrl = `ws://${req.get('host')}/ws/voice-device/${device._id}`;
+    const hubUrl = `ws://${req.get('host')}/ws/voice-device?deviceId=${device._id}`;
 
     console.log(`POST /api/remote-devices/activate - Successfully activated device: ${device.name} (${device._id})`);
     res.status(200).json({
