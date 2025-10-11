@@ -1,230 +1,406 @@
-# HomeBrain Deployment Guide
+# HomeBrain Jetson Orin Nano Deployment Guide
 
-## Overview
+This document walks through deploying the HomeBrain platform from this repository onto an NVIDIA Jetson Orin Nano that is starting from a clean JetPack installation. Every command is included so you can follow along even if you have never managed a Linux system before.
 
-HomeBrain is a comprehensive smart home management application designed to run on NVIDIA Jetson Orin Nano with distributed Raspberry Pi voice devices throughout your home. This guide covers complete deployment and configuration.
+---
 
-## Quick Start
+## What You Will Set Up
+- Node.js backend (`server/server.js`) with REST APIs, WebSockets, auto-discovery, and automation services.
+- Vite/React front-end (`client/`) served on your network.
+- MongoDB database running locally on the Jetson.
+- Optional HTTPS (self-managed certificates) and remote voice device packages.
 
-### Main Platform (Jetson Orin Nano)
+HomeBrain uses these default ports:
+- `3000/tcp` - API and WebSocket traffic
+- `3443/tcp` - optional HTTPS API (if certificates are configured)
+- `5173/tcp` - front-end UI (Vite preview or dev server)
+- `12345/udp` - device discovery broadcast channel
+
+---
+
+## Before You Begin
+- Hardware: Jetson Orin Nano Developer Kit (8 GB recommended), at least 64 GB of storage, reliable power supply.
+- Network: Wired Ethernet is easiest. Wi-Fi works but keep the Jetson and control devices on the same LAN.
+- Accounts: NVIDIA developer account for JetPack downloads and, if using Git, access to the remote repository.
+- Conventions in this guide:
+  - Commands that start with `sudo` will prompt for your password.
+  - Replace placeholders like `<your-jetson-user>` or `<YOUR_REPO_URL>` with values that match your setup.
+  - The project folder on the Jetson will be `/home/<your-jetson-user>/homebrain/HomeBrainv2` unless you choose another path.
+
+---
+
+## Step 0 - Flash JetPack on the Jetson (skip if JetPack 5.1+ is already installed)
+1. On another computer download the latest JetPack image (5.1.2 or newer) from https://developer.nvidia.com/jetpack.
+2. Flash the image to your microSD card or NVMe drive using NVIDIA SDK Manager or BalenaEtcher.
+3. Insert the storage in the Jetson, connect monitor, keyboard, mouse, and power.
+4. Complete the Ubuntu first boot wizard. Create a user such as `homebrain` and note the password.
+
+---
+
+## Step 1 - First boot housekeeping
+Open a terminal on the Jetson (Ctrl+Alt+T) and run:
 ```bash
-# Download and run the automated installer
-curl -fsSL https://raw.githubusercontent.com/yourusername/homebrain/main/scripts/install-jetson.sh | bash
+sudo apt update
+sudo apt upgrade -y
 ```
 
-### Remote Devices (Raspberry Pi)
+Set the timezone (replace with your region):
 ```bash
-# Download and run the remote device installer
-curl -fsSL https://preview-0py18bcb.ui.pythagora.ai/api/remote-devices/setup | bash
+sudo timedatectl set-timezone America/New_York
 ```
 
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        HomeBrain Network                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────────┐     ┌─────────────────────────────────┐    │
-│  │   Jetson Orin    │     │        Remote Devices          │    │
-│  │   Nano (Hub)     │◄────┤  • Living Room (Pi 4)         │    │
-│  │                  │     │  • Kitchen (Pi Zero 2W)       │    │
-│  │  • Main Platform │     │  • Bedroom (Pi 4)             │    │
-│  │  • Web Interface │     │  • Office (Pi Zero 2W)        │    │
-│  │  • Voice Hub     │     └─────────────────────────────────┘    │
-│  │  • Integrations  │                                            │
-│  └──────────────────┘                                            │
-│                                                                 │
-│  ┌──────────────────┐     ┌─────────────────────────────────┐    │
-│  │   Smart Devices  │     │      External Services         │    │
-│  │                  │     │                                │    │
-│  │  • SmartThings   │     │  • ElevenLabs (TTS)           │    │
-│  │  • INSTEON       │     │  • OpenAI/Anthropic (LLM)    │    │
-│  │  • Zigbee/Z-Wave│     └─────────────────────────────────┘    │
-│  └──────────────────┘                                            │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## System Requirements
-
-### Main Platform (Jetson Orin Nano)
-- **Hardware**: NVIDIA Jetson Orin Nano (8GB recommended)
-- **Storage**: 64GB+ microSD card or NVMe SSD
-- **Network**: Ethernet connection (Wi-Fi optional)
-- **USB**: Available ports for INSTEON PLM and audio devices
-- **Audio**: USB audio interface or I2S HAT (optional for hub voice)
-
-### Remote Devices (Raspberry Pi)
-- **Hardware**: Raspberry Pi 4B/Zero 2W/3B+ (Pi 4B recommended)
-- **Storage**: 32GB+ microSD card (Class 10 or better)
-- **Network**: Wi-Fi connection required
-- **Audio**: USB microphone + speaker OR I2S audio HAT
-- **Power**: Official Pi power supply recommended
-
-## Network Requirements
-
-- **Local Network**: All devices on same subnet
-- **Internet**: Required for initial setup and cloud services
-- **Ports**:
-  - 3000 (HomeBrain API)
-  - 5173 (Web Interface)
-  - 8080 (WebSocket)
-  - 12345 (Discovery UDP)
-
-## Detailed Deployment Instructions
-
-### 1. Main Platform Setup (Jetson Orin Nano)
-
-See [docs/jetson-setup.md](docs/jetson-setup.md) for detailed instructions.
-
-#### Quick Steps:
-1. Flash JetPack 5.1+ to Jetson Orin Nano
-2. Complete initial Ubuntu setup
-3. Run automated installer script
-4. Configure integrations and services
-5. Set up voice devices
-
-### 2. Remote Device Setup (Raspberry Pi)
-
-See [remote-device/README.md](remote-device/README.md) for detailed instructions.
-
-#### Quick Steps:
-1. Flash Raspberry Pi OS Lite
-2. Enable SSH and configure Wi-Fi
-3. Run automated installer script
-4. Devices auto-discover and connect to hub
-
-### 3. Configuration
-
-See [docs/configuration.md](docs/configuration.md) for detailed configuration steps.
-
-#### Key Configuration Areas:
-- **Location Settings**: Geographic location for sunrise/sunset
-- **Integrations**: SmartThings, INSTEON, ElevenLabs
-- **AI Services**: OpenAI, Anthropic, or Local LLM
-- **User Profiles**: Voice recognition and preferences
-- **Voice Devices**: Wake word training and room assignment
-
-## Post-Installation Verification
-
-1. **Access Web Interface**: http://[jetson-ip]:5173
-2. **Check Device Status**: Voice Devices page
-3. **Test Voice Commands**: "Hey Anna, turn on the lights"
-4. **Verify Integrations**: Settings > Integrations
-5. **Create Test Automation**: "Every morning at 8 AM, turn on the coffee maker"
-
-## Maintenance
-
-### Regular Updates
+If you use Wi-Fi:
 ```bash
-# Update main platform
-cd /opt/homebrain && git pull && npm install && npm run build
-
-# Update remote devices
-ssh pi@device-ip "cd ~/homebrain-remote && git pull && npm install"
+nmcli device wifi list
+nmcli device wifi connect "YOUR_WIFI_NAME" password "YOUR_WIFI_PASSWORD"
 ```
 
-### Backup Configuration
+---
+
+## Step 2 - Install base packages
 ```bash
-# Backup database
-mongodump --db homebrain --out /backup/homebrain-$(date +%Y%m%d)
-
-# Backup configuration
-cp -r /opt/homebrain/server/.env /backup/
+sudo apt install -y git build-essential curl wget nano htop pkg-config python3 make g++ net-tools ufw
 ```
 
-### Monitoring
-- **System Health**: Dashboard > System Status
-- **Device Status**: Voice Devices page
-- **Logs**: `journalctl -u homebrain` or `pm2 logs`
-- **Network**: `sudo systemctl status homebrain-discovery`
+These packages provide compilers, editors, and network tools used later.
 
-## Troubleshooting
+---
 
-See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues and solutions.
-
-### Quick Diagnostics
+## Step 3 - Install Node.js 18 LTS
+HomeBrain server code targets Node 18.
 ```bash
-# Check main services
-sudo systemctl status homebrain mongodb
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt install -y nodejs
 
-# Check network discovery
-sudo netstat -ulnp | grep 12345
+node -v
+npm -v
+```
+You should see versions that start with `v18.` and `9.` or later.
 
-# Test voice device connectivity
-curl http://[jetson-ip]:3000/api/voice-devices
+---
 
-# Check audio devices
-arecord -l && aplay -l
+## Step 4 - Install MongoDB 6.0
+MongoDB stores HomeBrain data.
+
+```bash
+curl -fsSL https://www.mongodb.org/static/pgp/server-6.0.asc | sudo tee /usr/share/keyrings/mongodb-server-6.0.gpg > /dev/null
+echo "deb [ arch=arm64,amd64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+
+sudo apt update
+sudo apt install -y mongodb-org
+sudo systemctl enable --now mongod
+sudo systemctl status mongod
 ```
 
-## Support
+`systemctl status` should report `active (running)`. Press `q` to exit.
 
-- **Documentation**: [docs/](docs/)
-- **Issues**: Create GitHub issue with logs
-- **Community**: Join Discord/Forum
-- **Professional**: Contact for enterprise support
+---
 
-## Security Considerations
+## Step 5 - Create a workspace and copy the project
+```bash
+mkdir -p ~/homebrain
+cd ~/homebrain
+```
 
-- **Network Isolation**: Consider VLAN for IoT devices
-- **Firewall**: Configure UFW rules for external access
-- **Updates**: Regular security updates for all components
-- **Authentication**: Strong passwords and JWT tokens
-- **Local Processing**: Voice processing happens locally for privacy
+### Option A - clone from Git
+```bash
+git clone https://github.com/mefree2098/HomeBrainv2.git
+cd HomeBrainv2
+```
 
-## Integration Guides
+### Option B - copy from your development machine
+On the computer that already has this folder:
+```bash
+cd path/to/HomeBrainv2
+tar -czf HomeBrainv2.tar.gz .
+scp HomeBrainv2.tar.gz <your-jetson-user>@<jetson-ip>:/home/<your-jetson-user>/homebrain/
+```
 
-### SmartThings Setup
-1. Create SmartThings Developer Account
-2. Generate Personal Access Token
-3. Configure in HomeBrain Settings
-4. Sync devices and test control
+Back on the Jetson:
+```bash
+cd ~/homebrain
+mkdir HomeBrainv2
+tar -xzf HomeBrainv2.tar.gz -C HomeBrainv2
+cd HomeBrainv2
+```
 
-### INSTEON Setup
-1. Connect INSTEON PowerLinc Modem via USB
-2. Configure serial port in settings
-3. Link INSTEON devices to hub
-4. Organize devices by room
+Find the Jetson IP with `hostname -I` if needed.
 
-### ElevenLabs Setup
-1. Create ElevenLabs account
-2. Generate API key
-3. Configure in HomeBrain settings
-4. Test text-to-speech functionality
+---
 
-## Performance Optimization
+## Step 6 - Install project dependencies
+The project has separate npm workspaces at the root, `server`, and `client`.
 
-### Jetson Orin Nano
-- **Power Mode**: Set to MAXN for best performance
-- **GPU**: Enable GPU acceleration for AI workloads
-- **Storage**: Use NVMe SSD for better I/O performance
-- **Cooling**: Ensure adequate cooling for sustained workloads
+```bash
+cd ~/homebrain/HomeBrainv2
+npm install
 
-### Remote Devices
-- **Audio Latency**: Use USB audio devices for lower latency
-- **Network**: 5GHz Wi-Fi for better bandwidth
-- **Storage**: Class 10+ SD cards for better performance
-- **Power**: Stable power supply prevents audio glitches
+cd server
+npm install
 
-## Advanced Configuration
+cd ../client
+npm install
+```
 
-### Custom Wake Words
-1. Access Picovoice Console
-2. Train custom wake word models
-3. Download .ppn files
-4. Configure in User Profiles
+Each command can take several minutes on ARM hardware. Wait for each to finish.
 
-### Local LLM Setup
-1. Install Ollama on Jetson
-2. Download appropriate model (llama2, codellama)
-3. Configure local endpoint in settings
-4. Test natural language processing
+---
 
-### Multi-Hub Setup
-1. Deploy multiple Jetson hubs
-2. Configure hub-specific device assignments
-3. Sync user profiles across hubs
-4. Load balance voice processing
+## Step 7 - Configure the server environment
+Copy the sample file and edit it.
 
-This deployment guide ensures a complete and secure HomeBrain installation across your smart home network.
+```bash
+cd ~/homebrain/HomeBrainv2/server
+cp .env.example .env
+nano .env
+```
+
+Set the following values:
+```
+PORT=3000
+DATABASE_URL=mongodb://localhost/HomeBrain
+JWT_SECRET=<paste output from openssl rand -hex 32>
+REFRESH_TOKEN_SECRET=<paste another value>
+ELEVENLABS_API_KEY=   # leave blank unless you have a key
+HTTPS_PORT=3443
+```
+
+Generate secrets whenever you need them:
+```bash
+openssl rand -hex 32
+```
+
+Save (`Ctrl+O`, Enter) and exit (`Ctrl+X`).
+
+---
+
+## Step 8 - Seed the database (optional)
+HomeBrain ships with seeding scripts.
+
+```bash
+cd ~/homebrain/HomeBrainv2/server
+node scripts/seedDatabase.js
+```
+
+To seed only a specific area:
+```bash
+node scripts/seedDatabase.js devices
+node scripts/seedDatabase.js scenes
+```
+
+---
+
+## Step 9 - Create your first admin account
+```bash
+cd ~/homebrain/HomeBrainv2/server/scripts
+node createAdminUser.js --email you@example.com --password 'Str0ngPassw0rd!'
+```
+
+The script enforces a strong password. Use `--force` if you need to replace an existing admin.
+
+---
+
+## Step 10 - Build the client UI (optional but recommended)
+This generates `client/dist` so you can serve static files or use `vite preview`.
+
+```bash
+cd ~/homebrain/HomeBrainv2/client
+npm run build
+```
+
+---
+
+## Step 11 - Manual smoke test
+Verify everything before enabling the service.
+
+### Single command that runs both client and server
+```bash
+cd ~/homebrain/HomeBrainv2
+NODE_ENV=production npm start
+```
+
+### Separate terminals (alternative)
+```bash
+# Terminal 1
+cd ~/homebrain/HomeBrainv2/server
+NODE_ENV=production npm run dev
+
+# Terminal 2
+cd ~/homebrain/HomeBrainv2/client
+npm run dev -- --host 0.0.0.0 --port 5173
+```
+
+Browse to `http://<jetson-ip>:5173` and sign in with the admin credentials. Stop the processes with `Ctrl+C` when you are satisfied.
+
+---
+
+## Step 12 - Configure a systemd service
+Create a service so HomeBrain starts on boot.
+
+```bash
+sudo nano /etc/systemd/system/homebrain.service
+```
+
+Paste the contents below (adjust the username and path if yours differ):
+
+```
+[Unit]
+Description=HomeBrain Smart Home Hub
+After=network.target mongod.service
+Requires=mongod.service
+
+[Service]
+Type=simple
+User=<your-jetson-user>
+WorkingDirectory=/home/<your-jetson-user>/homebrain/HomeBrainv2
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Save and exit, then enable the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now homebrain
+sudo systemctl status homebrain
+```
+
+`status` should show `active (running)`. Use `journalctl -u homebrain -f` to tail live logs. Restart after updates with `sudo systemctl restart homebrain`.
+
+---
+
+## Step 13 - Configure the firewall
+If you plan to use UFW:
+
+```bash
+sudo ufw allow 22/tcp
+sudo ufw allow 3000/tcp
+sudo ufw allow 5173/tcp
+sudo ufw allow 3443/tcp
+sudo ufw enable
+sudo ufw status
+```
+
+Discovery uses UDP 12345; most setups do not require extra firewall rules for outbound UDP.
+
+---
+
+## Step 14 - Allow HomeBrain to install Ollama (optional)
+The *Ollama Management* page can install and update Ollama for you, but the backend needs passwordless sudo to run the installer. You have two choices:
+
+1. **Let HomeBrain manage the install** - grant the service the minimum commands it needs (edit the file with `visudo -f` if it already exists):
+   ```bash
+   echo 'matt ALL=(ALL) NOPASSWD:/usr/bin/apt,/usr/bin/systemctl,/usr/bin/curl,/usr/bin/tar,/usr/bin/tee,/usr/bin/ollama,/usr/bin/true,/usr/bin/sh' | sudo tee /etc/sudoers.d/homebrain-ollama
+   sudo chmod 0440 /etc/sudoers.d/homebrain-ollama
+   sudo visudo -c    # optional sanity check
+   sudo systemctl restart homebrain
+   ```
+   Replace `matt` with the account that runs HomeBrain if yours is different.
+
+2. **Install Ollama yourself once** – skip the sudoers rule and pre-install directly:
+   ```bash
+   curl -fsSL https://ollama.com/install.sh | sudo sh
+   sudo systemctl enable --now ollama
+   ```
+   After this, click **Check Status** in the UI instead of **Install**.
+
+Pick only one path; you do not need both.
+
+---
+
+## Step 15 - Deploy a remote voice device (Raspberry Pi 4B)
+1. **Prepare the Pi**
+   - Flash Raspberry Pi OS Lite (64-bit) and enable SSH (using Raspberry Pi Imager “Advanced options”).
+   - Boot, connect to your network, and update packages:
+     ```bash
+     sudo apt update && sudo apt upgrade -y
+     ```
+
+2. **Pull the latest HomeBrain code on the Jetson**
+   ```bash
+   cd ~/homebrain/HomeBrainv2
+   git pull
+   ```
+
+3. **Copy the remote device folder to the Pi**
+   ```bash
+   scp -r remote-device pi@<pi-ip>:/home/pi/
+   ```
+   Replace `<pi-ip>` with the Pi’s address; the default username is `pi` unless you customised it.
+
+4. **Run the installer on the Pi (handles dependencies automatically)**
+   ```bash
+   ssh pi@<pi-ip>
+   cd ~/remote-device
+   bash install.sh
+   ```
+   The script installs ALSA/SOX utilities, Node.js 18, and creates `/home/pi/homebrain-remote` with helper scripts.
+
+5. **Verify audio and register the device**
+   ```bash
+   cd ~/homebrain-remote
+   ./test-audio.sh                           # optional sanity check
+   ./register.sh YOUR_CODE http://<hub-ip>:3000
+   ```
+   Obtain the registration code from the HomeBrain UI → Remote Devices → Add Remote Device. `<hub-ip>` is your Jetson address.
+
+6. **Start the service and enable auto-start**
+   ```bash
+   sudo systemctl enable homebrain-remote
+   sudo systemctl start homebrain-remote
+   sudo systemctl status homebrain-remote    # expect “active (running)”
+   ```
+   Check logs any time with `sudo journalctl -u homebrain-remote -f`.
+
+7. **Confirm from the hub**
+   Refresh the Remote Devices page; the Pi should display as “Online”. Repeat the copy/install steps for additional rooms, generating a new registration code each time.
+
+---
+
+## Step 16 - Ongoing maintenance
+- Update code:
+  ```bash
+  cd ~/homebrain/HomeBrainv2
+  git pull
+  npm install
+
+  cd server
+  npm install
+  cd ../client
+  npm install
+  npm run build    # skip if you only use the dev server
+  cd ..
+  sudo systemctl restart homebrain
+  ```
+- Check service status: `systemctl status homebrain`
+- Tail logs: `journalctl -u homebrain -f`
+- Backup MongoDB:
+  ```bash
+  mongodump --db HomeBrain --out ~/homebrain/backups/$(date +%Y%m%d)
+  ```
+
+---
+
+## Troubleshooting quick checks
+- API not responding: `sudo systemctl status homebrain`
+- Detailed logs: `journalctl -u homebrain -n 100`
+- MongoDB errors: `sudo tail -n 100 /var/log/mongodb/mongod.log`
+- Port conflicts: `sudo netstat -tulpn | grep -E '3000|5173|3443|12345'`
+- Discovery diagnostics: `sudo tcpdump -i any udp port 12345`
+- Reset admin: rerun `node server/scripts/createAdminUser.js --force --email ...`
+
+---
+
+## Useful repository paths
+- Backend entry point: `server/server.js`
+- Environment sample: `server/.env.example`
+- Seed scripts and utilities: `server/scripts/`
+- Client source: `client/src/`
+- Client build artifacts: `client/dist/`
+- Remote installer assets: `server/public/downloads/`
+- Systemd unit created in this guide: `/etc/systemd/system/homebrain.service`
