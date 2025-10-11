@@ -70,18 +70,42 @@ class OllamaService {
       config.serviceStatus = 'installing';
       await config.save();
 
-      // Check if sudo is available, otherwise run directly (for Docker/container environments)
-      let installCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
-
+      // Check if sudo is available, install it if not
+      let hasSudo = false;
       try {
-        // Check if sudo exists
         await execAsync('which sudo', { timeout: 2000 });
-        // If sudo exists, use it
+        hasSudo = true;
+        console.log('sudo command found');
+      } catch (error) {
+        console.log('sudo not found, attempting to install sudo...');
+
+        // Try to install sudo (requires we're already root or have package manager access)
+        try {
+          // Check if we can use apt-get
+          await execAsync('which apt-get', { timeout: 2000 });
+
+          // Update package lists and install sudo
+          console.log('Installing sudo using apt-get...');
+          await execAsync('apt-get update && apt-get install -y sudo', {
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 120000 // 2 minutes for apt operations
+          });
+
+          hasSudo = true;
+          console.log('sudo installed successfully');
+        } catch (installError) {
+          console.log('Could not install sudo:', installError.message);
+          console.log('Attempting installation without sudo (as current user)...');
+        }
+      }
+
+      // Prepare installation command
+      let installCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
+      if (hasSudo) {
         installCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
         console.log('Running Ollama installation script with sudo...');
-      } catch (error) {
-        // Sudo not available, run directly (likely in Docker container as root)
-        console.log('sudo not found, running Ollama installation script directly (root user)...');
+      } else {
+        console.log('Running Ollama installation script without sudo...');
       }
 
       const { stdout, stderr } = await execAsync(installCommand, {
@@ -239,18 +263,42 @@ class OllamaService {
       config.serviceStatus = 'installing';
       await config.save();
 
-      // Check if sudo is available, otherwise run directly (for Docker/container environments)
-      let updateCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
-
+      // Check if sudo is available, install it if not
+      let hasSudo = false;
       try {
-        // Check if sudo exists
         await execAsync('which sudo', { timeout: 2000 });
-        // If sudo exists, use it
+        hasSudo = true;
+        console.log('sudo command found');
+      } catch (error) {
+        console.log('sudo not found, attempting to install sudo...');
+
+        // Try to install sudo (requires we're already root or have package manager access)
+        try {
+          // Check if we can use apt-get
+          await execAsync('which apt-get', { timeout: 2000 });
+
+          // Update package lists and install sudo
+          console.log('Installing sudo using apt-get...');
+          await execAsync('apt-get update && apt-get install -y sudo', {
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 120000 // 2 minutes for apt operations
+          });
+
+          hasSudo = true;
+          console.log('sudo installed successfully');
+        } catch (installError) {
+          console.log('Could not install sudo:', installError.message);
+          console.log('Attempting update without sudo (as current user)...');
+        }
+      }
+
+      // Prepare update command
+      let updateCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
+      if (hasSudo) {
         updateCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
         console.log('Running Ollama update script with sudo...');
-      } catch (error) {
-        // Sudo not available, run directly (likely in Docker container as root)
-        console.log('sudo not found, running Ollama update script directly (root user)...');
+      } else {
+        console.log('Running Ollama update script without sudo...');
       }
 
       const { stdout, stderr } = await execAsync(updateCommand, {
