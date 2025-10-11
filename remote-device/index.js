@@ -324,6 +324,11 @@ class HomeBrainRemoteDevice {
           // Heartbeat acknowledged
           break;
 
+        case 'update_available':
+          console.log('Update available:', message.version);
+          this.handleUpdateAvailable(message);
+          break;
+
         case 'error':
           console.error('Hub error:', message.message);
           this.stats.errors++;
@@ -895,6 +900,66 @@ class HomeBrainRemoteDevice {
 
   generateDeviceId() {
     return 'device-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+  }
+
+  async handleUpdateAvailable(message) {
+    const { version, downloadUrl, checksum, size, mandatory } = message;
+
+    console.log('');
+    console.log('='.repeat(50));
+    console.log('UPDATE AVAILABLE');
+    console.log('='.repeat(50));
+    console.log(`Current version: ${require('./package.json').version}`);
+    console.log(`New version: ${version}`);
+    console.log(`Download size: ${(size / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`Mandatory: ${mandatory ? 'Yes' : 'No'}`);
+    console.log('='.repeat(50));
+    console.log('');
+
+    try {
+      // Notify hub that update is starting
+      this.sendMessage({
+        type: 'update_status',
+        status: 'downloading',
+        version: version
+      });
+
+      // Load updater module
+      const RemoteDeviceUpdater = require('./updater.js');
+      const updater = new RemoteDeviceUpdater();
+
+      await updater.initialize();
+
+      // Perform update
+      const result = await updater.performUpdate(downloadUrl, checksum, version);
+
+      if (result.success) {
+        console.log('Update completed successfully!');
+
+        // Notify hub of success
+        this.sendMessage({
+          type: 'update_status',
+          status: 'completed',
+          version: version
+        });
+
+        // Restart device
+        await updater.restartDevice();
+      }
+
+    } catch (error) {
+      console.error('Update failed:', error.message);
+
+      // Notify hub of failure
+      this.sendMessage({
+        type: 'update_status',
+        status: 'failed',
+        version: version,
+        error: error.message
+      });
+
+      console.log('Continuing with current version...');
+    }
   }
 
   shutdown() {

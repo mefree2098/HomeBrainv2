@@ -108,6 +108,20 @@ const schema = new mongoose.Schema({
   lastUpdate: {
     type: Date,
   },
+  // Update tracking
+  updateStatus: {
+    status: {
+      type: String,
+      enum: ['idle', 'checking', 'downloading', 'installing', 'completed', 'failed'],
+      default: 'idle'
+    },
+    version: String,
+    startedAt: Date,
+    completedAt: Date,
+    failedAt: Date,
+    error: String,
+    lastChecked: Date
+  },
   createdAt: {
     type: Date,
     default: Date.now,

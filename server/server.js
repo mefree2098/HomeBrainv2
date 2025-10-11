@@ -17,11 +17,13 @@ const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
+const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
 const discoveryRoutes = require("./routes/discoveryRoutes");
 const insteonRoutes = require("./routes/insteonRoutes");
 const sslRoutes = require("./routes/sslRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const DiscoveryService = require("./services/discoveryService");
+const remoteUpdateService = require("./services/remoteUpdateService");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 const http = require("http");
@@ -79,6 +81,8 @@ app.use('/api/smartthings', smartThingsRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 // Remote Device Routes
 app.use('/api/remote-devices', remoteDeviceRoutes);
+// Remote Update Routes
+app.use('/api/remote-updates', remoteUpdateRoutes);
 // Discovery Routes
 app.use('/api/discovery', discoveryRoutes);
 // Insteon Routes
@@ -145,6 +149,9 @@ async function setupHttpsServer() {
 const voiceWsServer = new VoiceWebSocketServer();
 voiceWsServer.initialize(httpServer);
 
+// Store voice WebSocket instance for use in routes
+app.set('voiceWebSocket', voiceWsServer);
+
 // Initialize Discovery service
 const discoveryService = new DiscoveryService();
 app.locals.discoveryService = discoveryService;
@@ -156,6 +163,16 @@ try {
 } catch (error) {
   console.warn('Auto-discovery service failed to start:', error.message);
 }
+
+// Initialize Remote Update Service
+(async () => {
+  try {
+    await remoteUpdateService.initialize();
+    console.log('Remote Update Service initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Remote Update Service:', error.message);
+  }
+})();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

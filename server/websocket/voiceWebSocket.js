@@ -143,6 +143,10 @@ class VoiceWebSocketServer {
           await this.handleStatusUpdate(deviceId, message);
           break;
 
+        case 'update_status':
+          await this.handleUpdateStatus(deviceId, message);
+          break;
+
         case 'error':
           await this.handleDeviceError(deviceId, message);
           break;
@@ -424,6 +428,28 @@ class VoiceWebSocketServer {
 
     } catch (error) {
       console.error(`Status update error for device ${deviceId}:`, error);
+    }
+  }
+
+  async handleUpdateStatus(deviceId, message) {
+    const connection = this.deviceConnections.get(deviceId);
+    if (!connection) return;
+
+    const { status, version, error } = message;
+
+    console.log(`Update status received from ${connection.device.name}: ${status} (version: ${version})`);
+
+    try {
+      // Import update service
+      const remoteUpdateService = require('../services/remoteUpdateService');
+
+      // Update device status using the service
+      await remoteUpdateService.updateDeviceStatus(deviceId, status, error);
+
+      console.log(`Update status for device ${deviceId} updated to: ${status}`);
+
+    } catch (updateError) {
+      console.error(`Error updating device update status for ${deviceId}:`, updateError);
     }
   }
 
