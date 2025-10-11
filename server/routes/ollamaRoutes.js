@@ -12,7 +12,43 @@ router.get('/status', requireUser, async (req, res) => {
   try {
     console.log('GET /api/ollama/status - Fetching Ollama status');
 
-    const status = await ollamaService.getStatus();
+    // Set a timeout for the entire operation
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Status check timeout')), 15000)
+    );
+
+    const statusPromise = ollamaService.getStatus();
+
+    const status = await Promise.race([statusPromise, timeoutPromise]).catch(error => {
+      console.error('Status check timed out or failed:', error.message);
+      // Return default status if check fails
+      return {
+        isInstalled: false,
+        version: null,
+        serviceRunning: false,
+        serviceStatus: 'not_installed',
+        installedModels: [],
+        activeModel: null,
+        configuration: {
+          apiUrl: 'http://localhost:11434',
+          maxConcurrentRequests: 1,
+          contextLength: 2048,
+          gpuLayers: -1
+        },
+        updateAvailable: false,
+        latestVersion: null,
+        lastUpdateCheck: null,
+        statistics: {
+          totalChats: 0,
+          totalTokensProcessed: 0,
+          averageResponseTime: 0
+        },
+        lastError: {
+          message: 'Status check timeout - Ollama may not be accessible',
+          timestamp: new Date()
+        }
+      };
+    });
 
     res.status(200).json(status);
   } catch (error) {

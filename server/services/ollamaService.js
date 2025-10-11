@@ -19,7 +19,7 @@ class OllamaService {
 
       // Check if ollama command exists
       try {
-        const { stdout } = await execAsync('which ollama');
+        const { stdout } = await execAsync('which ollama', { timeout: 5000 });
         if (!stdout.trim()) {
           return { isInstalled: false, version: null };
         }
@@ -29,7 +29,7 @@ class OllamaService {
 
       // Get version
       try {
-        const { stdout } = await execAsync('ollama --version');
+        const { stdout } = await execAsync('ollama --version', { timeout: 5000 });
         const version = stdout.trim().replace('ollama version is ', '').replace('ollama version ', '');
         console.log(`Ollama is installed, version: ${version}`);
         return { isInstalled: true, version };
@@ -346,7 +346,7 @@ class OllamaService {
       console.log(`Deleting model: ${modelName}`);
 
       const deleteCommand = `ollama rm ${modelName}`;
-      await execAsync(deleteCommand);
+      await execAsync(deleteCommand, { timeout: 30000 });
 
       console.log(`Model ${modelName} deleted successfully`);
 
@@ -513,8 +513,25 @@ class OllamaService {
       console.log('Getting Ollama full status...');
 
       const config = await OllamaConfig.getConfig();
-      const installStatus = await this.checkInstallation();
-      const serviceStatus = await this.checkServiceStatus();
+      console.log('Got config from database');
+
+      const installStatus = await Promise.race([
+        this.checkInstallation(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Installation check timeout')), 10000))
+      ]).catch(error => {
+        console.error('Installation check failed:', error.message);
+        return { isInstalled: false, version: null };
+      });
+      console.log('Installation status checked:', installStatus);
+
+      const serviceStatus = await Promise.race([
+        this.checkServiceStatus(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Service check timeout')), 5000))
+      ]).catch(error => {
+        console.error('Service check failed:', error.message);
+        return { running: false, error: error.message };
+      });
+      console.log('Service status checked:', serviceStatus);
 
       // Update config with current status
       if (serviceStatus.running) {
