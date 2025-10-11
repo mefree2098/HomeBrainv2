@@ -148,6 +148,7 @@ class HomeBrainRemoteDevice {
     const hubUrl = argv.hub || this.config.hubUrl || process.env.HUB_URL || 'http://localhost:3000';
     console.log(`Using Hub URL: ${hubUrl}`);
     this.config.hubUrl = hubUrl;
+    this.config.registrationCode = registrationCode;
 
     try {
       // Get network information
@@ -201,11 +202,8 @@ class HomeBrainRemoteDevice {
   }
 
   async connectToHub() {
-    const wsUrl =
-      argv.hub
-        ? argv.hub.replace(/^http/, 'ws').replace(/\/+$/, '') + `/ws/voice-device/${this.deviceId}`
-        : this.config.hubWsUrl
-          || (this.config.hubUrl ? this.config.hubUrl.replace(/^http/, 'ws').replace(/\/+$/, '') + `/ws/voice-device/${this.deviceId}` : `ws://localhost:3000/ws/voice-device/${this.deviceId}`);
+    const baseHttp = argv.hub || this.config.hubUrl || process.env.HUB_URL || 'http://localhost:3000';
+    const wsUrl = this.buildWebSocketUrl(baseHttp);
 
     console.log(`Connecting to hub: ${wsUrl}`);
 
@@ -494,6 +492,19 @@ class HomeBrainRemoteDevice {
         }
       });
     });
+  }
+
+  buildWebSocketUrl(baseUrl) {
+    try {
+      const url = new URL(baseUrl);
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      url.pathname = '/ws/voice-device';
+      url.searchParams.set('deviceId', this.deviceId);
+      return url.toString();
+    } catch (error) {
+      const normalized = baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '');
+      return `${normalized}/ws/voice-device?deviceId=${this.deviceId}`;
+    }
   }
 
   startHeartbeat() {

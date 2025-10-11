@@ -17,14 +17,23 @@ class VoiceWebSocketServer {
       server,
       path: '/ws/voice-device',
       verifyClient: (info) => {
-        // Extract device ID from URL path
         const url = new URL(info.req.url, `http://${info.req.headers.host}`);
-        const deviceId = url.pathname.split('/').pop();
+        let deviceId = url.searchParams.get('deviceId');
+
+        if (!deviceId) {
+          const segments = url.pathname.split('/').filter(Boolean);
+          if (segments.length >= 2 && segments[segments.length - 2] === 'voice-device') {
+            deviceId = segments[segments.length - 1];
+          }
+        }
 
         if (!deviceId || deviceId.length !== 24) {
           console.warn('WebSocket connection rejected: Invalid device ID');
           return false;
         }
+
+        // Attach deviceId to request for later use
+        info.req.deviceId = deviceId;
 
         return true;
       }
@@ -42,7 +51,12 @@ class VoiceWebSocketServer {
 
   async handleConnection(ws, req) {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    const deviceId = url.pathname.split('/').pop();
+    let deviceId = req.deviceId || url.searchParams.get('deviceId');
+
+    if (!deviceId) {
+      const segments = url.pathname.split('/').filter(Boolean);
+      deviceId = segments.pop();
+    }
 
     console.log(`Voice device WebSocket connection established: ${deviceId}`);
 
