@@ -38,6 +38,7 @@ export function VoiceSelector({
   const [searchQuery, setSearchQuery] = useState("")
   const [isOpen, setIsOpen] = useState(false)
   const mountedRef = useRef(true)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     mountedRef.current = true
@@ -45,6 +46,13 @@ export function VoiceSelector({
       mountedRef.current = false
     }
   }, [])
+
+  // Reset search when dropdown closes
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchQuery("")
+    }
+  }, [isOpen])
 
   // Filter voices based on search query
   const filteredVoices = useMemo(() => {
@@ -126,11 +134,21 @@ export function VoiceSelector({
               {selectedVoice ? formatVoiceLabel(selectedVoice) : placeholder}
             </SelectValue>
           </SelectTrigger>
-          <SelectContent>
-            <div className="sticky top-0 z-10 bg-white border-b p-2">
+          <SelectContent
+            onCloseAutoFocus={(e) => {
+              // Prevent focus from returning to trigger when closing with keyboard
+              e.preventDefault()
+            }}
+          >
+            <div
+              className="sticky top-0 z-10 bg-white border-b p-2"
+              onPointerMove={(e) => e.stopPropagation()}
+              onPointerLeave={(e) => e.stopPropagation()}
+            >
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                 <Input
+                  ref={searchInputRef}
                   placeholder="Search voices..."
                   value={searchQuery}
                   onChange={(e) => {
@@ -140,6 +158,21 @@ export function VoiceSelector({
                   }}
                   className="pl-9"
                   onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    // Prevent Radix UI Select from handling keyboard events on the search input
+                    e.stopPropagation()
+                  }}
+                  onPointerDown={(e) => {
+                    // Prevent Select from hijacking pointer events
+                    e.stopPropagation()
+                  }}
+                  onPointerMove={(e) => {
+                    // Prevent Select from hijacking pointer events
+                    e.stopPropagation()
+                  }}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
                 />
               </div>
             </div>
