@@ -25,7 +25,7 @@ const argv = yargs(hideBin(process.argv))
     description: 'Path to configuration file'
   })
   .option('hub', {
-    alias: 'h',
+    alias: 'u',
     type: 'string',
     description: 'Hub URL (e.g., http://localhost:3000)'
   })
@@ -47,7 +47,6 @@ const argv = yargs(hideBin(process.argv))
     description: 'Device name for auto-discovery (e.g., "Kitchen Speaker")'
   })
   .help()
-  .alias('help', 'h')
   .argv;
 
 class HomeBrainRemoteDevice {
@@ -147,6 +146,8 @@ class HomeBrainRemoteDevice {
     console.log(`Registering device with code: ${registrationCode}`);
 
     const hubUrl = argv.hub || this.config.hubUrl || 'http://localhost:3000';
+    console.log(`Using Hub URL: ${hubUrl}`);
+    this.config.hubUrl = hubUrl;
 
     try {
       // Get network information
