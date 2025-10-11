@@ -145,7 +145,7 @@ class HomeBrainRemoteDevice {
   async registerDevice(registrationCode) {
     console.log(`Registering device with code: ${registrationCode}`);
 
-    const hubUrl = argv.hub || this.config.hubUrl || 'http://localhost:3000';
+    const hubUrl = argv.hub || this.config.hubUrl || process.env.HUB_URL || 'http://localhost:3000';
     console.log(`Using Hub URL: ${hubUrl}`);
     this.config.hubUrl = hubUrl;
 
@@ -201,7 +201,11 @@ class HomeBrainRemoteDevice {
   }
 
   async connectToHub() {
-    const wsUrl = this.config.hubWsUrl || `ws://localhost:3000/ws/voice-device/${this.deviceId}`;
+    const wsUrl =
+      argv.hub
+        ? argv.hub.replace(/^http/, 'ws').replace(/\/+$/, '') + `/ws/voice-device/${this.deviceId}`
+        : this.config.hubWsUrl
+          || (this.config.hubUrl ? this.config.hubUrl.replace(/^http/, 'ws').replace(/\/+$/, '') + `/ws/voice-device/${this.deviceId}` : `ws://localhost:3000/ws/voice-device/${this.deviceId}`);
 
     console.log(`Connecting to hub: ${wsUrl}`);
 
