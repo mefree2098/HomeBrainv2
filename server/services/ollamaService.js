@@ -70,33 +70,55 @@ class OllamaService {
       config.serviceStatus = 'installing';
       await config.save();
 
-      // Check if sudo is available, install it if not
-      let hasSudo = false;
+      // Check current user
+      let currentUser = 'unknown';
       try {
-        await execAsync('which sudo', { timeout: 2000 });
-        hasSudo = true;
-        console.log('sudo command found');
+        const { stdout } = await execAsync('whoami', { timeout: 2000 });
+        currentUser = stdout.trim();
+        console.log(`Running as user: ${currentUser}`);
       } catch (error) {
-        console.log('sudo not found, attempting to install sudo...');
+        console.log('Could not determine current user');
+      }
 
-        // Try to install sudo (requires we're already root or have package manager access)
+      // Check if we're root
+      const isRoot = currentUser === 'root';
+
+      // Check if sudo is available and working
+      let hasSudo = false;
+      if (!isRoot) {
         try {
-          // Check if we can use apt-get
-          await execAsync('which apt-get', { timeout: 2000 });
-
-          // Update package lists and install sudo
-          console.log('Installing sudo using apt-get...');
-          await execAsync('apt-get update && apt-get install -y sudo', {
-            maxBuffer: 10 * 1024 * 1024,
-            timeout: 120000 // 2 minutes for apt operations
-          });
-
-          hasSudo = true;
-          console.log('sudo installed successfully');
-        } catch (installError) {
-          console.log('Could not install sudo:', installError.message);
-          console.log('Attempting installation without sudo (as current user)...');
+          await execAsync('which sudo', { timeout: 2000 });
+          // Verify we can actually use sudo without password
+          try {
+            await execAsync('sudo -n true', { timeout: 2000 });
+            hasSudo = true;
+            console.log('sudo command found and user has passwordless sudo privileges');
+          } catch (sudoError) {
+            console.log('sudo found but user does not have passwordless sudo privileges');
+          }
+        } catch (error) {
+          console.log('sudo command not found');
         }
+      }
+
+      // If we're not root and don't have working sudo, installation cannot proceed
+      if (!isRoot && !hasSudo) {
+        const errorMessage = `Ollama installation requires root privileges. This system is running as user "${currentUser}" without sudo access.
+
+To install Ollama, one of the following is required:
+• Run this application as root user
+• Grant sudo privileges to user "${currentUser}"
+• Pre-install Ollama on the host system before starting this container
+
+Please contact your system administrator for assistance.`;
+
+        console.error(errorMessage);
+
+        const config = await OllamaConfig.getConfig();
+        config.serviceStatus = 'error';
+        await config.setError(errorMessage);
+
+        throw new Error(errorMessage);
       }
 
       // Prepare installation command
@@ -105,7 +127,7 @@ class OllamaService {
         installCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
         console.log('Running Ollama installation script with sudo...');
       } else {
-        console.log('Running Ollama installation script without sudo...');
+        console.log('Running Ollama installation script as root...');
       }
 
       const { stdout, stderr } = await execAsync(installCommand, {
@@ -263,33 +285,47 @@ class OllamaService {
       config.serviceStatus = 'installing';
       await config.save();
 
-      // Check if sudo is available, install it if not
-      let hasSudo = false;
+      // Check current user
+      let currentUser = 'unknown';
       try {
-        await execAsync('which sudo', { timeout: 2000 });
-        hasSudo = true;
-        console.log('sudo command found');
+        const { stdout } = await execAsync('whoami', { timeout: 2000 });
+        currentUser = stdout.trim();
+        console.log(`Running as user: ${currentUser}`);
       } catch (error) {
-        console.log('sudo not found, attempting to install sudo...');
+        console.log('Could not determine current user');
+      }
 
-        // Try to install sudo (requires we're already root or have package manager access)
+      // Check if we're root
+      const isRoot = currentUser === 'root';
+
+      // Check if sudo is available and working
+      let hasSudo = false;
+      if (!isRoot) {
         try {
-          // Check if we can use apt-get
-          await execAsync('which apt-get', { timeout: 2000 });
-
-          // Update package lists and install sudo
-          console.log('Installing sudo using apt-get...');
-          await execAsync('apt-get update && apt-get install -y sudo', {
-            maxBuffer: 10 * 1024 * 1024,
-            timeout: 120000 // 2 minutes for apt operations
-          });
-
-          hasSudo = true;
-          console.log('sudo installed successfully');
-        } catch (installError) {
-          console.log('Could not install sudo:', installError.message);
-          console.log('Attempting update without sudo (as current user)...');
+          await execAsync('which sudo', { timeout: 2000 });
+          // Verify we can actually use sudo without password
+          try {
+            await execAsync('sudo -n true', { timeout: 2000 });
+            hasSudo = true;
+            console.log('sudo command found and user has passwordless sudo privileges');
+          } catch (sudoError) {
+            console.log('sudo found but user does not have passwordless sudo privileges');
+          }
+        } catch (error) {
+          console.log('sudo command not found');
         }
+      }
+
+      // If we're not root and don't have working sudo, update cannot proceed
+      if (!isRoot && !hasSudo) {
+        const errorMessage = `Ollama update requires root privileges. This system is running as user "${currentUser}" without sudo access. Please contact your system administrator for assistance.`;
+        console.error(errorMessage);
+
+        const config = await OllamaConfig.getConfig();
+        config.serviceStatus = 'error';
+        await config.setError(errorMessage);
+
+        throw new Error(errorMessage);
       }
 
       // Prepare update command
@@ -298,7 +334,7 @@ class OllamaService {
         updateCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
         console.log('Running Ollama update script with sudo...');
       } else {
-        console.log('Running Ollama update script without sudo...');
+        console.log('Running Ollama update script as root...');
       }
 
       const { stdout, stderr } = await execAsync(updateCommand, {
