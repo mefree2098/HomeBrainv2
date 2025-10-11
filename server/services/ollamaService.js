@@ -70,9 +70,19 @@ class OllamaService {
       config.serviceStatus = 'installing';
       await config.save();
 
-      // Download and install Ollama with sudo
-      const installCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
-      console.log('Running Ollama installation script with sudo...');
+      // Check if sudo is available, otherwise run directly (for Docker/container environments)
+      let installCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
+
+      try {
+        // Check if sudo exists
+        await execAsync('which sudo', { timeout: 2000 });
+        // If sudo exists, use it
+        installCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
+        console.log('Running Ollama installation script with sudo...');
+      } catch (error) {
+        // Sudo not available, run directly (likely in Docker container as root)
+        console.log('sudo not found, running Ollama installation script directly (root user)...');
+      }
 
       const { stdout, stderr } = await execAsync(installCommand, {
         maxBuffer: 10 * 1024 * 1024,
@@ -229,9 +239,19 @@ class OllamaService {
       config.serviceStatus = 'installing';
       await config.save();
 
-      // Run update command (same as install) with sudo
-      const updateCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
-      console.log('Running Ollama update script with sudo...');
+      // Check if sudo is available, otherwise run directly (for Docker/container environments)
+      let updateCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
+
+      try {
+        // Check if sudo exists
+        await execAsync('which sudo', { timeout: 2000 });
+        // If sudo exists, use it
+        updateCommand = 'curl -fsSL https://ollama.com/install.sh | sudo sh';
+        console.log('Running Ollama update script with sudo...');
+      } catch (error) {
+        // Sudo not available, run directly (likely in Docker container as root)
+        console.log('sudo not found, running Ollama update script directly (root user)...');
+      }
 
       const { stdout, stderr } = await execAsync(updateCommand, {
         maxBuffer: 10 * 1024 * 1024,
