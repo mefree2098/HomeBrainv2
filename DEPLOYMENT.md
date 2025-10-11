@@ -361,7 +361,7 @@ Pick only one path; you do not need both.
    Refresh the Remote Devices page; the Pi should display as “Online”. Repeat the copy/install steps for additional rooms, generating a new registration code each time.
 
 8. **Enable on-device wake-word detection (Porcupine)**
-   - Install the optional Porcupine binding:
+   - Install the optional Porcupine binding on the Pi:
      ```bash
      cd ~/homebrain-remote
      npm install @picovoice/porcupine-node
@@ -370,13 +370,12 @@ Pick only one path; you do not need both.
      ```bash
      export PICOVOICE_ACCESS_KEY="YOUR_PICOVOICE_ACCESS_KEY"
      ```
-   - Copy your `.ppn` keyword files (from the Picovoice Console) to a readable path, e.g. `/home/pi/homebrain-remote/wake-words/`.
-   - Update `~/homebrain-remote/config.json` with the keyword paths, sensitivities, optional `modelPath`, and (if you prefer) `accessKey`—see `remote-device/README.md` for a template.
-   - Restart the service to load the detector:
+   - On the hub (Jetson), copy your `.ppn` keyword files into `~/homebrain/HomeBrainv2/server/public/wake-words/` using slugged filenames like `anna_raspberry-pi.ppn`.
+   - Restart the remote device service so it authenticates and downloads the models:
      ```bash
      sudo systemctl restart homebrain-remote
      ```
-   - Watch `journalctl -u homebrain-remote -f` and speak your wake word; you should now see `wake_word_detected` events instead of relying on the Enter test shortcut.
+   - Tail `journalctl -u homebrain-remote -f`; you should see the Pi download the models and then log real `wake_word_detected` events instead of relying on the Enter test shortcut.
 
 ---
 
