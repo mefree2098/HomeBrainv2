@@ -14,10 +14,20 @@ import {
   Activity,
   AlertTriangle,
   Trash2,
-  Settings
+  Settings,
+  RefreshCw,
+  Download,
+  CheckCircle2,
+  XCircle
 } from "lucide-react"
 import { getVoiceDevices, testVoiceDevice } from "@/api/voice"
-import { deleteRemoteDevice } from "@/api/remoteDevices"
+import {
+  deleteRemoteDevice,
+  getUpdateStatistics,
+  initiateDeviceUpdate,
+  initiateUpdateForAllDevices,
+  getRemoteDeviceVersion
+} from "@/api/remoteDevices"
 import { RemoteDeviceSetup } from "@/components/remote/RemoteDeviceSetup"
 import { PendingDevices } from "@/components/discovery/PendingDevices"
 import { AutoDiscoverySettings } from "@/components/discovery/AutoDiscoverySettings"
@@ -29,8 +39,12 @@ export function VoiceDevices() {
   const [loading, setLoading] = useState(true)
   const [testingDevice, setTestingDevice] = useState<string | null>(null)
   const [deletingDevice, setDeletingDevice] = useState<string | null>(null)
+  const [updatingDevice, setUpdatingDevice] = useState<string | null>(null)
+  const [updatingAll, setUpdatingAll] = useState(false)
   const [autoDiscoveryEnabled, setAutoDiscoveryEnabled] = useState(false)
   const [showAutoDiscovery, setShowAutoDiscovery] = useState(false)
+  const [updateStats, setUpdateStats] = useState<any>(null)
+  const [latestVersion, setLatestVersion] = useState<string>('')
 
   const componentId = useRef(`voice-devices-${Date.now()}-${Math.random()}`).current
 
@@ -40,8 +54,14 @@ export function VoiceDevices() {
     const fetchInitialData = async () => {
       try {
         console.log('Fetching voice devices data (initial)')
-        const data = await getVoiceDevices()
-        setDevices(data.devices || [])
+        const [devicesData, statsData, versionData] = await Promise.all([
+          getVoiceDevices(),
+          getUpdateStatistics().catch(() => null),
+          getRemoteDeviceVersion().catch(() => ({ version: 'Unknown' }))
+        ])
+        setDevices(devicesData.devices || [])
+        setUpdateStats(statsData)
+        setLatestVersion(versionData?.version || 'Unknown')
       } catch (error) {
         console.error('Failed to fetch voice devices:', error)
         toast({
@@ -99,8 +119,12 @@ export function VoiceDevices() {
   const refreshDevices = async () => {
     try {
       console.log('Refreshing voice devices data')
-      const data = await getVoiceDevices()
-      setDevices(data.devices || [])
+      const [devicesData, statsData] = await Promise.all([
+        getVoiceDevices(),
+        getUpdateStatistics().catch(() => null)
+      ])
+      setDevices(devicesData.devices || [])
+      setUpdateStats(statsData)
     } catch (error) {
       console.error('Failed to refresh voice devices:', error)
       toast({
@@ -108,6 +132,60 @@ export function VoiceDevices() {
         description: "Failed to refresh voice devices",
         variant: "destructive"
       })
+    }
+  }
+
+  const handleUpdateDevice = async (deviceId: string, deviceName: string) => {
+    setUpdatingDevice(deviceId)
+    try {
+      console.log('Initiating update for device:', { deviceId, deviceName })
+      const result = await initiateDeviceUpdate(deviceId)
+
+      toast({
+        title: "Update Initiated",
+        description: `${deviceName} is now updating to version ${result.version}`
+      })
+
+      // Refresh devices to show new status
+      await refreshDevices()
+    } catch (error) {
+      console.error('Failed to initiate device update:', error)
+      toast({
+        title: "Update Failed",
+        description: error.message || "Failed to initiate device update",
+        variant: "destructive"
+      })
+    } finally {
+      setUpdatingDevice(null)
+    }
+  }
+
+  const handleUpdateAllDevices = async () => {
+    if (!confirm('Are you sure you want to update all devices? This will update all online devices to the latest version.')) {
+      return
+    }
+
+    setUpdatingAll(true)
+    try {
+      console.log('Initiating update for all devices')
+      const result = await initiateUpdateForAllDevices()
+
+      toast({
+        title: "Bulk Update Initiated",
+        description: `Update initiated for ${result.initiated} device(s). ${result.failed} failed.`
+      })
+
+      // Refresh devices to show new status
+      await refreshDevices()
+    } catch (error) {
+      console.error('Failed to initiate bulk update:', error)
+      toast({
+        title: "Update Failed",
+        description: error.message || "Failed to initiate bulk update",
+        variant: "destructive"
+      })
+    } finally {
+      setUpdatingAll(false)
     }
   }
 
@@ -167,11 +245,51 @@ export function VoiceDevices() {
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
     const diffMins = Math.floor(diffMs / 60000)
-    
+
     if (diffMins < 1) return "Just now"
     if (diffMins < 60) return `${diffMins}m ago`
     if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`
     return date.toLocaleDateString()
+  }
+
+  const needsUpdate = (device: any) => {
+    if (!device.firmwareVersion || !latestVersion || latestVersion === 'Unknown') return false
+    return device.firmwareVersion !== latestVersion && device.status === 'online'
+  }
+
+  const isUpdating = (device: any) => {
+    return device.status === 'updating'
+  }
+
+  const getUpdateBadge = (device: any) => {
+    if (isUpdating(device)) {
+      return (
+        <Badge variant="secondary" className="flex items-center gap-1">
+          <RefreshCw className="h-3 w-3 animate-spin" />
+          Updating
+        </Badge>
+      )
+    }
+
+    if (needsUpdate(device)) {
+      return (
+        <Badge variant="destructive" className="flex items-center gap-1">
+          <XCircle className="h-3 w-3" />
+          Update Available
+        </Badge>
+      )
+    }
+
+    if (device.firmwareVersion && latestVersion && device.firmwareVersion === latestVersion) {
+      return (
+        <Badge variant="default" className="flex items-center gap-1 bg-green-600">
+          <CheckCircle2 className="h-3 w-3" />
+          Up to Date
+        </Badge>
+      )
+    }
+
+    return null
   }
 
   if (loading) {
@@ -197,6 +315,25 @@ export function VoiceDevices() {
           </p>
         </div>
         <div className="flex gap-2">
+          {updateStats && updateStats.outdated > 0 && (
+            <Button
+              onClick={handleUpdateAllDevices}
+              disabled={updatingAll}
+              className="bg-gradient-to-r from-blue-600 to-purple-600"
+            >
+              {updatingAll ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Updating...
+                </>
+              ) : (
+                <>
+                  <Download className="h-4 w-4 mr-2" />
+                  Update All ({updateStats.outdated})
+                </>
+              )}
+            </Button>
+          )}
           <RemoteDeviceSetup onDeviceRegistered={refreshDevices} />
           <Button
             variant="outline"
@@ -327,35 +464,88 @@ export function VoiceDevices() {
                 </div>
               )}
 
-              <div className="flex justify-between text-sm text-muted-foreground">
-                <span>Last seen:</span>
-                <span>{formatLastSeen(device.lastSeen)}</span>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm text-muted-foreground">
+                  <span>Firmware:</span>
+                  <span className="font-mono">{device.firmwareVersion || 'Unknown'}</span>
+                </div>
+
+                <div className="flex justify-between text-sm text-muted-foreground">
+                  <span>Latest:</span>
+                  <span className="font-mono">{latestVersion}</span>
+                </div>
+
+                <div className="flex justify-between text-sm text-muted-foreground">
+                  <span>Last seen:</span>
+                  <span>{formatLastSeen(device.lastSeen)}</span>
+                </div>
+
+                {getUpdateBadge(device) && (
+                  <div className="flex justify-center pt-1">
+                    {getUpdateBadge(device)}
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-2">
-                <Button
-                  onClick={() => handleTestDevice(device._id, device.name)}
-                  disabled={device.status === 'offline' || testingDevice === device._id}
-                  variant={device.status === 'online' ? "default" : "outline"}
-                  className="flex-1"
-                  size="sm"
-                >
-                  {testingDevice === device._id ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
-                      Testing...
-                    </>
-                  ) : (
-                    <>
-                      <TestTube className="h-4 w-4 mr-2" />
-                      Test Device
-                    </>
-                  )}
-                </Button>
+                {needsUpdate(device) && !isUpdating(device) && (
+                  <Button
+                    onClick={() => handleUpdateDevice(device._id, device.name)}
+                    disabled={updatingDevice === device._id}
+                    className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600"
+                    size="sm"
+                  >
+                    {updatingDevice === device._id ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="h-4 w-4 mr-2" />
+                        Update
+                      </>
+                    )}
+                  </Button>
+                )}
+
+                {!needsUpdate(device) && !isUpdating(device) && (
+                  <Button
+                    onClick={() => handleTestDevice(device._id, device.name)}
+                    disabled={device.status === 'offline' || testingDevice === device._id}
+                    variant={device.status === 'online' ? "default" : "outline"}
+                    className="flex-1"
+                    size="sm"
+                  >
+                    {testingDevice === device._id ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                        Testing...
+                      </>
+                    ) : (
+                      <>
+                        <TestTube className="h-4 w-4 mr-2" />
+                        Test Device
+                      </>
+                    )}
+                  </Button>
+                )}
+
+                {isUpdating(device) && (
+                  <Button
+                    disabled
+                    variant="secondary"
+                    className="flex-1"
+                    size="sm"
+                  >
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Updating...
+                  </Button>
+                )}
 
                 <Button
                   onClick={() => handleDeleteDevice(device._id, device.name)}
-                  disabled={deletingDevice === device._id}
+                  disabled={deletingDevice === device._id || isUpdating(device)}
                   variant="outline"
                   size="sm"
                   className="px-3"
