@@ -10,7 +10,30 @@ const localApi = axios.create({
   validateStatus: (status) => {
     return status >= 200 && status < 300;
   },
-  transformResponse: [(data) => JSONbig.parse(data)]
+  transformResponse: [(data) => {
+    // Handle empty responses
+    if (!data || data === '') {
+      return {};
+    }
+
+    // Check if data looks like HTML instead of JSON
+    if (typeof data === 'string') {
+      const trimmed = data.trim();
+      if (trimmed.startsWith('<') || trimmed.startsWith('<!DOCTYPE')) {
+        console.error('Received HTML instead of JSON. This usually means the API endpoint is not accessible or returned an error page.');
+        throw new Error('API endpoint returned HTML instead of JSON. The server may be unreachable or the endpoint does not exist.');
+      }
+    }
+
+    // Try to parse as JSON
+    try {
+      return JSONbig.parse(data);
+    } catch (error: any) {
+      console.error('Failed to parse response as JSON:', error.message);
+      console.error('Response data:', data);
+      throw new Error(`Invalid JSON response from server: ${error.message}`);
+    }
+  }]
 });
 
 

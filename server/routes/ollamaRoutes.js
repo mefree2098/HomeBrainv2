@@ -4,11 +4,14 @@ const { requireUser } = require('./middlewares/auth');
 const ollamaService = require('../services/ollamaService');
 const OllamaConfig = require('../models/OllamaConfig');
 
+// Create auth middleware instance
+const auth = requireUser();
+
 // Description: Get Ollama status and configuration
 // Endpoint: GET /api/ollama/status
 // Request: {}
 // Response: { isInstalled: boolean, version: string, serviceRunning: boolean, installedModels: Array, activeModel: string, ... }
-router.get('/status', requireUser, async (req, res) => {
+router.get('/status', auth, async (req, res) => {
   try {
     console.log('GET /api/ollama/status - Fetching Ollama status');
 
@@ -61,7 +64,7 @@ router.get('/status', requireUser, async (req, res) => {
 // Endpoint: POST /api/ollama/install
 // Request: {}
 // Response: { success: boolean, version: string }
-router.post('/install', requireUser, async (req, res) => {
+router.post('/install', auth, async (req, res) => {
   try {
     console.log('POST /api/ollama/install - Starting Ollama installation');
 
@@ -78,7 +81,7 @@ router.post('/install', requireUser, async (req, res) => {
 // Endpoint: POST /api/ollama/service/start
 // Request: {}
 // Response: { success: boolean, message: string }
-router.post('/service/start', requireUser, async (req, res) => {
+router.post('/service/start', auth, async (req, res) => {
   try {
     console.log('POST /api/ollama/service/start - Starting Ollama service');
 
@@ -95,7 +98,7 @@ router.post('/service/start', requireUser, async (req, res) => {
 // Endpoint: POST /api/ollama/service/stop
 // Request: {}
 // Response: { success: boolean, message: string }
-router.post('/service/stop', requireUser, async (req, res) => {
+router.post('/service/stop', auth, async (req, res) => {
   try {
     console.log('POST /api/ollama/service/stop - Stopping Ollama service');
 
@@ -112,7 +115,7 @@ router.post('/service/stop', requireUser, async (req, res) => {
 // Endpoint: GET /api/ollama/updates/check
 // Request: {}
 // Response: { updateAvailable: boolean, currentVersion: string, latestVersion: string }
-router.get('/updates/check', requireUser, async (req, res) => {
+router.get('/updates/check', auth, async (req, res) => {
   try {
     console.log('GET /api/ollama/updates/check - Checking for Ollama updates');
 
@@ -129,7 +132,7 @@ router.get('/updates/check', requireUser, async (req, res) => {
 // Endpoint: POST /api/ollama/update
 // Request: {}
 // Response: { success: boolean, version: string }
-router.post('/update', requireUser, async (req, res) => {
+router.post('/update', auth, async (req, res) => {
   try {
     console.log('POST /api/ollama/update - Updating Ollama');
 
@@ -146,7 +149,7 @@ router.post('/update', requireUser, async (req, res) => {
 // Endpoint: GET /api/ollama/models
 // Request: {}
 // Response: { models: Array<{ name: string, size: number, modifiedAt: Date, ... }> }
-router.get('/models', requireUser, async (req, res) => {
+router.get('/models', auth, async (req, res) => {
   try {
     console.log('GET /api/ollama/models - Fetching installed models');
 
@@ -163,7 +166,7 @@ router.get('/models', requireUser, async (req, res) => {
 // Endpoint: GET /api/ollama/models/available
 // Request: {}
 // Response: { models: Array<{ name: string, description: string, size: string, parameterSize: string }> }
-router.get('/models/available', requireUser, async (req, res) => {
+router.get('/models/available', auth, async (req, res) => {
   try {
     console.log('GET /api/ollama/models/available - Fetching available models');
 
@@ -180,7 +183,7 @@ router.get('/models/available', requireUser, async (req, res) => {
 // Endpoint: POST /api/ollama/models/pull
 // Request: { modelName: string }
 // Response: { success: boolean, message: string }
-router.post('/models/pull', requireUser, async (req, res) => {
+router.post('/models/pull', auth, async (req, res) => {
   try {
     const { modelName } = req.body;
 
@@ -203,7 +206,7 @@ router.post('/models/pull', requireUser, async (req, res) => {
 // Endpoint: DELETE /api/ollama/models/:name
 // Request: {}
 // Response: { success: boolean, message: string }
-router.delete('/models/:name', requireUser, async (req, res) => {
+router.delete('/models/:name', auth, async (req, res) => {
   try {
     const modelName = req.params.name;
 
@@ -222,7 +225,7 @@ router.delete('/models/:name', requireUser, async (req, res) => {
 // Endpoint: POST /api/ollama/models/activate
 // Request: { modelName: string }
 // Response: { success: boolean, activeModel: string }
-router.post('/models/activate', requireUser, async (req, res) => {
+router.post('/models/activate', auth, async (req, res) => {
   try {
     const { modelName } = req.body;
 
@@ -245,7 +248,7 @@ router.post('/models/activate', requireUser, async (req, res) => {
 // Endpoint: POST /api/ollama/chat
 // Request: { modelName?: string, message: string, conversationHistory?: Array<{ role: string, content: string }> }
 // Response: { message: string, model: string, done: boolean, totalDuration: number, ... }
-router.post('/chat', requireUser, async (req, res) => {
+router.post('/chat', auth, async (req, res) => {
   try {
     let { modelName, message, conversationHistory } = req.body;
 
@@ -286,7 +289,7 @@ router.post('/chat', requireUser, async (req, res) => {
 // Endpoint: POST /api/ollama/generate
 // Request: { modelName?: string, prompt: string }
 // Response: { response: string, model: string, done: boolean, totalDuration: number }
-router.post('/generate', requireUser, async (req, res) => {
+router.post('/generate', auth, async (req, res) => {
   try {
     let { modelName, prompt } = req.body;
 
@@ -319,7 +322,7 @@ router.post('/generate', requireUser, async (req, res) => {
 // Endpoint: GET /api/ollama/chat/history
 // Request: { limit?: number }
 // Response: { history: Array<{ role: string, content: string, timestamp: Date, model: string }> }
-router.get('/chat/history', requireUser, async (req, res) => {
+router.get('/chat/history', auth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
 
@@ -338,7 +341,7 @@ router.get('/chat/history', requireUser, async (req, res) => {
 // Endpoint: DELETE /api/ollama/chat/history
 // Request: {}
 // Response: { success: boolean, message: string }
-router.delete('/chat/history', requireUser, async (req, res) => {
+router.delete('/chat/history', auth, async (req, res) => {
   try {
     console.log('DELETE /api/ollama/chat/history - Clearing chat history');
 
