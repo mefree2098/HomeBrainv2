@@ -75,9 +75,6 @@ sudo apt-get install -y \
     python3-pip \
     alsa-utils \
     pulseaudio \
-    portaudio19-dev \
-    libsndfile1-dev \
-    libasound2-dev \
     sox \
     libsox-fmt-all
 
@@ -117,7 +114,7 @@ if [[ -f "$(dirname "$0")/package.json" ]]; then
 else
     print_status "Downloading HomeBrain Remote Device..."
     # In production, this would download from a repository
-    cat > package.json << 'EOF'
+  cat > package.json << 'EOF'
 {
   "name": "homebrain-remote-device",
   "version": "1.0.0",
@@ -131,10 +128,10 @@ else
   "dependencies": {
     "ws": "^8.18.0",
     "node-record-lpcm16": "^1.0.1",
-    "speaker": "^0.5.4",
     "node-fetch": "^2.7.0",
     "yargs": "^17.7.2",
-    "node-wav": "^0.0.2"
+    "node-wav": "^0.0.2",
+    "audio-buffer-utils": "^5.1.2"
   },
   "optionalDependencies": {
     "@picovoice/porcupine-node": "^3.0.2"

@@ -2,7 +2,6 @@
 
 const WebSocket = require('ws');
 const recorder = require('node-record-lpcm16');
-const Speaker = require('speaker');
 const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
@@ -10,6 +9,7 @@ const yargs = require('yargs');
 const { hideBin } = require('yargs/helpers');
 const dgram = require('dgram');
 const os = require('os');
+const { exec } = require('child_process');
 
 // Parse command line arguments
 const argv = yargs(hideBin(process.argv))
@@ -62,7 +62,6 @@ class HomeBrainRemoteDevice {
     this.heartbeatInterval = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
-    this.speaker = null;
     this.recordingStream = null;
 
     // Wake word detection (simplified for demo)
@@ -135,18 +134,12 @@ class HomeBrainRemoteDevice {
     console.log('Initializing audio system...');
 
     try {
-      // Initialize speaker for TTS playback
-      this.speaker = new Speaker({
-        channels: this.config.audio?.channels || 1,
-        bitDepth: 16,
-        sampleRate: this.config.audio?.sampleRate || 16000,
-        device: this.config.audio?.playbackDevice || 'default'
-      });
-
-      console.log('Audio system initialized successfully');
+      await this.verifyCommand('arecord');
+      await this.verifyCommand('aplay');
+      console.log('Audio capture/playback utilities detected (arecord/aplay)');
     } catch (error) {
       console.warn('Audio initialization warning:', error.message);
-      console.log('Continuing without audio playback...');
+      console.warn('Recording or playback may fail until required ALSA utilities are installed.');
     }
   }
 
@@ -484,6 +477,18 @@ class HomeBrainRemoteDevice {
     // In production, you would play actual TTS audio
     // For demo, we'll just log the response
     console.log(`🔊 TTS Response: "${text}"`);
+  }
+
+  verifyCommand(command) {
+    return new Promise((resolve, reject) => {
+      exec(`command -v ${command}`, (error) => {
+        if (error) {
+          reject(new Error(`"${command}" executable not found in PATH`));
+        } else {
+          resolve();
+        }
+      });
+    });
   }
 
   startHeartbeat() {

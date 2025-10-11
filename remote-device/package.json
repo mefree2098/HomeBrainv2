@@ -21,12 +21,10 @@
   "dependencies": {
     "ws": "^8.18.0",
     "node-record-lpcm16": "^1.0.1",
-    "speaker": "^0.5.4",
     "node-fetch": "^2.7.0",
     "yargs": "^17.7.2",
     "node-wav": "^0.0.2",
-    "audio-buffer-utils": "^5.1.2",
-    "node-portaudio": "^2.0.1"
+    "audio-buffer-utils": "^5.1.2"
   },
   "optionalDependencies": {
     "@picovoice/porcupine-node": "^3.0.2"
