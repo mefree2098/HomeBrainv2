@@ -47,6 +47,7 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
       'r:locations:*',
       'x:locations:*',
       'r:rules:*',
+      'w:rules:*',
       'x:rules:*',
       'r:security:locations:*:armstate'
     ]
@@ -153,6 +154,7 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
         'r:locations:*',
         'x:locations:*',
         'r:rules:*',
+        'w:rules:*',
         'x:rules:*',
         'r:security:locations:*:armstate'
       ],
@@ -222,6 +224,7 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
       'r:locations:*',
       'x:locations:*',
       'r:rules:*',
+      'w:rules:*',
       'x:rules:*',
       'r:security:locations:*:armstate'
     ];
@@ -257,6 +260,7 @@ SmartThingsIntegrationSchema.statics.configureIntegration = async function(confi
     'r:locations:*',
     'x:locations:*',
     'r:rules:*',
+    'w:rules:*',
     'x:rules:*',
     'r:security:locations:*:armstate'
   ];
