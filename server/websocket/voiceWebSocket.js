@@ -97,6 +97,7 @@ class VoiceWebSocketServer {
         } catch (logError) {
           console.warn(`Failed to log raw message for ${deviceId}:`, logError);
         }
+        console.log(`Queueing message for processing for ${deviceId}`);
         this.handleMessage(deviceId, message);
       });
 
