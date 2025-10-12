@@ -3,6 +3,8 @@ const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
 const wakeWordAssets = require('../utils/wakeWordAssets');
 
+console.log('voiceWebSocket.js loaded with enhanced logging');
+
 class VoiceWebSocketServer {
   constructor() {
     this.wss = null;
@@ -41,6 +43,7 @@ class VoiceWebSocketServer {
     });
 
     this.wss.on('connection', (ws, req) => {
+      console.log('voiceWebSocket.js instrumentation active - connection handler invoked');
       this.handleConnection(ws, req);
     });
 
@@ -127,6 +130,8 @@ class VoiceWebSocketServer {
       const message = JSON.parse(rawMessage.toString());
       const connection = this.deviceConnections.get(deviceId);
 
+      console.log(`WebSocket raw message from ${deviceId}: ${rawMessage.toString()}`);
+
       if (!connection) {
         console.warn(`Received message from unconnected device: ${deviceId}`);
         return;
@@ -173,6 +178,7 @@ class VoiceWebSocketServer {
 
     } catch (error) {
       console.error(`Error processing message from device ${deviceId}:`, error);
+      console.error('Failed message payload:', rawMessage.toString());
       this.sendMessage(deviceId, {
         type: 'error',
         message: 'Failed to process message'
