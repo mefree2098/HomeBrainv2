@@ -15,14 +15,7 @@ class SecurityAlarmService {
     try {
       const integration = await SmartThingsIntegration.getIntegration();
 
-      // Check if integration is configured and connected
-      if (!integration.isConfigured || !integration.isConnected) {
-        return false;
-      }
-
-      // Check if STHM device IDs are configured
-      const sthm = integration.sthm || {};
-      return !!(sthm.armAwayDeviceId && sthm.armStayDeviceId && sthm.disarmDeviceId);
+      return !!(integration.isConfigured && integration.isConnected);
     } catch (error) {
       console.error('SecurityAlarmService: Error checking SmartThings configuration:', error.message);
       return false;
@@ -66,11 +59,8 @@ class SecurityAlarmService {
       const isSthmConfigured = await this.isSmartThingsConfiguredForSthm();
       if (isSthmConfigured) {
         try {
-          if (mode === 'stay') {
-            await smartThingsService.armSthmStay();
-          } else if (mode === 'away') {
-            await smartThingsService.armSthmAway();
-          }
+          const targetState = mode === 'stay' ? 'ArmedStay' : 'ArmedAway';
+          await smartThingsService.setSecurityArmState(targetState);
           console.log('SecurityAlarmService: SmartThings command sent successfully');
         } catch (smartThingsError) {
           console.warn('SecurityAlarmService: SmartThings command failed, continuing with local arming:', smartThingsError.message);
@@ -109,7 +99,7 @@ class SecurityAlarmService {
       const isSthmConfigured = await this.isSmartThingsConfiguredForSthm();
       if (isSthmConfigured) {
         try {
-          await smartThingsService.disarmSthm();
+          await smartThingsService.setSecurityArmState('Disarmed');
           console.log('SecurityAlarmService: SmartThings disarm command sent successfully');
         } catch (smartThingsError) {
           console.warn('SecurityAlarmService: SmartThings command failed, continuing with local disarming:', smartThingsError.message);
@@ -234,48 +224,50 @@ class SecurityAlarmService {
 
       const alarm = await SecurityAlarm.getMainAlarm();
 
-      if (!alarm.smartthingsDeviceId) {
-        throw new Error('No SmartThings device ID configured');
+      let synced = false;
+
+      if (await this.isSmartThingsConfiguredForSthm()) {
+        try {
+          const securityState = await smartThingsService.getSecurityArmState();
+          if (securityState?.armState) {
+            const mappedState = this.mapSmartThingsArmState(securityState.armState);
+            if (mappedState && mappedState !== alarm.alarmState) {
+              alarm.alarmState = mappedState;
+            }
+            alarm.lastSyncWithSmartThings = new Date();
+            alarm.isOnline = true;
+            await alarm.save();
+            synced = true;
+          }
+        } catch (securityError) {
+          console.warn('SecurityAlarmService: Unable to sync via SmartThings security endpoint:', securityError.message);
+        }
       }
 
-      // Get device status from SmartThings using the new service
-      const deviceStatus = await smartThingsService.getDeviceStatus(alarm.smartthingsDeviceId);
-
-      // Update local alarm state based on SmartThings status
-      if (deviceStatus && deviceStatus.components && deviceStatus.components.main) {
-        const securitySystemStatus = deviceStatus.components.main.securitySystem;
-
-        if (securitySystemStatus) {
-          const smartthingsState = securitySystemStatus.securitySystemStatus.value;
-
-          // Map SmartThings states to our alarm states
-          let newAlarmState = alarm.alarmState;
-          switch (smartthingsState) {
-            case 'disarmed':
-              newAlarmState = 'disarmed';
-              break;
-            case 'armedStay':
-              newAlarmState = 'armedStay';
-              break;
-            case 'armedAway':
-              newAlarmState = 'armedAway';
-              break;
-            case 'triggered':
-              newAlarmState = 'triggered';
-              break;
-            default:
-              console.warn(`Unknown SmartThings alarm state: ${smartthingsState}`);
-          }
-
-          if (newAlarmState !== alarm.alarmState) {
-            alarm.alarmState = newAlarmState;
-            await alarm.save();
-          }
+      if (!synced) {
+        if (!alarm.smartthingsDeviceId) {
+          throw new Error('No SmartThings device ID configured');
         }
 
-        alarm.lastSyncWithSmartThings = new Date();
-        alarm.isOnline = true;
-        await alarm.save();
+        const deviceStatus = await smartThingsService.getDeviceStatus(alarm.smartthingsDeviceId);
+
+        if (deviceStatus?.components?.main?.securitySystem) {
+          const smartthingsState = deviceStatus.components.main.securitySystem.securitySystemStatus.value;
+          const mappedState = this.mapSmartThingsArmState(smartthingsState);
+
+          if (mappedState && mappedState !== alarm.alarmState) {
+            alarm.alarmState = mappedState;
+          }
+
+          alarm.lastSyncWithSmartThings = new Date();
+          alarm.isOnline = true;
+          await alarm.save();
+          synced = true;
+        }
+      }
+
+      if (!synced) {
+        throw new Error('SmartThings did not return security state information');
       }
 
       console.log('SecurityAlarmService: Successfully synced with SmartThings');
@@ -289,6 +281,31 @@ class SecurityAlarmService {
       await alarm.save();
 
       throw new Error('Failed to sync with SmartThings');
+    }
+  }
+
+  mapSmartThingsArmState(armState) {
+    if (!armState) {
+      return null;
+    }
+
+    switch (armState.toLowerCase()) {
+      case 'disarmed':
+      case 'disarm':
+        return 'disarmed';
+      case 'armedstay':
+      case 'stay':
+      case 'armed_stay':
+        return 'armedStay';
+      case 'armedaway':
+      case 'away':
+      case 'armed_away':
+        return 'armedAway';
+      case 'triggered':
+        return 'triggered';
+      default:
+        console.warn(`SecurityAlarmService: Unknown SmartThings arm state received: ${armState}`);
+        return null;
     }
   }
 

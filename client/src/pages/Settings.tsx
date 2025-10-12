@@ -685,7 +685,7 @@ export function Settings() {
       if (response.success) {
         toast({
           title: "Sync Complete",
-          description: `Successfully synced ${response.deviceCount} SmartThings devices`
+          description: response.message || `Successfully synced ${response.deviceCount ?? 0} SmartThings devices`
         });
       }
     } catch (error) {

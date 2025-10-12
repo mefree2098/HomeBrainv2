@@ -311,16 +311,22 @@ class MaintenanceService {
     console.log('MaintenanceService: Starting SmartThings force sync');
 
     try {
+      const integrationDoc = await SmartThingsIntegration.getIntegration();
       const devices = await smartThingsService.getDevices();
       console.log(`MaintenanceService: Fetched ${devices.length} SmartThings devices from API`);
 
       const processedIds = [];
+      const locationCounts = new Map();
       let created = 0;
       let updated = 0;
       let skipped = 0;
 
       for (const device of devices) {
         processedIds.push(device.deviceId);
+        if (device.locationId) {
+          const currentCount = locationCounts.get(device.locationId) || 0;
+          locationCounts.set(device.locationId, currentCount + 1);
+        }
 
         const mappedDevice = await this.mapSmartThingsDevice(device);
 
@@ -353,11 +359,25 @@ class MaintenanceService {
         }
       }
 
-      const removalResult = await Device.deleteMany({
-        'properties.source': 'smartthings',
-        'properties.smartThingsDeviceId': { $nin: processedIds }
-      });
-      const removed = removalResult.deletedCount || 0;
+      let removed = 0;
+      if (processedIds.length > 0) {
+        const removalResult = await Device.deleteMany({
+          'properties.source': 'smartthings',
+          'properties.smartThingsDeviceId': { $nin: processedIds }
+        });
+        removed = removalResult.deletedCount || 0;
+      }
+
+      // Persist preferred location ID for security operations
+      if (integrationDoc && typeof integrationDoc.updateSecurityArmState === 'function' && locationCounts.size > 0) {
+        const sortedLocations = [...locationCounts.entries()].sort((a, b) => b[1] - a[1]);
+        const mostFrequentLocationId = sortedLocations[0][0];
+        try {
+          await integrationDoc.updateSecurityArmState({ locationId: mostFrequentLocationId });
+        } catch (error) {
+          console.warn('MaintenanceService: Unable to persist preferred SmartThings location:', error.message);
+        }
+      }
 
       console.log(`MaintenanceService: SmartThings sync summary - created: ${created}, updated: ${updated}, removed: ${removed}, skipped: ${skipped}`);
 

@@ -428,24 +428,26 @@ router.post('/scenes/:sceneId/execute', auth, async (req, res) => {
 
 // Description: Configure STHM virtual switches
 // Endpoint: POST /api/smartthings/sthm/configure
-// Request: { armAwayDeviceId?: string, armStayDeviceId?: string, disarmDeviceId?: string }
+// Request: { armAwayDeviceId?: string, armStayDeviceId?: string, disarmDeviceId?: string, locationId?: string }
 // Response: { success: boolean, message: string }
 router.post('/sthm/configure', auth, async (req, res) => {
   try {
-    const { armAwayDeviceId, armStayDeviceId, disarmDeviceId } = req.body;
+    const { armAwayDeviceId, armStayDeviceId, disarmDeviceId, locationId } = req.body;
 
     console.log('SmartThings Routes: Configuring STHM virtual switches');
 
-    await smartThingsService.configureSthm({
+    const integration = await smartThingsService.configureSthm({
       armAwayDeviceId,
       armStayDeviceId,
-      disarmDeviceId
+      disarmDeviceId,
+      locationId
     });
 
     console.log('SmartThings Routes: STHM configuration updated successfully');
     res.json({
       success: true,
-      message: 'STHM virtual switches configured successfully'
+      message: 'SmartThings security configuration updated successfully',
+      integration: integration.toSanitized ? integration.toSanitized() : integration
     });
   } catch (error) {
     console.error('SmartThings Routes: Error configuring STHM:', error.message);
