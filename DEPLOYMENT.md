@@ -11,6 +11,7 @@ This document walks through deploying the HomeBrain platform from this repositor
 - Optional HTTPS (self-managed certificates) and remote voice device packages.
 
 HomeBrain uses these default ports:
+- `80/tcp` - ACME HTTP-01 challenge listener for Let's Encrypt
 - `3000/tcp` - API and WebSocket traffic
 - `3443/tcp` - optional HTTPS API (if certificates are configured)
 - `5173/tcp` - front-end UI (Vite preview or dev server)
@@ -163,7 +164,10 @@ JWT_SECRET=<paste output from openssl rand -hex 32>
 REFRESH_TOKEN_SECRET=<paste another value>
 ELEVENLABS_API_KEY=   # leave blank unless you have a key
 HTTPS_PORT=3443
+ACME_CHALLENGE_PORT=80
 ```
+
+Port 80 must be available so the built-in ACME challenge listener can respond to Let's Encrypt HTTP-01 checks. If another service already binds to port 80, stop it temporarily or adjust your reverse proxy strategy before requesting certificates.
 
 Generate secrets whenever you need them:
 ```bash

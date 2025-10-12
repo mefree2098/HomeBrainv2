@@ -21,10 +21,7 @@ export default defineConfig({
         changeOrigin: true,
       }
     },
-    allowedHosts: [
-      'localhost',
-      '.pythagora.ai'
-    ],
+    allowedHosts: true,
     watch: {
       ignored: ['**/node_modules/**', '**/dist/**', '**/public/**', '**/log/**']
     }

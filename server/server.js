@@ -33,6 +33,62 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 
+const ACME_CHALLENGE_PORT = Number(process.env.ACME_CHALLENGE_PORT || 80);
+const ACME_CHALLENGE_DIR = path.join(__dirname, 'public', '.well-known', 'acme-challenge');
+let challengeServer = null;
+let isShuttingDown = false;
+
+function startAcmeChallengeServer() {
+  if (Number.isNaN(ACME_CHALLENGE_PORT)) {
+    console.warn('ACME challenge server disabled: invalid ACME_CHALLENGE_PORT value');
+    return;
+  }
+
+  const challengeApp = express();
+  challengeApp.use('/.well-known/acme-challenge', express.static(ACME_CHALLENGE_DIR));
+  challengeApp.use((req, res) => res.status(404).end());
+
+  challengeServer = http.createServer(challengeApp);
+
+  challengeServer.on('error', (error) => {
+    const { code, message } = error;
+    if (code === 'EACCES') {
+      console.warn(`ACME challenge server requires elevated privileges to bind port ${ACME_CHALLENGE_PORT}: ${message}`);
+    } else if (code === 'EADDRINUSE') {
+      console.warn(`ACME challenge server could not bind port ${ACME_CHALLENGE_PORT}: address already in use`);
+    } else {
+      console.error(`ACME challenge server error: ${message}`);
+    }
+    challengeServer = null;
+  });
+
+  try {
+    challengeServer.listen(ACME_CHALLENGE_PORT, () => {
+      console.log(`ACME challenge server running on port ${ACME_CHALLENGE_PORT}`);
+    });
+  } catch (error) {
+    console.warn(`Failed to start ACME challenge server on port ${ACME_CHALLENGE_PORT}: ${error.message}`);
+    challengeServer = null;
+  }
+}
+
+function closeServer(server, name) {
+  return new Promise((resolve) => {
+    if (!server || typeof server.close !== 'function' || !server.listening) {
+      return resolve();
+    }
+
+    server.close((error) => {
+      if (error) {
+        console.error(`Error stopping ${name}: ${error.message}`);
+      } else {
+        console.log(`${name} stopped`);
+      }
+      resolve();
+    });
+  });
+}
+
 if (!process.env.DATABASE_URL) {
   console.error("Error: DATABASE_URL variables in .env missing.");
   process.exit(-1);
@@ -95,9 +151,6 @@ app.use('/api/ssl', sslRoutes);
 app.use('/api/ollama', ollamaRoutes);
 // Resource Monitor Routes
 app.use('/api/resources', resourceRoutes);
-
-// Serve Let's Encrypt challenge files
-app.use('/.well-known/acme-challenge', express.static(path.join(__dirname, 'public', '.well-known', 'acme-challenge')));
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {
@@ -180,40 +233,42 @@ try {
   }
 })();
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM, shutting down gracefully');
-  voiceWsServer.stop();
-  discoveryService.stop();
-  httpServer.close(() => {
-    console.log('HTTP server stopped');
-    if (httpsServer) {
-      httpsServer.close(() => {
-        console.log('HTTPS server stopped');
-        process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
-  });
-});
+startAcmeChallengeServer();
 
-process.on('SIGINT', () => {
-  console.log('Received SIGINT, shutting down gracefully');
-  voiceWsServer.stop();
-  discoveryService.stop();
-  httpServer.close(() => {
-    console.log('HTTP server stopped');
-    if (httpsServer) {
-      httpsServer.close(() => {
-        console.log('HTTPS server stopped');
-        process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
-  });
-});
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    return;
+  }
+  isShuttingDown = true;
+
+  console.log(`Received ${signal}, shutting down gracefully`);
+
+  try {
+    voiceWsServer.stop();
+  } catch (error) {
+    console.error('Error stopping voice WebSocket server:', error.message);
+  }
+
+  try {
+    discoveryService.stop();
+  } catch (error) {
+    console.error('Error stopping discovery service:', error.message);
+  }
+
+  await closeServer(challengeServer, 'ACME challenge server');
+  challengeServer = null;
+
+  await closeServer(httpServer, 'HTTP server');
+
+  await closeServer(httpsServer, 'HTTPS server');
+  httpsServer = null;
+
+  process.exit(0);
+}
+
+// Graceful shutdown
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Start HTTP server
 httpServer.listen(port, async () => {
