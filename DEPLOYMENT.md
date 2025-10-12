@@ -420,12 +420,14 @@ SmartThings now requires OAuth settings to be managed with the SmartThings CLI. 
      "w:devices:*",
      "w:installedapps",
      "w:locations:*",
-     "w:rules:*",
-     "x:devices:$",
-     "x:devices:*",
-     "x:locations:*",
-     "x:scenes:*"
-   )
+   "w:rules:*",
+   "x:devices:$",
+   "x:devices:*",
+   "x:locations:*",
+   "x:scenes:*",
+   "r:security:locations:*:armstate",
+   "x:security:locations:*:armstate"
+ )
 
    # Set your SmartThings PAT for this session
    $env:SMARTTHINGS_AUTH_TOKEN = "PASTE-YOUR-PAT-HERE"
@@ -450,6 +452,9 @@ SmartThings now requires OAuth settings to be managed with the SmartThings CLI. 
    ```
 
 4. After the redirect URI is updated, rerun **Connect to SmartThings** inside HomeBrain. The SmartThings authorization page should accept the redirect and return you to `/settings?smartthings=success` on your domain.
+5. In HomeBrain, go to **Settings → Maintenance** and click **Force SmartThings Sync** to import devices. They will now appear on the Devices page grouped by their SmartThings rooms.
+
+The scope list above enables HomeBrain to read and set the SmartThings Home Monitor arm state (`location.security.armState`) without creating virtual switch devices. Force-syncing SmartThings from **Settings → Maintenance** now imports devices directly into the HomeBrain device list and stores the primary location for security control.
 
 When you are finished, close the PowerShell session or run `Remove-Item Env:\SMARTTHINGS_AUTH_TOKEN` so the token is not left in memory.
 

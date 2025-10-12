@@ -1,6 +1,7 @@
 const axios = require('axios');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
+const Device = require('../models/Device');
 
 class SmartThingsService {
   constructor() {
@@ -253,7 +254,10 @@ class SmartThingsService {
         await integration.clearTokens('Access token invalid');
       }
 
-      throw new Error(`SmartThings API request failed: ${error.response?.data?.message || error.message}`);
+      const apiError = new Error(`SmartThings API request failed: ${error.response?.data?.message || error.message}`);
+      apiError.status = error.response?.status;
+      apiError.data = error.response?.data;
+      throw apiError;
     }
   }
 
@@ -322,6 +326,169 @@ class SmartThingsService {
       this.locationNameCache.set(locationId, null);
       return null;
     }
+  }
+
+  normalizeArmState(state) {
+    if (!state) {
+      throw new Error('Arm state is required');
+    }
+
+    const normalized = state.toString().trim().toLowerCase();
+
+    if (normalized === 'disarmed' || normalized === 'disarm') {
+      return 'Disarmed';
+    }
+
+    if (normalized === 'armedstay' || normalized === 'stay' || normalized === 'armstay' || normalized === 'armed_stay') {
+      return 'ArmedStay';
+    }
+
+    if (normalized === 'armedaway' || normalized === 'away' || normalized === 'armaway' || normalized === 'armed_away') {
+      return 'ArmedAway';
+    }
+
+    throw new Error(`Unsupported SmartThings arm state: ${state}`);
+  }
+
+  async resolveLocationId(locationId) {
+    if (locationId) {
+      return locationId.trim();
+    }
+
+    const integration = await SmartThingsIntegration.getIntegration();
+
+    if (integration?.sthm?.locationId) {
+      return integration.sthm.locationId;
+    }
+
+    const connectedDeviceWithLocation = integration?.connectedDevices?.find(device => device.locationId);
+    if (connectedDeviceWithLocation) {
+      return connectedDeviceWithLocation.locationId;
+    }
+
+    const anySmartThingsDevice = await Device.findOne({ 'properties.source': 'smartthings', 'properties.smartThingsLocationId': { $exists: true, $ne: null } });
+    if (anySmartThingsDevice?.properties?.smartThingsLocationId) {
+      return anySmartThingsDevice.properties.smartThingsLocationId;
+    }
+
+    throw new Error('Unable to determine SmartThings location ID. Please ensure at least one device is synced.');
+  }
+
+  async getSecurityArmState(locationId) {
+    const resolvedLocationId = await this.resolveLocationId(locationId);
+
+    const candidateEndpoints = [
+      `/locations/${resolvedLocationId}/security/armState`,
+      `/locations/${resolvedLocationId}/security/arm-state`
+    ];
+
+    let response = null;
+
+    for (const endpoint of candidateEndpoints) {
+      try {
+        response = await this.makeAuthenticatedRequest(endpoint);
+        break;
+      } catch (error) {
+        if (error.status && error.status === 404) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!response) {
+      throw new Error('SmartThings security arm state endpoint is unavailable');
+    }
+
+    const armState = response?.armState || response?.location?.security?.armState || null;
+    const normalizedState = armState ? this.normalizeArmState(armState) : null;
+
+    const integration = await SmartThingsIntegration.getIntegration();
+    if (integration && typeof integration.updateSecurityArmState === 'function' && normalizedState) {
+      await integration.updateSecurityArmState({ armState: normalizedState, locationId: resolvedLocationId });
+    }
+
+    return {
+      locationId: resolvedLocationId,
+      armState: normalizedState,
+      raw: response
+    };
+  }
+
+  async setSecurityArmState(state, locationId) {
+    const normalizedState = this.normalizeArmState(state);
+    const resolvedLocationId = await this.resolveLocationId(locationId);
+
+    const candidateEndpoints = [
+      { method: 'POST', path: `/locations/${resolvedLocationId}/security/armState` },
+      { method: 'PUT', path: `/locations/${resolvedLocationId}/security/armState` },
+      { method: 'POST', path: `/locations/${resolvedLocationId}/security/arm-state` },
+      { method: 'PUT', path: `/locations/${resolvedLocationId}/security/arm-state` }
+    ];
+
+    let appliedDirect = false;
+
+    for (const endpoint of candidateEndpoints) {
+      try {
+        await this.makeAuthenticatedRequest(endpoint.path, {
+          method: endpoint.method,
+          data: { armState: normalizedState }
+        });
+        appliedDirect = true;
+        break;
+      } catch (error) {
+        if (error.status && ![404, 405].includes(error.status)) {
+          throw error;
+        }
+      }
+    }
+
+    if (!appliedDirect) {
+      console.warn('SmartThingsService: Direct security arm endpoint unavailable, falling back to Rules API');
+
+      const ruleName = `HomeBrain STHM ${normalizedState} ${Date.now()}`;
+      const rulePayload = {
+        name: ruleName,
+        actions: [
+          {
+            type: 'location',
+            location: {
+              security: {
+                armState: normalizedState
+              }
+            }
+          }
+        ]
+      };
+
+      const ruleResponse = await this.makeAuthenticatedRequest('/rules', {
+        method: 'POST',
+        data: rulePayload
+      });
+
+      const ruleId = ruleResponse?.id || ruleResponse?.ruleId;
+      if (!ruleId) {
+        throw new Error('Failed to create SmartThings rule for arming state');
+      }
+
+      try {
+        await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute`, { method: 'POST' });
+      } finally {
+        await this.makeAuthenticatedRequest(`/rules/${ruleId}`, { method: 'DELETE' }).catch((cleanupError) => {
+          console.warn(`SmartThingsService: Failed to delete temporary rule ${ruleId}: ${cleanupError.message}`);
+        });
+      }
+    }
+
+    const integration = await SmartThingsIntegration.getIntegration();
+    if (integration && typeof integration.updateSecurityArmState === 'function') {
+      await integration.updateSecurityArmState({ armState: normalizedState, locationId: resolvedLocationId });
+    }
+
+    return {
+      locationId: resolvedLocationId,
+      armState: normalizedState
+    };
   }
 
   /**
@@ -479,12 +646,18 @@ class SmartThingsService {
 
       const integration = await SmartThingsIntegration.getIntegration();
       integration.sthm = {
+        ...(integration.sthm || {}),
         armAwayDeviceId: sthm.armAwayDeviceId || '',
         armStayDeviceId: sthm.armStayDeviceId || '',
-        disarmDeviceId: sthm.disarmDeviceId || ''
+        disarmDeviceId: sthm.disarmDeviceId || '',
+        locationId: sthm.locationId || integration.sthm?.locationId || ''
       };
 
       await integration.save();
+
+      if (sthm.locationId && typeof integration.updateSecurityArmState === 'function') {
+        await integration.updateSecurityArmState({ locationId: sthm.locationId });
+      }
 
       console.log('SmartThingsService: STHM configuration updated successfully');
       return integration;
@@ -500,14 +673,8 @@ class SmartThingsService {
    */
   async armSthmStay() {
     try {
-      const integration = await SmartThingsIntegration.getIntegration();
-
-      if (!integration.sthm.armStayDeviceId) {
-        throw new Error('STHM Arm Stay virtual switch not configured');
-      }
-
       console.log('SmartThingsService: Arming STHM (Stay mode)');
-      return this.turnDeviceOn(integration.sthm.armStayDeviceId);
+      return this.setSecurityArmState('ArmedStay');
     } catch (error) {
       console.error('SmartThingsService: Error arming STHM (Stay):', error.message);
       throw error;
@@ -520,14 +687,8 @@ class SmartThingsService {
    */
   async armSthmAway() {
     try {
-      const integration = await SmartThingsIntegration.getIntegration();
-
-      if (!integration.sthm.armAwayDeviceId) {
-        throw new Error('STHM Arm Away virtual switch not configured');
-      }
-
       console.log('SmartThingsService: Arming STHM (Away mode)');
-      return this.turnDeviceOn(integration.sthm.armAwayDeviceId);
+      return this.setSecurityArmState('ArmedAway');
     } catch (error) {
       console.error('SmartThingsService: Error arming STHM (Away):', error.message);
       throw error;
@@ -540,14 +701,8 @@ class SmartThingsService {
    */
   async disarmSthm() {
     try {
-      const integration = await SmartThingsIntegration.getIntegration();
-
-      if (!integration.sthm.disarmDeviceId) {
-        throw new Error('STHM Disarm virtual switch not configured');
-      }
-
       console.log('SmartThingsService: Disarming STHM');
-      return this.turnDeviceOn(integration.sthm.disarmDeviceId);
+      return this.setSecurityArmState('Disarmed');
     } catch (error) {
       console.error('SmartThingsService: Error disarming STHM:', error.message);
       throw error;

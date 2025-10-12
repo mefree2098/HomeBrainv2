@@ -39,7 +39,16 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
   },
   scope: {
     type: [String],
-    default: ['r:devices:*', 'x:devices:*', 'r:scenes:*', 'x:scenes:*', 'r:locations:*']
+    default: [
+      'r:devices:*',
+      'x:devices:*',
+      'r:scenes:*',
+      'x:scenes:*',
+      'r:locations:*',
+      'x:locations:*',
+      'r:security:locations:*:armstate',
+      'x:security:locations:*:armstate'
+    ]
   },
 
   // Integration Status
@@ -84,6 +93,18 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
     disarmDeviceId: {
       type: String,
       default: ''
+    },
+    locationId: {
+      type: String,
+      default: ''
+    },
+    lastArmState: {
+      type: String,
+      default: ''
+    },
+    lastArmStateUpdatedAt: {
+      type: Date,
+      default: null
     }
   },
 
@@ -123,7 +144,16 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
       refreshToken: '',
       tokenType: 'Bearer',
       expiresAt: null,
-      scope: ['r:devices:*', 'x:devices:*', 'r:scenes:*', 'x:scenes:*', 'r:locations:*'],
+      scope: [
+        'r:devices:*',
+        'x:devices:*',
+        'r:scenes:*',
+        'x:scenes:*',
+        'r:locations:*',
+        'x:locations:*',
+        'r:security:locations:*:armstate',
+        'x:security:locations:*:armstate'
+      ],
       isConfigured: false,
       isConnected: false,
       lastSync: null,
@@ -132,7 +162,10 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
       sthm: {
         armAwayDeviceId: '',
         armStayDeviceId: '',
-        disarmDeviceId: ''
+        disarmDeviceId: '',
+        locationId: '',
+        lastArmState: '',
+        lastArmStateUpdatedAt: null
       },
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -275,6 +308,7 @@ SmartThingsIntegrationSchema.methods.updateDevices = async function(devices) {
     name: device.name,
     label: device.label,
     room: device.roomId || '',
+    locationId: device.locationId || '',
     capabilities: device.components?.[0]?.capabilities?.map(cap => cap.id) || [],
     components: device.components?.map(comp => comp.id) || [],
     lastUpdated: new Date()
@@ -284,6 +318,36 @@ SmartThingsIntegrationSchema.methods.updateDevices = async function(devices) {
   await this.save();
 
   console.log('SmartThingsIntegration: Device list updated successfully');
+};
+
+SmartThingsIntegrationSchema.methods.updateSecurityArmState = async function({ armState, locationId }) {
+  if (!this.sthm) {
+    this.sthm = {};
+  }
+
+  let changed = false;
+
+  if (locationId) {
+    const trimmedLocation = trimString(locationId);
+    if (this.sthm.locationId !== trimmedLocation) {
+      this.sthm.locationId = trimmedLocation;
+      changed = true;
+    }
+  }
+
+  if (armState) {
+    if (this.sthm.lastArmState !== armState) {
+      this.sthm.lastArmState = armState;
+      changed = true;
+    }
+    this.sthm.lastArmStateUpdatedAt = new Date();
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  await this.save();
 };
 
 // Method to get sanitized data (without sensitive information)
