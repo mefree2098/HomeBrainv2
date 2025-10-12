@@ -7,6 +7,8 @@ class SmartThingsService {
     this.baseUrl = 'https://api.smartthings.com/v1';
     this.authUrl = 'https://api.smartthings.com/oauth/authorize';
     this.tokenUrl = 'https://api.smartthings.com/oauth/token';
+    this.roomsCache = new Map();
+    this.locationNameCache = new Map();
   }
 
   /**
@@ -273,6 +275,52 @@ class SmartThingsService {
     } catch (error) {
       console.error('SmartThingsService: Error fetching devices:', error.message);
       throw error;
+    }
+  }
+
+  async getRoomName(locationId, roomId) {
+    if (!locationId || !roomId) {
+      return null;
+    }
+
+    if (!this.roomsCache.has(locationId)) {
+      try {
+        const response = await this.makeAuthenticatedRequest(`/locations/${locationId}/rooms`);
+        const roomMap = new Map();
+        (response?.items || []).forEach((room) => {
+          if (room?.roomId || room?.id) {
+            roomMap.set(room.roomId || room.id, room.name || '');
+          }
+        });
+        this.roomsCache.set(locationId, roomMap);
+      } catch (error) {
+        console.warn(`SmartThingsService: Unable to fetch rooms for location ${locationId}: ${error.message}`);
+        this.roomsCache.set(locationId, new Map());
+      }
+    }
+
+    const rooms = this.roomsCache.get(locationId);
+    return rooms?.get(roomId) || null;
+  }
+
+  async getLocationName(locationId) {
+    if (!locationId) {
+      return null;
+    }
+
+    if (this.locationNameCache.has(locationId)) {
+      return this.locationNameCache.get(locationId);
+    }
+
+    try {
+      const response = await this.makeAuthenticatedRequest(`/locations/${locationId}`);
+      const name = response?.name || null;
+      this.locationNameCache.set(locationId, name);
+      return name;
+    } catch (error) {
+      console.warn(`SmartThingsService: Unable to fetch location ${locationId}: ${error.message}`);
+      this.locationNameCache.set(locationId, null);
+      return null;
     }
   }
 

@@ -312,12 +312,63 @@ class MaintenanceService {
 
     try {
       const devices = await smartThingsService.getDevices();
-      console.log(`MaintenanceService: Successfully synced ${devices.length} SmartThings devices`);
+      console.log(`MaintenanceService: Fetched ${devices.length} SmartThings devices from API`);
+
+      const processedIds = [];
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (const device of devices) {
+        processedIds.push(device.deviceId);
+
+        const mappedDevice = await this.mapSmartThingsDevice(device);
+
+        if (!mappedDevice) {
+          skipped += 1;
+          continue;
+        }
+
+        const existing = await Device.findOne({ 'properties.smartThingsDeviceId': device.deviceId });
+
+        if (existing) {
+          existing.name = mappedDevice.name;
+          existing.type = mappedDevice.type;
+          existing.room = mappedDevice.room;
+          existing.status = mappedDevice.status;
+          existing.brightness = mappedDevice.brightness ?? 0;
+          existing.temperature = mappedDevice.temperature;
+          existing.targetTemperature = mappedDevice.targetTemperature;
+          existing.properties = { ...(existing.properties || {}), ...mappedDevice.properties };
+          existing.brand = mappedDevice.brand;
+          existing.model = mappedDevice.model;
+          existing.isOnline = mappedDevice.isOnline;
+          existing.lastSeen = mappedDevice.lastSeen;
+
+          await existing.save();
+          updated += 1;
+        } else {
+          await Device.create(mappedDevice);
+          created += 1;
+        }
+      }
+
+      const removalResult = await Device.deleteMany({
+        'properties.source': 'smartthings',
+        'properties.smartThingsDeviceId': { $nin: processedIds }
+      });
+      const removed = removalResult.deletedCount || 0;
+
+      console.log(`MaintenanceService: SmartThings sync summary - created: ${created}, updated: ${updated}, removed: ${removed}, skipped: ${skipped}`);
 
       return {
         success: true,
-        message: `Successfully synced ${devices.length} devices from SmartThings`,
-        deviceCount: devices.length
+        message: `Synced ${devices.length} SmartThings devices (created ${created}, updated ${updated}, removed ${removed}, skipped ${skipped})`,
+        deviceCount: devices.length,
+        created,
+        updated,
+        removed,
+        skipped
       };
     } catch (error) {
       console.error('MaintenanceService: Error during SmartThings sync:', error.message);
@@ -335,6 +386,325 @@ class MaintenanceService {
 
       throw new Error('Failed to sync SmartThings devices');
     }
+  }
+
+  async mapSmartThingsDevice(device) {
+    if (!device?.deviceId) {
+      console.warn('MaintenanceService: Skipping SmartThings device with missing deviceId');
+      return null;
+    }
+
+    const capabilities = this.collectSmartThingsCapabilities(device);
+    const type = this.mapSmartThingsType(capabilities, device);
+
+    if (!type) {
+      console.warn(`MaintenanceService: Skipping SmartThings device ${device.deviceId} (${device.label || device.name}) with unsupported type`);
+      return null;
+    }
+
+    const statusRoot = this.extractStatusRoot(device);
+
+    const isOnline = (device.healthState?.state || '').toUpperCase() === 'ONLINE';
+    const status = this.mapSmartThingsStatus(type, capabilities, statusRoot, isOnline);
+    const brightness = this.mapSmartThingsBrightness(capabilities, statusRoot);
+    const temperature = this.mapSmartThingsTemperature(statusRoot);
+    const targetTemperature = this.mapSmartThingsTargetTemperature(statusRoot);
+
+    const roomName = await this.resolveSmartThingsRoom(device) || 'SmartThings';
+    const brand = device.manufacturerName || device.manufacturer || 'SmartThings';
+    const model = device.deviceTypeName || device.presentationId || 'SmartThings Device';
+
+    const lastSeen = device.healthState?.lastUpdatedDate ? new Date(device.healthState.lastUpdatedDate) : new Date();
+
+    return {
+      name: (device.label || device.name || device.deviceId).trim(),
+      type,
+      room: roomName,
+      status,
+      brightness: brightness ?? 0,
+      temperature: temperature ?? undefined,
+      targetTemperature: targetTemperature ?? undefined,
+      properties: {
+        ...(device.components ? { componentIds: device.components.map(component => component.id) } : {}),
+        source: 'smartthings',
+        smartThingsDeviceId: device.deviceId,
+        smartThingsDeviceName: device.name || null,
+        smartThingsLabel: device.label || null,
+        smartThingsLocationId: device.locationId || null,
+        smartThingsRoomId: device.roomId || null,
+        smartThingsCapabilities: Array.from(capabilities),
+        smartThingsHealthState: device.healthState || null,
+        smartThingsPresentationId: device.presentationId || null,
+        smartThingsDeviceTypeName: device.deviceTypeName || null
+      },
+      brand,
+      model,
+      isOnline,
+      lastSeen
+    };
+  }
+
+  collectSmartThingsCapabilities(device) {
+    const capabilities = new Set();
+
+    (device.components || []).forEach((component) => {
+      (component.capabilities || []).forEach((capability) => {
+        if (capability?.id) {
+          capabilities.add(capability.id);
+        }
+      });
+    });
+
+    return capabilities;
+  }
+
+  mapSmartThingsType(capabilities, device) {
+    const categories = new Set();
+    (device.components || []).forEach((component) => {
+      (component.categories || []).forEach((category) => {
+        if (category?.name) {
+          categories.add(category.name.toLowerCase());
+        }
+      });
+    });
+
+    if (capabilities.has('thermostatMode') || capabilities.has('thermostatCoolingSetpoint') || capabilities.has('thermostatHeatingSetpoint') || categories.has('thermostat')) {
+      return 'thermostat';
+    }
+
+    if (capabilities.has('lock') || categories.has('lock')) {
+      return 'lock';
+    }
+
+    if (capabilities.has('garageDoorControl') || capabilities.has('doorControl') || categories.has('garageDoor') || categories.has('garage')) {
+      return 'garage';
+    }
+
+    if (capabilities.has('switchLevel') || capabilities.has('colorControl') || categories.has('light')) {
+      return 'light';
+    }
+
+    if (capabilities.has('switch') || categories.has('switch')) {
+      return 'switch';
+    }
+
+    if (
+      capabilities.has('motionSensor') ||
+      capabilities.has('contactSensor') ||
+      capabilities.has('presenceSensor') ||
+      capabilities.has('waterSensor') ||
+      capabilities.has('humidityMeasurement') ||
+      categories.has('sensor')
+    ) {
+      return 'sensor';
+    }
+
+    if (categories.has('camera')) {
+      return 'camera';
+    }
+
+    // Default to switch for devices we can likely control
+    if (capabilities.size > 0) {
+      return 'switch';
+    }
+
+    return null;
+  }
+
+  extractStatusRoot(device) {
+    if (device?.status?.main) {
+      return device.status.main;
+    }
+
+    if (device?.status?.components?.main) {
+      return device.status.components.main;
+    }
+
+    return device?.status || {};
+  }
+
+  getStatusValue(statusRoot, paths) {
+    for (const path of paths) {
+      let current = statusRoot;
+      let found = true;
+
+      for (const key of path) {
+        if (current == null) {
+          found = false;
+          break;
+        }
+        current = current[key];
+      }
+
+      if (!found || current == null) {
+        continue;
+      }
+
+      if (typeof current === 'object' && 'value' in current) {
+        return current.value;
+      }
+
+      return current;
+    }
+
+    return undefined;
+  }
+
+  mapSmartThingsStatus(type, capabilities, statusRoot, isOnline) {
+    const valueFor = (...paths) => this.getStatusValue(statusRoot, paths);
+
+    if (type === 'lock') {
+      const state = valueFor(
+        ['lock', 'lock', 'value'],
+        ['lock', 'lock'],
+        ['lock', 'value'],
+        ['lock']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'locked' : !!state;
+    }
+
+    if (type === 'garage') {
+      const state = valueFor(
+        ['garageDoorControl', 'door', 'value'],
+        ['garageDoorControl', 'door'],
+        ['doorControl', 'door', 'value'],
+        ['doorControl', 'door']
+      );
+      return typeof state === 'string' ? ['open', 'opening'].includes(state.toLowerCase()) : !!state;
+    }
+
+    if (capabilities.has('switch') || capabilities.has('switchLevel')) {
+      const state = valueFor(
+        ['switch', 'switch', 'value'],
+        ['switch', 'switch'],
+        ['switch', 'value'],
+        ['switch']
+      );
+      if (typeof state === 'string') {
+        return state.toLowerCase() === 'on';
+      }
+      if (typeof state === 'boolean') {
+        return state;
+      }
+      return !!state;
+    }
+
+    if (capabilities.has('contactSensor')) {
+      const state = valueFor(
+        ['contactSensor', 'contact', 'value'],
+        ['contactSensor', 'contact'],
+        ['contactSensor']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'open' : !!state;
+    }
+
+    if (capabilities.has('motionSensor')) {
+      const state = valueFor(
+        ['motionSensor', 'motion', 'value'],
+        ['motionSensor', 'motion'],
+        ['motionSensor']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'active' : !!state;
+    }
+
+    if (type === 'thermostat') {
+      const state = valueFor(
+        ['thermostatOperatingState', 'operatingState', 'value'],
+        ['thermostatOperatingState', 'operatingState'],
+        ['thermostatMode', 'thermostatMode', 'value'],
+        ['thermostatMode', 'thermostatMode']
+      );
+      if (typeof state === 'string') {
+        return state.toLowerCase() !== 'off' && state.toLowerCase() !== 'idle';
+      }
+      return !!state;
+    }
+
+    // Default to online status when no specific capability matches
+    return !!isOnline;
+  }
+
+  mapSmartThingsBrightness(capabilities, statusRoot) {
+    if (!capabilities.has('switchLevel')) {
+      return undefined;
+    }
+
+    const value = this.getStatusValue(statusRoot, [
+      ['switchLevel', 'level', 'value'],
+      ['switchLevel', 'level'],
+      ['level']
+    ]);
+
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) {
+      return undefined;
+    }
+
+    return Math.min(Math.max(Math.round(numeric), 0), 100);
+  }
+
+  mapSmartThingsTemperature(statusRoot) {
+    const value = this.getStatusValue(statusRoot, [
+      ['temperatureMeasurement', 'temperature', 'value'],
+      ['temperatureMeasurement', 'temperature'],
+      ['temperature']
+    ]);
+
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    const numeric = Number(value);
+    return Number.isNaN(numeric) ? undefined : numeric;
+  }
+
+  mapSmartThingsTargetTemperature(statusRoot) {
+    const heating = this.getStatusValue(statusRoot, [
+      ['thermostatHeatingSetpoint', 'heatingSetpoint', 'value'],
+      ['thermostatHeatingSetpoint', 'heatingSetpoint']
+    ]);
+
+    const cooling = this.getStatusValue(statusRoot, [
+      ['thermostatCoolingSetpoint', 'coolingSetpoint', 'value'],
+      ['thermostatCoolingSetpoint', 'coolingSetpoint']
+    ]);
+
+    const preferred = heating ?? cooling;
+    if (preferred === undefined || preferred === null) {
+      return undefined;
+    }
+
+    const numeric = Number(preferred);
+    return Number.isNaN(numeric) ? undefined : numeric;
+  }
+
+  async resolveSmartThingsRoom(device) {
+    const locationId = device.locationId || null;
+    const roomId = device.roomId || null;
+
+    if (!locationId) {
+      return null;
+    }
+
+    const roomName = await smartThingsService.getRoomName(locationId, roomId);
+    if (roomName) {
+      return roomName;
+    }
+
+    const locationName = await smartThingsService.getLocationName(locationId);
+    if (locationName) {
+      return locationName;
+    }
+
+    if (roomId) {
+      return `Room ${roomId.slice(0, 6)}`;
+    }
+
+    return null;
   }
 
   /**

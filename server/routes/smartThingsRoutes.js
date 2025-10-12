@@ -106,23 +106,32 @@ router.get('/callback', async (req, res) => {
 
     console.log('SmartThings Routes: Handling OAuth callback');
 
+    const resolvedClientUrl = (process.env.CLIENT_URL && process.env.CLIENT_URL.trim())
+      ? process.env.CLIENT_URL.trim()
+      : `${req.secure ? 'https' : 'http'}://${req.get('host')}`;
+    const redirectBase = resolvedClientUrl.replace(/\/+$/, '');
+
     if (error) {
       const message = errorDescription || error;
       console.error('SmartThings Routes: OAuth error:', message);
-      return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}/settings?smartthings=error&message=${encodeURIComponent(message)}`);
+      return res.redirect(`${redirectBase}/settings?smartthings=error&message=${encodeURIComponent(message)}`);
     }
 
     if (!code) {
-      return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}/settings?smartthings=error&message=${encodeURIComponent('No authorization code received')}`);
+      return res.redirect(`${redirectBase}/settings?smartthings=error&message=${encodeURIComponent('No authorization code received')}`);
     }
 
     await smartThingsService.exchangeCodeForToken(code, state);
 
     console.log('SmartThings Routes: OAuth callback handled successfully');
-    res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}/settings?smartthings=success`);
+    res.redirect(`${redirectBase}/settings?smartthings=success`);
   } catch (error) {
     console.error('SmartThings Routes: Error handling OAuth callback:', error.message);
-    res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}/settings?smartthings=error&message=${encodeURIComponent(error.message)}`);
+    const resolvedClientUrl = (process.env.CLIENT_URL && process.env.CLIENT_URL.trim())
+      ? process.env.CLIENT_URL.trim()
+      : `${req.secure ? 'https' : 'http'}://${req.get('host')}`;
+    const redirectBase = resolvedClientUrl.replace(/\/+$/, '');
+    res.redirect(`${redirectBase}/settings?smartthings=error&message=${encodeURIComponent(error.message)}`);
   }
 });
 
