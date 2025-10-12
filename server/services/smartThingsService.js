@@ -31,6 +31,13 @@ class SmartThingsService {
         state: Date.now().toString() // Simple state for CSRF protection
       });
 
+      console.log('SmartThingsService: Authorization context', {
+        clientId: integration.clientId,
+        redirectUri: integration.redirectUri,
+        scope: integration.scope,
+        authUrl: `${this.authUrl}?${params.toString()}`
+      });
+
       const authUrl = `${this.authUrl}?${params.toString()}`;
       console.log('SmartThingsService: Authorization URL generated successfully');
 
