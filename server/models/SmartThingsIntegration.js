@@ -46,6 +46,8 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
       'x:scenes:*',
       'r:locations:*',
       'x:locations:*',
+      'r:rules:*',
+      'x:rules:*',
       'r:security:locations:*:armstate'
     ]
   },
@@ -150,6 +152,8 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
         'x:scenes:*',
         'r:locations:*',
         'x:locations:*',
+        'r:rules:*',
+        'x:rules:*',
         'r:security:locations:*:armstate'
       ],
       isConfigured: false,
@@ -210,6 +214,25 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
       changed = true;
     }
 
+    const requiredScopes = [
+      'r:devices:*',
+      'x:devices:*',
+      'r:scenes:*',
+      'x:scenes:*',
+      'r:locations:*',
+      'x:locations:*',
+      'r:rules:*',
+      'x:rules:*',
+      'r:security:locations:*:armstate'
+    ];
+
+    const existingScopes = Array.isArray(integration.scope) ? integration.scope : [];
+    const updatedScopes = Array.from(new Set([...existingScopes, ...requiredScopes]));
+    if (updatedScopes.length !== existingScopes.length) {
+      integration.scope = updatedScopes;
+      changed = true;
+    }
+
     if (changed && typeof integration.save === 'function') {
       await integration.save();
     }
@@ -226,6 +249,18 @@ SmartThingsIntegrationSchema.statics.configureIntegration = async function(confi
   const clientSecret = trimString(config.clientSecret);
   const redirectUri = config.redirectUri ? trimString(config.redirectUri) : trimString(process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback');
 
+  const requiredScopes = [
+    'r:devices:*',
+    'x:devices:*',
+    'r:scenes:*',
+    'x:scenes:*',
+    'r:locations:*',
+    'x:locations:*',
+    'r:rules:*',
+    'x:rules:*',
+    'r:security:locations:*:armstate'
+  ];
+
   let integration = await this.findOne();
 
   if (!integration) {
@@ -234,7 +269,8 @@ SmartThingsIntegrationSchema.statics.configureIntegration = async function(confi
       clientId,
       clientSecret,
       redirectUri,
-      isConfigured: true
+      isConfigured: true,
+      scope: requiredScopes
     });
   } else {
     console.log('SmartThingsIntegration: Updating existing integration configuration');
@@ -242,6 +278,8 @@ SmartThingsIntegrationSchema.statics.configureIntegration = async function(confi
     integration.clientSecret = clientSecret;
     integration.redirectUri = redirectUri;
     integration.isConfigured = true;
+    const existingScopes = Array.isArray(integration.scope) ? integration.scope : [];
+    integration.scope = Array.from(new Set([...existingScopes, ...requiredScopes]));
   }
 
   await integration.save();

@@ -425,6 +425,7 @@ SmartThings now requires OAuth settings to be managed with the SmartThings CLI. 
      "x:devices:*",
      "x:locations:*",
      "x:scenes:*",
+     "x:rules:*",
      "r:security:locations:*:armstate"
    )
 
@@ -453,7 +454,7 @@ SmartThings now requires OAuth settings to be managed with the SmartThings CLI. 
 4. After the redirect URI is updated, rerun **Connect to SmartThings** inside HomeBrain. The SmartThings authorization page should accept the redirect and return you to `/settings?smartthings=success` on your domain.
 5. In HomeBrain, go to **Settings → Maintenance** and click **Force SmartThings Sync** to import devices. They will now appear on the Devices page grouped by their SmartThings rooms.
 
-The scope list above enables HomeBrain to read (`r:security:locations:*:armstate`) and control (`x:locations:*`) the SmartThings Home Monitor arm state (`location.security.armState`) without creating virtual switch devices. Force-syncing SmartThings from **Settings → Maintenance** now imports devices directly into the HomeBrain device list and stores the primary location for security control. SmartThings currently rejects the `x:security:locations:*:armstate` scope, so leave it out of the payload.
+The scope list above enables HomeBrain to read (`r:security:locations:*:armstate`) and control (`x:locations:*`) the SmartThings Home Monitor arm state (`location.security.armState`) without creating virtual switch devices. `x:rules:*` is required so HomeBrain can create short-lived automation rules when the location security endpoint does not accept direct updates. SmartThings currently rejects the `x:security:locations:*:armstate` scope, so leave it out of the payload.
 
 When you are finished, close the PowerShell session or run `Remove-Item Env:\SMARTTHINGS_AUTH_TOKEN` so the token is not left in memory.
 
