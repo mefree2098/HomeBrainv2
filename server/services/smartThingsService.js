@@ -461,7 +461,9 @@ class SmartThingsService {
         ]
       };
 
-      const ruleResponse = await this.makeAuthenticatedRequest('/rules', {
+      const rulesBasePath = `/rules?locationId=${encodeURIComponent(resolvedLocationId)}`;
+
+      const ruleResponse = await this.makeAuthenticatedRequest(rulesBasePath, {
         method: 'POST',
         data: rulePayload
       });
@@ -472,9 +474,9 @@ class SmartThingsService {
       }
 
       try {
-        await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute`, { method: 'POST' });
+        await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute?locationId=${encodeURIComponent(resolvedLocationId)}`, { method: 'POST' });
       } finally {
-        await this.makeAuthenticatedRequest(`/rules/${ruleId}`, { method: 'DELETE' }).catch((cleanupError) => {
+        await this.makeAuthenticatedRequest(`/rules/${ruleId}?locationId=${encodeURIComponent(resolvedLocationId)}`, { method: 'DELETE' }).catch((cleanupError) => {
           console.warn(`SmartThingsService: Failed to delete temporary rule ${ruleId}: ${cleanupError.message}`);
         });
       }
