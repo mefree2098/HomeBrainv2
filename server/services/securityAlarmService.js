@@ -246,9 +246,8 @@ class SecurityAlarmService {
 
       if (!synced) {
         if (!alarm.smartthingsDeviceId) {
-          throw new Error('No SmartThings device ID configured');
-        }
-
+          console.warn('SecurityAlarmService: No SmartThings device ID configured; unable to sync via device status');
+        } else {
         const deviceStatus = await smartThingsService.getDeviceStatus(alarm.smartthingsDeviceId);
 
         if (deviceStatus?.components?.main?.securitySystem) {
@@ -265,12 +264,19 @@ class SecurityAlarmService {
           synced = true;
         }
       }
-
-      if (!synced) {
-        throw new Error('SmartThings did not return security state information');
       }
 
-      console.log('SecurityAlarmService: Successfully synced with SmartThings');
+      if (!synced) {
+        console.warn('SecurityAlarmService: SmartThings did not provide security state; keeping local state');
+        alarm.isOnline = false;
+        alarm.lastSyncWithSmartThings = new Date();
+        await alarm.save();
+      } else {
+        alarm.isOnline = true;
+        await alarm.save();
+      }
+
+      console.log('SecurityAlarmService: SmartThings sync complete');
       return alarm;
     } catch (error) {
       console.error('SecurityAlarmService: Error syncing with SmartThings:', error.message);

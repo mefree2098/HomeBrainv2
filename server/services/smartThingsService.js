@@ -382,36 +382,34 @@ class SmartThingsService {
       `/locations/${resolvedLocationId}/security/arm-state`
     ];
 
-    let response = null;
-
     for (const endpoint of candidateEndpoints) {
       try {
-        response = await this.makeAuthenticatedRequest(endpoint);
-        break;
+        const response = await this.makeAuthenticatedRequest(endpoint);
+        const armState = response?.armState || response?.location?.security?.armState || null;
+        const normalizedState = armState ? this.normalizeArmState(armState) : null;
+
+        const integration = await SmartThingsIntegration.getIntegration();
+        if (integration && typeof integration.updateSecurityArmState === 'function' && normalizedState) {
+          await integration.updateSecurityArmState({ armState: normalizedState, locationId: resolvedLocationId });
+        }
+
+        return {
+          locationId: resolvedLocationId,
+          armState: normalizedState,
+          raw: response
+        };
       } catch (error) {
-        if (error.status && error.status === 404) {
+        if (error.status && [404, 405, 422].includes(error.status)) {
           continue;
         }
         throw error;
       }
     }
 
-    if (!response) {
-      throw new Error('SmartThings security arm state endpoint is unavailable');
-    }
-
-    const armState = response?.armState || response?.location?.security?.armState || null;
-    const normalizedState = armState ? this.normalizeArmState(armState) : null;
-
-    const integration = await SmartThingsIntegration.getIntegration();
-    if (integration && typeof integration.updateSecurityArmState === 'function' && normalizedState) {
-      await integration.updateSecurityArmState({ armState: normalizedState, locationId: resolvedLocationId });
-    }
-
     return {
       locationId: resolvedLocationId,
-      armState: normalizedState,
-      raw: response
+      armState: null,
+      raw: null
     };
   }
 
@@ -432,12 +430,15 @@ class SmartThingsService {
       try {
         await this.makeAuthenticatedRequest(endpoint.path, {
           method: endpoint.method,
-          data: { armState: normalizedState }
+          data: {
+            armState: normalizedState,
+            locationId: resolvedLocationId
+          }
         });
         appliedDirect = true;
         break;
       } catch (error) {
-        if (error.status && ![404, 405].includes(error.status)) {
+        if (!error.status || ![404, 405, 422].includes(error.status)) {
           throw error;
         }
       }
@@ -449,9 +450,11 @@ class SmartThingsService {
       const ruleName = `HomeBrain STHM ${normalizedState} ${Date.now()}`;
       const rulePayload = {
         name: ruleName,
+        locationId: resolvedLocationId,
         actions: [
           {
             type: 'location',
+            locationId: resolvedLocationId,
             location: {
               security: {
                 armState: normalizedState
@@ -461,25 +464,31 @@ class SmartThingsService {
         ]
       };
 
-      const rulesBasePath = `/rules?locationId=${encodeURIComponent(resolvedLocationId)}`;
-
-      const ruleResponse = await this.makeAuthenticatedRequest(rulesBasePath, {
-        method: 'POST',
-        data: rulePayload
-      });
-
-      const ruleId = ruleResponse?.id || ruleResponse?.ruleId;
-      if (!ruleId) {
-        throw new Error('Failed to create SmartThings rule for arming state');
-      }
-
+      const locationQuery = `locationId=${encodeURIComponent(resolvedLocationId)}`;
       try {
-        await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute?locationId=${encodeURIComponent(resolvedLocationId)}`, { method: 'POST' });
-      } finally {
-        await this.makeAuthenticatedRequest(`/rules/${ruleId}?locationId=${encodeURIComponent(resolvedLocationId)}`, { method: 'DELETE' }).catch((cleanupError) => {
-          console.warn(`SmartThingsService: Failed to delete temporary rule ${ruleId}: ${cleanupError.message}`);
+        const ruleResponse = await this.makeAuthenticatedRequest(`/rules?${locationQuery}`, {
+          method: 'POST',
+          data: rulePayload
         });
+
+        const ruleId = ruleResponse?.id || ruleResponse?.ruleId;
+        if (!ruleId) {
+          throw new Error('Failed to create SmartThings rule for arming state');
+        }
+
+        try {
+          await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute?${locationQuery}`, { method: 'POST' });
+        } finally {
+          await this.makeAuthenticatedRequest(`/rules/${ruleId}?${locationQuery}`, { method: 'DELETE' }).catch((cleanupError) => {
+            console.warn(`SmartThingsService: Failed to delete temporary rule ${ruleId}: ${cleanupError.message}`);
+          });
+        }
+      } catch (error) {
+        console.error('SmartThingsService: Failed to apply security arm state via Rules API:', error.data || error.message);
+        throw error;
       }
+
+      appliedDirect = true;
     }
 
     const integration = await SmartThingsIntegration.getIntegration();
