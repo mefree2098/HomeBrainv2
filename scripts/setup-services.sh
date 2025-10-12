@@ -83,7 +83,7 @@ show_status() {
     # Show port usage
     echo "Port Usage:"
     echo "==========="
-    sudo netstat -tulnp | grep -E "(3000|5173|8080|12345|27017)"
+    sudo netstat -tulnp | grep -E "(80|3000|3443|5173|8080|12345|27017)"
 }
 
 show_logs() {
@@ -264,7 +264,7 @@ run_health_check() {
     # Check network ports
     echo "Network Ports:"
     echo "============="
-    for port in 3000 5173 8080 12345 27017; do
+    for port in 80 3000 3443 5173 8080 12345 27017; do
         if sudo netstat -tuln | grep -q ":$port "; then
             echo -e "  Port $port: ${GREEN}Open${NC}"
         else
@@ -334,15 +334,6 @@ server {
     listen 80;
     server_name _;
 
-    # ACME HTTP-01 challenge
-    location /.well-known/acme-challenge/ {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
     # Main application
     location / {
         proxy_pass http://localhost:5173;
@@ -391,6 +382,7 @@ EOF
 
     print_success "Nginx reverse proxy configured"
     print_status "HomeBrain is now accessible on port 80"
+    print_warning "HomeBrain now serves ACME challenges directly; ensure port 80 is free when requesting certificates."
 }
 
 # Setup SSL certificates
