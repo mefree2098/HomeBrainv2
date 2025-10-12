@@ -49,6 +49,7 @@ class SmartThingsService {
    */
   async exchangeCodeForToken(code, state) {
     try {
+      const startTime = Date.now();
       console.log('SmartThingsService: Exchanging authorization code for tokens');
 
       const integration = await SmartThingsIntegration.getIntegration();
@@ -57,23 +58,28 @@ class SmartThingsService {
         throw new Error('SmartThings OAuth configuration incomplete');
       }
 
-      const tokenData = new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: code,
-        redirect_uri: integration.redirectUri,
-        client_id: integration.clientId,
-        client_secret: integration.clientSecret
-      });
+      const tokenData = new URLSearchParams();
+      tokenData.append('grant_type', 'authorization_code');
+      tokenData.append('code', code);
+      tokenData.append('redirect_uri', integration.redirectUri);
+      tokenData.append('client_id', integration.clientId);
+      tokenData.append('client_secret', integration.clientSecret);
 
-      const basicAuth = Buffer.from(`${integration.clientId}:${integration.clientSecret}`).toString('base64');
+      const basicAuth = Buffer.from(`${integration.clientId}:${integration.clientSecret}`, 'utf8').toString('base64');
 
       const response = await axios.post(this.tokenUrl, tokenData.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json',
-          Authorization: `Basic ${basicAuth}`
+          Authorization: `Basic ${basicAuth}`,
+          'User-Agent': 'HomeBrain/SmartThingsIntegration'
         },
         timeout: 10000
+      });
+
+      console.log('SmartThingsService: Token exchange response', {
+        status: response.status,
+        tookMs: Date.now() - startTime
       });
 
       await integration.updateTokens(response.data);
@@ -82,8 +88,13 @@ class SmartThingsService {
       return response.data;
     } catch (error) {
       const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error?.message || error.response?.data?.error || error.message;
-      console.error('SmartThingsService: Error exchanging code for token:', error.response?.data || error.message);
-      throw new Error(`Failed to exchange authorization code for access token: ${errorDetails}`);
+      console.error('SmartThingsService: Error exchanging code for token:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        headers: error.response?.headers,
+        message: error.message
+      });
+      throw new Error(`Failed to exchange authorization code for access token: ${errorDetails || 'Unknown error'}`);
     }
   }
 
@@ -93,6 +104,7 @@ class SmartThingsService {
    */
   async refreshAccessToken() {
     try {
+      const startTime = Date.now();
       console.log('SmartThingsService: Refreshing access token');
 
       const integration = await SmartThingsIntegration.getIntegration();
@@ -101,22 +113,27 @@ class SmartThingsService {
         throw new Error('No refresh token available');
       }
 
-      const tokenData = new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: integration.refreshToken,
-        client_id: integration.clientId,
-        client_secret: integration.clientSecret
-      });
+      const tokenData = new URLSearchParams();
+      tokenData.append('grant_type', 'refresh_token');
+      tokenData.append('refresh_token', integration.refreshToken);
+      tokenData.append('client_id', integration.clientId);
+      tokenData.append('client_secret', integration.clientSecret);
 
-      const basicAuth = Buffer.from(`${integration.clientId}:${integration.clientSecret}`).toString('base64');
+      const basicAuth = Buffer.from(`${integration.clientId}:${integration.clientSecret}`, 'utf8').toString('base64');
 
       const response = await axios.post(this.tokenUrl, tokenData.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json',
-          Authorization: `Basic ${basicAuth}`
+          Authorization: `Basic ${basicAuth}`,
+          'User-Agent': 'HomeBrain/SmartThingsIntegration'
         },
         timeout: 10000
+      });
+
+      console.log('SmartThingsService: Refresh response', {
+        status: response.status,
+        tookMs: Date.now() - startTime
       });
 
       await integration.updateTokens(response.data);
@@ -125,13 +142,18 @@ class SmartThingsService {
       return response.data;
     } catch (error) {
       const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error?.message || error.response?.data?.error || error.message;
-      console.error('SmartThingsService: Error refreshing access token:', error.response?.data || error.message);
+      console.error('SmartThingsService: Error refreshing access token:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        headers: error.response?.headers,
+        message: error.message
+      });
 
       // Clear tokens if refresh fails
       const integration = await SmartThingsIntegration.getIntegration();
       await integration.clearTokens('Refresh token failed');
 
-      throw new Error(`Failed to refresh access token: ${errorDetails}`);
+      throw new Error(`Failed to refresh access token: ${errorDetails || 'Unknown error'}`);
     }
   }
 
