@@ -407,7 +407,7 @@ SmartThings now requires OAuth settings to be managed with the SmartThings CLI. 
    $appId    = "YOUR-SMARTTHINGS-APP-ID"
    $redirect = "https://your-domain.com/api/smartthings/callback"
 
-   # === Known-valid scope superset ===
+   # === Known-valid scope superset (matches current SmartThings behaviour) ===
    $scopes = @(
      "r:devices:$",
      "r:devices:*",
@@ -420,14 +420,13 @@ SmartThings now requires OAuth settings to be managed with the SmartThings CLI. 
      "w:devices:*",
      "w:installedapps",
      "w:locations:*",
-   "w:rules:*",
-   "x:devices:$",
-   "x:devices:*",
-   "x:locations:*",
-   "x:scenes:*",
-   "r:security:locations:*:armstate",
-   "x:security:locations:*:armstate"
- )
+     "w:rules:*",
+     "x:devices:$",
+     "x:devices:*",
+     "x:locations:*",
+     "x:scenes:*",
+     "r:security:locations:*:armstate"
+   )
 
    # Set your SmartThings PAT for this session
    $env:SMARTTHINGS_AUTH_TOKEN = "PASTE-YOUR-PAT-HERE"
@@ -438,7 +437,7 @@ SmartThings now requires OAuth settings to be managed with the SmartThings CLI. 
      scope        = $scopes
      redirectUris = @($redirect)
    }
-   $outFile = "oauth-update.json"
+   $outFile = "oauth-update-all.json"
    $payload | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 $outFile
 
    Write-Host ">>> Sending this payload to SmartThings:"
@@ -447,14 +446,14 @@ SmartThings now requires OAuth settings to be managed with the SmartThings CLI. 
    # Update OAuth settings
    npx smartthings apps:oauth:update $appId --input $outFile --json
 
-   # Verify the redirect URI
+   # Verify the redirect URI and scopes
    npx smartthings apps:oauth $appId --json
    ```
 
 4. After the redirect URI is updated, rerun **Connect to SmartThings** inside HomeBrain. The SmartThings authorization page should accept the redirect and return you to `/settings?smartthings=success` on your domain.
 5. In HomeBrain, go to **Settings → Maintenance** and click **Force SmartThings Sync** to import devices. They will now appear on the Devices page grouped by their SmartThings rooms.
 
-The scope list above enables HomeBrain to read and set the SmartThings Home Monitor arm state (`location.security.armState`) without creating virtual switch devices. Force-syncing SmartThings from **Settings → Maintenance** now imports devices directly into the HomeBrain device list and stores the primary location for security control.
+The scope list above enables HomeBrain to read (`r:security:locations:*:armstate`) and control (`x:locations:*`) the SmartThings Home Monitor arm state (`location.security.armState`) without creating virtual switch devices. Force-syncing SmartThings from **Settings → Maintenance** now imports devices directly into the HomeBrain device list and stores the primary location for security control. SmartThings currently rejects the `x:security:locations:*:armstate` scope, so leave it out of the payload.
 
 When you are finished, close the PowerShell session or run `Remove-Item Env:\SMARTTHINGS_AUTH_TOKEN` so the token is not left in memory.
 
