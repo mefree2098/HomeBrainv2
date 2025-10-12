@@ -183,7 +183,7 @@ async function setupHttpsServer() {
         cert: sslConfig.cert
       }, app);
 
-      const httpsPort = process.env.HTTPS_PORT || 3443;
+      const httpsPort = process.env.HTTPS_PORT || 443;
 
       httpsServer.listen(httpsPort, () => {
         console.log(`HTTPS server running at https://localhost:${httpsPort}`);

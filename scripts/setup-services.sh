@@ -114,7 +114,7 @@ show_status() {
     # Show port usage
     echo "Port Usage:"
     echo "==========="
-    sudo netstat -tulnp | grep -E "(80|3000|3443|5173|8080|12345|27017)"
+    sudo netstat -tulnp | grep -E "(80|3000|443|5173|8080|12345|27017)"
 }
 
 show_logs() {
@@ -296,7 +296,7 @@ run_health_check() {
     # Check network ports
     echo "Network Ports:"
     echo "============="
-    for port in 80 3000 3443 5173 8080 12345 27017; do
+    for port in 80 3000 443 5173 8080 12345 27017; do
         if sudo netstat -tuln | grep -q ":$port "; then
             echo -e "  Port $port: ${GREEN}Open${NC}"
         else
