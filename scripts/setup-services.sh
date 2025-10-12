@@ -14,6 +14,35 @@ NC='\033[0m'
 
 HOMEBRAIN_DIR="/opt/homebrain"
 HOMEBRAIN_USER="homebrain"
+NODE_BIN=""
+
+ensure_node_capability() {
+    if ! command -v node &>/dev/null; then
+        print_warning "Node.js not found; cannot set privileged port capability"
+        return
+    fi
+
+    NODE_BIN=$(readlink -f "$(command -v node)")
+    if [[ -z "$NODE_BIN" ]]; then
+        print_warning "Unable to resolve node binary path for capability setup"
+        return
+    fi
+
+    if ! command -v setcap &>/dev/null || ! command -v getcap &>/dev/null; then
+        print_warning "setcap/getcap not available; install libcap2-bin to allow Node to bind port 80"
+        return
+    fi
+
+    if getcap "$NODE_BIN" 2>/dev/null | grep -q "cap_net_bind_service"; then
+        return
+    fi
+
+    if sudo setcap 'cap_net_bind_service=+ep' "$NODE_BIN"; then
+        print_success "Granted Node.js permission to bind privileged ports (cap_net_bind_service)"
+    else
+        print_warning "Failed to grant Node.js privileged port access. Run manually: sudo setcap 'cap_net_bind_service=+ep' $NODE_BIN"
+    fi
+}
 
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
@@ -44,6 +73,7 @@ show_usage() {
 # Service management functions
 start_services() {
     print_status "Starting HomeBrain services..."
+    ensure_node_capability
     sudo systemctl start mongodb
     sudo systemctl start homebrain
     sudo systemctl start homebrain-discovery
@@ -59,6 +89,7 @@ stop_services() {
 
 restart_services() {
     print_status "Restarting HomeBrain services..."
+    ensure_node_capability
     sudo systemctl restart homebrain
     sudo systemctl restart homebrain-discovery
     print_success "Services restarted"
@@ -133,6 +164,7 @@ update_homebrain() {
     # Build client
     cd ..
     sudo -u $HOMEBRAIN_USER npm run build
+    ensure_node_capability
 
     # Start services
     start_services

@@ -11,7 +11,6 @@ This document walks through deploying the HomeBrain platform from this repositor
 - Optional HTTPS (self-managed certificates) and remote voice device packages.
 
 HomeBrain uses these default ports:
-- `80/tcp` - ACME HTTP-01 challenge listener for Let's Encrypt
 - `3000/tcp` - API and WebSocket traffic
 - `3443/tcp` - optional HTTPS API (if certificates are configured)
 - `5173/tcp` - front-end UI (Vite preview or dev server)
@@ -60,10 +59,10 @@ nmcli device wifi connect "YOUR_WIFI_NAME" password "YOUR_WIFI_PASSWORD"
 
 ## Step 2 - Install base packages
 ```bash
-sudo apt install -y git build-essential curl wget nano htop pkg-config python3 make g++ net-tools ufw
+sudo apt install -y git build-essential curl wget nano htop pkg-config python3 make g++ net-tools ufw libcap2-bin
 ```
 
-These packages provide compilers, editors, and network tools used later.
+These packages provide compilers, editors, network tools, and the `setcap` utility used to grant Node.js permission to bind privileged ports.
 
 ---
 
@@ -168,6 +167,12 @@ ACME_CHALLENGE_PORT=80
 ```
 
 Port 80 must be available so the built-in ACME challenge listener can respond to Let's Encrypt HTTP-01 checks. If another service already binds to port 80, stop it temporarily or adjust your reverse proxy strategy before requesting certificates.
+
+Grant the Node.js binary permission to bind privileged ports (80/443) once after installation:
+```bash
+sudo setcap 'cap_net_bind_service=+ep' $(readlink -f $(which node))
+```
+The capability survives reboots, but rerun the command whenever Node.js is upgraded or reinstalled because the binary path may change.
 
 Generate secrets whenever you need them:
 ```bash
@@ -365,7 +370,7 @@ Pick only one path; you do not need both.
    Refresh the Remote Devices page; the Pi should display as “Online”. Repeat the copy/install steps for additional rooms, generating a new registration code each time.
 
 8. **Enable on-device wake-word detection (Porcupine)**
-   - Install the optional Porcupine binding on the Pi:
+   - Install the optional Porcupine binding:
      ```bash
      cd ~/homebrain-remote
      npm install @picovoice/porcupine-node
@@ -374,12 +379,13 @@ Pick only one path; you do not need both.
      ```bash
      export PICOVOICE_ACCESS_KEY="YOUR_PICOVOICE_ACCESS_KEY"
      ```
-   - On the hub (Jetson), copy your `.ppn` keyword files into `~/homebrain/HomeBrainv2/server/public/wake-words/` using slugged filenames like `anna_raspberry-pi.ppn`.
-   - Restart the remote device service so it authenticates and downloads the models:
+   - Copy your `.ppn` keyword files (from the Picovoice Console) to a readable path, e.g. `/home/pi/homebrain-remote/wake-words/`.
+   - Update `~/homebrain-remote/config.json` with the keyword paths, sensitivities, optional `modelPath`, and (if you prefer) `accessKey`—see `remote-device/README.md` for a template.
+   - Restart the service to load the detector:
      ```bash
      sudo systemctl restart homebrain-remote
      ```
-   - Tail `journalctl -u homebrain-remote -f`; you should see the Pi download the models and then log real `wake_word_detected` events instead of relying on the Enter test shortcut.
+   - Watch `journalctl -u homebrain-remote -f` and speak your wake word; you should now see `wake_word_detected` events instead of relying on the Enter test shortcut.
 
 ---
 
