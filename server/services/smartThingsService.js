@@ -57,15 +57,15 @@ class SmartThingsService {
         throw new Error('SmartThings OAuth configuration incomplete');
       }
 
-      const tokenData = {
+      const tokenData = new URLSearchParams({
         grant_type: 'authorization_code',
         code: code,
         redirect_uri: integration.redirectUri,
         client_id: integration.clientId,
         client_secret: integration.clientSecret
-      };
+      });
 
-      const response = await axios.post(this.tokenUrl, tokenData, {
+      const response = await axios.post(this.tokenUrl, tokenData.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json'
@@ -78,8 +78,9 @@ class SmartThingsService {
       console.log('SmartThingsService: Successfully exchanged code for tokens');
       return response.data;
     } catch (error) {
+      const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error || error.message;
       console.error('SmartThingsService: Error exchanging code for token:', error.response?.data || error.message);
-      throw new Error('Failed to exchange authorization code for access token');
+      throw new Error(`Failed to exchange authorization code for access token: ${errorDetails}`);
     }
   }
 
@@ -97,14 +98,14 @@ class SmartThingsService {
         throw new Error('No refresh token available');
       }
 
-      const tokenData = {
+      const tokenData = new URLSearchParams({
         grant_type: 'refresh_token',
         refresh_token: integration.refreshToken,
         client_id: integration.clientId,
         client_secret: integration.clientSecret
-      };
+      });
 
-      const response = await axios.post(this.tokenUrl, tokenData, {
+      const response = await axios.post(this.tokenUrl, tokenData.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json'
@@ -117,13 +118,14 @@ class SmartThingsService {
       console.log('SmartThingsService: Access token refreshed successfully');
       return response.data;
     } catch (error) {
+      const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error || error.message;
       console.error('SmartThingsService: Error refreshing access token:', error.response?.data || error.message);
 
       // Clear tokens if refresh fails
       const integration = await SmartThingsIntegration.getIntegration();
       await integration.clearTokens('Refresh token failed');
 
-      throw new Error('Failed to refresh access token');
+      throw new Error(`Failed to refresh access token: ${errorDetails}`);
     }
   }
 
