@@ -428,8 +428,14 @@ class HomeBrainRemoteDevice {
         timestamp: new Date().toISOString()
       };
       const summary = message?.type ? `type="${message.type}"` : 'no type';
-      console.log(`Sending message to hub (${summary})`);
-      this.ws.send(JSON.stringify(payload));
+      console.log(`Sending message to hub (${summary}) [readyState=${this.ws.readyState}]`);
+      this.ws.send(JSON.stringify(payload), (error) => {
+        if (error) {
+          console.error(`Failed to send message to hub (${summary}):`, error.message);
+        } else {
+          console.log(`Message delivered to hub (${summary})`);
+        }
+      });
       return true;
     }
     console.warn('Attempted to send message while WebSocket not open');
