@@ -65,10 +65,13 @@ class SmartThingsService {
         client_secret: integration.clientSecret
       });
 
+      const basicAuth = Buffer.from(`${integration.clientId}:${integration.clientSecret}`).toString('base64');
+
       const response = await axios.post(this.tokenUrl, tokenData.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          Authorization: `Basic ${basicAuth}`
         },
         timeout: 10000
       });
@@ -78,7 +81,7 @@ class SmartThingsService {
       console.log('SmartThingsService: Successfully exchanged code for tokens');
       return response.data;
     } catch (error) {
-      const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error || error.message;
+      const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error?.message || error.response?.data?.error || error.message;
       console.error('SmartThingsService: Error exchanging code for token:', error.response?.data || error.message);
       throw new Error(`Failed to exchange authorization code for access token: ${errorDetails}`);
     }
@@ -105,10 +108,13 @@ class SmartThingsService {
         client_secret: integration.clientSecret
       });
 
+      const basicAuth = Buffer.from(`${integration.clientId}:${integration.clientSecret}`).toString('base64');
+
       const response = await axios.post(this.tokenUrl, tokenData.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          Authorization: `Basic ${basicAuth}`
         },
         timeout: 10000
       });
@@ -118,7 +124,7 @@ class SmartThingsService {
       console.log('SmartThingsService: Access token refreshed successfully');
       return response.data;
     } catch (error) {
-      const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error || error.message;
+      const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error?.message || error.response?.data?.error || error.message;
       console.error('SmartThingsService: Error refreshing access token:', error.response?.data || error.message);
 
       // Clear tokens if refresh fails
