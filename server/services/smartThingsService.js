@@ -492,7 +492,7 @@ class SmartThingsService {
         console.error('SmartThingsService: Failed to apply security arm state via Rules API:', errorPayload);
 
         if (error.status === 403) {
-          const scopeError = new Error('SmartThings rejected rule execution (missing w:rules:* or x:rules:* scope). Update the SmartThings app OAuth scopes, reconnect HomeBrain, then try again.');
+          const scopeError = new Error('SmartThings rejected rule execution (missing w:rules:* scope). Update the SmartThings app OAuth scopes, reconnect HomeBrain, then try again.');
           scopeError.status = error.status;
           scopeError.data = error.data;
           throw scopeError;

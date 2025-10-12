@@ -2,6 +2,32 @@ const mongoose = require('mongoose');
 
 const trimString = (value) => (typeof value === 'string' ? value.trim() : value ?? '');
 
+const REQUIRED_SMARTTHINGS_SCOPES = [
+  'r:devices:*',
+  'x:devices:*',
+  'r:scenes:*',
+  'x:scenes:*',
+  'r:locations:*',
+  'x:locations:*',
+  'r:rules:*',
+  'w:rules:*',
+  'r:security:locations:*:armstate'
+];
+
+const DEPRECATED_SMARTTHINGS_SCOPES = [
+  'x:rules:*'
+];
+
+const sanitizeScopes = (scopes) => {
+  const rawScopes = Array.isArray(scopes) ? scopes : [];
+  const filteredScopes = rawScopes
+    .filter(scope => typeof scope === 'string')
+    .map(scope => scope.trim())
+    .filter(scope => scope.length > 0 && !DEPRECATED_SMARTTHINGS_SCOPES.includes(scope));
+
+  return Array.from(new Set([...filteredScopes, ...REQUIRED_SMARTTHINGS_SCOPES]));
+};
+
 const SmartThingsIntegrationSchema = new mongoose.Schema({
   // OAuth Configuration
   clientId: {
@@ -39,18 +65,7 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
   },
   scope: {
     type: [String],
-    default: [
-      'r:devices:*',
-      'x:devices:*',
-      'r:scenes:*',
-      'x:scenes:*',
-      'r:locations:*',
-      'x:locations:*',
-      'r:rules:*',
-      'w:rules:*',
-      'x:rules:*',
-      'r:security:locations:*:armstate'
-    ]
+    default: () => [...REQUIRED_SMARTTHINGS_SCOPES]
   },
 
   // Integration Status
@@ -146,18 +161,7 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
       refreshToken: '',
       tokenType: 'Bearer',
       expiresAt: null,
-      scope: [
-        'r:devices:*',
-        'x:devices:*',
-        'r:scenes:*',
-        'x:scenes:*',
-        'r:locations:*',
-        'x:locations:*',
-        'r:rules:*',
-        'w:rules:*',
-        'x:rules:*',
-        'r:security:locations:*:armstate'
-      ],
+      scope: [...REQUIRED_SMARTTHINGS_SCOPES],
       isConfigured: false,
       isConnected: false,
       lastSync: null,
@@ -216,23 +220,11 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
       changed = true;
     }
 
-    const requiredScopes = [
-      'r:devices:*',
-      'x:devices:*',
-      'r:scenes:*',
-      'x:scenes:*',
-      'r:locations:*',
-      'x:locations:*',
-      'r:rules:*',
-      'w:rules:*',
-      'x:rules:*',
-      'r:security:locations:*:armstate'
-    ];
-
-    const existingScopes = Array.isArray(integration.scope) ? integration.scope : [];
-    const updatedScopes = Array.from(new Set([...existingScopes, ...requiredScopes]));
-    if (updatedScopes.length !== existingScopes.length) {
-      integration.scope = updatedScopes;
+    const sanitizedScopes = sanitizeScopes(integration.scope);
+    if (!Array.isArray(integration.scope) ||
+        integration.scope.length !== sanitizedScopes.length ||
+        sanitizedScopes.some((scope, index) => scope !== integration.scope[index])) {
+      integration.scope = sanitizedScopes;
       changed = true;
     }
 
@@ -252,19 +244,6 @@ SmartThingsIntegrationSchema.statics.configureIntegration = async function(confi
   const clientSecret = trimString(config.clientSecret);
   const redirectUri = config.redirectUri ? trimString(config.redirectUri) : trimString(process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback');
 
-  const requiredScopes = [
-    'r:devices:*',
-    'x:devices:*',
-    'r:scenes:*',
-    'x:scenes:*',
-    'r:locations:*',
-    'x:locations:*',
-    'r:rules:*',
-    'w:rules:*',
-    'x:rules:*',
-    'r:security:locations:*:armstate'
-  ];
-
   let integration = await this.findOne();
 
   if (!integration) {
@@ -274,7 +253,7 @@ SmartThingsIntegrationSchema.statics.configureIntegration = async function(confi
       clientSecret,
       redirectUri,
       isConfigured: true,
-      scope: requiredScopes
+      scope: [...REQUIRED_SMARTTHINGS_SCOPES]
     });
   } else {
     console.log('SmartThingsIntegration: Updating existing integration configuration');
@@ -282,8 +261,7 @@ SmartThingsIntegrationSchema.statics.configureIntegration = async function(confi
     integration.clientSecret = clientSecret;
     integration.redirectUri = redirectUri;
     integration.isConfigured = true;
-    const existingScopes = Array.isArray(integration.scope) ? integration.scope : [];
-    integration.scope = Array.from(new Set([...existingScopes, ...requiredScopes]));
+    integration.scope = sanitizeScopes(integration.scope);
   }
 
   await integration.save();
