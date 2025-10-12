@@ -1,18 +1,23 @@
 const mongoose = require('mongoose');
 
+const trimString = (value) => (typeof value === 'string' ? value.trim() : value ?? '');
+
 const SmartThingsIntegrationSchema = new mongoose.Schema({
   // OAuth Configuration
   clientId: {
     type: String,
-    required: true
+    required: true,
+    set: value => typeof value === 'string' ? value.trim() : value
   },
   clientSecret: {
     type: String,
-    required: true
+    required: true,
+    set: value => typeof value === 'string' ? value.trim() : value
   },
   redirectUri: {
     type: String,
-    required: true
+    required: true,
+    set: value => typeof value === 'string' ? value.trim() : value
   },
 
   // OAuth Tokens
@@ -111,9 +116,9 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
     console.log('SmartThingsIntegration: No integration found, returning unconfigured status');
     // Return a plain object with default unconfigured state instead of trying to save invalid document
     return {
-      clientId: process.env.SMARTTHINGS_CLIENT_ID || '',
-      clientSecret: process.env.SMARTTHINGS_CLIENT_SECRET || '',
-      redirectUri: process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback',
+      clientId: trimString(process.env.SMARTTHINGS_CLIENT_ID || ''),
+      clientSecret: trimString(process.env.SMARTTHINGS_CLIENT_SECRET || ''),
+      redirectUri: trimString(process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback'),
       accessToken: '',
       refreshToken: '',
       tokenType: 'Bearer',
@@ -155,6 +160,30 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
     };
   }
 
+  if (integration) {
+    let changed = false;
+    const trimmedClientId = trimString(integration.clientId);
+    const trimmedClientSecret = trimString(integration.clientSecret);
+    const trimmedRedirectUri = trimString(integration.redirectUri);
+
+    if (integration.clientId !== trimmedClientId) {
+      integration.clientId = trimmedClientId;
+      changed = true;
+    }
+    if (integration.clientSecret !== trimmedClientSecret) {
+      integration.clientSecret = trimmedClientSecret;
+      changed = true;
+    }
+    if (integration.redirectUri !== trimmedRedirectUri) {
+      integration.redirectUri = trimmedRedirectUri;
+      changed = true;
+    }
+
+    if (changed && typeof integration.save === 'function') {
+      await integration.save();
+    }
+  }
+
   return integration;
 };
 
@@ -162,23 +191,25 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
 SmartThingsIntegrationSchema.statics.configureIntegration = async function(config) {
   console.log('SmartThingsIntegration: Configuring integration with OAuth settings');
 
+  const clientId = trimString(config.clientId);
+  const clientSecret = trimString(config.clientSecret);
+  const redirectUri = config.redirectUri ? trimString(config.redirectUri) : trimString(process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback');
+
   let integration = await this.findOne();
 
   if (!integration) {
     console.log('SmartThingsIntegration: Creating new integration configuration');
     integration = new this({
-      clientId: config.clientId,
-      clientSecret: config.clientSecret,
-      redirectUri: config.redirectUri || process.env.SMARTTHINGS_REDIRECT_URI || 'http://localhost:3000/api/smartthings/callback',
+      clientId,
+      clientSecret,
+      redirectUri,
       isConfigured: true
     });
   } else {
     console.log('SmartThingsIntegration: Updating existing integration configuration');
-    integration.clientId = config.clientId;
-    integration.clientSecret = config.clientSecret;
-    if (config.redirectUri) {
-      integration.redirectUri = config.redirectUri;
-    }
+    integration.clientId = clientId;
+    integration.clientSecret = clientSecret;
+    integration.redirectUri = redirectUri;
     integration.isConfigured = true;
   }
 
