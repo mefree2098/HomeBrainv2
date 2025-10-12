@@ -389,7 +389,72 @@ Pick only one path; you do not need both.
 
 ---
 
-## Step 16 - Ongoing maintenance
+## Step 16 - Configure SmartThings OAuth redirect (optional)
+SmartThings now requires OAuth settings to be managed with the SmartThings CLI. Use the CLI to aim the HomeBrain automation app back at your HTTPS domain.
+
+1. **Install or update the SmartThings CLI** (Node.js is already a prerequisite for HomeBrain):
+   ```powershell
+   npm install -g @smartthings/cli
+   ```
+   If the `smartthings` command is not on your `PATH`, prefix commands with `npx smartthings ...`.
+
+2. **Create a SmartThings personal access token** with `apps:read` and `apps:write` scopes at <https://account.smartthings.com/tokens>. Copy the token—you will paste it into the PowerShell session in the next step.
+
+3. **Run the following PowerShell script** (update `$appId` to your Automation App ID and `$redirect` to your HomeBrain domain). The script builds the JSON payload, updates the app via the CLI, and prints the new settings. Adjust `$scopes` if you want to limit access beyond the default superset.
+   ```powershell
+   # === EDIT THESE TWO ONLY ===
+   $appId    = "YOUR-SMARTTHINGS-APP-ID"
+   $redirect = "https://your-domain.com/api/smartthings/callback"
+
+   # === Known-valid scope superset ===
+   $scopes = @(
+     "r:devices:$",
+     "r:devices:*",
+     "r:hubs:*",
+     "r:installedapps",
+     "r:locations:*",
+     "r:rules:*",
+     "r:scenes:*",
+     "w:devices:$",
+     "w:devices:*",
+     "w:installedapps",
+     "w:locations:*",
+     "w:rules:*",
+     "x:devices:$",
+     "x:devices:*",
+     "x:locations:*",
+     "x:scenes:*"
+   )
+
+   # Set your SmartThings PAT for this session
+   $env:SMARTTHINGS_AUTH_TOKEN = "PASTE-YOUR-PAT-HERE"
+
+   # Build payload as JSON
+   $payload = @{
+     clientName   = "HomeBrain OAuth"
+     scope        = $scopes
+     redirectUris = @($redirect)
+   }
+   $outFile = "oauth-update.json"
+   $payload | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 $outFile
+
+   Write-Host ">>> Sending this payload to SmartThings:"
+   Get-Content $outFile | Write-Host
+
+   # Update OAuth settings
+   npx smartthings apps:oauth:update $appId --input $outFile --json
+
+   # Verify the redirect URI
+   npx smartthings apps:oauth $appId --json
+   ```
+
+4. After the redirect URI is updated, rerun **Connect to SmartThings** inside HomeBrain. The SmartThings authorization page should accept the redirect and return you to `/settings?smartthings=success` on your domain.
+
+When you are finished, close the PowerShell session or run `Remove-Item Env:\SMARTTHINGS_AUTH_TOKEN` so the token is not left in memory.
+
+---
+
+## Step 17 - Ongoing maintenance
 - Update code:
   ```bash
   cd ~/homebrain/HomeBrainv2
