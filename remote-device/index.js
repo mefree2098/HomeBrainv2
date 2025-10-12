@@ -336,6 +336,10 @@ class HomeBrainRemoteDevice {
           console.log('Authentication successful');
           this.isAuthenticated = true;
           if (message.config) {
+            const assetCount = Array.isArray(message.config?.wakeWord?.assets)
+              ? message.config.wakeWord.assets.length
+              : 0;
+            console.log(`Auth payload received with ${assetCount} wake word asset(s) and wakeWords=${JSON.stringify(message.config.wakeWords || [])}`);
             const detectorNeedsRestart = await this.applyConfigUpdate(message.config);
             await this.saveConfig();
             if (detectorNeedsRestart) {
@@ -349,6 +353,10 @@ class HomeBrainRemoteDevice {
 
         case 'config_update': {
           if (message.config) {
+            const assetCount = Array.isArray(message.config?.wakeWord?.assets)
+              ? message.config.wakeWord.assets.length
+              : 0;
+            console.log(`Config update received with ${assetCount} wake word asset(s)`);
             const detectorNeedsRestart = await this.applyConfigUpdate(message.config);
             await this.saveConfig();
             if (detectorNeedsRestart) {
@@ -477,6 +485,15 @@ class HomeBrainRemoteDevice {
     const assetsChanged = await this.syncWakeWordAssetsFromConfig(config);
     restartNeeded = restartNeeded || assetsChanged;
 
+    const keywordSummary = Array.isArray(this.config.wakeWord?.keywords) && this.config.wakeWord.keywords.length
+      ? this.config.wakeWord.keywords.map((keyword) => `${keyword.label}:${keyword.path}`).join(', ')
+      : null;
+    if (keywordSummary) {
+      console.log(`Wake word keywords active: ${keywordSummary}`);
+    } else {
+      console.log('No wake word keywords currently active after config update');
+    }
+
     return restartNeeded;
   }
 
@@ -508,6 +525,7 @@ class HomeBrainRemoteDevice {
       ...this.config.wakeWord,
       cacheDir: targetDir
     };
+    console.log(`Wake word cache directory set to ${targetDir}`);
     return targetDir;
   }
 
@@ -525,12 +543,19 @@ class HomeBrainRemoteDevice {
     try {
       await fs.promises.access(localPath, fs.constants.R_OK);
       if (!expectedChecksum) {
+        console.log(`Wake word cache hit for ${localPath} (no checksum provided)`);
         return false;
       }
       const currentChecksum = await this.computeFileChecksum(localPath);
+      if (currentChecksum !== expectedChecksum) {
+        console.log(`Wake word checksum mismatch for ${localPath} (expected ${expectedChecksum}, found ${currentChecksum})`);
+      } else {
+        console.log(`Wake word checksum validated for ${localPath}`);
+      }
       return currentChecksum !== expectedChecksum;
     } catch (error) {
       if (error.code === 'ENOENT') {
+        console.log(`Wake word model missing at ${localPath}`);
         return true;
       }
       throw error;
@@ -559,6 +584,7 @@ class HomeBrainRemoteDevice {
     const assets = Array.isArray(wakeWordConfig.assets) ? wakeWordConfig.assets : [];
 
     if (!assets.length) {
+      console.log('Wake word configuration provided no assets; skipping synchronization');
       return false;
     }
 
@@ -594,6 +620,9 @@ class HomeBrainRemoteDevice {
         }
         await fs.promises.writeFile(localPath, buffer);
         assetsChanged = true;
+        console.log(`Saved wake word model for "${label}" to ${localPath}`);
+      } else {
+        console.log(`Wake word model for "${label}" already up to date at ${localPath}`);
       }
 
       keywords.push({
@@ -618,6 +647,7 @@ class HomeBrainRemoteDevice {
     const newSignature = this.generateWakeWordAssetSignature(keywords);
     if (newSignature !== this.wakeWordAssetSignature) {
       assetsChanged = true;
+      console.log('Wake word keyword set changed; updating signature');
       this.wakeWordAssetSignature = newSignature;
     }
 
