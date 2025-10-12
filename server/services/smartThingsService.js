@@ -19,22 +19,28 @@ class SmartThingsService {
 
       const integration = await SmartThingsIntegration.getIntegration();
 
-      if (!integration.clientId || !integration.redirectUri) {
+      const clientId = integration.clientId ? integration.clientId.trim() : '';
+      const redirectUri = integration.redirectUri ? integration.redirectUri.trim() : '';
+      const scope = Array.isArray(integration.scope) && integration.scope.length > 0
+        ? integration.scope
+        : ['r:devices:*', 'x:devices:*', 'r:scenes:*', 'x:scenes:*', 'r:locations:*'];
+
+      if (!clientId || !redirectUri) {
         throw new Error('SmartThings OAuth configuration incomplete. Please configure Client ID and Redirect URI.');
       }
 
       const params = new URLSearchParams({
         response_type: 'code',
-        client_id: integration.clientId,
-        redirect_uri: integration.redirectUri,
-        scope: integration.scope.join(' '),
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: scope.join(' '),
         state: Date.now().toString() // Simple state for CSRF protection
       });
 
       console.log('SmartThingsService: Authorization context', {
-        clientId: integration.clientId,
-        redirectUri: integration.redirectUri,
-        scope: integration.scope,
+        clientId,
+        redirectUri,
+        scope,
         authUrl: `${this.authUrl}?${params.toString()}`
       });
 
@@ -61,18 +67,22 @@ class SmartThingsService {
 
       const integration = await SmartThingsIntegration.getIntegration();
 
-      if (!integration.clientId || !integration.clientSecret || !integration.redirectUri) {
+      const clientId = integration.clientId ? integration.clientId.trim() : '';
+      const clientSecret = integration.clientSecret ? integration.clientSecret.trim() : '';
+      const redirectUri = integration.redirectUri ? integration.redirectUri.trim() : '';
+
+      if (!clientId || !clientSecret || !redirectUri) {
         throw new Error('SmartThings OAuth configuration incomplete');
       }
 
       const tokenData = new URLSearchParams();
       tokenData.append('grant_type', 'authorization_code');
       tokenData.append('code', code);
-      tokenData.append('redirect_uri', integration.redirectUri);
-      tokenData.append('client_id', integration.clientId);
-      tokenData.append('client_secret', integration.clientSecret);
+      tokenData.append('redirect_uri', redirectUri);
+      tokenData.append('client_id', clientId);
+      tokenData.append('client_secret', clientSecret);
 
-      const basicAuth = Buffer.from(`${integration.clientId}:${integration.clientSecret}`, 'utf8').toString('base64');
+      const basicAuth = Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64');
 
       const response = await axios.post(this.tokenUrl, tokenData.toString(), {
         headers: {
@@ -116,17 +126,24 @@ class SmartThingsService {
 
       const integration = await SmartThingsIntegration.getIntegration();
 
+      const clientId = integration.clientId ? integration.clientId.trim() : '';
+      const clientSecret = integration.clientSecret ? integration.clientSecret.trim() : '';
+
       if (!integration.refreshToken) {
         throw new Error('No refresh token available');
+      }
+
+      if (!clientId || !clientSecret) {
+        throw new Error('SmartThings OAuth configuration incomplete');
       }
 
       const tokenData = new URLSearchParams();
       tokenData.append('grant_type', 'refresh_token');
       tokenData.append('refresh_token', integration.refreshToken);
-      tokenData.append('client_id', integration.clientId);
-      tokenData.append('client_secret', integration.clientSecret);
+      tokenData.append('client_id', clientId);
+      tokenData.append('client_secret', clientSecret);
 
-      const basicAuth = Buffer.from(`${integration.clientId}:${integration.clientSecret}`, 'utf8').toString('base64');
+      const basicAuth = Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64');
 
       const response = await axios.post(this.tokenUrl, tokenData.toString(), {
         headers: {
