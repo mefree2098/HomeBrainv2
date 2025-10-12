@@ -197,7 +197,7 @@ class VoiceWebSocketServer {
       }
 
       if (device.settings.registrationCode !== registrationCode) {
-        console.warn(`Authentication failed for device ${deviceId}: Invalid registration code`);
+        console.warn(`Authentication failed for device ${deviceId}: Invalid registration code (${registrationCode || 'none'})`);
         this.sendMessage(deviceId, {
           type: 'auth_failed',
           message: 'Invalid registration code'
@@ -210,6 +210,8 @@ class VoiceWebSocketServer {
 
       const platform = deviceInfo.platform || null;
       const arch = deviceInfo.arch || null;
+      console.log(`Authenticating device ${deviceId} (${device.name}) with code ${registrationCode}`);
+
       const assets = wakeWordAssets.getAssetsForWakeWords(device.supportedWakeWords, {
         platform,
         arch,
@@ -218,6 +220,9 @@ class VoiceWebSocketServer {
 
       if (!assets.length) {
         console.warn(`No wake word assets available for device ${device.name}. Ensure files exist in server/public/wake-words.`);
+      } else {
+        const assetLabels = assets.map((asset) => `${asset.label}:${asset.fileName}`).join(', ');
+        console.log(`Resolved ${assets.length} wake word asset(s) for ${device.name}: ${assetLabels}`);
       }
 
       const wakeWordAssetPayload = assets.map((asset) => {
@@ -241,6 +246,8 @@ class VoiceWebSocketServer {
           downloadUrl: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
         };
       });
+
+      console.log(`Sending auth_success to ${deviceId} with ${wakeWordAssetPayload.length} wake word asset(s)`);
 
       this.sendMessage(deviceId, {
         type: 'auth_success',
@@ -552,6 +559,11 @@ class VoiceWebSocketServer {
     }
 
     try {
+      if (message && message.type) {
+        console.log(`Dispatching message "${message.type}" to device ${deviceId}`);
+      } else {
+        console.log(`Dispatching unnamed message to device ${deviceId}`);
+      }
       connection.ws.send(JSON.stringify(message));
       return true;
     } catch (error) {
