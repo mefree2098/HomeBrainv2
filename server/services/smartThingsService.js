@@ -438,8 +438,12 @@ class SmartThingsService {
         appliedDirect = true;
         break;
       } catch (error) {
-        if (!error.status || ![404, 405, 422].includes(error.status)) {
+        if (!error.status || ![403, 404, 405, 422].includes(error.status)) {
           throw error;
+        }
+
+        if (error.status === 403) {
+          console.warn(`SmartThingsService: Security arm endpoint denied (403) for ${endpoint.method} ${endpoint.path}, attempting rules fallback`);
         }
       }
     }
@@ -484,7 +488,16 @@ class SmartThingsService {
           });
         }
       } catch (error) {
-        console.error('SmartThingsService: Failed to apply security arm state via Rules API:', error.data || error.message);
+        const errorPayload = error.data || error.message;
+        console.error('SmartThingsService: Failed to apply security arm state via Rules API:', errorPayload);
+
+        if (error.status === 403) {
+          const scopeError = new Error('SmartThings rejected rule execution (missing w:rules:* or x:rules:* scope). Update the SmartThings app OAuth scopes, reconnect HomeBrain, then try again.');
+          scopeError.status = error.status;
+          scopeError.data = error.data;
+          throw scopeError;
+        }
+
         throw error;
       }
 
