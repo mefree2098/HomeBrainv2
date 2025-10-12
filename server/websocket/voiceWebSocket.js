@@ -91,6 +91,12 @@ class VoiceWebSocketServer {
 
       // Set up WebSocket event handlers
       ws.on('message', (message) => {
+        try {
+          const text = message.toString();
+          console.log(`WebSocket message event for ${deviceId}: ${text}`);
+        } catch (logError) {
+          console.warn(`Failed to log raw message for ${deviceId}:`, logError);
+        }
         this.handleMessage(deviceId, message);
       });
 
