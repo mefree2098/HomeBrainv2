@@ -100,13 +100,16 @@ router.get('/auth/url', auth, async (req, res) => {
 // Response: Redirect to frontend with success/error status
 router.get('/callback', async (req, res) => {
   try {
-    const { code, state, error } = req.query;
+    const { code, state, error, error_description: errorDescription } = req.query;
+
+    console.log('SmartThings Routes: OAuth callback query params', req.query);
 
     console.log('SmartThings Routes: Handling OAuth callback');
 
     if (error) {
-      console.error('SmartThings Routes: OAuth error:', error);
-      return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}/settings?smartthings=error&message=${encodeURIComponent(error)}`);
+      const message = errorDescription || error;
+      console.error('SmartThings Routes: OAuth error:', message);
+      return res.redirect(`${process.env.CLIENT_URL || 'http://localhost:5173'}/settings?smartthings=error&message=${encodeURIComponent(message)}`);
     }
 
     if (!code) {
