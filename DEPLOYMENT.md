@@ -12,7 +12,7 @@ This document walks through deploying the HomeBrain platform from this repositor
 
 HomeBrain uses these default ports:
 - `3000/tcp` - API and WebSocket traffic
-- `3443/tcp` - optional HTTPS API (if certificates are configured)
+- `443/tcp` - optional HTTPS API (if certificates are configured)
 - `5173/tcp` - front-end UI (Vite preview or dev server)
 - `12345/udp` - device discovery broadcast channel
 
@@ -162,11 +162,11 @@ DATABASE_URL=mongodb://localhost/HomeBrain
 JWT_SECRET=<paste output from openssl rand -hex 32>
 REFRESH_TOKEN_SECRET=<paste another value>
 ELEVENLABS_API_KEY=   # leave blank unless you have a key
-HTTPS_PORT=3443
+HTTPS_PORT=443
 ACME_CHALLENGE_PORT=80
 ```
 
-Port 80 must be available so the built-in ACME challenge listener can respond to Let's Encrypt HTTP-01 checks. If another service already binds to port 80, stop it temporarily or adjust your reverse proxy strategy before requesting certificates.
+Port 80 must be available so the built-in ACME challenge listener can respond to Let's Encrypt HTTP-01 checks. Ensure port 443 is also free if you keep the default HTTPS listener; stop or reconfigure any conflicting service before requesting certificates.
 
 Grant the Node.js binary permission to bind privileged ports (80/443) once after installation:
 ```bash
@@ -290,7 +290,7 @@ If you plan to use UFW:
 sudo ufw allow 22/tcp
 sudo ufw allow 3000/tcp
 sudo ufw allow 5173/tcp
-sudo ufw allow 3443/tcp
+sudo ufw allow 443/tcp
 sudo ufw enable
 sudo ufw status
 ```
@@ -417,7 +417,7 @@ Pick only one path; you do not need both.
 - API not responding: `sudo systemctl status homebrain`
 - Detailed logs: `journalctl -u homebrain -n 100`
 - MongoDB errors: `sudo tail -n 100 /var/log/mongodb/mongod.log`
-- Port conflicts: `sudo netstat -tulpn | grep -E '3000|5173|3443|12345'`
+- Port conflicts: `sudo netstat -tulpn | grep -E '3000|5173|443|12345'`
 - Discovery diagnostics: `sudo tcpdump -i any udp port 12345`
 - Reset admin: rerun `node server/scripts/createAdminUser.js --force --email ...`
 
