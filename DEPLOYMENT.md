@@ -164,6 +164,7 @@ REFRESH_TOKEN_SECRET=<paste another value>
 ELEVENLABS_API_KEY=   # leave blank unless you have a key
 HTTPS_PORT=443
 ACME_CHALLENGE_PORT=80
+# CLIENT_URL=https://your-domain.com   # optional override for frontend redirects
 ```
 
 Port 80 must be available so the built-in ACME challenge listener can respond to Let's Encrypt HTTP-01 checks. Ensure port 443 is also free if you keep the default HTTPS listener; stop or reconfigure any conflicting service before requesting certificates.
