@@ -480,6 +480,17 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
     val_features = np.concatenate([pos_val_windows, neg_val_windows], axis=0)
     val_labels = np.concatenate([pos_val_labels, neg_val_labels], axis=0)
 
+    if train_features.shape[0] == 0 or train_labels.shape[0] == 0:
+        raise ValueError(
+            "Training dataset is empty. Try increasing the number or duration of positive/negative samples, "
+            "or verify that the generated clips are at least the configured clip length."
+        )
+
+    if val_features.shape[0] == 0 or val_labels.shape[0] == 0:
+        raise ValueError(
+            "Validation dataset is empty. Try increasing the dataset size or adjusting the train/validation split."
+        )
+
     rng_np = np.random.default_rng(42)
     train_idx = rng_np.permutation(train_features.shape[0])
     val_idx = rng_np.permutation(val_features.shape[0])
