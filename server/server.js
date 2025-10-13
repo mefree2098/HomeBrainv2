@@ -152,6 +152,26 @@ app.use('/api/ollama', ollamaRoutes);
 // Resource Monitor Routes
 app.use('/api/resources', resourceRoutes);
 
+// Serve built client app in production (fallback for SPA routes)
+const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
+if (fs.existsSync(clientDistPath)) {
+  console.log(`Serving client build from ${clientDistPath}`);
+  app.use(express.static(clientDistPath));
+
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) {
+      return next();
+    }
+
+    const indexFilePath = path.join(clientDistPath, 'index.html');
+    res.sendFile(indexFilePath, (error) => {
+      if (error) {
+        next(error);
+      }
+    });
+  });
+}
+
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {
   res.status(404).send("Page not found.");
