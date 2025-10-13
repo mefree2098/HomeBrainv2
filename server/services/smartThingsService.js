@@ -889,6 +889,12 @@ class SmartThingsService {
 
       const locationQuery = `locationId=${encodeURIComponent(resolvedLocationId)}`;
       try {
+        console.debug('SmartThingsService: Creating temporary rule for STHM armState', {
+          ruleName,
+          normalizedState,
+          resolvedLocationId
+        });
+        console.debug('SmartThingsService: Rule payload', rulePayload);
         const ruleResponse = await this.makeAuthenticatedRequest(`/rules?${locationQuery}`, {
           method: 'POST',
           data: rulePayload
@@ -908,7 +914,7 @@ class SmartThingsService {
         }
       } catch (error) {
         const errorPayload = error.data || error.message;
-        console.error('SmartThingsService: Failed to apply security arm state via Rules API:', errorPayload);
+        console.error('SmartThingsService: Failed to apply security arm state via Rules API:', JSON.stringify(errorPayload, null, 2));
 
         if (error.status === 403) {
           const scopeError = new Error('SmartThings rejected rule execution (missing w:rules:* scope). Update the SmartThings app OAuth scopes, reconnect HomeBrain, then try again.');
