@@ -2,6 +2,14 @@ const Device = require('../models/Device');
 const smartThingsService = require('./smartThingsService');
 
 class DeviceService {
+  constructor() {
+    this.smartThingsPresence = null;
+    this.smartThingsPresenceCheckedAt = 0;
+    this.smartThingsSyncPromise = null;
+    this.lastSmartThingsSyncAt = 0;
+    this.smartThingsSyncCooldownMs = Number(process.env.SMARTTHINGS_DEVICE_REFRESH_MS || 15000);
+  }
+
   /**
    * Get all devices
    * @param {Object} filters - Optional filters (room, type, status, isOnline)
@@ -10,7 +18,9 @@ class DeviceService {
   async getAllDevices(filters = {}) {
     try {
       console.log('DeviceService: Fetching all devices with filters:', filters);
-      
+
+      await this.ensureSmartThingsState();
+
       const query = {};
       if (filters.room) query.room = filters.room;
       if (filters.type) query.type = filters.type;
@@ -36,7 +46,9 @@ class DeviceService {
   async getDeviceById(deviceId) {
     try {
       console.log('DeviceService: Fetching device by ID:', deviceId);
-      
+
+      await this.ensureSmartThingsState();
+
       const device = await Device.findById(deviceId);
       if (!device) {
         console.log('DeviceService: Device not found for ID:', deviceId);
@@ -199,6 +211,10 @@ class DeviceService {
       }
 
       const isSmartThings = this.isSmartThingsDevice(device);
+
+      if (isSmartThings) {
+        await this.ensureSmartThingsState({ immediate: true });
+      }
 
       if (!device.isOnline) {
         if (isSmartThings) {
@@ -629,14 +645,34 @@ class DeviceService {
           status
         };
 
-        const updates = await smartThingsService.buildSmartThingsDeviceUpdate(device, combined);
-        if (updates) {
-          const healthState = details?.healthState?.state || '';
-          updates.isOnline = healthState.toUpperCase() !== 'OFFLINE';
-          updates.lastSeen = new Date();
+        let updates = await smartThingsService.buildSmartThingsDeviceUpdate(device, combined);
+        if (!updates) {
+          updates = {};
+        }
+
+        const healthState = details?.healthState?.state || '';
+        const isOnline = healthState.toUpperCase() !== 'OFFLINE';
+        const lastSeen = details?.healthState?.lastUpdatedDate
+          ? new Date(details.healthState.lastUpdatedDate)
+          : new Date();
+
+        if (updates.isOnline === undefined && device.isOnline !== isOnline) {
+          updates.isOnline = isOnline;
+        }
+        updates.lastSeen = lastSeen;
+        updates['properties.smartThingsHealthState'] = details?.healthState || null;
+        if (details?.locationId) {
+          updates['properties.smartThingsLocationId'] = details.locationId;
+        }
+
+        if (Object.keys(updates).length > 0) {
           lastUpdates = updates;
 
-          if (expectedStatus === undefined || updates.status === expectedStatus) {
+          if (
+            expectedStatus === undefined ||
+            updates.status === undefined ||
+            updates.status === expectedStatus
+          ) {
             return updates;
           }
         }
@@ -660,7 +696,9 @@ class DeviceService {
   async getDevicesByRoom() {
     try {
       console.log('DeviceService: Fetching devices grouped by room');
-      
+
+      await this.ensureSmartThingsState();
+
       const devices = await Device.find().sort({ room: 1, name: 1 });
       
       // Group devices by room
@@ -694,7 +732,9 @@ class DeviceService {
   async getDeviceStats() {
     try {
       console.log('DeviceService: Fetching device statistics');
-      
+
+      await this.ensureSmartThingsState();
+
       const totalDevices = await Device.countDocuments();
       const onlineDevices = await Device.countDocuments({ isOnline: true });
       const activeDevices = await Device.countDocuments({ status: true });
@@ -726,6 +766,71 @@ class DeviceService {
       console.error(error.stack);
       throw new Error('Failed to fetch device statistics');
     }
+  }
+
+  async ensureSmartThingsState({ immediate = false } = {}) {
+    const hasSmartThings = await this.detectSmartThingsPresence();
+    if (!hasSmartThings) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (this.smartThingsSyncPromise) {
+      try {
+        await this.smartThingsSyncPromise;
+      } catch (error) {
+        console.warn('DeviceService: SmartThings state refresh in progress failed:', error.message);
+      }
+      if (!immediate && now - this.lastSmartThingsSyncAt < this.smartThingsSyncCooldownMs) {
+        return;
+      }
+    } else if (!immediate && now - this.lastSmartThingsSyncAt < this.smartThingsSyncCooldownMs) {
+      return;
+    }
+
+    this.smartThingsSyncPromise = (async () => {
+      let succeeded = false;
+      try {
+        await smartThingsService.runDeviceStatusSync();
+        succeeded = true;
+      } catch (error) {
+        console.warn('DeviceService: SmartThings state refresh failed:', error.message);
+        throw error;
+      } finally {
+        if (succeeded) {
+          this.lastSmartThingsSyncAt = Date.now();
+        }
+        this.smartThingsSyncPromise = null;
+      }
+    })();
+
+    try {
+      await this.smartThingsSyncPromise;
+    } catch (error) {
+      // already logged above
+    }
+  }
+
+  async detectSmartThingsPresence() {
+    const now = Date.now();
+    if (this.smartThingsPresence !== null && (now - this.smartThingsPresenceCheckedAt) < 60000) {
+      return this.smartThingsPresence;
+    }
+
+    try {
+      this.smartThingsPresence = await Device.exists({
+        'properties.source': 'smartthings',
+        'properties.smartThingsDeviceId': { $exists: true }
+      });
+    } catch (error) {
+      console.warn('DeviceService: Failed to detect SmartThings devices:', error.message);
+      this.smartThingsPresence = false;
+    } finally {
+      this.smartThingsPresenceCheckedAt = now;
+    }
+
+    return this.smartThingsPresence;
   }
 }
 
