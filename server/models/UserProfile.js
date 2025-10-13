@@ -12,6 +12,10 @@ const schema = new mongoose.Schema({
     required: true,
     trim: true,
   }],
+  wakeWordModels: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'WakeWordModel'
+  }],
   voiceId: {
     type: String,
     required: true,

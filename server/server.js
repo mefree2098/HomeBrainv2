@@ -26,6 +26,7 @@ const resourceRoutes = require("./routes/resourceRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const DiscoveryService = require("./services/discoveryService");
 const remoteUpdateService = require("./services/remoteUpdateService");
+const wakeWordTrainingService = require("./services/wakeWordTrainingService");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 const http = require("http");
@@ -227,6 +228,10 @@ async function setupHttpsServer() {
 // Initialize WebSocket server on HTTP
 const voiceWsServer = new VoiceWebSocketServer();
 voiceWsServer.initialize(httpServer);
+wakeWordTrainingService.setVoiceWebSocket(voiceWsServer);
+wakeWordTrainingService.resumePendingTraining().catch((error) => {
+  console.error('Failed to resume wake word training jobs:', error);
+});
 
 // Store voice WebSocket instance for use in routes
 app.set('voiceWebSocket', voiceWsServer);

@@ -208,24 +208,20 @@ Edit `config.json`:
 }
 ```
 
-#### Wake Word Engine (Porcupine)
+#### Wake Word Engine (OpenWakeWord)
 
-1. **Install the Porcupine binding** (optional dependency) on the device:
+1. **Install/update dependencies** on the device (this pulls `onnxruntime-node`):
    ```bash
    cd ~/homebrain/remote-device
-   npm install @picovoice/porcupine-node
+   npm install
    ```
-2. **Configure your Picovoice AccessKey** (keep it secret):
+2. **Restart the remote service** whenever you deploy new code so it loads the OpenWakeWord runtime:
    ```bash
-   export PICOVOICE_ACCESS_KEY="YOUR_PICOVOICE_ACCESS_KEY"
-   # or set in /etc/environment or your systemd unit Environment directive
+   sudo systemctl restart homebrain-remote
+   journalctl -u homebrain-remote -n 20
    ```
-3. **Copy your keyword `.ppn` files to the hub** (Jetson). Place them in `server/public/wake-words/` with a slugged name, e.g. `anna_raspberry-pi.ppn` or `anna.ppn` for a generic model:
-   ```bash
-   scp anna_raspberry-pi.ppn jetson:/opt/homebrain/HomeBrainv2/server/public/wake-words/
-   ```
-4. *(Optional)* Drop additional variants (e.g., desktop builds) in the same directory using the `<slug>_<platform>.ppn` naming convention. The hub picks the best match based on the device’s platform and architecture.
-5. **Restart the remote device service** (or rerun `./start.sh`). On startup/authentication the Pi contacts the hub, downloads any missing wake-word models, and populates `wake-words/` next to your config automatically—no manual path edits are required.
+3. **Let the hub manage models.** Trained `.tflite` files are downloaded automatically into `~/homebrain-remote/wake-words/` based on the profile wake words configured in the UI—no AccessKey or manual copying is required.
+4. **Monitor detection** with `journalctl -u homebrain-remote -f`; successful triggers appear as `wake_word_detected` events.
 
 #### Audio Configuration
 
@@ -337,13 +333,11 @@ sudo systemctl status homebrain-remote
 
 ### Custom Wake Words
 
-#### Using Picovoice Console
-1. Visit [Picovoice Console](https://console.picovoice.ai/)
-2. Create account and new wake word
-3. Train with voice samples
-4. Download `.ppn` file
-5. Copy the resulting `.ppn` files to the HomeBrain hub: `server/public/wake-words/` (use descriptive filenames like `anna_raspberry-pi.ppn`).
-6. Restart the remote device process so it re-authenticates and downloads the new models automatically.
+#### Using the HomeBrain Training Pipeline
+1. Open the HomeBrain UI, edit (or create) the profile that should respond to the wake word, and add the new phrase.
+2. Wait for the hub to finish training (watch `journalctl -u homebrain -f` or query the Profiles API until the model status becomes `ready`).
+3. Confirm a matching `.tflite` file appears under `server/public/wake-words/`.
+4. Restart the remote service—or wait for the next `config_update`—so the Pi downloads the new model into `~/homebrain-remote/wake-words/`.
 
 #### Configuration Example
 ```json
@@ -354,13 +348,13 @@ sudo systemctl status homebrain-remote
     "keywords": [
       {
         "label": "Anna",
-        "path": "/home/pi/homebrain-remote/wake-words/anna_raspberry-pi.ppn",
-        "sensitivity": 0.6
+        "path": "/home/pi/homebrain-remote/wake-words/anna.tflite",
+        "threshold": 0.55
       },
       {
         "label": "Henry",
-        "path": "/home/pi/homebrain-remote/wake-words/henry_raspberry-pi.ppn",
-        "sensitivity": 0.7
+        "path": "/home/pi/homebrain-remote/wake-words/henry.tflite",
+        "threshold": 0.6
       }
     ],
     "assets": [
@@ -493,7 +487,7 @@ nmap -sn 192.168.1.0/24
 #### Voice Recognition Problems
 1. **Microphone Sensitivity**: Adjust in config.json
 2. **Background Noise**: Enable noise reduction
-3. **Wake Word Models**: Verify `.ppn` files are correct
+3. **Wake Word Models**: Confirm `.tflite` models exist in `~/homebrain-remote/wake-words/` and that the hub reports the wake word status as `ready`
 4. **Audio Quality**: Check for audio distortion or clipping
 
 #### Service Startup Issues

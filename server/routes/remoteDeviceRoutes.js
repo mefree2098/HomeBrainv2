@@ -5,6 +5,7 @@ const { requireUser } = require('./middlewares/auth');
 const crypto = require('crypto');
 const wakeWordAssets = require('../utils/wakeWordAssets');
 const fs = require('fs');
+const path = require('path');
 
 // Description: Register a new remote device
 // Endpoint: POST /api/remote-devices/register
@@ -111,7 +112,11 @@ router.get('/:deviceId/wake-words', async (req, res) => {
         updatedAt: asset.updatedAt,
         downloadPath: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}`,
         platform: asset.platform,
-        arch: asset.arch
+        arch: asset.arch,
+        engine: asset.engine,
+        format: asset.format,
+        sensitivity: asset.sensitivity,
+        threshold: asset.threshold
       }))
     });
 
@@ -138,7 +143,7 @@ router.get('/:deviceId/wake-words/:slug', async (req, res) => {
       });
     }
 
-    const normalisedSlug = slug.toLowerCase().replace(/\.ppn$/i, '');
+    const normalisedSlug = slug.toLowerCase().replace(/\.(ppn|tflite|onnx)$/i, '');
     const asset = wakeWordAssets.getAssetForWakeWord(normalisedSlug, {
       slug: normalisedSlug,
       platform,
@@ -157,6 +162,8 @@ router.get('/:deviceId/wake-words/:slug', async (req, res) => {
     res.setHeader('Content-Length', asset.size);
     res.setHeader('ETag', asset.checksum);
     res.setHeader('Content-Disposition', `attachment; filename="${asset.fileName}"`);
+    res.setHeader('X-Wake-Word-Format', asset.format || path.extname(asset.fileName).slice(1));
+    res.setHeader('X-Wake-Word-Engine', asset.engine || 'openwakeword');
 
     const readStream = fs.createReadStream(asset.absolutePath);
     readStream.on('error', (streamError) => {
