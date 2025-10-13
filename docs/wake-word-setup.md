@@ -18,7 +18,7 @@ Make sure the following are ready:
   scripts/install-openwakeword-deps.sh
   ```
 
-  Set `PYTHON_BIN` if you want to target a specific interpreter. Consult the [OpenWakeWord project](https://github.com/dscripka/openWakeWord) if you need GPU support or a custom backend.
+  Set `PYTHON_BIN` if you want to target a specific interpreter. The script creates `server/.wakeword-venv`, installs the necessary (pinned) Python packages, and the training service automatically prefers `server/.wakeword-venv/bin/python`. Consult the [OpenWakeWord project](https://github.com/dscripka/openWakeWord) if you need GPU support or a custom backend.
 
 ---
 

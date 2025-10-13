@@ -192,7 +192,7 @@ cd ~/homebrain/HomeBrainv2/server
 scripts/install-openwakeword-deps.sh
 ```
 
-Set `PYTHON_BIN=/usr/bin/python3.10` if you need to target a specific interpreter. The script upgrades `pip` and installs the `openwakeword[train]` package.
+Set `PYTHON_BIN=/usr/bin/python3.10` if you need to target a specific interpreter. The script creates `server/.wakeword-venv`, pins compatible versions of NumPy/SciPy, and installs `openwakeword[train]`. The wake-word training service will automatically pick up `server/.wakeword-venv/bin/python` the next time it starts.
 
 ---
 
