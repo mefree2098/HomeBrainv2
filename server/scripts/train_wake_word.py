@@ -255,7 +255,10 @@ def augment(samples: List[np.ndarray], copies: int, rng: random.Random) -> List[
             if signal is not None and rng.random() < 0.3:
                 impulse = np.exp(-np.linspace(0, 3, 2048) * rng.uniform(0.2, 0.6)).astype(np.float32)
                 noisy = signal.fftconvolve(noisy, impulse, mode="full").astype(np.float32)
-            augmented.append(np.clip(noisy, -1.0, 1.0))
+            noisy = np.clip(noisy, -1.0, 1.0).astype(np.float32)
+            if noisy.shape[0] != base.shape[0]:
+                noisy = pad_audio(noisy, base.shape[0], rng)
+            augmented.append(noisy)
     return augmented
 
 
