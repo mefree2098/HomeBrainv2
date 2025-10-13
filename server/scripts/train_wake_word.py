@@ -436,6 +436,12 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
     augment_copies = int(dataset_cfg.get("augmentCopies", 2))
     train_ratio = float(dataset_cfg.get("trainSplit", 0.85))
 
+    try:
+        from openwakeword import utils as oww_utils  # type: ignore
+        oww_utils.download_models()
+    except Exception as download_error:  # pragma: no cover
+        progress("generating", 0.01, f"Warning: failed to verify OpenWakeWord resources ({download_error}); proceeding with existing files.")
+
     work_dir = Path(tempfile.mkdtemp(prefix=f"wakeword-{args.slug}-"))
     ensure_dir(work_dir)
 
