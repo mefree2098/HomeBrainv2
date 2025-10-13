@@ -8,17 +8,26 @@ const UserProfile = require('../models/UserProfile');
 const VoiceDevice = require('../models/VoiceDevice');
 const { slugify, WAKE_WORD_ROOT } = require('../utils/wakeWordAssets');
 
+const SERVER_ROOT = path.join(__dirname, '..');
+const DEFAULT_VENV_DIR = path.join(SERVER_ROOT, '.wakeword-venv');
+const DEFAULT_VENV_PYTHON = process.platform === 'win32'
+  ? path.join(DEFAULT_VENV_DIR, 'Scripts', 'python.exe')
+  : path.join(DEFAULT_VENV_DIR, 'bin', 'python');
+
 class WakeWordTrainingService {
   constructor() {
     this.queue = Promise.resolve();
     this.pendingSlugs = new Set();
     this.voiceWebSocket = null;
-    this.pythonExecutable = process.env.PYTHON_EXECUTABLE || process.env.WAKEWORD_TRAINING_PYTHON || 'python3';
+    this.pythonExecutable = process.env.PYTHON_EXECUTABLE
+      || process.env.WAKEWORD_TRAINING_PYTHON
+      || (fs.existsSync(DEFAULT_VENV_PYTHON) ? DEFAULT_VENV_PYTHON : 'python3');
     this.trainerScript = path.join(__dirname, '..', 'scripts', 'train_wake_word.py');
     this.defaultFormat = process.env.WAKEWORD_TRAINING_FORMAT || 'tflite';
     this.ensureDirectories().catch((error) => {
       console.error('Failed to prepare wake word directories:', error);
     });
+    console.log(`[wakeword] Training service using Python executable: ${this.pythonExecutable}`);
   }
 
   async ensureDirectories() {
