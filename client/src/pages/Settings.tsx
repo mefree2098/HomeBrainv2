@@ -1,10 +1,16 @@
 import { useState, useEffect } from "react"
+}
+  )
+            <WakeWordManager />
+}
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { WakeWordManager } from "@/components/voice/WakeWordManager"
 import {
   Settings as SettingsIcon,
   Wifi,
@@ -1100,6 +1106,8 @@ export function Settings() {
                 </div>
               </CardContent>
             </Card>
+
+            <WakeWordManager />
 
             <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
               <CardHeader>

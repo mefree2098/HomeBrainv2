@@ -96,7 +96,7 @@ sudo systemctl status mongod
 
 ---
 
-## Step 5 - Create a workspace and copy the project
+## Step 5 - Create a workspace
 ```bash
 mkdir -p ~/homebrain
 cd ~/homebrain
@@ -129,7 +129,7 @@ Find the Jetson IP with `hostname -I` if needed.
 ---
 
 ## Step 6 - Install project dependencies
-The project has separate npm workspaces at the root, `server`, and `client`.
+The project has separate npm workspace
 
 ```bash
 cd ~/homebrain/HomeBrainv2
@@ -185,16 +185,21 @@ Save (`Ctrl+O`, Enter) and exit (`Ctrl+X`).
 ---
 
 ## Step 8 - Install OpenWakeWord training dependencies
-The hub trains wake-word models locally. Run the helper script once (and again after future upgrades) to install Python requirements:
+The hub now generates datasets, augments them, and trains wake-word models locally using PyTorch and Piper.
+Run the helper script once (and again after future upgrades) to provision the Python toolchain (PyTorch, soundfile, librosa, onnxruntime/onnx-tf, TensorFlow Lite converters, and openwakeword):
 
 ```bash
 cd ~/homebrain/HomeBrainv2/server
 scripts/install-openwakeword-deps.sh
 ```
 
-Set `PYTHON_BIN=/usr/bin/python3.10` if you need to target a specific interpreter. The script creates `server/.wakeword-venv`, pins compatible versions of NumPy/SciPy, and installs `openwakeword[train]`. The wake-word training service will automatically pick up `server/.wakeword-venv/bin/python` the next time it starts.
+Set `PYTHON_BIN=/usr/bin/python3.10` if you need to target a specific interpreter. The script creates `server/.wakeword-venv`, pins compatible NumPy/SciPy versions, installs PyTorch + OpenWakeWord, and is idempotent.
+The training service automatically prefers `server/.wakeword-venv/bin/python` on restart.
+After installing the dependencies restart the HomeBrain server process (`sudo systemctl restart homebrain-server`) so the training worker reloads the new virtualenv. Manage wake words from the UI under **Settings -> Voice & Audio -> Wake Word Models**.
 
 ---
+
+
 
 ## Step 9 - Seed the database (optional)
 HomeBrain ships with seeding scripts.
@@ -369,7 +374,7 @@ Pick only one path; you do not need both.
    ./test-audio.sh                           # optional sanity check
    ./register.sh YOUR_CODE http://<hub-ip>:3000
    ```
-   Obtain the registration code from the HomeBrain UI → Remote Devices → Add Remote Device. `<hub-ip>` is your Jetson address.
+   Obtain the registration code from the HomeBrain UI -> Remote Devices -> Add Remote Device. `<hub-ip>` is your Jetson address.
 
 6. **Start the service and enable auto-start**
    ```bash
@@ -383,18 +388,20 @@ Pick only one path; you do not need both.
    Refresh the Remote Devices page; the Pi should display as “Online”. Repeat the copy/install steps for additional rooms, generating a new registration code each time.
 
 8. **Verify on-device wake-word detection (OpenWakeWord)**
-   - Update the remote device workspace with the new dependencies:
+   - Update the remote device workspace to capture the latest dependencies (notably `node-webrtcvad` for voice activity detection):
      ```bash
      cd ~/homebrain-remote
      npm install
      ```
-   - Restart the remote service to load the OpenWakeWord engine:
+   - Restart the remote service to load the OpenWakeWord engine and the new wake-word metadata:
      ```bash
      sudo systemctl restart homebrain-remote
      journalctl -u homebrain-remote -n 20
      ```
-   - Custom wake words are now generated on the hub automatically—add them in the HomeBrain UI and the Raspberry Pi will download the trained `.tflite` model moments later (no Picovoice AccessKey required).
-   - Follow the logs live with `journalctl -u homebrain-remote -f`, speak your wake word, and confirm `wake_word_detected` events appear.
+   - Custom wake words are generated on the hub after you submit them in the HomeBrain UI. The Raspberry Pi will download the trained model (preferring `.tflite` with automatic ONNX fallback) moments later—no Picovoice AccessKey required.
+   - Follow the logs live with `journalctl -u homebrain-remote -f`, speak your wake word, and confirm `wake_word_detected` events appear. You should also see VAD (voice activity detection) messages showing when the listener is active.
+
+---
 
 ---
 

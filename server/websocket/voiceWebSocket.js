@@ -2,6 +2,7 @@ const WebSocket = require('ws');
 const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
 const wakeWordAssets = require('../utils/wakeWordAssets');
+const WakeWordModel = require('../models/WakeWordModel');
 
 console.log('voiceWebSocket.js loaded with enhanced logging');
 
@@ -147,6 +148,21 @@ class VoiceWebSocketServer {
       threshold: defaultThreshold
     });
 
+    const clampValue = (value, min, max) => Math.min(Math.max(value, min), max);
+
+    const metadataBySlug = {};
+    try {
+      const slugs = assets.map((asset) => asset.slug);
+      if (slugs.length) {
+        const models = await WakeWordModel.find({ slug: { $in: slugs } });
+        for (const model of models) {
+          metadataBySlug[model.slug] = model.metadata || {};
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to load wake word metadata for device ${device.name}:`, error.message);
+    }
+
     const wakeWordAssetPayload = assets.map((asset) => {
       const params = new URLSearchParams();
       params.set('code', registrationCode);
@@ -157,27 +173,60 @@ class VoiceWebSocketServer {
         params.set('arch', asset.arch || arch);
       }
 
+      const modelMetadata = metadataBySlug[asset.slug] || {};
+      const rawThreshold = typeof asset.threshold === 'number'
+        ? asset.threshold
+        : typeof modelMetadata.threshold === 'number'
+          ? modelMetadata.threshold
+          : defaultThreshold;
+      const rawSensitivity = typeof asset.sensitivity === 'number'
+        ? asset.sensitivity
+        : typeof modelMetadata.recommendedSensitivity === 'number'
+          ? modelMetadata.recommendedSensitivity
+          : undefined;
+
       return {
         label: asset.label,
         slug: asset.slug,
         fileName: asset.fileName,
         checksum: asset.checksum,
         size: asset.size,
-        sensitivity: asset.sensitivity,
-        threshold: typeof asset.threshold === 'number' ? asset.threshold : defaultThreshold,
+        sensitivity: rawSensitivity != null ? clampValue(rawSensitivity, 0, 1) : undefined,
+        threshold: clampValue(rawThreshold, 0, 1),
         engine: asset.engine || 'openwakeword',
         format: asset.format,
         updatedAt: asset.updatedAt,
+        metadata: modelMetadata,
         downloadUrl: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
       };
     });
+
+    const debounceMs = typeof device.settings?.wakeWordDebounceMs === 'number'
+      ? device.settings.wakeWordDebounceMs
+      : 1500;
+    const vadSettings = device.settings?.wakeWordVad || {};
 
     return {
       config: {
         wakeWords: device.supportedWakeWords,
         wakeWord: {
           enabled: device.supportedWakeWords,
-          assets: wakeWordAssetPayload
+          assets: wakeWordAssetPayload,
+          debounceMs,
+          vad: {
+            speechThreshold: typeof vadSettings.speechThreshold === 'number'
+              ? clampValue(vadSettings.speechThreshold, 0, 1)
+              : 0.35,
+            history: typeof vadSettings.history === 'number'
+              ? Math.max(1, Math.min(32, Math.round(vadSettings.history)))
+              : 8,
+            minActivations: typeof vadSettings.minActivations === 'number'
+              ? Math.max(1, Math.round(vadSettings.minActivations))
+              : 1,
+            mode: typeof vadSettings.mode === 'number'
+              ? Math.max(0, Math.min(3, Math.round(vadSettings.mode)))
+              : 3
+          }
         },
         volume: device.volume,
         microphoneSensitivity: device.microphoneSensitivity,

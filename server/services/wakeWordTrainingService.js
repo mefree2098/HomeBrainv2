@@ -1,7 +1,8 @@
+const EventEmitter = require('events');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const crypto = require('crypto');
+const os = require('os');
 const { spawn } = require('child_process');
 const WakeWordModel = require('../models/WakeWordModel');
 const UserProfile = require('../models/UserProfile');
@@ -9,21 +10,70 @@ const VoiceDevice = require('../models/VoiceDevice');
 const { slugify, WAKE_WORD_ROOT } = require('../utils/wakeWordAssets');
 
 const SERVER_ROOT = path.join(__dirname, '..');
-const DEFAULT_VENV_DIR = path.join(SERVER_ROOT, '.wakeword-venv');
-const DEFAULT_VENV_PYTHON = process.platform === 'win32'
-  ? path.join(DEFAULT_VENV_DIR, 'Scripts', 'python.exe')
-  : path.join(DEFAULT_VENV_DIR, 'bin', 'python');
+const TMP_ROOT = path.join(SERVER_ROOT, '..', 'tmp', 'wake-word-training');
+const DATA_ROOT = path.join(SERVER_ROOT, 'data', 'wake-word');
+const DEFAULT_BACKGROUND_DIR = path.join(DATA_ROOT, 'backgrounds');
+const DEFAULT_PROFILE_DIR = path.join(DATA_ROOT, 'profiles');
 
-class WakeWordTrainingService {
+const DEFAULT_OPTIONS = {
+  dataset: {
+    clipDurationSeconds: 1.5,
+    trainSplit: 0.85,
+    augmentCopies: 2,
+    positive: {
+      syntheticSamples: 400,
+      userRecordings: [],
+      textVariations: [],
+      tts: {
+        executable: process.env.WAKEWORD_PIPER_EXEC || undefined,
+        voices: []
+      }
+    },
+    negative: {
+      backgroundDirs: [],
+      syntheticSpeech: {
+        samples: 150,
+        phrases: []
+      },
+      randomSilence: 200
+    }
+  },
+  training: {
+    epochs: 6,
+    batchSize: 128,
+    learningRate: 1e-4,
+    targetFalseActivationsPerHour: 0.2
+  },
+  export: {
+    onnx: true,
+    tflite: true
+  }
+};
+
+const STATUS_FOR_STAGE = {
+  generating: 'generating',
+  training: 'training',
+  exporting: 'exporting',
+  error: 'error'
+};
+
+const DEFAULT_PYTHON = process.env.PYTHON_EXECUTABLE
+  || process.env.WAKEWORD_TRAINING_PYTHON
+  || (process.platform === 'win32'
+    ? path.join(SERVER_ROOT, '.wakeword-venv', 'Scripts', 'python.exe')
+    : path.join(SERVER_ROOT, '.wakeword-venv', 'bin', 'python'));
+
+class WakeWordTrainingService extends EventEmitter {
   constructor() {
+    super();
     this.queue = Promise.resolve();
     this.pendingSlugs = new Set();
+    this.trainingOptions = new Map();
+    this.activeJobs = new Map();
     this.voiceWebSocket = null;
-    this.pythonExecutable = process.env.PYTHON_EXECUTABLE
-      || process.env.WAKEWORD_TRAINING_PYTHON
-      || (fs.existsSync(DEFAULT_VENV_PYTHON) ? DEFAULT_VENV_PYTHON : 'python3');
-    this.trainerScript = path.join(__dirname, '..', 'scripts', 'train_wake_word.py');
-    this.defaultFormat = process.env.WAKEWORD_TRAINING_FORMAT || 'tflite';
+    this.pythonExecutable = DEFAULT_PYTHON;
+    this.trainerScript = path.join(SERVER_ROOT, 'scripts', 'train_wake_word.py');
+    this.defaultFormat = 'tflite';
     this.ensureDirectories().catch((error) => {
       console.error('Failed to prepare wake word directories:', error);
     });
@@ -32,18 +82,15 @@ class WakeWordTrainingService {
 
   async ensureDirectories() {
     await fsp.mkdir(WAKE_WORD_ROOT, { recursive: true });
-    const tempDir = path.join(WAKE_WORD_ROOT, '..', '..', 'tmp', 'wake-word-training');
-    await fsp.mkdir(tempDir, { recursive: true });
+    await fsp.mkdir(TMP_ROOT, { recursive: true });
+    await fsp.mkdir(DEFAULT_BACKGROUND_DIR, { recursive: true });
+    await fsp.mkdir(DEFAULT_PROFILE_DIR, { recursive: true });
   }
 
   setVoiceWebSocket(voiceWebSocket) {
     this.voiceWebSocket = voiceWebSocket;
   }
 
-  /**
-   * Synchronise wake words for a profile, ensuring models exist and training is queued.
-   * @param {mongoose.Document|Object} profile
-   */
   async syncProfileWakeWords(profile) {
     if (!profile) return [];
 
@@ -56,15 +103,12 @@ class WakeWordTrainingService {
     const wakeWords = Array.isArray(profile.wakeWords) ? profile.wakeWords : [];
     const uniquePhrases = [...new Set(wakeWords.map((phrase) => (phrase || '').trim()).filter(Boolean))];
     const slugs = uniquePhrases.map((phrase) => slugify(phrase));
-
     const modelIds = [];
 
     for (let index = 0; index < uniquePhrases.length; index += 1) {
       const phrase = uniquePhrases[index];
       const slug = slugs[index];
-      if (!slug) {
-        continue;
-      }
+      if (!slug) continue;
 
       let model = await WakeWordModel.findOne({ slug });
       if (!model) {
@@ -87,8 +131,8 @@ class WakeWordTrainingService {
           dirty = true;
         }
         if (model.status === 'ready') {
-          const fileExists = model.modelPath && fs.existsSync(model.modelPath);
-          if (!fileExists) {
+          const exists = model.modelPath && fs.existsSync(model.modelPath);
+          if (!exists) {
             model.status = 'pending';
             model.modelPath = undefined;
             model.checksum = undefined;
@@ -112,7 +156,6 @@ class WakeWordTrainingService {
       wakeWordModels: modelIds
     });
 
-    // Detach profile from models that no longer reference these wake words
     await WakeWordModel.updateMany(
       { profiles: profileId, slug: { $nin: slugs } },
       { $pull: { profiles: profileId } }
@@ -121,12 +164,66 @@ class WakeWordTrainingService {
     return modelIds;
   }
 
-  enqueueTraining(slug) {
-    if (!slug || this.pendingSlugs.has(slug)) {
+  async requestTraining({ phrase, slug, options = {}, profiles = [] }) {
+    const normalisedPhrase = (phrase || '').trim();
+    const resolvedSlug = slug || slugify(normalisedPhrase);
+    if (!normalisedPhrase || !resolvedSlug) {
+      throw new Error('Wake word phrase is required');
+    }
+
+    let model = await WakeWordModel.findOne({ slug: resolvedSlug });
+    if (!model) {
+      model = new WakeWordModel({
+        phrase: normalisedPhrase,
+        slug: resolvedSlug,
+        status: 'pending',
+        engine: 'openwakeword',
+        format: this.defaultFormat,
+        profiles
+      });
+    } else {
+      model.phrase = normalisedPhrase;
+      if (Array.isArray(profiles) && profiles.length) {
+        const mergedProfiles = new Set([...model.profiles.map((id) => id.toString()), ...profiles.map(String)]);
+        model.profiles = Array.from(mergedProfiles);
+      }
+    }
+
+    model.metadata = model.metadata || {};
+    model.metadata.pendingOptions = options || {};
+    model.status = (model.status === 'ready' && model.modelPath && fs.existsSync(model.modelPath))
+      ? 'ready'
+      : 'pending';
+    model.progress = model.status === 'ready' ? 1 : 0;
+    model.statusMessage = 'Queued for training';
+    model.updatedAt = Date.now();
+
+    await model.save();
+
+    await this.enqueueTraining(resolvedSlug, { options });
+
+    return model;
+  }
+
+  async enqueueTraining(slug, { options = {} } = {}) {
+    if (!slug) return;
+
+    this.trainingOptions.set(slug, this.mergeOptions(options));
+
+    if (this.pendingSlugs.has(slug)) {
+      const job = this.activeJobs.get(slug);
+      if (job) {
+        job.options = this.trainingOptions.get(slug);
+      }
       return;
     }
 
-    console.log(`Queueing wake word training for "${slug}"`);
+    await this.updateModelStatus(slug, {
+      status: 'queued',
+      progress: 0.01,
+      message: 'Waiting for training slot'
+    });
+
     this.pendingSlugs.add(slug);
     this.queue = this.queue
       .then(() => this.executeTraining(slug))
@@ -135,11 +232,13 @@ class WakeWordTrainingService {
       })
       .finally(() => {
         this.pendingSlugs.delete(slug);
+        this.trainingOptions.delete(slug);
+        this.activeJobs.delete(slug);
       });
   }
 
   async executeTraining(slug) {
-    let model = await WakeWordModel.findOne({ slug });
+    const model = await WakeWordModel.findOne({ slug });
     if (!model) {
       console.warn(`No wake word model found for slug ${slug}; skipping training`);
       return;
@@ -149,25 +248,38 @@ class WakeWordTrainingService {
       return;
     }
 
-    model.status = 'training';
-    console.log(`Starting wake word training for "${model.phrase}" (${slug})`);
-    model.error = undefined;
-    model.updatedAt = Date.now();
-    await model.save();
+    await this.updateModelStatus(slug, {
+      status: 'generating',
+      progress: 0.05,
+      message: 'Preparing training job'
+    });
+
+    const options = this.trainingOptions.get(slug) || this.mergeOptions({});
+    const job = {
+      slug,
+      phrase: model.phrase,
+      options,
+      startedAt: Date.now()
+    };
+    this.activeJobs.set(slug, job);
 
     const outputFile = path.join(WAKE_WORD_ROOT, `${slug}.${this.defaultFormat}`);
 
     try {
       await fsp.mkdir(path.dirname(outputFile), { recursive: true });
-
       const result = await this.runTrainer({
         slug,
         phrase: model.phrase,
         outputFile,
-        format: this.defaultFormat
+        options
       });
 
       if (!result.success) {
+        await this.updateModelStatus(slug, {
+          status: 'error',
+          progress: 0,
+          message: result.error || 'Training failed'
+        });
         model.status = 'error';
         model.error = result.error || 'Training failed';
         await model.save();
@@ -175,39 +287,56 @@ class WakeWordTrainingService {
         return;
       }
 
-      const checksum = await this.computeChecksum(outputFile);
-
-      model.status = 'ready';
-      model.modelPath = outputFile;
-      model.checksum = checksum;
-      model.engine = result.engine || 'openwakeword';
-      model.format = result.format || this.defaultFormat;
-      model.trainingMetadata = {
-        samplesGenerated: result.samplesGenerated || null,
-        generator: result.generator || result.voice || null,
-        durationMs: result.durationMs || result.trainingDurationMs || null
-      };
-      model.lastTrainedAt = new Date();
-      model.error = undefined;
-      await model.save();
-
-      console.log(`Wake word model trained for "${model.phrase}" (${model.format})`);
-
-      await VoiceDevice.updateMany(
-        { wakeWordSupport: true },
-        { $addToSet: { supportedWakeWords: model.phrase } }
-      );
-
+      await this.applyTrainingResult(model, result);
       await this.notifyDevices(model);
     } catch (error) {
       console.error(`Error during wake word training for ${slug}:`, error);
+      await this.updateModelStatus(slug, {
+        status: 'error',
+        progress: 0,
+        message: error.message
+      });
       model.status = 'error';
       model.error = error.message;
       await model.save();
     }
   }
 
-  async runTrainer({ slug, phrase, outputFile, format }) {
+  mergeOptions(options) {
+    const merged = JSON.parse(JSON.stringify(DEFAULT_OPTIONS));
+
+    const recursiveMerge = (target, source) => {
+      const output = target;
+      Object.entries(source || {}).forEach(([key, value]) => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          output[key] = recursiveMerge(output[key] || {}, value);
+        } else {
+          output[key] = value;
+        }
+      });
+      return output;
+    };
+
+    const result = recursiveMerge(merged, options || {});
+
+    const envBackgrounds = (process.env.WAKEWORD_BACKGROUND_DIRS || '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+    const defaultBackgrounds = [DEFAULT_BACKGROUND_DIR];
+    const backgroundDirs = new Set([
+      ...defaultBackgrounds,
+      ...envBackgrounds,
+      ...(result.dataset.negative.backgroundDirs || [])
+    ].filter(Boolean));
+
+    result.dataset.negative.backgroundDirs = Array.from(backgroundDirs);
+
+    return result;
+  }
+
+  async runTrainer({ slug, phrase, outputFile, options }) {
     if (!fs.existsSync(this.trainerScript)) {
       return {
         success: false,
@@ -215,7 +344,9 @@ class WakeWordTrainingService {
       };
     }
 
-    const args = [
+    const tempDir = await fsp.mkdtemp(path.join(TMP_ROOT, `${slug}-`));
+    const configPath = path.join(tempDir, 'config.json');
+    const trainerArgs = [
       this.trainerScript,
       '--wake-word',
       phrase,
@@ -223,59 +354,67 @@ class WakeWordTrainingService {
       slug,
       '--output',
       outputFile,
-      '--format',
-      format
+      '--config',
+      configPath
     ];
 
-    if (process.env.WAKEWORD_TRAINING_VOICE) {
-      args.push('--tts-voice', process.env.WAKEWORD_TRAINING_VOICE);
-    }
-    if (process.env.WAKEWORD_TRAINING_LANGUAGE) {
-      args.push('--language', process.env.WAKEWORD_TRAINING_LANGUAGE);
-    }
-    if (process.env.WAKEWORD_TRAINING_SAMPLES) {
-      args.push('--samples', process.env.WAKEWORD_TRAINING_SAMPLES);
+    if (options?.dataset?.positive?.tts?.voices?.length === 0) {
+      delete options.dataset.positive.tts.voices;
     }
 
+    await fsp.writeFile(configPath, JSON.stringify(options || {}, null, 2), 'utf8');
+
     return new Promise((resolve) => {
-      const child = spawn(this.pythonExecutable, args, {
+      const child = spawn(this.pythonExecutable, trainerArgs, {
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
-      let stdout = '';
-      let stderr = '';
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+      let finalResult = null;
+
+      const flushBuffer = () => {
+        let newlineIndex;
+        while ((newlineIndex = stdoutBuffer.indexOf('\n')) >= 0) {
+          const line = stdoutBuffer.slice(0, newlineIndex).trim();
+          stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+          if (!line) continue;
+          try {
+            const payload = JSON.parse(line);
+            if (payload.type === 'progress') {
+              this.handleTrainerProgress(slug, payload);
+            } else if (payload.type === 'result') {
+              finalResult = payload;
+            }
+          } catch (error) {
+            // Ignore non-JSON lines, but keep a record in stderr buffer
+            stderrBuffer += `${line}\n`;
+          }
+        }
+      };
 
       child.stdout.on('data', (data) => {
-        stdout += data.toString();
+        stdoutBuffer += data.toString();
+        flushBuffer();
       });
 
       child.stderr.on('data', (data) => {
-        stderr += data.toString();
+        stderrBuffer += data.toString();
       });
 
       child.on('close', (code) => {
-        if (code === 0) {
-          let metadata = {};
-          const trimmedOutput = stdout.trim();
-          if (trimmedOutput) {
-            try {
-              metadata = JSON.parse(trimmedOutput);
-            } catch (parseError) {
-              console.warn('Trainer output was not valid JSON; continuing without metadata');
-            }
-          }
-
-          resolve({
-            success: true,
-            ...metadata
-          });
+        flushBuffer();
+        if (finalResult && finalResult.type === 'result') {
+          resolve({ success: true, ...finalResult });
+        } else if (code === 0) {
+          resolve({ success: false, error: stderrBuffer.trim() || 'Trainer did not return result payload' });
         } else {
-          const errorMessage = stderr.trim() || stdout.trim() || `Trainer exited with code ${code}`;
           resolve({
             success: false,
-            error: errorMessage
+            error: stderrBuffer.trim() || `Trainer exited with code ${code}`
           });
         }
+        fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
       });
 
       child.on('error', (error) => {
@@ -283,25 +422,79 @@ class WakeWordTrainingService {
           success: false,
           error: error.message
         });
+        fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
       });
     });
   }
 
-  async computeChecksum(filePath) {
-    return new Promise((resolve, reject) => {
-      const hash = crypto.createHash('sha256');
-      const stream = fs.createReadStream(filePath);
-      stream.on('data', (chunk) => hash.update(chunk));
-      stream.on('end', () => resolve(hash.digest('hex')));
-      stream.on('error', (error) => reject(error));
+  async handleTrainerProgress(slug, payload) {
+    const status = STATUS_FOR_STAGE[payload.stage] || 'training';
+    const progressValue = typeof payload.progress === 'number'
+      ? Math.max(0, Math.min(1, payload.progress))
+      : null;
+    const message = payload.message || '';
+    await this.updateModelStatus(slug, {
+      status,
+      progress: progressValue,
+      message
     });
+  }
+
+  async updateModelStatus(slug, { status, progress, message }) {
+    const update = {};
+    if (status) update.status = status;
+    if (typeof progress === 'number') update.progress = Math.max(0, Math.min(1, progress));
+    if (message) update.statusMessage = message;
+    update.updatedAt = Date.now();
+
+    const model = await WakeWordModel.findOneAndUpdate({ slug }, update, { new: true });
+    if (model) {
+      this.emit('status', {
+        slug,
+        status: model.status,
+        progress: model.progress,
+        message: model.statusMessage
+      });
+    }
+    return model;
+  }
+
+  async applyTrainingResult(model, result) {
+    const outputPath = result.metadata?.artifacts?.find((artifact) => artifact.format === 'tflite')
+      || result.metadata?.artifacts?.find((artifact) => artifact.format === 'onnx')
+      || null;
+
+    const checksum = outputPath?.checksum || null;
+    const modelPath = outputPath?.path || result.output;
+    const format = outputPath?.format || result.format || this.defaultFormat;
+
+    model.status = 'ready';
+    model.progress = 1;
+    model.statusMessage = 'Training complete';
+    model.modelPath = modelPath;
+    model.checksum = checksum;
+    model.engine = result.engine || 'openwakeword';
+    model.format = format;
+    model.trainingMetadata = {
+      samplesGenerated: result.samplesGenerated || null,
+      durationMs: result.durationMs || null,
+      generator: 'openwakeword-trainer'
+    };
+    model.metadata = result.metadata || {};
+    model.error = undefined;
+    model.lastTrainedAt = new Date();
+    await model.save();
+
+    await VoiceDevice.updateMany(
+      { wakeWordSupport: true },
+      { $addToSet: { supportedWakeWords: model.phrase } }
+    );
   }
 
   async notifyDevices(model) {
     if (!this.voiceWebSocket || typeof this.voiceWebSocket.broadcastWakeWordUpdate !== 'function') {
       return;
     }
-
     try {
       await this.voiceWebSocket.broadcastWakeWordUpdate(model);
     } catch (error) {
@@ -311,7 +504,6 @@ class WakeWordTrainingService {
 
   async resumePendingTraining() {
     const models = await WakeWordModel.find({});
-
     for (const model of models) {
       if (model.status === 'ready') {
         const exists = model.modelPath && fs.existsSync(model.modelPath);
@@ -319,10 +511,11 @@ class WakeWordTrainingService {
           model.status = 'pending';
           model.modelPath = undefined;
           model.checksum = undefined;
+          model.progress = 0;
           await model.save();
           this.enqueueTraining(model.slug);
         }
-      } else if (model.status === 'pending' || model.status === 'error') {
+      } else if (model.status === 'pending' || model.status === 'error' || model.status === 'queued') {
         this.enqueueTraining(model.slug);
       }
     }
@@ -334,6 +527,16 @@ class WakeWordTrainingService {
       { profiles: profileId },
       { $pull: { profiles: profileId } }
     );
+  }
+
+  async getQueueStatus() {
+    const active = Array.from(this.activeJobs.values()).map((job) => ({
+      slug: job.slug,
+      phrase: job.phrase,
+      startedAt: job.startedAt
+    }));
+    const pending = Array.from(this.pendingSlugs).filter((slug) => !this.activeJobs.has(slug));
+    return { active, pending };
   }
 }
 

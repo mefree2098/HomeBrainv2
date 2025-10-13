@@ -17,6 +17,7 @@ const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
+const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
 const discoveryRoutes = require("./routes/discoveryRoutes");
 const insteonRoutes = require("./routes/insteonRoutes");
@@ -140,6 +141,8 @@ app.use('/api/smartthings', smartThingsRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 // Remote Device Routes
 app.use('/api/remote-devices', remoteDeviceRoutes);
+// Wake Word Routes
+app.use('/api/wake-words', wakeWordRoutes);
 // Remote Update Routes
 app.use('/api/remote-updates', remoteUpdateRoutes);
 // Discovery Routes
