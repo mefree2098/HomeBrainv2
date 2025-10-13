@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -23,6 +24,7 @@ import {
   deleteWakeWordModel,
   getWakeWordQueueStatus
 } from "@/api/wakeWords";
+import { getPiperVoices, downloadPiperVoice, removePiperVoice, PiperVoice } from "@/api/wakeWordVoices";
 import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 type WakeWordStatus =
@@ -81,8 +83,122 @@ export function WakeWordManager() {
   const [sampleCount, setSampleCount] = useState(600);
   const [submitting, setSubmitting] = useState(false);
   const [polling, setPolling] = useState(false);
+  const [voices, setVoices] = useState<PiperVoice[]>([]);
+  const [loadingVoices, setLoadingVoices] = useState(false);
+  const [voiceActionId, setVoiceActionId] = useState<string | null>(null);
+  const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>([]);
 
-  const loadData = async () => {
+  const formatBytes = (bytes?: number | null) => {
+    if (!bytes || bytes <= 0) {
+      return "-";
+    }
+    const units = ["KB", "MB", "GB"];
+    let value = bytes / 1024;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex += 1;
+    }
+    const digits = value >= 100 ? 0 : 1;
+    return `${value.toFixed(digits)} ${units[unitIndex]}`;
+  };
+
+  const loadVoices = useCallback(async () => {
+    try {
+      setLoadingVoices(true);
+      const response = await getPiperVoices();
+      if (response?.success && Array.isArray(response.voices)) {
+        setVoices(response.voices);
+        const installedIds = response.voices.filter((voice) => voice.installed).map((voice) => voice.id);
+        setSelectedVoiceIds((prev) => {
+          const preserved = prev.filter((id) => installedIds.includes(id));
+          if (preserved.length > 0) {
+            const newlyInstalled = installedIds.filter((id) => !preserved.includes(id));
+            return [...preserved, ...newlyInstalled];
+          }
+          return installedIds;
+        });
+      }
+    } catch (error: any) {
+      console.error("Failed to load Piper voices", error);
+      toast({
+        title: "Failed to load voices",
+        description: error?.message || "Unable to load Piper voice catalog.",
+        variant: "destructive"
+      });
+    } finally {
+      setLoadingVoices(false);
+    }
+  }, [toast]);
+
+  const handleVoiceCheckboxChange = (voiceId: string, checked: boolean | "indeterminate") => {
+    const isChecked = checked === true;
+    setSelectedVoiceIds((prev) => {
+      if (isChecked) {
+        if (prev.includes(voiceId)) {
+          return prev;
+        }
+        return [...prev, voiceId];
+      }
+      return prev.filter((id) => id !== voiceId);
+    });
+  };
+
+  const handleDownloadVoice = async (voiceId: string) => {
+    try {
+      setVoiceActionId(voiceId);
+      await downloadPiperVoice(voiceId);
+      toast({
+        title: "Voice downloaded",
+        description: "The Piper voice model is ready for training."
+      });
+      await loadVoices();
+    } catch (error: any) {
+      console.error("Failed to download voice", error);
+      toast({
+        title: "Download failed",
+        description: error?.message || "Unable to download the Piper voice.",
+        variant: "destructive"
+      });
+    } finally {
+      setVoiceActionId(null);
+    }
+  };
+
+  const handleRemoveVoice = async (voiceId: string) => {
+    try {
+      setVoiceActionId(voiceId);
+      await removePiperVoice(voiceId);
+      toast({
+        title: "Voice removed",
+        description: "The Piper voice model has been deleted."
+      });
+      setSelectedVoiceIds((prev) => prev.filter((id) => id !== voiceId));
+      await loadVoices();
+    } catch (error: any) {
+      console.error("Failed to remove voice", error);
+      toast({
+        title: "Remove failed",
+        description: error?.message || "Unable to remove the Piper voice.",
+        variant: "destructive"
+      });
+    } finally {
+      setVoiceActionId(null);
+    }
+  };
+
+  const installedVoices = useMemo(() => voices.filter((voice) => voice.installed), [voices]);
+  const totalInstalledBytes = useMemo(
+    () => installedVoices.reduce((total, voice) => total + (voice.sizeBytes || 0), 0),
+    [installedVoices]
+  );
+  const selectedVoiceDetails = useMemo(
+    () => installedVoices.filter((voice) => selectedVoiceIds.includes(voice.id)),
+    [installedVoices, selectedVoiceIds]
+  );
+  const hasInstalledVoices = installedVoices.length > 0;
+
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       const response = await listWakeWordModels();
@@ -118,19 +234,21 @@ export function WakeWordManager() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    void loadData();
+    void loadVoices();
+  }, [loadData, loadVoices]);
 
   useEffect(() => {
     if (!polling) return;
     const interval = setInterval(() => {
-      loadData().catch(() => {});
+      void loadData();
+      void loadVoices();
     }, 5000);
     return () => clearInterval(interval);
-  }, [polling]);
+  }, [polling, loadData, loadVoices]);
 
   const handleCreate = async () => {
     if (!newPhrase.trim()) {
@@ -144,13 +262,35 @@ export function WakeWordManager() {
 
     setSubmitting(true);
     try {
-      await createWakeWordModel({
-        phrase: newPhrase.trim(),
-        options: {
-          dataset: {
-            positive: { syntheticSamples: sampleCount }
+      const selectedVoices = selectedVoiceDetails
+        .filter((voice) => voice.modelPath && voice.configPath)
+        .map((voice) => ({
+          id: voice.id,
+          name: voice.name,
+          language: voice.language,
+          speaker: voice.speaker,
+          modelPath: voice.modelPath,
+          configPath: voice.configPath,
+          quality: voice.quality
+        }));
+
+      const options: any = {
+        dataset: {
+          positive: {
+            syntheticSamples: sampleCount
           }
         }
+      };
+
+      if (selectedVoices.length > 0) {
+        options.dataset.positive.tts = {
+          voices: selectedVoices
+        };
+      }
+
+      await createWakeWordModel({
+        phrase: newPhrase.trim(),
+        options
       });
       toast({
         title: "Wake word queued",
@@ -314,6 +454,112 @@ export function WakeWordManager() {
         </Dialog>
       </CardHeader>
       <CardContent className="space-y-6">
+        <div className="rounded-lg border border-dashed bg-white/60 p-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="font-semibold">Synthetic Voices</p>
+              <p className="text-xs text-muted-foreground">
+                Download Piper voices to synthesize wake word samples locally. Select which voices to include during training.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={loadVoices} disabled={loadingVoices || voiceActionId !== null}>
+              {loadingVoices ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Refresh
+            </Button>
+          </div>
+
+          <div className="mt-3 text-xs text-muted-foreground">
+            {hasInstalledVoices ? (
+              <span>
+                {installedVoices.length} installed | {formatBytes(totalInstalledBytes)} on disk
+                {selectedVoiceDetails.length > 0 ? ` | ${selectedVoiceDetails.length} selected for training` : ""}
+              </span>
+            ) : (
+              <span>No voices installed yet.</span>
+            )}
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {loadingVoices ? (
+              <div className="flex items-center justify-center py-4 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading voice catalog.
+              </div>
+            ) : voices.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Voice catalog unavailable. Ensure the hub has internet access and try refreshing.
+              </p>
+            ) : (
+              voices.map((voice) => {
+                const isInstalled = voice.installed && voice.modelPath && voice.configPath;
+                const selected = selectedVoiceIds.includes(voice.id);
+                return (
+                  <div
+                    key={voice.id}
+                    className="flex flex-col gap-3 rounded-md border border-border/60 bg-white/70 p-3 shadow-sm md:flex-row md:items-center md:justify-between"
+                  >
+                    <div className="space-y-2">
+                      <div>
+                        <p className="font-medium">
+                          {voice.name}{" "}
+                          <span className="text-xs text-muted-foreground">
+                            {voice.language} | {voice.quality ?? "standard"}
+                          </span>
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Speaker: {voice.speaker || "Unknown"} | Size: {formatBytes(voice.sizeBytes)}
+                        </p>
+                      </div>
+                      {isInstalled ? (
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Checkbox
+                            checked={selected}
+                            onCheckedChange={(checked) => handleVoiceCheckboxChange(voice.id, checked)}
+                            disabled={voiceActionId === voice.id}
+                          />
+                          Use this voice when generating synthetic samples
+                        </label>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {isInstalled ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleRemoveVoice(voice.id)}
+                          disabled={voiceActionId === voice.id}
+                        >
+                          {voiceActionId === voice.id ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : null}
+                          Remove
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={() => handleDownloadVoice(voice.id)}
+                          disabled={voiceActionId === voice.id}
+                        >
+                          {voiceActionId === voice.id ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : null}
+                          Download
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            {!hasInstalledVoices && !loadingVoices ? (
+              <p className="text-xs text-amber-600">
+                Install at least one voice to synthesize varied training samples. You can still queue training, but the
+                trainer will fall back to default behaviour.
+              </p>
+            ) : null}
+          </div>
+        </div>
+
         <div className="flex items-center justify-between text-sm text-muted-foreground">
           <span>Queue status</span>
           <span className="font-medium text-foreground">{activeQueueDescription}</span>
