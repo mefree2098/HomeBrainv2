@@ -877,7 +877,6 @@ class SmartThingsService {
         name: ruleName,
         actions: [
           {
-            type: 'location',
             location: {
               security: {
                 armState: normalizedState
