@@ -18,6 +18,24 @@ class SmartThingsService {
     }
   }
 
+  resolveSmartThingsEndpoint(href) {
+    if (!href || typeof href !== 'string') {
+      return null;
+    }
+
+    if (/^https?:\/\//i.test(href)) {
+      try {
+        const url = new URL(href);
+        return `${url.pathname}${url.search || ''}`;
+      } catch (error) {
+        console.warn(`SmartThingsService: Failed to parse SmartThings href "${href}": ${error.message}`);
+        return null;
+      }
+    }
+
+    return href;
+  }
+
   /**
    * Get OAuth authorization URL
    * @returns {Promise<string>} Authorization URL
@@ -917,6 +935,13 @@ class SmartThingsService {
           throw new Error('Failed to create SmartThings rule for arming state');
         }
 
+        const executeEndpoint =
+          this.resolveSmartThingsEndpoint(ruleResponse?.links?.execute?.href) ||
+          `/rules/${ruleId}/execute`;
+        const deleteEndpoint =
+          this.resolveSmartThingsEndpoint(ruleResponse?.links?.self?.href) ||
+          `/rules/${ruleId}`;
+
         const maxExecutionAttempts = 5;
         let executionAttempt = 0;
         let executionSucceeded = false;
@@ -931,14 +956,18 @@ class SmartThingsService {
 
           try {
             console.debug('SmartThingsService: Executing temporary rule', { ruleId, locationId: resolvedLocationId });
-            await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute`, {
+            const executeOptions = {
               method: 'POST',
-              params: { locationId: resolvedLocationId },
               headers: {
                 'X-ST-Location': resolvedLocationId,
                 'X-ST-LOCATION': resolvedLocationId
               }
-            });
+            };
+            if (!executeEndpoint.includes('?')) {
+              executeOptions.params = { locationId: resolvedLocationId };
+            }
+
+            await this.makeAuthenticatedRequest(executeEndpoint, executeOptions);
             executionSucceeded = true;
           } catch (executionError) {
             lastExecutionError = executionError;
@@ -954,14 +983,18 @@ class SmartThingsService {
           throw lastExecutionError || new Error('Failed to execute SmartThings rule for arming state');
         }
 
-        await this.makeAuthenticatedRequest(`/rules/${ruleId}`, {
+        const deleteOptions = {
           method: 'DELETE',
-          params: { locationId: resolvedLocationId },
           headers: {
             'X-ST-Location': resolvedLocationId,
             'X-ST-LOCATION': resolvedLocationId
           }
-        }).catch((cleanupError) => {
+        };
+        if (!deleteEndpoint.includes('?')) {
+          deleteOptions.params = { locationId: resolvedLocationId };
+        }
+
+        await this.makeAuthenticatedRequest(deleteEndpoint, deleteOptions).catch((cleanupError) => {
           console.warn(`SmartThingsService: Failed to delete temporary rule ${ruleId}: ${cleanupError.message}`);
         });
       } catch (error) {
