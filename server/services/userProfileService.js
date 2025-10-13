@@ -1,5 +1,6 @@
 const UserProfile = require('../models/UserProfile');
 const elevenLabsService = require('./elevenLabsService');
+const wakeWordTrainingService = require('./wakeWordTrainingService');
 
 class UserProfileService {
   /**
@@ -26,6 +27,7 @@ class UserProfileService {
         .populate('favorites.devices')
         .populate('favorites.scenes')
         .populate('favorites.automations')
+        .populate('wakeWordModels')
         .sort({ lastUsed: -1, createdAt: -1 });
       
       console.log(`Retrieved ${profiles.length} user profiles`);
@@ -50,7 +52,8 @@ class UserProfileService {
       const profile = await UserProfile.findById(profileId)
         .populate('favorites.devices')
         .populate('favorites.scenes')
-        .populate('favorites.automations');
+        .populate('favorites.automations')
+        .populate('wakeWordModels');
       
       if (!profile) {
         console.log(`User profile not found: ${profileId}`);
@@ -113,9 +116,17 @@ class UserProfileService {
 
       const profile = new UserProfile(profileData);
       await profile.save();
+
+      await wakeWordTrainingService.syncProfileWakeWords(profile);
+
+      const populatedProfile = await UserProfile.findById(profile._id)
+        .populate('favorites.devices')
+        .populate('favorites.scenes')
+        .populate('favorites.automations')
+        .populate('wakeWordModels');
       
-      console.log(`Successfully created user profile: ${profile.name} with ID: ${profile._id}`);
-      return profile;
+      console.log(`Successfully created user profile: ${populatedProfile.name} with ID: ${populatedProfile._id}`);
+      return populatedProfile;
 
     } catch (error) {
       console.error('Error creating user profile:', error.message);
@@ -162,7 +173,7 @@ class UserProfileService {
       // Update the profile
       const updatedProfile = await UserProfile.findByIdAndUpdate(
         profileId,
-        { 
+        {
           ...updateData,
           updatedAt: Date.now()
         },
@@ -172,10 +183,23 @@ class UserProfileService {
         }
       ).populate('favorites.devices')
        .populate('favorites.scenes')
-       .populate('favorites.automations');
+       .populate('favorites.automations')
+       .populate('wakeWordModels');
+
+      if (!updatedProfile) {
+        throw new Error(`Profile with ID ${profileId} not found`);
+      }
+
+      await wakeWordTrainingService.syncProfileWakeWords(updatedProfile);
+
+      const refreshedProfile = await UserProfile.findById(profileId)
+        .populate('favorites.devices')
+        .populate('favorites.scenes')
+        .populate('favorites.automations')
+        .populate('wakeWordModels');
       
-      console.log(`Successfully updated user profile: ${updatedProfile.name}`);
-      return updatedProfile;
+      console.log(`Successfully updated user profile: ${refreshedProfile.name}`);
+      return refreshedProfile;
 
     } catch (error) {
       console.error(`Error updating user profile ${profileId}:`, error.message);
@@ -199,7 +223,8 @@ class UserProfileService {
       }
 
       await UserProfile.findByIdAndDelete(profileId);
-      
+      await wakeWordTrainingService.unregisterProfile(profileId);
+
       console.log(`Successfully deleted user profile: ${profile.name}`);
       return true;
 

@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const WAKE_WORD_ROOT = path.join(__dirname, '..', 'public', 'wake-words');
+const SUPPORTED_EXTENSIONS = ['.tflite', '.onnx', '.ppn'];
 
 const ensureDirectory = () => {
   try {
@@ -26,7 +27,10 @@ const slugify = (value) => {
 const listWakeWordFiles = () => {
   ensureDirectory();
   try {
-    return fs.readdirSync(WAKE_WORD_ROOT).filter((file) => file.toLowerCase().endsWith('.ppn'));
+    return fs.readdirSync(WAKE_WORD_ROOT).filter((file) => {
+      const extension = path.extname(file).toLowerCase();
+      return SUPPORTED_EXTENSIONS.includes(extension);
+    });
   } catch (error) {
     if (error.code === 'ENOENT') {
       return [];
@@ -65,17 +69,18 @@ const buildCandidateFileNames = (slug, platform, arch) => {
   const normalisedPlatform = normalisePlatform(platform);
   const normalisedArch = normaliseArch(arch);
 
-  if (normalisedPlatform && normalisedArch) {
-    candidates.add(`${slug}_${normalisedPlatform}_${normalisedArch}.ppn`);
+  for (const extension of SUPPORTED_EXTENSIONS) {
+    if (normalisedPlatform && normalisedArch) {
+      candidates.add(`${slug}_${normalisedPlatform}_${normalisedArch}${extension}`);
+    }
+    if (normalisedPlatform) {
+      candidates.add(`${slug}_${normalisedPlatform}${extension}`);
+    }
+    if (normalisedArch) {
+      candidates.add(`${slug}_${normalisedArch}${extension}`);
+    }
+    candidates.add(`${slug}${extension}`);
   }
-  if (normalisedPlatform) {
-    candidates.add(`${slug}_${normalisedPlatform}.ppn`);
-  }
-  if (normalisedArch) {
-    candidates.add(`${slug}_${normalisedArch}.ppn`);
-  }
-
-  candidates.add(`${slug}.ppn`);
 
   return Array.from(candidates);
 };
@@ -120,6 +125,9 @@ const getAssetForWakeWord = (label, options = {}) => {
   }
 
   const stats = fs.statSync(absolutePath);
+  const extension = path.extname(fileName).toLowerCase();
+  const format = extension.replace('.', '');
+  const engine = extension === '.ppn' ? 'porcupine' : 'openwakeword';
 
   return {
     label,
@@ -131,7 +139,10 @@ const getAssetForWakeWord = (label, options = {}) => {
     updatedAt: stats.mtime,
     platform: options.platform || null,
     arch: options.arch || null,
-    sensitivity: typeof options.sensitivity === 'number' ? options.sensitivity : null
+    sensitivity: typeof options.sensitivity === 'number' ? options.sensitivity : null,
+    threshold: typeof options.threshold === 'number' ? options.threshold : null,
+    format,
+    engine
   };
 };
 
@@ -161,7 +172,9 @@ const listAllAssets = (options = {}) => {
       checksum: computeFileHash(absolutePath),
       updatedAt: stats.mtime,
       platform: options.platform || null,
-      arch: options.arch || null
+      arch: options.arch || null,
+      format: path.extname(fileName).slice(1),
+      engine: path.extname(fileName).toLowerCase() === '.ppn' ? 'porcupine' : 'openwakeword'
     };
   });
 };

@@ -138,10 +138,8 @@ cat > package.json << 'EOF'
     "node-fetch": "^2.7.0",
     "yargs": "^17.7.2",
     "node-wav": "^0.0.2",
-    "audio-buffer-utils": "^5.1.2"
-  },
-  "optionalDependencies": {
-    "@picovoice/porcupine-node": "^3.0.2"
+    "audio-buffer-utils": "^5.1.2",
+    "onnxruntime-node": "^1.19.0"
   },
   "engines": {
     "node": ">=16.0.0"

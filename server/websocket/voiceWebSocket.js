@@ -132,6 +132,66 @@ class VoiceWebSocketServer {
     }
   }
 
+  async buildWakeWordConfig(device, registrationCode, deviceInfo = {}) {
+    const deviceId = device._id.toString();
+    const platform = deviceInfo.platform || null;
+    const arch = deviceInfo.arch || null;
+    const defaultThreshold = typeof device.settings?.wakeWordThreshold === 'number'
+      ? device.settings.wakeWordThreshold
+      : 0.55;
+
+    const assets = wakeWordAssets.getAssetsForWakeWords(device.supportedWakeWords, {
+      platform,
+      arch,
+      allowGeneric: true,
+      threshold: defaultThreshold
+    });
+
+    const wakeWordAssetPayload = assets.map((asset) => {
+      const params = new URLSearchParams();
+      params.set('code', registrationCode);
+      if (asset.platform || platform) {
+        params.set('platform', asset.platform || platform);
+      }
+      if (asset.arch || arch) {
+        params.set('arch', asset.arch || arch);
+      }
+
+      return {
+        label: asset.label,
+        slug: asset.slug,
+        fileName: asset.fileName,
+        checksum: asset.checksum,
+        size: asset.size,
+        sensitivity: asset.sensitivity,
+        threshold: typeof asset.threshold === 'number' ? asset.threshold : defaultThreshold,
+        engine: asset.engine || 'openwakeword',
+        format: asset.format,
+        updatedAt: asset.updatedAt,
+        downloadUrl: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
+      };
+    });
+
+    return {
+      config: {
+        wakeWords: device.supportedWakeWords,
+        wakeWord: {
+          enabled: device.supportedWakeWords,
+          assets: wakeWordAssetPayload
+        },
+        volume: device.volume,
+        microphoneSensitivity: device.microphoneSensitivity,
+        settings: {
+          audioSampleRate: 16000,
+          audioChannels: 1,
+          wakeWordThreshold: defaultThreshold,
+          wakeWordEngine: 'openwakeword'
+        }
+      },
+      assets
+    };
+  }
+
   async handleMessage(deviceId, rawMessage) {
     try {
       const message = JSON.parse(rawMessage.toString());
@@ -221,15 +281,9 @@ class VoiceWebSocketServer {
       connection.authenticated = true;
       connection.deviceInfo = deviceInfo;
 
-      const platform = deviceInfo.platform || null;
-      const arch = deviceInfo.arch || null;
       console.log(`Authenticating device ${deviceId} (${device.name}) with code ${registrationCode}`);
 
-      const assets = wakeWordAssets.getAssetsForWakeWords(device.supportedWakeWords, {
-        platform,
-        arch,
-        allowGeneric: true
-      });
+      const { config, assets } = await this.buildWakeWordConfig(device, registrationCode, deviceInfo);
 
       if (!assets.length) {
         console.warn(`No wake word assets available for device ${device.name}. Ensure files exist in server/public/wake-words.`);
@@ -238,46 +292,11 @@ class VoiceWebSocketServer {
         console.log(`Resolved ${assets.length} wake word asset(s) for ${device.name}: ${assetLabels}`);
       }
 
-      const wakeWordAssetPayload = assets.map((asset) => {
-        const params = new URLSearchParams();
-        params.set('code', registrationCode);
-        if (asset.platform || platform) {
-          params.set('platform', asset.platform || platform);
-        }
-        if (asset.arch || arch) {
-          params.set('arch', asset.arch || arch);
-        }
-
-        return {
-          label: asset.label,
-          slug: asset.slug,
-          fileName: asset.fileName,
-          checksum: asset.checksum,
-          size: asset.size,
-          sensitivity: asset.sensitivity,
-          updatedAt: asset.updatedAt,
-          downloadUrl: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
-        };
-      });
-
-      console.log(`Sending auth_success to ${deviceId} with ${wakeWordAssetPayload.length} wake word asset(s)`);
+      console.log(`Sending auth_success to ${deviceId} with ${assets.length} wake word asset(s)`);
 
       this.sendMessage(deviceId, {
         type: 'auth_success',
-        config: {
-          wakeWords: device.supportedWakeWords,
-          wakeWord: {
-            enabled: device.supportedWakeWords,
-            assets: wakeWordAssetPayload
-          },
-          volume: device.volume,
-          microphoneSensitivity: device.microphoneSensitivity,
-          settings: {
-            audioSampleRate: 16000,
-            audioChannels: 1,
-            wakeWordThreshold: 0.5
-          }
-        }
+        config
       });
 
       console.log(`Device ${device.name} authenticated successfully`);
@@ -288,6 +307,48 @@ class VoiceWebSocketServer {
         type: 'auth_failed',
         message: 'Authentication error'
       });
+    }
+  }
+
+  async broadcastWakeWordUpdate(model) {
+    try {
+      const phrase = typeof model === 'string' ? model : model?.phrase;
+      if (!phrase) {
+        console.warn('broadcastWakeWordUpdate called without a valid phrase');
+        return;
+      }
+
+      const devices = await VoiceDevice.find({
+        wakeWordSupport: true,
+        supportedWakeWords: { $in: [phrase] }
+      });
+
+      for (const device of devices) {
+        const deviceId = device._id.toString();
+        const connection = this.deviceConnections.get(deviceId);
+        if (!connection || !connection.authenticated) {
+          continue;
+        }
+
+        const registrationCode = device.settings?.registrationCode;
+        if (!registrationCode) {
+          console.warn(`Cannot send wake word update to ${device.name}: missing registration code`);
+          continue;
+        }
+
+        try {
+          const { config, assets } = await this.buildWakeWordConfig(device, registrationCode, connection.deviceInfo || {});
+          console.log(`Dispatching config_update to ${deviceId} for wake word "${phrase}" with ${assets.length} asset(s)`);
+          this.sendMessage(deviceId, {
+            type: 'config_update',
+            config
+          });
+        } catch (configError) {
+          console.error(`Failed to build wake word config for device ${deviceId}:`, configError);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to broadcast wake word update:', error);
     }
   }
 

@@ -244,14 +244,10 @@ LOCAL_LLM_MODEL=llama2
 4. Test accuracy
 
 #### Training Custom Wake Words
-```bash
-# Using Picovoice Console
-1. Visit https://console.picovoice.ai/
-2. Create new wake word
-3. Train with voice samples
-4. Download .ppn file
-5. Upload to HomeBrain profile
-```
+1. Edit the user profile in the HomeBrain UI and add the wake-word phrase(s).
+2. Monitor `journalctl -u homebrain -f` (or query the Profiles API) until each wake word reports `ready`.
+3. Confirm the corresponding `.tflite` file exists in `server/public/wake-words/` on the hub.
+4. Restart the remote service—or wait for a `config_update`—so the Pi downloads the new model automatically.
 
 ## Voice Device Configuration
 

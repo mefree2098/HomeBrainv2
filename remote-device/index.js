@@ -13,8 +13,8 @@ const crypto = require('crypto');
 const { exec } = require('child_process');
 const packageInfo = require('./package.json');
 
-const DEFAULT_WAKE_WORD_SENSITIVITY = 0.65;
 const DEFAULT_WAKE_WORD_CONFIDENCE = 0.9;
+const DEFAULT_WAKE_WORD_THRESHOLD = 0.55;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
 const PACKAGE_VERSION = packageInfo.version;
 const WAKE_WORD_USER_AGENT = `HomeBrain-Remote/${PACKAGE_VERSION}`;
@@ -90,16 +90,16 @@ class HomeBrainRemoteDevice {
     this.wakeWords = this.wakeWordDisplayNames.map((word) => word.toLowerCase());
     this.isWakeWordListening = true;
     this.wakeWordAudioBuffer = Buffer.alloc(0);
-    this.porcupine = null;
-    this.porcupineInitialized = false;
-    this.porcupineFrameLength = 0;
-    this.porcupineSampleRate = this.config.audio.sampleRate || 16000;
-    this.porcupineKeywordLabels = [];
-    this.porcupineSensitivities = [];
-    this.porcupineReportWords = [];
-    this.porcupineAccessKey = this.config.wakeWord.accessKey || process.env.PICOVOICE_ACCESS_KEY || process.env.PV_ACCESS_KEY || null;
+    this.wakeWordEngine = 'openwakeword';
+    this.wakeWordSessions = [];
+    this.wakeWordFrameSamples = 0;
+    this.wakeWordSampleRate = this.config.audio.sampleRate || 16000;
+    this.wakeWordInputShape = new Map();
+    this.onnxRuntime = null;
+    this.wakeWordThreshold = clamp(this.config.wakeWord.threshold ?? this.config.wakeWord.defaultThreshold ?? DEFAULT_WAKE_WORD_THRESHOLD, 0, 1);
     this.wakeWordReportedConfidence = clamp(this.config.wakeWord.reportedConfidence ?? DEFAULT_WAKE_WORD_CONFIDENCE, 0, 1);
     this.wakeWordEngineFailed = false;
+    this.wakeWordDetectionQueue = Promise.resolve();
     this.testModeActive = false;
     this.testModeListenerAttached = false;
     this.testModeListener = null;
@@ -455,9 +455,6 @@ class HomeBrainRemoteDevice {
         ...config.wakeWord
       };
 
-      if (typeof config.wakeWord.accessKey === 'string' && config.wakeWord.accessKey.trim().length > 0) {
-        this.porcupineAccessKey = config.wakeWord.accessKey.trim();
-      }
     }
 
     if (Array.isArray(config.wakeWords)) {
@@ -492,6 +489,12 @@ class HomeBrainRemoteDevice {
       this.wakeWordReportedConfidence = clamp(config.wakeWord.reportedConfidence, 0, 1);
     }
 
+    if (typeof config.wakeWord?.threshold === 'number') {
+      this.wakeWordThreshold = clamp(config.wakeWord.threshold, 0, 1);
+    } else if (typeof config.wakeWord?.defaultThreshold === 'number') {
+      this.wakeWordThreshold = clamp(config.wakeWord.defaultThreshold, 0, 1);
+    }
+
     const assetsChanged = await this.syncWakeWordAssetsFromConfig(config);
     restartNeeded = restartNeeded || assetsChanged;
 
@@ -516,14 +519,17 @@ class HomeBrainRemoteDevice {
   }
 
   isWakeWordDetectorActive() {
-    return Boolean(this.recordingStream && this.porcupineInitialized && !this.wakeWordEngineFailed);
+    return Boolean(this.recordingStream && this.wakeWordSessions.length > 0 && !this.wakeWordEngineFailed);
   }
 
   generateWakeWordAssetSignature(keywords = []) {
     return JSON.stringify(keywords.map((keyword) => ({
       label: keyword.label || '',
+      slug: keyword.slug || (keyword.label ? slugify(keyword.label) : ''),
       path: keyword.path ? path.resolve(keyword.path) : '',
-      sensitivity: typeof keyword.sensitivity === 'number' ? Number(keyword.sensitivity.toFixed(3)) : null
+      engine: keyword.engine || 'openwakeword',
+      sensitivity: typeof keyword.sensitivity === 'number' ? Number(keyword.sensitivity.toFixed(3)) : null,
+      threshold: typeof keyword.threshold === 'number' ? Number(keyword.threshold.toFixed(3)) : null
     })));
   }
 
@@ -611,7 +617,12 @@ class HomeBrainRemoteDevice {
         continue;
       }
 
-      const fileName = asset.fileName || `${slug}.ppn`;
+      const fallbackFormat = typeof asset.format === 'string' && asset.format.trim().length
+        ? asset.format.trim().replace(/^\./, '')
+        : 'tflite';
+      const fileName = asset.fileName && asset.fileName.trim().length
+        ? asset.fileName.trim()
+        : `${slug}.${fallbackFormat}`;
       const localPath = path.resolve(cacheDir, fileName);
       const downloadUrl = asset.downloadUrl ? this.buildAbsoluteHubUrl(asset.downloadUrl) : null;
 
@@ -638,6 +649,9 @@ class HomeBrainRemoteDevice {
       keywords.push({
         label,
         path: localPath,
+        slug,
+        engine: asset.engine || 'openwakeword',
+        threshold: typeof asset.threshold === 'number' ? clamp(asset.threshold, 0, 1) : undefined,
         sensitivity: typeof asset.sensitivity === 'number' ? clamp(asset.sensitivity, 0, 1) : undefined
       });
 
@@ -702,39 +716,14 @@ class HomeBrainRemoteDevice {
   }
 
   async initializeWakeWordEngine() {
-    if (this.porcupineInitialized && this.porcupine) {
+    if (this.wakeWordSessions.length > 0) {
       return;
     }
 
     const wakeWordConfig = this.config.wakeWord || {};
-    const accessKeyCandidate = typeof wakeWordConfig.accessKey === 'string' && wakeWordConfig.accessKey.trim().length > 0
-      ? wakeWordConfig.accessKey.trim()
-      : this.porcupineAccessKey || process.env.PICOVOICE_ACCESS_KEY || process.env.PV_ACCESS_KEY;
+    const seenPaths = new Set();
 
-    if (!accessKeyCandidate) {
-      throw new Error('Porcupine AccessKey not configured. Set wakeWord.accessKey in config.json or PICOVOICE_ACCESS_KEY environment variable.');
-    }
-
-    this.porcupineAccessKey = accessKeyCandidate;
-
-    let porcupineModule;
-
-    try {
-      porcupineModule = require('@picovoice/porcupine-node');
-    } catch (error) {
-      throw new Error('Porcupine wake-word engine not installed. Run `npm install @picovoice/porcupine-node` on the device.');
-    }
-
-    const { Porcupine } = porcupineModule;
-    if (!Porcupine) {
-      throw new Error('Invalid Porcupine module: missing Porcupine export');
-    }
-
-    const keywordPaths = [];
-    const keywordLabels = [];
-    const keywordSensitivities = [];
-
-    const resolveKeywordPath = (candidate) => {
+    const resolveModelPath = (candidate) => {
       if (!candidate || (typeof candidate === 'string' && candidate.trim().length === 0)) {
         return null;
       }
@@ -743,127 +732,158 @@ class HomeBrainRemoteDevice {
       const absolutePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(this.configDirectory, rawPath);
 
       if (!fs.existsSync(absolutePath)) {
-        throw new Error(`Wake word keyword file not found: ${absolutePath}`);
+        console.warn(`Wake word model not found on disk: ${absolutePath}`);
+        return null;
       }
 
       return absolutePath;
     };
 
-    const addKeyword = (entry) => {
+    const keywordEntries = [];
+    const pushKeywordEntry = (entry) => {
       if (!entry) return;
 
       if (typeof entry === 'string') {
-        const resolved = resolveKeywordPath(entry);
-        if (!resolved) return;
-        keywordPaths.push(resolved);
-        keywordLabels.push(this.formatWakeWordLabel(entry));
-        keywordSensitivities.push(null);
-      } else if (typeof entry === 'object' && entry.path) {
-        const resolved = resolveKeywordPath(entry.path);
-        if (!resolved) return;
-        keywordPaths.push(resolved);
-        keywordLabels.push(entry.label || this.formatWakeWordLabel(entry.path));
-        keywordSensitivities.push(typeof entry.sensitivity === 'number' ? entry.sensitivity : null);
+        const resolvedPath = resolveModelPath(entry);
+        if (!resolvedPath || seenPaths.has(resolvedPath)) {
+          return;
+        }
+        seenPaths.add(resolvedPath);
+        keywordEntries.push({
+          label: this.formatWakeWordLabel(entry),
+          slug: slugify(entry),
+          path: resolvedPath,
+          sensitivity: null,
+          threshold: null
+        });
+        return;
       }
+
+      if (typeof entry !== 'object') {
+        return;
+      }
+
+      const candidatePath = entry.path || entry.file || entry.keywordPath || entry.modelPath;
+      const resolvedPath = resolveModelPath(candidatePath);
+      if (!resolvedPath || seenPaths.has(resolvedPath)) {
+        return;
+      }
+
+      seenPaths.add(resolvedPath);
+
+      const labelSource = entry.label || entry.displayName || entry.slug || entry.name || entry.keyword || candidatePath;
+      keywordEntries.push({
+        label: this.formatWakeWordLabel(labelSource),
+        slug: slugify(entry.slug || labelSource),
+        path: resolvedPath,
+        sensitivity: typeof entry.sensitivity === 'number' ? clamp(entry.sensitivity, 0, 1) : null,
+        threshold: typeof entry.threshold === 'number' ? clamp(entry.threshold, 0, 1) : null
+      });
     };
 
-    if (Array.isArray(wakeWordConfig.keywordPaths)) {
-      wakeWordConfig.keywordPaths.forEach(addKeyword);
-    }
-
     if (Array.isArray(wakeWordConfig.keywords)) {
-      wakeWordConfig.keywords.forEach(addKeyword);
+      wakeWordConfig.keywords.forEach(pushKeywordEntry);
     }
 
-    if (Array.isArray(wakeWordConfig.keywordFiles)) {
-      wakeWordConfig.keywordFiles.forEach(addKeyword);
+    if (keywordEntries.length === 0 && Array.isArray(wakeWordConfig.keywordPaths)) {
+      wakeWordConfig.keywordPaths.forEach(pushKeywordEntry);
     }
 
-    if (wakeWordConfig.keywordPath) {
-      addKeyword(wakeWordConfig.keywordPath);
+    if (keywordEntries.length === 0 && Array.isArray(wakeWordConfig.keywordFiles)) {
+      wakeWordConfig.keywordFiles.forEach(pushKeywordEntry);
     }
 
-    if (wakeWordConfig.customWakeWordFile) {
-      addKeyword(wakeWordConfig.customWakeWordFile);
+    if (keywordEntries.length === 0 && wakeWordConfig.keywordPath) {
+      pushKeywordEntry(wakeWordConfig.keywordPath);
     }
 
-    if (!keywordPaths.length) {
-      throw new Error('No wake-word keyword files configured. Update config.json with wakeWord.keywordPaths or wakeWord.customWakeWordFile.');
+    if (keywordEntries.length === 0 && wakeWordConfig.customWakeWordFile) {
+      pushKeywordEntry(wakeWordConfig.customWakeWordFile);
     }
 
-    if (Array.isArray(wakeWordConfig.enabled) && wakeWordConfig.enabled.length > 0 && wakeWordConfig.enabled.length !== keywordPaths.length) {
-      console.warn(`Wake word configuration mismatch: ${wakeWordConfig.enabled.length} enabled entries but ${keywordPaths.length} keyword files.`);
+    if (!keywordEntries.length) {
+      throw new Error('No wake word models configured. Await hub configuration or confirm wake word assets were downloaded.');
     }
 
-    const baseSensitivity = clamp(
-      typeof wakeWordConfig.sensitivity === 'number' ? wakeWordConfig.sensitivity : DEFAULT_WAKE_WORD_SENSITIVITY,
-      0,
-      1
-    );
-
-    const sensitivityValues = keywordPaths.map((_, index) => {
-      if (typeof keywordSensitivities[index] === 'number') {
-        return clamp(keywordSensitivities[index], 0, 1);
-      }
-      return baseSensitivity;
-    });
-
-    const sensitivities = Float32Array.from(sensitivityValues);
-
-    const args = [this.porcupineAccessKey, keywordPaths, sensitivities];
-    const modelPath = wakeWordConfig.modelPath || process.env.PORCUPINE_MODEL_PATH;
-    const libraryPath = wakeWordConfig.libraryPath || process.env.PORCUPINE_LIBRARY_PATH;
-
-    if (modelPath) {
-      args.push(modelPath);
-      if (libraryPath) {
-        args.push(libraryPath);
-      }
-    }
-
+    let ort;
     try {
-      const createPorcupine = typeof Porcupine.fromKeywordPaths === 'function'
-        ? Porcupine.fromKeywordPaths.bind(Porcupine)
-        : typeof Porcupine.create === 'function'
-          ? Porcupine.create.bind(Porcupine)
-          : null;
-
-      if (!createPorcupine) {
-        throw new Error('Unsupported Porcupine binding version (missing fromKeywordPaths/create factory method)');
-      }
-
-      this.porcupine = await createPorcupine(...args);
-      this.porcupineFrameLength = this.porcupine.frameLength;
-      this.porcupineSampleRate = this.porcupine.sampleRate;
-      this.porcupineKeywordLabels = keywordLabels;
-      this.porcupineSensitivities = sensitivityValues;
-      this.porcupineReportWords = [];
-      this.wakeWordAudioBuffer = Buffer.alloc(0);
-      this.porcupineInitialized = true;
-      this.wakeWordEngineFailed = false;
-
-      const configuredNames = Array.isArray(wakeWordConfig.enabled) ? wakeWordConfig.enabled : null;
-      if (configuredNames && configuredNames.length === keywordLabels.length) {
-        this.wakeWordDisplayNames = configuredNames;
-        this.wakeWords = configuredNames.map((w) => w.toLowerCase());
-      } else if (!configuredNames || configuredNames.length === 0) {
-        this.wakeWordDisplayNames = keywordLabels;
-        this.wakeWords = keywordLabels.map((w) => w.toLowerCase());
-      }
-
-      this.porcupineReportWords = this.wakeWords.slice(0, keywordLabels.length);
-
-      if (argv.verbose) {
-        keywordPaths.forEach((kp, index) => {
-          const label = keywordLabels[index] || kp;
-          const sensitivity = sensitivityValues[index];
-          console.log(`Porcupine keyword ready: ${label} (path: ${kp}, sensitivity: ${sensitivity.toFixed(2)})`);
-        });
-      }
-
+      ort = this.onnxRuntime || require('onnxruntime-node');
+      this.onnxRuntime = ort;
     } catch (error) {
-      throw new Error(`Failed to initialize Porcupine: ${error.message}`);
+      throw new Error('OpenWakeWord runtime not installed. Install dependency `onnxruntime-node` on the device.');
     }
+
+    const sessions = [];
+    let resolvedFrameSamples = 0;
+
+    for (const entry of keywordEntries) {
+      if (!entry.path) {
+        continue;
+      }
+
+      let session;
+      try {
+        session = await ort.InferenceSession.create(entry.path);
+      } catch (error) {
+        console.error(`Failed to load wake word model for "${entry.label}": ${error.message}`);
+        continue;
+      }
+
+      const inputNames = Array.isArray(session.inputNames) && session.inputNames.length
+        ? session.inputNames
+        : Object.keys(session.inputMetadata || {});
+      const inputName = inputNames[0] || null;
+      const inputMetadata = inputName ? session.inputMetadata?.[inputName] : null;
+      const dimensions = Array.isArray(inputMetadata?.dimensions)
+        ? inputMetadata.dimensions.filter((dim) => typeof dim === 'number' && dim > 0)
+        : [];
+      const candidateFrameSamples = dimensions.length ? dimensions[dimensions.length - 1] : 0;
+
+      if (candidateFrameSamples > 0) {
+        if (!resolvedFrameSamples || candidateFrameSamples < resolvedFrameSamples) {
+          resolvedFrameSamples = candidateFrameSamples;
+        }
+      }
+
+      const detectionThreshold = clamp(
+        entry.threshold ?? entry.sensitivity ?? this.wakeWordThreshold,
+        0,
+        1
+      );
+
+      sessions.push({
+        label: entry.label,
+        slug: entry.slug || slugify(entry.label),
+        path: entry.path,
+        threshold: detectionThreshold,
+        sensitivity: entry.sensitivity,
+        inputName,
+        inputMetadata,
+        outputNames: Array.isArray(session.outputNames) && session.outputNames.length
+          ? session.outputNames
+          : Object.keys(session.outputMetadata || {}),
+        session
+      });
+    }
+
+    if (!sessions.length) {
+      throw new Error('Failed to initialize OpenWakeWord models. No valid models were loaded.');
+    }
+
+    this.wakeWordSessions = sessions;
+    this.wakeWordFrameSamples = resolvedFrameSamples || this.wakeWordFrameSamples || this.config.audio?.frameSamples || 16000;
+    this.wakeWordAudioBuffer = Buffer.alloc(0);
+    this.wakeWordEngineFailed = false;
+
+    for (const sessionInfo of this.wakeWordSessions) {
+      try {
+        await this.warmUpWakeWordSession(sessionInfo);
+      } catch (warmupError) {
+        console.warn(`Wake word model warm-up skipped for ${sessionInfo.label}: ${warmupError.message}`);
+      }
+    }
+
+    console.log(`Wake word detection engine initialized (OpenWakeWord) with ${this.wakeWordSessions.length} model(s); frame length ${this.wakeWordFrameSamples} samples.`);
   }
 
   formatWakeWordLabel(source) {
@@ -877,19 +897,27 @@ class HomeBrainRemoteDevice {
   }
 
   releaseWakeWordEngine() {
-    if (this.porcupine) {
-      try {
-        if (typeof this.porcupine.release === 'function') {
-          this.porcupine.release();
+    if (Array.isArray(this.wakeWordSessions) && this.wakeWordSessions.length) {
+      for (const sessionInfo of this.wakeWordSessions) {
+        const session = sessionInfo?.session;
+        if (!session) continue;
+
+        try {
+          if (typeof session.release === 'function') {
+            session.release();
+          } else if (typeof session.dispose === 'function') {
+            session.dispose();
+          }
+        } catch (error) {
+          console.warn(`Failed to release OpenWakeWord session for ${sessionInfo.label}: ${error.message}`);
         }
-      } catch (error) {
-        console.warn('Failed to release Porcupine engine cleanly:', error.message);
       }
     }
 
-    this.porcupine = null;
-    this.porcupineInitialized = false;
+    this.wakeWordSessions = [];
     this.wakeWordAudioBuffer = Buffer.alloc(0);
+    this.wakeWordEngineFailed = false;
+    this.wakeWordDetectionQueue = Promise.resolve();
   }
 
   async startWakeWordDetection() {
@@ -915,12 +943,17 @@ class HomeBrainRemoteDevice {
     try {
       await this.initializeWakeWordEngine();
 
+      if (!this.wakeWordSessions.length) {
+        throw new Error('No wake word models are ready for OpenWakeWord.');
+      }
+
       this.wakeWordEngineFailed = false;
       this.wakeWordAudioBuffer = Buffer.alloc(0);
+      this.wakeWordDetectionQueue = Promise.resolve();
 
       const recordingOptions = {
-        sampleRate: this.porcupineSampleRate,
-        sampleRateHertz: this.porcupineSampleRate,
+        sampleRate: this.wakeWordSampleRate,
+        sampleRateHertz: this.wakeWordSampleRate,
         threshold: this.config.audio.threshold ?? 0.5,
         verbose: false,
         recordProgram: this.config.audio.recordProgram || 'arecord',
@@ -931,9 +964,17 @@ class HomeBrainRemoteDevice {
       const micStream = this.recordingStream.stream();
 
       micStream.on('data', (data) => {
-        if (this.isWakeWordListening && !this.isRecording) {
-          this.processAudioForWakeWord(data);
+        if (!this.isWakeWordListening || this.isRecording) {
+          return;
         }
+
+        const audioChunk = Buffer.isBuffer(data) ? Buffer.from(data) : Buffer.from(data);
+        this.wakeWordDetectionQueue = this.wakeWordDetectionQueue
+          .then(() => this.processAudioForWakeWord(audioChunk))
+          .catch((processingError) => {
+            console.error('Wake word processing error:', processingError.message);
+            this.handleWakeWordEngineFailure(processingError);
+          });
       });
 
       micStream.on('error', (streamError) => {
@@ -941,7 +982,7 @@ class HomeBrainRemoteDevice {
       });
 
       this.isWakeWordListening = true;
-      console.log('Wake word detection active (Porcupine)');
+      console.log('Wake word detection active (OpenWakeWord)');
 
     } catch (error) {
       console.error('Failed to start wake word detection:', error.message);
@@ -959,6 +1000,7 @@ class HomeBrainRemoteDevice {
     console.error('Wake word engine failure:', error.message);
 
     this.releaseWakeWordEngine();
+    this.wakeWordDetectionQueue = Promise.resolve();
 
     if (this.recordingStream) {
       try {
@@ -969,12 +1011,12 @@ class HomeBrainRemoteDevice {
       this.recordingStream = null;
     }
 
-    console.log('Falling back to test mode. Press ENTER to simulate wake word triggers while troubleshooting Porcupine.');
+    console.log('Falling back to test mode. Press ENTER to simulate wake word triggers while troubleshooting OpenWakeWord.');
     this.startTestMode();
   }
 
-  processAudioForWakeWord(audioData) {
-    if (!this.porcupine || !this.porcupineInitialized) {
+  async processAudioForWakeWord(audioData) {
+    if (this.wakeWordEngineFailed || !Array.isArray(this.wakeWordSessions) || !this.wakeWordSessions.length) {
       return;
     }
 
@@ -982,44 +1024,170 @@ class HomeBrainRemoteDevice {
       return;
     }
 
-    if (!Buffer.isBuffer(audioData)) {
-      audioData = Buffer.from(audioData);
-    }
+    const bufferData = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
+    this.wakeWordAudioBuffer = Buffer.concat([this.wakeWordAudioBuffer, bufferData]);
 
-    this.wakeWordAudioBuffer = Buffer.concat([this.wakeWordAudioBuffer, audioData]);
-
-    const frameBytes = this.porcupineFrameLength * PCM_SAMPLE_WIDTH_BYTES;
+    const frameBytes = this.wakeWordFrameSamples * PCM_SAMPLE_WIDTH_BYTES;
 
     while (this.wakeWordAudioBuffer.length >= frameBytes) {
       const frameBuffer = this.wakeWordAudioBuffer.subarray(0, frameBytes);
       this.wakeWordAudioBuffer = this.wakeWordAudioBuffer.subarray(frameBytes);
 
-      let keywordIndex = -1;
-
       try {
-        const pcm = new Int16Array(frameBuffer.buffer, frameBuffer.byteOffset, this.porcupineFrameLength);
-        keywordIndex = this.porcupine.process(pcm);
+        const detection = await this.evaluateWakeWordFrame(frameBuffer);
+        if (detection) {
+          this.onWakeWordDetected(detection.slug, detection.score, detection.label);
+          this.wakeWordAudioBuffer = Buffer.alloc(0);
+          break;
+        }
       } catch (error) {
-        console.error('Porcupine processing error:', error.message);
-        this.handleWakeWordEngineFailure(error);
-        return;
-      }
-
-      if (keywordIndex >= 0) {
-        const label = this.porcupineKeywordLabels[keywordIndex] || this.wakeWordDisplayNames[keywordIndex] || `keyword_${keywordIndex}`;
-        const reportedWakeWord = this.porcupineReportWords[keywordIndex] || label.toLowerCase();
-        const confidenceSource = this.porcupineSensitivities[keywordIndex];
-        const confidence = clamp(
-          typeof confidenceSource === 'number' ? confidenceSource : this.wakeWordReportedConfidence,
-          0,
-          1
-        );
-
-        this.onWakeWordDetected(reportedWakeWord, confidence, label);
-        this.wakeWordAudioBuffer = Buffer.alloc(0);
-        break;
+        throw error;
       }
     }
+  }
+
+  async evaluateWakeWordFrame(frameBuffer) {
+    if (!frameBuffer || frameBuffer.length === 0 || !this.onnxRuntime) {
+      return null;
+    }
+
+    const floatFrame = this.convertPcmFrameToFloat32(frameBuffer, this.wakeWordFrameSamples);
+
+    for (const sessionInfo of this.wakeWordSessions) {
+      const feeds = this.buildWakeWordFeeds(floatFrame, sessionInfo);
+      const outputs = await sessionInfo.session.run(feeds);
+      const score = this.extractWakeWordScore(outputs, sessionInfo);
+
+      if (score >= sessionInfo.threshold) {
+        return {
+          slug: (sessionInfo.slug || sessionInfo.label || 'wake_word').toLowerCase(),
+          label: sessionInfo.label || sessionInfo.slug || 'wake_word',
+          score: clamp(score, 0, 1)
+        };
+      }
+    }
+
+    return null;
+  }
+
+  convertPcmFrameToFloat32(frameBuffer, expectedSamples) {
+    const samplesAvailable = Math.floor(frameBuffer.length / PCM_SAMPLE_WIDTH_BYTES);
+    const sampleCount = Math.max(0, Math.min(expectedSamples || samplesAvailable, samplesAvailable));
+    const floatValues = new Float32Array(expectedSamples || samplesAvailable);
+
+    for (let i = 0; i < sampleCount; i += 1) {
+      const sample = frameBuffer.readInt16LE(i * PCM_SAMPLE_WIDTH_BYTES);
+      floatValues[i] = sample / 32768;
+    }
+
+    if (floatValues.length > sampleCount) {
+      floatValues.fill(0, sampleCount);
+    }
+
+    return floatValues;
+  }
+
+  getWakeWordInputShape(sessionInfo) {
+    if (Array.isArray(sessionInfo.inputShape) && sessionInfo.inputShape.length) {
+      return sessionInfo.inputShape;
+    }
+
+    const frameSamples = this.wakeWordFrameSamples || 16000;
+    const metadataDimensions = Array.isArray(sessionInfo.inputMetadata?.dimensions)
+      ? sessionInfo.inputMetadata.dimensions
+      : null;
+
+    let shape;
+    if (metadataDimensions && metadataDimensions.length) {
+      shape = metadataDimensions.map((dim) => {
+        if (typeof dim === 'number' && dim > 0) {
+          return dim;
+        }
+        return frameSamples;
+      });
+    } else {
+      shape = [1, frameSamples];
+    }
+
+    sessionInfo.inputShape = shape;
+    return shape;
+  }
+
+  buildWakeWordFeeds(floatData, sessionInfo) {
+    if (!this.onnxRuntime?.Tensor) {
+      throw new Error('onnxruntime Tensor constructor unavailable');
+    }
+
+    const shape = this.getWakeWordInputShape(sessionInfo);
+    const elementCount = shape.reduce((total, value) => total * (value > 0 ? value : 1), 1);
+    const tensorData = new Float32Array(elementCount);
+    const copyLength = Math.min(elementCount, floatData.length);
+
+    tensorData.set(floatData.subarray(0, copyLength));
+    if (copyLength < elementCount) {
+      tensorData.fill(0, copyLength);
+    }
+
+    const inputName = sessionInfo.inputName
+      || (Array.isArray(sessionInfo.session?.inputNames) && sessionInfo.session.inputNames[0])
+      || Object.keys(sessionInfo.session?.inputMetadata || { audio: null })[0]
+      || 'audio';
+
+    const feeds = {};
+    feeds[inputName] = new this.onnxRuntime.Tensor('float32', tensorData, shape);
+    return feeds;
+  }
+
+  extractWakeWordScore(outputs, sessionInfo) {
+    if (!outputs || typeof outputs !== 'object') {
+      return 0;
+    }
+
+    const candidateOutputs = Array.isArray(sessionInfo.outputNames) && sessionInfo.outputNames.length
+      ? sessionInfo.outputNames
+      : Object.keys(outputs);
+
+    for (const name of candidateOutputs) {
+      const value = outputs[name];
+      const score = this.coerceWakeWordScore(value);
+      if (typeof score === 'number' && !Number.isNaN(score)) {
+        return score;
+      }
+    }
+
+    const fallbackKey = Object.keys(outputs)[0];
+    return this.coerceWakeWordScore(outputs[fallbackKey]) || 0;
+  }
+
+  coerceWakeWordScore(value) {
+    if (value == null) {
+      return 0;
+    }
+    if (typeof value === 'number') {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return typeof value[0] === 'number' ? value[0] : 0;
+    }
+    if (ArrayBuffer.isView(value) && value.length) {
+      return typeof value[0] === 'number' ? value[0] : 0;
+    }
+    if (typeof value === 'object' && value.data) {
+      return this.coerceWakeWordScore(value.data);
+    }
+    return 0;
+  }
+
+  async warmUpWakeWordSession(sessionInfo) {
+    if (!sessionInfo || !sessionInfo.session || !this.onnxRuntime?.Tensor) {
+      return;
+    }
+
+    const frameSamples = this.wakeWordFrameSamples || 16000;
+    const zeroFrame = new Float32Array(frameSamples);
+    const feeds = this.buildWakeWordFeeds(zeroFrame, sessionInfo);
+
+    await sessionInfo.session.run(feeds);
   }
 
   onWakeWordDetected(wakeWord, confidence, displayName) {
