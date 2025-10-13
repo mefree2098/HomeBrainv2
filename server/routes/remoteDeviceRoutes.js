@@ -4,6 +4,7 @@ const VoiceDevice = require('../models/VoiceDevice');
 const { requireUser } = require('./middlewares/auth');
 const crypto = require('crypto');
 const wakeWordAssets = require('../utils/wakeWordAssets');
+const WakeWordModel = require('../models/WakeWordModel');
 const fs = require('fs');
 const path = require('path');
 
@@ -100,6 +101,20 @@ router.get('/:deviceId/wake-words', async (req, res) => {
       allowGeneric: true
     });
 
+    const clampValue = (value, min, max) => Math.min(Math.max(value, min), max);
+    const metadataBySlug = {};
+    try {
+      const slugs = assets.map((asset) => asset.slug);
+      if (slugs.length) {
+        const models = await WakeWordModel.find({ slug: { $in: slugs } });
+        models.forEach((model) => {
+          metadataBySlug[model.slug] = model.metadata || {};
+        });
+      }
+    } catch (error) {
+      console.warn(`Failed to load wake word metadata for device ${device.name}:`, error.message);
+    }
+
     res.status(200).json({
       success: true,
       wakeWords: device.supportedWakeWords,
@@ -115,8 +130,17 @@ router.get('/:deviceId/wake-words', async (req, res) => {
         arch: asset.arch,
         engine: asset.engine,
         format: asset.format,
-        sensitivity: asset.sensitivity,
-        threshold: asset.threshold
+        sensitivity: asset.sensitivity != null ? clampValue(asset.sensitivity, 0, 1) : undefined,
+        threshold: clampValue(
+          typeof asset.threshold === 'number'
+            ? asset.threshold
+            : typeof metadataBySlug[asset.slug]?.threshold === 'number'
+              ? metadataBySlug[asset.slug].threshold
+              : 0.55,
+          0,
+          1
+        ),
+        metadata: metadataBySlug[asset.slug] || {}
       }))
     });
 

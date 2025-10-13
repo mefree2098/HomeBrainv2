@@ -4,6 +4,7 @@ const WebSocket = require('ws');
 const recorder = require('node-record-lpcm16');
 const fetch = require('node-fetch');
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const yargs = require('yargs');
 const { hideBin } = require('yargs/helpers');
@@ -12,12 +13,25 @@ const os = require('os');
 const crypto = require('crypto');
 const { exec } = require('child_process');
 const packageInfo = require('./package.json');
+let WebRtcVad = null;
+try {
+  WebRtcVad = require('node-webrtcvad');
+} catch (error) {
+  console.warn('node-webrtcvad module not available; wake word VAD gating disabled.');
+}
 
 const DEFAULT_WAKE_WORD_CONFIDENCE = 0.9;
 const DEFAULT_WAKE_WORD_THRESHOLD = 0.55;
+const DEFAULT_WAKE_WORD_DEBOUNCE_MS = 1500;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
+const DEFAULT_VAD_WINDOW_MS = 30;
+const DEFAULT_VAD_HISTORY = 8;
+const DEFAULT_VAD_THRESHOLD = 0.35;
 const PACKAGE_VERSION = packageInfo.version;
 const WAKE_WORD_USER_AGENT = `HomeBrain-Remote/${PACKAGE_VERSION}`;
+const VAD_BASE_SAMPLE_RATE = 16000;
+const VAD_FRAME_SAMPLES = Math.round((DEFAULT_VAD_WINDOW_MS / 1000) * VAD_BASE_SAMPLE_RATE);
+const VAD_FRAME_BYTES = VAD_FRAME_SAMPLES * PCM_SAMPLE_WIDTH_BYTES;
 
 const clamp = (value, min, max) => Math.min(Math.max(Number(value) || 0, min), max);
 const slugify = (value) => {
@@ -103,6 +117,32 @@ class HomeBrainRemoteDevice {
     this.testModeActive = false;
     this.testModeListenerAttached = false;
     this.testModeListener = null;
+    this.wakeWordDebounceMs = clamp(this.config.wakeWord.debounceMs ?? DEFAULT_WAKE_WORD_DEBOUNCE_MS, 250, 10000);
+    this.lastWakeWordAt = 0;
+    this.vadEnabled = Boolean(WebRtcVad);
+    this.vad = null;
+    this.vadBuffer = Buffer.alloc(0);
+    this.vadHistory = [];
+    this.vadHistoryLength = clamp(this.config.wakeWord?.vad?.history ?? DEFAULT_VAD_HISTORY, 1, 32);
+    this.vadSpeechThreshold = clamp(this.config.wakeWord?.vad?.speechThreshold ?? DEFAULT_VAD_THRESHOLD, 0, 1);
+    this.vadMinActivations = clamp(this.config.wakeWord?.vad?.minActivations ?? 1, 1, this.vadHistoryLength);
+    this.vadActive = !this.vadEnabled;
+    if (this.vadEnabled) {
+      try {
+        const vadMode = clamp(this.config.wakeWord?.vad?.mode ?? 3, 0, 3);
+        this.vad = new WebRtcVad(vadMode);
+      } catch (error) {
+        console.warn(`WebRTC VAD initialization failed (${error.message}); disabling VAD gating.`);
+        this.vadEnabled = false;
+        this.vad = null;
+      }
+    }
+    if (this.vadEnabled && this.wakeWordSampleRate !== VAD_BASE_SAMPLE_RATE) {
+      console.warn(`VAD gating requires ${VAD_BASE_SAMPLE_RATE} Hz audio. Current sample rate ${this.wakeWordSampleRate} Hz is not supported; disabling VAD.`);
+      this.vadEnabled = false;
+      this.vad = null;
+      this.vadActive = true;
+    }
 
     // Auto-discovery
     this.discoveryPort = 12345;
@@ -651,6 +691,7 @@ class HomeBrainRemoteDevice {
         path: localPath,
         slug,
         engine: asset.engine || 'openwakeword',
+        format: asset.format || path.extname(fileName).slice(1),
         threshold: typeof asset.threshold === 'number' ? clamp(asset.threshold, 0, 1) : undefined,
         sensitivity: typeof asset.sensitivity === 'number' ? clamp(asset.sensitivity, 0, 1) : undefined
       });
@@ -682,6 +723,28 @@ class HomeBrainRemoteDevice {
       keywords,
       assets: normalizedAssets
     };
+
+    if (typeof wakeWordConfig.debounceMs === 'number') {
+      this.wakeWordDebounceMs = clamp(wakeWordConfig.debounceMs, 250, 10000);
+    }
+    if (wakeWordConfig.vad && this.vadEnabled) {
+      const vadCfg = wakeWordConfig.vad;
+      this.vadHistoryLength = clamp(vadCfg.history ?? this.vadHistoryLength, 1, 32);
+      this.vadSpeechThreshold = clamp(vadCfg.speechThreshold ?? this.vadSpeechThreshold, 0, 1);
+      this.vadMinActivations = clamp(vadCfg.minActivations ?? this.vadMinActivations, 1, this.vadHistoryLength);
+      if (this.vad) {
+        try {
+          const mode = clamp(vadCfg.mode ?? 3, 0, 3);
+          this.vad = new WebRtcVad(mode);
+        } catch (error) {
+          console.warn(`Failed to update VAD mode (${error.message}); disabling VAD gating.`);
+          this.vadEnabled = false;
+          this.vad = null;
+          this.vadActive = true;
+        }
+      }
+      this.vadHistory = [];
+    }
 
     return assetsChanged;
   }
@@ -805,65 +868,20 @@ class HomeBrainRemoteDevice {
       throw new Error('No wake word models configured. Await hub configuration or confirm wake word assets were downloaded.');
     }
 
-    let ort;
-    try {
-      ort = this.onnxRuntime || require('onnxruntime-node');
-      this.onnxRuntime = ort;
-    } catch (error) {
-      throw new Error('OpenWakeWord runtime not installed. Install dependency `onnxruntime-node` on the device.');
-    }
-
     const sessions = [];
     let resolvedFrameSamples = 0;
 
     for (const entry of keywordEntries) {
-      if (!entry.path) {
+      if (!entry.path) continue;
+      const sessionInfo = await this.createWakeWordSession(entry);
+      if (!sessionInfo) {
+        console.warn(`Wake word session not initialized for "${entry.label}" (${entry.format || 'unknown'}).`);
         continue;
       }
-
-      let session;
-      try {
-        session = await ort.InferenceSession.create(entry.path);
-      } catch (error) {
-        console.error(`Failed to load wake word model for "${entry.label}": ${error.message}`);
-        continue;
+      if (sessionInfo.frameSamples && (!resolvedFrameSamples || sessionInfo.frameSamples < resolvedFrameSamples)) {
+        resolvedFrameSamples = sessionInfo.frameSamples;
       }
-
-      const inputNames = Array.isArray(session.inputNames) && session.inputNames.length
-        ? session.inputNames
-        : Object.keys(session.inputMetadata || {});
-      const inputName = inputNames[0] || null;
-      const inputMetadata = inputName ? session.inputMetadata?.[inputName] : null;
-      const dimensions = Array.isArray(inputMetadata?.dimensions)
-        ? inputMetadata.dimensions.filter((dim) => typeof dim === 'number' && dim > 0)
-        : [];
-      const candidateFrameSamples = dimensions.length ? dimensions[dimensions.length - 1] : 0;
-
-      if (candidateFrameSamples > 0) {
-        if (!resolvedFrameSamples || candidateFrameSamples < resolvedFrameSamples) {
-          resolvedFrameSamples = candidateFrameSamples;
-        }
-      }
-
-      const detectionThreshold = clamp(
-        entry.threshold ?? entry.sensitivity ?? this.wakeWordThreshold,
-        0,
-        1
-      );
-
-      sessions.push({
-        label: entry.label,
-        slug: entry.slug || slugify(entry.label),
-        path: entry.path,
-        threshold: detectionThreshold,
-        sensitivity: entry.sensitivity,
-        inputName,
-        inputMetadata,
-        outputNames: Array.isArray(session.outputNames) && session.outputNames.length
-          ? session.outputNames
-          : Object.keys(session.outputMetadata || {}),
-        session
-      });
+      sessions.push(sessionInfo);
     }
 
     if (!sessions.length) {
@@ -884,6 +902,119 @@ class HomeBrainRemoteDevice {
     }
 
     console.log(`Wake word detection engine initialized (OpenWakeWord) with ${this.wakeWordSessions.length} model(s); frame length ${this.wakeWordFrameSamples} samples.`);
+  }
+
+  async createWakeWordSession(entry) {
+    if (entry.format && entry.format.toLowerCase() === 'tflite') {
+      const session = await this.createTfliteSession(entry);
+      if (session) {
+        return session;
+      }
+      const fallbackPath = entry.path.replace(/\.tflite$/i, '.onnx');
+      if (fallbackPath && fs.existsSync(fallbackPath)) {
+        return this.createOnnxWakeWordSession({
+          ...entry,
+          path: fallbackPath,
+          format: 'onnx'
+        });
+      }
+    }
+    return this.createOnnxWakeWordSession(entry);
+  }
+
+  async createTfliteSession(entry) {
+    try {
+      const tflite = require('tflite-node');
+      console.log(`Attempting to load TFLite wake word model "${entry.label}"`);
+      const modelBuffer = await fsp.readFile(entry.path);
+      const interpreter = new tflite.Interpreter(modelBuffer);
+      interpreter.allocateTensors();
+      const inputDetails = interpreter.getInputDetails()[0];
+      const outputDetails = interpreter.getOutputDetails()[0];
+      const frameSamples = Array.isArray(inputDetails.shape) ? inputDetails.shape[inputDetails.shape.length - 1] : this.wakeWordFrameSamples;
+
+      const sessionInfo = {
+        label: entry.label,
+        slug: entry.slug || slugify(entry.label),
+        path: entry.path,
+        format: 'tflite',
+        engine: 'tflite',
+        threshold: clamp(entry.threshold ?? entry.sensitivity ?? this.wakeWordThreshold, 0, 1),
+        sensitivity: entry.sensitivity,
+        frameSamples,
+        run: (floatFrame) => {
+          try {
+            const inputTensor = interpreter.getInputTensor(0);
+            inputTensor.copyFrom(floatFrame);
+            interpreter.invoke();
+            const outputTensor = interpreter.getOutputTensor(outputDetails.index);
+            const data = outputTensor.data();
+            return Array.isArray(data) ? data[0] : data;
+          } catch (error) {
+            console.warn(`TFLite inference error for ${entry.label}: ${error.message}`);
+            return 0;
+          }
+        }
+      };
+
+      return sessionInfo;
+    } catch (error) {
+      console.warn(`TFLite runtime unavailable for model "${entry.label}": ${error.message}. Falling back to ONNX.`);
+      return null;
+    }
+  }
+
+  async createOnnxWakeWordSession(entry) {
+    let ort;
+    try {
+      ort = this.onnxRuntime || require('onnxruntime-node');
+      this.onnxRuntime = ort;
+    } catch (error) {
+      throw new Error('onnxruntime-node dependency is required for wake word detection.');
+    }
+
+    let session;
+    try {
+      session = await ort.InferenceSession.create(entry.path);
+    } catch (error) {
+      console.error(`Failed to create ONNX session for "${entry.label}": ${error.message}`);
+      return null;
+    }
+
+    const inputNames = Array.isArray(session.inputNames) && session.inputNames.length
+      ? session.inputNames
+      : Object.keys(session.inputMetadata || {});
+    const inputName = inputNames[0] || null;
+    const inputMetadata = inputName ? session.inputMetadata?.[inputName] : null;
+    const dimensions = Array.isArray(inputMetadata?.dimensions)
+      ? inputMetadata.dimensions.filter((dim) => typeof dim === 'number' && dim > 0)
+      : [];
+    const frameSamples = dimensions.length ? dimensions[dimensions.length - 1] : this.wakeWordFrameSamples;
+
+    const sessionInfo = {
+      label: entry.label,
+      slug: entry.slug || slugify(entry.label),
+      path: entry.path,
+      format: 'onnx',
+      engine: 'onnx',
+      threshold: clamp(entry.threshold ?? entry.sensitivity ?? this.wakeWordThreshold, 0, 1),
+      sensitivity: entry.sensitivity,
+      inputName,
+      inputMetadata,
+      outputNames: Array.isArray(session.outputNames) && session.outputNames.length
+        ? session.outputNames
+        : Object.keys(session.outputMetadata || {}),
+      session,
+      frameSamples
+    };
+
+    sessionInfo.run = async (floatFrame) => {
+      const feeds = this.buildWakeWordFeeds(floatFrame, sessionInfo);
+      const outputs = await sessionInfo.session.run(feeds);
+      return this.extractWakeWordScore(outputs, sessionInfo);
+    };
+
+    return sessionInfo;
   }
 
   formatWakeWordLabel(source) {
@@ -1025,6 +1156,25 @@ class HomeBrainRemoteDevice {
     }
 
     const bufferData = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
+
+    if (this.vadEnabled && this.vad) {
+      this.vadBuffer = Buffer.concat([this.vadBuffer, bufferData]);
+      while (this.vadBuffer.length >= VAD_FRAME_BYTES) {
+        const vadFrame = this.vadBuffer.subarray(0, VAD_FRAME_BYTES);
+        this.vadBuffer = this.vadBuffer.subarray(VAD_FRAME_BYTES);
+        try {
+          const speech = this.vad.process(this.wakeWordSampleRate, vadFrame);
+          this.updateVadState(Boolean(speech));
+        } catch (error) {
+          console.warn(`VAD processing error (${error.message}); disabling VAD gating.`);
+          this.vadEnabled = false;
+          this.vad = null;
+          this.vadActive = true;
+          break;
+        }
+      }
+    }
+
     this.wakeWordAudioBuffer = Buffer.concat([this.wakeWordAudioBuffer, bufferData]);
 
     const frameBytes = this.wakeWordFrameSamples * PCM_SAMPLE_WIDTH_BYTES;
@@ -1032,6 +1182,10 @@ class HomeBrainRemoteDevice {
     while (this.wakeWordAudioBuffer.length >= frameBytes) {
       const frameBuffer = this.wakeWordAudioBuffer.subarray(0, frameBytes);
       this.wakeWordAudioBuffer = this.wakeWordAudioBuffer.subarray(frameBytes);
+
+      if (this.vadEnabled && !this.shouldEvaluateWakeWord()) {
+        continue;
+      }
 
       try {
         const detection = await this.evaluateWakeWordFrame(frameBuffer);
@@ -1047,16 +1201,22 @@ class HomeBrainRemoteDevice {
   }
 
   async evaluateWakeWordFrame(frameBuffer) {
-    if (!frameBuffer || frameBuffer.length === 0 || !this.onnxRuntime) {
+    if (!frameBuffer || frameBuffer.length === 0) {
       return null;
     }
 
-    const floatFrame = this.convertPcmFrameToFloat32(frameBuffer, this.wakeWordFrameSamples);
-
     for (const sessionInfo of this.wakeWordSessions) {
-      const feeds = this.buildWakeWordFeeds(floatFrame, sessionInfo);
-      const outputs = await sessionInfo.session.run(feeds);
-      const score = this.extractWakeWordScore(outputs, sessionInfo);
+      const frameSamples = sessionInfo.frameSamples || this.wakeWordFrameSamples;
+      const floatFrame = this.convertPcmFrameToFloat32(frameBuffer, frameSamples);
+      let score = 0;
+
+      if (typeof sessionInfo.run === 'function') {
+        score = await sessionInfo.run(floatFrame);
+      } else if (sessionInfo.session) {
+        const feeds = this.buildWakeWordFeeds(floatFrame, sessionInfo);
+        const outputs = await sessionInfo.session.run(feeds);
+        score = this.extractWakeWordScore(outputs, sessionInfo);
+      }
 
       if (score >= sessionInfo.threshold) {
         return {
@@ -1178,6 +1338,26 @@ class HomeBrainRemoteDevice {
     return 0;
   }
 
+  updateVadState(isSpeech) {
+    if (!this.vadEnabled) {
+      return;
+    }
+    this.vadHistory.push(isSpeech ? 1 : 0);
+    if (this.vadHistory.length > this.vadHistoryLength) {
+      this.vadHistory.shift();
+    }
+    const activations = this.vadHistory.reduce((sum, value) => sum + value, 0);
+    const ratio = this.vadHistory.length ? activations / this.vadHistory.length : 0;
+    this.vadActive = activations >= this.vadMinActivations && ratio >= this.vadSpeechThreshold;
+  }
+
+  shouldEvaluateWakeWord() {
+    if (!this.vadEnabled) {
+      return true;
+    }
+    return this.vadActive;
+  }
+
   async warmUpWakeWordSession(sessionInfo) {
     if (!sessionInfo || !sessionInfo.session || !this.onnxRuntime?.Tensor) {
       return;
@@ -1192,6 +1372,12 @@ class HomeBrainRemoteDevice {
 
   onWakeWordDetected(wakeWord, confidence, displayName) {
     if (!this.isAuthenticated) return;
+
+    const now = Date.now();
+    if (now - this.lastWakeWordAt < this.wakeWordDebounceMs) {
+      return;
+    }
+    this.lastWakeWordAt = now;
 
     const normalizedConfidence = clamp(confidence ?? this.wakeWordReportedConfidence, 0, 1);
     const label = displayName || wakeWord;
@@ -1209,12 +1395,16 @@ class HomeBrainRemoteDevice {
     });
 
     this.wakeWordAudioBuffer = Buffer.alloc(0);
+    if (this.vadEnabled) {
+      this.vadHistory = [];
+      this.vadActive = false;
+    }
 
     // Brief pause to prevent multiple detections
     this.isWakeWordListening = false;
     setTimeout(() => {
       this.isWakeWordListening = true;
-    }, 2000);
+    }, this.wakeWordDebounceMs);
   }
 
   startVoiceRecording() {

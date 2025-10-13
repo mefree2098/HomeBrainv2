@@ -36,6 +36,8 @@ python -m pip install --upgrade pip setuptools wheel ${PIP_FLAGS}
 
 # Use versions compatible with the system SciPy/SKLearn stack.
 python -m pip install "numpy<2.0" "scipy<1.11" ${PIP_FLAGS}
+python -m pip install "torch" "soundfile" "librosa" ${PIP_FLAGS}
+python -m pip install "onnxruntime" "onnx" "onnx-tf" "tensorflow-cpu" ${PIP_FLAGS}
 python -m pip install "openwakeword[train]" ${PIP_FLAGS}
 
 cat <<EOF

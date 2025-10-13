@@ -15,7 +15,7 @@ const schema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'training', 'ready', 'error'],
+    enum: ['pending', 'queued', 'generating', 'training', 'exporting', 'ready', 'error'],
     default: 'pending',
     index: true
   },
@@ -33,6 +33,46 @@ const schema = new mongoose.Schema({
   checksum: {
     type: String
   },
+  artifacts: [{
+    format: {
+      type: String,
+      enum: ['tflite', 'onnx', 'torchscript', 'raw'],
+      required: true
+    },
+    path: {
+      type: String,
+      required: true
+    },
+    size: {
+      type: Number
+    },
+    checksum: {
+      type: String
+    },
+    threshold: {
+      type: Number,
+      min: 0,
+      max: 1
+    },
+    sensitivity: {
+      type: Number,
+      min: 0,
+      max: 1
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  progress: {
+    type: Number,
+    min: 0,
+    max: 1,
+    default: 0
+  },
+  statusMessage: {
+    type: String
+  },
   error: {
     type: String
   },
@@ -44,6 +84,10 @@ const schema = new mongoose.Schema({
     samplesGenerated: Number,
     generator: String,
     durationMs: Number
+  },
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
   lastTrainedAt: {
     type: Date

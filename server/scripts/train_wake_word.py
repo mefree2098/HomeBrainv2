@@ -1,194 +1,568 @@
 #!/usr/bin/env python3
-"""
-HomeBrain OpenWakeWord training helper.
+# Minimal OpenWakeWord training pipeline for HomeBrain.
+#
+# Emits JSON progress messages to stdout. The final line is a JSON object with type="result".
 
-Attempts to train an OpenWakeWord model for a custom phrase. The script first tries
-to invoke the Python API (if available), falling back to the command line interface.
-
-On success, JSON metadata is written to stdout. On failure, stderr contains a message
-and the exit code will be non-zero.
-"""
+from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import random
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-import traceback
 from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import numpy as np
+
+try:
+    import soundfile as sf  # type: ignore
+except ImportError as exc:  # pragma: no cover
+    sys.stderr.write("soundfile is required. Install with `pip install soundfile`.\n")
+    raise
+
+try:
+    from scipy import signal  # type: ignore
+except Exception:  # pragma: no cover
+    signal = None
+
+try:
+    import torch  # type: ignore
+    from torch.utils.data import DataLoader, Dataset  # type: ignore
+except ImportError as exc:  # pragma: no cover
+    sys.stderr.write("PyTorch is required. Install with `pip install torch`.\n")
+    raise
+
+try:
+    from openwakeword.train import Model, convert_onnx_to_tflite  # type: ignore
+    from openwakeword.utils import AudioFeatures  # type: ignore
+except ImportError as exc:  # pragma: no cover
+    sys.stderr.write("openwakeword is required. Install with `pip install openwakeword[train]`.\n")
+    raise
+
+SAMPLE_RATE = 16_000
+WINDOW_FRAMES = 16
+WINDOW_STEP = 4
+DEFAULT_POSITIVE_SYNTHETIC = 400
+DEFAULT_NEGATIVE_SYNTHETIC = 150
+DEFAULT_RANDOM_SILENCE = 200
 
 
-def parse_args():
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+def progress(stage: str, amount: float, message: str, **extra: object) -> None:
+    payload = {
+        "type": "progress",
+        "stage": stage,
+        "progress": max(0.0, min(1.0, amount)),
+        "message": message
+    }
+    if extra:
+        payload["data"] = extra
+    print(json.dumps(payload), flush=True)
+
+
+def ensure_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def load_audio(path: Path) -> np.ndarray:
+    audio, sr = sf.read(str(path), always_2d=False)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if sr != SAMPLE_RATE:
+        if signal is None:
+            raise RuntimeError("Resampling requires scipy. Install with pip install scipy.")
+        gcd = math.gcd(sr, SAMPLE_RATE)
+        up = SAMPLE_RATE // gcd
+        down = sr // gcd
+        audio = signal.resample_poly(audio, up, down)
+    return audio.astype(np.float32)
+
+
+def pad_audio(audio: np.ndarray, target_samples: int, rng: random.Random) -> np.ndarray:
+    if audio.shape[0] == target_samples:
+        return audio.copy()
+    if audio.shape[0] > target_samples:
+        start = 0
+        if audio.shape[0] - target_samples > 1:
+            start = rng.randint(0, audio.shape[0] - target_samples)
+        return audio[start:start + target_samples]
+    result = np.zeros(target_samples, dtype=np.float32)
+    start = 0
+    if target_samples - audio.shape[0] > 1:
+        start = rng.randint(0, target_samples - audio.shape[0])
+    result[start:start + audio.shape[0]] = audio
+    return result
+
+
+def piper_synthesize(executable: str, voice: Dict[str, object], text: str, output: Path) -> bool:
+    cmd = [executable, "--model", str(voice["modelPath"]), "--output_file", str(output)]
+    if voice.get("configPath"):
+        cmd.extend(["--config", str(voice["configPath"])])
+    if voice.get("speaker"):
+        cmd.extend(["--speaker", str(voice["speaker"])])
+    try:
+        subprocess.run(cmd, input=text.encode("utf-8"), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:  # pragma: no cover
+        return False
+
+
+def list_audio_files(sources: Iterable[Path]) -> List[Path]:
+    results: List[Path] = []
+    for source in sources:
+        if source.is_file():
+            results.append(source)
+        elif source.is_dir():
+            for child in source.rglob("*"):
+                if child.suffix.lower() in {".wav", ".flac", ".mp3", ".ogg"}:
+                    results.append(child)
+    return results
+
+
+def sha256_checksum(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Dataset assembly
+# ---------------------------------------------------------------------------
+
+def generate_positive_samples(
+    phrase: str,
+    options: Dict[str, object],
+    target_samples: int,
+    work_dir: Path,
+    rng: random.Random
+) -> List[np.ndarray]:
+    samples: List[np.ndarray] = []
+    tts_cfg = options.get("tts", {})
+    synthetic_total = int(options.get("syntheticSamples", DEFAULT_POSITIVE_SYNTHETIC))
+    voices = [voice for voice in tts_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
+    piper_exec = shutil.which(str(tts_cfg.get("executable") or "piper"))
+    phrases = options.get("textVariations") or []
+    if phrases:
+        phrases = [p.strip() for p in phrases if p.strip()]
+
+    if synthetic_total > 0 and piper_exec and voices:
+        tmp_dir = ensure_dir(work_dir / "positive-tts")
+        for index in range(synthetic_total):
+            text = rng.choice(phrases) if phrases else phrase
+            voice = rng.choice(voices)
+            output = tmp_dir / f"{index:04d}.wav"
+            success = piper_synthesize(piper_exec, voice, text, output)
+            if not success:
+                continue
+            try:
+                audio = load_audio(output)
+                samples.append(pad_audio(audio, target_samples, rng))
+            except Exception:
+                continue
+
+    for path in list_audio_files(map(Path, options.get("userRecordings", []))):
+        try:
+            audio = load_audio(path)
+            samples.append(pad_audio(audio, target_samples, rng))
+        except Exception:
+            continue
+
+    if not samples:
+        silence = np.zeros(target_samples, dtype=np.float32)
+        for _ in range(max(200, synthetic_total or 200)):
+            samples.append(silence.copy())
+
+    return samples
+
+
+def generate_negative_samples(
+    phrase: str,
+    options: Dict[str, object],
+    target_samples: int,
+    work_dir: Path,
+    rng: random.Random
+) -> List[np.ndarray]:
+    samples: List[np.ndarray] = []
+    backgrounds = list_audio_files(map(Path, options.get("backgroundDirs", [])))
+    for path in backgrounds:
+        try:
+            audio = load_audio(path)
+            samples.append(pad_audio(audio, target_samples, rng))
+        except Exception:
+            continue
+
+    piper_cfg = options.get("syntheticSpeech", {})
+    phrases = piper_cfg.get("phrases") or [
+        f"Ignore {phrase}",
+        "Good morning",
+        "Turn on the lights",
+        "Cancel the alarm"
+    ]
+    synthetic_count = int(piper_cfg.get("samples", DEFAULT_NEGATIVE_SYNTHETIC))
+    voices = [voice for voice in piper_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
+    piper_exec = shutil.which(str(piper_cfg.get("executable") or "piper"))
+    if synthetic_count > 0 and piper_exec and voices:
+        tmp_dir = ensure_dir(work_dir / "negative-tts")
+        for index in range(synthetic_count):
+            text = rng.choice(phrases)
+            voice = rng.choice(voices)
+            output = tmp_dir / f"{index:04d}.wav"
+            success = piper_synthesize(piper_exec, voice, text, output)
+            if not success:
+                continue
+            try:
+                audio = load_audio(output)
+                samples.append(pad_audio(audio, target_samples, rng))
+            except Exception:
+                continue
+
+    for _ in range(int(options.get("randomSilence", DEFAULT_RANDOM_SILENCE))):
+        noise = np.random.normal(0, rng.uniform(0.002, 0.01), size=target_samples).astype(np.float32)
+        samples.append(noise)
+
+    if not samples:
+        noise = np.random.normal(0, 0.01, size=target_samples).astype(np.float32)
+        for _ in range(400):
+            samples.append(noise.copy())
+
+    return samples
+
+
+def augment(samples: List[np.ndarray], copies: int, rng: random.Random) -> List[np.ndarray]:
+    augmented: List[np.ndarray] = []
+    if copies <= 0:
+        return samples
+    for base in samples:
+        augmented.append(base)
+        for _ in range(copies):
+            scale = rng.uniform(0.7, 1.1)
+            noisy = base * scale
+            noisy += np.random.normal(0, rng.uniform(0.001, 0.02), size=base.shape[0]).astype(np.float32)
+            if signal is not None and rng.random() < 0.3:
+                impulse = np.exp(-np.linspace(0, 3, 2048) * rng.uniform(0.2, 0.6)).astype(np.float32)
+                noisy = signal.fftconvolve(noisy, impulse, mode="full").astype(np.float32)
+            augmented.append(np.clip(noisy, -1.0, 1.0))
+    return augmented
+
+
+def split_dataset(samples: List[np.ndarray], train_ratio: float, rng: random.Random) -> Tuple[np.ndarray, np.ndarray]:
+    array = np.stack(samples, axis=0)
+    rng.shuffle(array)
+    split_index = int(train_ratio * array.shape[0])
+    return array[:split_index], array[split_index:]
+
+
+# ---------------------------------------------------------------------------
+# Feature extraction and windows
+# ---------------------------------------------------------------------------
+
+def embeddings_from_clips(clips: np.ndarray, batch_size: int) -> np.ndarray:
+    features = AudioFeatures(device="cuda" if torch.cuda.is_available() else "cpu")
+    if clips.size == 0:
+        return np.empty((0, WINDOW_FRAMES, 96), dtype=np.float32)
+    return features.embed_clips(clips, batch_size=batch_size, ncpu=max(1, os.cpu_count() or 1)).astype(np.float32)
+
+
+def window_embeddings(emb: np.ndarray, label: int) -> Tuple[np.ndarray, np.ndarray]:
+    windows: List[np.ndarray] = []
+    labels: List[int] = []
+    for clip in emb:
+        frames = clip.shape[0]
+        if frames < WINDOW_FRAMES:
+            continue
+        for start in range(0, frames - WINDOW_FRAMES + 1, WINDOW_STEP):
+            windows.append(clip[start:start + WINDOW_FRAMES, :])
+            labels.append(label)
+    if not windows:
+        return np.empty((0, WINDOW_FRAMES, emb.shape[-1]), dtype=np.float32), np.empty((0,), dtype=np.float32)
+    return np.stack(windows).astype(np.float32), np.array(labels, dtype=np.float32)
+
+
+class WakeWordDataset(Dataset):
+    def __init__(self, features: np.ndarray, labels: np.ndarray) -> None:
+        self.features = torch.from_numpy(features).float()
+        self.labels = torch.from_numpy(labels).float()
+
+    def __len__(self) -> int:
+        return self.features.shape[0]
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.features[idx], self.labels[idx]
+
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+
+class WakeWordTrainer:
+    def __init__(self, input_shape: Tuple[int, int], batch_size: int, learning_rate: float) -> None:
+        self.model = Model(n_classes=1, input_shape=input_shape, model_type="dnn", layer_dim=128,
+                           seconds_per_example=WINDOW_FRAMES * 80 / 1000)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.criterion = torch.nn.BCELoss()
+        self.batch_size = batch_size
+
+    def run_epoch(self, loader: DataLoader, train: bool) -> Tuple[float, float]:
+        total_loss = 0.0
+        correct = 0
+        total = 0
+        if train:
+            self.model.train()
+        else:
+            self.model.eval()
+
+        for features, labels in loader:
+            features = features.to(self.device)
+            labels = labels.to(self.device)
+            if train:
+                self.optimizer.zero_grad()
+            outputs = self.model(features).view(-1)
+            loss = self.criterion(outputs, labels)
+            if train:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
+                self.optimizer.step()
+            total_loss += loss.item() * labels.size(0)
+            predictions = (outputs.detach() >= 0.5).float()
+            correct += int((predictions == labels).sum().item())
+            total += labels.size(0)
+
+        if total == 0:
+            return 0.0, 0.0
+        return total_loss / total, correct / total
+
+    def fit(self, train_loader: DataLoader, val_loader: DataLoader, epochs: int) -> Dict[str, float]:
+        best_val_loss = float("inf")
+        best_state = None
+        history = {}
+
+        for epoch in range(epochs):
+            progress("training", 0.4 + (epoch / max(epochs, 1)) * 0.3, f"Epoch {epoch + 1}/{epochs}")
+            train_loss, train_acc = self.run_epoch(train_loader, train=True)
+            val_loss, val_acc = self.run_epoch(val_loader, train=False)
+            history = {"train_loss": train_loss, "train_accuracy": train_acc, "val_loss": val_loss, "val_accuracy": val_acc}
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+
+        if best_state:
+            self.model.load_state_dict(best_state)
+        return history
+
+    def scores(self, features: np.ndarray) -> np.ndarray:
+        if features.size == 0:
+            return np.empty((0,), dtype=np.float32)
+        self.model.eval()
+        with torch.no_grad():
+            tensor = torch.from_numpy(features).float().to(self.device)
+            outputs = self.model(tensor).view(-1).cpu().numpy().astype(np.float32)
+        return outputs
+
+    def export_onnx(self, path: Path) -> None:
+        dummy = torch.randn(1, *self.model.input_shape, dtype=torch.float32, device=self.device)
+        torch.onnx.export(self.model, dummy, str(path), opset_version=13, do_constant_folding=True,
+                          input_names=["audio"], output_names=["score"])
+
+
+# ---------------------------------------------------------------------------
+# Threshold estimation & artifact export
+# ---------------------------------------------------------------------------
+
+def determine_threshold(pos_scores: np.ndarray, neg_scores: np.ndarray, target_fp_per_hour: float) -> float:
+    if neg_scores.size == 0:
+        return 0.5
+    percentile = max(90.0, min(99.9, 100.0 - target_fp_per_hour * 10))
+    neg_level = float(np.percentile(neg_scores, percentile))
+    pos_level = float(np.percentile(pos_scores, 10.0)) if pos_scores.size else 0.7
+    threshold = max(0.1, min(0.9, (neg_level + pos_level) / 2.0))
+    if pos_scores.size and threshold >= pos_scores.max():
+        threshold = max(0.1, min(0.9, pos_scores.max() * 0.9))
+    return threshold
+
+
+def export_artifacts(trainer: WakeWordTrainer, output_path: Path) -> List[Dict[str, object]]:
+    artifacts: List[Dict[str, object]] = []
+    ensure_dir(output_path.parent)
+    onnx_path = output_path.with_suffix(".onnx")
+    trainer.export_onnx(onnx_path)
+    artifacts.append({
+        "format": "onnx",
+        "path": str(onnx_path),
+        "size": onnx_path.stat().st_size,
+        "checksum": sha256_checksum(onnx_path)
+    })
+
+    try:
+        convert_onnx_to_tflite(str(onnx_path), str(output_path))
+        artifacts.append({
+            "format": "tflite",
+            "path": str(output_path),
+            "size": output_path.stat().st_size,
+            "checksum": sha256_checksum(output_path)
+        })
+    except Exception:  # pragma: no cover
+        progress("exporting", 0.88, "TFLite conversion failed; ONNX artifact only.")
+    return artifacts
+
+
+# ---------------------------------------------------------------------------
+# Main orchestration
+# ---------------------------------------------------------------------------
+
+def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[str, object]:
+    rng = random.Random(1337)
+    dataset_cfg = options.get("dataset", {})
+    target_seconds = float(dataset_cfg.get("clipDurationSeconds", 1.5))
+    target_samples = int(target_seconds * SAMPLE_RATE)
+    augment_copies = int(dataset_cfg.get("augmentCopies", 2))
+    train_ratio = float(dataset_cfg.get("trainSplit", 0.85))
+
+    work_dir = Path(tempfile.mkdtemp(prefix=f"wakeword-{args.slug}-"))
+    ensure_dir(work_dir)
+
+    progress("generating", 0.05, "Generating positive samples")
+    positive_samples = generate_positive_samples(args.wake_word, dataset_cfg.get("positive", {}), target_samples, work_dir, rng)
+    progress("generating", 0.1, "Generating negative samples")
+    negative_samples = generate_negative_samples(args.wake_word, dataset_cfg.get("negative", {}), target_samples, work_dir, rng)
+
+    progress("generating", 0.18, "Applying augmentation")
+    positive_samples = augment(positive_samples, augment_copies, rng)
+    negative_samples = augment(negative_samples, max(1, augment_copies // 2), rng)
+
+    progress("generating", 0.26, "Splitting dataset")
+    pos_train, pos_val = split_dataset(positive_samples, train_ratio, rng)
+    neg_train, neg_val = split_dataset(negative_samples, train_ratio, rng)
+
+    progress("generating", 0.34, "Computing embeddings")
+    pos_train_emb = embeddings_from_clips(pos_train, batch_size=64)
+    pos_val_emb = embeddings_from_clips(pos_val, batch_size=64)
+    neg_train_emb = embeddings_from_clips(neg_train, batch_size=64)
+    neg_val_emb = embeddings_from_clips(neg_val, batch_size=64)
+
+    progress("generating", 0.4, "Preparing windows")
+    pos_train_windows, pos_train_labels = window_embeddings(pos_train_emb, 1)
+    neg_train_windows, neg_train_labels = window_embeddings(neg_train_emb, 0)
+    pos_val_windows, pos_val_labels = window_embeddings(pos_val_emb, 1)
+    neg_val_windows, neg_val_labels = window_embeddings(neg_val_emb, 0)
+
+    train_features = np.concatenate([pos_train_windows, neg_train_windows], axis=0)
+    train_labels = np.concatenate([pos_train_labels, neg_train_labels], axis=0)
+    val_features = np.concatenate([pos_val_windows, neg_val_windows], axis=0)
+    val_labels = np.concatenate([pos_val_labels, neg_val_labels], axis=0)
+
+    rng_np = np.random.default_rng(42)
+    train_idx = rng_np.permutation(train_features.shape[0])
+    val_idx = rng_np.permutation(val_features.shape[0])
+    train_features, train_labels = train_features[train_idx], train_labels[train_idx]
+    val_features, val_labels = val_features[val_idx], val_labels[val_idx]
+
+    train_loader = DataLoader(WakeWordDataset(train_features, train_labels),
+                              batch_size=int(options.get("training", {}).get("batchSize", 128)),
+                              shuffle=True, num_workers=min(4, os.cpu_count() or 1))
+    val_loader = DataLoader(WakeWordDataset(val_features, val_labels),
+                            batch_size=int(options.get("training", {}).get("batchSize", 128)),
+                            shuffle=False, num_workers=min(4, os.cpu_count() or 1))
+
+    trainer = WakeWordTrainer(input_shape=train_features.shape[1:],
+                              batch_size=int(options.get("training", {}).get("batchSize", 128)),
+                              learning_rate=float(options.get("training", {}).get("learningRate", 1e-4)))
+
+    metrics = trainer.fit(train_loader, val_loader, epochs=int(options.get("training", {}).get("epochs", 6)))
+
+    progress("training", 0.74, "Evaluating thresholds")
+    pos_scores = trainer.scores(pos_val_windows)
+    neg_scores = trainer.scores(neg_val_windows)
+    threshold = determine_threshold(pos_scores, neg_scores,
+                                    target_fp_per_hour=float(options.get("training", {}).get("targetFalseActivationsPerHour", 0.2)))
+    sensitivity = max(0.05, min(0.95, 1.0 - threshold))
+
+    progress("exporting", 0.82, "Exporting artifacts")
+    output_path = Path(args.output).resolve()
+    artifacts = export_artifacts(trainer, output_path)
+
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+    duration_ms = int((time.monotonic() - START_TIME) * 1000)
+    return {
+        "engine": "openwakeword",
+        "format": "tflite" if any(a["format"] == "tflite" for a in artifacts) else artifacts[0]["format"],
+        "output": str(output_path),
+        "durationMs": duration_ms,
+        "samplesGenerated": len(positive_samples),
+        "metadata": {
+            "threshold": threshold,
+            "recommendedSensitivity": sensitivity,
+            "training": metrics,
+            "validation": {
+                "positiveSamples": float(len(pos_scores)),
+                "negativeSamples": float(len(neg_scores)),
+                "falsePositiveRate": float((neg_scores >= threshold).mean() if neg_scores.size else 0.0),
+                "falseNegativeRate": float((pos_scores < threshold).mean() if pos_scores.size else 0.0)
+            },
+            "artifacts": artifacts
+        }
+    }
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an OpenWakeWord model for a custom wake word.")
-    parser.add_argument("--wake-word", required=True, help="Wake word phrase to train (e.g., 'Anna').")
-    parser.add_argument("--slug", required=True, help="Slugified identifier for the wake word (e.g., 'anna').")
-    parser.add_argument("--output", required=True, help="Path to the output model file (.tflite or .onnx).")
-    parser.add_argument("--format", default="tflite", choices=["tflite", "onnx"], help="Output model format.")
-    parser.add_argument("--language", help="Language code for synthetic samples (if supported).")
-    parser.add_argument("--tts-voice", help="Preferred TTS voice identifier for synthetic data generation.")
-    parser.add_argument("--samples", type=int, help="Number of synthetic samples to generate, if supported.")
+    parser.add_argument("--wake-word", required=True, help="Wake word phrase.")
+    parser.add_argument("--slug", required=True, help="Slug identifier for filenames.")
+    parser.add_argument("--output", required=True, help="Output TFLite path (ONNX exported alongside).")
+    parser.add_argument("--config", help="Optional JSON configuration file.")
+    parser.add_argument("--samples", type=int, help="Override positive synthetic sample count.")
+    parser.add_argument("--language", help="Override default TTS language.")
+    parser.add_argument("--tts-voice", help="Add a Piper voice model path.")
     return parser.parse_args()
 
 
-def ensure_parent_directory(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-
-def try_python_api(args, work_dir: Path):
-    """
-    Attempt to train using the Python API if available.
-    Returns (success: bool, metadata_or_error: dict or str)
-    """
-    try:
-        from openwakeword import training as oww_training  # type: ignore
-    except ImportError:
-        return False, "openwakeword Python training API not available"
-
-    phrase = args.wake_word
-    output_path = Path(args.output)
-    ensure_parent_directory(output_path)
-
-    start = time.time()
-
-    try:
-        if hasattr(oww_training, "train_keyword"):
-            kwargs = {
-                "keyword": phrase,
-                "output_path": str(output_path),
-                "format": args.format
-            }
-            if args.language:
-                kwargs["language"] = args.language
-            if args.tts_voice:
-                kwargs["voice"] = args.tts_voice
-            if args.samples:
-                kwargs["sample_count"] = args.samples
-
-            result = oww_training.train_keyword(**kwargs)
-            metadata = result if isinstance(result, dict) else {}
-        elif hasattr(oww_training, "KeywordTrainer"):
-            trainer = oww_training.KeywordTrainer(
-                keyword=phrase,
-                output_dir=str(work_dir),
-                output_format=args.format
-            )
-            if args.language and hasattr(trainer, "language"):
-                trainer.language = args.language
-            if args.tts_voice and hasattr(trainer, "tts_voice"):
-                trainer.tts_voice = args.tts_voice
-            if args.samples and hasattr(trainer, "sample_count"):
-                trainer.sample_count = args.samples
-
-            trainer.train()
-            produced = next(work_dir.glob(f"*.*"), None)
-            if not produced:
-                return False, "Trainer completed but no model was produced"
-            produced.rename(output_path)
-            metadata = {}
-        else:
-            return False, "Unsupported openwakeword training API version"
-    except Exception as error:  # pylint: disable=broad-except
-        traceback.print_exc()
-        return False, f"Python training API failed: {error}"
-
-    duration = int((time.time() - start) * 1000)
-
-    return True, {
-        "engine": "openwakeword",
-        "format": args.format,
-        "output": str(output_path),
-        "durationMs": duration,
-        "metadata": metadata
-    }
-
-
-def try_cli(args, work_dir: Path):
-    """
-    Attempt to train using the openwakeword CLI if available.
-    Returns (success: bool, metadata_or_error: dict or str)
-    """
-    output_path = Path(args.output)
-    ensure_parent_directory(output_path)
-
-    command = [
-        sys.executable,
-        "-m",
-        "openwakeword.cli",
-        "train",
-        "--wake-word",
-        args.wake_word,
-        "--output",
-        str(output_path),
-        "--format",
-        args.format
-    ]
-
+def load_options(args: argparse.Namespace) -> Dict[str, object]:
+    options: Dict[str, object] = {}
+    if args.config:
+        config_path = Path(args.config)
+        if config_path.is_file():
+            with config_path.open("r", encoding="utf-8") as handle:
+                options = json.load(handle)
+    if args.samples is not None:
+        options.setdefault("dataset", {}).setdefault("positive", {})["syntheticSamples"] = args.samples
     if args.language:
-        command.extend(["--language", args.language])
+        options.setdefault("dataset", {}).setdefault("positive", {}).setdefault("tts", {})["language"] = args.language
     if args.tts_voice:
-        command.extend(["--tts-voice", args.tts_voice])
-    if args.samples:
-        command.extend(["--samples", str(args.samples)])
-
-    start = time.time()
-
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(work_dir),
-            capture_output=True,
-            text=True,
-            check=False
-        )
-    except Exception as error:  # pylint: disable=broad-except
-        return False, f"Failed to launch openwakeword CLI: {error}"
-
-    if completed.returncode != 0:
-        error_message = completed.stderr.strip() or completed.stdout.strip() or f"CLI exited with code {completed.returncode}"
-        return False, error_message
-
-    duration = int((time.time() - start) * 1000)
-
-    metadata = {}
-    try:
-        metadata = json.loads(completed.stdout) if completed.stdout.strip().startswith("{") else {}
-    except json.JSONDecodeError:
-        metadata = {"rawOutput": completed.stdout.strip()}
-
-    return True, {
-        "engine": "openwakeword",
-        "format": args.format,
-        "output": str(output_path),
-        "durationMs": duration,
-        "metadata": metadata
-    }
+        options.setdefault("dataset", {}).setdefault("positive", {}).setdefault("tts", {}).setdefault("voices", []).append({
+            "modelPath": args.tts_voice,
+            "name": Path(args.tts_voice).stem
+        })
+    return options
 
 
-def main():
+def main() -> None:
+    global START_TIME
+    START_TIME = time.monotonic()
     args = parse_args()
-    output_path = Path(args.output)
-    ensure_parent_directory(output_path)
-
-    with tempfile.TemporaryDirectory(prefix="wakeword-training-") as temp_dir:
-        work_dir = Path(temp_dir)
-
-        success, payload = try_python_api(args, work_dir)
-        if not success:
-            success, payload = try_cli(args, work_dir)
-
-        if not success:
-            print(payload, file=sys.stderr)
-            sys.exit(3)
-
-        # Ensure the output file exists
-        if not output_path.exists():
-            print(f"Expected model output at {output_path} was not created", file=sys.stderr)
-            sys.exit(4)
-
-        print(json.dumps(payload))
+    options = load_options(args)
+    try:
+        result = run_pipeline(args, options)
+        result_payload = {"type": "result", **result}
+        print(json.dumps(result_payload), flush=True)
+    except Exception as exc:  # pragma: no cover
+        progress("error", 1.0, f"Wake word training failed: {exc}")
+        raise
 
 
 if __name__ == "__main__":
