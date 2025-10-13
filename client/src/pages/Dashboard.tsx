@@ -63,18 +63,28 @@ export function Dashboard() {
   const handleDeviceControl = async (deviceId: string, action: string) => {
     try {
       console.log('Controlling device from dashboard:', { deviceId, action })
-      await controlDevice({ deviceId, action })
+      const controlResult = await controlDevice({ deviceId, action })
+      const updatedDevice = controlResult?.device
+
       toast({
         title: "Device Controlled",
         description: "Device action completed successfully"
       })
       
-      // Update device state locally
-      setDevices(prev => prev.map(device => 
-        device._id === deviceId 
-          ? { ...device, status: action === 'turn_on' }
-          : device
-      ))
+      if (updatedDevice && updatedDevice._id) {
+        setDevices(prev => prev.map(device => 
+          device._id === updatedDevice._id
+            ? { ...device, ...updatedDevice }
+            : device
+        ))
+      } else {
+        // Fallback to flipping the expected state if updated device payload missing
+        setDevices(prev => prev.map(device => 
+          device._id === deviceId 
+            ? { ...device, status: action === 'turn_on' }
+            : device
+        ))
+      }
     } catch (error) {
       console.error('Failed to control device:', error)
       toast({
