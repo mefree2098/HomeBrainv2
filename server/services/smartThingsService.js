@@ -875,12 +875,11 @@ class SmartThingsService {
       const ruleName = `HomeBrain STHM ${normalizedState} ${Date.now()}`;
       const rulePayload = {
         name: ruleName,
-        locationId: resolvedLocationId,
         actions: [
           {
             type: 'location',
-            locationId: resolvedLocationId,
             location: {
+              locationId: resolvedLocationId,
               security: {
                 armState: normalizedState
               }
