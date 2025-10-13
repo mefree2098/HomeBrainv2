@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Page Not Found - SmartThings Community</title>
+  <meta name="description" content="">
+  <meta name="generator" content="Discourse 3.6.0.beta2-latest - https://github.com/discourse/discourse version c17eb25b6c44492744a517ec90683033a4403e96">
+<link rel="icon" type="image/png" href="https://global.discourse-cdn.com/smartthings/optimized/3X/5/3/53b4b2c197e63da043419923e1433ac32f4e1d97_2_32x32.svg">
+<link rel="apple-touch-icon" type="image/png" href="https://global.discourse-cdn.com/smartthings/optimized/3X/5/3/53b4b2c197e63da043419923e1433ac32f4e1d97_2_180x180.svg">
+<meta name="theme-color" media="all" content="#f7f7f7">
+
+<meta name="color-scheme" content="light">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, viewport-fit=cover">
+<link rel="canonical" href="https://community.smartthings.com/t/rules-api-examples/219708?page=0" />
+
+<link rel="search" type="application/opensearchdescription+xml" href="https://community.smartthings.com/opensearch.xml" title="SmartThings Community Search">
+
+  <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/color_definitions_smartthings-light_32_44_a7eb90dce734e996b8b88da334da82069c58d227.css?__ws=community.smartthings.com" media="all" rel="stylesheet" class="light-scheme" data-scheme-id="32"/>
+
+<link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/common_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="common"  />
+
+  <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/mobile_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="(max-width: 39.99999rem)" rel="stylesheet" data-target="mobile"  />
+  <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/desktop_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="(min-width: 40rem)" rel="stylesheet" data-target="desktop"  />
+
+
+
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/checklist_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="checklist"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-ai_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-ai"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-akismet_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-akismet"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-antivirus_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-antivirus"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-cakeday_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-cakeday"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-chat-integration_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-chat-integration"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-data-explorer_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-data-explorer"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-details_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-details"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-lazy-videos_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-lazy-videos"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-local-dates_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-local-dates"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-narrative-bot_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-narrative-bot"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-policy_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-policy"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-presence_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-presence"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-solved_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-solved"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-templates_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-templates"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-topic-voting_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="discourse-topic-voting"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/footnote_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="footnote"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/hosted-site_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="hosted-site"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/poll_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="poll"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/spoiler-alert_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="spoiler-alert"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-ai_mobile_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="(max-width: 39.99999rem)" rel="stylesheet" data-target="discourse-ai_mobile"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-solved_mobile_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="(max-width: 39.99999rem)" rel="stylesheet" data-target="discourse-solved_mobile"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-topic-voting_mobile_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="(max-width: 39.99999rem)" rel="stylesheet" data-target="discourse-topic-voting_mobile"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-ai_desktop_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="(min-width: 40rem)" rel="stylesheet" data-target="discourse-ai_desktop"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/discourse-topic-voting_desktop_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="(min-width: 40rem)" rel="stylesheet" data-target="discourse-topic-voting_desktop"  />
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/poll_desktop_4ba79faba03887d9518821e25f833faa39fe7461.css?__ws=community.smartthings.com" media="(min-width: 40rem)" rel="stylesheet" data-target="poll_desktop"  />
+
+  <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/common_theme_46_75028a4b10ffce892768e0e692cb0d160e8e0f01.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="46" data-theme-name="clickable topic"/>
+<link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/common_theme_45_a90a6e7e9a4feea4f803af64e707938d891c86cc.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="45" data-theme-name="modern category + group boxes"/>
+<link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/common_theme_47_3d8073bee3ac067392d953326f385206175ab2ef.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="47" data-theme-name="search banner"/>
+<link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/common_theme_44_8806fe7fed2ca17270a6aeb8bdc552e98fb7c43f.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="44" data-theme-name="smartthings 2024"/>
+<link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/common_theme_48_6440e1cbd7ad61036bec854423d251fbd3292f5a.css?__ws=community.smartthings.com" media="all" rel="stylesheet" data-target="common_theme" data-theme-id="48" data-theme-name="custom css"/>
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/mobile_theme_45_930c1cfd6fffd3bacec6efac25bd892148fb15f7.css?__ws=community.smartthings.com" media="(max-width: 39.99999rem)" rel="stylesheet" data-target="mobile_theme" data-theme-id="45" data-theme-name="modern category + group boxes"/>
+<link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/mobile_theme_47_18ad5884f07cd56987a88e2f1dbf3f4006bb28e7.css?__ws=community.smartthings.com" media="(max-width: 39.99999rem)" rel="stylesheet" data-target="mobile_theme" data-theme-id="47" data-theme-name="search banner"/>
+<link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/mobile_theme_44_bf4f04f070e8a3ba89d7f92a1b43ec26257ad01f.css?__ws=community.smartthings.com" media="(max-width: 39.99999rem)" rel="stylesheet" data-target="mobile_theme" data-theme-id="44" data-theme-name="smartthings 2024"/>
+<link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/mobile_theme_48_645c138b6647831cf3ea3ef3dd29b67cd85e36ac.css?__ws=community.smartthings.com" media="(max-width: 39.99999rem)" rel="stylesheet" data-target="mobile_theme" data-theme-id="48" data-theme-name="custom css"/>
+    <link href="https://yyz2.discourse-cdn.com/smartthings/stylesheets/desktop_theme_44_055810f404c28e0f0b85c6b0f2038e27bf38eae2.css?__ws=community.smartthings.com" media="(min-width: 40rem)" rel="stylesheet" data-target="desktop_theme" data-theme-id="44" data-theme-name="smartthings 2024"/>
+
+  
+
+    
+
+    <meta id="discourse-error" data-discourse-error="true">
+
+
+    
+
+
+
+  <script defer src="https://global.discourse-cdn.com/smartthings/assets/pageview-941a854e.js" data-discourse-entrypoint="pageview" nonce="ra9QmyoVOuBrhs9F8JPNbGiPc"></script>
+
+</head>
+<body class="no-ember ">
+    
+
+    <div class="background-container"></div>
+
+
+    
+
+  <section id='main'>
+    
+  <header class="d-header">
+    <div class="wrap">
+      <div class="contents clearfix">
+        <div class="title">
+          <a href="/">
+              <picture>
+                <img src="https://global.discourse-cdn.com/smartthings/original/3X/b/c/bc7dab834bebed09862a3c9ea3bb3c24b579152d.svg" alt="SmartThings Community" id="site-logo" />
+              </picture>
+          </a>
+        </div>
+        <div class="panel clearfix">
+            <span class='header-buttons'>
+              <span class='auth-buttons'>
+                  <a href="/signup" class='btn btn-text btn-primary btn-small sign-up-button'>Sign Up</a>
+                <a href="/login" class='btn btn-icon-text btn-primary btn-small login-button'><svg class="fa d-icon svg-icon svg-node" aria-hidden="true"><svg id="user" viewBox="0 0 448 512">
+  <path d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512l388.6 0c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304l-91.4 0z"/>
+</svg></svg>
+Log In</a>
+              </span>
+            </span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+    <div id="main-outlet" class="wrap not-found-container">
+      
+
+
+
+<div class="page-not-found">
+
+<div class="heading">
+<div class="illustration-not-found">
+  <svg viewBox="0 0 219 170" fill="none" xmlns="http://www.w3.org/2000/svg">
+<ellipse cx="101" cy="163" rx="96" ry="7" fill="var(--secondary)"/>
+<path d="M149.726 24.5874C151.174 24.9801 152.037 26.4529 151.644 27.9005C151.374 28.8958 150.563 29.6472 149.558 29.8602L147.46 30.4324L147.331 30.9074C147.221 31.3146 146.796 31.5392 146.411 31.4349C146.004 31.3244 145.773 30.9218 145.884 30.5147L146.129 29.6099C146.197 29.3611 146.371 29.1655 146.634 29.0912L149.201 28.4033C149.715 28.2998 150.074 27.9602 150.197 27.5078C150.368 26.8744 149.967 26.2069 149.333 26.035L146.89 25.3723C146.483 25.2618 146.081 25.4926 145.97 25.8997C145.872 26.2616 145.441 26.5089 145.056 26.4046C144.649 26.2941 144.418 25.8915 144.522 25.507C144.848 24.3081 146.084 23.5993 147.283 23.9246L149.726 24.5874ZM146.117 32.5206C146.614 32.6556 146.905 33.1959 146.776 33.6709C146.641 34.1685 146.123 34.4652 145.626 34.3302C145.105 34.1891 144.825 33.7002 144.966 33.18C145.101 32.6823 145.596 32.3795 146.117 32.5206Z" fill="var(--tertiary-high)"/>
+<path d="M58.1071 115.793C58.4765 115.94 58.7754 116.22 58.9328 116.586L61.7934 123.239C62.1267 124.014 61.7615 124.886 61.0079 125.21L55.4958 127.58C54.7206 127.913 53.8585 127.569 53.5253 126.794L49.9703 118.526C49.6463 117.772 49.9807 116.889 50.7558 116.555L54.653 114.88C55.0191 114.722 55.4284 114.725 55.7979 114.872L58.1071 115.793ZM60.7599 123.683L60.7383 123.693L58.0721 117.492L56.3711 118.223C55.9836 118.39 55.5525 118.218 55.3859 117.83L54.6545 116.129L51.2094 117.61C51.0157 117.694 50.9297 117.909 51.0131 118.103L54.5588 126.35C54.6421 126.543 54.8576 126.629 55.0514 126.546L60.5635 124.176C60.7358 124.102 60.8432 123.877 60.7599 123.683ZM54.037 122.288C53.9166 122.008 54.0301 121.679 54.3316 121.549L57.4321 120.216C57.712 120.096 58.0507 120.231 58.1711 120.51C58.3007 120.812 58.1564 121.129 57.8765 121.249L54.7759 122.583C54.4745 122.712 54.1666 122.589 54.037 122.288ZM58.3209 122.283C58.6008 122.163 58.9395 122.298 59.0598 122.578C59.1894 122.879 59.0451 123.196 58.7652 123.316L55.6647 124.65C55.3632 124.779 55.0553 124.656 54.9257 124.355C54.8054 124.075 54.9189 123.746 55.2203 123.616L58.3209 122.283Z" fill="var(--tertiary-high)"/>
+<path d="M10.6672 15.165C10.8922 15.5133 10.7695 15.9899 10.4043 16.1864C10.2331 16.2875 10.0339 16.3088 9.85236 16.2621C9.64809 16.2095 9.48403 16.0947 9.3829 15.9234L7.61313 12.9267L4.59371 14.6906C4.42247 14.7918 4.22336 14.8131 4.04178 14.7664C3.83751 14.7138 3.67345 14.599 3.57232 14.4277C3.34737 14.0794 3.47006 13.6027 3.83524 13.4063L6.83781 11.6139L5.06804 8.61714C4.84308 8.26882 4.96577 7.79217 5.33095 7.59575C5.67928 7.37079 6.15593 7.49349 6.35234 7.85867L8.14481 10.8612L11.1415 9.09146C11.4899 8.86651 11.9665 8.9892 12.1629 9.35438C12.3879 9.70271 12.2652 10.1794 11.9 10.3758L8.89744 12.1682L10.6672 15.165Z" fill="#var(--tertiary-high)"/>
+<circle cx="73" cy="47" r="46" fill="var(--secondary)" stroke="var(--tertiary-high)" stroke-width="2"/>
+<rect x="101" y="85.2603" width="14" height="31" transform="rotate(-47.1283 101 85.2603)" fill="var(--tertiary-medium)"/>
+<rect x="113" y="106.626" width="29.5091" height="65.3415" rx="6" transform="rotate(-47.1283 113 106.626)" fill="var(--tertiary-high)"/>
+<circle cx="73" cy="47" r="37.5" fill="var(--tertiary-medium)" stroke="var(--tertiary-high)"/>
+<circle cx="60.5" cy="36.5" r="4" fill="var(--secondary)" stroke="var(--secondary)"/>
+<circle cx="85.5" cy="36.5" r="4" fill="var(--secondary)" stroke="var(--secondary)"/>
+<path d="M58 61.8011C66.2918 53.492 75.574 55.8621 83 63.0002" stroke="var(--secondary)" stroke-width="2"/>
+<path d="M200.473 105.782C200.473 95.2311 201.557 82.8566 193.945 74.5196C189.225 69.3502 174.712 64.2654 174.712 64.2654C163.984 62.2082 157.391 67.0725 163.108 77.871C165.857 83.0642 172.298 87.4386 177.964 88.4503C186.94 90.0531 198.843 86.3663 205.425 80.1219C214.619 71.3993 223.721 36.595 211.728 27" stroke="var(--tertiary-high)" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 4"/>
+</svg>
+</div>
+
+<div class="title_wrapper">
+  <h1 class="title">Oops! That page doesn’t exist or is private.</h1>
+  <a class="btn btn-primary btn-large --home" href="https://community.smartthings.com"> <svg class="fa d-icon svg-icon svg-node" aria-hidden="true"><svg id="house" viewBox="0 0 576 512">
+  <path d="M575.8 255.5c0 18-15 32.1-32 32.1l-32 0 .7 160.2c0 2.7-.2 5.4-.5 8.1l0 16.2c0 22.1-17.9 40-40 40l-16 0c-1.1 0-2.2 0-3.3-.1c-1.4 .1-2.8 .1-4.2 .1L416 512l-24 0c-22.1 0-40-17.9-40-40l0-24 0-64c0-17.7-14.3-32-32-32l-64 0c-17.7 0-32 14.3-32 32l0 64 0 24c0 22.1-17.9 40-40 40l-24 0-31.9 0c-1.5 0-3-.1-4.5-.2c-1.2 .1-2.4 .2-3.6 .2l-16 0c-22.1 0-40-17.9-40-40l0-112c0-.9 0-1.9 .1-2.8l0-69.7-32 0c-18 0-32-14-32-32.1c0-9 3-17 10-24L266.4 8c7-7 15-8 22-8s15 2 21 7L564.8 231.5c8 7 12 15 11 24z"/>
+</svg></svg>
+ Take me home
+  </a>
+  </div>
+</div>
+  <div class="row">
+    <div class="page-not-found-search">
+      <form action='/search' id='discourse-search'>
+        <label for="search-input">Try searching instead?</label>
+        <div class="search-input__wrapper">
+        <input type="text" id="search-input" class="search-input" placeholder="Search topics by title or keywords…" name="q" value="rules api examples">
+        <div class="search-input__icon" aria-hidden="true"><svg class="fa d-icon svg-icon svg-node" aria-hidden="true"><svg id="magnifying-glass" viewBox="0 0 512 512">
+  <path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/>
+</svg></svg>
+</div>
+        </div>
+        <button class="btn btn-primary">Search</button>
+      </form>
+    </div>
+  </div>
+
+  <script defer src="https://global.discourse-cdn.com/smartthings/assets/onpopstate-handler-41316d0a.js" data-discourse-entrypoint="onpopstate-handler" nonce="ra9QmyoVOuBrhs9F8JPNbGiPc"></script>
+
+
+</div>
+
+
+
+<div class="row page-not-found-topics">
+    <div class="popular-topics">
+      <h2 class="popular-topics-title">Popular topics</h2>
+        <div class='not-found-topic'>
+          <a href="/t/aeotec-smart-home-hub-2-aeotec-smart-home-hub-2018-2015-model-hub-firmware-release-notes-0-58-10/305623">Aeotec Smart Home Hub 2/Aeotec Smart Home Hub/2018/2015 Model Hub Firmware Release Notes - 0.58.10</a><a class='badge-category__wrapper ' href='/c/announcements/hub-firmware-release-notes/70'><span data-category-id='70' style='--category-badge-color: #AB9364; --category-badge-text-color: #000000; --parent-category-badge-color: #AB9364;' data-parent-category-id='12' data-drop-close='true' class='badge-category --style-square --has-parent' ><span class='badge-category__name'>Hub Firmware Release Notes</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/smartthings-android-app-1-8-37-23-september-2025/305674">SmartThings Android app 1.8.37.23 (September 2025)</a><a class='badge-category__wrapper ' href='/c/smartthings-clients/android/61'><span data-category-id='61' style='--category-badge-color: #F4BC31; --category-badge-text-color: #000000; --parent-category-badge-color: #f4bc31;' data-parent-category-id='34' data-drop-close='true' class='badge-category --style-square --has-parent' ><span class='badge-category__name'>Android</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/bug-wrong-profile-matching-for-matter-buttons-with-battery/305513">[Bug] Wrong profile matching for Matter buttons with battery</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/devices-offline-and-online-again/305889">Devices offline and online again</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/custom-virtual-energy-meter-why-isnt-it-appearing-in-the-energy-panel/305521">Custom Virtual Energy Meter - Why isn&rsquo;t it appearing in the Energy panel?</a><a class='badge-category__wrapper ' href='/c/devices-integrations/community-created-device-types/68'><span data-category-id='68' style='--category-badge-color: #A116BD; --category-badge-text-color: #FFFFFF; --parent-category-badge-color: #0099AA;' data-parent-category-id='5' data-drop-close='true' class='badge-category --style-square --has-parent' title='This is an area where Community members contribute their created Device Types.'><span class='badge-category__name'>Community Created Device Types</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/how-do-i-unify-thread-networks/305767">How do I Unify thread networks?</a><a class='badge-category__wrapper ' href='/c/devices-integrations/connected-things/31'><span data-category-id='31' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF; --parent-category-badge-color: #0099AA;' data-parent-category-id='5' data-drop-close='true' class='badge-category --style-square --has-parent' title='A place to discuss all the connected things that will work with SmartThings.'><span class='badge-category__name'>Connected Things</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/can-i-put-st-on-a-dedicated-network/305662">Can I put ST on a dedicated network?</a><a class='badge-category__wrapper ' href='/c/devices-integrations/connected-things/31'><span data-category-id='31' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF; --parent-category-badge-color: #0099AA;' data-parent-category-id='5' data-drop-close='true' class='badge-category --style-square --has-parent' title='A place to discuss all the connected things that will work with SmartThings.'><span class='badge-category__name'>Connected Things</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/st-app-intermittent-texts-messages/305613">ST App - Intermittent Texts Messages</a><a class='badge-category__wrapper ' href='/c/smartapps/webcore/83'><span data-category-id='83' style='--category-badge-color: #15bfff; --category-badge-text-color: #15bfff; --parent-category-badge-color: #328e63;' data-parent-category-id='6' data-drop-close='true' class='badge-category --style-square --has-parent' ><span class='badge-category__name'>webCoRE</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/no-longer-able-to-add-devices/305508">No longer able to add devices</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/i-am-ready-to-migrate-to-a-v3-from-a-v2-update-the-firmware-on-the-v3-first/305759">I am ready to migrate to a V3 from a V2. Update the firmware on the V3 first?</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+      <a href="/top" class="btn btn-default">More&hellip;</a>
+    </div>
+    <div class="recent-topics">
+      <h2 class="recent-topics-title">Recent topics</h2>
+        <div class='not-found-topic'>
+          <a href="/t/philips-hue-bankruptcy/305976">Philips Hue Bankruptcy</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/wired-gate-sensor-on-smartthings/305974">Wired Gate Sensor on Smartthings</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/temperature-sensor-that-was-with-hub2/305971">Temperature sensor that was with hub2</a><a class='badge-category__wrapper ' href='/c/devices-integrations/connected-things/31'><span data-category-id='31' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF; --parent-category-badge-color: #0099AA;' data-parent-category-id='5' data-drop-close='true' class='badge-category --style-square --has-parent' title='A place to discuss all the connected things that will work with SmartThings.'><span class='badge-category__name'>Connected Things</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/nat64-not-available-on-v4-hub/305945">NAT64 not available on V4 Hub</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/smarttag2-setup-on-3-different-modern-devices-not-working/305944">SmartTag2 setup on 3 different (modern) devices - Not Working</a><a class='badge-category__wrapper ' href='/c/smartthings-clients/android/61'><span data-category-id='61' style='--category-badge-color: #F4BC31; --category-badge-text-color: #000000; --parent-category-badge-color: #f4bc31;' data-parent-category-id='34' data-drop-close='true' class='badge-category --style-square --has-parent' ><span class='badge-category__name'>Android</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/pairing-matter-devices-with-amazon-thread-border-router-error-code-39-517/305940">Pairing Matter Devices with Amazon Thread Border Router Error Code 39-517</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/siren-with-custom-notifications/305937">Siren with custom notifications?</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/zigbee-devices-not-working-since-58-10-update/305934">Zigbee Devices Not Working Since 58.10 Update</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/wireless-vs-wired-light-switches/305916">Wireless vs Wired light switches</a><a class='badge-category__wrapper ' href='/c/devices-integrations/5'><span data-category-id='5' style='--category-badge-color: #0099AA; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='Discuss smart home devices and also integrating them with SmartThings.'><span class='badge-category__name'>Devices &amp; Integrations</span></span></a>
+        </div>
+        <div class='not-found-topic'>
+          <a href="/t/older-v2-hub-was-offline-unplugged-for-a-long-time-now-it-wont-do-much-of-anything/305914">Older v2 hub was offline (unplugged) for a long time, now it won&rsquo;t do much of anything!</a><a class='badge-category__wrapper ' href='/c/general-smartthings/56'><span data-category-id='56' style='--category-badge-color: #174527; --category-badge-text-color: #FFFFFF;' data-drop-close='true' class='badge-category --style-square ' title='A catchall for all things SmartThings.'><span class='badge-category__name'>General Discussion</span></span></a>
+        </div>
+      <a href="/latest" class="btn btn-default">More&hellip;</a>
+    </div>
+</div>
+
+
+
+
+    </div>
+  </section>
+
+    
+    
+
+    
+    
+</body>
+</html>
