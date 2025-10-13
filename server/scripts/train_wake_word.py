@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 
 
@@ -90,6 +91,7 @@ def try_python_api(args, work_dir: Path):
         else:
             return False, "Unsupported openwakeword training API version"
     except Exception as error:  # pylint: disable=broad-except
+        traceback.print_exc()
         return False, f"Python training API failed: {error}"
 
     duration = int((time.time() - start) * 1000)
@@ -108,11 +110,19 @@ def try_cli(args, work_dir: Path):
     Attempt to train using the openwakeword CLI if available.
     Returns (success: bool, metadata_or_error: dict or str)
     """
-    cli_executable_candidates = ["openwakeword", "openwakeword-train", "oww"]
+    cli_executable_candidates = [
+        "openwakeword",
+        "openwakeword-train",
+        "oww",
+        str(Path(sys.executable).with_name("openwakeword")),
+        str(Path(sys.executable).with_name("openwakeword-train")),
+        str(Path(sys.executable).with_name("oww")),
+    ]
     cli_path = None
     for executable in cli_executable_candidates:
-        cli_path = shutil.which(executable)
-        if cli_path:
+        candidate = shutil.which(executable) if os.path.sep not in executable else executable
+        if candidate and Path(candidate).exists():
+            cli_path = candidate
             break
     if not cli_path:
         return False, "openwakeword CLI not found; install the openwakeword package with training extras"
@@ -132,9 +142,14 @@ def try_cli(args, work_dir: Path):
     start = time.time()
 
     try:
+        env = os.environ.copy()
+        bin_dir = str(Path(cli_path).parent)
+        env["PATH"] = f"{bin_dir}:{env.get('PATH','')}"
+
         completed = subprocess.run(
             command,
             cwd=str(work_dir),
+            env=env,
             capture_output=True,
             text=True,
             check=False
