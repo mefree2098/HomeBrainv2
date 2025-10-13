@@ -879,7 +879,6 @@ class SmartThingsService {
           {
             type: 'location',
             location: {
-              locationId: resolvedLocationId,
               security: {
                 armState: normalizedState
               }
