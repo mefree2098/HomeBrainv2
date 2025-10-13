@@ -184,7 +184,19 @@ Save (`Ctrl+O`, Enter) and exit (`Ctrl+X`).
 
 ---
 
-## Step 8 - Seed the database (optional)
+## Step 8 - Install OpenWakeWord training dependencies
+The hub trains wake-word models locally. Run the helper script once (and again after future upgrades) to install Python requirements:
+
+```bash
+cd ~/homebrain/HomeBrainv2/server
+scripts/install-openwakeword-deps.sh
+```
+
+Set `PYTHON_BIN=/usr/bin/python3.10` if you need to target a specific interpreter. The script upgrades `pip` and installs the `openwakeword[train]` package.
+
+---
+
+## Step 9 - Seed the database (optional)
 HomeBrain ships with seeding scripts.
 
 ```bash
@@ -200,7 +212,7 @@ node scripts/seedDatabase.js scenes
 
 ---
 
-## Step 9 - Create your first admin account
+## Step 10 - Create your first admin account
 ```bash
 cd ~/homebrain/HomeBrainv2/server/scripts
 node createAdminUser.js --email you@example.com --password 'Str0ngPassw0rd!'
@@ -210,7 +222,7 @@ The script enforces a strong password. Use `--force` if you need to replace an e
 
 ---
 
-## Step 10 - Build the client UI (optional but recommended)
+## Step 11 - Build the client UI (optional but recommended)
 This generates `client/dist` so you can serve static files or use `vite preview`.
 
 ```bash
@@ -220,7 +232,7 @@ npm run build
 
 ---
 
-## Step 11 - Manual smoke test
+## Step 12 - Manual smoke test
 Verify everything before enabling the service.
 
 ### Single command that runs both client and server
