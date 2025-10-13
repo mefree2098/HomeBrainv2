@@ -898,13 +898,23 @@ class SmartThingsService {
           method: 'POST',
           data: rulePayload
         });
+        console.debug('SmartThingsService: Temporary rule created', ruleResponse);
 
-        const ruleId = ruleResponse?.id || ruleResponse?.ruleId;
+        const ruleId =
+          ruleResponse?.id ||
+          ruleResponse?.ruleId ||
+          ruleResponse?.rule?.id ||
+          (typeof ruleResponse?.rule === 'string' ? ruleResponse.rule : null) ||
+          (typeof ruleResponse?.links?.self?.href === 'string'
+            ? ruleResponse.links.self.href.split('/').pop()
+            : null);
         if (!ruleId) {
+          console.error('SmartThingsService: Unexpected rule creation response', ruleResponse);
           throw new Error('Failed to create SmartThings rule for arming state');
         }
 
         try {
+          console.debug('SmartThingsService: Executing temporary rule', { ruleId, locationQuery });
           await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute?${locationQuery}`, { method: 'POST' });
         } finally {
           await this.makeAuthenticatedRequest(`/rules/${ruleId}?${locationQuery}`, { method: 'DELETE' }).catch((cleanupError) => {
