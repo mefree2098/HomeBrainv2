@@ -39,7 +39,7 @@ export const controlDevice = async (data: { deviceId: string; action: string; va
     console.log('Controlling device:', data);
     const response = await api.post('/api/devices/control', data);
     console.log('Successfully controlled device');
-    return response.data;
+    return response.data?.data || {};
   } catch (error) {
     console.error('Error controlling device:', error);
     throw new Error(error?.response?.data?.error || error.message);

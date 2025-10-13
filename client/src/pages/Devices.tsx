@@ -58,18 +58,50 @@ export function Devices() {
   const handleDeviceControl = async (deviceId: string, action: string) => {
     try {
       console.log('Controlling device:', { deviceId, action })
-      await controlDevice({ deviceId, action })
+      const controlResult = await controlDevice({ deviceId, action })
+      const updatedDevice = controlResult?.device
+
       toast({
         title: "Device Controlled",
         description: "Device action completed successfully"
       })
       
-      // Update device state locally
-      setDevices(prev => prev.map(device => 
-        device._id === deviceId 
-          ? { ...device, status: action === 'turn_on' }
-          : device
-      ))
+      if (updatedDevice && updatedDevice._id) {
+        setDevices(prev => prev.map(device => 
+          device._id === updatedDevice._id 
+            ? { ...device, ...updatedDevice }
+            : device
+        ))
+
+        setRoomDevices(prev => prev.map(room => ({
+          ...room,
+          devices: Array.isArray(room.devices)
+            ? room.devices.map(roomDevice => 
+                roomDevice._id === updatedDevice._id
+                  ? { ...roomDevice, ...updatedDevice }
+                  : roomDevice
+              )
+            : room.devices
+        })))
+      } else {
+        // Fallback to toggling expected state if updated payload missing
+        setDevices(prev => prev.map(device => 
+          device._id === deviceId 
+            ? { ...device, status: action === 'turn_on' }
+            : device
+        ))
+
+        setRoomDevices(prev => prev.map(room => ({
+          ...room,
+          devices: Array.isArray(room.devices)
+            ? room.devices.map(roomDevice => 
+                roomDevice._id === deviceId
+                  ? { ...roomDevice, status: action === 'turn_on' }
+                  : roomDevice
+              )
+            : room.devices
+        })))
+      }
     } catch (error) {
       console.error('Failed to control device:', error)
       toast({
