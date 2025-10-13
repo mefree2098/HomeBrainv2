@@ -4,6 +4,7 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
+const piperVoiceService = require('./piperVoiceService');
 const WakeWordModel = require('../models/WakeWordModel');
 const UserProfile = require('../models/UserProfile');
 const VoiceDevice = require('../models/VoiceDevice');
@@ -254,7 +255,8 @@ class WakeWordTrainingService extends EventEmitter {
       message: 'Preparing training job'
     });
 
-    const options = this.trainingOptions.get(slug) || this.mergeOptions({});
+    const baseOptions = this.trainingOptions.get(slug) || this.mergeOptions({});
+    const options = await this.enrichOptionsWithVoices(baseOptions);
     const job = {
       slug,
       phrase: model.phrase,
@@ -334,6 +336,59 @@ class WakeWordTrainingService extends EventEmitter {
     result.dataset.negative.backgroundDirs = Array.from(backgroundDirs);
 
     return result;
+  }
+
+  async enrichOptionsWithVoices(rawOptions) {
+    const options = JSON.parse(JSON.stringify(rawOptions || {}));
+    options.dataset = options.dataset || {};
+    options.dataset.positive = options.dataset.positive || {};
+    options.dataset.positive.tts = options.dataset.positive.tts || {};
+
+    const requestedVoices = Array.isArray(options.dataset.positive.tts.voices)
+      ? options.dataset.positive.tts.voices
+      : [];
+
+    const installedVoices = await piperVoiceService.getInstalledVoicesForTraining();
+    const installedMap = new Map(installedVoices.map((voice) => [voice.id, voice]));
+
+    if (requestedVoices.length > 0) {
+      const hydrated = requestedVoices
+        .map((voice) => {
+          if (voice.modelPath && voice.configPath) {
+            return voice;
+          }
+          const fallback = installedMap.get(voice.id);
+          if (!fallback) {
+            return null;
+          }
+          return {
+            ...fallback,
+            ...voice,
+            modelPath: fallback.modelPath,
+            configPath: fallback.configPath
+          };
+        })
+        .filter(Boolean);
+
+      if (hydrated.length > 0) {
+        options.dataset.positive.tts.voices = hydrated;
+        return options;
+      }
+    }
+
+    if (installedVoices.length > 0) {
+      options.dataset.positive.tts.voices = installedVoices.map((voice) => ({
+        id: voice.id,
+        name: voice.name,
+        language: voice.language,
+        speaker: voice.speaker,
+        quality: voice.quality,
+        modelPath: voice.modelPath,
+        configPath: voice.configPath
+      }));
+    }
+
+    return options;
   }
 
   async runTrainer({ slug, phrase, outputFile, options }) {

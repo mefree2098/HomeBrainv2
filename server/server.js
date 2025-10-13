@@ -21,6 +21,7 @@ const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
 const discoveryRoutes = require("./routes/discoveryRoutes");
 const insteonRoutes = require("./routes/insteonRoutes");
+const piperVoiceRoutes = require("./routes/piperVoiceRoutes");
 const sslRoutes = require("./routes/sslRoutes");
 const ollamaRoutes = require("./routes/ollamaRoutes");
 const resourceRoutes = require("./routes/resourceRoutes");
@@ -141,6 +142,8 @@ app.use('/api/smartthings', smartThingsRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 // Remote Device Routes
 app.use('/api/remote-devices', remoteDeviceRoutes);
+// Piper Voice Routes
+app.use('/api/wake-words/voices', piperVoiceRoutes);
 // Wake Word Routes
 app.use('/api/wake-words', wakeWordRoutes);
 // Remote Update Routes
