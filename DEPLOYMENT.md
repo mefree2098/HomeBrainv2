@@ -193,9 +193,11 @@ cd ~/homebrain/HomeBrainv2/server
 scripts/install-openwakeword-deps.sh
 ```
 
-Set `PYTHON_BIN=/usr/bin/python3.10` if you need to target a specific interpreter. The script creates `server/.wakeword-venv`, pins compatible NumPy/SciPy versions, installs PyTorch + OpenWakeWord, and is idempotent.
+Set `PYTHON_BIN=/usr/bin/python3.10` if you need to target a specific interpreter.
 The training service automatically prefers `server/.wakeword-venv/bin/python` on restart.
+If you need TensorFlow Lite exports, install the Jetson-specific TensorFlow wheel manually after the script finishes (see NVIDIA's matrix), then re-run the script; otherwise the pipeline will produce ONNX artifacts and the Pi will fall back to ONNX Runtime.
 After installing the dependencies restart the HomeBrain server process (`sudo systemctl restart homebrain-server`) so the training worker reloads the new virtualenv. Manage wake words from the UI under **Settings -> Voice & Audio -> Wake Word Models**.
+
 
 ---
 
