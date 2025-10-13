@@ -321,9 +321,21 @@ class DeviceService {
           throw new Error(`Unknown action: ${action}`);
       }
 
+      const expectedStatus = Object.prototype.hasOwnProperty.call(updateData, 'status')
+        ? !!updateData.status
+        : undefined;
+
       if (isSmartThings) {
         await this.controlSmartThingsDevice(device, normalizedAction, commandValue, updateData);
-        updateData.isOnline = true;
+
+        const remoteUpdate = await this.pollSmartThingsState(device, expectedStatus);
+        if (remoteUpdate) {
+          Object.assign(updateData, remoteUpdate);
+        }
+
+        if (updateData.isOnline === undefined) {
+          updateData.isOnline = true;
+        }
       }
 
       const updatedDevice = await Device.findByIdAndUpdate(
@@ -590,6 +602,55 @@ class DeviceService {
         }]);
         break;
     }
+  }
+
+  async pollSmartThingsState(device, expectedStatus) {
+    const smartThingsId = device?.properties?.smartThingsDeviceId;
+    if (!smartThingsId) {
+      return null;
+    }
+
+    let lastUpdates = null;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const [details, status] = await Promise.all([
+          smartThingsService.getDevice(smartThingsId),
+          smartThingsService.getDeviceStatus(smartThingsId)
+        ]);
+
+        if (!status || !status.components) {
+          throw new Error('SmartThings status payload missing components');
+        }
+
+        const combined = {
+          ...(details || {}),
+          deviceId: details?.deviceId || smartThingsId,
+          status
+        };
+
+        const updates = await smartThingsService.buildSmartThingsDeviceUpdate(device, combined);
+        if (updates) {
+          const healthState = details?.healthState?.state || '';
+          updates.isOnline = healthState.toUpperCase() !== 'OFFLINE';
+          updates.lastSeen = new Date();
+          lastUpdates = updates;
+
+          if (expectedStatus === undefined || updates.status === expectedStatus) {
+            return updates;
+          }
+        }
+      } catch (error) {
+        console.warn(`DeviceService: Unable to fetch SmartThings state for ${smartThingsId} (attempt ${attempt + 1}): ${error.message}`);
+      }
+
+      const delayMs = Math.min(500 * (attempt + 1), 1500);
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    return lastUpdates;
   }
 
   /**
