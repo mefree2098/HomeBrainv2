@@ -186,7 +186,7 @@ Save (`Ctrl+O`, Enter) and exit (`Ctrl+X`).
 
 ## Step 8 - Install OpenWakeWord training dependencies
 The hub now generates datasets, augments them, and trains wake-word models locally using PyTorch and Piper.
-Run the helper script once (and again after future upgrades) to provision the Python toolchain (PyTorch, soundfile, librosa, onnxruntime/onnx-tf, TensorFlow Lite converters, and openwakeword):
+Run the helper script once (and again after future upgrades) to provision the Python toolchain (PyTorch + torchaudio/torchmetrics/torchinfo, soundfile, librosa, onnxruntime/onnx-tf, TensorFlow Lite converters, and openwakeword):
 
 ```bash
 cd ~/homebrain/HomeBrainv2/server
