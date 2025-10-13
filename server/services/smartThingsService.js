@@ -915,9 +915,15 @@ class SmartThingsService {
 
         try {
           console.debug('SmartThingsService: Executing temporary rule', { ruleId, locationQuery });
-          await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute?${locationQuery}`, { method: 'POST' });
+          await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute`, {
+            method: 'POST',
+            params: { locationId: resolvedLocationId }
+          });
         } finally {
-          await this.makeAuthenticatedRequest(`/rules/${ruleId}?${locationQuery}`, { method: 'DELETE' }).catch((cleanupError) => {
+          await this.makeAuthenticatedRequest(`/rules/${ruleId}`, {
+            method: 'DELETE',
+            params: { locationId: resolvedLocationId }
+          }).catch((cleanupError) => {
             console.warn(`SmartThingsService: Failed to delete temporary rule ${ruleId}: ${cleanupError.message}`);
           });
         }
