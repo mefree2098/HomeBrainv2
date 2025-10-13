@@ -47,6 +47,7 @@ python -m pip install \
   "webrtcvad" \
   "audiomentations" \
   "torch-audiomentations" \
+  "speechbrain" \
   ${PIP_FLAGS}
 # TensorFlow Lite export is optional on Jetson; install the NVIDIA wheel manually if needed.
 python -m pip install "onnxruntime" "onnx" "onnx-tf" ${PIP_FLAGS}
