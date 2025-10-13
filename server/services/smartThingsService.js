@@ -913,20 +913,53 @@ class SmartThingsService {
           throw new Error('Failed to create SmartThings rule for arming state');
         }
 
-        try {
-          console.debug('SmartThingsService: Executing temporary rule', { ruleId, locationQuery });
-          await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute`, {
-            method: 'POST',
-            params: { locationId: resolvedLocationId }
-          });
-        } finally {
-          await this.makeAuthenticatedRequest(`/rules/${ruleId}`, {
-            method: 'DELETE',
-            params: { locationId: resolvedLocationId }
-          }).catch((cleanupError) => {
-            console.warn(`SmartThingsService: Failed to delete temporary rule ${ruleId}: ${cleanupError.message}`);
-          });
+        const maxExecutionAttempts = 3;
+        let executionAttempt = 0;
+        let executionSucceeded = false;
+        let lastExecutionError = null;
+
+        while (executionAttempt < maxExecutionAttempts && !executionSucceeded) {
+          if (executionAttempt > 0) {
+            const backoffMs = 250 * executionAttempt;
+            console.debug(`SmartThingsService: Rule execution retry ${executionAttempt + 1}/${maxExecutionAttempts} after ${backoffMs}ms`, { ruleId });
+            await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          }
+
+          try {
+            console.debug('SmartThingsService: Executing temporary rule', { ruleId, locationId: resolvedLocationId });
+            await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute`, {
+              method: 'POST',
+              params: { locationId: resolvedLocationId },
+              headers: {
+                'X-ST-Location': resolvedLocationId,
+                'X-ST-LOCATION': resolvedLocationId
+              }
+            });
+            executionSucceeded = true;
+          } catch (executionError) {
+            lastExecutionError = executionError;
+            if (executionError.status === 404 && executionAttempt < maxExecutionAttempts - 1) {
+              executionAttempt += 1;
+              continue;
+            }
+            throw executionError;
+          }
         }
+
+        if (!executionSucceeded) {
+          throw lastExecutionError || new Error('Failed to execute SmartThings rule for arming state');
+        }
+
+        await this.makeAuthenticatedRequest(`/rules/${ruleId}`, {
+          method: 'DELETE',
+          params: { locationId: resolvedLocationId },
+          headers: {
+            'X-ST-Location': resolvedLocationId,
+            'X-ST-LOCATION': resolvedLocationId
+          }
+        }).catch((cleanupError) => {
+          console.warn(`SmartThingsService: Failed to delete temporary rule ${ruleId}: ${cleanupError.message}`);
+        });
       } catch (error) {
         const errorPayload = error.data || error.message;
         console.error('SmartThingsService: Failed to apply security arm state via Rules API:', JSON.stringify(errorPayload, null, 2));
