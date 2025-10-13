@@ -10,6 +10,12 @@ class SmartThingsService {
     this.tokenUrl = 'https://api.smartthings.com/oauth/token';
     this.roomsCache = new Map();
     this.locationNameCache = new Map();
+    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 60000);
+    this.deviceStatusSyncTimer = null;
+    this.deviceStatusSyncInProgress = false;
+    if (this.deviceStatusSyncIntervalMs > 0) {
+      this.startDeviceStatusSync();
+    }
   }
 
   /**
@@ -280,6 +286,421 @@ class SmartThingsService {
       console.error('SmartThingsService: Error fetching devices:', error.message);
       throw error;
     }
+  }
+
+  startDeviceStatusSync() {
+    if (this.deviceStatusSyncTimer) {
+      clearInterval(this.deviceStatusSyncTimer);
+    }
+
+    const intervalMs = Math.max(this.deviceStatusSyncIntervalMs, 15000);
+
+    this.deviceStatusSyncTimer = setInterval(() => {
+      this.runDeviceStatusSync().catch((error) => {
+        console.error('SmartThingsService: Device status sync error:', error.message);
+      });
+    }, intervalMs);
+
+    if (typeof this.deviceStatusSyncTimer.unref === 'function') {
+      this.deviceStatusSyncTimer.unref();
+    }
+
+    setImmediate(() => {
+      this.runDeviceStatusSync().catch((error) => {
+        console.error('SmartThingsService: Initial device status sync error:', error.message);
+      });
+    });
+  }
+
+  async runDeviceStatusSync() {
+    if (this.deviceStatusSyncInProgress) {
+      return;
+    }
+
+    this.deviceStatusSyncInProgress = true;
+
+    try {
+      const integration = await SmartThingsIntegration.findOne();
+      if (!integration || !integration.isConfigured) {
+        return;
+      }
+
+      if (!integration.accessToken && !integration.refreshToken) {
+        return;
+      }
+
+      const trackedDevices = await Device.find({ 'properties.source': 'smartthings', 'properties.smartThingsDeviceId': { $exists: true } });
+      if (trackedDevices.length === 0) {
+        return;
+      }
+
+      const deviceResponse = await this.makeAuthenticatedRequest('/devices?includeStatus=true&includeHealth=true');
+      const apiDevices = Array.isArray(deviceResponse?.items) ? deviceResponse.items : [];
+      if (apiDevices.length === 0) {
+        return;
+      }
+
+      const trackedMap = new Map();
+      trackedDevices.forEach((doc) => {
+        const smartThingsId = doc?.properties?.smartThingsDeviceId;
+        if (smartThingsId) {
+          trackedMap.set(smartThingsId, doc);
+        }
+      });
+
+      if (trackedMap.size === 0) {
+        return;
+      }
+
+      const bulkOps = [];
+      let updatedCount = 0;
+
+      for (const device of apiDevices) {
+        const tracked = trackedMap.get(device.deviceId);
+        if (!tracked) {
+          continue;
+        }
+
+        const updates = await this.buildSmartThingsDeviceUpdate(tracked, device);
+        if (updates) {
+          bulkOps.push({
+            updateOne: {
+              filter: { _id: tracked._id },
+              update: { $set: updates }
+            }
+          });
+          updatedCount += 1;
+        }
+      }
+
+      if (bulkOps.length > 0) {
+        await Device.bulkWrite(bulkOps, { ordered: false });
+        console.log(`SmartThingsService: Updated state for ${updatedCount} SmartThings devices`);
+      }
+    } catch (error) {
+      console.error('SmartThingsService: Device status sync failure:', error.message);
+    } finally {
+      this.deviceStatusSyncInProgress = false;
+    }
+  }
+
+  async buildSmartThingsDeviceUpdate(existingDevice, apiDevice) {
+    const updates = {};
+    let changed = false;
+
+    const capabilities = this.collectSmartThingsCapabilities(apiDevice);
+    const statusRoot = this.extractStatusRoot(apiDevice);
+    const detectedType = existingDevice.type || this.mapSmartThingsType(capabilities, apiDevice);
+    if (!detectedType) {
+      return null;
+    }
+
+    const isOnline = (apiDevice.healthState?.state || '').toUpperCase() === 'ONLINE';
+
+    const statusValue = this.mapSmartThingsStatus(detectedType, capabilities, statusRoot, isOnline);
+    if (typeof statusValue === 'boolean' && statusValue !== existingDevice.status) {
+      updates.status = statusValue;
+      changed = true;
+    }
+
+    const brightnessValue = this.mapSmartThingsBrightness(capabilities, statusRoot);
+    if (typeof brightnessValue === 'number' && brightnessValue !== existingDevice.brightness) {
+      updates.brightness = brightnessValue;
+      changed = true;
+    }
+
+    const temperatureValue = this.mapSmartThingsTemperature(statusRoot);
+    if (typeof temperatureValue === 'number' && temperatureValue !== existingDevice.temperature) {
+      updates.temperature = temperatureValue;
+      changed = true;
+    }
+
+    const targetTemperatureValue = this.mapSmartThingsTargetTemperature(statusRoot);
+    if (typeof targetTemperatureValue === 'number' && targetTemperatureValue !== existingDevice.targetTemperature) {
+      updates.targetTemperature = targetTemperatureValue;
+      changed = true;
+    }
+
+    if (isOnline !== existingDevice.isOnline) {
+      updates.isOnline = isOnline;
+      changed = true;
+    }
+
+    const lastSeen = apiDevice.healthState?.lastUpdatedDate ? new Date(apiDevice.healthState.lastUpdatedDate) : new Date();
+    const existingLastSeen = existingDevice.lastSeen instanceof Date ? existingDevice.lastSeen.getTime() : null;
+    if (existingLastSeen !== lastSeen.getTime()) {
+      updates.lastSeen = lastSeen;
+      changed = true;
+    }
+
+    const nextHealthState = apiDevice.healthState || null;
+    const currentHealthState = existingDevice?.properties?.smartThingsHealthState || null;
+    if (JSON.stringify(currentHealthState) !== JSON.stringify(nextHealthState)) {
+      updates['properties.smartThingsHealthState'] = nextHealthState;
+      changed = true;
+    }
+
+    const preferredName = (apiDevice.label || apiDevice.name || '').trim();
+    if (preferredName && preferredName !== existingDevice.name) {
+      updates.name = preferredName;
+      changed = true;
+    }
+
+    if (apiDevice.locationId && apiDevice.roomId) {
+      const roomName = await this.getRoomName(apiDevice.locationId, apiDevice.roomId);
+      if (roomName && roomName !== existingDevice.room) {
+        updates.room = roomName;
+        changed = true;
+      }
+    }
+
+    updates.updatedAt = new Date();
+
+    return changed ? updates : null;
+  }
+
+  collectSmartThingsCapabilities(device) {
+    const capabilities = new Set();
+
+    (device.components || []).forEach((component) => {
+      (component.capabilities || []).forEach((capability) => {
+        if (capability?.id) {
+          capabilities.add(capability.id);
+        }
+      });
+    });
+
+    return capabilities;
+  }
+
+  mapSmartThingsType(capabilities, device) {
+    const categories = new Set();
+    (device.components || []).forEach((component) => {
+      (component.categories || []).forEach((category) => {
+        if (category?.name) {
+          categories.add(category.name.toLowerCase());
+        }
+      });
+    });
+
+    if (capabilities.has('thermostatMode') || capabilities.has('thermostatCoolingSetpoint') || capabilities.has('thermostatHeatingSetpoint') || categories.has('thermostat')) {
+      return 'thermostat';
+    }
+
+    if (capabilities.has('lock') || categories.has('lock')) {
+      return 'lock';
+    }
+
+    if (capabilities.has('garageDoorControl') || capabilities.has('doorControl') || categories.has('garageDoor') || categories.has('garage')) {
+      return 'garage';
+    }
+
+    if (capabilities.has('switchLevel') || capabilities.has('colorControl') || categories.has('light')) {
+      return 'light';
+    }
+
+    if (capabilities.has('switch') || categories.has('switch')) {
+      return 'switch';
+    }
+
+    if (
+      capabilities.has('motionSensor') ||
+      capabilities.has('contactSensor') ||
+      capabilities.has('presenceSensor') ||
+      capabilities.has('waterSensor') ||
+      capabilities.has('humidityMeasurement') ||
+      categories.has('sensor')
+    ) {
+      return 'sensor';
+    }
+
+    if (capabilities.has('audioVolume') || categories.has('audio') || categories.has('speaker')) {
+      return 'speaker';
+    }
+
+    if (categories.has('camera')) {
+      return 'camera';
+    }
+
+    if (capabilities.size > 0) {
+      return 'switch';
+    }
+
+    return null;
+  }
+
+  extractStatusRoot(device) {
+    if (device?.status?.main) {
+      return device.status.main;
+    }
+
+    if (device?.status?.components?.main) {
+      return device.status.components.main;
+    }
+
+    return device?.status || {};
+  }
+
+  getStatusValue(statusRoot, paths) {
+    for (const path of paths) {
+      let current = statusRoot;
+      let found = true;
+
+      for (const key of path) {
+        if (current == null) {
+          found = false;
+          break;
+        }
+        current = current[key];
+      }
+
+      if (!found || current == null) {
+        continue;
+      }
+
+      if (typeof current === 'object' && 'value' in current) {
+        return current.value;
+      }
+
+      return current;
+    }
+
+    return undefined;
+  }
+
+  mapSmartThingsStatus(type, capabilities, statusRoot, isOnline) {
+    const valueFor = (...paths) => this.getStatusValue(statusRoot, paths);
+
+    if (type === 'lock') {
+      const state = valueFor(
+        ['lock', 'lock', 'value'],
+        ['lock', 'lock'],
+        ['lock', 'value'],
+        ['lock']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'locked' : !!state;
+    }
+
+    if (type === 'garage') {
+      const state = valueFor(
+        ['garageDoorControl', 'door', 'value'],
+        ['garageDoorControl', 'door'],
+        ['doorControl', 'door', 'value'],
+        ['doorControl', 'door']
+      );
+      return typeof state === 'string' ? ['open', 'opening'].includes(state.toLowerCase()) : !!state;
+    }
+
+    if (capabilities.has('switch') || capabilities.has('switchLevel')) {
+      const state = valueFor(
+        ['switch', 'switch', 'value'],
+        ['switch', 'switch'],
+        ['switch', 'value'],
+        ['switch']
+      );
+      if (typeof state === 'string') {
+        return state.toLowerCase() === 'on';
+      }
+      if (typeof state === 'boolean') {
+        return state;
+      }
+      return !!state;
+    }
+
+    if (capabilities.has('contactSensor')) {
+      const state = valueFor(
+        ['contactSensor', 'contact', 'value'],
+        ['contactSensor', 'contact'],
+        ['contactSensor']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'open' : !!state;
+    }
+
+    if (capabilities.has('motionSensor')) {
+      const state = valueFor(
+        ['motionSensor', 'motion', 'value'],
+        ['motionSensor', 'motion'],
+        ['motionSensor']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'active' : !!state;
+    }
+
+    if (type === 'thermostat') {
+      const state = valueFor(
+        ['thermostatOperatingState', 'operatingState', 'value'],
+        ['thermostatOperatingState', 'operatingState'],
+        ['thermostatMode', 'thermostatMode', 'value'],
+        ['thermostatMode', 'thermostatMode']
+      );
+      if (typeof state === 'string') {
+        return state.toLowerCase() !== 'off' && state.toLowerCase() !== 'idle';
+      }
+      return !!state;
+    }
+
+    return !!isOnline;
+  }
+
+  mapSmartThingsBrightness(capabilities, statusRoot) {
+    if (!capabilities.has('switchLevel')) {
+      return undefined;
+    }
+
+    const value = this.getStatusValue(statusRoot, [
+      ['switchLevel', 'level', 'value'],
+      ['switchLevel', 'level'],
+      ['level']
+    ]);
+
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) {
+      return undefined;
+    }
+
+    return Math.min(Math.max(Math.round(numeric), 0), 100);
+  }
+
+  mapSmartThingsTemperature(statusRoot) {
+    const value = this.getStatusValue(statusRoot, [
+      ['temperatureMeasurement', 'temperature', 'value'],
+      ['temperatureMeasurement', 'temperature'],
+      ['temperature']
+    ]);
+
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) {
+      return undefined;
+    }
+
+    return numeric;
+  }
+
+  mapSmartThingsTargetTemperature(statusRoot) {
+    const value = this.getStatusValue(statusRoot, [
+      ['thermostatCoolingSetpoint', 'coolingSetpoint', 'value'],
+      ['thermostatCoolingSetpoint', 'coolingSetpoint'],
+      ['thermostatHeatingSetpoint', 'heatingSetpoint', 'value'],
+      ['thermostatHeatingSetpoint', 'heatingSetpoint']
+    ]);
+
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) {
+      return undefined;
+    }
+
+    return numeric;
   }
 
   async getRoomName(locationId, roomId) {
