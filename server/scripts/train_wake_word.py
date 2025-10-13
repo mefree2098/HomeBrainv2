@@ -110,27 +110,21 @@ def try_cli(args, work_dir: Path):
     Attempt to train using the openwakeword CLI if available.
     Returns (success: bool, metadata_or_error: dict or str)
     """
-    cli_executable_candidates = [
-        "openwakeword",
-        "openwakeword-train",
-        "oww",
-        str(Path(sys.executable).with_name("openwakeword")),
-        str(Path(sys.executable).with_name("openwakeword-train")),
-        str(Path(sys.executable).with_name("oww")),
-    ]
-    cli_path = None
-    for executable in cli_executable_candidates:
-        candidate = shutil.which(executable) if os.path.sep not in executable else executable
-        if candidate and Path(candidate).exists():
-            cli_path = candidate
-            break
-    if not cli_path:
-        return False, "openwakeword CLI not found; install the openwakeword package with training extras"
-
     output_path = Path(args.output)
     ensure_parent_directory(output_path)
 
-    command = [cli_path, "train", "--wake-word", args.wake_word, "--output", str(output_path), "--format", args.format]
+    command = [
+        sys.executable,
+        "-m",
+        "openwakeword.cli",
+        "train",
+        "--wake-word",
+        args.wake_word,
+        "--output",
+        str(output_path),
+        "--format",
+        args.format
+    ]
 
     if args.language:
         command.extend(["--language", args.language])
@@ -142,14 +136,9 @@ def try_cli(args, work_dir: Path):
     start = time.time()
 
     try:
-        env = os.environ.copy()
-        bin_dir = str(Path(cli_path).parent)
-        env["PATH"] = f"{bin_dir}:{env.get('PATH','')}"
-
         completed = subprocess.run(
             command,
             cwd=str(work_dir),
-            env=env,
             capture_output=True,
             text=True,
             check=False
