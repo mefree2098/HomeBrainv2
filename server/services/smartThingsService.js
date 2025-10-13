@@ -893,9 +893,10 @@ class SmartThingsService {
           resolvedLocationId
         });
         console.debug('SmartThingsService: Rule payload', rulePayload);
-        const ruleResponse = await this.makeAuthenticatedRequest(`/locations/${resolvedLocationId}/rules`, {
+        const ruleResponse = await this.makeAuthenticatedRequest('/rules', {
           method: 'POST',
           data: rulePayload,
+          params: { locationId: resolvedLocationId },
           headers: {
             'X-ST-Location': resolvedLocationId,
             'X-ST-LOCATION': resolvedLocationId
@@ -930,8 +931,9 @@ class SmartThingsService {
 
           try {
             console.debug('SmartThingsService: Executing temporary rule', { ruleId, locationId: resolvedLocationId });
-            await this.makeAuthenticatedRequest(`/locations/${resolvedLocationId}/rules/${ruleId}/execute`, {
+            await this.makeAuthenticatedRequest(`/rules/${ruleId}/execute`, {
               method: 'POST',
+              params: { locationId: resolvedLocationId },
               headers: {
                 'X-ST-Location': resolvedLocationId,
                 'X-ST-LOCATION': resolvedLocationId
@@ -952,8 +954,9 @@ class SmartThingsService {
           throw lastExecutionError || new Error('Failed to execute SmartThings rule for arming state');
         }
 
-        await this.makeAuthenticatedRequest(`/locations/${resolvedLocationId}/rules/${ruleId}`, {
+        await this.makeAuthenticatedRequest(`/rules/${ruleId}`, {
           method: 'DELETE',
+          params: { locationId: resolvedLocationId },
           headers: {
             'X-ST-Location': resolvedLocationId,
             'X-ST-LOCATION': resolvedLocationId
