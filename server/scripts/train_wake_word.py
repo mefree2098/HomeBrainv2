@@ -277,6 +277,8 @@ def embeddings_from_clips(clips: np.ndarray, batch_size: int) -> np.ndarray:
     features = AudioFeatures(device="cuda" if torch.cuda.is_available() else "cpu")
     if clips.size == 0:
         return np.empty((0, WINDOW_FRAMES, 96), dtype=np.float32)
+    if clips.dtype != np.int16:
+        clips = np.clip(np.round(clips * 32767.0), -32768, 32767).astype(np.int16)
     return features.embed_clips(clips, batch_size=batch_size, ncpu=max(1, os.cpu_count() or 1)).astype(np.float32)
 
 
