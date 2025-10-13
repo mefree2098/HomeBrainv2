@@ -204,7 +204,8 @@ class DeviceService {
         if (isSmartThings) {
           const refreshedOnline = await this.refreshSmartThingsOnlineStatus(device);
           if (!refreshedOnline) {
-            throw new Error('Device is offline and cannot be controlled');
+            const smartThingsId = device?.properties?.smartThingsDeviceId || 'unknown-id';
+            console.warn(`DeviceService: SmartThings device ${smartThingsId} still reports offline; attempting command anyway`);
           }
         } else {
           throw new Error('Device is offline and cannot be controlled');
