@@ -11,15 +11,14 @@ Make sure the following are ready:
 - **HomeBrain hub** (Jetson or other Linux host) is running the latest server build.
 - **Remote devices** have pulled the updated `homebrain-remote` package and run `npm install` so that `onnxruntime-node` is available.
 - **Python 3.8+ with pip** on the hub. The OpenWakeWord trainer is a Python script.
-- **OpenWakeWord training dependencies** installed on the hub:
+- **OpenWakeWord training dependencies** installed on the hub (run once, and repeat after upgrades):
 
   ```bash
   cd ~/homebrain/HomeBrainv2/server
-  python3 -m pip install --upgrade pip
-  python3 -m pip install "openwakeword[train]"
+  scripts/install-openwakeword-deps.sh
   ```
 
-  Consult the [OpenWakeWord project](https://github.com/dscripka/openWakeWord) if you need GPU support or a custom backend.
+  Set `PYTHON_BIN` if you want to target a specific interpreter. Consult the [OpenWakeWord project](https://github.com/dscripka/openWakeWord) if you need GPU support or a custom backend.
 
 ---
 
