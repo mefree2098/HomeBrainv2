@@ -244,11 +244,13 @@ router.post('/devices/:id/push-config', requireUser(), async (req, res) => {
   const { id } = req.params;
   try {
     const app = req.app;
-    const ws = app.get('voiceWebSocket');
-    if (!ws || typeof ws.pushConfigToDevice !== 'function') {
-      return res.status(503).json({ success: false, message: 'Voice WebSocket unavailable' });
+    const wsHttps = app.get('voiceWebSocket');
+    const wsHttp = app.get('voiceWebSocketHttp');
+    const tryPush = async (ws) => ws && typeof ws.pushConfigToDevice === 'function' ? await ws.pushConfigToDevice(id) : { success: false, error: 'WS instance unavailable' };
+    let result = await tryPush(wsHttps);
+    if (!result.success) {
+      result = await tryPush(wsHttp);
     }
-    const result = await ws.pushConfigToDevice(id);
     if (!result.success) {
       return res.status(400).json({ success: false, message: result.error || 'Failed to push config' });
     }
@@ -265,11 +267,13 @@ router.post('/devices/:id/ping-tts', requireUser(), async (req, res) => {
   const { text } = req.body || {};
   try {
     const app = req.app;
-    const ws = app.get('voiceWebSocket');
-    if (!ws || typeof ws.playTtsToDevice !== 'function') {
-      return res.status(503).json({ success: false, message: 'Voice WebSocket unavailable' });
+    const wsHttps = app.get('voiceWebSocket');
+    const wsHttp = app.get('voiceWebSocketHttp');
+    const tryPing = (ws) => ws && typeof ws.playTtsToDevice === 'function' ? ws.playTtsToDevice(id, text || 'Ping from hub') : { success: false, error: 'WS instance unavailable' };
+    let result = tryPing(wsHttps);
+    if (!result.success) {
+      result = tryPing(wsHttp);
     }
-    const result = ws.playTtsToDevice(id, text || 'Ping from hub');
     if (!result.success) {
       return res.status(400).json({ success: false, message: result.error || 'Failed to send TTS' });
     }
