@@ -114,6 +114,8 @@ class HomeBrainRemoteDevice {
     this.wakeWordReportedConfidence = clamp(this.config.wakeWord.reportedConfidence ?? DEFAULT_WAKE_WORD_CONFIDENCE, 0, 1);
     this.wakeWordEngineFailed = false;
     this.wakeWordDetectionQueue = Promise.resolve();
+    this.wakeWordRestartAttempts = 0;
+    this.maxWakeWordRestarts = 3;
     this.testModeActive = false;
     this.testModeListenerAttached = false;
     this.testModeListener = null;
@@ -763,6 +765,9 @@ class HomeBrainRemoteDevice {
       this.recordingStream = null;
     }
 
+    // Give ALSA a moment to release device
+    await new Promise((r) => setTimeout(r, 1000));
+
     this.isWakeWordListening = false;
     this.wakeWordEngineFailed = false;
 
@@ -1030,6 +1035,9 @@ class HomeBrainRemoteDevice {
   }
 
   releaseWakeWordEngine() {
+    // Ensure sidecar is stopped
+    this.stopFeatureSidecar();
+
     if (Array.isArray(this.wakeWordSessions) && this.wakeWordSessions.length) {
       for (const sessionInfo of this.wakeWordSessions) {
         const session = sessionInfo?.session;
@@ -1109,6 +1117,7 @@ class HomeBrainRemoteDevice {
         });
 
         this.isWakeWordListening = true;
+        this.wakeWordRestartAttempts = 0;
         console.log('Wake word detection active (FeatureSidecar/OWW)');
         return;
       }
@@ -1155,6 +1164,7 @@ class HomeBrainRemoteDevice {
       });
 
       this.isWakeWordListening = true;
+      this.wakeWordRestartAttempts = 0;
       console.log('Wake word detection active (OpenWakeWord)');
 
     } catch (error) {
@@ -1226,6 +1236,18 @@ class HomeBrainRemoteDevice {
     });
   }
 
+  stopFeatureSidecar() {
+    try {
+      if (this.sidecar) {
+        try { this.sidecar.stdin && this.sidecar.stdin.end(); } catch (_) {}
+        try { this.sidecar.kill('SIGTERM'); } catch (_) {}
+      }
+    } catch (_) {}
+    this.sidecar = null;
+    this.sidecarAudioBuffer = Buffer.alloc(0);
+    this.sidecarStdoutBuffer = '';
+  }
+
   enqueueSidecarAudio(data) {
     if (!this.sidecar || !data) return;
     const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -1253,8 +1275,10 @@ class HomeBrainRemoteDevice {
 
     this.wakeWordEngineFailed = true;
     this.isWakeWordListening = false;
-    console.error('Wake word engine failure:', error.message);
+    const errMsg = (error && error.message) ? error.message : 'unknown error';
+    console.error('Wake word engine failure:', errMsg);
 
+    // Clean up resources
     this.releaseWakeWordEngine();
     this.wakeWordDetectionQueue = Promise.resolve();
 
@@ -1265,6 +1289,20 @@ class HomeBrainRemoteDevice {
         console.warn('Unable to stop recording stream during failure:', streamError.message);
       }
       this.recordingStream = null;
+    }
+
+    // Attempt automatic restart a few times before falling back to test mode
+    if (this.wakeWordRestartAttempts < this.maxWakeWordRestarts) {
+      this.wakeWordRestartAttempts += 1;
+      const attempt = this.wakeWordRestartAttempts;
+      console.log(`Attempting to restart wake word engine (${attempt}/${this.maxWakeWordRestarts}) in 500ms...`);
+      setTimeout(() => {
+        this.wakeWordEngineFailed = false;
+        this.restartWakeWordDetection().catch((e) => {
+          console.error('Wake word engine restart failed:', e.message);
+        });
+      }, 500);
+      return;
     }
 
     console.log('Falling back to test mode. Press ENTER to simulate wake word triggers while troubleshooting OpenWakeWord.');
