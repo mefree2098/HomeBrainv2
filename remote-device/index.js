@@ -1191,8 +1191,14 @@ class HomeBrainRemoteDevice {
 
     // Send config
     const models = keywordEntries.map((k) => ({ label: k.label, path: k.path, threshold: k.threshold ?? this.wakeWordThreshold }));
-    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples || 16000 };
+    // Default frameSamples to 1s of audio at current sample rate if not set
+    this.wakeWordFrameSamples = this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000;
+    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples };
     this.sidecar.stdin.write(JSON.stringify(cfg) + '\n');
+
+    // Prepare chunking into exact frames for the sidecar
+    this.sidecarFrameBytes = (this.wakeWordFrameSamples || 16000) * PCM_SAMPLE_WIDTH_BYTES;
+    this.sidecarAudioBuffer = Buffer.alloc(0);
 
     // Read results
     this.sidecarStdoutBuffer = '';
@@ -1205,7 +1211,12 @@ class HomeBrainRemoteDevice {
         if (!line.trim()) continue;
         try {
           const msg = JSON.parse(line);
+          if (msg.type === 'score' && (argv.verbose || this.config?.wakeWord?.debug)) {
+            const s = typeof msg.score === 'number' ? msg.score.toFixed(3) : String(msg.score);
+            console.log(`[sidecar] ${msg.model}: ${s}`);
+          }
           if (msg.type === 'detect' && typeof msg.model === 'string' && typeof msg.score === 'number') {
+            console.log(`[sidecar] DETECT ${msg.model} ${msg.score.toFixed(3)}`);
             this.onWakeWordDetected(msg.model.toLowerCase(), msg.score, msg.model);
           }
         } catch (e) {
@@ -1217,15 +1228,21 @@ class HomeBrainRemoteDevice {
 
   enqueueSidecarAudio(data) {
     if (!this.sidecar || !data) return;
-    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    const header = Buffer.alloc(8);
-    header.write('AUD0', 0);
-    header.writeUInt32LE(buf.length, 4);
-    try {
-      this.sidecar.stdin.write(header);
-      this.sidecar.stdin.write(buf);
-    } catch (e) {
-      console.warn('Failed to write audio to sidecar:', e.message);
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    this.sidecarAudioBuffer = Buffer.concat([this.sidecarAudioBuffer, chunk]);
+    while (this.sidecarAudioBuffer.length >= (this.sidecarFrameBytes || 32000)) {
+      const frame = this.sidecarAudioBuffer.subarray(0, this.sidecarFrameBytes);
+      this.sidecarAudioBuffer = this.sidecarAudioBuffer.subarray(this.sidecarFrameBytes);
+      const header = Buffer.alloc(8);
+      header.write('AUD0', 0);
+      header.writeUInt32LE(frame.length, 4);
+      try {
+        this.sidecar.stdin.write(header);
+        this.sidecar.stdin.write(frame);
+      } catch (e) {
+        console.warn('Failed to write audio to sidecar:', e.message);
+        break;
+      }
     }
   }
 
