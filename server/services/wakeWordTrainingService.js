@@ -3,7 +3,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const piperVoiceService = require('./piperVoiceService');
 const WakeWordModel = require('../models/WakeWordModel');
 const UserProfile = require('../models/UserProfile');
@@ -356,6 +356,35 @@ class WakeWordTrainingService extends EventEmitter {
     options.dataset.positive = options.dataset.positive || {};
     options.dataset.positive.tts = options.dataset.positive.tts || {};
 
+    // Ensure Piper executable path is populated if available
+    const resolvePiperExec = () => {
+      const envPath = process.env.WAKEWORD_PIPER_EXEC;
+      if (envPath && fs.existsSync(envPath)) return envPath;
+      try {
+        const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['piper'], { encoding: 'utf8' });
+        if (which.status === 0) {
+          const out = (which.stdout || '').split(/\r?\n/).find((line) => line.trim());
+          if (out && fs.existsSync(out.trim())) return out.trim();
+        }
+      } catch (_) {}
+      const candidates = process.platform === 'win32'
+        ? [
+            path.join(__dirname, '..', '.wakeword-venv', 'Scripts', 'piper.exe'),
+            'C:/Program Files/piper/piper.exe',
+            'C:/Program Files (x86)/piper/piper.exe'
+          ]
+        : ['/usr/bin/piper', '/usr/local/bin/piper', '/bin/piper'];
+      for (const cand of candidates) {
+        try { if (fs.existsSync(cand)) return cand; } catch (_) {}
+      }
+      return null;
+    };
+
+    const piperExec = options.dataset?.positive?.tts?.executable || resolvePiperExec();
+    if (piperExec) {
+      options.dataset.positive.tts.executable = piperExec;
+    }
+
     const requestedVoices = Array.isArray(options.dataset.positive.tts.voices)
       ? options.dataset.positive.tts.voices
       : [];
@@ -431,6 +460,12 @@ class WakeWordTrainingService extends EventEmitter {
 
     options.dataset.negative = options.dataset.negative || {};
     options.dataset.negative.syntheticSpeech = options.dataset.negative.syntheticSpeech || {};
+    if (!options.dataset.negative.syntheticSpeech.executable) {
+      const negPiperExec = resolvePiperExec();
+      if (negPiperExec) {
+        options.dataset.negative.syntheticSpeech.executable = negPiperExec;
+      }
+    }
     const requestedNegativeVoices = Array.isArray(options.dataset.negative.syntheticSpeech.voices)
       ? options.dataset.negative.syntheticSpeech.voices
       : [];
