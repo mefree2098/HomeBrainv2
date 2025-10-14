@@ -33,3 +33,8 @@ export const removePiperVoice = async (voiceId: string) => {
   const response = await api.delete(`/api/wake-words/voices/${voiceId}`);
   return response.data;
 };
+
+export const probePiperDevice = async () => {
+  const response = await api.get('/api/wake-words/voices/probe/device');
+  return response.data as { success: boolean; info?: { using: string; provider: string; reason?: string; executable?: string | null; voices: number; platform: string; gpuAvailable: boolean; cudaDeviceCount: number } };
+};

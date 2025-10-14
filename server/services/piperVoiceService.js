@@ -5,6 +5,7 @@ const os = require('os');
 const axios = require('axios');
 const crypto = require('crypto');
 const fsExtra = require('fs-extra');
+const { spawn } = require('child_process');
 
 const VOICES_ROOT = path.join(__dirname, '..', 'data', 'wake-word', 'voices');
 const HUGGING_FACE_BASE_URL = 'https://huggingface.co/rhasspy/piper-voices/resolve/main';
@@ -373,11 +374,141 @@ async function getInstalledVoicesForTraining() {
   }));
 }
 
+function resolvePiperExecutable() {
+  const envPath = process.env.WAKEWORD_PIPER_EXEC;
+  if (envPath && fs.existsSync(envPath)) return envPath;
+  try {
+    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+    const which = spawn(whichCmd, ['piper']);
+    return new Promise((resolve) => {
+      let out = '';
+      which.stdout.on('data', (d) => (out += d.toString()));
+      which.on('close', () => {
+        const line = out.split(/\r?\n/).find((l) => l.trim());
+        if (line && fs.existsSync(line.trim())) return resolve(line.trim());
+        resolve(null);
+      });
+      which.on('error', () => resolve(null));
+    });
+  } catch (_) {
+    // fall through
+  }
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(__dirname, '..', '.wakeword-venv', 'Scripts', 'piper.exe'),
+        'C:/Program Files/piper/piper.exe',
+        'C:/Program Files (x86)/piper/piper.exe'
+      ]
+    : [
+        path.join(__dirname, '..', '.wakeword-venv', 'bin', 'piper'),
+        '/usr/bin/piper',
+        '/usr/local/bin/piper',
+        '/bin/piper'
+      ];
+  for (const cand of candidates) {
+    try { if (fs.existsSync(cand)) return Promise.resolve(cand); } catch (_) {}
+  }
+  return Promise.resolve(null);
+}
+
+async function detectPiperDevice() {
+  const installed = await getInstalledVoicesForTraining();
+  const voice = installed[0] || null;
+  const execPath = await resolvePiperExecutable();
+  if (!execPath) {
+    return {
+      using: 'cpu',
+      provider: 'unknown',
+      reason: 'Piper executable not found. Install Piper and set WAKEWORD_PIPER_EXEC if needed.',
+      executable: null,
+      voices: installed.length,
+      platform: process.platform,
+      gpuAvailable: false,
+      cudaDeviceCount: 0
+    };
+  }
+
+  const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'piper-probe-'));
+  const outFile = path.join(tmpDir, 'probe.wav');
+
+  const args = ['--model'];
+  if (voice && voice.modelPath) {
+    args.push(voice.modelPath);
+  } else {
+    // If no voice installed, use a dummy path; Piper will likely fail but may still log EPs
+    args.push(path.join(tmpDir, 'missing.onnx'));
+  }
+  args.push('--output_file', outFile);
+
+  const env = { ...process.env, ORT_LOG_SEVERITY_LEVEL: process.env.ORT_LOG_SEVERITY_LEVEL || '1', ORT_LOG_VERBOSITY_LEVEL: process.env.ORT_LOG_VERBOSITY_LEVEL || '1' };
+
+  const logs = await new Promise((resolve) => {
+    try {
+      const child = spawn(execPath, args, { env });
+      let stderr = '';
+      let stdout = '';
+      child.stdout.on('data', (d) => (stdout += d.toString()));
+      child.stderr.on('data', (d) => (stderr += d.toString()));
+      child.on('close', () => resolve(`${stderr}\n${stdout}`));
+      child.on('error', () => resolve(''));
+      // write a trivial text line to satisfy stdin (if needed)
+      try { child.stdin.write('probe\n'); child.stdin.end(); } catch (_) {}
+    } catch (_) {
+      resolve('');
+    }
+  });
+
+  const text = String(logs || '').toLowerCase();
+  let provider = 'CPUExecutionProvider';
+  let using = 'cpu';
+  if (text.includes('cudaexecutionprovider') || text.includes('cuda execution provider')) {
+    provider = 'CUDAExecutionProvider';
+    using = 'gpu';
+  } else if (text.includes('dmlexecutionprovider') || text.includes('directml') || text.includes('dml')) {
+    provider = 'DmlExecutionProvider';
+    using = 'gpu';
+  } else if (text.includes('rocmexecutionprovider') || text.includes('rocm')) {
+    provider = 'ROCMExecutionProvider';
+    using = 'gpu';
+  } else if (text.includes('coremlexecutionprovider') || text.includes('coreml')) {
+    provider = 'CoreMLExecutionProvider';
+    using = 'gpu';
+  } else if (text.includes('openvinoexecutionprovider') || text.includes('openvino')) {
+    provider = 'OpenVINOExecutionProvider';
+    using = 'gpu';
+  } else if (text.includes('cpuexecutionprovider') || text.includes('cpu execution provider')) {
+    provider = 'CPUExecutionProvider';
+    using = 'cpu';
+  }
+
+  let reason = '';
+  const gpuAvailable = false; // Node server not checking CUDA; keep generic
+  const cudaDeviceCount = 0;
+  if (using === 'cpu') {
+    reason = 'No compatible GPU provider detected in Piper logs or Piper build lacks GPU EP support.';
+  }
+
+  // cleanup
+  try { await fsExtra.remove(tmpDir); } catch (_) {}
+
+  return {
+    using,
+    provider,
+    reason,
+    executable: execPath,
+    voices: installed.length,
+    platform: process.platform,
+    gpuAvailable,
+    cudaDeviceCount
+  };
+}
+
 module.exports = {
   VOICES_ROOT,
   listVoices,
   listInstalledVoices,
   downloadVoice,
   removeVoice,
-  getInstalledVoicesForTraining
+  getInstalledVoicesForTraining,
+  detectPiperDevice
 };
