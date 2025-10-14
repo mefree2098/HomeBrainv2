@@ -77,6 +77,7 @@ sudo apt-get install -y \
     rsync \
     python3 \
     python3-pip \
+    python3-venv \
     alsa-utils \
     pulseaudio \
     sox \
@@ -163,6 +164,19 @@ else
         npm install || true
         npm install tflite-node@1.0.0 || true
     fi
+fi
+
+# Prepare Python venv for sidecar automatically
+print_status "Creating Python virtual environment for wake-word sidecar..."
+if [ ! -d "$INSTALL_DIR/.venv" ]; then
+    python3 -m venv "$INSTALL_DIR/.venv" || true
+fi
+if [ -x "$INSTALL_DIR/.venv/bin/python" ]; then
+    "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip setuptools wheel || true
+    "$INSTALL_DIR/.venv/bin/pip" install numpy onnxruntime openwakeword || true
+    print_success "Python sidecar environment prepared"
+else
+    print_warning "Python venv not available; sidecar will attempt system python3"
 fi
 
 # Configure audio
