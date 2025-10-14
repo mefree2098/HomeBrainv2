@@ -1193,7 +1193,7 @@ class HomeBrainRemoteDevice {
     const models = keywordEntries.map((k) => ({ label: k.label, path: k.path, threshold: k.threshold ?? this.wakeWordThreshold }));
     // Default frameSamples to 1s of audio at current sample rate if not set
     this.wakeWordFrameSamples = this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000;
-    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples };
+    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples, cooldownMs: this.wakeWordDebounceMs, vad: { minRms: 0.004 } };
     this.sidecar.stdin.write(JSON.stringify(cfg) + '\n');
 
     // Prepare chunking into exact frames for the sidecar

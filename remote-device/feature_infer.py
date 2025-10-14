@@ -75,6 +75,9 @@ class FeatureInfer:
         self.models: List[ModelSpec] = []
         self.sample_rate = DEFAULT_SAMPLE_RATE
         self.frame_samples = DEFAULT_SAMPLE_RATE  # 1 second by default
+        self.min_rms = 0.004  # energy gate to reduce false positives on silence
+        self.cooldown_ms = 1500  # per-model cooldown between detects
+        self.last_detect_ts: Dict[str, float] = {}
         # Initialize AudioFeatures; if resources missing, attempt one more download, then retry once
         try:
             self.features = AudioFeatures(device="cpu")
@@ -95,6 +98,15 @@ class FeatureInfer:
         models_cfg = payload.get("models") or []
         self.sample_rate = int(payload.get("sampleRate") or DEFAULT_SAMPLE_RATE)
         self.frame_samples = int(payload.get("frameSamples") or self.sample_rate)
+        vad = payload.get("vad") or {}
+        try:
+            self.min_rms = float(vad.get("minRms")) if vad.get("minRms") is not None else self.min_rms
+        except Exception:
+            pass
+        try:
+            self.cooldown_ms = int(payload.get("cooldownMs")) if payload.get("cooldownMs") is not None else self.cooldown_ms
+        except Exception:
+            pass
 
         providers = ["CPUExecutionProvider"]
         configured: List[ModelSpec] = []
@@ -149,6 +161,7 @@ class FeatureInfer:
     def infer(self, window: np.ndarray) -> List[Dict]:
         # window shape: [16, 96]
         results = []
+        now = time.time()
         for m in self.models:
             if not m.session or not m.input_name:
                 continue
@@ -177,7 +190,10 @@ class FeatureInfer:
                     score = 0.0
             else:
                 score = 0.0
-            detect = score is not None and score >= m.threshold
+            last = self.last_detect_ts.get(m.label, 0.0)
+            detect = (score is not None) and (score >= m.threshold) and (((now - last) * 1000.0) >= self.cooldown_ms)
+            if detect:
+                self.last_detect_ts[m.label] = now
             results.append({"model": m.label, "score": score, "detect": bool(detect)})
         return results
 
@@ -235,6 +251,11 @@ def main():
         pcm_i16 = np.frombuffer(data, dtype=np.int16)
         pcm = (pcm_i16.astype(np.float32) / 32768.0)
         try:
+            # Simple energy gate to avoid processing silence
+            rms = float(np.sqrt(np.mean(np.square(pcm))) if pcm.size else 0.0)
+            if rms < fi.min_rms:
+                # Skip low-energy frame
+                continue
             window = fi.preprocess(pcm)
             results = fi.infer(window)
             ts = time.time()
