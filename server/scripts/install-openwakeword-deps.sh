@@ -54,6 +54,8 @@ python -m pip install \
 # TensorFlow Lite export is optional on Jetson; install the NVIDIA wheel manually if needed.
 python -m pip install "onnxruntime" "onnx" "onnx-tf" ${PIP_FLAGS}
 python -m pip install "openwakeword[train]" ${PIP_FLAGS}
+# Install Piper CLI for local TTS synthesis during dataset generation
+python -m pip install "piper-tts" ${PIP_FLAGS}
 
 cat <<EOF
 [wakeword] Installation complete.
@@ -63,4 +65,7 @@ cat <<EOF
   python server/scripts/train_wake_word.py --help
 
 [wakeword] The training service will automatically use ${VENV_DIR}/bin/python if available.
+[wakeword] Ensure Piper CLI is reachable by the service:
+  - Preferred: ${VENV_DIR}/bin/piper should exist after install.
+  - Otherwise set WAKEWORD_PIPER_EXEC to the full path to piper in the service environment.
 EOF
