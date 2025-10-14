@@ -99,6 +99,12 @@ class HomeBrainRemoteDevice {
     this.wakeWordCacheDir = this.config.wakeWord?.cacheDir || path.join(this.configDirectory, 'wake-words');
     this.wakeWordAssetSignature = null;
 
+    // Voice capture/recording behavior
+    this.voiceConfig = this.config.voice || {};
+    // captureMode: 'none' (default), 'simulate', or 'pcm'
+    this.captureMode = process.env.HB_CAPTURE_MODE || this.voiceConfig.captureMode || 'none';
+    this.recordStopTimer = null;
+
     // Wake word detection
     this.wakeWordDisplayNames = ['Anna', 'Henry', 'Home Brain', 'Homebrain'];
     this.wakeWords = this.wakeWordDisplayNames.map((word) => word.toLowerCase());
@@ -415,9 +421,10 @@ class HomeBrainRemoteDevice {
 
         case 'wake_word_ack':
           console.log('Wake word acknowledged, listening for command...');
-          this.startVoiceRecording();
+          this.startVoiceRecording(message.timeout || 5000);
 
-          setTimeout(() => {
+          if (this.recordStopTimer) clearTimeout(this.recordStopTimer);
+          this.recordStopTimer = setTimeout(() => {
             if (this.isRecording) {
               this.stopVoiceRecording();
             }
@@ -1578,25 +1585,67 @@ class HomeBrainRemoteDevice {
     }, this.wakeWordDebounceMs);
   }
 
-  startVoiceRecording() {
+  startVoiceRecording(timeoutMs = 5000) {
     if (this.isRecording) return;
+
+    if (this.captureMode === 'none') {
+      // Do nothing unless explicitly configured to capture or simulate
+      return;
+    }
 
     console.log('Starting voice command recording...');
     this.isRecording = true;
 
-    // In production, you would record audio and send to hub
-    // For demo, we'll simulate command input
-    setTimeout(() => {
-      const testCommands = [
-        'Turn on the living room lights',
-        'Set the temperature to 72 degrees',
-        'Lock all the doors',
-        'What\'s the weather like?'
-      ];
+    if (this.captureMode === 'simulate') {
+      // Demo mode: simulate recognized text
+      setTimeout(() => {
+        const testCommands = [
+          'Turn on the living room lights',
+          'Set the temperature to 72 degrees',
+          'Lock all the doors',
+          'What\'s the weather like?'
+        ];
+        const command = testCommands[Math.floor(Math.random() * testCommands.length)];
+        this.onVoiceCommandRecorded(command, 0.9);
+      }, 2000);
+      return;
+    }
 
-      const command = testCommands[Math.floor(Math.random() * testCommands.length)];
-      this.onVoiceCommandRecorded(command, 0.9);
-    }, 2000);
+    if (this.captureMode === 'pcm') {
+      // Stream raw PCM frames to hub as base64 messages
+      const opts = {
+        sampleRate: this.wakeWordSampleRate,
+        sampleRateHertz: this.wakeWordSampleRate,
+        threshold: 0,
+        verbose: false,
+        recordProgram: this.config.audio.recordProgram || 'arecord',
+        device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
+      };
+      try {
+        this.commandRecording = recorder.record(opts);
+        const s = this.commandRecording.stream();
+        s.on('data', (buf) => {
+          if (!this.isRecording) return;
+          const b64 = Buffer.from(buf).toString('base64');
+          this.sendMessage({
+            type: 'audio_data',
+            audioData: b64,
+            sampleRate: this.wakeWordSampleRate,
+            channels: 1,
+            format: 'S16LE'
+          });
+        });
+        s.on('error', (e) => {
+          console.warn('Command recording error:', e?.message || e);
+        });
+      } catch (e) {
+        console.warn('Failed to start command recording:', e?.message || e);
+      }
+      return;
+    }
+
+    // Default: do not simulate, do not stream; just open a listening window
+    // You can implement local STT here in the future.
   }
 
   stopVoiceRecording() {
@@ -1604,6 +1653,15 @@ class HomeBrainRemoteDevice {
 
     console.log('Stopping voice command recording');
     this.isRecording = false;
+
+    if (this.commandRecording) {
+      try { this.commandRecording.stop(); } catch (_) {}
+      this.commandRecording = null;
+    }
+    if (this.recordStopTimer) {
+      clearTimeout(this.recordStopTimer);
+      this.recordStopTimer = null;
+    }
   }
 
   onVoiceCommandRecorded(command, confidence) {
@@ -1624,36 +1682,48 @@ class HomeBrainRemoteDevice {
   async playTTSResponse(text, voice = 'default') {
     console.log(`Playing TTS: "${text}"`);
 
-    // Attempt audible ping locally: generate a short sine beep and play via aplay/sox
+    // Try system TTS first (espeak or pico2wave), else beep fallback
+    const tryExec = (cmd) => new Promise((resolve) => exec(cmd, (err) => resolve(!err)));
+    const escaped = (text || '').replace(/"/g, '\\"');
+
+    let played = false;
     try {
-      const sampleRate = 16000;
-      const durationSec = 0.5;
-      const freq = 880; // A5
-      const samples = Math.floor(sampleRate * durationSec);
-      const buffer = new Float32Array(samples);
-      for (let i = 0; i < samples; i++) {
-        buffer[i] = Math.sin(2 * Math.PI * freq * (i / sampleRate)) * 0.3;
+      // espeak direct to ALSA
+      played = await tryExec(`espeak -s 175 -a 150 "${escaped}" 2>/dev/null`);
+      if (!played) {
+        // pico2wave -> aplay
+        const tmpWav = path.join(os.tmpdir(), `hb_tts_${Date.now()}.wav`);
+        const ok = await tryExec(`pico2wave -w "${tmpWav}" "${escaped}" && aplay -q "${tmpWav}"`);
+        played = ok;
+        try { await fsp.unlink(tmpWav); } catch (_) {}
       }
-      const wav = require('node-wav');
-      const wavBuffer = wav.encode([buffer], { sampleRate, float: true, bitDepth: 32 });
-      const tmpPath = path.join(os.tmpdir(), `hb_ping_${Date.now()}.wav`);
-      await fsp.writeFile(tmpPath, wavBuffer);
+    } catch (_) {}
 
-      const tryPlay = (cmd) => new Promise((resolve) => {
-        exec(cmd, (err) => resolve(!err));
-      });
-
-      // Prefer aplay; fallback to sox 'play'
-      const ok = (await tryPlay(`aplay -q "${tmpPath}"`)) || (await tryPlay(`play -q "${tmpPath}"`));
-      if (!ok) {
-        console.warn('No audio player available (aplay/play). Ping rendered but not played.');
+    if (!played) {
+      // Audible ping fallback
+      try {
+        const sampleRate = 16000;
+        const durationSec = 0.35;
+        const freq = 880;
+        const samples = Math.floor(sampleRate * durationSec);
+        const buffer = new Float32Array(samples);
+        for (let i = 0; i < samples; i++) {
+          buffer[i] = Math.sin(2 * Math.PI * freq * (i / sampleRate)) * 0.3;
+        }
+        const wav = require('node-wav');
+        const wavBuffer = wav.encode([buffer], { sampleRate, float: true, bitDepth: 32 });
+        const tmpPath = path.join(os.tmpdir(), `hb_ping_${Date.now()}.wav`);
+        await fsp.writeFile(tmpPath, wavBuffer);
+        const ok = await tryExec(`aplay -q "${tmpPath}"`) || await tryExec(`play -q "${tmpPath}"`);
+        try { await fsp.unlink(tmpPath); } catch (_) {}
+        if (!ok) {
+          console.warn('No audio player available (aplay/play). Unable to play TTS or beep.');
+        }
+      } catch (err) {
+        console.warn('Failed to render/play audible ping:', err.message);
       }
-      try { await fsp.unlink(tmpPath); } catch (_) {}
-    } catch (err) {
-      console.warn('Failed to render/play audible ping:', err.message);
     }
 
-    // Log textual fallback regardless
     console.log(`🔊 TTS Response: "${text}"`);
   }
 
