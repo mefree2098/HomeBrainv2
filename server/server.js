@@ -240,8 +240,9 @@ wakeWordTrainingService.resumePendingTraining().catch((error) => {
   console.error('Failed to resume wake word training jobs:', error);
 });
 
-// Store voice WebSocket instance for use in routes
+// Store voice WebSocket instance(s) for use in routes
 app.set('voiceWebSocket', voiceWsServer);
+app.set('voiceWebSocketHttp', voiceWsServer);
 
 // Initialize Discovery service
 const discoveryService = new DiscoveryService();
@@ -318,5 +319,12 @@ httpServer.listen(port, async () => {
   console.log(`WebSocket server ready for voice devices`);
 
   // Try to setup HTTPS server after HTTP is running
-  await setupHttpsServer();
+  const httpsWs = await setupHttpsServer();
+  if (httpsWs) {
+    // Prefer HTTPS WebSocket server for device operations if available
+    app.set('voiceWebSocket', httpsWs);
+    console.log('Voice WebSocket (HTTPS) selected for device operations');
+  } else {
+    console.log('Voice WebSocket (HTTP) selected for device operations');
+  }
 });
