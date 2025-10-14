@@ -224,6 +224,7 @@ class WakeWordTrainingService extends EventEmitter {
       progress: 0.01,
       message: 'Waiting for training slot'
     });
+    console.log(`[wakeword] Enqueued training for ${slug}`);
 
     this.pendingSlugs.add(slug);
     this.queue = this.queue
@@ -280,6 +281,7 @@ class WakeWordTrainingService extends EventEmitter {
       options,
       startedAt: Date.now()
     };
+    console.log(`[wakeword] Starting trainer for ${slug}`);
     this.activeJobs.set(slug, job);
 
     const outputFile = path.join(WAKE_WORD_ROOT, `${slug}.${this.defaultFormat}`);
@@ -538,6 +540,8 @@ class WakeWordTrainingService extends EventEmitter {
 
     await fsp.writeFile(configPath, JSON.stringify(options || {}, null, 2), 'utf8');
 
+    console.log(`[wakeword] Trainer config written for ${slug}: ${configPath}`);
+
     // Compute Piper path to expose to the trainer via env as fallback
     const getPiperFromOptions = () =>
       options?.dataset?.positive?.tts?.executable
@@ -566,6 +570,8 @@ class WakeWordTrainingService extends EventEmitter {
           ...(resolvedPiper ? { WAKEWORD_PIPER_EXEC: resolvedPiper } : {})
         }
       });
+
+      console.log(`[wakeword] Spawned trainer PID ${child.pid} for ${slug} using python ${this.pythonExecutable} (piper=${resolvedPiper || '(none)'})`);
 
       let stdoutBuffer = '';
       let stderrBuffer = '';
@@ -602,6 +608,7 @@ class WakeWordTrainingService extends EventEmitter {
 
       child.on('close', (code) => {
         flushBuffer();
+        console.log(`[wakeword] Trainer PID ${child.pid} for ${slug} exited with code ${code}`);
         if (finalResult && finalResult.type === 'result') {
           resolve({ success: true, ...finalResult });
         } else if (code === 0) {
