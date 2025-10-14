@@ -382,6 +382,8 @@ class WakeWordTrainingService extends EventEmitter {
           ]
         : [
             path.join(__dirname, '..', '.wakeword-venv', 'bin', 'piper'),
+            path.join(__dirname, '..', 'server', '.wakeword-venv', 'bin', 'piper'),
+            path.join(__dirname, '.wakeword-venv', 'bin', 'piper'),
             '/usr/bin/piper',
             '/usr/local/bin/piper',
             '/bin/piper'
@@ -394,7 +396,12 @@ class WakeWordTrainingService extends EventEmitter {
 
     const piperExec = options.dataset?.positive?.tts?.executable || resolvePiperExec();
     if (piperExec) {
-      const absExec = path.isAbsolute(piperExec) ? piperExec : path.resolve(SERVER_ROOT, piperExec);
+      let absExec = piperExec;
+      if (!path.isAbsolute(absExec)) {
+        // If it starts with ./server, resolve from project root; otherwise from SERVER_ROOT
+        const PROJECT_ROOT = path.resolve(SERVER_ROOT, '..');
+        absExec = absExec.startsWith('./server') ? path.resolve(PROJECT_ROOT, absExec) : path.resolve(SERVER_ROOT, absExec);
+      }
       options.dataset.positive.tts.executable = absExec;
     }
 
@@ -476,7 +483,11 @@ class WakeWordTrainingService extends EventEmitter {
     if (!options.dataset.negative.syntheticSpeech.executable) {
       const negPiperExec = resolvePiperExec();
       if (negPiperExec) {
-        const absNeg = path.isAbsolute(negPiperExec) ? negPiperExec : path.resolve(SERVER_ROOT, negPiperExec);
+        let absNeg = negPiperExec;
+        if (!path.isAbsolute(absNeg)) {
+          const PROJECT_ROOT = path.resolve(SERVER_ROOT, '..');
+          absNeg = absNeg.startsWith('./server') ? path.resolve(PROJECT_ROOT, absNeg) : path.resolve(SERVER_ROOT, absNeg);
+        }
         options.dataset.negative.syntheticSpeech.executable = absNeg;
       }
     } else if (options.dataset.negative.syntheticSpeech.executable) {
