@@ -260,10 +260,11 @@ class WakeWordTrainingService extends EventEmitter {
     try {
       const positiveVoices = options?.dataset?.positive?.tts?.voices || [];
       const negativeVoices = options?.dataset?.negative?.syntheticSpeech?.voices || [];
-      const piperExecLog = (resolvedPiper
-        || options?.dataset?.positive?.tts?.executable
+      const piperExecLog = (
+        options?.dataset?.positive?.tts?.executable
         || options?.dataset?.negative?.syntheticSpeech?.executable
-        || '(none)');
+        || '(none)'
+      );
       console.log(
         `[wakeword] Training ${slug} using ${positiveVoices.length} positive voices, ${negativeVoices.length} negative voices, piper: ${piperExecLog}`
       );
