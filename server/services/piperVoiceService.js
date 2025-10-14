@@ -184,13 +184,13 @@ function mapVoiceWithInstallation(meta, installedInfo = null) {
       name: meta.name,
       language: meta.languageLabel,
       languageCode: meta.language.code || null,
-    speaker: meta.name,
-    speakerId: meta.speakerId,
-    quality: meta.quality,
-    sizeBytes: meta.sizeBytes,
-    installed: false,
-    modelPath: null,
-    configPath: null
+      speaker: meta.name,
+      speakerId: meta.speakerId,
+      quality: meta.quality,
+      sizeBytes: meta.sizeBytes,
+      installed: false,
+      modelPath: null,
+      configPath: null
     };
   }
 
