@@ -132,6 +132,64 @@ def piper_synthesize(executable: str, voice: Dict[str, object], text: str, outpu
         return False, str(error)
 
 
+# Attempt to resolve Piper executable from config/environment/known paths
+# Returns absolute path or None if not found
+
+def resolve_piper_executable(executable_opt: Optional[str]) -> Optional[str]:
+    # 1) Explicit config value
+    if executable_opt:
+        raw = str(executable_opt)
+        candidate = Path(raw)
+        # Try as-is
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+        # Try relative to CWD and repo root
+        try_paths = []
+        try:
+            try_paths.append((Path.cwd() / candidate))
+        except Exception:
+            pass
+        root = Path(__file__).resolve().parent.parent
+        try_paths.append(root / candidate)
+        for p in try_paths:
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p.resolve())
+        # Try PATH lookup
+        resolved = shutil.which(raw)
+        if resolved:
+            return resolved
+
+    # 2) Environment variable
+    env_exec = os.environ.get("WAKEWORD_PIPER_EXEC")
+    if env_exec:
+        env_path = Path(str(env_exec))
+        if env_path.is_file() and os.access(env_path, os.X_OK):
+            return str(env_path.resolve())
+        resolved = shutil.which(str(env_exec))
+        if resolved:
+            return resolved
+
+    # 3) PATH search
+    resolved = shutil.which("piper")
+    if resolved:
+        return resolved
+
+    # 4) Known venv/system locations relative to this repo
+    root = Path(__file__).resolve().parent.parent  # .../server
+    candidates = [
+        root / ".wakeword-venv" / "bin" / "piper",
+        root / ".wakeword-venv" / "Scripts" / "piper.exe",
+        Path("/usr/local/bin/piper"),
+        Path("/usr/bin/piper"),
+        Path("/bin/piper")
+    ]
+    for c in candidates:
+        if c.is_file() and os.access(c, os.X_OK):
+            return str(c)
+
+    return None
+
+
 def list_audio_files(sources: Iterable[Path]) -> List[Path]:
     results: List[Path] = []
     for source in sources:
@@ -170,25 +228,7 @@ def generate_positive_samples(
     synthetic_total = int(options.get("syntheticSamples", DEFAULT_POSITIVE_SYNTHETIC))
     voices = [voice for voice in tts_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
     p_exec_cfg = tts_cfg.get("executable")
-    piper_exec: Optional[str] = None
-    env_exec = os.environ.get("WAKEWORD_PIPER_EXEC")
-    if p_exec_cfg:
-        candidate = Path(str(p_exec_cfg))
-        if candidate.is_file():
-            piper_exec = str(candidate)
-        else:
-            piper_exec = shutil.which(str(p_exec_cfg))
-    else:
-        # Try environment variable
-        if env_exec:
-            env_candidate = Path(str(env_exec))
-            if env_candidate.is_file():
-                piper_exec = str(env_candidate)
-            else:
-                piper_exec = shutil.which(str(env_exec))
-        # Finally, search PATH for 'piper'
-        if not piper_exec:
-            piper_exec = shutil.which("piper")
+    piper_exec = resolve_piper_executable(str(p_exec_cfg) if p_exec_cfg else None)
     phrases = options.get("textVariations") or []
     if phrases:
         phrases = [p.strip() for p in phrases if p.strip()]

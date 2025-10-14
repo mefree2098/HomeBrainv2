@@ -89,6 +89,8 @@ export function WakeWordManager() {
   const [newPhrase, setNewPhrase] = useState("");
   const [sampleCount, setSampleCount] = useState(600);
   const [submitting, setSubmitting] = useState(false);
+  const [clipDurationSeconds, setClipDurationSeconds] = useState<number>(1.5);
+  const [windowFrames, setWindowFrames] = useState<number>(16);
   const [polling, setPolling] = useState(false);
   const [voices, setVoices] = useState<PiperVoice[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
@@ -314,6 +316,8 @@ export function WakeWordManager() {
 
       const options: any = {
         dataset: {
+          clipDurationSeconds,
+          windowFrames,
           positive: {
             syntheticSamples: sampleCount
           }
@@ -478,6 +482,37 @@ export function WakeWordManager() {
                   Higher counts improve robustness at the cost of longer training time. Defaults to 600.
                 </p>
               </div>
+              <details className="group">
+                <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">Advanced training options</summary>
+                <div className="mt-3 grid gap-2">
+                  <Label htmlFor="clip-duration">Clip duration (seconds)</Label>
+                  <Input
+                    id="clip-duration"
+                    type="number"
+                    step={0.1}
+                    min={0.8}
+                    max={5}
+                    value={clipDurationSeconds}
+                    onChange={(e) => setClipDurationSeconds(Number(e.target.value || 0))}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Minimum is auto-enforced to ensure enough context windows for training.
+                  </p>
+                  <Label htmlFor="window-frames">Context window (frames)</Label>
+                  <Input
+                    id="window-frames"
+                    type="number"
+                    step={1}
+                    min={4}
+                    max={64}
+                    value={windowFrames}
+                    onChange={(e) => setWindowFrames(Number(e.target.value || 0))}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Default 16. Lowering allows shorter clips; increasing may improve temporal context.
+                  </p>
+                </div>
+              </details>
             </div>
             <DialogFooter>
               <Button variant="secondary" onClick={() => setCreateDialogOpen(false)} disabled={submitting}>
