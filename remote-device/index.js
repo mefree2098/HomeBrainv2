@@ -1166,7 +1166,17 @@ class HomeBrainRemoteDevice {
   // --- Feature sidecar integration ---
   async startFeatureSidecar(keywordEntries) {
     const { spawn } = require('child_process');
-    const python = this.config?.wakeWord?.python || 'python3';
+    // Prefer configured interpreter; else local venv; else system python3
+    let python = (this.config && this.config.wakeWord && this.config.wakeWord.python) || null;
+    if (!python) {
+      const venvPy = process.platform === 'win32'
+        ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
+        : path.join(__dirname, '.venv', 'bin', 'python');
+      if (fs.existsSync(venvPy)) {
+        python = venvPy;
+      }
+    }
+    python = python || 'python3';
     const script = path.join(__dirname, 'feature_infer.py');
     const args = [script];
     this.sidecar = spawn(python, args, { stdio: ['pipe', 'pipe', 'inherit'] });
