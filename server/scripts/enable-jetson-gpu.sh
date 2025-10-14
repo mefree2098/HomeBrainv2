@@ -70,10 +70,11 @@ fi
 
 # Install NVIDIA wheels
 echo "[jetson] Installing torch==${TORCH_VER} torchvision==${VISION_VER} torchaudio==${AUDIO_VER} from ${INDEX_URL}"
-pip install --no-cache-dir --extra-index-url "${INDEX_URL}" \
+# Prefer NVIDIA index first to avoid CPU-only wheels from PyPI
+pip install --no-cache-dir --index-url "${INDEX_URL}" --extra-index-url https://pypi.org/simple \
   torch=="${TORCH_VER}" torchvision=="${VISION_VER}" torchaudio=="${AUDIO_VER}"
 
-# Verify CUDA
+verify_cuda() {
 python - <<'PYCODE'
 import torch
 print("[jetson] torch:", torch.__version__)
@@ -84,8 +85,31 @@ try:
 except Exception as e:
     print('[jetson] GPU test failed:', e)
 PYCODE
+}
 
-echo "[jetson] Done. If cuda available is False, ensure your JetPack matches the v${JP_VER} index and try again."
+verify_cuda
+
+# If still CPU-only, retry with a fallback version mapping for this JetPack
+CPU_ONLY=$(python - <<'PYCODE'
+import torch
+print('yes' if (not torch.cuda.is_available() or '+cpu' in torch.__version__) else 'no')
+PYCODE
+)
+if [ "$CPU_ONLY" = "yes" ]; then
+  echo "[jetson] Detected CPU-only torch. Retrying with NVIDIA index only and a fallback version set..."
+  python -m pip uninstall -y torch torchvision torchaudio || true
+  if [ "${JP_VER}" = "62" ]; then
+    # Fallback known-good mapping for JP 6.2
+    TORCH_FALLBACK="2.6.0"; VISION_FALLBACK="0.21.0"; AUDIO_FALLBACK="2.6.0"
+  else
+    TORCH_FALLBACK="${TORCH_VER}"; VISION_FALLBACK="${VISION_VER}"; AUDIO_FALLBACK="${AUDIO_VER}"
+  fi
+  pip install --no-cache-dir --index-url "${INDEX_URL}" --extra-index-url https://pypi.org/simple \
+    torch=="${TORCH_FALLBACK}" torchvision=="${VISION_FALLBACK}" torchaudio=="${AUDIO_FALLBACK}"
+  verify_cuda
+fi
+
+echo "[jetson] Done. If cuda available is False, ensure JetPack matches v${JP_VER} and that the NVIDIA index hosts the requested versions."
 
 echo "Optional: set for services if needed:"
 echo "  export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:\$LD_LIBRARY_PATH"
