@@ -299,22 +299,35 @@ def generate_positive_samples(
                         "voice": str(voice.get("id") or voice.get("name") or "unknown"),
                         "error": error_message
                     })
-                continue
-            try:
-                audio = load_audio(output)
-                samples.append(pad_audio(audio, target_samples, rng))
-                stats["syntheticGenerated"] += 1
-                voice_id = str(voice.get("id") or voice.get("name") or "unknown")
-                stats["voiceUsage"][voice_id] = stats["voiceUsage"].get(voice_id, 0) + 1
-                stats["piperSucceeded"] += 1
-            except Exception as error:
-                stats["piperFailed"] += 1
-                if len(stats["piperErrors"]) < 5:
-                    stats["piperErrors"].append({
-                        "voice": str(voice.get("id") or voice.get("name") or "unknown"),
-                        "error": str(error)
-                    })
-                continue
+            else:
+                try:
+                    audio = load_audio(output)
+                    samples.append(pad_audio(audio, target_samples, rng))
+                    stats["syntheticGenerated"] += 1
+                    voice_id = str(voice.get("id") or voice.get("name") or "unknown")
+                    stats["voiceUsage"][voice_id] = stats["voiceUsage"].get(voice_id, 0) + 1
+                    stats["piperSucceeded"] += 1
+                except Exception as error:
+                    stats["piperFailed"] += 1
+                    if len(stats["piperErrors"]) < 5:
+                        stats["piperErrors"].append({
+                            "voice": str(voice.get("id") or voice.get("name") or "unknown"),
+                            "error": str(error)
+                        })
+            # Periodic progress updates to avoid appearing stuck
+            if synthetic_total > 0 and ((index + 1) % max(10, synthetic_total // 20 or 1) == 0 or (index + 1) == synthetic_total):
+                frac = (index + 1) / max(1, synthetic_total)
+                progress(
+                    "generating",
+                    0.05 + 0.05 * frac,
+                    f"Synthesizing positives {index + 1}/{synthetic_total}",
+                    stats={
+                        "attempts": stats["piperAttempts"],
+                        "succeeded": stats["piperSucceeded"],
+                        "failed": stats["piperFailed"],
+                        "voiceUsage": stats["voiceUsage"]
+                    }
+                )
 
     for path in list_audio_files(map(Path, options.get("userRecordings", []))):
         try:
@@ -414,22 +427,34 @@ def generate_negative_samples(
                         "voice": str(voice.get("id") or voice.get("name") or "unknown"),
                         "error": error_message
                     })
-                continue
-            try:
-                audio = load_audio(output)
-                samples.append(pad_audio(audio, target_samples, rng))
-                stats["syntheticGenerated"] += 1
-                voice_id = str(voice.get("id") or voice.get("name") or "unknown")
-                stats["voiceUsage"][voice_id] = stats["voiceUsage"].get(voice_id, 0) + 1
-                stats["piperSucceeded"] += 1
-            except Exception as error:
-                stats["piperFailed"] += 1
-                if len(stats["piperErrors"]) < 5:
-                    stats["piperErrors"].append({
-                        "voice": str(voice.get("id") or voice.get("name") or "unknown"),
-                        "error": str(error)
-                    })
-                continue
+            else:
+                try:
+                    audio = load_audio(output)
+                    samples.append(pad_audio(audio, target_samples, rng))
+                    stats["syntheticGenerated"] += 1
+                    voice_id = str(voice.get("id") or voice.get("name") or "unknown")
+                    stats["voiceUsage"][voice_id] = stats["voiceUsage"].get(voice_id, 0) + 1
+                    stats["piperSucceeded"] += 1
+                except Exception as error:
+                    stats["piperFailed"] += 1
+                    if len(stats["piperErrors"]) < 5:
+                        stats["piperErrors"].append({
+                            "voice": str(voice.get("id") or voice.get("name") or "unknown"),
+                            "error": str(error)
+                        })
+            if synthetic_count > 0 and ((index + 1) % max(10, synthetic_count // 20 or 1) == 0 or (index + 1) == synthetic_count):
+                frac = (index + 1) / max(1, synthetic_count)
+                progress(
+                    "generating",
+                    0.12 + 0.04 * frac,
+                    f"Synthesizing negatives {index + 1}/{synthetic_count}",
+                    stats={
+                        "attempts": stats["piperAttempts"],
+                        "succeeded": stats["piperSucceeded"],
+                        "failed": stats["piperFailed"],
+                        "voiceUsage": stats["voiceUsage"]
+                    }
+                )
 
     for _ in range(int(options.get("randomSilence", DEFAULT_RANDOM_SILENCE))):
         noise = np.random.normal(0, rng.uniform(0.002, 0.01), size=target_samples).astype(np.float32)
