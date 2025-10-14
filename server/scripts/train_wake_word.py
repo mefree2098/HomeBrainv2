@@ -103,7 +103,7 @@ def pad_audio(audio: np.ndarray, target_samples: int, rng: random.Random) -> np.
     return result
 
 
-def piper_synthesize(executable: str, voice: Dict[str, object], text: str, output: Path) -> Tuple[bool, str]:
+def piper_synthesize(executable: str, voice: Dict[str, object], text: str, output: Path, env: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
     cmd = [executable, "--model", str(voice["modelPath"]), "--output_file", str(output)]
     if voice.get("configPath"):
         cmd.extend(["--config", str(voice["configPath"])])
@@ -120,13 +120,14 @@ def piper_synthesize(executable: str, voice: Dict[str, object], text: str, outpu
             input=(text + "\n").encode("utf-8"),
             check=False,
             capture_output=True,
-            timeout=60
+            timeout=60,
+            env=env
         )
-        if result.returncode == 0:
-            return True, ""
         stderr = result.stderr.decode("utf-8", errors="ignore")
         stdout = result.stdout.decode("utf-8", errors="ignore")
         combined = "\n".join(filter(None, [stderr.strip(), stdout.strip()]))
+        if result.returncode == 0:
+            return True, combined
         return False, combined or f"Piper exited with code {result.returncode}"
     except subprocess.TimeoutExpired:
         return False, "Piper synthesis timed out"
@@ -284,6 +285,70 @@ def generate_positive_samples(
         )
 
     if synthetic_total > 0 and piper_exec and voices:
+        # Detect Piper execution provider (CPU/GPU) once up-front for UI visibility
+        probe_voice = voices[0]
+        probe_env = os.environ.copy()
+        probe_env["ORT_LOG_SEVERITY_LEVEL"] = probe_env.get("ORT_LOG_SEVERITY_LEVEL", "1")
+        probe_env["ORT_LOG_VERBOSITY_LEVEL"] = probe_env.get("ORT_LOG_VERBOSITY_LEVEL", "1")
+        probe_tmp = ensure_dir(work_dir / "piper-probe") / "probe.wav"
+        provider_name = "unknown"
+        using_device = "cpu"
+        reason = ""
+        try:
+            ok, stderr_or_empty = piper_synthesize(piper_exec, probe_voice, "probe", probe_tmp, env=probe_env)
+            logs = stderr_or_empty
+            text = logs.lower()
+            # Heuristic parse for common ONNX Runtime EP names
+            if "cudaexecutionprovider" in text or "cuda execution provider" in text:
+                provider_name = "CUDAExecutionProvider"
+                using_device = "gpu"
+            elif "dmlexecutionprovider" in text or "directml" in text or "dml" in text:
+                provider_name = "DmlExecutionProvider"
+                using_device = "gpu"
+            elif "rocmexecutionprovider" in text or "rocm" in text:
+                provider_name = "ROCMExecutionProvider"
+                using_device = "gpu"
+            elif "coremlexecutionprovider" in text or "coreml" in text:
+                provider_name = "CoreMLExecutionProvider"
+                using_device = "gpu"
+            elif "openvinoexecutionprovider" in text or "openvino" in text:
+                provider_name = "OpenVINOExecutionProvider"
+                using_device = "gpu"
+            elif "metal" in text and sys.platform == "darwin":
+                provider_name = "Metal"
+                using_device = "gpu"
+            elif "cpuexecutionprovider" in text or "cpu execution provider" in text:
+                provider_name = "CPUExecutionProvider"
+                using_device = "cpu"
+            else:
+                # If no explicit provider found, default to CPU with reason
+                provider_name = "CPUExecutionProvider"
+                using_device = "cpu"
+            if using_device == "cpu":
+                if torch.cuda.is_available():
+                    reason = "Piper build likely lacks GPU execution provider support. Install a GPU-enabled Piper build."
+                else:
+                    reason = "No compatible GPU detected on this system."
+        except Exception:
+            provider_name = "unknown"
+            using_device = "cpu"
+            reason = "Unable to probe Piper execution provider; assuming CPU."
+        progress(
+            "generating",
+            0.051,
+            f"Piper synthesis will use {using_device.upper()} ({provider_name})",
+            piper={
+                "using": using_device,
+                "provider": provider_name,
+                "reason": reason,
+                "executable": str(piper_exec),
+                "voices": len(voices),
+                "platform": sys.platform,
+                "gpuAvailable": bool(torch.cuda.is_available()),
+                "cudaDeviceCount": int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
+            }
+        )
+
         tmp_dir = ensure_dir(work_dir / "positive-tts")
         for index in range(synthetic_total):
             text = rng.choice(phrases) if phrases else phrase
@@ -412,6 +477,65 @@ def generate_negative_samples(
         )
 
     if synthetic_count > 0 and piper_exec and voices:
+        # Emit provider info if not already captured in positive path
+        probe_voice = voices[0]
+        probe_env = os.environ.copy()
+        probe_env["ORT_LOG_SEVERITY_LEVEL"] = probe_env.get("ORT_LOG_SEVERITY_LEVEL", "1")
+        probe_env["ORT_LOG_VERBOSITY_LEVEL"] = probe_env.get("ORT_LOG_VERBOSITY_LEVEL", "1")
+        probe_tmp = ensure_dir(work_dir / "piper-probe-neg") / "probe.wav"
+        provider_name = "unknown"
+        using_device = "cpu"
+        reason = ""
+        try:
+            ok, stderr_or_empty = piper_synthesize(piper_exec, probe_voice, "probe", probe_tmp, env=probe_env)
+            logs = stderr_or_empty
+            text = logs.lower()
+            if "cudaexecutionprovider" in text or "cuda execution provider" in text:
+                provider_name = "CUDAExecutionProvider"
+                using_device = "gpu"
+            elif "dmlexecutionprovider" in text or "directml" in text or "dml" in text:
+                provider_name = "DmlExecutionProvider"
+                using_device = "gpu"
+            elif "rocmexecutionprovider" in text or "rocm" in text:
+                provider_name = "ROCMExecutionProvider"
+                using_device = "gpu"
+            elif "coremlexecutionprovider" in text or "coreml" in text:
+                provider_name = "CoreMLExecutionProvider"
+                using_device = "gpu"
+            elif "openvinoexecutionprovider" in text or "openvino" in text:
+                provider_name = "OpenVINOExecutionProvider"
+                using_device = "gpu"
+            elif "cpuexecutionprovider" in text or "cpu execution provider" in text:
+                provider_name = "CPUExecutionProvider"
+                using_device = "cpu"
+            else:
+                provider_name = "CPUExecutionProvider"
+                using_device = "cpu"
+            if using_device == "cpu":
+                if torch.cuda.is_available():
+                    reason = "Piper build likely lacks GPU execution provider support. Install a GPU-enabled Piper build."
+                else:
+                    reason = "No compatible GPU detected on this system."
+        except Exception:
+            provider_name = "unknown"
+            using_device = "cpu"
+            reason = "Unable to probe Piper execution provider; assuming CPU."
+        progress(
+            "generating",
+            0.121,
+            f"Piper synthesis will use {using_device.upper()} ({provider_name})",
+            piper={
+                "using": using_device,
+                "provider": provider_name,
+                "reason": reason,
+                "executable": str(piper_exec),
+                "voices": len(voices),
+                "platform": sys.platform,
+                "gpuAvailable": bool(torch.cuda.is_available()),
+                "cudaDeviceCount": int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
+            }
+        )
+
         tmp_dir = ensure_dir(work_dir / "negative-tts")
         for index in range(synthetic_count):
             text = rng.choice(phrases)

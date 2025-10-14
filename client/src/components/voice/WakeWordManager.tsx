@@ -470,12 +470,23 @@ export function WakeWordManager() {
   const renderProgress = (model: WakeWordModel) => {
     if (!TRAINING_STATUSES.includes(model.status)) return null;
     const percent = Math.max(0, Math.min(100, Math.round((model.progress ?? 0) * 100)));
+    const piperInfo = (model as any)?.metadata?.piper as
+      | { using?: string; provider?: string; reason?: string; executable?: string }
+      | undefined;
+    const usingLabel = piperInfo?.using ? piperInfo.using.toString().toUpperCase() : undefined;
     return (
       <div className="mt-2 space-y-1">
         <Progress value={percent} />
         <p className="text-xs text-muted-foreground">
           {model.statusMessage || "Preparing"} • {percent}%
         </p>
+        {piperInfo ? (
+          <p className="text-[11px] text-muted-foreground/80">
+            Piper: {usingLabel || "UNKNOWN"}
+            {piperInfo.provider ? ` (${piperInfo.provider})` : ""}
+            {piperInfo.using?.toLowerCase() === "cpu" && piperInfo.reason ? ` — ${piperInfo.reason}` : ""}
+          </p>
+        ) : null}
       </div>
     );
   };
