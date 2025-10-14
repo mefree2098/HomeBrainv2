@@ -38,6 +38,17 @@ except Exception as exc:  # pragma: no cover
     sys.stderr.write(f"onnxruntime is required: {exc}\n")
     sys.exit(1)
 
+# Ensure OpenWakeWord resources are present
+try:
+    from openwakeword import utils as oww_utils  # type: ignore
+    try:
+        oww_utils.download_models()
+    except Exception as _download_err:
+        # Non-fatal; AudioFeatures init will fail if truly missing
+        pass
+except Exception:
+    pass
+
 try:
     from openwakeword.utils import AudioFeatures
 except Exception as exc:  # pragma: no cover
@@ -64,7 +75,16 @@ class FeatureInfer:
         self.models: List[ModelSpec] = []
         self.sample_rate = DEFAULT_SAMPLE_RATE
         self.frame_samples = DEFAULT_SAMPLE_RATE  # 1 second by default
-        self.features = AudioFeatures(device="cpu")
+        # Initialize AudioFeatures; if resources missing, attempt one more download, then retry once
+        try:
+            self.features = AudioFeatures(device="cpu")
+        except Exception as init_err:
+            try:
+                from openwakeword import utils as oww_utils  # type: ignore
+                oww_utils.download_models()
+                self.features = AudioFeatures(device="cpu")
+            except Exception:
+                raise init_err
         self.lock = threading.Lock()
 
     def log(self, **kwargs):
