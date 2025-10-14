@@ -359,37 +359,79 @@ class WakeWordTrainingService extends EventEmitter {
     const requestedVoices = Array.isArray(options.dataset.positive.tts.voices)
       ? options.dataset.positive.tts.voices
       : [];
+    const resolveVoice = (voice) => {
+      const modelPath = voice.modelPath ? path.resolve(String(voice.modelPath)) : null;
+      const configPath = voice.configPath ? path.resolve(String(voice.configPath)) : null;
+      const hasExistingPaths =
+        modelPath &&
+        configPath &&
+        fs.existsSync(modelPath) &&
+        fs.existsSync(configPath);
+
+      if (hasExistingPaths) {
+        return {
+          ...voice,
+          modelPath,
+          configPath
+        };
+      }
+
+      const fallback = installedMap.get(voice.id);
+      if (!fallback) {
+        return null;
+      }
+      return {
+        ...fallback,
+        ...voice,
+        modelPath: fallback.modelPath,
+        configPath: fallback.configPath
+      };
+    };
 
     const installedVoices = await piperVoiceService.getInstalledVoicesForTraining();
     const installedMap = new Map(installedVoices.map((voice) => [voice.id, voice]));
 
     if (requestedVoices.length > 0) {
       const hydrated = requestedVoices
-        .map((voice) => {
-          if (voice.modelPath && voice.configPath) {
-            return voice;
-          }
-          const fallback = installedMap.get(voice.id);
-          if (!fallback) {
-            return null;
-          }
-          return {
-            ...fallback,
-            ...voice,
-            modelPath: fallback.modelPath,
-            configPath: fallback.configPath
-          };
-        })
+        .map(resolveVoice)
         .filter(Boolean);
 
       if (hydrated.length > 0) {
         options.dataset.positive.tts.voices = hydrated;
-        return options;
       }
     }
 
-    if (installedVoices.length > 0) {
+    if (!options.dataset.positive.tts.voices && installedVoices.length > 0) {
       options.dataset.positive.tts.voices = installedVoices.map((voice) => ({
+        id: voice.id,
+        name: voice.name,
+        language: voice.language,
+        speaker: voice.speaker,
+        quality: voice.quality,
+        modelPath: voice.modelPath,
+        configPath: voice.configPath
+      }));
+    }
+
+    options.dataset.negative = options.dataset.negative || {};
+    options.dataset.negative.syntheticSpeech = options.dataset.negative.syntheticSpeech || {};
+    const requestedNegativeVoices = Array.isArray(options.dataset.negative.syntheticSpeech.voices)
+      ? options.dataset.negative.syntheticSpeech.voices
+      : [];
+    if (requestedNegativeVoices.length > 0) {
+      const hydratedNegative = requestedNegativeVoices
+        .map(resolveVoice)
+        .filter(Boolean);
+      if (hydratedNegative.length > 0) {
+        options.dataset.negative.syntheticSpeech.voices = hydratedNegative;
+      }
+    }
+
+    if (
+      !options.dataset.negative.syntheticSpeech.voices &&
+      installedVoices.length > 0
+    ) {
+      options.dataset.negative.syntheticSpeech.voices = installedVoices.map((voice) => ({
         id: voice.id,
         name: voice.name,
         language: voice.language,
