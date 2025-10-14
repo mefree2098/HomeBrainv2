@@ -118,14 +118,29 @@ class VoiceWebSocketServer {
         }
       });
 
-      // Send welcome message
-      this.sendMessage(deviceId, {
-        type: 'welcome',
-        deviceId: deviceId,
-        timestamp: new Date().toISOString()
-      });
+    // Send welcome message
+    this.sendMessage(deviceId, {
+      type: 'welcome',
+      deviceId: deviceId,
+      timestamp: new Date().toISOString()
+    });
 
-      console.log(`Voice device ${device.name} connected successfully`);
+    // Proactively authenticate device on connect to avoid race/missed auth messages
+    try {
+      const registrationCode = device.settings?.registrationCode || 'auto';
+      const { config } = await this.buildWakeWordConfig(device, registrationCode, {});
+      const conn = this.deviceConnections.get(deviceId);
+      if (conn) {
+        conn.authenticated = true;
+        conn.deviceInfo = conn.deviceInfo || {};
+      }
+      this.sendMessage(deviceId, { type: 'auth_success', config });
+      console.log(`Proactive auth_success sent to ${deviceId} (${device.name}) on connection`);
+    } catch (autoAuthErr) {
+      console.warn(`Failed to proactively authenticate ${deviceId} on connect:`, autoAuthErr.message);
+    }
+
+    console.log(`Voice device ${device.name} connected successfully`);
 
     } catch (error) {
       console.error(`Error handling WebSocket connection for ${deviceId}:`, error);
