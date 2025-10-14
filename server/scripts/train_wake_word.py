@@ -169,7 +169,26 @@ def generate_positive_samples(
     tts_cfg = options.get("tts", {})
     synthetic_total = int(options.get("syntheticSamples", DEFAULT_POSITIVE_SYNTHETIC))
     voices = [voice for voice in tts_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
-    piper_exec = shutil.which(str(tts_cfg.get("executable") or "piper"))
+    p_exec_cfg = tts_cfg.get("executable")
+    piper_exec: Optional[str] = None
+    env_exec = os.environ.get("WAKEWORD_PIPER_EXEC")
+    if p_exec_cfg:
+        candidate = Path(str(p_exec_cfg))
+        if candidate.is_file():
+            piper_exec = str(candidate)
+        else:
+            piper_exec = shutil.which(str(p_exec_cfg))
+    else:
+        # Try environment variable
+        if env_exec:
+            env_candidate = Path(str(env_exec))
+            if env_candidate.is_file():
+                piper_exec = str(env_candidate)
+            else:
+                piper_exec = shutil.which(str(env_exec))
+        # Finally, search PATH for 'piper'
+        if not piper_exec:
+            piper_exec = shutil.which("piper")
     phrases = options.get("textVariations") or []
     if phrases:
         phrases = [p.strip() for p in phrases if p.strip()]
@@ -208,8 +227,18 @@ def generate_positive_samples(
         )
 
     if synthetic_total > 0 and voices and not piper_exec:
+        progress(
+            "generating",
+            0.09,
+            "Piper executable not found for positive synthesis",
+            stats={
+                "executableRequested": str(p_exec_cfg or "piper"),
+                "resolvedExecutable": None,
+                "voiceCount": len(voices)
+            }
+        )
         raise RuntimeError(
-            "Piper executable not found. Install Piper or set WAKEWORD_PIPER_EXEC to its path and restart the hub."
+            "Piper executable not found. Install Piper and ensure it is executable, or set WAKEWORD_PIPER_EXEC to the full path and restart the hub."
         )
 
     if synthetic_total > 0 and piper_exec and voices:
