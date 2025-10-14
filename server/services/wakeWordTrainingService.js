@@ -359,6 +359,19 @@ class WakeWordTrainingService extends EventEmitter {
     const requestedVoices = Array.isArray(options.dataset.positive.tts.voices)
       ? options.dataset.positive.tts.voices
       : [];
+    const normaliseSpeakerId = (value) => {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === 'string') {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+      return null;
+    };
+
     const resolveVoice = (voice) => {
       const modelPath = voice.modelPath ? path.resolve(String(voice.modelPath)) : null;
       const configPath = voice.configPath ? path.resolve(String(voice.configPath)) : null;
@@ -372,7 +385,8 @@ class WakeWordTrainingService extends EventEmitter {
         return {
           ...voice,
           modelPath,
-          configPath
+          configPath,
+          speakerId: normaliseSpeakerId(voice.speakerId)
         };
       }
 
@@ -384,7 +398,8 @@ class WakeWordTrainingService extends EventEmitter {
         ...fallback,
         ...voice,
         modelPath: fallback.modelPath,
-        configPath: fallback.configPath
+        configPath: fallback.configPath,
+        speakerId: normaliseSpeakerId(fallback.speakerId) ?? normaliseSpeakerId(voice.speakerId)
       };
     };
 
@@ -407,6 +422,7 @@ class WakeWordTrainingService extends EventEmitter {
         name: voice.name,
         language: voice.language,
         speaker: voice.speaker,
+        speakerId: typeof voice.speakerId === 'number' ? voice.speakerId : null,
         quality: voice.quality,
         modelPath: voice.modelPath,
         configPath: voice.configPath
@@ -436,6 +452,7 @@ class WakeWordTrainingService extends EventEmitter {
         name: voice.name,
         language: voice.language,
         speaker: voice.speaker,
+        speakerId: typeof voice.speakerId === 'number' ? voice.speakerId : null,
         quality: voice.quality,
         modelPath: voice.modelPath,
         configPath: voice.configPath

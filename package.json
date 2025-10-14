@@ -7,7 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "client": "cd client && npm run dev",
     "client-install": "cd client && npm install",
-    "server": "cd server && npm run dev",
+    "server": "cross-env WAKEWORD_PIPER_EXEC=${WAKEWORD_PIPER_EXEC:-./server/.wakeword-venv/bin/piper} npm run dev --prefix server",
     "server-install": "cd server && npm install",
     "start": "concurrently -n \"client,server\" \"npm run client\" \"npm run server\"",
     "debug": "concurrently -n \"client,server\" \"npm run client\" \"cross-env NODE_OPTIONS=--inspect-brk=9229 npm run server\"",
