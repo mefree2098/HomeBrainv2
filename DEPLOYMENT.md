@@ -184,9 +184,9 @@ Save (`Ctrl+O`, Enter) and exit (`Ctrl+X`).
 
 ---
 
-## Step 8 - Install OpenWakeWord training dependencies
+## Step 8 - Install OpenWakeWord training dependencies (and Piper)
 The hub now generates datasets, augments them, and trains wake-word models locally using PyTorch and Piper.
-Run the helper script once (and again after future upgrades) to provision the Python toolchain (PyTorch + torchaudio/torchmetrics/torchinfo, soundfile, librosa, pronouncing, audiomentations + torch-audiomentations, webrtcvad, speechbrain, mutagen, acoustics, onnxruntime/onnx-tf, TensorFlow Lite converters, and openwakeword):
+Run the helper script once (and again after future upgrades) to provision the Python toolchain (PyTorch + torchaudio/torchmetrics/torchinfo, soundfile, librosa, pronouncing, audiomentations + torch-audiomentations, webrtcvad, speechbrain, mutagen, acoustics, onnxruntime/onnx-tf, TensorFlow Lite converters, openwakeword, and Piper CLI):
 
 ```bash
 cd ~/homebrain/HomeBrainv2/server
@@ -194,9 +194,11 @@ scripts/install-openwakeword-deps.sh
 ```
 
 Set `PYTHON_BIN=/usr/bin/python3.10` if you need to target a specific interpreter.
-The training service automatically prefers `server/.wakeword-venv/bin/python` on restart.
+The training service automatically prefers `server/.wakeword-venv/bin/python` on restart. The script also installs `piper-tts` into this venv so the Piper CLI is available at `server/.wakeword-venv/bin/piper`.
 If you need TensorFlow Lite exports, install the Jetson-specific TensorFlow wheel manually after the script finishes (see NVIDIA's matrix), then re-run the script; otherwise the pipeline will produce ONNX artifacts and the Pi will fall back to ONNX Runtime.
-After installing the dependencies restart the HomeBrain server process (`sudo systemctl restart homebrain-server`) so the training worker reloads the new virtualenv. Manage wake words from the UI under **Settings -> Voice & Audio -> Wake Word Models**.
+After installing the dependencies restart the HomeBrain server process (`sudo systemctl restart homebrain`) so the training worker reloads the new virtualenv. Manage wake words from the UI under **Settings -> Voice & Audio -> Wake Word Models**.
+
+If your Piper binary is installed elsewhere, set `WAKEWORD_PIPER_EXEC=/full/path/to/piper` in the HomeBrain service environment. The training service will auto-detect common paths but an explicit env var is the most reliable.
 
 
 ---
@@ -390,17 +392,22 @@ Pick only one path; you do not need both.
    Refresh the Remote Devices page; the Pi should display as “Online”. Repeat the copy/install steps for additional rooms, generating a new registration code each time.
 
 8. **Verify on-device wake-word detection (OpenWakeWord)**
-   - Update the remote device workspace to capture the latest dependencies (notably `node-webrtcvad` for voice activity detection):
-     ```bash
-     cd ~/homebrain-remote
-     npm install
-     ```
+   - Update the remote device workspace to capture the latest dependencies (notably `node-webrtcvad` for voice activity detection). For best compatibility with hub‑trained models, install TFLite runtime so the remote prefers `.tflite` models and only falls back to ONNX when necessary:
+   ```bash
+   cd ~/homebrain-remote
+   npm install
+   npm install tflite-node --no-optional
+   ```
    - Restart the remote service to load the OpenWakeWord engine and the new wake-word metadata:
      ```bash
      sudo systemctl restart homebrain-remote
      journalctl -u homebrain-remote -n 20
      ```
-   - Custom wake words are generated on the hub after you submit them in the HomeBrain UI. The Raspberry Pi will download the trained model (preferring `.tflite` with automatic ONNX fallback) moments later—no Picovoice AccessKey required.
+   - Custom wake words are generated on the hub after you submit them in the HomeBrain UI. The Raspberry Pi will download the trained model (preferring `.tflite` with automatic ONNX fallback) moments later—no Picovoice AccessKey required. If you see an ONNX error like “Invalid rank for input: audio”, ensure `tflite-node` is installed on the remote.
+
+9. **Manual broadcast / testing tools**
+   - Use “Push to devices” in Wake Word Manager to re-broadcast wake‑word config.
+   - On the Voice Devices page, use “Push Config” per device to send the latest config to a single device, and “Play Ping” to send a test TTS message.
    - Follow the logs live with `journalctl -u homebrain-remote -f`, speak your wake word, and confirm `wake_word_detected` events appear. You should also see VAD (voice activity detection) messages showing when the listener is active.
 
 ---
