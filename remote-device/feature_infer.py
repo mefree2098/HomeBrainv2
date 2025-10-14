@@ -195,15 +195,20 @@ def read_exact(stream, n):
 def main():
     fi = FeatureInfer()
     # Line-based control messages on stdin until we receive the first audio header
+    bin_in = sys.stdin.buffer
     while True:
-        pos = sys.stdin.buffer.peek(4) if hasattr(sys.stdin.buffer, 'peek') else None
-        if pos == MAGIC:
-            break
-        line = sys.stdin.readline()
-        if not line:
+        try:
+            pos = bin_in.peek(4) if hasattr(bin_in, 'peek') else None
+            if pos and len(pos) >= 4 and pos[:4] == MAGIC:
+                break
+        except Exception:
+            pass
+        line_bytes = bin_in.readline()
+        if not line_bytes:
             break
         try:
-            payload = json.loads(line.decode('utf-8'))
+            text = line_bytes.decode('utf-8', errors='ignore')
+            payload = json.loads(text)
             if payload.get('type') == 'config':
                 fi.configure(payload)
                 sys.stdout.write(json.dumps({"type": "ready", "models": [m.label for m in fi.models]}) + "\n")
@@ -211,7 +216,9 @@ def main():
             else:
                 fi.log(level="warn", msg="Unknown control message", payload=payload)
         except Exception as e:
-            fi.log(level="error", msg="Control parse error", error=str(e))
+            # Ignore non-JSON or partial lines quietly
+            fi.log(level="debug", msg="Skipping non-JSON control line")
+            continue
 
     # Audio loop
     while True:
