@@ -104,17 +104,27 @@ def pad_audio(audio: np.ndarray, target_samples: int, rng: random.Random) -> np.
     return result
 
 
-def piper_synthesize(executable: str, voice: Dict[str, object], text: str, output: Path) -> bool:
+def piper_synthesize(executable: str, voice: Dict[str, object], text: str, output: Path) -> Tuple[bool, str]:
     cmd = [executable, "--model", str(voice["modelPath"]), "--output_file", str(output)]
     if voice.get("configPath"):
         cmd.extend(["--config", str(voice["configPath"])])
     if voice.get("speaker"):
         cmd.extend(["--speaker", str(voice["speaker"])])
     try:
-        subprocess.run(cmd, input=text.encode("utf-8"), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except Exception:  # pragma: no cover
-        return False
+        result = subprocess.run(
+            cmd,
+            input=text.encode("utf-8"),
+            check=False,
+            capture_output=True
+        )
+        if result.returncode == 0:
+            return True, ""
+        stderr = result.stderr.decode("utf-8", errors="ignore")
+        stdout = result.stdout.decode("utf-8", errors="ignore")
+        combined = "\n".join(filter(None, [stderr.strip(), stdout.strip()]))
+        return False, combined or f"Piper exited with code {result.returncode}"
+    except Exception as error:  # pragma: no cover
+        return False, str(error)
 
 
 def list_audio_files(sources: Iterable[Path]) -> List[Path]:
@@ -164,7 +174,11 @@ def generate_positive_samples(
         "syntheticGenerated": 0,
         "userRecordings": 0,
         "silenceBackfill": 0,
-        "voiceUsage": {}
+        "voiceUsage": {},
+        "piperAttempts": 0,
+        "piperSucceeded": 0,
+        "piperFailed": 0,
+        "piperErrors": []
     }
 
     requested_voices = tts_cfg.get("voices", [])
@@ -199,8 +213,15 @@ def generate_positive_samples(
             text = rng.choice(phrases) if phrases else phrase
             voice = rng.choice(voices)
             output = tmp_dir / f"{index:04d}.wav"
-            success = piper_synthesize(piper_exec, voice, text, output)
+            stats["piperAttempts"] += 1
+            success, error_message = piper_synthesize(piper_exec, voice, text, output)
             if not success:
+                stats["piperFailed"] += 1
+                if len(stats["piperErrors"]) < 5:
+                    stats["piperErrors"].append({
+                        "voice": str(voice.get("id") or voice.get("name") or "unknown"),
+                        "error": error_message
+                    })
                 continue
             try:
                 audio = load_audio(output)
@@ -208,7 +229,14 @@ def generate_positive_samples(
                 stats["syntheticGenerated"] += 1
                 voice_id = str(voice.get("id") or voice.get("name") or "unknown")
                 stats["voiceUsage"][voice_id] = stats["voiceUsage"].get(voice_id, 0) + 1
-            except Exception:
+                stats["piperSucceeded"] += 1
+            except Exception as error:
+                stats["piperFailed"] += 1
+                if len(stats["piperErrors"]) < 5:
+                    stats["piperErrors"].append({
+                        "voice": str(voice.get("id") or voice.get("name") or "unknown"),
+                        "error": str(error)
+                    })
                 continue
 
     for path in list_audio_files(map(Path, options.get("userRecordings", []))):
@@ -243,7 +271,11 @@ def generate_negative_samples(
         "syntheticRequested": 0,
         "syntheticGenerated": 0,
         "noiseSamples": 0,
-        "voiceUsage": {}
+        "voiceUsage": {},
+        "piperAttempts": 0,
+        "piperSucceeded": 0,
+        "piperFailed": 0,
+        "piperErrors": []
     }
     for path in backgrounds:
         try:
@@ -296,8 +328,15 @@ def generate_negative_samples(
             text = rng.choice(phrases)
             voice = rng.choice(voices)
             output = tmp_dir / f"{index:04d}.wav"
-            success = piper_synthesize(piper_exec, voice, text, output)
+            stats["piperAttempts"] += 1
+            success, error_message = piper_synthesize(piper_exec, voice, text, output)
             if not success:
+                stats["piperFailed"] += 1
+                if len(stats["piperErrors"]) < 5:
+                    stats["piperErrors"].append({
+                        "voice": str(voice.get("id") or voice.get("name") or "unknown"),
+                        "error": error_message
+                    })
                 continue
             try:
                 audio = load_audio(output)
@@ -305,7 +344,14 @@ def generate_negative_samples(
                 stats["syntheticGenerated"] += 1
                 voice_id = str(voice.get("id") or voice.get("name") or "unknown")
                 stats["voiceUsage"][voice_id] = stats["voiceUsage"].get(voice_id, 0) + 1
-            except Exception:
+                stats["piperSucceeded"] += 1
+            except Exception as error:
+                stats["piperFailed"] += 1
+                if len(stats["piperErrors"]) < 5:
+                    stats["piperErrors"].append({
+                        "voice": str(voice.get("id") or voice.get("name") or "unknown"),
+                        "error": str(error)
+                    })
                 continue
 
     for _ in range(int(options.get("randomSilence", DEFAULT_RANDOM_SILENCE))):
@@ -552,7 +598,11 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
             "synthetic": positive_stats["syntheticGenerated"],
             "userRecordings": positive_stats["userRecordings"],
             "silenceBackfill": positive_stats["silenceBackfill"],
-            "voiceUsage": positive_stats["voiceUsage"]
+            "voiceUsage": positive_stats["voiceUsage"],
+            "piperAttempts": positive_stats["piperAttempts"],
+            "piperSucceeded": positive_stats["piperSucceeded"],
+            "piperFailed": positive_stats["piperFailed"],
+            "piperErrors": positive_stats["piperErrors"]
         }
     )
     progress("generating", 0.12, "Generating negative samples")
@@ -576,7 +626,11 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
             "synthetic": negative_stats["syntheticGenerated"],
             "backgroundClips": negative_stats["backgroundClips"],
             "noiseSamples": negative_stats["noiseSamples"],
-            "voiceUsage": negative_stats["voiceUsage"]
+            "voiceUsage": negative_stats["voiceUsage"],
+            "piperAttempts": negative_stats["piperAttempts"],
+            "piperSucceeded": negative_stats["piperSucceeded"],
+            "piperFailed": negative_stats["piperFailed"],
+            "piperErrors": negative_stats["piperErrors"]
         }
     )
 
@@ -611,6 +665,14 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
     val_labels = np.concatenate([pos_val_labels, neg_val_labels], axis=0)
 
     if train_features.shape[0] == 0 or train_labels.shape[0] == 0:
+        detail_messages = []
+        if positive_stats.get("piperErrors"):
+            detail_messages.append(f"positive synthesis errors: {positive_stats['piperErrors']}")
+        if negative_stats.get("piperErrors"):
+            detail_messages.append(f"negative synthesis errors: {negative_stats['piperErrors']}")
+        detail_suffix = ""
+        if detail_messages:
+            detail_suffix = " Details: " + "; ".join(detail_messages)
         raise ValueError(
             "Training dataset is empty. Counts — "
             f"positive clips {positive_stats['totalSamples']} (synthetic {positive_stats['syntheticGenerated']}, "
@@ -620,6 +682,7 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
             f"voices {neg_voice_summary}); windowed frames positive {pos_train_windows.shape[0]}, "
             f"negative {neg_train_windows.shape[0]}. Try increasing the number or duration of samples, or ensure "
             "that generated clips meet the configured clip length."
+            + detail_suffix
         )
 
     if val_features.shape[0] == 0 or val_labels.shape[0] == 0:
