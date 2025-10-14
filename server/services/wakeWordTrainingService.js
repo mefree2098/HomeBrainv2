@@ -574,12 +574,17 @@ class WakeWordTrainingService extends EventEmitter {
     }
 
     return new Promise((resolve) => {
+      const baseEnv = { ...process.env, ...(resolvedPiper ? { WAKEWORD_PIPER_EXEC: resolvedPiper } : {}) };
+      // Ensure CUDA libs are discoverable on Jetson/Linux
+      if (process.platform !== 'win32') {
+        const jetsonLib = '/usr/lib/aarch64-linux-gnu';
+        baseEnv.LD_LIBRARY_PATH = baseEnv.LD_LIBRARY_PATH
+          ? `${baseEnv.LD_LIBRARY_PATH}:${jetsonLib}`
+          : jetsonLib;
+      }
       const child = spawn(this.pythonExecutable, trainerArgs, {
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          ...(resolvedPiper ? { WAKEWORD_PIPER_EXEC: resolvedPiper } : {})
-        }
+        env: baseEnv
       });
 
       console.log(`[wakeword] Spawned trainer PID ${child.pid} for ${slug} using python ${this.pythonExecutable} (piper=${resolvedPiper || '(none)'})`);

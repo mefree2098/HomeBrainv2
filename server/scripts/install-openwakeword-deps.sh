@@ -36,21 +36,70 @@ python -m pip install --upgrade pip setuptools wheel ${PIP_FLAGS}
 
 # Use versions compatible with the system SciPy/SKLearn stack.
 python -m pip install "numpy<2.0" "scipy<1.11" ${PIP_FLAGS}
-python -m pip install \
-  "torch" \
-  "torchaudio" \
-  "soundfile" \
-  "librosa" \
-  "torchinfo" \
-  "torchmetrics" \
-  "pronouncing" \
-  "webrtcvad" \
-  "audiomentations" \
-  "torch-audiomentations" \
-  "speechbrain" \
-  "mutagen" \
-  "acoustics" \
-  ${PIP_FLAGS}
+# If JETSON_TORCH_INDEX_URL is provided, use NVIDIA's Jetson wheels for torch.*
+# Example:
+#   export JETSON_TORCH_INDEX_URL=https://developer.download.nvidia.com/compute/redist/jp/v62/pytorch/
+#   export JETSON_TORCH_VERSION=2.7.0
+#   export JETSON_TORCHVISION_VERSION=0.22.0
+#   export JETSON_TORCHAUDIO_VERSION=2.7.0
+TORCH_DONE=0
+if [ -n "${JETSON_TORCH_INDEX_URL:-}" ]; then
+  echo "[wakeword] Using NVIDIA Jetson PyTorch wheels from: ${JETSON_TORCH_INDEX_URL}"
+  # Uninstall any previously installed CPU-only torch wheels
+  python -m pip uninstall -y torch torchvision torchaudio || true
+  if [ -z "${JETSON_TORCH_VERSION:-}" ] || [ -z "${JETSON_TORCHVISION_VERSION:-}" ] || [ -z "${JETSON_TORCHAUDIO_VERSION:-}" ]; then
+    echo "[wakeword] ERROR: When JETSON_TORCH_INDEX_URL is set, you must also set JETSON_TORCH_VERSION, JETSON_TORCHVISION_VERSION, and JETSON_TORCHAUDIO_VERSION." >&2
+    echo "[wakeword] Example versions for JetPack 6.2: torch=2.7.0, torchvision=0.22.0, torchaudio=2.7.0" >&2
+    exit 2
+  fi
+  python -m pip install --no-cache-dir \
+    --extra-index-url "${JETSON_TORCH_INDEX_URL}" \
+    torch=="${JETSON_TORCH_VERSION}" \
+    torchvision=="${JETSON_TORCHVISION_VERSION}" \
+    torchaudio=="${JETSON_TORCHAUDIO_VERSION}" \
+    ${PIP_FLAGS}
+  TORCH_DONE=1
+  echo "[wakeword] Verifying CUDA availability in torch..."
+  python - <<'PYCODE'
+import torch
+print("[wakeword] torch:", torch.__version__)
+print("[wakeword] CUDA version:", getattr(torch.version, 'cuda', None))
+print("[wakeword] torch.cuda.is_available():", torch.cuda.is_available())
+PYCODE
+fi
+
+# Install the rest of the dependencies. If torch was not installed via Jetson wheels, install from PyPI.
+if [ "${TORCH_DONE}" -eq 1 ]; then
+  python -m pip install \
+    "soundfile" \
+    "librosa" \
+    "torchinfo" \
+    "torchmetrics" \
+    "pronouncing" \
+    "webrtcvad" \
+    "audiomentations" \
+    "torch-audiomentations" \
+    "speechbrain" \
+    "mutagen" \
+    "acoustics" \
+    ${PIP_FLAGS}
+else
+  python -m pip install \
+    "torch" \
+    "torchaudio" \
+    "soundfile" \
+    "librosa" \
+    "torchinfo" \
+    "torchmetrics" \
+    "pronouncing" \
+    "webrtcvad" \
+    "audiomentations" \
+    "torch-audiomentations" \
+    "speechbrain" \
+    "mutagen" \
+    "acoustics" \
+    ${PIP_FLAGS}
+fi
 # TensorFlow Lite export is optional on Jetson; install the NVIDIA wheel manually if needed.
 python -m pip install "onnxruntime" "onnx" "onnx-tf" ${PIP_FLAGS}
 python -m pip install "openwakeword[train]" ${PIP_FLAGS}
