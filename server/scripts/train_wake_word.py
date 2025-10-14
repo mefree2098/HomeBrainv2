@@ -149,7 +149,7 @@ def generate_positive_samples(
     target_samples: int,
     work_dir: Path,
     rng: random.Random
-) -> List[np.ndarray]:
+) -> Tuple[List[np.ndarray], Dict[str, object]]:
     samples: List[np.ndarray] = []
     tts_cfg = options.get("tts", {})
     synthetic_total = int(options.get("syntheticSamples", DEFAULT_POSITIVE_SYNTHETIC))
@@ -158,6 +158,14 @@ def generate_positive_samples(
     phrases = options.get("textVariations") or []
     if phrases:
         phrases = [p.strip() for p in phrases if p.strip()]
+
+    stats = {
+        "syntheticRequested": synthetic_total,
+        "syntheticGenerated": 0,
+        "userRecordings": 0,
+        "silenceBackfill": 0,
+        "voiceUsage": {}
+    }
 
     if synthetic_total > 0 and voices and not piper_exec:
         raise RuntimeError(
@@ -176,6 +184,9 @@ def generate_positive_samples(
             try:
                 audio = load_audio(output)
                 samples.append(pad_audio(audio, target_samples, rng))
+                stats["syntheticGenerated"] += 1
+                voice_id = str(voice.get("id") or voice.get("name") or "unknown")
+                stats["voiceUsage"][voice_id] = stats["voiceUsage"].get(voice_id, 0) + 1
             except Exception:
                 continue
 
@@ -183,6 +194,7 @@ def generate_positive_samples(
         try:
             audio = load_audio(path)
             samples.append(pad_audio(audio, target_samples, rng))
+            stats["userRecordings"] += 1
         except Exception:
             continue
 
@@ -191,7 +203,9 @@ def generate_positive_samples(
         for _ in range(max(200, synthetic_total or 200)):
             samples.append(silence.copy())
 
-    return samples
+    stats["silenceBackfill"] = max(0, len(samples) - (stats["syntheticGenerated"] + stats["userRecordings"]))
+    stats["totalSamples"] = len(samples)
+    return samples, stats
 
 
 def generate_negative_samples(
@@ -200,13 +214,21 @@ def generate_negative_samples(
     target_samples: int,
     work_dir: Path,
     rng: random.Random
-) -> List[np.ndarray]:
+) -> Tuple[List[np.ndarray], Dict[str, object]]:
     samples: List[np.ndarray] = []
     backgrounds = list_audio_files(map(Path, options.get("backgroundDirs", [])))
+    stats = {
+        "backgroundClips": 0,
+        "syntheticRequested": 0,
+        "syntheticGenerated": 0,
+        "noiseSamples": 0,
+        "voiceUsage": {}
+    }
     for path in backgrounds:
         try:
             audio = load_audio(path)
             samples.append(pad_audio(audio, target_samples, rng))
+            stats["backgroundClips"] += 1
         except Exception:
             continue
 
@@ -220,6 +242,7 @@ def generate_negative_samples(
     synthetic_count = int(piper_cfg.get("samples", DEFAULT_NEGATIVE_SYNTHETIC))
     voices = [voice for voice in piper_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
     piper_exec = shutil.which(str(piper_cfg.get("executable") or "piper"))
+    stats["syntheticRequested"] = synthetic_count
     if synthetic_count > 0 and voices and not piper_exec:
         raise RuntimeError(
             "Piper executable not found. Install Piper or set WAKEWORD_PIPER_EXEC to its path and restart the hub."
@@ -237,19 +260,25 @@ def generate_negative_samples(
             try:
                 audio = load_audio(output)
                 samples.append(pad_audio(audio, target_samples, rng))
+                stats["syntheticGenerated"] += 1
+                voice_id = str(voice.get("id") or voice.get("name") or "unknown")
+                stats["voiceUsage"][voice_id] = stats["voiceUsage"].get(voice_id, 0) + 1
             except Exception:
                 continue
 
     for _ in range(int(options.get("randomSilence", DEFAULT_RANDOM_SILENCE))):
         noise = np.random.normal(0, rng.uniform(0.002, 0.01), size=target_samples).astype(np.float32)
         samples.append(noise)
+        stats["noiseSamples"] += 1
 
     if not samples:
         noise = np.random.normal(0, 0.01, size=target_samples).astype(np.float32)
         for _ in range(400):
             samples.append(noise.copy())
+        stats["noiseSamples"] += 400
 
-    return samples
+    stats["totalSamples"] = len(samples)
+    return samples, stats
 
 
 def augment(samples: List[np.ndarray], copies: int, rng: random.Random) -> List[np.ndarray]:
@@ -461,25 +490,74 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
     ensure_dir(work_dir)
 
     progress("generating", 0.05, "Generating positive samples")
-    positive_samples = generate_positive_samples(args.wake_word, dataset_cfg.get("positive", {}), target_samples, work_dir, rng)
-    progress("generating", 0.1, "Generating negative samples")
-    negative_samples = generate_negative_samples(args.wake_word, dataset_cfg.get("negative", {}), target_samples, work_dir, rng)
+    positive_samples, positive_stats = generate_positive_samples(
+        args.wake_word,
+        dataset_cfg.get("positive", {}),
+        target_samples,
+        work_dir,
+        rng
+    )
+    pos_voice_summary = ", ".join(
+        f"{voice_id}: {count}"
+        for voice_id, count in sorted(positive_stats["voiceUsage"].items())
+    ) or "—"
+    progress(
+        "generating",
+        0.1,
+        f"Positive samples ready ({positive_stats['totalSamples']} clips, synthetic {positive_stats['syntheticGenerated']}, user {positive_stats['userRecordings']}, voices {pos_voice_summary})",
+        stats={
+            "total": positive_stats["totalSamples"],
+            "synthetic": positive_stats["syntheticGenerated"],
+            "userRecordings": positive_stats["userRecordings"],
+            "silenceBackfill": positive_stats["silenceBackfill"],
+            "voiceUsage": positive_stats["voiceUsage"]
+        }
+    )
+    progress("generating", 0.12, "Generating negative samples")
+    negative_samples, negative_stats = generate_negative_samples(
+        args.wake_word,
+        dataset_cfg.get("negative", {}),
+        target_samples,
+        work_dir,
+        rng
+    )
+    neg_voice_summary = ", ".join(
+        f"{voice_id}: {count}"
+        for voice_id, count in sorted(negative_stats["voiceUsage"].items())
+    ) or "—"
+    progress(
+        "generating",
+        0.16,
+        f"Negative samples ready ({negative_stats['totalSamples']} clips, synthetic {negative_stats['syntheticGenerated']}, noise {negative_stats['noiseSamples']}, voices {neg_voice_summary})",
+        stats={
+            "total": negative_stats["totalSamples"],
+            "synthetic": negative_stats["syntheticGenerated"],
+            "backgroundClips": negative_stats["backgroundClips"],
+            "noiseSamples": negative_stats["noiseSamples"],
+            "voiceUsage": negative_stats["voiceUsage"]
+        }
+    )
 
-    progress("generating", 0.18, "Applying augmentation")
+    progress("generating", 0.22, "Applying augmentation")
     positive_samples = augment(positive_samples, augment_copies, rng)
     negative_samples = augment(negative_samples, max(1, augment_copies // 2), rng)
+    progress(
+        "generating",
+        0.26,
+        f"Augmentation complete (positive {len(positive_samples)}, negative {len(negative_samples)})"
+    )
 
-    progress("generating", 0.26, "Splitting dataset")
+    progress("generating", 0.3, "Splitting dataset")
     pos_train, pos_val = split_dataset(positive_samples, train_ratio, rng)
     neg_train, neg_val = split_dataset(negative_samples, train_ratio, rng)
 
-    progress("generating", 0.34, "Computing embeddings")
+    progress("generating", 0.38, "Computing embeddings")
     pos_train_emb = embeddings_from_clips(pos_train, batch_size=64)
     pos_val_emb = embeddings_from_clips(pos_val, batch_size=64)
     neg_train_emb = embeddings_from_clips(neg_train, batch_size=64)
     neg_val_emb = embeddings_from_clips(neg_val, batch_size=64)
 
-    progress("generating", 0.4, "Preparing windows")
+    progress("generating", 0.44, "Preparing windows")
     pos_train_windows, pos_train_labels = window_embeddings(pos_train_emb, 1)
     neg_train_windows, neg_train_labels = window_embeddings(neg_train_emb, 0)
     pos_val_windows, pos_val_labels = window_embeddings(pos_val_emb, 1)
@@ -492,8 +570,14 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
 
     if train_features.shape[0] == 0 or train_labels.shape[0] == 0:
         raise ValueError(
-            "Training dataset is empty. Try increasing the number or duration of positive/negative samples, "
-            "or verify that the generated clips are at least the configured clip length."
+            "Training dataset is empty. Counts — "
+            f"positive clips {positive_stats['totalSamples']} (synthetic {positive_stats['syntheticGenerated']}, "
+            f"user {positive_stats['userRecordings']}, voices {pos_voice_summary}), "
+            f"negative clips {negative_stats['totalSamples']} (synthetic {negative_stats['syntheticGenerated']}, "
+            f"background {negative_stats['backgroundClips']}, noise {negative_stats['noiseSamples']}, "
+            f"voices {neg_voice_summary}); windowed frames positive {pos_train_windows.shape[0]}, "
+            f"negative {neg_train_windows.shape[0]}. Try increasing the number or duration of samples, or ensure "
+            "that generated clips meet the configured clip length."
         )
 
     if val_features.shape[0] == 0 or val_labels.shape[0] == 0:

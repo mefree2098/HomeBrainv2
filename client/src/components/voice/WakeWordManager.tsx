@@ -126,6 +126,16 @@ export function WakeWordManager() {
           }
           return installedIds;
         });
+        setLanguageFilter((current) => {
+          if (current === "all") {
+            return current;
+          }
+          const hasMatch = response.voices.some((voice) => {
+            const code = voice.languageCode || voice.language || voice.id;
+            return code === current;
+          });
+          return hasMatch ? current : "all";
+        });
       }
     } catch (error: any) {
       console.error("Failed to load Piper voices", error);
