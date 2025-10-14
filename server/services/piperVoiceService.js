@@ -74,6 +74,15 @@ function normaliseVoiceEntry(id, entry) {
   }
 
   const sizeBytes = files.reduce((total, file) => total + (file.sizeBytes || 0), 0);
+  let speakerId = null;
+  const speakerMap = entry.speaker_id_map || {};
+  if (speakerMap && typeof speakerMap === 'object' && Object.keys(speakerMap).length > 0) {
+    const firstKey = Object.keys(speakerMap)[0];
+    const value = speakerMap[firstKey];
+    if (typeof value === 'number') {
+      speakerId = value;
+    }
+  }
 
   return {
     id,
@@ -84,7 +93,8 @@ function normaliseVoiceEntry(id, entry) {
     downloadFiles: [modelFile, configFile],
     modelFile,
     configFile,
-    sizeBytes: sizeBytes || null
+    sizeBytes: sizeBytes || null,
+    speakerId
   };
 }
 
@@ -159,6 +169,7 @@ async function getInstalledVoiceInfo(meta) {
     language: meta.languageLabel,
     languageCode: meta.language.code || null,
     speaker: meta.name,
+    speakerId: meta.speakerId,
     quality: meta.quality,
     modelPath,
     configPath,
@@ -173,12 +184,13 @@ function mapVoiceWithInstallation(meta, installedInfo = null) {
       name: meta.name,
       language: meta.languageLabel,
       languageCode: meta.language.code || null,
-      speaker: meta.name,
-      quality: meta.quality,
-      sizeBytes: meta.sizeBytes,
-      installed: false,
-      modelPath: null,
-      configPath: null
+    speaker: meta.name,
+    speakerId: meta.speakerId,
+    quality: meta.quality,
+    sizeBytes: meta.sizeBytes,
+    installed: false,
+    modelPath: null,
+    configPath: null
     };
   }
 
@@ -188,6 +200,7 @@ function mapVoiceWithInstallation(meta, installedInfo = null) {
     language: installedInfo.language,
     languageCode: installedInfo.languageCode,
     speaker: installedInfo.speaker,
+    speakerId: installedInfo.speakerId ?? meta.speakerId ?? null,
     quality: installedInfo.quality,
     sizeBytes: installedInfo.sizeBytes || meta.sizeBytes,
     installed: true,
@@ -353,6 +366,7 @@ async function getInstalledVoicesForTraining() {
     name: voice.name,
     language: voice.language,
     speaker: voice.speaker,
+    speakerId: voice.speakerId ?? null,
     quality: voice.quality,
     modelPath: voice.modelPath,
     configPath: voice.configPath

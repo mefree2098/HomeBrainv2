@@ -108,8 +108,13 @@ def piper_synthesize(executable: str, voice: Dict[str, object], text: str, outpu
     cmd = [executable, "--model", str(voice["modelPath"]), "--output_file", str(output)]
     if voice.get("configPath"):
         cmd.extend(["--config", str(voice["configPath"])])
-    if voice.get("speaker"):
-        cmd.extend(["--speaker", str(voice["speaker"])])
+    speaker_id = voice.get("speakerId")
+    if isinstance(speaker_id, (int, float)):
+        cmd.extend(["--speaker", str(int(speaker_id))])
+    else:
+        speaker_value = voice.get("speaker")
+        if isinstance(speaker_value, int):
+            cmd.extend(["--speaker", str(speaker_value)])
     try:
         result = subprocess.run(
             cmd,
