@@ -20,7 +20,7 @@ import {
   CheckCircle2,
   XCircle
 } from "lucide-react"
-import { getVoiceDevices, testVoiceDevice } from "@/api/voice"
+import { getVoiceDevices, testVoiceDevice, pushConfigToDevice, pingTtsToDevice } from "@/api/voice"
 import {
   deleteRemoteDevice,
   getUpdateStatistics,
@@ -41,6 +41,8 @@ export function VoiceDevices() {
   const [deletingDevice, setDeletingDevice] = useState<string | null>(null)
   const [updatingDevice, setUpdatingDevice] = useState<string | null>(null)
   const [updatingAll, setUpdatingAll] = useState(false)
+  const [pushingConfig, setPushingConfig] = useState<string | null>(null)
+  const [pingingTts, setPingingTts] = useState<string | null>(null)
   const [autoDiscoveryEnabled, setAutoDiscoveryEnabled] = useState(false)
   const [showAutoDiscovery, setShowAutoDiscovery] = useState(false)
   const [updateStats, setUpdateStats] = useState<any>(null)
@@ -510,25 +512,79 @@ export function VoiceDevices() {
                 )}
 
                 {!needsUpdate(device) && !isUpdating(device) && (
-                  <Button
-                    onClick={() => handleTestDevice(device._id, device.name)}
-                    disabled={device.status === 'offline' || testingDevice === device._id}
-                    variant={device.status === 'online' ? "default" : "outline"}
-                    className="flex-1"
-                    size="sm"
-                  >
-                    {testingDevice === device._id ? (
-                      <>
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
-                        Testing...
-                      </>
-                    ) : (
-                      <>
-                        <TestTube className="h-4 w-4 mr-2" />
-                        Test Device
-                      </>
-                    )}
-                  </Button>
+                  <>
+                    <Button
+                      onClick={() => handleTestDevice(device._id, device.name)}
+                      disabled={device.status === 'offline' || testingDevice === device._id}
+                      variant={device.status === 'online' ? "default" : "outline"}
+                      className="flex-1"
+                      size="sm"
+                    >
+                      {testingDevice === device._id ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Testing...
+                        </>
+                      ) : (
+                        <>
+                          <TestTube className="h-4 w-4 mr-2" />
+                          Test Device
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      onClick={async () => {
+                        setPushingConfig(device._id)
+                        try {
+                          await pushConfigToDevice(device._id)
+                          toast({ title: 'Config pushed', description: `Pushed wake word config to ${device.name}` })
+                        } catch (e: any) {
+                          toast({ title: 'Push failed', description: e?.message || 'Unable to push config', variant: 'destructive' })
+                        } finally {
+                          setPushingConfig(null)
+                        }
+                      }}
+                      disabled={device.status === 'offline' || pushingConfig === device._id}
+                      variant="outline"
+                      className="flex-1"
+                      size="sm"
+                    >
+                      {pushingConfig === device._id ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Pushing...
+                        </>
+                      ) : (
+                        'Push Config'
+                      )}
+                    </Button>
+                    <Button
+                      onClick={async () => {
+                        setPingingTts(device._id)
+                        try {
+                          await pingTtsToDevice(device._id, 'Ping from hub')
+                          toast({ title: 'Ping sent', description: `Sent test TTS to ${device.name}` })
+                        } catch (e: any) {
+                          toast({ title: 'Ping failed', description: e?.message || 'Unable to send TTS', variant: 'destructive' })
+                        } finally {
+                          setPingingTts(null)
+                        }
+                      }}
+                      disabled={device.status === 'offline' || pingingTts === device._id}
+                      variant="outline"
+                      className="flex-1"
+                      size="sm"
+                    >
+                      {pingingTts === device._id ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Pinging...
+                        </>
+                      ) : (
+                        'Play Ping'
+                      )}
+                    </Button>
+                  </>
                 )}
 
                 {isUpdating(device) && (

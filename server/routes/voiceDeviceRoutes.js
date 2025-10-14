@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const voiceDeviceService = require('../services/voiceDeviceService');
 const { requireUser } = require('./middlewares/auth');
+const voiceWs = require('../websocket/voiceWebSocket');
 
 /**
  * @route GET /api/voice/devices
@@ -235,6 +236,47 @@ router.get('/devices/status/:status', requireUser(), async (req, res) => {
       success: false,
       message: error.message || 'Failed to fetch devices by status'
     });
+  }
+});
+
+// Push updated wake word config to a specific device
+router.post('/devices/:id/push-config', requireUser(), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const app = req.app;
+    const ws = app.get('voiceWebSocket');
+    if (!ws || typeof ws.pushConfigToDevice !== 'function') {
+      return res.status(503).json({ success: false, message: 'Voice WebSocket unavailable' });
+    }
+    const result = await ws.pushConfigToDevice(id);
+    if (!result.success) {
+      return res.status(400).json({ success: false, message: result.error || 'Failed to push config' });
+    }
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('POST /api/voice/devices/:id/push-config - Error:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to push config' });
+  }
+});
+
+// Send a test TTS ping to a specific device
+router.post('/devices/:id/ping-tts', requireUser(), async (req, res) => {
+  const { id } = req.params;
+  const { text } = req.body || {};
+  try {
+    const app = req.app;
+    const ws = app.get('voiceWebSocket');
+    if (!ws || typeof ws.playTtsToDevice !== 'function') {
+      return res.status(503).json({ success: false, message: 'Voice WebSocket unavailable' });
+    }
+    const result = ws.playTtsToDevice(id, text || 'Ping from hub');
+    if (!result.success) {
+      return res.status(400).json({ success: false, message: result.error || 'Failed to send TTS' });
+    }
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('POST /api/voice/devices/:id/ping-tts - Error:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to send TTS' });
   }
 });
 

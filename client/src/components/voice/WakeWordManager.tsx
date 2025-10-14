@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -32,6 +32,7 @@ import {
   getWakeWordQueueStatus
 } from "@/api/wakeWords";
 import { getPiperVoices, downloadPiperVoice, removePiperVoice, PiperVoice } from "@/api/wakeWordVoices";
+import { getSetting, updateSettings } from "@/api/settings";
 import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 type WakeWordStatus =
@@ -97,6 +98,8 @@ export function WakeWordManager() {
   const [voiceActionId, setVoiceActionId] = useState<string | null>(null);
   const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>([]);
   const [languageFilter, setLanguageFilter] = useState<string>("all");
+  const [savingRegion, setSavingRegion] = useState(false);
+  const saveRegionRequestId = useRef(0);
 
   const formatBytes = (bytes?: number | null) => {
     if (!bytes || bytes <= 0) {
@@ -150,6 +153,45 @@ export function WakeWordManager() {
       setLoadingVoices(false);
     }
   }, [toast]);
+
+  const loadSavedVoiceRegion = useCallback(async () => {
+    try {
+      const response = await getSetting("voiceRegion");
+      const savedValue = response?.value;
+      if (typeof savedValue === "string" && savedValue.trim().length > 0) {
+        setLanguageFilter(savedValue);
+      }
+    } catch (error) {
+      console.warn("Failed to load saved voice region preference", error);
+    }
+  }, []);
+
+  const persistVoiceRegion = useCallback(async (value: string) => {
+    const requestId = ++saveRegionRequestId.current;
+    try {
+      await updateSettings({ voiceRegion: value });
+    } catch (error: any) {
+      console.error("Failed to save voice region preference", error);
+      toast({
+        title: "Failed to save region",
+        description: error?.message || "Unable to save voice region preference.",
+        variant: "destructive"
+      });
+    } finally {
+      if (saveRegionRequestId.current === requestId) {
+        setSavingRegion(false);
+      }
+    }
+  }, [toast]);
+
+  const handleLanguageFilterChange = (value: string) => {
+    if (value === languageFilter) {
+      return;
+    }
+    setLanguageFilter(value);
+    setSavingRegion(true);
+    void persistVoiceRegion(value);
+  };
 
   const handleVoiceCheckboxChange = (voiceId: string, checked: boolean | "indeterminate") => {
     const isChecked = checked === true;
@@ -277,9 +319,14 @@ export function WakeWordManager() {
   }, [toast]);
 
   useEffect(() => {
-    void loadData();
-    void loadVoices();
-  }, [loadData, loadVoices]);
+    const initialize = async () => {
+      await loadSavedVoiceRegion();
+      await loadData();
+      await loadVoices();
+    };
+
+    void initialize();
+  }, [loadData, loadVoices, loadSavedVoiceRegion]);
 
   useEffect(() => {
     if (!polling) return;
@@ -536,11 +583,15 @@ export function WakeWordManager() {
               </p>
             </div>
             <div className="flex flex-col gap-2 md:flex-row md:items-center">
-              <Select value={languageFilter} onValueChange={setLanguageFilter} disabled={voices.length === 0}>
+              <Select
+                value={languageFilter}
+                onValueChange={handleLanguageFilterChange}
+                disabled={voices.length === 0 || savingRegion}
+              >
                 <SelectTrigger
                   className="w-[210px]"
                   aria-label="Filter voices by region"
-                  disabled={voices.length === 0}
+                  disabled={voices.length === 0 || savingRegion}
                 >
                   <SelectValue placeholder="Filter voices" />
                 </SelectTrigger>
@@ -663,7 +714,28 @@ export function WakeWordManager() {
 
         <div className="flex items-center justify-between text-sm text-muted-foreground">
           <span>Queue status</span>
-          <span className="font-medium text-foreground">{activeQueueDescription}</span>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-foreground">{activeQueueDescription}</span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                try {
+                  const { broadcastWakeWordUpdate } = await import('@/api/wakeWords');
+                  const resp = await broadcastWakeWordUpdate();
+                  toast({
+                    title: 'Wake words pushed',
+                    description: `Broadcasted updates for ${resp.count ?? 0} phrase(s)`
+                  });
+                } catch (err: any) {
+                  toast({ title: 'Broadcast failed', description: err?.message || 'Unable to push updates', variant: 'destructive' });
+                }
+              }}
+            >
+              Push to devices
+            </Button>
+          </div>
         </div>
 
         {loading ? (

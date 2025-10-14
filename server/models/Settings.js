@@ -34,6 +34,10 @@ const SettingsSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  voiceRegion: {
+    type: String,
+    default: 'all'
+  },
   
   // Notification Settings
   enableNotifications: {
@@ -120,6 +124,10 @@ const SettingsSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  autoDiscoveryEnabled: {
+    type: Boolean,
+    default: false
+  },
   
   // Metadata
   lastModified: {
@@ -195,6 +203,8 @@ SettingsSchema.methods.toSanitized = function() {
   if (sanitized.anthropicApiKey) {
     sanitized.anthropicApiKey = sanitized.anthropicApiKey.replace(/.(?=.{4})/g, '*');
   }
+  delete sanitized.voiceRegion;
+  delete sanitized.autoDiscoveryEnabled;
   
   return sanitized;
 };

@@ -27,6 +27,7 @@ const ollamaRoutes = require("./routes/ollamaRoutes");
 const resourceRoutes = require("./routes/resourceRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const DiscoveryService = require("./services/discoveryService");
+const settingsService = require("./services/settingsService");
 const remoteUpdateService = require("./services/remoteUpdateService");
 const wakeWordTrainingService = require("./services/wakeWordTrainingService");
 const { connectDB } = require("./config/database");
@@ -246,13 +247,23 @@ app.set('voiceWebSocket', voiceWsServer);
 const discoveryService = new DiscoveryService();
 app.locals.discoveryService = discoveryService;
 
-// Auto-start discovery service (can be disabled via API)
-try {
-  discoveryService.start();
-  console.log('Auto-discovery service started');
-} catch (error) {
-  console.warn('Auto-discovery service failed to start:', error.message);
+async function initializeDiscoveryService() {
+  try {
+    const settings = await settingsService.getSettings();
+    const shouldEnable = settings?.autoDiscoveryEnabled === true;
+
+    if (shouldEnable) {
+      discoveryService.start();
+      console.log('Auto-discovery service started (persisted preference)');
+    } else {
+      console.log('Auto-discovery service disabled by default (persisted preference)');
+    }
+  } catch (error) {
+    console.warn('Failed to initialize auto-discovery service from settings:', error.message);
+  }
 }
+
+void initializeDiscoveryService();
 
 // Initialize Remote Update Service
 (async () => {

@@ -24,3 +24,8 @@ export const deleteWakeWordModel = async (id: string) => {
   const response = await api.delete(`/api/wake-words/${id}`);
   return response.data;
 };
+
+export const broadcastWakeWordUpdate = async (payload?: { phrase?: string; slug?: string }) => {
+  const response = await api.post('/api/wake-words/broadcast', payload || {});
+  return response.data;
+};

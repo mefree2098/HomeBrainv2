@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const VoiceDevice = require('../models/VoiceDevice');
 const { requireUser } = require('./middlewares/auth');
+const settingsService = require('../services/settingsService');
 
 // Import discovery service (will be injected by server.js)
 let discoveryService = null;
@@ -40,18 +41,48 @@ router.post('/toggle', requireUser(), async (req, res) => {
       });
     }
 
-    if (enabled && !discoveryService.isRunning()) {
+    const previousState = discoveryService.isRunning();
+
+    if (enabled && !previousState) {
       discoveryService.start();
       console.log('POST /api/discovery/toggle - Auto-discovery service started');
-    } else if (!enabled && discoveryService.isRunning()) {
+    } else if (!enabled && previousState) {
       discoveryService.stop();
       console.log('POST /api/discovery/toggle - Auto-discovery service stopped');
     }
 
-    res.status(200).json({
+    const currentState = discoveryService.isRunning();
+
+    try {
+      await settingsService.updateSettings({ autoDiscoveryEnabled: currentState });
+      console.log('POST /api/discovery/toggle - Persisted auto-discovery preference:', currentState);
+    } catch (persistError) {
+      console.error('POST /api/discovery/toggle - Failed to persist preference:', persistError.message);
+      if (currentState !== previousState) {
+        try {
+          if (previousState) {
+            discoveryService.start();
+            console.log('POST /api/discovery/toggle - Reverted auto-discovery state to previous ON state');
+          } else {
+            discoveryService.stop();
+            console.log('POST /api/discovery/toggle - Reverted auto-discovery state to previous OFF state');
+          }
+        } catch (revertError) {
+          console.error('POST /api/discovery/toggle - Failed to revert discovery state:', revertError.message);
+        }
+      }
+
+      return res.status(500).json({
+        success: false,
+        enabled: discoveryService.isRunning(),
+        message: 'Failed to save auto-discovery preference'
+      });
+    }
+
+    return res.status(200).json({
       success: true,
-      enabled: discoveryService.isRunning(),
-      message: `Auto-discovery ${discoveryService.isRunning() ? 'enabled' : 'disabled'}`
+      enabled: currentState,
+      message: `Auto-discovery ${currentState ? 'enabled' : 'disabled'}`
     });
 
   } catch (error) {

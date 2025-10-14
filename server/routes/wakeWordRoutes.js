@@ -50,6 +50,38 @@ router.get('/', requireUser(), async (req, res) => {
   }
 });
 
+// Broadcast updated wake word configuration to connected devices
+router.post('/broadcast', requireUser(), async (req, res) => {
+  try {
+    const { phrase, slug } = req.body || {};
+    const voiceWs = req.app.get('voiceWebSocket');
+    if (!voiceWs || typeof voiceWs.broadcastWakeWordUpdate !== 'function') {
+      return res.status(503).json({ success: false, message: 'Voice WebSocket unavailable' });
+    }
+
+    let phrases = [];
+    if (phrase && typeof phrase === 'string' && phrase.trim()) {
+      phrases = [phrase.trim()];
+    } else if (slug && typeof slug === 'string' && slug.trim()) {
+      const model = await WakeWordModel.findOne({ slug: slug.trim() });
+      if (model && model.phrase) phrases = [model.phrase];
+    } else {
+      const readyModels = await WakeWordModel.find({ status: 'ready' });
+      phrases = readyModels.map((m) => m.phrase).filter(Boolean);
+    }
+
+    const unique = Array.from(new Set(phrases));
+    for (const p of unique) {
+      await voiceWs.broadcastWakeWordUpdate(p);
+    }
+
+    return res.status(200).json({ success: true, count: unique.length, phrases: unique });
+  } catch (error) {
+    console.error('POST /api/wake-words/broadcast - Error:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to broadcast wake word update' });
+  }
+});
+
 router.get('/queue', requireUser(), async (req, res) => {
   try {
     const queue = await wakeWordTrainingService.getQueueStatus();
