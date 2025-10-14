@@ -1501,7 +1501,10 @@ class HomeBrainRemoteDevice {
   }
 
   onWakeWordDetected(wakeWord, confidence, displayName) {
-    if (!this.isAuthenticated) return;
+    if (!this.isAuthenticated) {
+      console.warn('Skipping wake word event: device not authenticated with hub');
+      return;
+    }
 
     const now = Date.now();
     if (now - this.lastWakeWordAt < this.wakeWordDebounceMs) {
