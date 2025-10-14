@@ -568,7 +568,28 @@ def export_artifacts(trainer: WakeWordTrainer, output_path: Path) -> List[Dict[s
 def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[str, object]:
     rng = random.Random(1337)
     dataset_cfg = options.get("dataset", {})
-    target_seconds = float(dataset_cfg.get("clipDurationSeconds", 1.5))
+
+    # Allow window size override from options
+    override_window_frames = dataset_cfg.get("windowFrames")
+    if override_window_frames is not None:
+        try:
+            override_val = int(override_window_frames)
+            if override_val >= 4:  # basic sanity
+                global WINDOW_FRAMES
+                WINDOW_FRAMES = override_val
+        except Exception:
+            pass
+
+    target_seconds_config = float(dataset_cfg.get("clipDurationSeconds", 1.5))
+    # Ensure clips are long enough to produce at least one training window
+    # openWakeWord embedding uses 10 ms mel frames, 76-frame window, 8-frame (80 ms) stride.
+    # To get WINDOW_FRAMES windows, mel frames needed = 76 + (WINDOW_FRAMES-1)*8
+    # melspectrogram model yields roughly ceil(samples/160 - 3) frames -> samples ~= (mel_frames+3)*160
+    mel_frames_needed = 76 + (WINDOW_FRAMES - 1) * 8
+    min_required_seconds = ((mel_frames_needed + 3) * 160) / SAMPLE_RATE
+    if target_seconds_config < min_required_seconds:
+        progress("generating", 0.02, f"clipDurationSeconds too short ({target_seconds_config:.2f}s). Using {min_required_seconds:.2f}s to satisfy windowing.")
+    target_seconds = max(target_seconds_config, min_required_seconds)
     target_samples = int(target_seconds * SAMPLE_RATE)
     augment_copies = int(dataset_cfg.get("augmentCopies", 2))
     train_ratio = float(dataset_cfg.get("trainSplit", 0.85))
@@ -744,7 +765,13 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
                 "falsePositiveRate": float((neg_scores >= threshold).mean() if neg_scores.size else 0.0),
                 "falseNegativeRate": float((pos_scores < threshold).mean() if pos_scores.size else 0.0)
             },
-            "artifacts": artifacts
+            "artifacts": artifacts,
+            "config": {
+                "windowFrames": int(WINDOW_FRAMES),
+                "clipDurationSecondsRequested": float(target_seconds_config),
+                "effectiveClipDurationSeconds": float(target_seconds),
+                "minRequiredClipDurationSeconds": float(min_required_seconds)
+            }
         }
     }
 

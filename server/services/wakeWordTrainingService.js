@@ -406,17 +406,15 @@ class WakeWordTrainingService extends EventEmitter {
     const installedVoices = await piperVoiceService.getInstalledVoicesForTraining();
     const installedMap = new Map(installedVoices.map((voice) => [voice.id, voice]));
 
+    // Prefer requested voices if provided and resolvable; otherwise, fall back to all installed voices
+    let hydratedPositive = [];
     if (requestedVoices.length > 0) {
-      const hydrated = requestedVoices
-        .map(resolveVoice)
-        .filter(Boolean);
-
-      if (hydrated.length > 0) {
-        options.dataset.positive.tts.voices = hydrated;
-      }
+      hydratedPositive = requestedVoices.map(resolveVoice).filter(Boolean);
     }
 
-    if (!options.dataset.positive.tts.voices && installedVoices.length > 0) {
+    if (hydratedPositive.length > 0) {
+      options.dataset.positive.tts.voices = hydratedPositive;
+    } else if (installedVoices.length > 0) {
       options.dataset.positive.tts.voices = installedVoices.map((voice) => ({
         id: voice.id,
         name: voice.name,
@@ -427,6 +425,8 @@ class WakeWordTrainingService extends EventEmitter {
         modelPath: voice.modelPath,
         configPath: voice.configPath
       }));
+    } else {
+      delete options.dataset.positive.tts.voices;
     }
 
     options.dataset.negative = options.dataset.negative || {};
@@ -434,19 +434,15 @@ class WakeWordTrainingService extends EventEmitter {
     const requestedNegativeVoices = Array.isArray(options.dataset.negative.syntheticSpeech.voices)
       ? options.dataset.negative.syntheticSpeech.voices
       : [];
+
+    let hydratedNegative = [];
     if (requestedNegativeVoices.length > 0) {
-      const hydratedNegative = requestedNegativeVoices
-        .map(resolveVoice)
-        .filter(Boolean);
-      if (hydratedNegative.length > 0) {
-        options.dataset.negative.syntheticSpeech.voices = hydratedNegative;
-      }
+      hydratedNegative = requestedNegativeVoices.map(resolveVoice).filter(Boolean);
     }
 
-    if (
-      !options.dataset.negative.syntheticSpeech.voices &&
-      installedVoices.length > 0
-    ) {
+    if (hydratedNegative.length > 0) {
+      options.dataset.negative.syntheticSpeech.voices = hydratedNegative;
+    } else if (installedVoices.length > 0) {
       options.dataset.negative.syntheticSpeech.voices = installedVoices.map((voice) => ({
         id: voice.id,
         name: voice.name,
@@ -457,6 +453,8 @@ class WakeWordTrainingService extends EventEmitter {
         modelPath: voice.modelPath,
         configPath: voice.configPath
       }));
+    } else {
+      delete options.dataset.negative.syntheticSpeech.voices;
     }
 
     return options;
