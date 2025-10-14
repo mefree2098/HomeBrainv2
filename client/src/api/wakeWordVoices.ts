@@ -4,6 +4,7 @@ export interface PiperVoice {
   id: string;
   name: string;
   language: string;
+  languageCode?: string | null;
   speaker?: string;
   quality?: string;
   sizeBytes?: number;
