@@ -1453,8 +1453,36 @@ class HomeBrainRemoteDevice {
   async playTTSResponse(text, voice = 'default') {
     console.log(`Playing TTS: "${text}"`);
 
-    // In production, you would play actual TTS audio
-    // For demo, we'll just log the response
+    // Attempt audible ping locally: generate a short sine beep and play via aplay/sox
+    try {
+      const sampleRate = 16000;
+      const durationSec = 0.5;
+      const freq = 880; // A5
+      const samples = Math.floor(sampleRate * durationSec);
+      const buffer = new Float32Array(samples);
+      for (let i = 0; i < samples; i++) {
+        buffer[i] = Math.sin(2 * Math.PI * freq * (i / sampleRate)) * 0.3;
+      }
+      const wav = require('node-wav');
+      const wavBuffer = wav.encode([buffer], { sampleRate, float: true, bitDepth: 32 });
+      const tmpPath = path.join(os.tmpdir(), `hb_ping_${Date.now()}.wav`);
+      await fsp.writeFile(tmpPath, wavBuffer);
+
+      const tryPlay = (cmd) => new Promise((resolve) => {
+        exec(cmd, (err) => resolve(!err));
+      });
+
+      // Prefer aplay; fallback to sox 'play'
+      const ok = (await tryPlay(`aplay -q "${tmpPath}"`)) || (await tryPlay(`play -q "${tmpPath}"`));
+      if (!ok) {
+        console.warn('No audio player available (aplay/play). Ping rendered but not played.');
+      }
+      try { await fsp.unlink(tmpPath); } catch (_) {}
+    } catch (err) {
+      console.warn('Failed to render/play audible ping:', err.message);
+    }
+
+    // Log textual fallback regardless
     console.log(`🔊 TTS Response: "${text}"`);
   }
 

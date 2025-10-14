@@ -91,15 +91,30 @@ const findFileForWakeWord = (slug, platform, arch) => {
     return null;
   }
 
-  const candidates = buildCandidateFileNames(slug, platform, arch);
-  for (const candidate of candidates) {
-    const match = files.find((file) => file.toLowerCase() === candidate.toLowerCase());
-    if (match) {
-      return match;
+  // Strictly prefer TFLite when available; then fall back to ONNX; then Porcupine PPN.
+  const exts = ['.tflite', '.onnx', '.ppn'];
+  const buildCandidatesFor = (ext) => {
+    const c = new Set();
+    const p = normalisePlatform(platform);
+    const a = normaliseArch(arch);
+    if (p && a) c.add(`${slug}_${p}_${a}${ext}`);
+    if (p) c.add(`${slug}_${p}${ext}`);
+    if (a) c.add(`${slug}_${a}${ext}`);
+    c.add(`${slug}${ext}`);
+    return Array.from(c);
+  };
+
+  for (const ext of exts) {
+    const candidates = buildCandidatesFor(ext);
+    for (const candidate of candidates) {
+      const match = files.find((file) => file.toLowerCase() === candidate.toLowerCase());
+      if (match) {
+        return match;
+      }
     }
   }
 
-  // Fallback: any file containing slug
+  // Fallback: any file starting with slug (any extension)
   const fallback = files.find((file) => file.toLowerCase().startsWith(`${slug}_`));
   if (fallback) {
     return fallback;
