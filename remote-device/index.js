@@ -1074,6 +1074,46 @@ class HomeBrainRemoteDevice {
     }
 
     try {
+      // Use feature-based sidecar for ONNX models when enabled or when ONNX models are present
+      const useSidecar = true; // enable by default for now
+      const keywordEntries = Array.isArray(this.config?.wakeWord?.keywords) ? this.config.wakeWord.keywords : [];
+      const hasOnnx = keywordEntries.some((k) => /\.onnx$/i.test(k.path || ''));
+
+      if (useSidecar && hasOnnx) {
+        await this.startFeatureSidecar(keywordEntries);
+        this.wakeWordEngineFailed = false;
+        this.wakeWordAudioBuffer = Buffer.alloc(0);
+        this.wakeWordDetectionQueue = Promise.resolve();
+
+        const recordingOptions = {
+          sampleRate: this.wakeWordSampleRate,
+          sampleRateHertz: this.wakeWordSampleRate,
+          threshold: this.config.audio.threshold ?? 0.5,
+          verbose: false,
+          recordProgram: this.config.audio.recordProgram || 'arecord',
+          device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
+        };
+
+        this.recordingStream = recorder.record(recordingOptions);
+        const micStream = this.recordingStream.stream();
+
+        micStream.on('data', (data) => {
+          if (!this.isWakeWordListening || this.isRecording) {
+            return;
+          }
+          this.enqueueSidecarAudio(data);
+        });
+
+        micStream.on('error', (streamError) => {
+          this.handleWakeWordEngineFailure(streamError);
+        });
+
+        this.isWakeWordListening = true;
+        console.log('Wake word detection active (FeatureSidecar/OWW)');
+        return;
+      }
+
+      // Existing in-process engine for TFLite/ONNX with raw-audio models
       await this.initializeWakeWordEngine();
 
       if (!this.wakeWordSessions.length) {
@@ -1120,6 +1160,62 @@ class HomeBrainRemoteDevice {
     } catch (error) {
       console.error('Failed to start wake word detection:', error.message);
       this.handleWakeWordEngineFailure(error);
+    }
+  }
+
+  // --- Feature sidecar integration ---
+  async startFeatureSidecar(keywordEntries) {
+    const { spawn } = require('child_process');
+    const python = this.config?.wakeWord?.python || 'python3';
+    const script = path.join(__dirname, 'feature_infer.py');
+    const args = [script];
+    this.sidecar = spawn(python, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+
+    this.sidecar.on('close', (code) => {
+      console.warn(`Feature sidecar exited with code ${code}`);
+      this.sidecar = null;
+      if (this.isWakeWordListening) {
+        this.handleWakeWordEngineFailure(new Error('Feature sidecar exited'));
+      }
+    });
+
+    // Send config
+    const models = keywordEntries.map((k) => ({ label: k.label, path: k.path, threshold: k.threshold ?? this.wakeWordThreshold }));
+    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples || 16000 };
+    this.sidecar.stdin.write(JSON.stringify(cfg) + '\n');
+
+    // Read results
+    this.sidecarStdoutBuffer = '';
+    this.sidecar.stdout.on('data', (chunk) => {
+      this.sidecarStdoutBuffer += chunk.toString();
+      let idx;
+      while ((idx = this.sidecarStdoutBuffer.indexOf('\n')) >= 0) {
+        const line = this.sidecarStdoutBuffer.slice(0, idx);
+        this.sidecarStdoutBuffer = this.sidecarStdoutBuffer.slice(idx + 1);
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'detect' && typeof msg.model === 'string' && typeof msg.score === 'number') {
+            this.onWakeWordDetected(msg.model.toLowerCase(), msg.score, msg.model);
+          }
+        } catch (e) {
+          console.warn('Failed to parse sidecar line:', line);
+        }
+      }
+    });
+  }
+
+  enqueueSidecarAudio(data) {
+    if (!this.sidecar || !data) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    const header = Buffer.alloc(8);
+    header.write('AUD0', 0);
+    header.writeUInt32LE(buf.length, 4);
+    try {
+      this.sidecar.stdin.write(header);
+      this.sidecar.stdin.write(buf);
+    } catch (e) {
+      console.warn('Failed to write audio to sidecar:', e.message);
     }
   }
 
