@@ -118,9 +118,10 @@ def piper_synthesize(executable: str, voice: Dict[str, object], text: str, outpu
     try:
         result = subprocess.run(
             cmd,
-            input=text.encode("utf-8"),
+            input=(text + "\n").encode("utf-8"),
             check=False,
-            capture_output=True
+            capture_output=True,
+            timeout=60
         )
         if result.returncode == 0:
             return True, ""
@@ -128,6 +129,8 @@ def piper_synthesize(executable: str, voice: Dict[str, object], text: str, outpu
         stdout = result.stdout.decode("utf-8", errors="ignore")
         combined = "\n".join(filter(None, [stderr.strip(), stdout.strip()]))
         return False, combined or f"Piper exited with code {result.returncode}"
+    except subprocess.TimeoutExpired:
+        return False, "Piper synthesis timed out"
     except Exception as error:  # pragma: no cover
         return False, str(error)
 

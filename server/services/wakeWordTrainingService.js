@@ -394,7 +394,7 @@ class WakeWordTrainingService extends EventEmitter {
 
     const piperExec = options.dataset?.positive?.tts?.executable || resolvePiperExec();
     if (piperExec) {
-      const absExec = path.isAbsolute(piperExec) ? piperExec : path.resolve(piperExec);
+      const absExec = path.isAbsolute(piperExec) ? piperExec : path.resolve(SERVER_ROOT, piperExec);
       options.dataset.positive.tts.executable = absExec;
     }
 
@@ -476,12 +476,12 @@ class WakeWordTrainingService extends EventEmitter {
     if (!options.dataset.negative.syntheticSpeech.executable) {
       const negPiperExec = resolvePiperExec();
       if (negPiperExec) {
-        const absNeg = path.isAbsolute(negPiperExec) ? negPiperExec : path.resolve(negPiperExec);
+        const absNeg = path.isAbsolute(negPiperExec) ? negPiperExec : path.resolve(SERVER_ROOT, negPiperExec);
         options.dataset.negative.syntheticSpeech.executable = absNeg;
       }
     } else if (options.dataset.negative.syntheticSpeech.executable) {
       const cur = options.dataset.negative.syntheticSpeech.executable;
-      options.dataset.negative.syntheticSpeech.executable = path.isAbsolute(cur) ? cur : path.resolve(cur);
+      options.dataset.negative.syntheticSpeech.executable = path.isAbsolute(cur) ? cur : path.resolve(SERVER_ROOT, cur);
     }
     const requestedNegativeVoices = Array.isArray(options.dataset.negative.syntheticSpeech.voices)
       ? options.dataset.negative.syntheticSpeech.voices
