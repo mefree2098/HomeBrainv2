@@ -38,7 +38,9 @@ class SettingsService {
         'anthropicApiKey', 'anthropicModel',
         'localLlmEndpoint', 'localLlmModel', 'llmPriorityList',
         // SmartThings OAuth Settings
-        'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth'
+        'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth',
+        // Voice/Discovery Preferences
+        'voiceRegion', 'autoDiscoveryEnabled'
       ];
       
       const sanitizedUpdates = {};

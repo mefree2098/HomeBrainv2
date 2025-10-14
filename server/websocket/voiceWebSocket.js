@@ -427,18 +427,45 @@ class VoiceWebSocketServer {
     if (!connection || !connection.authenticated) return;
 
     const { wakeWord, confidence, timestamp } = message;
+    const normalizedWake = (wakeWord || 'anna').toString().toLowerCase();
 
-    console.log(`Wake word detected by ${connection.device.name}: ${wakeWord} (confidence: ${confidence})`);
+    console.log(`Wake word detected by ${connection.device.name}: ${normalizedWake} (confidence: ${confidence})`);
 
     try {
-      // Log wake word detection
+      // Persist a minimal, schema-compliant VoiceCommand record for wake word events
+      const now = timestamp ? new Date(timestamp) : new Date();
+      const original = `[WAKE_WORD] ${normalizedWake}`;
+      const sourceRoom = connection.device?.room || 'unknown';
+
       const voiceCommand = new VoiceCommand({
         deviceId: deviceId,
-        originalText: `[WAKE_WORD] ${wakeWord}`,
-        intent: 'wake_word_detection',
-        confidence: confidence,
-        timestamp: timestamp ? new Date(timestamp) : new Date(),
-        status: 'processed'
+        originalText: original,
+        processedText: original,
+        wakeWord: ['anna', 'henry', 'home-brain', 'computer'].includes(normalizedWake) ? normalizedWake : 'custom',
+        sourceRoom,
+        intent: {
+          action: 'system_control',
+          confidence: typeof confidence === 'number' ? Math.max(0, Math.min(1, confidence)) : 1.0,
+          entities: {}
+        },
+        execution: {
+          status: 'success',
+          startedAt: now,
+          completedAt: now
+        },
+        llmProcessing: {
+          provider: 'local',
+          model: 'wakeword',
+          prompt: '',
+          rawResponse: '',
+          processingTime: 0,
+          tokensUsed: { input: 0, output: 0, total: 0 }
+        },
+        response: {
+          text: 'Wake word detected',
+          playedAt: now,
+          responseTime: 0
+        }
       });
 
       await voiceCommand.save();
@@ -673,6 +700,38 @@ class VoiceWebSocketServer {
     } catch (error) {
       console.error(`Error handling disconnection for device ${deviceId}:`, error);
     }
+  }
+
+  async pushConfigToDevice(deviceId) {
+    try {
+      const connection = this.deviceConnections.get(deviceId);
+      if (!connection || !connection.authenticated) {
+        throw new Error('Device not connected or not authenticated');
+      }
+      const device = connection.device || await VoiceDevice.findById(deviceId);
+      if (!device) {
+        throw new Error('Device not found');
+      }
+      const registrationCode = device.settings?.registrationCode;
+      if (!registrationCode) {
+        throw new Error('Device missing registration code');
+      }
+      const { config } = await this.buildWakeWordConfig(device, registrationCode, connection.deviceInfo || {});
+      this.sendMessage(deviceId, { type: 'config_update', config });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  playTtsToDevice(deviceId, text = 'Ping from hub') {
+    const connection = this.deviceConnections.get(deviceId);
+    if (!connection || !connection.authenticated) {
+      return { success: false, error: 'Device not connected or not authenticated' };
+    }
+    const payload = { type: 'tts_response', text, voice: 'default' };
+    const ok = this.sendMessage(deviceId, payload);
+    return ok ? { success: true } : { success: false, error: 'Send failed' };
   }
 
   sendMessage(deviceId, message) {

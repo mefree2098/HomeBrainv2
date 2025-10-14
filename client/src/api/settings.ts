@@ -41,6 +41,8 @@ export const updateSettings = async (settings: {
   anthropicModel?: string;
   localLlmEndpoint?: string;
   localLlmModel?: string;
+  voiceRegion?: string;
+  autoDiscoveryEnabled?: boolean;
 }) => {
   try {
     const response = await api.put('/api/settings', settings);

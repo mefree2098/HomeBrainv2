@@ -162,6 +162,26 @@ export const getVoiceDeviceById = async (deviceId: string) => {
 // Endpoint: PUT /api/voice/devices/:id/status
 // Request: { status: string }
 // Response: { success: boolean, message: string, device: object }
+export const pushConfigToDevice = async (deviceId: string) => {
+  try {
+    const response = await api.post(`/api/voice/devices/${deviceId}/push-config`, {});
+    return response.data;
+  } catch (error) {
+    console.error('Error pushing config to device:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+export const pingTtsToDevice = async (deviceId: string, text?: string) => {
+  try {
+    const response = await api.post(`/api/voice/devices/${deviceId}/ping-tts`, { text });
+    return response.data;
+  } catch (error) {
+    console.error('Error sending TTS to device:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
 export const updateVoiceDeviceStatus = async (deviceId: string, status: string) => {
   console.log('Updating voice device status:', deviceId, status)
   try {
