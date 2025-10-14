@@ -260,8 +260,9 @@ class WakeWordTrainingService extends EventEmitter {
     try {
       const positiveVoices = options?.dataset?.positive?.tts?.voices || [];
       const negativeVoices = options?.dataset?.negative?.syntheticSpeech?.voices || [];
+      const piperExecLog = options?.dataset?.positive?.tts?.executable || options?.dataset?.negative?.syntheticSpeech?.executable || '(none)';
       console.log(
-        `[wakeword] Training ${slug} using ${positiveVoices.length} positive voices, ${negativeVoices.length} negative voices`
+        `[wakeword] Training ${slug} using ${positiveVoices.length} positive voices, ${negativeVoices.length} negative voices, piper: ${piperExecLog}`
       );
       if (positiveVoices.length === 0) {
         console.log('[wakeword] Positive voice payload', JSON.stringify(options?.dataset?.positive?.tts || {}, null, 2));
@@ -373,7 +374,12 @@ class WakeWordTrainingService extends EventEmitter {
             'C:/Program Files/piper/piper.exe',
             'C:/Program Files (x86)/piper/piper.exe'
           ]
-        : ['/usr/bin/piper', '/usr/local/bin/piper', '/bin/piper'];
+        : [
+            path.join(__dirname, '..', '.wakeword-venv', 'bin', 'piper'),
+            '/usr/bin/piper',
+            '/usr/local/bin/piper',
+            '/bin/piper'
+          ];
       for (const cand of candidates) {
         try { if (fs.existsSync(cand)) return cand; } catch (_) {}
       }
@@ -523,9 +529,30 @@ class WakeWordTrainingService extends EventEmitter {
 
     await fsp.writeFile(configPath, JSON.stringify(options || {}, null, 2), 'utf8');
 
+    // Compute Piper path to expose to the trainer via env as fallback
+    const getPiperFromOptions = () =>
+      options?.dataset?.positive?.tts?.executable
+      || options?.dataset?.negative?.syntheticSpeech?.executable
+      || null;
+
+    const resolvedPiper = getPiperFromOptions() || (function() {
+      try {
+        const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['piper'], { encoding: 'utf8' });
+        if (which.status === 0) {
+          const out = (which.stdout || '').split(/\r?\n/).find((line) => line.trim());
+          if (out && fs.existsSync(out.trim())) return out.trim();
+        }
+      } catch (_) {}
+      return null;
+    })();
+
     return new Promise((resolve) => {
       const child = spawn(this.pythonExecutable, trainerArgs, {
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          ...(resolvedPiper ? { WAKEWORD_PIPER_EXEC: resolvedPiper } : {})
+        }
       });
 
       let stdoutBuffer = '';
