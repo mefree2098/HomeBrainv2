@@ -39,10 +39,9 @@ except ImportError as exc:  # pragma: no cover
     raise
 
 try:
-    from openwakeword.train import Model, convert_onnx_to_tflite  # type: ignore
     from openwakeword.utils import AudioFeatures  # type: ignore
 except ImportError as exc:  # pragma: no cover
-    sys.stderr.write("openwakeword is required. Install with `pip install openwakeword[train]`.\n")
+    sys.stderr.write("openwakeword is required. Install with `pip install openwakeword`.\n")
     raise
 
 SAMPLE_RATE = 16_000
@@ -545,10 +544,31 @@ class WakeWordDataset(Dataset):
 # Training
 # ---------------------------------------------------------------------------
 
+# Simple DNN classifier to avoid importing openwakeword.train (which pulls torchaudio)
+class SimpleDNN(torch.nn.Module):
+    def __init__(self, input_shape: Tuple[int, int], layer_dim: int = 128) -> None:
+        super().__init__()
+        self.input_shape = input_shape
+        in_features = int(input_shape[0] * input_shape[1])
+        self.net = torch.nn.Sequential(
+            torch.nn.Flatten(),
+            torch.nn.Linear(in_features, layer_dim),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(p=0.2),
+            torch.nn.Linear(layer_dim, layer_dim),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(p=0.2),
+            torch.nn.Linear(layer_dim, 1),
+            torch.nn.Sigmoid()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
+        return self.net(x)
+
+
 class WakeWordTrainer:
     def __init__(self, input_shape: Tuple[int, int], batch_size: int, learning_rate: float) -> None:
-        self.model = Model(n_classes=1, input_shape=input_shape, model_type="dnn", layer_dim=128,
-                           seconds_per_example=WINDOW_FRAMES * 80 / 1000)
+        self.model = SimpleDNN(input_shape=input_shape, layer_dim=128)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=1e-5)
@@ -645,15 +665,31 @@ def export_artifacts(trainer: WakeWordTrainer, output_path: Path) -> List[Dict[s
         "checksum": sha256_checksum(onnx_path)
     })
 
-    try:
+    converted = False
+    try:  # Try helper from openwakeword if available
+        from openwakeword.train import convert_onnx_to_tflite  # type: ignore
         convert_onnx_to_tflite(str(onnx_path), str(output_path))
+        converted = True
+    except Exception:
+        # Fallback to our script using onnx-tf + TensorFlow if present
+        try:
+            conv_script = Path(__file__).resolve().parent / "convert_to_tflite.py"
+            if conv_script.is_file():
+                result = subprocess.run([sys.executable, str(conv_script), "--onnx", str(onnx_path), "--out", str(output_path)],
+                                        check=False, capture_output=True)
+                if result.returncode == 0 and output_path.exists():
+                    converted = True
+        except Exception:
+            converted = False
+
+    if converted and output_path.exists():
         artifacts.append({
             "format": "tflite",
             "path": str(output_path),
             "size": output_path.stat().st_size,
             "checksum": sha256_checksum(output_path)
         })
-    except Exception:  # pragma: no cover
+    else:
         progress("exporting", 0.88, "TFLite conversion failed; ONNX artifact only.")
     return artifacts
 
