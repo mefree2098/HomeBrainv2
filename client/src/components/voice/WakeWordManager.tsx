@@ -8,6 +8,13 @@ import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -87,6 +94,7 @@ export function WakeWordManager() {
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [voiceActionId, setVoiceActionId] = useState<string | null>(null);
   const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>([]);
+  const [languageFilter, setLanguageFilter] = useState<string>("all");
 
   const formatBytes = (bytes?: number | null) => {
     if (!bytes || bytes <= 0) {
@@ -192,6 +200,26 @@ export function WakeWordManager() {
     () => installedVoices.reduce((total, voice) => total + (voice.sizeBytes || 0), 0),
     [installedVoices]
   );
+  const languageOptions = useMemo(() => {
+    const entries = new Map<string, { code: string; label: string }>();
+    voices.forEach((voice) => {
+      const code = voice.languageCode || voice.language || voice.id;
+      const label = voice.language || "Unknown region";
+      if (!entries.has(code)) {
+        entries.set(code, { code, label });
+      }
+    });
+    return Array.from(entries.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [voices]);
+  const filteredVoices = useMemo(() => {
+    if (languageFilter === "all") {
+      return voices;
+    }
+    return voices.filter((voice) => {
+      const code = voice.languageCode || voice.language || voice.id;
+      return code === languageFilter;
+    });
+  }, [voices, languageFilter]);
   const selectedVoiceDetails = useMemo(
     () => installedVoices.filter((voice) => selectedVoiceIds.includes(voice.id)),
     [installedVoices, selectedVoiceIds]
@@ -455,17 +483,41 @@ export function WakeWordManager() {
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="rounded-lg border border-dashed bg-white/60 p-4">
-          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="font-semibold">Synthetic Voices</p>
               <p className="text-xs text-muted-foreground">
                 Download Piper voices to synthesize wake word samples locally. Select which voices to include during training.
               </p>
             </div>
-            <Button variant="outline" size="sm" onClick={loadVoices} disabled={loadingVoices || voiceActionId !== null}>
-              {loadingVoices ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Refresh
-            </Button>
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <Select value={languageFilter} onValueChange={setLanguageFilter} disabled={voices.length === 0}>
+                <SelectTrigger
+                  className="w-[210px]"
+                  aria-label="Filter voices by region"
+                  disabled={voices.length === 0}
+                >
+                  <SelectValue placeholder="Filter voices" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All regions</SelectItem>
+                  {languageOptions.map((option) => (
+                    <SelectItem key={option.code} value={option.code}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadVoices}
+                disabled={loadingVoices || voiceActionId !== null}
+              >
+                {loadingVoices ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Refresh
+              </Button>
+            </div>
           </div>
 
           <div className="mt-3 text-xs text-muted-foreground">
@@ -489,8 +541,12 @@ export function WakeWordManager() {
               <p className="text-sm text-muted-foreground">
                 Voice catalog unavailable. Ensure the hub has internet access and try refreshing.
               </p>
+            ) : filteredVoices.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No voices match the current region filter.
+              </p>
             ) : (
-              voices.map((voice) => {
+              filteredVoices.map((voice) => {
                 const isInstalled = voice.installed && voice.modelPath && voice.configPath;
                 const selected = selectedVoiceIds.includes(voice.id);
                 return (
