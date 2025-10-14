@@ -3,66 +3,17 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const axios = require('axios');
-const tar = require('tar');
+const crypto = require('crypto');
 const fsExtra = require('fs-extra');
 
 const VOICES_ROOT = path.join(__dirname, '..', 'data', 'wake-word', 'voices');
+const HUGGING_FACE_BASE_URL = 'https://huggingface.co/rhasspy/piper-voices/resolve/main';
+const HUGGING_FACE_VOICES_URL = `${HUGGING_FACE_BASE_URL}/voices.json`;
+const DEFAULT_VOICE_ID = 'en_US-amy-medium';
+const CATALOG_TTL_MS = 1000 * 60 * 60; // 1 hour
 
-const AVAILABLE_VOICES = [
-  {
-    id: 'en_US-amy-medium',
-    name: 'Amy',
-    language: 'en-US',
-    speaker: 'Amy',
-    quality: 'medium',
-    sizeBytes: 56623104,
-    archiveUrl: 'https://github.com/rhasspy/piper/releases/download/2024.11.12/en_US-amy-medium.tar.gz',
-    files: {
-      model: 'en_US-amy-medium.onnx',
-      config: 'en_US-amy-medium.onnx.json'
-    }
-  },
-  {
-    id: 'en_US-kathleen-high',
-    name: 'Kathleen',
-    language: 'en-US',
-    speaker: 'Kathleen',
-    quality: 'high',
-    sizeBytes: 63229184,
-    archiveUrl: 'https://github.com/rhasspy/piper/releases/download/2024.11.12/en_US-kathleen-high.tar.gz',
-    files: {
-      model: 'en_US-kathleen-high.onnx',
-      config: 'en_US-kathleen-high.onnx.json'
-    }
-  },
-  {
-    id: 'en_GB-semaine-medium',
-    name: 'Semaine',
-    language: 'en-GB',
-    speaker: 'Semaine',
-    quality: 'medium',
-    sizeBytes: 56098816,
-    archiveUrl: 'https://github.com/rhasspy/piper/releases/download/2024.11.12/en_GB-semaine-medium.tar.gz',
-    files: {
-      model: 'en_GB-semaine-medium.onnx',
-      config: 'en_GB-semaine-medium.onnx.json'
-    }
-  },
-  {
-    id: 'es_ES-dario-medium',
-    name: 'Dario',
-    language: 'es-ES',
-    speaker: 'Dario',
-    quality: 'medium',
-    sizeBytes: 56000000,
-    archiveUrl: 'https://github.com/rhasspy/piper/releases/download/2024.11.12/es_ES-dario-medium.tar.gz',
-    files: {
-      model: 'es_ES-dario-medium.onnx',
-      config: 'es_ES-dario-medium.onnx.json'
-    }
-  }
-];
-
+let cachedCatalog = null;
+let catalogFetchedAt = 0;
 let autoDownloadAttempted = false;
 
 async function ensureVoiceDirectory() {
@@ -78,197 +29,319 @@ async function fileExists(filePath) {
   }
 }
 
-async function computeInstalledSize(voice) {
-  let total = 0;
-  const expectedFiles = new Set([voice.files.model, voice.files.config]);
-  const legacyPrefix = voice.id.replace(/-/g, '_');
-
-  try {
-    const entries = await fsp.readdir(VOICES_ROOT);
-    for (const name of entries) {
-      if (!expectedFiles.has(name) && !name.startsWith(voice.id) && !name.startsWith(legacyPrefix)) {
-        continue;
-      }
-
-      try {
-        const stat = await fsp.stat(path.join(VOICES_ROOT, name));
-        if (stat.isFile()) {
-          total += stat.size;
-        }
-      } catch (error) {
-        // ignore individual file errors
-      }
-    }
-  } catch (error) {
-    // ignore directory read errors
-  }
-
-  return total || voice.sizeBytes || null;
+function encodeVoicePath(relPath) {
+  return relPath
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
 }
 
-function mapVoiceWithInstallation(voice, installedInfo = null) {
-  if (!installedInfo) {
-    return {
-      ...voice,
-      installed: false,
-      modelPath: null,
-      configPath: null
-    };
-  }
-  return {
-    ...voice,
-    installed: true,
-    modelPath: installedInfo.modelPath,
-    configPath: installedInfo.configPath,
-    sizeBytes: installedInfo.sizeBytes ?? voice.sizeBytes ?? null
-  };
+function resolveVoiceUrl(relPath) {
+  return `${HUGGING_FACE_BASE_URL}/${encodeVoicePath(relPath)}`;
 }
 
-async function getInstalledVoiceInfo(voice) {
-  const modelPath = path.join(VOICES_ROOT, voice.files.model);
-  const configPath = path.join(VOICES_ROOT, voice.files.config);
-  const installed = await fileExists(modelPath) && await fileExists(configPath);
-  if (!installed) {
+function formatLanguageLabel(language = {}) {
+  const english = language.name_english || language.code || 'Unknown';
+  const region = language.country_english || language.region || '';
+  if (!region || region === english) {
+    return english;
+  }
+  return `${english} (${region})`;
+}
+
+function titleCase(value) {
+  if (!value) return '';
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function normaliseVoiceEntry(id, entry) {
+  if (!entry || typeof entry !== 'object') {
     return null;
   }
 
-  const sizeBytes = await computeInstalledSize(voice);
+  const files = Object.entries(entry.files || {}).map(([relPath, fileInfo = {}]) => ({
+    relPath,
+    fileName: path.basename(relPath),
+    sizeBytes: typeof fileInfo.size_bytes === 'number' ? fileInfo.size_bytes : null,
+    md5: fileInfo.md5_digest || null
+  }));
+
+  const modelFile = files.find((file) => file.fileName.endsWith('.onnx'));
+  const configFile = files.find((file) => file.fileName.endsWith('.onnx.json'));
+
+  if (!modelFile || !configFile) {
+    return null;
+  }
+
+  const sizeBytes = files.reduce((total, file) => total + (file.sizeBytes || 0), 0);
 
   return {
-    id: voice.id,
-    name: voice.name,
-    language: voice.language,
-    speaker: voice.speaker,
-    quality: voice.quality,
+    id,
+    name: titleCase(entry.name || id),
+    quality: entry.quality || 'standard',
+    language: entry.language || {},
+    languageLabel: formatLanguageLabel(entry.language),
+    downloadFiles: [modelFile, configFile],
+    modelFile,
+    configFile,
+    sizeBytes: sizeBytes || null
+  };
+}
+
+async function loadVoiceCatalog(force = false) {
+  if (!force && cachedCatalog && Date.now() - catalogFetchedAt < CATALOG_TTL_MS) {
+    return cachedCatalog;
+  }
+
+  try {
+    const response = await axios.get(HUGGING_FACE_VOICES_URL, {
+      responseType: 'json',
+      headers: { Accept: 'application/json' },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
+    });
+    const rawCatalog = response.data || {};
+    const catalogueMap = new Map();
+    Object.entries(rawCatalog).forEach(([id, entry]) => {
+      const normalised = normaliseVoiceEntry(id, entry);
+      if (normalised) {
+        catalogueMap.set(id, normalised);
+      }
+    });
+    cachedCatalog = catalogueMap;
+    catalogFetchedAt = Date.now();
+    return cachedCatalog;
+  } catch (error) {
+    throw new Error(`Unable to fetch Piper voice catalogue: ${error.message}`);
+  }
+}
+
+async function getVoiceMetadataById(id) {
+  const catalog = await loadVoiceCatalog();
+  const meta = catalog.get(id);
+  if (!meta) {
+    throw new Error(`Unknown Piper voice id: ${id}`);
+  }
+  return meta;
+}
+
+async function computeInstalledSize(meta, voiceDir) {
+  let total = 0;
+  for (const file of meta.downloadFiles) {
+    const filePath = path.join(voiceDir, file.fileName);
+    try {
+      const stat = await fsp.stat(filePath);
+      if (stat.isFile()) {
+        total += stat.size;
+      }
+    } catch (error) {
+      // Ignore missing files; installation status is handled by the caller.
+    }
+  }
+  return total || meta.sizeBytes || null;
+}
+
+async function getInstalledVoiceInfo(meta) {
+  const voiceDir = path.join(VOICES_ROOT, meta.id);
+  const requiredFiles = meta.downloadFiles.map((file) => path.join(voiceDir, file.fileName));
+  const checks = await Promise.all(requiredFiles.map(fileExists));
+  if (!checks.every(Boolean)) {
+    return null;
+  }
+
+  const modelPath = path.join(voiceDir, meta.modelFile.fileName);
+  const configPath = path.join(voiceDir, meta.configFile.fileName);
+  const sizeBytes = await computeInstalledSize(meta, voiceDir);
+
+  return {
+    id: meta.id,
+    name: meta.name,
+    language: meta.languageLabel,
+    languageCode: meta.language.code || null,
+    speaker: meta.name,
+    quality: meta.quality,
     modelPath,
     configPath,
     sizeBytes
   };
 }
 
+function mapVoiceWithInstallation(meta, installedInfo = null) {
+  if (!installedInfo) {
+    return {
+      id: meta.id,
+      name: meta.name,
+      language: meta.languageLabel,
+      languageCode: meta.language.code || null,
+      speaker: meta.name,
+      quality: meta.quality,
+      sizeBytes: meta.sizeBytes,
+      installed: false,
+      modelPath: null,
+      configPath: null
+    };
+  }
+
+  return {
+    id: meta.id,
+    name: meta.name,
+    language: installedInfo.language,
+    languageCode: installedInfo.languageCode,
+    speaker: installedInfo.speaker,
+    quality: installedInfo.quality,
+    sizeBytes: installedInfo.sizeBytes || meta.sizeBytes,
+    installed: true,
+    modelPath: installedInfo.modelPath,
+    configPath: installedInfo.configPath
+  };
+}
+
 async function listVoices() {
   await ensureVoiceDirectory();
   await ensureDefaultVoiceInstalled();
+  const catalog = await loadVoiceCatalog();
+  const voices = [];
 
-  const results = [];
-  for (const voice of AVAILABLE_VOICES) {
-    const installedInfo = await getInstalledVoiceInfo(voice);
-    results.push(mapVoiceWithInstallation(voice, installedInfo));
+  for (const meta of catalog.values()) {
+    const installedInfo = await getInstalledVoiceInfo(meta);
+    voices.push(mapVoiceWithInstallation(meta, installedInfo));
   }
-  return results;
+
+  return voices.sort((a, b) => {
+    if (a.installed && !b.installed) return -1;
+    if (!a.installed && b.installed) return 1;
+    const languageCompare = (a.language || '').localeCompare(b.language || '');
+    if (languageCompare !== 0) return languageCompare;
+    return (a.name || '').localeCompare(b.name || '');
+  });
 }
 
 async function listInstalledVoices() {
   await ensureVoiceDirectory();
+  const catalog = await loadVoiceCatalog();
   const installed = [];
-  for (const voice of AVAILABLE_VOICES) {
-    const info = await getInstalledVoiceInfo(voice);
+
+  for (const meta of catalog.values()) {
+    const info = await getInstalledVoiceInfo(meta);
     if (info) {
       installed.push(info);
     }
   }
+
   return installed;
+}
+
+async function downloadFile(url, destination, expectedMd5 = null) {
+  const response = await axios({
+    method: 'GET',
+    url,
+    responseType: 'stream'
+  });
+
+  await fsExtra.ensureDir(path.dirname(destination));
+  const tempPath = `${destination}.download`;
+  const hash = expectedMd5 ? crypto.createHash('md5') : null;
+
+  return new Promise((resolve, reject) => {
+    const writer = fs.createWriteStream(tempPath);
+
+    response.data.on('data', (chunk) => {
+      if (hash) {
+        hash.update(chunk);
+      }
+    });
+
+    response.data.on('error', async (error) => {
+      await fsExtra.remove(tempPath).catch(() => {});
+      reject(error);
+    });
+
+    writer.on('finish', async () => {
+      try {
+        if (hash) {
+          const digest = hash.digest('hex');
+          if (digest !== expectedMd5) {
+            await fsExtra.remove(tempPath).catch(() => {});
+            reject(new Error(`Checksum mismatch fetched=${digest}, expected=${expectedMd5}`));
+            return;
+          }
+        }
+        await fsExtra.move(tempPath, destination, { overwrite: true });
+        resolve();
+      } catch (error) {
+        await fsExtra.remove(tempPath).catch(() => {});
+        reject(error);
+      }
+    });
+
+    writer.on('error', async (error) => {
+      await fsExtra.remove(tempPath).catch(() => {});
+      reject(error);
+    });
+
+    response.data.pipe(writer);
+  });
+}
+
+async function downloadVoice(id) {
+  const meta = await getVoiceMetadataById(id);
+  const installedInfo = await getInstalledVoiceInfo(meta);
+  if (installedInfo) {
+    return mapVoiceWithInstallation(meta, installedInfo);
+  }
+
+  await ensureVoiceDirectory();
+  const voiceDir = path.join(VOICES_ROOT, meta.id);
+  await fsExtra.ensureDir(voiceDir);
+
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), `piper-voice-${meta.id}-`));
+  try {
+    for (const file of meta.downloadFiles) {
+      const url = resolveVoiceUrl(file.relPath);
+      const tempPath = path.join(tempDir, file.fileName);
+      const destinationPath = path.join(voiceDir, file.fileName);
+      await downloadFile(url, tempPath, file.md5);
+      await fsExtra.move(tempPath, destinationPath, { overwrite: true });
+    }
+  } catch (error) {
+    await fsExtra.remove(voiceDir).catch(() => {});
+    throw new Error(`Failed to download Piper voice ${meta.id}: ${error.message}`);
+  } finally {
+    await fsExtra.remove(tempDir).catch(() => {});
+  }
+
+  const info = await getInstalledVoiceInfo(meta);
+  return mapVoiceWithInstallation(meta, info);
+}
+
+async function removeVoice(id) {
+  await ensureVoiceDirectory();
+  const voiceDir = path.join(VOICES_ROOT, id);
+  await fsExtra.remove(voiceDir);
+
+  const remaining = await listInstalledVoices();
+  if (remaining.length === 0) {
+    autoDownloadAttempted = false;
+  }
 }
 
 async function ensureDefaultVoiceInstalled() {
   if (autoDownloadAttempted) {
     return;
   }
-
-  const installedVoices = await listInstalledVoices();
-  if (installedVoices.length > 0) {
-    autoDownloadAttempted = true;
-    return;
-  }
-
   autoDownloadAttempted = true;
 
-  const defaultVoice = AVAILABLE_VOICES[0];
-  if (!defaultVoice) {
-    return;
-  }
-
   try {
-    const installed = await getInstalledVoiceInfo(defaultVoice);
+    const meta = await getVoiceMetadataById(DEFAULT_VOICE_ID);
+    const installed = await getInstalledVoiceInfo(meta);
     if (!installed) {
-      await downloadVoice(defaultVoice.id);
+      await downloadVoice(meta.id);
     }
   } catch (error) {
     autoDownloadAttempted = false;
-    const reason = error instanceof Error ? error.message : String(error);
     console.warn(
-      `[wakeword] Failed to auto-download default Piper voice (${defaultVoice.id}): ${reason}`
+      `[wakeword] Failed to auto-download default Piper voice (${DEFAULT_VOICE_ID}): ${error.message}`
     );
-  }
-}
-
-async function downloadVoice(id) {
-  const voice = AVAILABLE_VOICES.find((entry) => entry.id === id);
-  if (!voice) {
-    throw new Error(`Unknown Piper voice id: ${id}`);
-  }
-  const installedInfo = await getInstalledVoiceInfo(voice);
-  if (installedInfo) {
-    return mapVoiceWithInstallation(voice, installedInfo);
-  }
-
-  await ensureVoiceDirectory();
-
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'piper-voice-'));
-  const archivePath = path.join(tempDir, `${voice.id}.tar.gz`);
-
-  try {
-    const response = await axios({
-      method: 'GET',
-      url: voice.archiveUrl,
-      responseType: 'stream'
-    });
-
-    await new Promise((resolve, reject) => {
-      const writer = fs.createWriteStream(archivePath);
-      response.data.pipe(writer);
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
-
-    await tar.x({
-      file: archivePath,
-      cwd: VOICES_ROOT
-    });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to download Piper voice ${voice.id}: ${reason}`);
-  } finally {
-    await fsExtra.remove(tempDir).catch(() => {});
-  }
-
-  const info = await getInstalledVoiceInfo(voice);
-  return mapVoiceWithInstallation(voice, info);
-}
-
-async function removeVoice(id) {
-  const voice = AVAILABLE_VOICES.find((entry) => entry.id === id);
-  if (!voice) {
-    throw new Error(`Unknown Piper voice id: ${id}`);
-  }
-  await ensureVoiceDirectory();
-
-  const entries = await fsp.readdir(VOICES_ROOT);
-  const modelBase = voice.files.model.replace(/\.onnx$/, '');
-  const configBase = voice.files.config.replace(/\.onnx\.json$/, '');
-
-  await Promise.all(entries
-    .filter((name) => {
-      return name.startsWith(modelBase) || name.startsWith(configBase) || name.startsWith(voice.id);
-    })
-    .map(async (name) => {
-      const filePath = path.join(VOICES_ROOT, name);
-      await fsExtra.remove(filePath);
-    }));
-
-  const remaining = await listInstalledVoices();
-  if (remaining.length === 0) {
-    autoDownloadAttempted = false;
   }
 }
 
@@ -287,7 +360,6 @@ async function getInstalledVoicesForTraining() {
 }
 
 module.exports = {
-  AVAILABLE_VOICES,
   VOICES_ROOT,
   listVoices,
   listInstalledVoices,
