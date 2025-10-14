@@ -986,10 +986,11 @@ class HomeBrainRemoteDevice {
       : Object.keys(session.inputMetadata || {});
     const inputName = inputNames[0] || null;
     const inputMetadata = inputName ? session.inputMetadata?.[inputName] : null;
-    const dimensions = Array.isArray(inputMetadata?.dimensions)
-      ? inputMetadata.dimensions.filter((dim) => typeof dim === 'number' && dim > 0)
-      : [];
-    const frameSamples = dimensions.length ? dimensions[dimensions.length - 1] : this.wakeWordFrameSamples;
+    // onnxruntime-node exposes dims, not dimensions
+    const metaDims = Array.isArray(inputMetadata?.dims) ? inputMetadata.dims.slice() : [];
+    // Determine frame length from last positive dim if present
+    const positiveDims = metaDims.filter((d) => typeof d === 'number' && d > 0);
+    const frameSamples = positiveDims.length ? positiveDims[positiveDims.length - 1] : (this.wakeWordFrameSamples || 16000);
 
     const sessionInfo = {
       label: entry.label,
@@ -1001,6 +1002,7 @@ class HomeBrainRemoteDevice {
       sensitivity: entry.sensitivity,
       inputName,
       inputMetadata,
+      inputDims: metaDims,
       outputNames: Array.isArray(session.outputNames) && session.outputNames.length
         ? session.outputNames
         : Object.keys(session.outputMetadata || {}),
@@ -1253,20 +1255,25 @@ class HomeBrainRemoteDevice {
     }
 
     const frameSamples = this.wakeWordFrameSamples || 16000;
-    const metadataDimensions = Array.isArray(sessionInfo.inputMetadata?.dimensions)
-      ? sessionInfo.inputMetadata.dimensions
-      : null;
+    const metaDims = Array.isArray(sessionInfo.inputDims) ? sessionInfo.inputDims.slice() : null;
 
     let shape;
-    if (metadataDimensions && metadataDimensions.length) {
-      shape = metadataDimensions.map((dim) => {
-        if (typeof dim === 'number' && dim > 0) {
-          return dim;
-        }
-        return frameSamples;
+    if (metaDims && metaDims.length) {
+      // Replace dynamic/non-positive dims: set last dim to frameSamples, others to 1
+      shape = metaDims.map((dim, idx) => {
+        if (typeof dim === 'number' && dim > 0) return dim;
+        // last dimension gets frame length, others default to 1
+        return idx === metaDims.length - 1 ? frameSamples : 1;
       });
+      // Ensure 3D shape [B, C, T]
+      if (shape.length === 2) {
+        shape = [shape[0], 1, shape[1]];
+      } else if (shape.length === 1) {
+        shape = [1, 1, shape[0]];
+      }
     } else {
-      shape = [1, frameSamples];
+      // Fallback to [1, 1, T]
+      shape = [1, 1, frameSamples];
     }
 
     sessionInfo.inputShape = shape;
