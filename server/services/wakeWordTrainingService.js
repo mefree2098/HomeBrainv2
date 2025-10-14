@@ -257,6 +257,18 @@ class WakeWordTrainingService extends EventEmitter {
 
     const baseOptions = this.trainingOptions.get(slug) || this.mergeOptions({});
     const options = await this.enrichOptionsWithVoices(baseOptions);
+    try {
+      const positiveVoices = options?.dataset?.positive?.tts?.voices || [];
+      const negativeVoices = options?.dataset?.negative?.syntheticSpeech?.voices || [];
+      console.log(
+        `[wakeword] Training ${slug} using ${positiveVoices.length} positive voices, ${negativeVoices.length} negative voices`
+      );
+      if (positiveVoices.length === 0) {
+        console.log('[wakeword] Positive voice payload', JSON.stringify(options?.dataset?.positive?.tts || {}, null, 2));
+      }
+    } catch (debugError) {
+      console.warn('[wakeword] Failed to log voice payloads', debugError);
+    }
     const job = {
       slug,
       phrase: model.phrase,

@@ -167,6 +167,27 @@ def generate_positive_samples(
         "voiceUsage": {}
     }
 
+    requested_voices = tts_cfg.get("voices", [])
+    if synthetic_total > 0 and not voices:
+        progress(
+            "generating",
+            0.07,
+            "No positive voices available for Piper synthesis",
+            stats={
+                "requested": len(requested_voices),
+                "resolved": [
+                    {
+                        "id": str(voice.get("id")),
+                        "modelPath": str(voice.get("modelPath")),
+                        "configPath": str(voice.get("configPath")),
+                        "modelExists": Path(str(voice.get("modelPath", ""))).is_file(),
+                        "configExists": Path(str(voice.get("configPath", ""))).is_file()
+                    }
+                    for voice in requested_voices
+                ]
+            }
+        )
+
     if synthetic_total > 0 and voices and not piper_exec:
         raise RuntimeError(
             "Piper executable not found. Install Piper or set WAKEWORD_PIPER_EXEC to its path and restart the hub."
@@ -243,6 +264,27 @@ def generate_negative_samples(
     voices = [voice for voice in piper_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
     piper_exec = shutil.which(str(piper_cfg.get("executable") or "piper"))
     stats["syntheticRequested"] = synthetic_count
+    requested_voices = piper_cfg.get("voices", [])
+    if synthetic_count > 0 and not voices:
+        progress(
+            "generating",
+            0.14,
+            "No negative voices available for Piper synthesis",
+            stats={
+                "requested": len(requested_voices),
+                "resolved": [
+                    {
+                        "id": str(voice.get("id")),
+                        "modelPath": str(voice.get("modelPath")),
+                        "configPath": str(voice.get("configPath")),
+                        "modelExists": Path(str(voice.get("modelPath", ""))).is_file(),
+                        "configExists": Path(str(voice.get("configPath", ""))).is_file()
+                    }
+                    for voice in requested_voices
+                ]
+            }
+        )
+
     if synthetic_count > 0 and voices and not piper_exec:
         raise RuntimeError(
             "Piper executable not found. Install Piper or set WAKEWORD_PIPER_EXEC to its path and restart the hub."
