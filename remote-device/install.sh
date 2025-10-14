@@ -139,7 +139,8 @@ cat > package.json << 'EOF'
     "yargs": "^17.7.2",
     "node-wav": "^0.0.2",
     "audio-buffer-utils": "^5.1.2",
-    "onnxruntime-node": "^1.19.0"
+    "onnxruntime-node": "^1.19.0",
+    "tflite-node": "1.0.0"
   },
   "engines": {
     "node": ">=16.0.0"
@@ -153,7 +154,15 @@ print_status "Installing Node.js dependencies..."
 if [ -d "$INSTALL_DIR/node_modules" ]; then
     print_warning "Dependencies already present (skipping npm install)"
 else
-    npm install
+    if ! npm install; then
+        print_warning "npm install failed; attempting to enforce tflite-node@1.0.0 and retry"
+        # Ensure tflite-node version is pinned in package.json
+        if grep -q '"tflite-node"' package.json; then
+            sed -i 's/"tflite-node"\s*:\s*"[^"]*"/"tflite-node": "1.0.0"/g' package.json || true
+        fi
+        npm install || true
+        npm install tflite-node@1.0.0 || true
+    fi
 fi
 
 # Configure audio
