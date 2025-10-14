@@ -31,7 +31,7 @@ import {
   deleteWakeWordModel,
   getWakeWordQueueStatus
 } from "@/api/wakeWords";
-import { getPiperVoices, downloadPiperVoice, removePiperVoice, PiperVoice } from "@/api/wakeWordVoices";
+import { getPiperVoices, downloadPiperVoice, removePiperVoice, PiperVoice, probePiperDevice } from "@/api/wakeWordVoices";
 import { getSetting, updateSettings } from "@/api/settings";
 import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 
@@ -100,6 +100,8 @@ export function WakeWordManager() {
   const [languageFilter, setLanguageFilter] = useState<string>("all");
   const [savingRegion, setSavingRegion] = useState(false);
   const saveRegionRequestId = useRef(0);
+  const [probing, setProbing] = useState(false);
+  const [probeResult, setProbeResult] = useState<null | { using: string; provider: string; reason?: string; executable?: string | null; voices: number; platform: string; gpuAvailable: boolean; cudaDeviceCount: number }>(null);
 
   const formatBytes = (bytes?: number | null) => {
     if (!bytes || bytes <= 0) {
@@ -624,6 +626,32 @@ export function WakeWordManager() {
                 {loadingVoices ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Refresh
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  setProbing(true);
+                  setProbeResult(null);
+                  try {
+                    const resp = await probePiperDevice();
+                    if (resp?.success && resp.info) {
+                      setProbeResult(resp.info);
+                      const label = `${resp.info.using?.toUpperCase?.() || 'UNKNOWN'}${resp.info.provider ? ` (${resp.info.provider})` : ''}`;
+                      toast({ title: 'Piper device', description: resp.info.reason ? `${label} — ${resp.info.reason}` : label });
+                    } else {
+                      toast({ title: 'Piper probe failed', description: resp?.message || 'Unable to determine Piper device', variant: 'destructive' });
+                    }
+                  } catch (err: any) {
+                    toast({ title: 'Piper probe failed', description: err?.message || 'Unable to determine Piper device', variant: 'destructive' });
+                  } finally {
+                    setProbing(false);
+                  }
+                }}
+                disabled={probing}
+              >
+                {probing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Test Piper device
+              </Button>
             </div>
           </div>
 
@@ -636,6 +664,12 @@ export function WakeWordManager() {
             ) : (
               <span>No voices installed yet.</span>
             )}
+            {probeResult ? (
+              <div className="mt-1 text-[11px]">
+                Piper: {probeResult.using?.toUpperCase?.() || 'UNKNOWN'}{probeResult.provider ? ` (${probeResult.provider})` : ''}
+                {probeResult.using?.toLowerCase() === 'cpu' && probeResult.reason ? ` — ${probeResult.reason}` : ''}
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-4 space-y-3">

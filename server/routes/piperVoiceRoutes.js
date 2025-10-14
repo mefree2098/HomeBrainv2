@@ -52,4 +52,15 @@ router.delete('/:voiceId', requireUser(), async (req, res) => {
   }
 });
 
+// Test Piper device/provider (CPU vs GPU)
+router.get('/probe/device', requireUser(), async (req, res) => {
+  try {
+    const info = await piperVoiceService.detectPiperDevice();
+    res.status(200).json({ success: true, info });
+  } catch (error) {
+    console.error('GET /api/wake-words/voices/probe/device - Error:', error.message);
+    res.status(500).json({ success: false, message: error.message || 'Failed to probe Piper device' });
+  }
+});
+
 module.exports = router;
