@@ -159,6 +159,11 @@ def generate_positive_samples(
     if phrases:
         phrases = [p.strip() for p in phrases if p.strip()]
 
+    if synthetic_total > 0 and voices and not piper_exec:
+        raise RuntimeError(
+            "Piper executable not found. Install Piper or set WAKEWORD_PIPER_EXEC to its path and restart the hub."
+        )
+
     if synthetic_total > 0 and piper_exec and voices:
         tmp_dir = ensure_dir(work_dir / "positive-tts")
         for index in range(synthetic_total):
@@ -215,6 +220,11 @@ def generate_negative_samples(
     synthetic_count = int(piper_cfg.get("samples", DEFAULT_NEGATIVE_SYNTHETIC))
     voices = [voice for voice in piper_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
     piper_exec = shutil.which(str(piper_cfg.get("executable") or "piper"))
+    if synthetic_count > 0 and voices and not piper_exec:
+        raise RuntimeError(
+            "Piper executable not found. Install Piper or set WAKEWORD_PIPER_EXEC to its path and restart the hub."
+        )
+
     if synthetic_count > 0 and piper_exec and voices:
         tmp_dir = ensure_dir(work_dir / "negative-tts")
         for index in range(synthetic_count):
