@@ -253,7 +253,8 @@ class WakeWordTrainingService extends EventEmitter {
     await this.updateModelStatus(slug, {
       status: 'generating',
       progress: 0.05,
-      message: 'Preparing training job'
+      message: 'Preparing training job',
+      data: { piper: null }
     });
 
     const baseOptions = this.trainingOptions.get(slug) || this.mergeOptions({});
@@ -657,16 +658,25 @@ class WakeWordTrainingService extends EventEmitter {
     await this.updateModelStatus(slug, {
       status,
       progress: progressValue,
-      message
+      message,
+      data: payload.data || null
     });
   }
 
-  async updateModelStatus(slug, { status, progress, message }) {
+  async updateModelStatus(slug, { status, progress, message, data = null }) {
+    // Build update document. Use dot-notation to merge metadata fields without clobbering the whole object.
     const update = {};
     if (status) update.status = status;
     if (typeof progress === 'number') update.progress = Math.max(0, Math.min(1, progress));
     if (message) update.statusMessage = message;
     update.updatedAt = Date.now();
+
+    if (data && typeof data === 'object') {
+      // Persist Piper device info reported by the trainer so the UI can render it during generation.
+      if (data.piper && typeof data.piper === 'object') {
+        update['metadata.piper'] = data.piper;
+      }
+    }
 
     const model = await WakeWordModel.findOneAndUpdate({ slug }, update, { new: true });
     if (model) {
