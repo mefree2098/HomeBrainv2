@@ -705,20 +705,17 @@ class VoiceWebSocketServer {
   async pushConfigToDevice(deviceId) {
     try {
       const connection = this.deviceConnections.get(deviceId);
-      if (!connection || !connection.authenticated) {
-        throw new Error('Device not connected or not authenticated');
+      if (!connection) {
+        throw new Error('Device not connected');
       }
       const device = connection.device || await VoiceDevice.findById(deviceId);
       if (!device) {
         throw new Error('Device not found');
       }
-      const registrationCode = device.settings?.registrationCode;
-      if (!registrationCode) {
-        throw new Error('Device missing registration code');
-      }
+      const registrationCode = device.settings?.registrationCode || 'auto';
       const { config } = await this.buildWakeWordConfig(device, registrationCode, connection.deviceInfo || {});
-      this.sendMessage(deviceId, { type: 'config_update', config });
-      return { success: true };
+      const ok = this.sendMessage(deviceId, { type: 'config_update', config });
+      return ok ? { success: true } : { success: false, error: 'WebSocket send failed' };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -726,8 +723,8 @@ class VoiceWebSocketServer {
 
   playTtsToDevice(deviceId, text = 'Ping from hub') {
     const connection = this.deviceConnections.get(deviceId);
-    if (!connection || !connection.authenticated) {
-      return { success: false, error: 'Device not connected or not authenticated' };
+    if (!connection) {
+      return { success: false, error: 'Device not connected' };
     }
     const payload = { type: 'tts_response', text, voice: 'default' };
     const ok = this.sendMessage(deviceId, payload);
