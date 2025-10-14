@@ -81,7 +81,9 @@ sudo apt-get install -y \
     alsa-utils \
     pulseaudio \
     sox \
-    libsox-fmt-all
+    libsox-fmt-all \
+    espeak \
+    libttspico-utils
 
 # Install Node.js (if not present)
 if ! command -v node &> /dev/null; then
@@ -258,8 +260,9 @@ EOF
 # Reload systemd
 sudo systemctl daemon-reload
 
-# Create default configuration
+# Create default configuration (only if absent)
 print_status "Creating default configuration..."
+if [ ! -f config.json ]; then
 cat > config.json << 'EOF'
 {
   "audio": {
@@ -271,9 +274,15 @@ cat > config.json << 'EOF'
   "wakeWords": ["anna", "henry", "home brain"],
   "hubUrl": null,
   "deviceId": null,
-  "registrationCode": null
+  "registrationCode": null,
+  "voice": {
+    "captureMode": "none"
+  }
 }
 EOF
+else
+  print_warning "config.json exists; preserving existing configuration"
+fi
 
 # Create convenience scripts
 print_status "Creating convenience scripts..."
@@ -281,6 +290,7 @@ print_status "Creating convenience scripts..."
 # Start script
 cat > start.sh << 'EOF'
 #!/bin/bash
+export HB_CAPTURE_MODE=none
 echo "Starting HomeBrain Remote Device..."
 node index.js "$@"
 EOF
