@@ -27,14 +27,14 @@ export default function UpdateManager({ deviceId, deviceName }: Props) {
     }
   }
 
-  async function handleGenerate() {
+  async function handleGenerate(force = false) {
     setBusy(true);
     setMessage(null);
     try {
-      const res = await generatePackage();
+      const res = await generatePackage(force);
       if (res?.success) {
         setPkg(res);
-        setMessage(`Generated package v${res.version}`);
+        setMessage(`Generated package v${res.version}` + (force ? ' (forced)' : ''));
       } else {
         setMessage(res?.message || 'Failed to generate package');
       }
@@ -80,7 +80,8 @@ export default function UpdateManager({ deviceId, deviceName }: Props) {
       <CardContent className="space-y-3">
         <div className="flex gap-2">
           <Button onClick={refreshPackage} disabled={busy}>Refresh Package Info</Button>
-          <Button onClick={handleGenerate} disabled={busy}>Generate Package</Button>
+          <Button onClick={() => handleGenerate(false)} disabled={busy}>Generate Package</Button>
+          <Button variant="outline" onClick={() => handleGenerate(true)} disabled={busy}>Force Rebuild</Button>
           <Button onClick={handleCheck} disabled={busy}>Check Device</Button>
           <Button onClick={handlePush} disabled={busy || !deviceId}>Push Update</Button>
         </div>

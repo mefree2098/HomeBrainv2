@@ -63,7 +63,8 @@ router.post('/generate-package', requireUser(), async (req, res) => {
   console.log('POST /api/remote-updates/generate-package - Generating update package');
 
   try {
-    const packageInfo = await remoteUpdateService.generateUpdatePackage();
+    const force = Boolean(req.body?.force);
+    const packageInfo = await remoteUpdateService.generateUpdatePackage(force);
 
     console.log('POST /api/remote-updates/generate-package - Package generated successfully');
     res.status(200).json({
