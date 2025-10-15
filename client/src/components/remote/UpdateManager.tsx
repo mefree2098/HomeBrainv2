@@ -63,7 +63,7 @@ export default function UpdateManager({ deviceId, deviceName }: Props) {
     setBusy(true);
     setMessage(null);
     try {
-      const res = await initiateUpdate(deviceId);
+      const res = await initiateUpdate(deviceId, false);
       setMessage(res?.success ? `Update initiated to v${res.version}` : (res?.message || 'Failed to initiate update'));
     } catch (e: any) {
       setMessage(e?.message || 'Failed to initiate update');
@@ -84,6 +84,17 @@ export default function UpdateManager({ deviceId, deviceName }: Props) {
           <Button variant="outline" onClick={() => handleGenerate(true)} disabled={busy}>Force Rebuild</Button>
           <Button onClick={handleCheck} disabled={busy}>Check Device</Button>
           <Button onClick={handlePush} disabled={busy || !deviceId}>Push Update</Button>
+          <Button variant="destructive" onClick={async () => {
+            setBusy(true); setMessage(null);
+            try {
+              const res = await initiateUpdate(deviceId, true);
+              setMessage(res?.success ? `Force update pushed (v${res.version})` : (res?.message || 'Failed to force update'));
+            } catch (e: any) {
+              setMessage(e?.message || 'Failed to force update');
+            } finally {
+              setBusy(false);
+            }
+          }} disabled={busy || !deviceId}>Force Push Update</Button>
         </div>
         {message && <div className="text-sm text-muted-foreground">{message}</div>}
         {pkg && (
