@@ -1610,6 +1610,7 @@ class HomeBrainRemoteDevice {
 
     // Pause wake word mic to free the device while recording
     this.resumeWakeWordAfterCommand = false;
+    this.isWakeWordListening = false;
     if (this.recordingStream) {
       try { this.recordingStream.stop(); } catch (_) {}
       this.recordingStream = null;
@@ -1694,6 +1695,9 @@ class HomeBrainRemoteDevice {
       this.recordStopTimer = null;
     }
 
+    const shouldResumeWakeWord = this.resumeWakeWordAfterCommand;
+    this.resumeWakeWordAfterCommand = false;
+
     if (this.commandSessionId) {
       this.sendMessage({
         type: 'audio_data',
@@ -1703,6 +1707,16 @@ class HomeBrainRemoteDevice {
       });
       this.commandSessionId = null;
       this.commandSequence = 0;
+    }
+
+    if (shouldResumeWakeWord) {
+      setTimeout(() => {
+        this.restartWakeWordDetection().catch((error) => {
+          console.error('Failed to resume wake word detection after command:', error.message);
+        });
+      }, 250);
+    } else {
+      this.isWakeWordListening = true;
     }
   }
 
