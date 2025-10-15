@@ -3,6 +3,7 @@ const router = express.Router();
 const voiceDeviceService = require('../services/voiceDeviceService');
 const { requireUser } = require('./middlewares/auth');
 const voiceWs = require('../websocket/voiceWebSocket');
+const VoiceDevice = require('../models/VoiceDevice');
 
 /**
  * @route GET /api/voice/devices
@@ -281,6 +282,35 @@ router.post('/devices/:id/ping-tts', requireUser(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/voice/devices/:id/ping-tts - Error:', error.message);
     return res.status(500).json({ success: false, message: error.message || 'Failed to send TTS' });
+  }
+});
+
+// Update per-device settings (e.g., wake-word sensitivity)
+router.put('/devices/:id/settings', requireUser(), async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body || {};
+  try {
+    const device = await VoiceDevice.findById(id);
+    if (!device) {
+      return res.status(404).json({ success: false, message: 'Voice device not found' });
+    }
+    device.settings = { ...(device.settings || {}), ...(updates || {}) };
+    await device.save();
+
+    // Push updated config to device if connected
+    try {
+      const app = req.app;
+      const wsHttps = app.get('voiceWebSocket');
+      const wsHttp = app.get('voiceWebSocketHttp');
+      const tryPush = async (ws) => ws && typeof ws.pushConfigToDevice === 'function' ? await ws.pushConfigToDevice(id) : { success: false };
+      let result = await tryPush(wsHttps);
+      if (!result.success) result = await tryPush(wsHttp);
+    } catch (_) {}
+
+    return res.status(200).json({ success: true, device });
+  } catch (error) {
+    console.error('PUT /api/voice/devices/:id/settings - Error:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to update device settings' });
   }
 });
 
