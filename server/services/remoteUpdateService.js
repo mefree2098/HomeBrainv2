@@ -163,7 +163,8 @@ class RemoteUpdateService {
         'index.js',
         'package.json',
         'README.md',
-        'updater.js'
+        'updater.js',
+        'feature_infer.py'
       ];
 
       filesToInclude.forEach(file => {
