@@ -421,7 +421,7 @@ class HomeBrainRemoteDevice {
 
         case 'wake_word_ack':
           console.log('Wake word acknowledged, listening for command...');
-          this.startVoiceRecording(message.timeout || 5000);
+          this.startVoiceRecording(message.timeout || 5000, true);
 
           if (this.recordStopTimer) clearTimeout(this.recordStopTimer);
           this.recordStopTimer = setTimeout(() => {
@@ -1585,18 +1585,59 @@ class HomeBrainRemoteDevice {
     }, this.wakeWordDebounceMs);
   }
 
-  startVoiceRecording(timeoutMs = 5000) {
+  startVoiceRecording(timeoutMs = 5000, force = false) {
     if (this.isRecording) return;
 
-    if (this.captureMode === 'none') {
-      // Do nothing unless explicitly configured to capture or simulate
+    // If simulate explicitly requested, run demo path
+    if (this.captureMode === 'simulate' && !force) {
+      console.log('Starting voice command recording (simulate)...');
+      this.isRecording = true;
+      setTimeout(() => {
+        const testCommands = [
+          'Turn on the living room lights',
+          'Set the temperature to 72 degrees',
+          'Lock all the doors',
+          'What\'s the weather like?'
+        ];
+        const command = testCommands[Math.floor(Math.random() * testCommands.length)];
+        this.onVoiceCommandRecorded(command, 0.9);
+      }, 2000);
       return;
     }
 
-    console.log('Starting voice command recording...');
+    // Default: stream PCM to hub during listening window
+    console.log('Starting voice command recording (pcm)...');
     this.isRecording = true;
 
-    if (this.captureMode === 'simulate') {
+    const opts = {
+      sampleRate: this.wakeWordSampleRate,
+      sampleRateHertz: this.wakeWordSampleRate,
+      threshold: 0,
+      verbose: false,
+      recordProgram: this.config.audio.recordProgram || 'arecord',
+      device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
+    };
+    try {
+      this.commandRecording = recorder.record(opts);
+      const s = this.commandRecording.stream();
+      s.on('data', (buf) => {
+        if (!this.isRecording) return;
+        const b64 = Buffer.from(buf).toString('base64');
+        this.sendMessage({
+          type: 'audio_data',
+          audioData: b64,
+          sampleRate: this.wakeWordSampleRate,
+          channels: 1,
+          format: 'S16LE'
+        });
+      });
+      s.on('error', (e) => {
+        console.warn('Command recording error:', e?.message || e);
+      });
+    } catch (e) {
+      console.warn('Failed to start command recording:', e?.message || e);
+    }
+  }
       // Demo mode: simulate recognized text
       setTimeout(() => {
         const testCommands = [
