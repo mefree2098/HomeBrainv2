@@ -3,6 +3,9 @@ const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
 const wakeWordAssets = require('../utils/wakeWordAssets');
 const WakeWordModel = require('../models/WakeWordModel');
+const speechService = require('../services/speechService');
+const voiceCommandService = require('../services/voiceCommandService');
+const settingsService = require('../services/settingsService');
 
 console.log('voiceWebSocket.js loaded with enhanced logging');
 
@@ -12,6 +15,8 @@ class VoiceWebSocketServer {
     this.deviceConnections = new Map(); // deviceId -> WebSocket connection
     this.heartbeatInterval = 30000; // 30 seconds
     this.heartbeatTimer = null;
+    this.audioSessions = new Map(); // deviceId -> audio capture session
+    this.settingsCache = { value: null, fetchedAt: 0 };
   }
 
   initialize(server) {
@@ -80,7 +85,8 @@ class VoiceWebSocketServer {
         device: device,
         lastPing: Date.now(),
         authenticated: false,
-        deviceInfo: null
+        deviceInfo: null,
+        pendingWakeWord: null
       });
 
       // Update device status to online
@@ -446,8 +452,12 @@ class VoiceWebSocketServer {
 
     const { wakeWord, confidence, timestamp } = message;
     const normalizedWake = (wakeWord || 'anna').toString().toLowerCase();
+    connection.pendingWakeWord = {
+      wakeWord: normalizedWake,
+      timestamp: new Date()
+    };
 
-    console.log(`Wake word detected by ${connection.device.name}: ${normalizedWake} (confidence: ${confidence})`);
+      console.log(`Wake word detected by ${connection.device.name}: ${normalizedWake} (confidence: ${confidence})`);
 
     try {
       // Persist a minimal, schema-compliant VoiceCommand record for wake word events
@@ -505,21 +515,80 @@ class VoiceWebSocketServer {
     }
   }
 
-  async handleVoiceCommand(deviceId, message) {
-    const connection = this.deviceConnections.get(deviceId);
-    if (!connection || !connection.authenticated) return;
+  async getPreferredVoiceId(connection) {
+    const deviceSettings = connection?.device?.settings || {};
+    const candidateVoices = [
+      deviceSettings.voiceId,
+      deviceSettings.preferredVoiceId,
+      deviceSettings.defaultVoiceId,
+      deviceSettings.elevenLabsVoiceId,
+      deviceSettings?.voice?.elevenLabsVoiceId,
+      deviceSettings?.voice?.defaultVoiceId
+    ].filter((value) => typeof value === 'string' && value.trim().length > 0);
 
-    const { command, confidence, timestamp } = message;
+    if (candidateVoices.length > 0) {
+      return candidateVoices[0].trim();
+    }
+
+    const now = Date.now();
+    const cacheValid = this.settingsCache.value && now - this.settingsCache.fetchedAt < 30_000;
+
+    if (!cacheValid) {
+      try {
+        const settings = await settingsService.getSettings();
+        this.settingsCache = { value: settings, fetchedAt: now };
+      } catch (error) {
+        console.warn('VoiceWebSocket: Unable to load settings for voice preference:', error.message);
+        this.settingsCache = { value: null, fetchedAt: now };
+      }
+    }
+
+    const settings = this.settingsCache.value;
+    const globalVoice = settings?.elevenlabsDefaultVoiceId;
+    if (typeof globalVoice === 'string' && globalVoice.trim().length > 0) {
+      return globalVoice.trim();
+    }
+
+    return 'default';
+  }
+
+  async processVoiceCommandText(deviceId, context = {}) {
+    const connection = this.deviceConnections.get(deviceId);
+    if (!connection || !connection.authenticated) {
+      console.warn(`processVoiceCommandText called for unauthenticated device ${deviceId}`);
+      return;
+    }
+
+    const command = (context.commandText || context.command || '').toString().trim();
+    if (!command) {
+      console.warn(`Empty command received from device ${deviceId}`);
+      this.sendMessage(deviceId, {
+        type: 'command_error',
+        message: 'I did not catch that. Please try again.'
+      });
+      return;
+    }
+
+    const confidence = typeof context.confidence === 'number'
+      ? context.confidence
+      : typeof context.sttConfidence === 'number'
+        ? context.sttConfidence
+        : typeof context.stt?.confidence === 'number'
+          ? context.stt.confidence
+          : 0.5;
+
+    const timestamp = context.receivedAt instanceof Date
+      ? context.receivedAt
+      : (context.timestamp ? new Date(context.timestamp) : new Date());
 
     console.log(`Voice command received from ${connection.device.name}: ${command}`);
 
     try {
-      // Save voice command to database
       const voiceCommand = new VoiceCommand({
         deviceId: deviceId,
         originalText: command,
         processedText: command,
-        wakeWord: 'anna', // Default wake word
+        wakeWord: connection.pendingWakeWord?.wakeWord || 'anna',
         sourceRoom: connection.device.room,
         intent: {
           action: 'unknown',
@@ -532,94 +601,121 @@ class VoiceWebSocketServer {
         llmProcessing: {
           provider: 'local',
           model: 'unknown'
+        },
+        quality: {
+          speechRecognitionConfidence: typeof confidence === 'number' ? Math.max(0, Math.min(1, confidence)) : undefined
         }
       });
 
+      if (context.sessionId) {
+        voiceCommand.sessionId = context.sessionId;
+      }
+
+      if (context.stt && typeof context.stt === 'object') {
+        voiceCommand.llmProcessing.provider = context.stt.provider || 'openai';
+        voiceCommand.llmProcessing.model = context.stt.model || 'stt';
+        voiceCommand.llmProcessing.rawResponse = JSON.stringify({
+          provider: context.stt.provider,
+          model: context.stt.model,
+          duration: context.stt.duration,
+          processingTimeMs: context.stt.processingTimeMs
+        });
+      }
+
       await voiceCommand.save();
 
-      // Acknowledge command receipt
       this.sendMessage(deviceId, {
         type: 'command_processing',
         commandId: voiceCommand._id,
         message: 'Processing your command...'
       });
 
-      // Check if this is an automation creation request
-      const automationKeywords = ['automation', 'automate', 'when', 'every', 'if', 'create rule'];
-      const isAutomationRequest = automationKeywords.some(keyword =>
-        command.toLowerCase().includes(keyword)
-      );
+      const processingStart = Date.now();
+      const result = await voiceCommandService.processCommand({
+        commandText: command,
+        room: connection.device.room,
+        wakeWord: connection.pendingWakeWord?.wakeWord || 'anna',
+        deviceId,
+        stt: context.stt || null
+      });
 
-      if (isAutomationRequest) {
-        console.log(`Voice command identified as automation request: ${command}`);
+      const executionTime = Date.now() - processingStart;
+      const responseText = result.responseText || `Command "${command}" received and processed.`;
 
-        // Import automation service (do it here to avoid circular dependency)
-        const automationService = require('../services/automationService');
+      voiceCommand.processedText = result.processedText || command;
+      voiceCommand.intent.action = result.intent?.action || 'unknown';
+      voiceCommand.intent.confidence = typeof result.intent?.confidence === 'number'
+        ? Math.max(0, Math.min(1, result.intent.confidence))
+        : confidence || 0.5;
+      voiceCommand.intent.entities = result.intent?.entities || {};
 
-        try {
-          // Create automation from voice command with room context
-          const result = await automationService.createAutomationFromText(
-            command,
-            connection.device.room
-          );
-
-          // Update voice command with success
-          voiceCommand.intent.action = 'automation_create';
-          voiceCommand.execution.status = 'success';
-          voiceCommand.execution.completedAt = new Date();
-          voiceCommand.response = {
-            text: `Automation "${result.automation.name}" created successfully!`,
-            responseTime: Date.now() - voiceCommand.createdAt.getTime()
-          };
-          await voiceCommand.save();
-
-          // Send success response
-          this.sendMessage(deviceId, {
-            type: 'tts_response',
-            commandId: voiceCommand._id,
-            text: `Automation "${result.automation.name}" created successfully!`,
-            voice: 'default'
-          });
-
-        } catch (automationError) {
-          console.error(`Failed to create automation from voice command:`, automationError);
-
-          // Update voice command with failure
-          voiceCommand.execution.status = 'failed';
-          voiceCommand.execution.completedAt = new Date();
-          voiceCommand.execution.errorMessage = automationError.message;
-          await voiceCommand.save();
-
-          // Send error response
-          this.sendMessage(deviceId, {
-            type: 'tts_response',
-            commandId: voiceCommand._id,
-            text: `Sorry, I couldn't create that automation. ${automationError.message}`,
-            voice: 'default'
-          });
-        }
-      } else {
-        // Regular command processing (non-automation)
-        // Here you would integrate with your LLM service for other commands
-        voiceCommand.execution.status = 'success';
-        voiceCommand.execution.completedAt = new Date();
-        voiceCommand.response = {
-          text: `Command "${command}" received and processed.`,
-          responseTime: Date.now() - voiceCommand.createdAt.getTime()
-        };
-        await voiceCommand.save();
-
-        this.sendMessage(deviceId, {
-          type: 'tts_response',
-          commandId: voiceCommand._id,
-          text: `Command "${command}" received and processed.`,
-          voice: 'default'
-        });
+      voiceCommand.execution.status = result.execution?.status || 'failed';
+      voiceCommand.execution.completedAt = new Date();
+      voiceCommand.execution.executionTime = executionTime;
+      if (Array.isArray(result.execution?.actions)) {
+        voiceCommand.execution.actions = result.execution.actions.map((action) => ({
+          type: action.type,
+          target: action.deviceName || action.sceneId || action.message || '',
+          parameters: {
+            deviceId: action.deviceId,
+            value: action.value
+          },
+          result: {
+            success: Boolean(action.success),
+            message: action.message,
+            error: action.success ? undefined : action.message
+          }
+        }));
       }
+      if (voiceCommand.execution.status !== 'success') {
+        const failure = result.execution?.actions?.find((item) => item && !item.success);
+        voiceCommand.execution.errorMessage = failure?.message || 'Failed to complete command';
+      } else {
+        voiceCommand.execution.errorMessage = undefined;
+      }
+
+      voiceCommand.response = {
+        text: responseText,
+        responseTime: Date.now() - voiceCommand.createdAt.getTime()
+      };
+
+      const llmInfo = result.llm || {};
+      voiceCommand.llmProcessing.provider = llmInfo.provider || voiceCommand.llmProcessing.provider || 'local';
+      voiceCommand.llmProcessing.model = llmInfo.model || voiceCommand.llmProcessing.model || 'unknown';
+      voiceCommand.llmProcessing.prompt = llmInfo.prompt || '';
+      voiceCommand.llmProcessing.rawResponse = llmInfo.rawResponse || '';
+      voiceCommand.llmProcessing.processingTime = llmInfo.processingTimeMs || executionTime;
+      voiceCommand.llmProcessing.tokensUsed = llmInfo.tokensUsed || { input: 0, output: 0, total: 0 };
+
+      if (!voiceCommand.quality) {
+        voiceCommand.quality = {};
+      }
+      if (typeof confidence === 'number') {
+        voiceCommand.quality.speechRecognitionConfidence = Math.max(0, Math.min(1, confidence));
+      } else if (typeof result?.stt?.confidence === 'number') {
+        voiceCommand.quality.speechRecognitionConfidence = Math.max(0, Math.min(1, result.stt.confidence));
+      }
+      voiceCommand.quality.correctionNeeded = false;
+
+      await voiceCommand.save();
+
+      connection.pendingWakeWord = null;
+
+      const preferredVoiceId = await this.getPreferredVoiceId(connection);
+
+      this.sendMessage(deviceId, {
+        type: 'tts_response',
+        commandId: voiceCommand._id,
+        text: responseText,
+        voice: preferredVoiceId || 'default'
+      });
 
     } catch (error) {
       console.error(`Voice command handling error for device ${deviceId}:`, error);
       console.error('Full error:', error.stack);
+      if (connection) {
+        connection.pendingWakeWord = null;
+      }
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: 'Failed to process voice command'
@@ -627,19 +723,143 @@ class VoiceWebSocketServer {
     }
   }
 
+  async handleVoiceCommand(deviceId, message) {
+    await this.processVoiceCommandText(deviceId, {
+      commandText: message?.command,
+      confidence: typeof message?.confidence === 'number' ? message.confidence : undefined,
+      timestamp: message?.timestamp,
+      metadata: {
+        transport: 'websocket',
+        source: 'device_message'
+      }
+    });
+  }
+
   async handleAudioData(deviceId, message) {
     const connection = this.deviceConnections.get(deviceId);
     if (!connection || !connection.authenticated) return;
 
-    const { audioData, sampleRate, channels, format } = message;
+    const {
+      sessionId,
+      audioData,
+      sampleRate,
+      channels,
+      format,
+      isStart,
+      isFinal,
+      sequence
+    } = message;
 
-    console.log(`Audio data received from ${connection.device.name}: ${audioData.length} bytes`);
+    const resolvedSessionId = sessionId || `${deviceId}-${Date.now()}`;
+    let session = this.audioSessions.get(deviceId);
 
-    // Here you would process the audio data (speech-to-text, etc.)
-    // For now, just acknowledge receipt
+    if (
+      isStart ||
+      !session ||
+      session.sessionId !== resolvedSessionId
+    ) {
+      session = {
+        sessionId: resolvedSessionId,
+        chunks: [],
+        sampleRate: typeof sampleRate === 'number' ? sampleRate : 16000,
+        channels: typeof channels === 'number' ? channels : 1,
+        format: typeof format === 'string' ? format.toUpperCase() : 'S16LE',
+        startedAt: new Date(),
+        lastSequence: typeof sequence === 'number' ? sequence : -1,
+        chunkCount: 0
+      };
+      this.audioSessions.set(deviceId, session);
+      console.log(`Started audio session ${resolvedSessionId} for device ${deviceId}`);
+    }
+
+    if (typeof sequence === 'number') {
+      session.lastSequence = sequence;
+    }
+
+    if (audioData) {
+      try {
+        session.chunks.push(Buffer.from(audioData, 'base64'));
+      } catch (error) {
+        console.error(`Failed to decode audio chunk for device ${deviceId}:`, error.message);
+      }
+    }
+
+    session.chunkCount += 1;
+    session.lastReceivedAt = new Date();
+
+    const bytes = audioData ? Math.ceil((audioData.length * 3) / 4) : 0;
+
     this.sendMessage(deviceId, {
       type: 'audio_received',
-      bytesReceived: audioData.length
+      sessionId: resolvedSessionId,
+      bytesReceived: bytes,
+      isFinal: Boolean(isFinal)
+    });
+
+    if (isFinal) {
+      try {
+        await this.finalizeAudioSession(deviceId, session);
+      } finally {
+        this.audioSessions.delete(deviceId);
+      }
+    }
+  }
+
+  async finalizeAudioSession(deviceId, session) {
+    const connection = this.deviceConnections.get(deviceId);
+    if (!connection || !connection.authenticated) {
+      return;
+    }
+
+    if (!session || !Array.isArray(session.chunks) || session.chunks.length === 0) {
+      console.warn(`Audio session ${session?.sessionId || 'unknown'} for device ${deviceId} contained no data`);
+      this.sendMessage(deviceId, {
+        type: 'command_error',
+        message: "I didn't hear anything. Let's try again."
+      });
+      return;
+    }
+
+    const pcmBuffer = Buffer.concat(session.chunks);
+
+    console.log(`Transcribing ${pcmBuffer.length} bytes of audio for device ${deviceId} (session ${session.sessionId})`);
+
+    let transcription;
+    try {
+      transcription = await speechService.transcribe({
+        audioBuffer: pcmBuffer,
+        sampleRate: session.sampleRate,
+        channels: session.channels,
+        format: session.format
+      });
+    } catch (error) {
+      console.error(`Speech-to-text failed for device ${deviceId}:`, error.message);
+      this.sendMessage(deviceId, {
+        type: 'command_error',
+        message: 'Sorry, I could not understand the audio.'
+      });
+      return;
+    }
+
+    if (!transcription || !transcription.text) {
+      console.warn(`Transcription for device ${deviceId} session ${session.sessionId} returned no text`);
+      this.sendMessage(deviceId, {
+        type: 'command_error',
+        message: 'I did not catch that. Please try again.'
+      });
+      return;
+    }
+
+    await this.processVoiceCommandText(deviceId, {
+      commandText: transcription.text,
+      confidence: transcription.confidence,
+      receivedAt: new Date(),
+      sessionId: session.sessionId,
+      stt: transcription,
+      metadata: {
+        transport: 'websocket',
+        source: 'audio_stream'
+      }
     });
   }
 

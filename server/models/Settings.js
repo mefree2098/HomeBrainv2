@@ -38,6 +38,23 @@ const SettingsSchema = new mongoose.Schema({
     type: String,
     default: 'all'
   },
+  elevenlabsDefaultVoiceId: {
+    type: String,
+    default: ''
+  },
+  sttProvider: {
+    type: String,
+    enum: ['openai', 'local'],
+    default: 'openai'
+  },
+  sttModel: {
+    type: String,
+    default: 'gpt-4o-mini-transcribe'
+  },
+  sttLanguage: {
+    type: String,
+    default: 'en'
+  },
   
   // Notification Settings
   enableNotifications: {

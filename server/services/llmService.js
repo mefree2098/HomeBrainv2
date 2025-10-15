@@ -267,7 +267,81 @@ async function sendLLMRequestWithFallback(message, priorityList = null) {
   throw new Error(`All LLM providers failed. Errors: ${errorSummary}`);
 }
 
+async function sendLLMRequestWithFallbackDetailed(message, priorityList = null) {
+  console.log('LLM Service: Sending request with fallback mechanism (detailed response)');
+
+  const settings = await Settings.getSettings();
+  const priorities = priorityList || settings.llmPriorityList || ['local', 'openai', 'anthropic'];
+  const errors = [];
+
+  for (const provider of priorities) {
+    try {
+      let model;
+      let apiKey;
+      let endpoint;
+
+      switch (provider.toLowerCase()) {
+        case 'local':
+          endpoint = settings.localLlmEndpoint;
+          model = settings.localLlmModel;
+
+          if (!endpoint) {
+            errors.push({ provider, error: 'Local LLM endpoint not configured' });
+            continue;
+          }
+
+          return {
+            response: await sendRequestToLocalLLM(endpoint, model, message),
+            provider: 'local',
+            model
+          };
+
+        case 'openai':
+          apiKey = settings.openaiApiKey;
+          model = settings.openaiModel;
+
+          if (!apiKey) {
+            errors.push({ provider, error: 'OpenAI API key not configured' });
+            continue;
+          }
+
+          return {
+            response: await sendRequestToOpenAI(model, message, apiKey),
+            provider: 'openai',
+            model
+          };
+
+        case 'anthropic':
+          apiKey = settings.anthropicApiKey;
+          model = settings.anthropicModel;
+
+          if (!apiKey) {
+            errors.push({ provider, error: 'Anthropic API key not configured' });
+            continue;
+          }
+
+          return {
+            response: await sendRequestToAnthropic(model, message, apiKey),
+            provider: 'anthropic',
+            model
+          };
+
+        default:
+          errors.push({ provider, error: `Unknown provider: ${provider}` });
+          continue;
+      }
+    } catch (error) {
+      console.error(`LLM Service: Error with provider ${provider}:`, error.message);
+      errors.push({ provider, error: error.message });
+    }
+  }
+
+  const errorSummary = errors.map(e => `${e.provider}: ${e.error}`).join('; ');
+  throw new Error(`All LLM providers failed. Errors: ${errorSummary}`);
+}
+
 module.exports = {
   sendLLMRequest,
-  sendLLMRequestWithFallback
+  sendLLMRequestWithFallback,
+  sendLLMRequestWithFallbackDetailed
 };
