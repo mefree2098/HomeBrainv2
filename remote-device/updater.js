@@ -198,8 +198,23 @@ class RemoteDeviceUpdater {
         'index.js',
         'package.json',
         'README.md',
-        'updater.js'
+        'updater.js',
+        'feature_infer.py'
       ];
+
+      // Determine if dependencies changed by comparing package.json
+      let depsChanged = false;
+      try {
+        const oldPkg = JSON.parse(fs.readFileSync(path.join(this.installDir, 'package.json'), 'utf8'));
+        const newPkg = JSON.parse(fs.readFileSync(path.join(extractDir, 'package.json'), 'utf8'));
+        const pick = (o) => ({ ...(o.dependencies||{}), ...(o.optionalDependencies||{}), ...(o.peerDependencies||{}) });
+        const oldDeps = JSON.stringify(pick(oldPkg));
+        const newDeps = JSON.stringify(pick(newPkg));
+        depsChanged = oldDeps !== newDeps;
+      } catch (_) {
+        // If we can't compare, assume changed
+        depsChanged = true;
+      }
 
       // Copy updated files
       for (const file of filesToUpdate) {
@@ -212,9 +227,13 @@ class RemoteDeviceUpdater {
         }
       }
 
-      // Update dependencies
-      console.log('Updating dependencies...');
-      await execAsync('npm install', { cwd: this.installDir });
+      // Update dependencies only if necessary
+      if (depsChanged) {
+        console.log('Dependencies changed; running npm install...');
+        await execAsync('npm install', { cwd: this.installDir });
+      } else {
+        console.log('Dependencies unchanged; skipping npm install');
+      }
 
       console.log('Update installed successfully');
     } catch (error) {
