@@ -1210,7 +1210,7 @@ class HomeBrainRemoteDevice {
     const models = keywordEntries.map((k) => ({ label: k.label, path: k.path, threshold: k.threshold ?? this.wakeWordThreshold }));
     // Default frameSamples to 1s of audio at current sample rate if not set
     this.wakeWordFrameSamples = this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000;
-    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples, cooldownMs: this.wakeWordDebounceMs, vad: { minRms: 0.004 } };
+    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples, cooldownMs: this.wakeWordDebounceMs, vad: { minRms: 0.02 } };
     this.sidecar.stdin.write(JSON.stringify(cfg) + '\n');
 
     // Prepare chunking into exact frames for the sidecar
@@ -1605,35 +1605,25 @@ class HomeBrainRemoteDevice {
       return;
     }
 
+    // Pause wake word mic to free the device while recording
+    this.resumeWakeWordAfterCommand = false;
+    if (this.recordingStream) {
+      try { this.recordingStream.stop(); } catch (_) {}
+      this.recordingStream = null;
+      this.resumeWakeWordAfterCommand = true;
+    }
+
     // Default: stream PCM to hub during listening window
     console.log('Starting voice command recording (pcm)...');
     this.isRecording = true;
 
-    const opts = {
-      sampleRate: this.wakeWordSampleRate,
-      sampleRateHertz: this.wakeWordSampleRate,
-      threshold: 0,
-      verbose: false,
-      recordProgram: this.config.audio.recordProgram || 'arecord',
-      device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
-    };
     try {
       const { spawn } = require('child_process');
       const device = this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default';
       const rate = String(this.wakeWordSampleRate);
       // Prefer arecord directly to avoid sox/rec issues
       let proc = spawn('arecord', ['-q', '-D', device, '-t', 'raw', '-f', 'S16_LE', '-r', rate, '-c', '1'], { stdio: ['ignore', 'pipe', 'inherit'] });
-      proc.on('error', (err) => {
-        console.warn(`arecord failed (${err?.message || err}); attempting rec fallback`);
-        try {
-          proc = spawn('rec', ['-q', '-c', '1', '-r', rate, '-e', 'signed-integer', '-b', '16', '-t', 'raw', '-'], { stdio: ['ignore', 'pipe', 'inherit'] });
-        } catch (e2) {
-          console.warn('rec fallback failed:', e2?.message || e2);
-          throw err;
-        }
-        hook(proc);
-      });
-      const hook = (p) => {
+      const attach = (p) => {
         this.commandProc = p;
         p.stdout.on('data', (buf) => {
           if (!this.isRecording) return;
@@ -1652,7 +1642,16 @@ class HomeBrainRemoteDevice {
           }
         });
       };
-      hook(proc);
+      proc.on('error', (err) => {
+        console.warn(`arecord failed (${err?.message || err}); attempting rec fallback`);
+        try {
+          const p2 = spawn('rec', ['-q', '-c', '1', '-r', rate, '-e', 'signed-integer', '-b', '16', '-t', 'raw', '-'], { stdio: ['ignore', 'pipe', 'inherit'] });
+          attach(p2);
+        } catch (e2) {
+          console.warn('rec fallback failed:', e2?.message || e2);
+        }
+      });
+      attach(proc);
     } catch (e) {
       console.warn('Failed to start command recording:', e?.message || e);
     }

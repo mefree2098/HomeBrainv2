@@ -240,7 +240,10 @@ class VoiceWebSocketServer {
               : 1,
             mode: typeof vadSettings.mode === 'number'
               ? Math.max(0, Math.min(3, Math.round(vadSettings.mode)))
-              : 3
+              : 3,
+            minRms: typeof vadSettings.minRms === 'number'
+              ? clampValue(vadSettings.minRms, 0, 1)
+              : 0.02
           }
         },
         volume: device.volume,

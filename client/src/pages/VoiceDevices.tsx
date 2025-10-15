@@ -472,6 +472,33 @@ export function VoiceDevices() {
                   <span>Firmware:</span>
                   <span className="font-mono">{device.firmwareVersion || 'Unknown'}</span>
                 </div>
+                <div className="flex justify-between text-sm text-muted-foreground">
+                  <span>Wake-word Sensitivity:</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      defaultValue={device.settings?.wakeWordVad?.minRms ?? 0.02}
+                      onMouseUp={async (e) => {
+                        const val = Number((e.target as HTMLInputElement).value);
+                        try {
+                          await fetch(`/api/voice/devices/${device._id}/settings`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('accessToken')}` },
+                            body: JSON.stringify({ wakeWordVad: { minRms: val } })
+                          });
+                          toast({ title: 'Sensitivity updated', description: `minRms set to ${val.toFixed(2)}` });
+                        } catch (err: any) {
+                          toast({ title: 'Update failed', description: err?.message || 'Unable to update', variant: 'destructive' });
+                        }
+                      }}
+                      className="w-40"
+                    />
+                    <span className="font-mono text-xs">{(device.settings?.wakeWordVad?.minRms ?? 0.02).toFixed(2)}</span>
+                  </div>
+                </div>
 
                 <div className="flex justify-between text-sm text-muted-foreground">
                   <span>Latest:</span>
