@@ -32,7 +32,8 @@ class SettingsService {
       const allowedFields = [
         'location', 'timezone', 'wakeWordSensitivity', 'voiceVolume',
         'microphoneSensitivity', 'enableVoiceConfirmation', 'enableNotifications',
-        'insteonPort', 'smartthingsToken', 'elevenlabsApiKey', 'enableSecurityMode',
+        'insteonPort', 'smartthingsToken', 'elevenlabsApiKey', 'elevenlabsDefaultVoiceId',
+        'sttProvider', 'sttModel', 'sttLanguage', 'enableSecurityMode',
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',
         'anthropicApiKey', 'anthropicModel',

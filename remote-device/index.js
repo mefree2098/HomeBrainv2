@@ -104,6 +104,9 @@ class HomeBrainRemoteDevice {
     // captureMode: 'none' (default), 'simulate', or 'pcm'
     this.captureMode = process.env.HB_CAPTURE_MODE || this.voiceConfig.captureMode || 'none';
     this.recordStopTimer = null;
+    this.commandProc = null;
+    this.commandSessionId = null;
+    this.commandSequence = 0;
 
     // Wake word detection
     this.wakeWordDisplayNames = ['Anna', 'Henry', 'Home Brain', 'Homebrain'];
@@ -1617,6 +1620,19 @@ class HomeBrainRemoteDevice {
     console.log('Starting voice command recording (pcm)...');
     this.isRecording = true;
 
+    const sessionId = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+    this.commandSessionId = sessionId;
+    this.commandSequence = 0;
+
+    this.sendMessage({
+      type: 'audio_data',
+      sessionId,
+      isStart: true,
+      sampleRate: this.wakeWordSampleRate,
+      channels: 1,
+      format: 'S16LE'
+    });
+
     try {
       const { spawn } = require('child_process');
       const device = this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default';
@@ -1626,10 +1642,12 @@ class HomeBrainRemoteDevice {
       const attach = (p) => {
         this.commandProc = p;
         p.stdout.on('data', (buf) => {
-          if (!this.isRecording) return;
+          if (!this.isRecording || !this.commandSessionId) return;
           const b64 = Buffer.from(buf).toString('base64');
           this.sendMessage({
             type: 'audio_data',
+            sessionId: this.commandSessionId,
+            sequence: this.commandSequence++,
             audioData: b64,
             sampleRate: this.wakeWordSampleRate,
             channels: 1,
@@ -1667,9 +1685,24 @@ class HomeBrainRemoteDevice {
       try { this.commandRecording.stop(); } catch (_) {}
       this.commandRecording = null;
     }
+    if (this.commandProc) {
+      try { this.commandProc.kill('SIGTERM'); } catch (_) {}
+      this.commandProc = null;
+    }
     if (this.recordStopTimer) {
       clearTimeout(this.recordStopTimer);
       this.recordStopTimer = null;
+    }
+
+    if (this.commandSessionId) {
+      this.sendMessage({
+        type: 'audio_data',
+        sessionId: this.commandSessionId,
+        sequence: this.commandSequence++,
+        isFinal: true
+      });
+      this.commandSessionId = null;
+      this.commandSequence = 0;
     }
   }
 
