@@ -31,6 +31,7 @@ import {
 import { RemoteDeviceSetup } from "@/components/remote/RemoteDeviceSetup"
 import { PendingDevices } from "@/components/discovery/PendingDevices"
 import { AutoDiscoverySettings } from "@/components/discovery/AutoDiscoverySettings"
+import UpdateManager from "@/components/remote/UpdateManager"
 import { useToast } from "@/hooks/useToast"
 
 export function VoiceDevices() {
@@ -617,6 +618,8 @@ export function VoiceDevices() {
               <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
                 <strong>Wake words:</strong> "Hey Anna", "Henry", "Home Brain"
               </div>
+
+              <UpdateManager deviceId={device._id} deviceName={device.name} />
             </CardContent>
           </Card>
         ))}
