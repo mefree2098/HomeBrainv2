@@ -123,10 +123,13 @@ router.post('/initiate/:deviceId', requireUser(), async (req, res) => {
   console.log(`POST /api/remote-updates/initiate/${deviceId} - Initiating update`);
 
   try {
-    // Get WebSocket server instance from app
-    const voiceWebSocket = req.app.get('voiceWebSocket');
+    // Get WebSocket server instances from app (try both HTTP and HTTPS)
+    const wsPrimary = req.app.get('voiceWebSocket');
+    const wsHttp = req.app.get('voiceWebSocketHttp');
+    const wsHttps = req.app.get('voiceWebSocketHttps');
+    const sockets = [wsPrimary, wsHttp, wsHttps].filter(Boolean);
 
-    const result = await remoteUpdateService.initiateUpdate(deviceId, voiceWebSocket, { force: Boolean(req.body?.force) });
+    const result = await remoteUpdateService.initiateUpdate(deviceId, sockets, { force: Boolean(req.body?.force) });
 
     console.log(`POST /api/remote-updates/initiate/${deviceId} - Update initiated successfully`);
     res.status(200).json(result);
