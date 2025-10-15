@@ -160,6 +160,13 @@ app.use('/api/ollama', ollamaRoutes);
 // Resource Monitor Routes
 app.use('/api/resources', resourceRoutes);
 
+// Serve update packages from server/public/downloads so devices can fetch them
+const updatesPath = path.join(__dirname, 'public', 'downloads');
+if (fs.existsSync(updatesPath)) {
+  console.log(`Serving update downloads from ${updatesPath} at /downloads`);
+  app.use('/downloads', express.static(updatesPath));
+}
+
 // Serve built client app in production (fallback for SPA routes)
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(clientDistPath)) {
@@ -167,7 +174,7 @@ if (fs.existsSync(clientDistPath)) {
   app.use(express.static(clientDistPath));
 
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api/')) {
+    if (req.path.startsWith('/api/') || req.path.startsWith('/downloads/')) {
       return next();
     }
 

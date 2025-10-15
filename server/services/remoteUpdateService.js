@@ -129,6 +129,12 @@ class RemoteUpdateService {
       await fs.writeFile(checksumPath, checksum);
       const stat = await fs.stat(packagePath);
 
+      // Verify integrity by reading back and comparing checksum
+      const verifySum = await this.generateChecksum(packagePath);
+      if (verifySum !== checksum) {
+        throw new Error('Package checksum self-verify failed');
+      }
+
       console.log(`Update package generated: ${packageName}`);
       console.log(`Checksum: ${checksum}`);
 
