@@ -1682,45 +1682,73 @@ class HomeBrainRemoteDevice {
   async playTTSResponse(text, voice = 'default') {
     console.log(`Playing TTS: "${text}"`);
 
-    // Try system TTS first (espeak or pico2wave), else beep fallback
+    // If a specific ElevenLabs voice is provided, fetch audio from the hub and play it.
+    // Otherwise, fall back to local TTS or beep.
     const tryExec = (cmd) => new Promise((resolve) => exec(cmd, (err) => resolve(!err)));
-    const escaped = (text || '').replace(/"/g, '\\"');
 
-    let played = false;
+    let usedRemote = false;
     try {
-      // espeak direct to ALSA
-      played = await tryExec(`espeak -s 175 -a 150 "${escaped}" 2>/dev/null`);
-      if (!played) {
-        // pico2wave -> aplay
-        const tmpWav = path.join(os.tmpdir(), `hb_tts_${Date.now()}.wav`);
-        const ok = await tryExec(`pico2wave -w "${tmpWav}" "${escaped}" && aplay -q "${tmpWav}"`);
-        played = ok;
-        try { await fsp.unlink(tmpWav); } catch (_) {}
+      const voiceId = voice && voice !== 'default' ? voice : null;
+      if (voiceId) {
+        const base = this.getHubHttpBase();
+        const params = new URLSearchParams({ code: this.config.registrationCode || 'auto', text });
+        params.set('voiceId', voiceId);
+        const url = `${base}/api/remote-devices/${this.deviceId}/tts?${params.toString()}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const arrayBuf = await res.arrayBuffer();
+          const buf = Buffer.from(arrayBuf);
+          const tmpPath = path.join(os.tmpdir(), `hb_el_${Date.now()}.mp3`);
+          await fsp.writeFile(tmpPath, buf);
+          // Play via mpg123/ffplay/play/aplay
+          const played = await tryExec(`mpg123 -q "${tmpPath}"`) || await tryExec(`ffplay -nodisp -autoexit -loglevel quiet "${tmpPath}"`) || await tryExec(`play -q "${tmpPath}"`) || await tryExec(`aplay -q "${tmpPath}"`);
+          try { await fsp.unlink(tmpPath); } catch (_) {}
+          if (played) {
+            usedRemote = true;
+          }
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      // ignore and fall back
+    }
 
-    if (!played) {
-      // Audible ping fallback
+    if (!usedRemote) {
+      // Local TTS
+      const escaped = (text || '').replace(/"/g, '\\"');
+      let played = false;
       try {
-        const sampleRate = 16000;
-        const durationSec = 0.35;
-        const freq = 880;
-        const samples = Math.floor(sampleRate * durationSec);
-        const buffer = new Float32Array(samples);
-        for (let i = 0; i < samples; i++) {
-          buffer[i] = Math.sin(2 * Math.PI * freq * (i / sampleRate)) * 0.3;
+        played = await tryExec(`espeak -s 175 -a 150 "${escaped}" 2>/dev/null`);
+        if (!played) {
+          const tmpWav = path.join(os.tmpdir(), `hb_tts_${Date.now()}.wav`);
+          const ok = await tryExec(`pico2wave -w "${tmpWav}" "${escaped}" && aplay -q "${tmpWav}"`);
+          played = ok;
+          try { await fsp.unlink(tmpWav); } catch (_) {}
         }
-        const wav = require('node-wav');
-        const wavBuffer = wav.encode([buffer], { sampleRate, float: true, bitDepth: 32 });
-        const tmpPath = path.join(os.tmpdir(), `hb_ping_${Date.now()}.wav`);
-        await fsp.writeFile(tmpPath, wavBuffer);
-        const ok = await tryExec(`aplay -q "${tmpPath}"`) || await tryExec(`play -q "${tmpPath}"`);
-        try { await fsp.unlink(tmpPath); } catch (_) {}
-        if (!ok) {
-          console.warn('No audio player available (aplay/play). Unable to play TTS or beep.');
+      } catch (_) {}
+
+      if (!played) {
+        // Audible beep
+        try {
+          const sampleRate = 16000;
+          const durationSec = 0.35;
+          const freq = 880;
+          const samples = Math.floor(sampleRate * durationSec);
+          const buffer = new Float32Array(samples);
+          for (let i = 0; i < samples; i++) {
+            buffer[i] = Math.sin(2 * Math.PI * freq * (i / sampleRate)) * 0.3;
+          }
+          const wav = require('node-wav');
+          const wavBuffer = wav.encode([buffer], { sampleRate, float: true, bitDepth: 32 });
+          const tmpPath = path.join(os.tmpdir(), `hb_ping_${Date.now()}.wav`);
+          await fsp.writeFile(tmpPath, wavBuffer);
+          const ok = await tryExec(`aplay -q "${tmpPath}"`) || await tryExec(`play -q "${tmpPath}"`);
+          try { await fsp.unlink(tmpPath); } catch (_) {}
+          if (!ok) {
+            console.warn('No audio player available (aplay/play). Unable to play TTS or beep.');
+          }
+        } catch (err) {
+          console.warn('Failed to render/play audible ping:', err.message);
         }
-      } catch (err) {
-        console.warn('Failed to render/play audible ping:', err.message);
       }
     }
 

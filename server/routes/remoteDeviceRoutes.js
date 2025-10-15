@@ -7,6 +7,7 @@ const wakeWordAssets = require('../utils/wakeWordAssets');
 const WakeWordModel = require('../models/WakeWordModel');
 const fs = require('fs');
 const path = require('path');
+const elevenLabsService = require('../services/elevenLabsService');
 
 // Description: Register a new remote device
 // Endpoint: POST /api/remote-devices/register
@@ -151,6 +152,32 @@ router.get('/:deviceId/wake-words', async (req, res) => {
       success: false,
       message: error.message || 'Failed to fetch wake word assets'
     });
+  }
+});
+
+// Stream TTS audio for a device using ElevenLabs with device validation
+router.get('/:deviceId/tts', async (req, res) => {
+  const { deviceId } = req.params;
+  const { code, text, voiceId } = req.query;
+
+  try {
+    const device = await validateDeviceAccess(deviceId, code);
+    if (!device) {
+      return res.status(403).json({ success: false, message: 'Invalid device credentials' });
+    }
+    if (!text || !voiceId) {
+      return res.status(400).json({ success: false, message: 'Missing text or voiceId' });
+    }
+
+    const audioBuffer = await elevenLabsService.textToSpeech(String(text), String(voiceId));
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioBuffer.length);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(audioBuffer);
+  } catch (error) {
+    console.error(`GET /api/remote-devices/${deviceId}/tts - Error:`, error.message);
+    res.status(500).json({ success: false, message: error.message || 'Failed to generate TTS' });
   }
 });
 
