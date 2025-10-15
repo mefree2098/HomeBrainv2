@@ -3,6 +3,7 @@ const router = express.Router();
 const { requireUser } = require('./middlewares/auth');
 const remoteUpdateService = require('../services/remoteUpdateService');
 const path = require('path');
+const os = require('os');
 
 // Description: Get current remote device software version
 // Endpoint: GET /api/remote-updates/version
@@ -129,7 +130,31 @@ router.post('/initiate/:deviceId', requireUser(), async (req, res) => {
     const wsHttps = req.app.get('voiceWebSocketHttps');
     const sockets = [wsPrimary, wsHttp, wsHttps].filter(Boolean);
 
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    // Build a device-safe base URL. Avoid localhost/127.0.0.1 which are not reachable from the device.
+    const hostHeader = req.get('host') || '';
+    const parts = hostHeader.split(':');
+    const hostName = parts[0] || 'localhost';
+    const port = parts[1] || String(process.env.PORT || 3000);
+    const isLoopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostName);
+
+    let lanIp = null;
+    if (isLoopback) {
+      const nets = os.networkInterfaces();
+      for (const name of Object.keys(nets)) {
+        for (const iface of nets[name] || []) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            lanIp = iface.address;
+            break;
+          }
+        }
+        if (lanIp) break;
+      }
+    }
+
+    const baseUrl = isLoopback && lanIp
+      ? `http://${lanIp}:${port}`
+      : `${req.protocol}://${hostHeader}`;
+
     const result = await remoteUpdateService.initiateUpdate(deviceId, sockets, { force: Boolean(req.body?.force), baseUrl });
 
     console.log(`POST /api/remote-updates/initiate/${deviceId} - Update initiated successfully`);
