@@ -93,7 +93,7 @@ class RemoteUpdateService {
   /**
    * Generate an update package for remote devices
    */
-  async generateUpdatePackage() {
+  async generateUpdatePackage(force = false) {
     console.log('Generating remote device update package...');
 
     try {
@@ -102,18 +102,23 @@ class RemoteUpdateService {
       const packagePath = path.join(this.updatePackagePath, packageName);
       const checksumPath = path.join(this.updatePackagePath, `${packageName}.sha256`);
 
-      // Check if package already exists
-      try {
-        await fs.access(packagePath);
+      const exists = await fs.access(packagePath).then(() => true).catch(() => false);
+      if (exists && force) {
+        console.log(`Force flag set; removing existing package ${packageName}`);
+        try { await fs.unlink(packagePath); } catch (_) {}
+        try { await fs.unlink(checksumPath); } catch (_) {}
+      } else if (exists) {
         console.log(`Update package already exists: ${packageName}`);
+        const checksum = await fs.readFile(checksumPath, 'utf8').catch(() => null);
+        const stat = await fs.stat(packagePath);
         return {
           version,
           packageName,
           packagePath,
-          checksumPath
+          checksumPath,
+          checksum,
+          size: stat.size
         };
-      } catch (err) {
-        // Package doesn't exist, create it
       }
 
       // Create zip archive
@@ -122,6 +127,7 @@ class RemoteUpdateService {
       // Generate checksum
       const checksum = await this.generateChecksum(packagePath);
       await fs.writeFile(checksumPath, checksum);
+      const stat = await fs.stat(packagePath);
 
       console.log(`Update package generated: ${packageName}`);
       console.log(`Checksum: ${checksum}`);
@@ -131,7 +137,8 @@ class RemoteUpdateService {
         packageName,
         packagePath,
         checksumPath,
-        checksum
+        checksum,
+        size: stat.size
       };
     } catch (error) {
       console.error('Error generating update package:', error);

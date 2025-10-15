@@ -5,8 +5,8 @@ export async function getPackageInfo() {
   return res.data;
 }
 
-export async function generatePackage() {
-  const res = await api.post('/api/remote-updates/generate-package');
+export async function generatePackage(force = false) {
+  const res = await api.post('/api/remote-updates/generate-package', { force });
   return res.data;
 }
 
