@@ -261,12 +261,14 @@ class RemoteUpdateService {
       };
 
       // Send update command to device via WebSocket and verify delivery (with retries)
+      const sockets = Array.isArray(voiceWebSocket) ? voiceWebSocket.filter(Boolean) : [voiceWebSocket].filter(Boolean);
       let sent = false;
-      if (voiceWebSocket) {
+      for (const ws of sockets) {
+        if (!ws || sent) continue;
         for (let attempt = 1; attempt <= 5 && !sent; attempt++) {
-          sent = Boolean(voiceWebSocket.sendMessage(deviceId, updateCommand));
+          sent = Boolean(ws.sendMessage(deviceId, updateCommand));
           if (!sent) {
-            console.warn(`Update send attempt ${attempt} failed for ${deviceId}; retrying...`);
+            console.warn(`Update send attempt ${attempt} failed for ${deviceId} on WS instance; retrying...`);
             await new Promise((r) => setTimeout(r, 400));
           }
         }
