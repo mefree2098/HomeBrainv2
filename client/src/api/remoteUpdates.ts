@@ -1,4 +1,4 @@
-import { api } from './api';
+import api from './api';
 
 export async function getPackageInfo() {
   const res = await api.get('/remote-updates/package-info');
