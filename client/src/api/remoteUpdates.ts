@@ -10,8 +10,8 @@ export async function generatePackage(force = false) {
   return res.data;
 }
 
-export async function initiateUpdate(deviceId: string) {
-  const res = await api.post(`/api/remote-updates/initiate/${deviceId}`);
+export async function initiateUpdate(deviceId: string, force = false) {
+  const res = await api.post(`/api/remote-updates/initiate/${deviceId}`, { force });
   return res.data;
 }
 

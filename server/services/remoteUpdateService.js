@@ -225,8 +225,8 @@ class RemoteUpdateService {
   /**
    * Initiate update for a specific device
    */
-  async initiateUpdate(deviceId, voiceWebSocket) {
-    console.log(`Initiating update for device: ${deviceId}`);
+  async initiateUpdate(deviceId, voiceWebSocket, options = { force: false }) {
+    console.log(`Initiating update for device: ${deviceId}${options.force ? ' (force)' : ''}`);
 
     try {
       const device = await VoiceDevice.findById(deviceId);
@@ -235,15 +235,37 @@ class RemoteUpdateService {
         throw new Error('Device not found');
       }
 
-      // Check if device is online
-      if (device.status !== 'online') {
+      // Check if device is online unless force requested
+      if (device.status !== 'online' && !options.force) {
         throw new Error('Device is not online');
       }
 
       // Generate update package if needed
-      const packageInfo = await this.generateUpdatePackage();
+      const packageInfo = await this.generateUpdatePackage(false);
+      if (!packageInfo || !packageInfo.downloadUrl) {
+        throw new Error('Update package is not available');
+      }
 
-      // Update device status
+      // Prepare update command
+      const updateCommand = {
+        type: 'update_available',
+        version: packageInfo.version,
+        downloadUrl: `http://${process.env.HOST || 'localhost'}:${process.env.PORT || 3000}${packageInfo.downloadUrl}`,
+        checksum: packageInfo.checksum,
+        size: packageInfo.size,
+        mandatory: Boolean(options.force)
+      };
+
+      // Send update command to device via WebSocket and verify delivery
+      let sent = false;
+      if (voiceWebSocket) {
+        sent = Boolean(voiceWebSocket.sendMessage(deviceId, updateCommand));
+      }
+      if (!sent) {
+        throw new Error('Device not connected to hub (WebSocket send failed)');
+      }
+
+      // Only mark as updating after the command was sent
       await VoiceDevice.findByIdAndUpdate(deviceId, {
         status: 'updating',
         'settings.updateStatus': {
@@ -252,20 +274,6 @@ class RemoteUpdateService {
           startedAt: new Date()
         }
       });
-
-      // Send update command to device via WebSocket
-      const updateCommand = {
-        type: 'update_available',
-        version: packageInfo.version,
-        downloadUrl: `http://${process.env.HOST || 'localhost'}:${process.env.PORT || 3000}${packageInfo.downloadUrl}`,
-        checksum: packageInfo.checksum,
-        size: packageInfo.size,
-        mandatory: false
-      };
-
-      if (voiceWebSocket) {
-        voiceWebSocket.sendMessage(deviceId, updateCommand);
-      }
 
       console.log(`Update initiated for device ${device.name} to version ${packageInfo.version}`);
 
@@ -278,15 +286,17 @@ class RemoteUpdateService {
     } catch (error) {
       console.error(`Error initiating update for device ${deviceId}:`, error);
 
-      // Reset device status on error
-      await VoiceDevice.findByIdAndUpdate(deviceId, {
-        status: 'online',
-        'settings.updateStatus': {
-          status: 'failed',
-          error: error.message,
-          failedAt: new Date()
-        }
-      });
+      // Attempt to reset device status only if it exists and wasn't updating
+      try {
+        await VoiceDevice.findByIdAndUpdate(deviceId, {
+          status: 'online',
+          'settings.updateStatus': {
+            status: 'failed',
+            error: error.message,
+            failedAt: new Date()
+          }
+        });
+      } catch (_) {}
 
       throw error;
     }
