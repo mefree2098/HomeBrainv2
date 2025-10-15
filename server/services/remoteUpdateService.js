@@ -225,7 +225,7 @@ class RemoteUpdateService {
   /**
    * Initiate update for a specific device
    */
-  async initiateUpdate(deviceId, voiceWebSocket, options = { force: false }) {
+  async initiateUpdate(deviceId, voiceWebSocket, options = { force: false, baseUrl: null }) {
     console.log(`Initiating update for device: ${deviceId}${options.force ? ' (force)' : ''}`);
 
     try {
@@ -251,10 +251,11 @@ class RemoteUpdateService {
       }
 
       // Prepare update command
+      const origin = options.baseUrl || `http://${process.env.HOST || 'localhost'}:${process.env.PORT || 3000}`;
       const updateCommand = {
         type: 'update_available',
         version: packageInfo.version,
-        downloadUrl: `http://${process.env.HOST || 'localhost'}:${process.env.PORT || 3000}${packageInfo.downloadUrl}`,
+        downloadUrl: `${origin}${packageInfo.downloadUrl}`,
         checksum: packageInfo.checksum,
         size: packageInfo.size,
         mandatory: Boolean(options.force)
