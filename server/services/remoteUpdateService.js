@@ -240,8 +240,12 @@ class RemoteUpdateService {
         throw new Error('Device is not online');
       }
 
-      // Generate update package if needed
-      const packageInfo = await this.generateUpdatePackage(false);
+      // Ensure update package exists and has a public download URL
+      let packageInfo = await this.getUpdatePackageInfo();
+      if (!packageInfo || options.force) {
+        await this.generateUpdatePackage(Boolean(options.force));
+        packageInfo = await this.getUpdatePackageInfo();
+      }
       if (!packageInfo || !packageInfo.downloadUrl) {
         throw new Error('Update package is not available');
       }
