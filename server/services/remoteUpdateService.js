@@ -260,12 +260,22 @@ class RemoteUpdateService {
         mandatory: Boolean(options.force)
       };
 
-      // Send update command to device via WebSocket and verify delivery
+      // Send update command to device via WebSocket and verify delivery (with retries)
       let sent = false;
       if (voiceWebSocket) {
-        sent = Boolean(voiceWebSocket.sendMessage(deviceId, updateCommand));
+        for (let attempt = 1; attempt <= 5 && !sent; attempt++) {
+          sent = Boolean(voiceWebSocket.sendMessage(deviceId, updateCommand));
+          if (!sent) {
+            console.warn(`Update send attempt ${attempt} failed for ${deviceId}; retrying...`);
+            await new Promise((r) => setTimeout(r, 400));
+          }
+        }
       }
       if (!sent) {
+        try {
+          const stats = typeof voiceWebSocket.getStats === 'function' ? voiceWebSocket.getStats() : null;
+          console.warn('WebSocket stats at send failure:', stats);
+        } catch (_) {}
         throw new Error('Device not connected to hub (WebSocket send failed)');
       }
 
