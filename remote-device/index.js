@@ -1618,22 +1618,41 @@ class HomeBrainRemoteDevice {
       device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
     };
     try {
-      this.commandRecording = recorder.record(opts);
-      const s = this.commandRecording.stream();
-      s.on('data', (buf) => {
-        if (!this.isRecording) return;
-        const b64 = Buffer.from(buf).toString('base64');
-        this.sendMessage({
-          type: 'audio_data',
-          audioData: b64,
-          sampleRate: this.wakeWordSampleRate,
-          channels: 1,
-          format: 'S16LE'
+      const { spawn } = require('child_process');
+      const device = this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default';
+      const rate = String(this.wakeWordSampleRate);
+      // Prefer arecord directly to avoid sox/rec issues
+      let proc = spawn('arecord', ['-q', '-D', device, '-t', 'raw', '-f', 'S16_LE', '-r', rate, '-c', '1'], { stdio: ['ignore', 'pipe', 'inherit'] });
+      proc.on('error', (err) => {
+        console.warn(`arecord failed (${err?.message || err}); attempting rec fallback`);
+        try {
+          proc = spawn('rec', ['-q', '-c', '1', '-r', rate, '-e', 'signed-integer', '-b', '16', '-t', 'raw', '-'], { stdio: ['ignore', 'pipe', 'inherit'] });
+        } catch (e2) {
+          console.warn('rec fallback failed:', e2?.message || e2);
+          throw err;
+        }
+        hook(proc);
+      });
+      const hook = (p) => {
+        this.commandProc = p;
+        p.stdout.on('data', (buf) => {
+          if (!this.isRecording) return;
+          const b64 = Buffer.from(buf).toString('base64');
+          this.sendMessage({
+            type: 'audio_data',
+            audioData: b64,
+            sampleRate: this.wakeWordSampleRate,
+            channels: 1,
+            format: 'S16LE'
+          });
         });
-      });
-      s.on('error', (e) => {
-        console.warn('Command recording error:', e?.message || e);
-      });
+        p.on('close', (code) => {
+          if (this.isRecording) {
+            console.warn(`Command recorder exited with code ${code}`);
+          }
+        });
+      };
+      hook(proc);
     } catch (e) {
       console.warn('Failed to start command recording:', e?.message || e);
     }
