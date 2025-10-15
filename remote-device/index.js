@@ -1638,56 +1638,6 @@ class HomeBrainRemoteDevice {
       console.warn('Failed to start command recording:', e?.message || e);
     }
   }
-      // Demo mode: simulate recognized text
-      setTimeout(() => {
-        const testCommands = [
-          'Turn on the living room lights',
-          'Set the temperature to 72 degrees',
-          'Lock all the doors',
-          'What\'s the weather like?'
-        ];
-        const command = testCommands[Math.floor(Math.random() * testCommands.length)];
-        this.onVoiceCommandRecorded(command, 0.9);
-      }, 2000);
-      return;
-    }
-
-    if (this.captureMode === 'pcm') {
-      // Stream raw PCM frames to hub as base64 messages
-      const opts = {
-        sampleRate: this.wakeWordSampleRate,
-        sampleRateHertz: this.wakeWordSampleRate,
-        threshold: 0,
-        verbose: false,
-        recordProgram: this.config.audio.recordProgram || 'arecord',
-        device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
-      };
-      try {
-        this.commandRecording = recorder.record(opts);
-        const s = this.commandRecording.stream();
-        s.on('data', (buf) => {
-          if (!this.isRecording) return;
-          const b64 = Buffer.from(buf).toString('base64');
-          this.sendMessage({
-            type: 'audio_data',
-            audioData: b64,
-            sampleRate: this.wakeWordSampleRate,
-            channels: 1,
-            format: 'S16LE'
-          });
-        });
-        s.on('error', (e) => {
-          console.warn('Command recording error:', e?.message || e);
-        });
-      } catch (e) {
-        console.warn('Failed to start command recording:', e?.message || e);
-      }
-      return;
-    }
-
-    // Default: do not simulate, do not stream; just open a listening window
-    // You can implement local STT here in the future.
-  }
 
   stopVoiceRecording() {
     if (!this.isRecording) return;
