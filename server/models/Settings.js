@@ -117,7 +117,7 @@ const SettingsSchema = new mongoose.Schema({
   },
   localLlmEndpoint: {
     type: String,
-    default: 'http://localhost:8080'
+    default: 'http://localhost:11434'
   },
   localLlmModel: {
     type: String,
@@ -176,6 +176,11 @@ SettingsSchema.statics.getSettings = async function() {
     settings = new this();
     await settings.save();
     console.log('Settings: Default settings created successfully');
+  } else if (settings.localLlmEndpoint && settings.localLlmEndpoint.trim().toLowerCase() === 'http://localhost:8080') {
+    console.log('Settings: Updating legacy local LLM endpoint to default Ollama port (11434)');
+    settings.localLlmEndpoint = 'http://localhost:11434';
+    await settings.save();
+    console.log('Settings: localLlmEndpoint updated to http://localhost:11434');
   }
   
   return settings;

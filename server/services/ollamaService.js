@@ -215,6 +215,39 @@ Please contact your system administrator for assistance.`;
       if (error.code === 1) {
         return { success: true, message: 'Service was not running' };
       }
+
+      const errorOutput = `${error.stderr || ''}${error.stdout || ''}`.toLowerCase();
+
+      if (errorOutput.includes('operation not permitted') || error.code === 126 || error.code === 127) {
+        console.warn('Initial attempt to stop Ollama failed due to insufficient permissions. Trying sudo...');
+        try {
+          await execAsync('sudo -n pkill -f "ollama serve"');
+          console.log('Ollama service stopped via sudo');
+          return { success: true, message: 'Service stopped with elevated privileges' };
+        } catch (sudoError) {
+          const sudoOutput = `${sudoError.stderr || ''}${sudoError.stdout || ''}`.toLowerCase();
+
+          if (sudoError.code === 1 && sudoOutput.includes('no process found')) {
+            return { success: true, message: 'Service was not running' };
+          }
+
+          if (sudoOutput.includes('a password is required') || sudoOutput.includes('permission denied')) {
+            const message = 'Insufficient privileges to stop the Ollama service. Please run "sudo pkill -f \\"ollama serve\\"" manually or grant this service sudo access.';
+            console.error(message);
+            throw new Error(message);
+          }
+
+          if (sudoOutput.includes('command not found')) {
+            const message = 'Unable to stop Ollama service: sudo command not available. Please stop the service manually or install sudo.';
+            console.error(message);
+            throw new Error(message);
+          }
+
+          console.error('Error stopping Ollama service with sudo:', sudoError);
+          throw sudoError;
+        }
+      }
+
       console.error('Error stopping Ollama service:', error);
       throw error;
     }
