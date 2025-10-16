@@ -112,7 +112,29 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
       console.log(`Sending request to local LLM at ${testUrl} with model: ${model}`);
 
       // Try OpenAI-compatible endpoint format first
-      const response = await axios.post(`${testUrl}/v1/chat/completions`, {
+      const response = await axios.post(`${testUrl}/api/chat`, {
+        model: model || 'default',
+        messages: [{ role: 'user', content: message }],
+        stream: false
+      }, {
+        timeout: 30000,
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      console.log('LLM Service: Local Ollama /api/chat endpoint responded successfully');
+
+      if (response.data && response.data.message && response.data.message.content) {
+        return Array.isArray(response.data.message.content)
+          ? response.data.message.content.map((part) => part.text || '').join('').trim()
+          : String(response.data.message.content);
+      }
+
+      if (response.data && response.data.message) {
+        return JSON.stringify(response.data.message);
+      }
+
+      // Fallback to OpenAI-compatible endpoint if /api/chat is not supported
+      const completionResponse = await axios.post(`${testUrl}/v1/chat/completions`, {
         model: model || 'default',
         messages: [{ role: 'user', content: message }],
         max_tokens: 1024,
@@ -121,7 +143,7 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
         headers: { 'Content-Type': 'application/json' }
       });
 
-      console.log(`Received response from local LLM`);
+      console.log(`LLM Service: Local endpoint responded via /v1/chat/completions`);
 
       // Handle OpenAI-compatible response format
       if (response.data.choices && response.data.choices[0]) {
@@ -154,8 +176,38 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
           if (altResponse.data.response) {
             return altResponse.data.response;
           }
+
+          if (altResponse.data.output) {
+            return altResponse.data.output;
+          }
         } catch (altError) {
           console.error(`Alternative endpoint also failed:`, altError.message);
+        }
+
+        try {
+          console.log(`Trying legacy endpoint format: ${testUrl}/api/chat`);
+          const legacyResponse = await axios.post(`${testUrl}/api/chat`, {
+            model: model || 'default',
+            messages: [{ role: 'user', content: message }],
+            stream: false
+          }, {
+            timeout: 30000,
+            headers: { 'Content-Type': 'application/json' }
+          });
+
+          const legacyMessage = legacyResponse.data?.message;
+          if (legacyMessage?.content) {
+            if (Array.isArray(legacyMessage.content)) {
+              return legacyMessage.content.map((part) => part.text || '').join('').trim();
+            }
+            return String(legacyMessage.content);
+          }
+
+          if (typeof legacyResponse.data?.response === 'string') {
+            return legacyResponse.data.response;
+          }
+        } catch (altError) {
+          console.error(`Legacy endpoint also failed:`, altError.message);
         }
       }
 
