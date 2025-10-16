@@ -79,7 +79,7 @@ const ollamaConfigSchema = new mongoose.Schema({
   },
   serviceStatus: {
     type: String,
-    enum: ['running', 'stopped', 'installing', 'error', 'not_installed'],
+    enum: ['running', 'running_external', 'stopped', 'installing', 'error', 'not_installed'],
     default: 'not_installed',
   },
   installedModels: [ollamaModelSchema],
