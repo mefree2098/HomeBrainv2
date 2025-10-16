@@ -60,9 +60,17 @@ def load_model(model_name: str, download_dir: Path, device: str, compute_type: s
 
 
 class CommandLoop:
-    def __init__(self, model: WhisperModel, model_name: str):
+    def __init__(self, model: WhisperModel, model_name: str, requested_device: str, requested_compute: str):
         self.model = model
         self.model_name = model_name
+        self.device = requested_device
+        self.compute_type = requested_compute
+        internal_model = getattr(model, "_model", None) or getattr(model, "model", None)
+        if internal_model is not None:
+            self.device = getattr(internal_model, "device", self.device)
+            self.compute_type = getattr(internal_model, "compute_type", self.compute_type)
+        self.device = (self.device or "cpu")
+        self.compute_type = (self.compute_type or "float32")
         self.stdout_lock = threading.Lock()
         self.pending: "queue.Queue[dict]" = queue.Queue()
         self._running = True
@@ -185,6 +193,8 @@ class CommandLoop:
             response = {
                 "id": request_id,
                 "success": True,
+                "device": self.device,
+                "compute_type": self.compute_type,
                 "text": "".join(transcript).strip(),
                 "segments": segment_payload,
                 "info": {
@@ -195,6 +205,8 @@ class CommandLoop:
                     "model": self.model_name,
                     "processing_time": duration,
                     "avg_logprob": avg_logprob,
+                    "device": self.device,
+                    "compute_type": self.compute_type,
                 }
             }
             emit(response)
@@ -207,7 +219,9 @@ class CommandLoop:
             "id": payload.get("id"),
             "success": True,
             "action": "status",
-            "model": self.model_name
+            "model": self.model_name,
+            "device": self.device,
+            "compute_type": self.compute_type
         }
         emit(response)
 
@@ -256,7 +270,7 @@ def main() -> int:
         })
         return 1
 
-    loop = CommandLoop(model, args.model)
+    loop = CommandLoop(model, args.model, args.device, args.compute_type)
     try:
         loop.start()
     except KeyboardInterrupt:
