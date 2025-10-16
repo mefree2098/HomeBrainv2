@@ -30,6 +30,7 @@ interface OllamaStatus {
   version: string | null;
   serviceRunning: boolean;
   serviceStatus: string;
+  serviceOwner?: string | null;
   installedModels: any[];
   activeModel: string | null;
   updateAvailable: boolean;
@@ -119,11 +120,21 @@ export default function OllamaManagement() {
     setActionLoading('stop');
 
     try {
-      await stopOllamaService();
-      toast({
-        title: 'Success',
-        description: 'Ollama service stopped',
-      });
+      const result = await stopOllamaService();
+      if (result.success) {
+        toast({
+          title: 'Success',
+          description: result.message || 'Ollama service stopped',
+        });
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Unable to stop service',
+          description:
+            result.message ||
+            'Ollama is being managed outside HomeBrain. Stop it manually or grant sudo access.',
+        });
+      }
       await loadStatus();
     } catch (error: any) {
       console.error('Error stopping service:', error);
@@ -192,6 +203,10 @@ export default function OllamaManagement() {
       setActionLoading(null);
     }
   };
+
+  const isExternalService = status?.serviceStatus === 'running_external';
+  const isServiceRunning =
+    status?.serviceStatus === 'running' || status?.serviceStatus === 'running_external';
 
   if (loading) {
     return (
@@ -275,6 +290,9 @@ export default function OllamaManagement() {
         </p>
       </div>
 
+      const isExternalService = status.serviceStatus === 'running_external';
+      const isServiceRunning = status.serviceStatus === 'running' || status.serviceStatus === 'running_external';
+
       {/* Status Card */}
       <Card>
         <CardHeader>
@@ -299,22 +317,24 @@ export default function OllamaManagement() {
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-sm text-muted-foreground">Service</span>
-                {status.serviceRunning ? (
-                  <Badge className="bg-green-500">Running</Badge>
+                {isServiceRunning ? (
+                  <Badge className={isExternalService ? 'bg-slate-500' : 'bg-green-500'}>
+                    {isExternalService ? 'External Service' : 'Running'}
+                  </Badge>
                 ) : (
                   <Badge variant="destructive">Stopped</Badge>
                 )}
               </div>
               <div className="space-x-2">
-                {status.serviceRunning ? (
+                {isServiceRunning ? (
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={handleStopService}
-                    disabled={actionLoading === 'stop'}
+                    disabled={actionLoading === 'stop' || isExternalService}
                   >
                     <StopIcon className="h-4 w-4 mr-1" />
-                    Stop
+                    {isExternalService ? 'Managed Externally' : 'Stop'}
                   </Button>
                 ) : (
                   <Button
@@ -368,6 +388,22 @@ export default function OllamaManagement() {
               <Badge className="ml-2 bg-blue-500">{status.activeModel}</Badge>
             </div>
           )}
+
+          {isExternalService && (
+            <Alert className="mt-4">
+              <AlertDescription>
+                Ollama is currently managed by{' '}
+                <span className="font-semibold">
+                  {status.serviceOwner || 'another user'}
+                </span>
+                . HomeBrain can connect but cannot stop or restart this service. Use&nbsp;
+                <code className="rounded bg-muted px-2 py-1 text-xs">
+                  sudo systemctl stop ollama
+                </code>{' '}
+                (or grant this service sudo access) if you need to control it here.
+              </AlertDescription>
+            </Alert>
+          )}
         </CardContent>
       </Card>
 
@@ -384,7 +420,7 @@ export default function OllamaManagement() {
         </TabsContent>
 
         <TabsContent value="chat" className="space-y-6">
-          {!status.serviceRunning ? (
+          {!isServiceRunning ? (
             <Alert>
               <AlertDescription>
                 Ollama service is not running. Please start the service to use chat.
