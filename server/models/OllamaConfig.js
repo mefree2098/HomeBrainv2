@@ -65,6 +65,14 @@ const ollamaConfigSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  servicePid: {
+    type: Number,
+    default: null,
+  },
+  serviceOwner: {
+    type: String,
+    default: null,
+  },
   installPath: {
     type: String,
     default: '/usr/local/bin/ollama',
@@ -183,7 +191,11 @@ ollamaConfigSchema.methods.setActiveModel = async function(modelName) {
 ollamaConfigSchema.methods.updateInstallation = async function(version, isInstalled) {
   this.version = version;
   this.isInstalled = isInstalled;
-  this.serviceStatus = isInstalled ? 'running' : 'not_installed';
+  if (!isInstalled) {
+    this.servicePid = null;
+    this.serviceOwner = null;
+    this.serviceStatus = 'not_installed';
+  }
   await this.save();
 };
 
