@@ -939,51 +939,23 @@ async function createAutomationFromText(text, roomContext = null) {
     const defaultPriority = Array.isArray(settingsDoc.llmPriorityList) && settingsDoc.llmPriorityList.length
       ? settingsDoc.llmPriorityList
       : ['local', 'openai', 'anthropic'];
-    const failedProviders = new Set();
+    let providerQueue = [...defaultPriority];
     let parsedAutomation = null;
     let lastError = null;
+    let jsonReminderAdded = false;
 
     // Try up to MAX_LLM_RETRIES times with self-healing
-    for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
+    for (let attempt = 1; attempt <= MAX_LLM_RETRIES && providerQueue.length; attempt++) {
       console.log(`AutomationService: LLM attempt ${attempt}/${MAX_LLM_RETRIES}`);
 
       let providerUsed = null;
       let modelUsed = null;
 
       try {
-        const reorderedPriority = (() => {
-          if (!failedProviders.size) {
-            return defaultPriority;
-          }
-          const seen = new Set();
-          const active = [];
-          defaultPriority.forEach((provider) => {
-            const key = provider?.toLowerCase();
-            if (!key || seen.has(key)) {
-              return;
-            }
-            if (!failedProviders.has(key)) {
-              active.push(provider);
-              seen.add(key);
-            }
-          });
-          defaultPriority.forEach((provider) => {
-            const key = provider?.toLowerCase();
-            if (!key || seen.has(key)) {
-              return;
-            }
-            if (failedProviders.has(key)) {
-              active.push(provider);
-              seen.add(key);
-            }
-          });
-          return active.length ? active : defaultPriority;
-        })();
-
         // Send request to LLM with automatic fallback based on priority
         console.log('AutomationService: Sending request to LLM with fallback');
         const { response: llmResponse, provider, model } =
-          await sendLLMRequestWithFallbackDetailed(prompt, reorderedPriority);
+          await sendLLMRequestWithFallbackDetailed(prompt, providerQueue);
         providerUsed = provider ? provider.toLowerCase() : null;
         modelUsed = model || null;
 
@@ -999,8 +971,17 @@ async function createAutomationFromText(text, roomContext = null) {
           lastError = 'No valid JSON found in LLM response';
           console.error('AutomationService:', lastError);
           console.error('AutomationService: Full LLM Response:', llmResponse);
-          if (providerUsed) {
-            failedProviders.add(providerUsed);
+          if (providerUsed === 'local') {
+            providerQueue = providerQueue.filter(
+              (candidate) => candidate?.toLowerCase() !== providerUsed
+            );
+            console.warn(`AutomationService: Removing provider ${providerUsed} from queue due to malformed response`);
+          } else if (providerUsed) {
+            console.warn(`AutomationService: Provider ${providerUsed} returned malformed response; will retry after reinforcing instructions.`);
+            if (!jsonReminderAdded) {
+              prompt = `${prompt}\n\nREMINDER: Return ONLY the JSON object described above with all required fields.`;
+              jsonReminderAdded = true;
+            }
           }
           continue;
         }
@@ -1021,8 +1002,11 @@ async function createAutomationFromText(text, roomContext = null) {
           lastError = `Validation failed: ${validation.issues.join(', ')}`;
           console.error('AutomationService:', lastError);
           parsedAutomation = null;
-          if (providerUsed) {
-            failedProviders.add(providerUsed);
+          if (providerUsed === 'local') {
+            providerQueue = providerQueue.filter(
+              (candidate) => candidate?.toLowerCase() !== providerUsed
+            );
+            console.warn('AutomationService: Removing local provider after invalid automation payload');
           }
 
           // Build feedback prompt for retry
@@ -1042,13 +1026,23 @@ Return ONLY the corrected JSON, no explanation.`;
 
           // Update prompt for next attempt
           prompt = feedbackPrompt;
+          continue;
         }
 
       } catch (parseError) {
         lastError = `Parse error: ${parseError.message}`;
         console.error('AutomationService:', lastError);
-        if (providerUsed) {
-          failedProviders.add(providerUsed);
+        if (providerUsed === 'local') {
+          providerQueue = providerQueue.filter(
+            (candidate) => candidate?.toLowerCase() !== providerUsed
+          );
+          console.warn(`AutomationService: Removing provider ${providerUsed} from queue due to parse error`);
+        } else if (providerUsed) {
+          console.warn(`AutomationService: Provider ${providerUsed} caused parse error; reinforcing JSON reminder for next attempt.`);
+          if (!jsonReminderAdded) {
+            prompt = `${prompt}\n\nREMINDER: Return ONLY the JSON object described above with all required fields.`;
+            jsonReminderAdded = true;
+          }
         }
       }
     }
