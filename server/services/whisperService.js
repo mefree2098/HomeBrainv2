@@ -261,10 +261,9 @@ class WhisperService {
     } catch {
       ok = false;
     }
-    // Only mark installed if faster-whisper is importable AND CT2 (if present) reports CUDA on a CUDA-capable host
     if (ok && this._hasCudaSupport()) {
       const cudaOk = await this._verifyCudaRuntime();
-      ok = cudaOk; // require CUDA to be actually usable on Jetson/GPUs
+      ok = cudaOk;
     }
     if (ok !== !!config.isInstalled) {
       config.isInstalled = ok;
@@ -365,6 +364,23 @@ class WhisperService {
 
   _getCudaArch() { return process.env.CT2_CUDA_ARCH || (this._isJetson() ? '87' : null); }
 
+  _augmentedEnv() {
+    const env = { ...process.env };
+    const cudaHome = WhisperService._staticResolveCudaHome();
+    const ldParts = [
+      ...(env.LD_LIBRARY_PATH ? env.LD_LIBRARY_PATH.split(':') : []),
+      ...DEFAULT_LD_LIBRARY_PATHS,
+      cudaHome && path.join(cudaHome, 'lib64')
+    ];
+    env.LD_LIBRARY_PATH = dedupePath(ldParts).join(':');
+    if (cudaHome) {
+      env.CUDA_HOME = cudaHome;
+      env.CUDA_TOOLKIT_ROOT_DIR = cudaHome;
+      env.PATH = [path.join(cudaHome, 'bin'), env.PATH || ''].filter(Boolean).join(':');
+    }
+    return env;
+  }
+
   async _verifyCudaRuntime() {
     if (!this._hasCudaSupport()) return false;
 
@@ -389,23 +405,6 @@ class WhisperService {
       if (error.stderr?.trim()) console.warn(`Whisper Service: CUDA verification stderr:\n${error.stderr.trim().slice(0, 2000)}`);
       return false;
     }
-  }
-
-  _augmentedEnv() {
-    const env = { ...process.env };
-    const cudaHome = WhisperService._staticResolveCudaHome();
-    const ldParts = [
-      ...(env.LD_LIBRARY_PATH ? env.LD_LIBRARY_PATH.split(':') : []),
-      ...DEFAULT_LD_LIBRARY_PATHS,
-      cudaHome && path.join(cudaHome, 'lib64')
-    ];
-    env.LD_LIBRARY_PATH = dedupePath(ldParts).join(':');
-    if (cudaHome) {
-      env.CUDA_HOME = cudaHome;
-      env.CUDA_TOOLKIT_ROOT_DIR = cudaHome;
-      env.PATH = [path.join(cudaHome, 'bin'), env.PATH || ''].filter(Boolean).join(':');
-    }
-    return env;
   }
 
   async _buildCTranslate2FromSource() {
@@ -449,23 +448,29 @@ class WhisperService {
     console.log(`Whisper Service: Building CTranslate2 (ninja -j${jobs})`);
     await this._runCommand('ninja', ['-j', jobs], { cwd: buildDir, env: buildEnv });
 
-    // Build + install Python wheel (no deps so we don't pull PyPI CPU wheel)
+    // Build + install Python wheel WITHOUT build isolation so pybind11 is honored
     const pythonDir = path.join(sourceRoot, 'python');
-    console.log('Whisper Service: Building Python wheel for CTranslate2');
-    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'build', 'pybind11'], { cwd: pythonDir, env: buildEnv });
-    await this._runCommand(PYTHON_BIN, ['-m', 'build'], { cwd: pythonDir, env: buildEnv });
+    console.log('Whisper Service: Building Python wheel for CTranslate2 (no isolation)');
+    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel', 'build', 'pybind11'], { cwd: pythonDir, env: buildEnv });
+
+    // Use pip wheel with --no-build-isolation to avoid a fresh venv missing pybind11
+    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'wheel', '.', '--wheel-dir', 'dist', '--no-deps', '--no-build-isolation'], { cwd: pythonDir, env: buildEnv });
 
     const distDir = path.join(pythonDir, 'dist');
     const wheels = await fs.promises.readdir(distDir);
-    const wheel = wheels.find((file) => file.endsWith('.whl'));
+    const wheel = wheels.find((file) => file.startsWith('ctranslate2-') && file.endsWith('.whl'));
     if (!wheel) throw new Error('CTranslate2 wheel build completed but no dist/*.whl was produced');
 
     const wheelPath = path.join(distDir, wheel);
     console.log(`Whisper Service: Installing Python wheel ${wheelPath}`);
     await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--force-reinstall', '--no-deps', wheelPath], { cwd: pythonDir, env: buildEnv });
 
-    // Optional: cleanup
-    await fs.promises.rm(sourceRoot, { recursive: true, force: true }).catch(() => {});
+    // Make sure the linker sees /usr/local/lib (where libctranslate2.so installs)
+    try {
+      await this._runCommand('bash', ['-lc', `echo '/usr/local/lib' | sudo tee /etc/ld.so.conf.d/ctranslate2.conf >/dev/null && sudo ldconfig`], { env: buildEnv });
+    } catch {
+      // non-fatal if we lack sudo; child processes inherit LD_LIBRARY_PATH anyway
+    }
   }
 
   async installDependencies() {
