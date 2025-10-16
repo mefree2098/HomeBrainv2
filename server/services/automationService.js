@@ -2,9 +2,10 @@ const Automation = require('../models/Automation');
 const AutomationHistory = require('../models/AutomationHistory');
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
-const { sendLLMRequestWithFallback } = require('./llmService');
+const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
 const deviceService = require('./deviceService');
 const mongoose = require('mongoose');
+const Settings = require('../models/Settings');
 
 const MAX_LLM_RETRIES = 3;
 const MAX_DEVICE_PROMPT_ENTRIES = 40;
@@ -934,6 +935,11 @@ async function createAutomationFromText(text, roomContext = null) {
     // Build detailed prompt with filtered context
     let prompt = buildAutomationPrompt(text, promptDeviceContext, promptScenes, roomContext);
 
+    const settingsDoc = await Settings.getSettings();
+    const defaultPriority = Array.isArray(settingsDoc.llmPriorityList) && settingsDoc.llmPriorityList.length
+      ? settingsDoc.llmPriorityList
+      : ['local', 'openai', 'anthropic'];
+    const failedProviders = new Set();
     let parsedAutomation = null;
     let lastError = null;
 
@@ -941,12 +947,51 @@ async function createAutomationFromText(text, roomContext = null) {
     for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
       console.log(`AutomationService: LLM attempt ${attempt}/${MAX_LLM_RETRIES}`);
 
+      let providerUsed = null;
+      let modelUsed = null;
+
       try {
+        const reorderedPriority = (() => {
+          if (!failedProviders.size) {
+            return defaultPriority;
+          }
+          const seen = new Set();
+          const active = [];
+          defaultPriority.forEach((provider) => {
+            const key = provider?.toLowerCase();
+            if (!key || seen.has(key)) {
+              return;
+            }
+            if (!failedProviders.has(key)) {
+              active.push(provider);
+              seen.add(key);
+            }
+          });
+          defaultPriority.forEach((provider) => {
+            const key = provider?.toLowerCase();
+            if (!key || seen.has(key)) {
+              return;
+            }
+            if (failedProviders.has(key)) {
+              active.push(provider);
+              seen.add(key);
+            }
+          });
+          return active.length ? active : defaultPriority;
+        })();
+
         // Send request to LLM with automatic fallback based on priority
         console.log('AutomationService: Sending request to LLM with fallback');
-        const llmResponse = await sendLLMRequestWithFallback(prompt);
+        const { response: llmResponse, provider, model } =
+          await sendLLMRequestWithFallbackDetailed(prompt, reorderedPriority);
+        providerUsed = provider ? provider.toLowerCase() : null;
+        modelUsed = model || null;
+
         console.log('AutomationService: LLM response received');
         console.log('AutomationService: LLM Response Preview:', llmResponse.substring(0, 500));
+        if (providerUsed) {
+          console.log(`AutomationService: Response provided by ${providerUsed}${modelUsed ? ` (${modelUsed})` : ''}`);
+        }
 
         // Parse LLM response
         const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
@@ -954,6 +999,9 @@ async function createAutomationFromText(text, roomContext = null) {
           lastError = 'No valid JSON found in LLM response';
           console.error('AutomationService:', lastError);
           console.error('AutomationService: Full LLM Response:', llmResponse);
+          if (providerUsed) {
+            failedProviders.add(providerUsed);
+          }
           continue;
         }
 
@@ -973,6 +1021,9 @@ async function createAutomationFromText(text, roomContext = null) {
           lastError = `Validation failed: ${validation.issues.join(', ')}`;
           console.error('AutomationService:', lastError);
           parsedAutomation = null;
+          if (providerUsed) {
+            failedProviders.add(providerUsed);
+          }
 
           // Build feedback prompt for retry
           const feedbackPrompt = `
@@ -996,6 +1047,9 @@ Return ONLY the corrected JSON, no explanation.`;
       } catch (parseError) {
         lastError = `Parse error: ${parseError.message}`;
         console.error('AutomationService:', lastError);
+        if (providerUsed) {
+          failedProviders.add(providerUsed);
+        }
       }
     }
 
