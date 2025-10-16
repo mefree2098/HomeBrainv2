@@ -596,6 +596,10 @@ class WhisperService {
       '-DWITH_CUDA=ON',
       '-DWITH_CUDNN=ON',
       '-DCMAKE_CUDA_ARCHITECTURES=87',
+      '-DOPENMP_RUNTIME=COMP',
+      '-DWITH_MKL=OFF',
+      '-DWITH_DNNL=OFF',
+      '-DWITH_OPENBLAS=ON',
       '-DBUILD_CTRANSLATE2_CLI=OFF'
     ];
 
