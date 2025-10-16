@@ -450,20 +450,57 @@ class WhisperService {
 
     // Build + install Python wheel WITHOUT build isolation so pybind11 is honored
     const pythonDir = path.join(sourceRoot, 'python');
-    console.log('Whisper Service: Building Python wheel for CTranslate2 (no isolation)');
-    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel', 'build', 'pybind11'], { cwd: pythonDir, env: buildEnv });
+    console.log('Whisper Service: Building Python wheel for CTranslate2 (no isolation, modern packaging)');
 
-    // Use pip wheel with --no-build-isolation to avoid a fresh venv missing pybind11
-    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'wheel', '.', '--wheel-dir', 'dist', '--no-deps', '--no-build-isolation'], { cwd: pythonDir, env: buildEnv });
+    // 1) Ensure modern toolchain in the outer env (user site)
+    await this._runCommand(
+      PYTHON_BIN,
+      [
+        '-m',
+        'pip',
+        'install',
+        '--upgrade',
+        'pip',
+        'setuptools>=70',
+        'wheel>=0.44',
+        'build>=1.2',
+        'pybind11>=2.12',
+        'packaging>=24.1', // <-- fixes canonicalize_version strip_trailing_zero
+      ],
+      { cwd: pythonDir, env: buildEnv }
+    );
 
-    const distDir = path.join(pythonDir, 'dist');
-    const wheels = await fs.promises.readdir(distDir);
-    const wheel = wheels.find((file) => file.startsWith('ctranslate2-') && file.endsWith('.whl'));
-    if (!wheel) throw new Error('CTranslate2 wheel build completed but no dist/*.whl was produced');
+    // 2) Front-load the user site on PYTHONPATH so imports pick the upgraded packages over /usr/lib/python3/dist-packages
+    let userSite = '';
+    try {
+      const res = await this._runCommand(
+        PYTHON_BIN,
+        ['-c', 'import site,sys; print(site.getusersitepackages())'],
+        { env: buildEnv }
+      );
+      userSite = (res.stdout || '').trim();
+    } catch {
+      /* best effort */
+    }
 
-    const wheelPath = path.join(distDir, wheel);
-    console.log(`Whisper Service: Installing Python wheel ${wheelPath}`);
-    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--force-reinstall', '--no-deps', wheelPath], { cwd: pythonDir, env: buildEnv });
+    const wheelEnv = { ...buildEnv };
+    if (userSite) {
+      wheelEnv.PYTHONPATH = userSite + (buildEnv.PYTHONPATH ? ':' + buildEnv.PYTHONPATH : '');
+    }
+
+    // 3) Build a wheel WITHOUT build isolation (so it uses the upgraded packages)
+    await this._runCommand(
+      PYTHON_BIN,
+      ['-m', 'build', '--wheel', '--no-isolation'],
+      { cwd: pythonDir, env: wheelEnv }
+    );
+
+    // 4) Install the wheel we just produced (don’t let pip grab PyPI’s CPU wheel)
+    await this._runCommand(
+      PYTHON_BIN,
+      ['-m', 'pip', 'install', '--force-reinstall', '--no-deps', path.join('dist')],
+      { cwd: pythonDir, env: wheelEnv }
+    );
 
     // Make sure the linker sees /usr/local/lib (where libctranslate2.so installs)
     try {
