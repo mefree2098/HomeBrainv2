@@ -184,7 +184,22 @@ Please contact your system administrator for assistance.`;
       if (status.running) {
         console.log('Ollama service is already running');
         const ownedProcess = await this.findOwnedOllamaProcess();
-        if (ownedProcess) {
+        if (!ownedProcess) {
+          console.log('Existing Ollama process is owned by another user, attempting to stop system service...');
+          const stopResult = await this.stopSystemService();
+          if (!stopResult.success) {
+            config.serviceStatus = 'running_external';
+            config.servicePid = null;
+            config.serviceOwner = 'external';
+            config.lastError = {
+              message: stopResult.message,
+              timestamp: new Date()
+            };
+            await config.save();
+            throw new Error(stopResult.message);
+          }
+          await this.delay(1000);
+        } else {
           config.serviceStatus = 'running';
           config.servicePid = ownedProcess.pid;
           config.serviceOwner = ownedProcess.user;
@@ -192,25 +207,6 @@ Please contact your system administrator for assistance.`;
           await config.save();
           return { success: true, message: 'Service already running' };
         }
-
-        const processes = await this.listOllamaProcesses();
-        if (processes.length) {
-          const external = processes[0];
-          config.serviceStatus = 'running_external';
-          config.servicePid = external.pid;
-          config.serviceOwner = external.user;
-          config.lastError = null;
-          await config.save();
-          const message = `Service already running (managed by user "${external.user}"). HomeBrain will reuse it in read-only mode.`;
-          return { success: true, message };
-        }
-
-        config.serviceStatus = 'running';
-        config.servicePid = null;
-        config.serviceOwner = null;
-        config.lastError = null;
-        await config.save();
-        return { success: true, message: 'Service already running' };
       }
 
       const childEnv = {
@@ -274,27 +270,45 @@ Please contact your system administrator for assistance.`;
       console.log('Stopping Ollama service...');
 
       const candidates = [];
+      const currentUser = this.getCurrentUser();
+      const serviceOwner = config.serviceOwner || currentUser;
+      const isExternalOwner = serviceOwner && serviceOwner !== currentUser;
+
       if (config.servicePid) {
-        candidates.push({ pid: config.servicePid, managed: true });
+        candidates.push({ pid: config.servicePid, managed: !isExternalOwner, owner: serviceOwner });
       } else {
         const ownedProcess = await this.findOwnedOllamaProcess();
-      if (ownedProcess) {
-        candidates.push({ pid: ownedProcess.pid, managed: false });
+        if (ownedProcess) {
+          candidates.push({
+            pid: ownedProcess.pid,
+            managed: ownedProcess.user === currentUser,
+            owner: ownedProcess.user
+          });
+        }
       }
-    }
 
       if (candidates.length === 0) {
         const processes = await this.listOllamaProcesses();
         if (processes.length) {
           const external = processes[0];
-          const message = `Ollama service is managed by user "${external.user}". HomeBrain does not have permission to stop it. Use "sudo systemctl stop ollama" or grant HomeBrain sudo access.`;
-          config.serviceStatus = 'running_external';
-          config.servicePid = external.pid;
-          config.serviceOwner = external.user;
-          await config.setError(message);
-          await config.save();
+          const message = `Ollama service is managed by user "${external.user}". Attempting to stop via system service...`;
           console.warn(message);
-          return { success: false, message };
+          const stopResult = await this.stopSystemService();
+          if (!stopResult.success) {
+            config.serviceStatus = 'running_external';
+            config.servicePid = external.pid;
+            config.serviceOwner = external.user;
+            await config.setError(stopResult.message);
+            await config.save();
+            return { success: false, message: stopResult.message };
+          }
+          await this.delay(1000);
+          config.servicePid = null;
+          config.serviceOwner = null;
+          config.serviceStatus = 'stopped';
+          config.lastError = null;
+          await config.save();
+          return { success: true, message: 'Service stopped via system service' };
         }
 
         config.serviceStatus = 'stopped';
@@ -306,6 +320,24 @@ Please contact your system administrator for assistance.`;
       }
 
       for (const candidate of candidates) {
+        if (!candidate.managed) {
+          const stopResult = await this.stopSystemService();
+          if (!stopResult.success) {
+            config.serviceStatus = 'running_external';
+            config.serviceOwner = candidate.owner || config.serviceOwner || 'external';
+            await config.setError(stopResult.message);
+            await config.save();
+            return { success: false, message: stopResult.message };
+          }
+          await this.delay(1000);
+          config.servicePid = null;
+          config.serviceOwner = null;
+          config.serviceStatus = 'stopped';
+          config.lastError = null;
+          await config.save();
+          return { success: true, message: 'Service stopped via system service' };
+        }
+
         const result = await this.terminateManagedProcess(candidate.pid);
         if (result.success) {
           config.servicePid = null;
@@ -519,6 +551,51 @@ Please contact your system administrator for assistance.`;
 
   delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async stopSystemService() {
+    const commands = [];
+    const currentUser = this.getCurrentUser();
+
+    if (currentUser === 'root') {
+      commands.push('systemctl stop ollama');
+    }
+
+    commands.push('sudo -n systemctl stop ollama');
+    commands.push('sudo -n pkill -f "ollama serve"');
+
+    let lastError = null;
+
+    for (const command of commands) {
+      try {
+        await execAsync(command);
+        console.log(`Executed command: ${command}`);
+        return { success: true, message: `Service stopped using "${command}"` };
+      } catch (error) {
+        lastError = error;
+        const output = `${error.stderr || ''}${error.stdout || ''}`.toLowerCase();
+
+        if (error.code === 1 && output.includes('no process')) {
+          return { success: true, message: 'Service was not running' };
+        }
+        if (output.includes('password') || output.includes('permission denied')) {
+          return {
+            success: false,
+            message:
+              'Insufficient privileges to stop the Ollama service. Grant HomeBrain sudo access or stop it manually (e.g., "sudo systemctl stop ollama").'
+          };
+        }
+        if (output.includes('command not found')) {
+          continue;
+        }
+      }
+    }
+
+    if (lastError) {
+      return { success: false, message: lastError.message || 'Failed to stop system service' };
+    }
+
+    return { success: false, message: 'Unable to stop system service' };
   }
 
   /**
@@ -980,6 +1057,7 @@ Please contact your system administrator for assistance.`;
         version: installStatus.version,
         serviceRunning,
         serviceStatus: config.serviceStatus,
+        serviceOwner: config.serviceOwner,
         installedModels: config.installedModels,
         activeModel: config.activeModel,
         configuration: config.configuration,
