@@ -531,6 +531,102 @@ class WhisperService {
     }
   }
 
+  _resolveCudaHome() {
+    const candidates = [
+      process.env.WHISPER_CUDA_HOME,
+      process.env.CUDA_HOME,
+      '/usr/local/cuda',
+      '/usr/local/cuda-12',
+      '/usr/local/cuda-12.6'
+    ];
+    return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+  }
+
+  async _installJetsonBuildDependencies() {
+    console.log('Whisper Service: Installing build dependencies via apt-get');
+    await this._runCommand('sudo', ['apt-get', 'update']);
+    await this._runCommand('sudo', [
+      'apt-get',
+      'install',
+      '-y',
+      '--no-install-recommends',
+      'build-essential',
+      'cmake',
+      'ninja-build',
+      'git',
+      'pkg-config',
+      'python3-dev',
+      'python3-pip',
+      'python3-setuptools',
+      'python3-wheel',
+      'libopenblas-dev'
+    ]);
+  }
+
+  async _buildCTranslate2FromSource() {
+    await this._installJetsonBuildDependencies();
+
+    const sourceRoot = path.join(os.tmpdir(), 'ctranslate2-src');
+    console.log(`Whisper Service: Preparing CTranslate2 source in ${sourceRoot}`);
+    await fs.promises.rm(sourceRoot, { recursive: true, force: true });
+
+    await this._runCommand('git', ['clone', '--recursive', 'https://github.com/OpenNMT/CTranslate2.git', sourceRoot]);
+
+    const buildDir = path.join(sourceRoot, 'build');
+    await fs.promises.mkdir(buildDir, { recursive: true });
+
+    const cudaHome = this._resolveCudaHome();
+    const buildEnv = { ...process.env };
+    if (cudaHome) {
+      buildEnv.CUDA_HOME = cudaHome;
+      buildEnv.CUDA_TOOLKIT_ROOT_DIR = cudaHome;
+      const cudaBin = path.join(cudaHome, 'bin');
+      const cudaLib64 = path.join(cudaHome, 'lib64');
+      buildEnv.PATH = buildEnv.PATH ? `${cudaBin}:${buildEnv.PATH}` : `${cudaBin}`;
+      buildEnv.LD_LIBRARY_PATH = buildEnv.LD_LIBRARY_PATH
+        ? `${cudaLib64}:${buildEnv.LD_LIBRARY_PATH}`
+        : `${cudaLib64}`;
+    }
+
+    const cmakeArgs = [
+      '-G',
+      'Ninja',
+      '..',
+      '-DCMAKE_BUILD_TYPE=Release',
+      '-DWITH_CUDA=ON',
+      '-DWITH_CUDNN=ON',
+      '-DCMAKE_CUDA_ARCHITECTURES=87',
+      '-DBUILD_CTRANSLATE2_CLI=OFF'
+    ];
+
+    console.log('Whisper Service: Configuring CTranslate2 (cmake)');
+    await this._runCommand('cmake', cmakeArgs, { cwd: buildDir, env: buildEnv });
+
+    const jobs = Math.max(1, Array.isArray(os.cpus()) ? os.cpus().length : 4).toString();
+    console.log(`Whisper Service: Building CTranslate2 (ninja -j${jobs})`);
+    await this._runCommand('ninja', ['-j', jobs], { cwd: buildDir, env: buildEnv });
+
+    console.log('Whisper Service: Installing CTranslate2 system libraries');
+    await this._runCommand('sudo', ['ninja', 'install'], { cwd: buildDir, env: buildEnv });
+    await this._runCommand('sudo', ['ldconfig']);
+
+    const pythonDir = path.join(sourceRoot, 'python');
+    console.log('Whisper Service: Building Python wheel for CTranslate2');
+    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'build', 'pybind11'], { cwd: pythonDir });
+    await this._runCommand(PYTHON_BIN, ['-m', 'build'], { cwd: pythonDir });
+
+    const distDir = path.join(pythonDir, 'dist');
+    const wheels = await fs.promises.readdir(distDir);
+    const wheel = wheels.find((file) => file.endsWith('.whl'));
+    if (!wheel) {
+      throw new Error('CTranslate2 wheel build completed but no dist/*.whl was produced');
+    }
+
+    const wheelPath = path.join(distDir, wheel);
+    console.log(`Whisper Service: Installing Python wheel ${wheelPath}`);
+    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--force-reinstall', wheelPath], { cwd: pythonDir });
+  }
+
   async installDependencies() {
     const config = await this._getConfig();
     config.serviceStatus = 'installing';
@@ -539,7 +635,7 @@ class WhisperService {
     const cwd = process.cwd();
     const hasCuda = this._hasCudaSupport();
     let attemptedCudaInstall = false;
-    let cudaWheelInstalled = false;
+    let cudaInstallSucceeded = false;
     let cudaReady = false;
 
     const maxLogLength = 2000;
@@ -576,29 +672,45 @@ class WhisperService {
     await pipInstall('Install faster-whisper', ['--upgrade', 'faster-whisper']);
 
     if (hasCuda) {
-      try {
-        attemptedCudaInstall = true;
-        await pipUninstall('Remove existing ctranslate2', ['ctranslate2']);
-        await pipInstall(
-          'Install CUDA-enabled ctranslate2 wheel',
-          ['--only-binary=:all:', '--no-cache-dir', 'ctranslate2>=4.4,<5']
-        );
-        cudaWheelInstalled = true;
-      } catch (error) {
-        console.warn(`Whisper Service: CUDA-enabled CTranslate2 wheel install failed (${error.message})`);
-        if (error.stdout?.trim()) {
-          console.warn(`Whisper Service: pip stdout:\n${error.stdout.trim()}`);
+      attemptedCudaInstall = true;
+      if (this._isJetson()) {
+        console.log('Whisper Service: Detected Jetson platform, building CTranslate2 from source with CUDA.');
+        try {
+          await pipUninstall('Remove existing ctranslate2', ['ctranslate2']);
+          await this._buildCTranslate2FromSource();
+          cudaInstallSucceeded = true;
+        } catch (error) {
+          console.error('Whisper Service: Failed to build CTranslate2 with CUDA support:', error.message);
+          if (error.stdout?.trim()) {
+            console.error(`Whisper Service: build stdout:\n${trimOutput(error.stdout.trim())}`);
+          }
+          if (error.stderr?.trim()) {
+            console.error(`Whisper Service: build stderr:\n${trimOutput(error.stderr.trim())}`);
+          }
         }
-        if (error.stderr?.trim()) {
-          console.warn(`Whisper Service: pip stderr:\n${error.stderr.trim()}`);
+      } else {
+        try {
+          await pipUninstall('Remove existing ctranslate2', ['ctranslate2']);
+          await pipInstall(
+            'Install CUDA-enabled ctranslate2 wheel',
+            ['--only-binary=:all:', '--no-cache-dir', 'ctranslate2>=4.4,<5']
+          );
+          cudaInstallSucceeded = true;
+        } catch (error) {
+          console.warn(`Whisper Service: CUDA-enabled CTranslate2 wheel install failed (${error.message})`);
+          if (error.stdout?.trim()) {
+            console.warn(`Whisper Service: pip stdout:\n${trimOutput(error.stdout.trim())}`);
+          }
+          if (error.stderr?.trim()) {
+            console.warn(`Whisper Service: pip stderr:\n${trimOutput(error.stderr.trim())}`);
+          }
         }
-        cudaWheelInstalled = false;
       }
     }
 
     await pipInstall('Install soundfile', ['--upgrade', 'soundfile']);
 
-    if (cudaWheelInstalled) {
+    if (cudaInstallSucceeded) {
       cudaReady = await this._verifyCudaRuntime();
       if (!cudaReady) {
         console.warn(
@@ -612,9 +724,9 @@ class WhisperService {
     await config.save();
 
     const suffix = attemptedCudaInstall
-      ? (cudaWheelInstalled
-          ? (cudaReady ? ' (CUDA ready)' : ' (CUDA wheel installed but runtime not ready, using CPU)')
-          : ' (CUDA wheel unavailable, using CPU)')
+      ? (cudaInstallSucceeded
+          ? (cudaReady ? ' (CUDA ready)' : ' (CUDA installed but runtime not ready, using CPU)')
+          : ' (CUDA installation failed, using CPU)')
       : '';
 
     return {
