@@ -344,7 +344,33 @@ Pick only one path; you do not need both.
 
 ---
 
-## Step 15 - Deploy a remote voice device (Raspberry Pi 4B)
+## Step 15 - Enable on-device Whisper speech-to-text
+
+HomeBrain now includes a dedicated **Whisper Management** page that keeps all speech recognition on your Jetson Orin Nano. The workflow mirrors the Ollama UI but targets OpenAI’s Whisper models and the new background transcription worker.
+
+1. **Install the dependencies**  
+   Open **Whisper STT** from the sidebar and click **Install Dependencies**. This runs `pip install faster-whisper soundfile` using the system Python interpreter. If you already installed the packages manually, the page will detect them automatically and mark the step complete.
+
+2. **Start the Whisper service**  
+   Press **Start Service** once dependencies are in place. The backend launches `server/scripts/whisper_server.py`, keeps it running at boot, and restarts it if you change models.
+
+3. **Download a model**  
+   Use the *Model Library* section to pull a Whisper checkpoint. The `small` (multilingual) or `small.en` (English-only) models provide the best balance of accuracy and latency on the Orin Nano. Files are cached under `server/data/whisper/models`.
+
+4. **Activate the model**  
+   After the download finishes, click **Activate**. The running service swaps to the new model instantly, so the very next voice command uses it.
+
+5. **Set defaults in Settings → Voice & Audio**  
+   Switch the speech provider to **On-device Whisper (Jetson)**, pick your preferred model, and optionally set the language to `auto` if you want Whisper to detect it dynamically.
+
+6. **Monitor logs when tuning**  
+   The bottom panel shows the latest log lines from the Python worker—perfect for confirming GPU usage, spotting missing dependencies, or validating quick benchmarking runs.
+
+With these steps in place, every HomeBrain device streams microphone audio to the Jetson, Whisper transcribes it locally, and nothing leaves your network.
+
+---
+
+## Step 16 - Deploy a remote voice device (Raspberry Pi 4B)
 1. **Prepare the Pi**
    - Flash Raspberry Pi OS Lite (64-bit) and enable SSH (using Raspberry Pi Imager “Advanced options”).
    - Boot, connect to your network, and update packages:
@@ -414,7 +440,7 @@ Pick only one path; you do not need both.
 
 ---
 
-## Step 16 - Configure SmartThings OAuth redirect (optional)
+## Step 17 - Configure SmartThings OAuth redirect (optional)
 SmartThings now requires OAuth settings to be managed with the SmartThings CLI. Use the CLI to aim the HomeBrain automation app back at your HTTPS domain.
 
 1. **Install or update the SmartThings CLI** (Node.js is already a prerequisite for HomeBrain):
@@ -483,7 +509,7 @@ When you are finished, close the PowerShell session or run `Remove-Item Env:\SMA
 
 ---
 
-## Step 17 - Ongoing maintenance
+## Step 18 - Ongoing maintenance
 - Update code:
   ```bash
   cd ~/homebrain/HomeBrainv2

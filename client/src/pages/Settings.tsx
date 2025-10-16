@@ -69,9 +69,11 @@ import {
   performHealthCheck,
   exportConfiguration
 } from "@/api/maintenance"
+import { useNavigate } from "react-router-dom"
 
 export function Settings() {
   const { toast } = useToast()
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [testingApiKey, setTestingApiKey] = useState(false)
   const [testingOpenAI, setTestingOpenAI] = useState(false)
@@ -105,6 +107,9 @@ export function Settings() {
       voiceVolume: 0.8,
       microphoneSensitivity: 0.6,
       enableVoiceConfirmation: true,
+      sttProvider: "openai",
+      sttModel: "gpt-4o-mini-transcribe",
+      sttLanguage: "en",
       enableNotifications: true,
       insteonPort: "/dev/ttyUSB0",
       smartthingsToken: "",
@@ -122,6 +127,17 @@ export function Settings() {
       enableSecurityMode: false
     }
   })
+
+  const localWhisperModels = ["tiny", "base", "small", "small.en", "medium"]
+  const openaiSttModels = ["gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe-latest"]
+
+  const sttProviderValue = watch("sttProvider") || "openai"
+  const sttModelRaw = watch("sttModel")
+  const sttModelValue =
+    sttProviderValue === "local"
+      ? (sttModelRaw && localWhisperModels.includes(sttModelRaw) ? sttModelRaw : "small")
+      : (sttModelRaw && openaiSttModels.includes(sttModelRaw) ? sttModelRaw : "gpt-4o-mini-transcribe")
+  const sttLanguageValue = watch("sttLanguage") || "en"
 
   // Load settings on component mount
   useEffect(() => {
@@ -1097,6 +1113,130 @@ export function Settings() {
                       <span>Quiet</span>
                       <span>Loud</span>
                     </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Cpu className="h-5 w-5 text-indigo-600" />
+                  Speech-to-Text Pipeline
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-medium">Provider</label>
+                    <Select
+                      value={sttProviderValue}
+                      onValueChange={(value) => {
+                        setValue("sttProvider", value)
+                        if (value === "local" && !localWhisperModels.includes(sttModelValue)) {
+                          setValue("sttModel", "small")
+                        }
+                        if (value === "openai" && !openaiSttModels.includes(sttModelValue)) {
+                          setValue("sttModel", "gpt-4o-mini-transcribe")
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="openai">OpenAI Whisper API (Cloud)</SelectItem>
+                        <SelectItem value="local">On-device Whisper (Jetson)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {sttProviderValue === "local"
+                        ? "Audio stays on-device and is processed by the Jetson Orin Nano."
+                        : "Audio is sent securely to OpenAI for transcription."}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Recognition Language</label>
+                    <Select value={sttLanguageValue} onValueChange={(value) => setValue("sttLanguage", value)}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select language" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="en">English (en)</SelectItem>
+                        <SelectItem value="auto">Auto Detect</SelectItem>
+                        <SelectItem value="es">Spanish (es)</SelectItem>
+                        <SelectItem value="fr">French (fr)</SelectItem>
+                        <SelectItem value="de">German (de)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Choose “Auto Detect” to let Whisper determine the spoken language automatically.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-medium">
+                      {sttProviderValue === "local" ? "Local Whisper Model" : "Cloud Model"}
+                    </label>
+                    <Select value={sttModelValue} onValueChange={(value) => setValue("sttModel", value)}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {sttProviderValue === "local" ? (
+                          <>
+                            <SelectItem value="tiny">tiny (fastest, least accurate)</SelectItem>
+                            <SelectItem value="base">base (balanced)</SelectItem>
+                            <SelectItem value="small">small (recommended)</SelectItem>
+                            <SelectItem value="small.en">small.en (English-optimized)</SelectItem>
+                            <SelectItem value="medium">medium (highest accuracy)</SelectItem>
+                          </>
+                        ) : (
+                          <>
+                            <SelectItem value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</SelectItem>
+                            <SelectItem value="gpt-4o-mini-transcribe-latest">
+                              gpt-4o-mini-transcribe-latest
+                            </SelectItem>
+                          </>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {sttProviderValue === "local"
+                        ? "Manage downloads and GPU settings on the Whisper Management page."
+                        : "Uses OpenAI’s managed Whisper models via the Audio Transcriptions API."}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-dashed border-indigo-200 bg-indigo-50/60 p-4 text-sm text-indigo-900 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-100">
+                    {sttProviderValue === "local" ? (
+                      <>
+                        <p>Keep the on-device service healthy to ensure instant transcription.</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-3"
+                          onClick={() => navigate("/whisper")}
+                        >
+                          Open Whisper Management
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <p>Ensure your OpenAI API key has access to Whisper transcription models.</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-3"
+                          onClick={() =>
+                            window.open("https://platform.openai.com/account/api-keys", "_blank", "noopener")
+                          }
+                        >
+                          Open OpenAI Dashboard
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
               </CardContent>

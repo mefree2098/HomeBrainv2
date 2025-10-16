@@ -25,11 +25,13 @@ const piperVoiceRoutes = require("./routes/piperVoiceRoutes");
 const sslRoutes = require("./routes/sslRoutes");
 const ollamaRoutes = require("./routes/ollamaRoutes");
 const resourceRoutes = require("./routes/resourceRoutes");
+const whisperRoutes = require("./routes/whisperRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const DiscoveryService = require("./services/discoveryService");
 const settingsService = require("./services/settingsService");
 const remoteUpdateService = require("./services/remoteUpdateService");
 const wakeWordTrainingService = require("./services/wakeWordTrainingService");
+const whisperService = require("./services/whisperService");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 const http = require("http");
@@ -153,12 +155,14 @@ app.use('/api/remote-updates', remoteUpdateRoutes);
 app.use('/api/discovery', discoveryRoutes);
 // Insteon Routes
 app.use('/api/insteon', insteonRoutes);
-// SSL Routes
-app.use('/api/ssl', sslRoutes);
-// Ollama Routes
-app.use('/api/ollama', ollamaRoutes);
-// Resource Monitor Routes
-app.use('/api/resources', resourceRoutes);
+  // SSL Routes
+  app.use('/api/ssl', sslRoutes);
+  // Ollama Routes
+  app.use('/api/ollama', ollamaRoutes);
+  // Whisper Routes
+  app.use('/api/whisper', whisperRoutes);
+  // Resource Monitor Routes
+  app.use('/api/resources', resourceRoutes);
 
 // Serve update packages from server/public/downloads so devices can fetch them
 const updatesPath = path.join(__dirname, 'public', 'downloads');
@@ -283,6 +287,16 @@ void initializeDiscoveryService();
   }
 })();
 
+// Initialize Whisper Service (local STT)
+(async () => {
+  try {
+    await whisperService.initialize();
+    console.log('Whisper Service initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Whisper Service:', error.message);
+  }
+})();
+
 startAcmeChallengeServer();
 
 async function gracefulShutdown(signal) {
@@ -303,6 +317,12 @@ async function gracefulShutdown(signal) {
     discoveryService.stop();
   } catch (error) {
     console.error('Error stopping discovery service:', error.message);
+  }
+
+  try {
+    await whisperService.stopService();
+  } catch (error) {
+    console.error('Error stopping Whisper service:', error.message);
   }
 
   await closeServer(challengeServer, 'ACME challenge server');

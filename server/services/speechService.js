@@ -1,5 +1,6 @@
 const OpenAI = require('openai');
 const Settings = require('../models/Settings');
+const whisperService = require('./whisperService');
 
 function pcmToWav(pcmBuffer, sampleRate, channels, bitsPerSample = 16) {
   if (!Buffer.isBuffer(pcmBuffer)) {
@@ -44,13 +45,20 @@ class SpeechService {
 
     const settings = await Settings.getSettings();
     const provider = process.env.STT_PROVIDER || settings.sttProvider || 'openai';
-    const model =
-      process.env.STT_MODEL ||
-      settings.sttModel ||
-      (provider === 'openai' ? 'gpt-4o-mini-transcribe' : 'openai');
+    const normalizedProvider = provider === 'local' ? 'whisper_local' : provider;
+
+    let model;
+    if (normalizedProvider === 'whisper_local') {
+      model = process.env.STT_MODEL || settings.sttModel || 'small';
+    } else {
+      model =
+        process.env.STT_MODEL ||
+        settings.sttModel ||
+        (normalizedProvider === 'openai' ? 'gpt-4o-mini-transcribe' : 'openai');
+    }
     const language = process.env.STT_LANGUAGE || settings.sttLanguage || 'en';
 
-    const config = { provider, model, language };
+    const config = { provider: normalizedProvider, model, language };
     this.cachedProviderConfig = config;
     this.cachedSettingsTimestamp = now;
     return config;
@@ -120,6 +128,15 @@ class SpeechService {
           language: sttLanguage,
           model: providerConfig.model
         });
+      case 'whisper_local':
+        return this.transcribeWithWhisperLocal({
+          audioBuffer,
+          sampleRate,
+          channels,
+          format,
+          language: sttLanguage,
+          model: providerConfig.model
+        });
       default:
         throw new Error(`Unsupported speech-to-text provider: ${providerConfig.provider}`);
     }
@@ -158,6 +175,57 @@ class SpeechService {
       segments,
       confidence: this.computeConfidence(segments),
       processingTimeMs: durationMs
+    };
+  }
+
+  async transcribeWithWhisperLocal({ audioBuffer, sampleRate, channels, format, language, model }) {
+    if (format && format.toUpperCase() !== 'S16LE') {
+      throw new Error(`Unsupported audio format "${format}". Only S16LE PCM is currently supported.`);
+    }
+
+    const activeModel = model || 'small';
+    try {
+      const status = await whisperService.getStatus();
+      if (status.activeModel !== activeModel && status.installedModels?.some((m) => m.name === activeModel)) {
+        await whisperService.setActiveModel(activeModel);
+      } else if (status.activeModel !== activeModel && status.installedModels?.length) {
+        // If requested model not downloaded yet, attempt to download then set active
+        try {
+          await whisperService.downloadModel(activeModel);
+          await whisperService.setActiveModel(activeModel);
+        } catch (downloadError) {
+          console.warn(`Whisper local: failed to download model ${activeModel}:`, downloadError.message);
+        }
+      }
+    } catch (error) {
+      console.warn('Whisper local: failed to sync model state:', error.message);
+    }
+
+    const startedAt = Date.now();
+    const response = await whisperService.transcribe({
+      audioBuffer,
+      sampleRate,
+      channels,
+      language
+    });
+    const durationMs = Date.now() - startedAt;
+
+    const segments = Array.isArray(response?.segments) ? response.segments : [];
+    const confidenceFromAvg = typeof response?.avgLogProb === 'number'
+      ? Math.max(0, Math.min(1, 1 + (response.avgLogProb / 5)))
+      : null;
+
+    const confidence = confidenceFromAvg ?? this.computeConfidence(segments);
+
+    return {
+      provider: 'whisper_local',
+      model: response?.model || activeModel,
+      text: (response?.text || '').trim(),
+      language: response?.language || language,
+      duration: null,
+      segments,
+      confidence,
+      processingTimeMs: response?.processingTimeMs || durationMs
     };
   }
 }
