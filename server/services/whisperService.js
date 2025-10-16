@@ -519,6 +519,14 @@ class WhisperService {
         'Whisper Service: CUDA verification failed. Falling back to CPU. Details:',
         error.message
       );
+      const trim = (text) =>
+        text.length > 2000 ? `${text.slice(0, 2000)}...` : text;
+      if (error.stdout?.trim()) {
+        console.warn(`Whisper Service: CUDA verification stdout:\n${trim(error.stdout.trim())}`);
+      }
+      if (error.stderr?.trim()) {
+        console.warn(`Whisper Service: CUDA verification stderr:\n${trim(error.stderr.trim())}`);
+      }
       return false;
     }
   }
@@ -534,40 +542,61 @@ class WhisperService {
     let cudaWheelInstalled = false;
     let cudaReady = false;
 
-    const pipInstall = async (packages, options = {}) => {
-      const args = ['-m', 'pip', 'install', ...packages];
-      await this._runCommand(PYTHON_BIN, args, { cwd, ...options });
+    const maxLogLength = 2000;
+    const trimOutput = (text) =>
+      text.length > maxLogLength ? `${text.slice(0, maxLogLength)}...` : text;
+
+    const runPip = async (label, args, options = {}) => {
+      console.log(`Whisper Service: ${label} -> pip ${args.join(' ')}`);
+      const result = await this._runCommand(PYTHON_BIN, ['-m', 'pip', ...args], { cwd, ...options });
+      if (result?.stdout?.trim()) {
+        console.log(`Whisper Service: ${label} output:\n${trimOutput(result.stdout.trim())}`);
+      }
+      if (result?.stderr?.trim()) {
+        console.warn(`Whisper Service: ${label} warnings:\n${trimOutput(result.stderr.trim())}`);
+      }
+      return result;
     };
 
-    const pipUninstall = async (packages) => {
+    const pipInstall = async (label, packages, options = {}) => {
+      await runPip(label, ['install', ...packages], options);
+    };
+
+    const pipUninstall = async (label, packages) => {
       try {
-        const args = ['-m', 'pip', 'uninstall', '-y', ...packages];
-        await this._runCommand(PYTHON_BIN, args, { cwd });
+        await runPip(label, ['uninstall', '-y', ...packages]);
       } catch (error) {
-        console.warn(`Whisper Service: pip uninstall warning: ${error.message}`);
+        console.warn(`Whisper Service: ${label} warning: ${error.message}`);
       }
     };
 
-    await pipInstall(['--upgrade', 'pip']);
-    await pipInstall(['--upgrade', 'setuptools', 'wheel', 'numpy']);
-    await pipInstall(['--upgrade', 'huggingface-hub', 'tokenizers', 'tqdm']);
-    await pipInstall(['--upgrade', 'faster-whisper']);
+    await pipInstall('Upgrade pip', ['--upgrade', 'pip']);
+    await pipInstall('Upgrade setuptools/wheel/numpy', ['--upgrade', 'setuptools', 'wheel', 'numpy']);
+    await pipInstall('Upgrade huggingface hub toolchain', ['--upgrade', 'huggingface-hub', 'tokenizers', 'tqdm']);
+    await pipInstall('Install faster-whisper', ['--upgrade', 'faster-whisper']);
 
     if (hasCuda) {
       try {
         attemptedCudaInstall = true;
-        await pipUninstall(['ctranslate2']);
-        await pipInstall(['--only-binary=:all:', '--no-cache-dir', 'ctranslate2>=4.4,<5']);
+        await pipUninstall('Remove existing ctranslate2', ['ctranslate2']);
+        await pipInstall(
+          'Install CUDA-enabled ctranslate2 wheel',
+          ['--only-binary=:all:', '--no-cache-dir', 'ctranslate2>=4.4,<5']
+        );
         cudaWheelInstalled = true;
       } catch (error) {
-        console.warn(
-          `Whisper Service: CUDA-enabled CTranslate2 wheel install failed (${error.message}); falling back to CPU build`
-        );
+        console.warn(`Whisper Service: CUDA-enabled CTranslate2 wheel install failed (${error.message})`);
+        if (error.stdout?.trim()) {
+          console.warn(`Whisper Service: pip stdout:\n${error.stdout.trim()}`);
+        }
+        if (error.stderr?.trim()) {
+          console.warn(`Whisper Service: pip stderr:\n${error.stderr.trim()}`);
+        }
         cudaWheelInstalled = false;
       }
     }
 
-    await pipInstall(['--upgrade', 'soundfile']);
+    await pipInstall('Install soundfile', ['--upgrade', 'soundfile']);
 
     if (cudaWheelInstalled) {
       cudaReady = await this._verifyCudaRuntime();
@@ -846,6 +875,8 @@ class WhisperService {
           const error = new Error(
             `${command} ${args.join(' ')} exited with code ${code}\n${stderr.join('')}`
           );
+          error.stdout = stdout.join('');
+          error.stderr = stderr.join('');
           reject(error);
         }
       });
