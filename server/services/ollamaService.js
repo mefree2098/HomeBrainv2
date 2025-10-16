@@ -1,7 +1,8 @@
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const { promisify } = require('util');
 const axios = require('axios');
 const OllamaConfig = require('../models/OllamaConfig');
+const os = require('os');
 
 const execAsync = promisify(exec);
 
@@ -171,25 +172,62 @@ Please contact your system administrator for assistance.`;
    * Start Ollama service
    */
   async startService() {
+    const config = await OllamaConfig.getConfig();
+    if (config.configuration?.apiUrl) {
+      this.apiUrl = config.configuration.apiUrl;
+    }
+
     try {
       console.log('Starting Ollama service...');
 
-      // Check if already running
       const status = await this.checkServiceStatus();
       if (status.running) {
         console.log('Ollama service is already running');
+        config.serviceStatus = 'running';
+        if (!config.servicePid) {
+          const existingOwnedProcess = await this.findOwnedOllamaProcess();
+          if (existingOwnedProcess) {
+            config.servicePid = existingOwnedProcess.pid;
+            config.serviceOwner = existingOwnedProcess.user;
+          }
+        }
+        config.lastError = null;
+        await config.save();
         return { success: true, message: 'Service already running' };
       }
 
-      // Start as background service
-      exec('nohup ollama serve > /tmp/ollama.log 2>&1 &');
+      const childEnv = {
+        ...process.env,
+        OLLAMA_HOST: '127.0.0.1'
+      };
 
-      // Wait for service to start
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      const child = spawn('ollama', ['serve'], {
+        detached: true,
+        stdio: 'ignore',
+        env: childEnv
+      });
 
-      // Verify it's running
-      const newStatus = await this.checkServiceStatus();
-      if (!newStatus.running) {
+      await new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('spawn', resolve);
+      });
+
+      const childPid = child.pid;
+      config.servicePid = childPid;
+      config.serviceOwner = this.getCurrentUser();
+      config.serviceStatus = 'running';
+      config.lastError = null;
+      await config.save();
+
+      child.unref();
+
+      const started = await this.waitForServiceReady();
+      if (!started) {
+        await this.terminateManagedProcess(childPid);
+        config.servicePid = null;
+        config.serviceOwner = null;
+        config.serviceStatus = 'error';
+        await config.setError('Failed to start Ollama service within timeout.');
         throw new Error('Failed to start Ollama service');
       }
 
@@ -197,6 +235,11 @@ Please contact your system administrator for assistance.`;
       return { success: true, message: 'Service started' };
     } catch (error) {
       console.error('Error starting Ollama service:', error);
+      config.servicePid = null;
+      config.serviceOwner = null;
+      config.serviceStatus = 'error';
+      await config.setError(`Start service failed: ${error.message}`);
+      await config.save();
       throw error;
     }
   }
@@ -205,13 +248,69 @@ Please contact your system administrator for assistance.`;
    * Stop Ollama service
    */
   async stopService() {
+    const config = await OllamaConfig.getConfig();
+    if (config.configuration?.apiUrl) {
+      this.apiUrl = config.configuration.apiUrl;
+    }
+
     try {
       console.log('Stopping Ollama service...');
+
+      const candidates = [];
+      if (config.servicePid) {
+        candidates.push({ pid: config.servicePid, managed: true });
+      } else {
+        const ownedProcess = await this.findOwnedOllamaProcess();
+        if (ownedProcess) {
+          candidates.push({ pid: ownedProcess.pid, managed: false });
+        }
+      }
+
+      for (const candidate of candidates) {
+        const result = await this.terminateManagedProcess(candidate.pid);
+        if (result.success) {
+          config.servicePid = null;
+          config.serviceOwner = null;
+          config.serviceStatus = 'stopped';
+          config.lastError = null;
+          await config.save();
+          console.log('Ollama service stopped');
+          return { success: true, message: 'Service stopped' };
+        }
+
+        if (result.reason === 'permission') {
+          console.warn('Unable to terminate managed process due to insufficient permissions. Escalating to privileged stop.');
+          break;
+        }
+
+        if (result.reason === 'still_running') {
+          throw new Error('Failed to stop Ollama service: process still running after signals.');
+        }
+      }
+
+      const pkillResult = await this.stopServiceWithPkill();
+      config.servicePid = null;
+      config.serviceOwner = null;
+      config.serviceStatus = pkillResult.success ? 'stopped' : config.serviceStatus;
+      config.lastError = pkillResult.success ? null : config.lastError;
+      await config.save();
+      return pkillResult;
+    } catch (error) {
+      console.error('Error stopping Ollama service:', error);
+      await config.setError(`Stop service failed: ${error.message}`);
+      config.servicePid = null;
+      config.serviceOwner = null;
+      await config.save();
+      throw error;
+    }
+  }
+
+  async stopServiceWithPkill() {
+    try {
       await execAsync('pkill -f "ollama serve"');
-      console.log('Ollama service stopped');
+      console.log('Ollama service stopped using pkill');
       return { success: true, message: 'Service stopped' };
     } catch (error) {
-      // pkill returns error if no process found
       if (error.code === 1) {
         return { success: true, message: 'Service was not running' };
       }
@@ -231,14 +330,14 @@ Please contact your system administrator for assistance.`;
             return { success: true, message: 'Service was not running' };
           }
 
-          if (sudoOutput.includes('a password is required') || sudoOutput.includes('permission denied')) {
-            const message = 'Insufficient privileges to stop the Ollama service. Please run "sudo pkill -f \\"ollama serve\\"" manually or grant this service sudo access.';
+          if (sudoOutput.includes('command not found')) {
+            const message = 'Unable to stop Ollama service: sudo command not available. Please stop the service manually or install sudo.';
             console.error(message);
             throw new Error(message);
           }
 
-          if (sudoOutput.includes('command not found')) {
-            const message = 'Unable to stop Ollama service: sudo command not available. Please stop the service manually or install sudo.';
+          if (sudoOutput.includes('a password is required') || sudoOutput.includes('permission denied')) {
+            const message = 'Insufficient privileges to stop the Ollama service. Please run "sudo pkill -f \\"ollama serve\\"" manually, add this service to sudoers, or stop the system-level Ollama service (e.g., "sudo systemctl stop ollama").';
             console.error(message);
             throw new Error(message);
           }
@@ -248,9 +347,139 @@ Please contact your system administrator for assistance.`;
         }
       }
 
-      console.error('Error stopping Ollama service:', error);
       throw error;
     }
+  }
+
+  async waitForServiceReady(retries = 10, delayMs = 500) {
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+      const status = await this.checkServiceStatus();
+      if (status.running) {
+        return true;
+      }
+      await this.delay(delayMs);
+    }
+    return false;
+  }
+
+  async findOwnedOllamaProcess() {
+    const processes = await this.listOllamaProcesses();
+    if (!processes.length) {
+      return null;
+    }
+    const currentUser = this.getCurrentUser();
+    return processes.find(proc => proc.user === currentUser) || null;
+  }
+
+  async listOllamaProcesses() {
+    try {
+      const { stdout } = await execAsync('ps -eo pid=,user=,command= | grep "ollama serve" | grep -v grep');
+      const lines = stdout.split('\n').map(line => line.trim()).filter(Boolean);
+      return lines.map((line) => {
+        const match = line.match(/^(\d+)\s+(\S+)\s+(.*)$/);
+        if (!match) {
+          return null;
+        }
+        return {
+          pid: Number(match[1]),
+          user: match[2],
+          command: match[3]
+        };
+      }).filter(Boolean);
+    } catch (error) {
+      return [];
+    }
+  }
+
+  getCurrentUser() {
+    try {
+      return os.userInfo().username;
+    } catch (error) {
+      return process.env.SUDO_USER || process.env.USER || process.env.LOGNAME || 'unknown';
+    }
+  }
+
+  async terminateManagedProcess(pid) {
+    if (!pid) {
+      return { success: true };
+    }
+
+    const sendSignal = (signal) => {
+      try {
+        process.kill(-pid, signal);
+        return true;
+      } catch (error) {
+        if (error.code === 'ESRCH') {
+          return false;
+        }
+        if (error.code === 'EPERM') {
+          return 'permission';
+        }
+        try {
+          process.kill(pid, signal);
+          return true;
+        } catch (innerError) {
+          if (innerError.code === 'ESRCH') {
+            return false;
+          }
+          if (innerError.code === 'EPERM') {
+            return 'permission';
+          }
+          throw innerError;
+        }
+      }
+    };
+
+    const termResult = sendSignal('SIGTERM');
+    if (termResult === 'permission') {
+      return { success: false, reason: 'permission' };
+    }
+    if (termResult === false) {
+      return { success: true };
+    }
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (!this.isProcessRunning(pid)) {
+        return { success: true };
+      }
+      await this.delay(300);
+    }
+
+    const killResult = sendSignal('SIGKILL');
+    if (killResult === 'permission') {
+      return { success: false, reason: 'permission' };
+    }
+    if (killResult === false) {
+      return { success: true };
+    }
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (!this.isProcessRunning(pid)) {
+        return { success: true };
+      }
+      await this.delay(300);
+    }
+
+    return { success: false, reason: 'still_running' };
+  }
+
+  isProcessRunning(pid) {
+    if (!pid) {
+      return false;
+    }
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      if (error.code === 'EPERM') {
+        return true;
+      }
+      return false;
+    }
+  }
+
+  delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
