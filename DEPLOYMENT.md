@@ -349,7 +349,7 @@ Pick only one path; you do not need both.
 HomeBrain now includes a dedicated **Whisper Management** page that keeps all speech recognition on your Jetson Orin Nano. The workflow mirrors the Ollama UI but targets OpenAI’s Whisper models and the new background transcription worker.
 
 1. **Install the dependencies**  
-   Open **Whisper STT** from the sidebar and click **Install Dependencies**. This runs `pip install faster-whisper soundfile` using the system Python interpreter. If you already installed the packages manually, the page will detect them automatically and mark the step complete.
+   Open **Whisper STT** from the sidebar and click **Install Dependencies**. HomeBrain installs `faster-whisper` and supporting audio libraries inside the system Python environment. On Jetson hardware it automatically builds CTranslate2 with CUDA support (targeting compute capability 8.7) so the Whisper worker can run on the GPU; if the CUDA toolchain is unavailable it falls back to a CPU build. If you already installed the packages manually, the page will detect them automatically and mark the step complete.
 
 2. **Start the Whisper service**  
    Press **Start Service** once dependencies are in place. The backend launches `server/scripts/whisper_server.py`, keeps it running at boot, and restarts it if you change models.

@@ -118,14 +118,19 @@ class WhisperRuntime {
         args.push('--preload');
       }
 
-      this.child = spawn(PYTHON_BIN, args, {
-        env: {
-          ...process.env,
-          WHISPER_DEVICE: this.device,
+      const childEnv = {
+        ...process.env,
+        WHISPER_DEVICE: this.device,
         WHISPER_COMPUTE_TYPE: this.computeType
-      },
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+      };
+      if (this.device === 'cuda' && childEnv.CUDA_VISIBLE_DEVICES === undefined) {
+        childEnv.CUDA_VISIBLE_DEVICES = process.env.WHISPER_CUDA_VISIBLE_DEVICES ?? '0';
+      }
+
+      this.child = spawn(PYTHON_BIN, args, {
+        env: childEnv,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
 
       this.child.once('spawn', () => {
         resolved = true;
@@ -238,7 +243,22 @@ class WhisperRuntime {
         vad_filter: true
       },
       60_000
-    );
+    ).then((payload) => {
+      const info = payload?.info || {};
+      if (info.compute_type) {
+        this.computeType = info.compute_type;
+      }
+      if (info.device) {
+        this.device = info.device;
+      }
+      if (info.compute_type && !payload.compute_type) {
+        payload.compute_type = info.compute_type;
+      }
+      if (info.device && !payload.device) {
+        payload.device = info.device;
+      }
+      return payload;
+    });
   }
 
     async status() {
@@ -253,7 +273,11 @@ class WhisperRuntime {
           },
           2000
         );
-        return { running: true, model: response.model, computeType: this.computeType, device: this.device };
+        const resolvedCompute = response?.compute_type || this.computeType || null;
+        const resolvedDevice = response?.device || this.device || null;
+        this.computeType = resolvedCompute || this.computeType;
+        this.device = resolvedDevice || this.device;
+        return { running: true, model: response.model, computeType: resolvedCompute, device: resolvedDevice };
       } catch (error) {
         const stillAlive = this.child && this.child.exitCode === null && !this.child.killed;
         return {
@@ -392,10 +416,6 @@ class WhisperService {
     );
   }
 
-  _getJetsonIndexUrl() {
-    return process.env.WHISPER_JETSON_INDEX_URL || 'https://developer.download.nvidia.com/compute/redist/jp/v60';
-  }
-
   _hasCudaSupport() {
     if (process.env.WHISPER_DISABLE_CUDA === '1') {
       return false;
@@ -455,12 +475,63 @@ class WhisperService {
     return candidates;
   }
 
+  _getCudaArch() {
+    if (process.env.CT2_CUDA_ARCH) {
+      return process.env.CT2_CUDA_ARCH;
+    }
+    if (this._isJetson()) {
+      return '87';
+    }
+    return null;
+  }
+
+  async _verifyCudaRuntime() {
+    if (!this._hasCudaSupport()) {
+      return false;
+    }
+
+    try {
+      const result = await this._runCommand(
+        PYTHON_BIN,
+        [
+          '-c',
+          'import json; from ctranslate2 import get_supported_compute_types; types = get_supported_compute_types("cuda"); print(json.dumps(types))'
+        ],
+        { cwd: process.cwd() }
+      );
+      const output = (result?.stdout || '').trim().split(/\r?\n/).pop() || '[]';
+      let types = [];
+      try {
+        types = JSON.parse(output);
+      } catch (parseError) {
+        // ignore parse errors; treat as failure
+        types = [];
+      }
+      if (!Array.isArray(types) || !types.length) {
+        throw new Error('No CUDA compute types reported by ctranslate2');
+      }
+      console.log(
+        `Whisper Service: CUDA compute types available -> ${types.join(', ')}`
+      );
+      return true;
+    } catch (error) {
+      console.warn(
+        'Whisper Service: CUDA verification failed. Falling back to CPU. Details:',
+        error.message
+      );
+      return false;
+    }
+  }
+
   async installDependencies() {
     const config = await this._getConfig();
     config.serviceStatus = 'installing';
     await config.save();
 
     const cwd = process.cwd();
+    const hasCuda = this._hasCudaSupport();
+    let attemptedCudaBuild = false;
+    let cudaReady = false;
 
     await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'pip'], { cwd });
 
@@ -468,33 +539,54 @@ class WhisperService {
       await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'soundfile'], { cwd });
     };
 
-    const installFasterWhisper = async () => {
-      if (this._isJetson()) {
-        const indexUrl = this._getJetsonIndexUrl();
-        try {
-          await this._runCommand(
-            PYTHON_BIN,
-            ['-m', 'pip', 'install', '--upgrade', '--extra-index-url', indexUrl, 'faster-whisper'],
-            { cwd }
-          );
-          await installSoundfile();
-          return;
-        } catch (error) {
-          console.warn(
-            `Whisper Service: Jetson wheel install failed (${error.message}); falling back to PyPI wheel`
-          );
-        }
+    if (hasCuda) {
+      attemptedCudaBuild = true;
+      const buildEnv = {
+        ...process.env,
+        CT2_WITH_CUDA: '1'
+      };
+      const arch = this._getCudaArch();
+      if (arch) {
+        buildEnv.CT2_CUDA_ARCH = arch;
+      }
+      if (!buildEnv.MAX_JOBS && typeof os.cpus === 'function') {
+        const cpuCount = Array.isArray(os.cpus()) ? os.cpus().length : 4;
+        buildEnv.MAX_JOBS = String(cpuCount || 4);
       }
 
-      await this._runCommand(
-        PYTHON_BIN,
-        ['-m', 'pip', 'install', '--upgrade', 'faster-whisper'],
-        { cwd }
-      );
-      await installSoundfile();
-    };
+      try {
+        await this._runCommand(
+          PYTHON_BIN,
+          ['-m', 'pip', 'install', '--upgrade', 'cmake', 'ninja', 'pybind11', 'numpy'],
+          { cwd }
+        );
+        await this._runCommand(
+          PYTHON_BIN,
+          ['-m', 'pip', 'install', '--upgrade', '--no-binary', 'ctranslate2', 'ctranslate2'],
+          { cwd, env: buildEnv }
+        );
+      } catch (error) {
+        console.warn(
+          `Whisper Service: CUDA-enabled CTranslate2 build failed (${error.message}); falling back to CPU build`
+        );
+      }
+    }
 
-    await installFasterWhisper();
+    await this._runCommand(
+      PYTHON_BIN,
+      ['-m', 'pip', 'install', '--upgrade', 'faster-whisper'],
+      { cwd }
+    );
+    await installSoundfile();
+
+    if (attemptedCudaBuild) {
+      cudaReady = await this._verifyCudaRuntime();
+      if (!cudaReady) {
+        console.warn(
+          'Whisper Service: CUDA runtime unavailable after installation; GPU mode will fall back to CPU.'
+        );
+      }
+    }
 
     await this._detectDependencies();
     config.serviceStatus = 'stopped';
@@ -502,7 +594,7 @@ class WhisperService {
 
     return {
       success: true,
-      message: 'faster-whisper installed successfully'
+      message: `faster-whisper installed successfully${attemptedCudaBuild ? (cudaReady ? ' (CUDA ready)' : ' (CUDA fallback to CPU)') : ''}`
     };
   }
 
