@@ -16,6 +16,7 @@ import { UserProfiles } from "./pages/UserProfiles"
 import { Settings } from "./pages/Settings"
 import SSLManagement from "./pages/SSLManagement"
 import OllamaManagement from "./pages/OllamaManagement"
+import WhisperManagement from "./pages/WhisperManagement"
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
           <Route path="/settings" element={<ProtectedRoute><Layout><Settings /></Layout></ProtectedRoute>} />
           <Route path="/ssl" element={<ProtectedRoute><Layout><SSLManagement /></Layout></ProtectedRoute>} />
           <Route path="/ollama" element={<ProtectedRoute><Layout><OllamaManagement /></Layout></ProtectedRoute>} />
+          <Route path="/whisper" element={<ProtectedRoute><Layout><WhisperManagement /></Layout></ProtectedRoute>} />
           <Route path="*" element={<BlankPage />} />
         </Routes>
       </Router>
