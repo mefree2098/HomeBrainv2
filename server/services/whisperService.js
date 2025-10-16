@@ -448,6 +448,19 @@ class WhisperService {
     console.log(`Whisper Service: Building CTranslate2 (ninja -j${jobs})`);
     await this._runCommand('ninja', ['-j', jobs], { cwd: buildDir, env: buildEnv });
 
+    // Install the C++ library/headers so the Python wheel can find <ctranslate2/...>
+    console.log('Whisper Service: Installing CTranslate2 C++ artifacts');
+    try {
+      await this._runCommand('sudo', ['ninja', 'install'], { cwd: buildDir, env: buildEnv });
+    } catch (e) {
+      // If sudo is unavailable (container, non-sudo user), try a non-sudo install to /usr/local as current user.
+      await this._runCommand('ninja', ['install'], { cwd: buildDir, env: buildEnv });
+    }
+    // Refresh dynamic linker cache to expose libctranslate2.so
+    try {
+      await this._runCommand('sudo', ['ldconfig'], { env: buildEnv });
+    } catch { /* non-fatal in restricted envs; LD_LIBRARY_PATH still handles it */ }
+
     // Build + install Python wheel WITHOUT build isolation so pybind11 is honored
     const pythonDir = path.join(sourceRoot, 'python');
     console.log('Whisper Service: Building Python wheel for CTranslate2 (no isolation, modern packaging)');
@@ -487,6 +500,13 @@ class WhisperService {
     if (userSite) {
       wheelEnv.PYTHONPATH = userSite + (buildEnv.PYTHONPATH ? ':' + buildEnv.PYTHONPATH : '');
     }
+    // Make sure setup.py can find headers & libs from the install step
+    wheelEnv.CTRANSLATE2_ROOT = '/usr/local';
+    wheelEnv.CMAKE_PREFIX_PATH = ['/usr/local', wheelEnv.CMAKE_PREFIX_PATH || ''].filter(Boolean).join(':');
+    wheelEnv.CPATH = ['/usr/local/include', wheelEnv.CPATH || ''].filter(Boolean).join(':');
+    wheelEnv.CPLUS_INCLUDE_PATH = wheelEnv.CPATH;
+    wheelEnv.LIBRARY_PATH = ['/usr/local/lib', wheelEnv.LIBRARY_PATH || ''].filter(Boolean).join(':');
+    wheelEnv.LD_LIBRARY_PATH = ['/usr/local/lib', wheelEnv.LD_LIBRARY_PATH || ''].filter(Boolean).join(':');
 
     // 3) Build a wheel WITHOUT build isolation (so it uses the upgraded packages)
     await this._runCommand(
