@@ -241,27 +241,28 @@ class WhisperRuntime {
     );
   }
 
-  async status() {
-    if (!this.child) {
-      return { running: false };
+    async status() {
+      if (!this.child) {
+        return { running: false, model: null, computeType: null };
+      }
+      try {
+        const response = await this._send(
+          {
+            action: 'status',
+            id: crypto.randomUUID()
+          },
+          2000
+        );
+        return { running: true, model: response.model, computeType: this.computeType };
+      } catch (error) {
+        const stillAlive = this.child && this.child.exitCode === null && !this.child.killed;
+        return {
+          running: stillAlive,
+          model: stillAlive ? this.modelName : null,
+          computeType: stillAlive ? this.computeType : null
+        };
+      }
     }
-    try {
-      const response = await this._send(
-        {
-          action: 'status',
-          id: crypto.randomUUID()
-        },
-        2000
-      );
-      return { running: true, model: response.model };
-    } catch (error) {
-      const stillAlive = this.child && this.child.exitCode === null && !this.child.killed;
-      return {
-        running: stillAlive,
-        model: stillAlive ? this.modelName : null
-      };
-    }
-  }
 
   _send(payload, timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -343,6 +344,36 @@ class WhisperService {
     return config;
   }
 
+  _resolveComputeCandidates(requested = 'auto') {
+    const normalized = (requested || 'auto').toLowerCase();
+    const candidates = [];
+    const add = (value) => {
+      if (value && !candidates.includes(value)) {
+        candidates.push(value);
+      }
+    };
+
+    if (normalized === 'auto' || normalized === 'default') {
+      add('float16');
+      add('int8_float16');
+      add('float32');
+      add('int8');
+      add('auto');
+    } else {
+      add(normalized);
+      if (normalized !== 'float32') {
+        add('float32');
+      }
+      if (!normalized.startsWith('int8')) {
+        add('int8_float16');
+        add('int8');
+      }
+      add('auto');
+    }
+
+    return candidates;
+  }
+
   async installDependencies() {
     const config = await this._getConfig();
     config.serviceStatus = 'installing';
@@ -379,41 +410,67 @@ class WhisperService {
     const config = await this._getConfig();
 
     const targetModel = modelName || config.activeModel || 'small';
-    if (!this.runtime) {
-      this.runtime = new WhisperRuntime({
-        modelName: targetModel,
-        modelDir: config.modelDirectory || DEFAULT_MODEL_DIR,
-        device: process.env.WHISPER_DEVICE || 'auto',
-        computeType: process.env.WHISPER_COMPUTE_TYPE || 'float16'
-      });
-    } else if (this.runtime.modelName !== targetModel) {
-      await this.runtime.stop();
-      this.runtime = new WhisperRuntime({
-        modelName: targetModel,
-        modelDir: config.modelDirectory || DEFAULT_MODEL_DIR,
-        device: process.env.WHISPER_DEVICE || 'auto',
-        computeType: process.env.WHISPER_COMPUTE_TYPE || 'float16'
-      });
-    }
-
     config.serviceStatus = 'starting';
     await config.save();
 
-    try {
-      await this.runtime.start(true);
-      config.serviceStatus = 'running';
-      config.servicePid = this.runtime.child?.pid || null;
-      config.serviceOwner = os.userInfo().username;
-      config.activeModel = targetModel;
-      config.lastError = null;
-      await config.save();
-      return { success: true, message: 'Whisper service started', pid: config.servicePid };
-    } catch (error) {
-      config.serviceStatus = 'error';
-      await config.setError(error.message);
-      await config.save();
-      throw error;
+    if (this.runtime) {
+      await this.runtime.stop();
+      this.runtime = null;
     }
+
+    const device = process.env.WHISPER_DEVICE || 'auto';
+    const computePreference = process.env.WHISPER_COMPUTE_TYPE || 'auto';
+    const candidates = this._resolveComputeCandidates(computePreference);
+    let startError = null;
+
+    for (const computeType of candidates) {
+      const runtime = new WhisperRuntime({
+        modelName: targetModel,
+        modelDir: config.modelDirectory || DEFAULT_MODEL_DIR,
+        device,
+        computeType
+      });
+
+      try {
+        await runtime.start(true);
+        const runtimeStatus = await runtime.status();
+        if (!runtimeStatus.running) {
+          throw new Error('Whisper runtime exited before reporting ready');
+        }
+
+        this.runtime = runtime;
+        config.serviceStatus = 'running';
+        config.servicePid = runtime.child?.pid || null;
+        config.serviceOwner = os.userInfo().username;
+        config.activeModel = targetModel;
+        config.activeComputeType = computeType;
+        config.lastError = null;
+        await config.save();
+        return {
+          success: true,
+          message: `Whisper service started (${computeType})`,
+          pid: config.servicePid,
+          computeType
+        };
+      } catch (error) {
+        startError = error;
+        console.warn(`Whisper Service: failed to start with compute type ${computeType}:`, error.message);
+        try {
+          await runtime.stop('SIGKILL');
+        } catch (stopError) {
+          console.warn('Whisper Service: error while stopping failed runtime:', stopError.message);
+        }
+        this.runtime = null;
+      }
+    }
+
+    config.serviceStatus = 'error';
+    config.servicePid = null;
+    config.serviceOwner = null;
+    config.activeComputeType = null;
+    await config.setError(startError?.message || 'Failed to start Whisper service');
+    await config.save();
+    throw startError || new Error('Failed to start Whisper service');
   }
 
   async stopService() {
@@ -426,6 +483,7 @@ class WhisperService {
     config.serviceStatus = 'stopped';
     config.servicePid = null;
     config.serviceOwner = null;
+    config.activeComputeType = null;
     await config.save();
 
     return { success: true, message: 'Whisper service stopped' };
@@ -447,6 +505,7 @@ class WhisperService {
       servicePid: config.servicePid,
       serviceOwner: config.serviceOwner,
       activeModel: config.activeModel,
+      activeComputeType: config.activeComputeType || runtimeStatus.computeType || null,
       installedModels: config.installedModels,
       availableModels: AVAILABLE_MODELS,
       modelDirectory: config.modelDirectory,
@@ -542,6 +601,7 @@ class WhisperService {
         avgLogProb: result?.info?.avg_logprob ?? null,
         provider: 'whisper_local',
         model: config.activeModel,
+        computeType: this.runtime?.computeType || config.activeComputeType || null,
         processingTimeMs: duration
       };
     } finally {

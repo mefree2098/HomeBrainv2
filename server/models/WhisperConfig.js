@@ -61,6 +61,10 @@ const whisperConfigSchema = new mongoose.Schema(
       type: String,
       default: null
     },
+    activeComputeType: {
+      type: String,
+      default: null
+    },
     activeModel: {
       type: String,
       default: 'small'

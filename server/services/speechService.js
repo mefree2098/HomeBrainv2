@@ -220,6 +220,7 @@ class SpeechService {
     return {
       provider: 'whisper_local',
       model: response?.model || activeModel,
+      computeType: response?.computeType || null,
       text: (response?.text || '').trim(),
       language: response?.language || language,
       duration: null,
