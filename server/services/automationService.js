@@ -28,6 +28,221 @@ async function getAllAutomations() {
   }
 }
 
+function buildFallbackAutomation(text, devicesByRoom, roomContext) {
+  const devices = flattenDevices(devicesByRoom);
+  if (!devices.length) {
+    console.warn('AutomationService: Fallback builder has no devices to target');
+    return null;
+  }
+
+  const bestDevice = findBestDeviceForText(text, devices, roomContext);
+  if (!bestDevice) {
+    console.warn('AutomationService: Fallback builder could not match a device to text');
+    return null;
+  }
+
+  const inferred = inferDeviceActionFromText(text, bestDevice);
+  if (!inferred) {
+    console.warn('AutomationService: Fallback builder could not infer an action');
+    return null;
+  }
+
+  const actionParameters = { action: inferred.action };
+  if (typeof inferred.value === 'number') {
+    if (inferred.action === 'set_brightness') {
+      actionParameters.brightness = inferred.value;
+    } else if (inferred.action === 'set_temperature') {
+      actionParameters.temperature = inferred.value;
+    }
+  }
+  if (inferred.color) {
+    actionParameters.color = inferred.color;
+  }
+
+  const prettyAction = inferred.phrase || `${inferred.action.replace(/_/g, ' ')} ${bestDevice.name}`;
+  const automationName = `Manual: ${bestDevice.name} ${inferred.action.replace(/_/g, ' ')}`;
+
+  return {
+    name: automationName.slice(0, 50),
+    description: `Manual trigger to ${prettyAction}.`,
+    trigger: { type: 'manual', conditions: {} },
+    actions: [
+      {
+        type: 'device_control',
+        target: bestDevice.id,
+        parameters: actionParameters
+      }
+    ],
+    category: 'convenience',
+    priority: 5,
+    enabled: true
+  };
+}
+
+function flattenDevices(devicesByRoom) {
+  const list = [];
+  Object.entries(devicesByRoom || {}).forEach(([room, devices]) => {
+    (devices || []).forEach((device) => {
+      list.push({
+        ...device,
+        room
+      });
+    });
+  });
+  return list;
+}
+
+function findBestDeviceForText(text, devices, roomContext) {
+  const normalized = (text || '').toLowerCase();
+  const preferredRoom = roomContext ? roomContext.toLowerCase() : null;
+  let bestDevice = null;
+  let bestScore = 0;
+
+  for (const device of devices) {
+    let score = 0;
+    const nameLower = (device.name || '').toLowerCase();
+
+    if (!nameLower) {
+      continue;
+    }
+
+    if (normalized.includes(nameLower)) {
+      score += 5;
+    }
+
+    const tokens = nameLower.split(/\s+/);
+    tokens.forEach((token) => {
+      if (token.length >= 3 && normalized.includes(token)) {
+        score += 2;
+      }
+    });
+
+    if (preferredRoom && device.room && device.room.toLowerCase() === preferredRoom) {
+      score += 2.5;
+    } else if (device.room && normalized.includes(device.room.toLowerCase())) {
+      score += 1.5;
+    }
+
+    const typeLower = (device.type || '').toLowerCase();
+    if (typeLower && normalized.includes(typeLower)) {
+      score += 1;
+    }
+
+    if (normalized.includes('light') && typeLower === 'light') {
+      score += 1.5;
+    }
+    if (normalized.includes('switch') && typeLower === 'switch') {
+      score += 1.5;
+    }
+    if ((normalized.includes('thermostat') || normalized.includes('temperature')) && typeLower === 'thermostat') {
+      score += 1.5;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestDevice = device;
+    }
+  }
+
+  return bestScore > 0 ? bestDevice : null;
+}
+
+function inferDeviceActionFromText(text, device) {
+  const normalized = (text || '').toLowerCase();
+  const capabilities = new Set(device.capabilities || []);
+  const result = {
+    action: 'turn_on',
+    value: null,
+    color: null,
+    phrase: ''
+  };
+
+  if (/unlock\b/.test(normalized) && capabilities.has('unlock')) {
+    result.action = 'unlock';
+    result.phrase = `unlock ${device.name}`;
+  } else if (/lock\b/.test(normalized) && capabilities.has('lock')) {
+    result.action = 'lock';
+    result.phrase = `lock ${device.name}`;
+  } else if (/\b(open|raise)\b/.test(normalized) && capabilities.has('open')) {
+    result.action = 'open';
+    result.phrase = `open ${device.name}`;
+  } else if (/\b(close|shut)\b/.test(normalized) && capabilities.has('close')) {
+    result.action = 'close';
+    result.phrase = `close ${device.name}`;
+  } else if (/\b(turn\s*off|switch\s*off|power\s*off|shut\s*off)\b/.test(normalized) && capabilities.has('turn_off')) {
+    result.action = 'turn_off';
+    result.phrase = `turn off ${device.name}`;
+  } else if (/\b(dim\b|\bset\b.*brightness|\blower\b.*light)/.test(normalized) && capabilities.has('set_brightness')) {
+    const percent = extractPercentage(normalized);
+    result.action = 'set_brightness';
+    result.value = percent != null ? percent : 30;
+    result.phrase = `set ${device.name} brightness to ${result.value}%`;
+  } else if (/\b(brighten|increase\b.*brightness)\b/.test(normalized) && capabilities.has('set_brightness')) {
+    result.action = 'set_brightness';
+    result.value = 80;
+    result.phrase = `brighten ${device.name}`;
+  } else if (/\b(set\b.*temperature|heat\b.*to|cool\b.*to)\b/.test(normalized) && capabilities.has('set_temperature')) {
+    const temperature = extractNumber(normalized);
+    if (temperature != null) {
+      result.action = 'set_temperature';
+      result.value = temperature;
+      result.phrase = `set ${device.name} temperature to ${temperature}`;
+    }
+  } else {
+    // Default action preferences
+    if (/\boff\b/.test(normalized) && capabilities.has('turn_off')) {
+      result.action = 'turn_off';
+      result.phrase = `turn off ${device.name}`;
+    } else if (capabilities.has('turn_on')) {
+      result.action = 'turn_on';
+      result.phrase = `turn on ${device.name}`;
+    } else if (capabilities.size > 0) {
+      const [firstCapability] = Array.from(capabilities);
+      result.action = firstCapability;
+      result.phrase = `${firstCapability.replace(/_/g, ' ')} ${device.name}`;
+    } else {
+      return null;
+    }
+  }
+
+  // Ensure capability exists
+  if (!capabilities.has(result.action)) {
+    if (capabilities.has('turn_on') && result.action === 'turn_off') {
+      result.action = 'turn_on';
+    } else if (capabilities.has('turn_off') && result.action === 'turn_on') {
+      result.action = 'turn_off';
+    } else if (capabilities.size > 0) {
+      result.action = Array.from(capabilities)[0];
+    } else {
+      return null;
+    }
+  }
+
+  return result;
+}
+
+function extractPercentage(text) {
+  const match = text.match(/(\d{1,3})\s*(?:percent|%)/);
+  if (match) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) {
+      return Math.max(0, Math.min(100, value));
+    }
+  }
+  return null;
+}
+
+function extractNumber(text) {
+  const match = text.match(/(-?\d{1,3})(?:\s*degrees|\s*°|(?:\s*fahrenheit)?)?/);
+  if (match) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
 /**
  * Get automation by ID
  */
@@ -523,6 +738,7 @@ async function createAutomationFromText(text, roomContext = null) {
         } else {
           lastError = `Validation failed: ${validation.issues.join(', ')}`;
           console.error('AutomationService:', lastError);
+          parsedAutomation = null;
 
           // Build feedback prompt for retry
           const feedbackPrompt = `
@@ -551,21 +767,36 @@ Return ONLY the corrected JSON, no explanation.`;
 
     // If we exhausted all retries, throw error
     if (!parsedAutomation) {
-      throw new Error(`Failed to create valid automation after ${MAX_LLM_RETRIES} attempts. Last error: ${lastError}`);
+      console.warn('AutomationService: Falling back to heuristic automation builder');
+      parsedAutomation = buildFallbackAutomation(text, devicesByRoom, roomContext);
+      if (!parsedAutomation) {
+        throw new Error(`Failed to create valid automation after ${MAX_LLM_RETRIES} attempts. Last error: ${lastError}`);
+      }
     }
 
     // Validate and clean the parsed automation
+    let actions = Array.isArray(parsedAutomation.actions)
+      ? parsedAutomation.actions.filter(Boolean)
+      : null;
+
+    if (!Array.isArray(actions) || actions.length === 0) {
+      const fallbackAutomation = buildFallbackAutomation(text, devicesByRoom, roomContext);
+      if (fallbackAutomation && Array.isArray(fallbackAutomation.actions) && fallbackAutomation.actions.length) {
+        actions = fallbackAutomation.actions;
+        parsedAutomation.trigger = parsedAutomation.trigger || fallbackAutomation.trigger;
+        parsedAutomation.category = parsedAutomation.category || fallbackAutomation.category;
+        parsedAutomation.priority = parsedAutomation.priority || fallbackAutomation.priority;
+        parsedAutomation.description = parsedAutomation.description || fallbackAutomation.description;
+      } else {
+        throw new Error('At least one action is required');
+      }
+    }
+
     const automationData = {
       name: parsedAutomation.name || 'Custom Automation',
       description: parsedAutomation.description || text.trim(),
       trigger: parsedAutomation.trigger || { type: 'manual', conditions: {} },
-      actions: Array.isArray(parsedAutomation.actions) ? parsedAutomation.actions : [
-        {
-          type: 'notification',
-          target: 'user',
-          parameters: { message: `Execute: ${text.trim()}` }
-        }
-      ],
+      actions,
       category: parsedAutomation.category || 'custom',
       priority: parsedAutomation.priority || 5,
       enabled: true
@@ -608,12 +839,13 @@ function buildAutomationPrompt(text, devicesByRoom, scenes, roomContext) {
   return `You are an expert at creating smart home automations. Parse the following request into a structured JSON format.
 
 IMPORTANT RULES:
-1. ONLY use device IDs from the provided device list below
-2. ONLY use scene IDs from the provided scene list below
-3. DO NOT make up or invent device names or IDs
-4. DO NOT use generic placeholders - use actual IDs from the lists
-5. Match device capabilities to allowed actions for each device type
-6. Return ONLY valid JSON with NO additional text or explanation
+1. ALWAYS return at least one action when the user is asking to control something. Simple requests (e.g., "turn on the vault light") must become a manual trigger with one device_control action.
+2. Default the trigger to {"type": "manual", "conditions": {}} when no schedule or condition is provided.
+3. ONLY use device IDs from the provided device list and scene IDs from the provided scene list. Never invent IDs or placeholders.
+4. Match each action to the device’s allowed capabilities (e.g., lights support turn_on/turn_off/set_brightness).
+5. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
+6. Use intent-driven categories (security|comfort|energy|convenience|custom) and pick a sensible priority between 1-10 (default 5).
+7. Return ONLY valid JSON with NO additional text or explanation.
 
 AVAILABLE DEVICES:
 ${deviceList}
