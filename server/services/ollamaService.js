@@ -183,14 +183,31 @@ Please contact your system administrator for assistance.`;
       const status = await this.checkServiceStatus();
       if (status.running) {
         console.log('Ollama service is already running');
-        config.serviceStatus = 'running';
-        if (!config.servicePid) {
-          const existingOwnedProcess = await this.findOwnedOllamaProcess();
-          if (existingOwnedProcess) {
-            config.servicePid = existingOwnedProcess.pid;
-            config.serviceOwner = existingOwnedProcess.user;
-          }
+        const ownedProcess = await this.findOwnedOllamaProcess();
+        if (ownedProcess) {
+          config.serviceStatus = 'running';
+          config.servicePid = ownedProcess.pid;
+          config.serviceOwner = ownedProcess.user;
+          config.lastError = null;
+          await config.save();
+          return { success: true, message: 'Service already running' };
         }
+
+        const processes = await this.listOllamaProcesses();
+        if (processes.length) {
+          const external = processes[0];
+          config.serviceStatus = 'running_external';
+          config.servicePid = external.pid;
+          config.serviceOwner = external.user;
+          config.lastError = null;
+          await config.save();
+          const message = `Service already running (managed by user "${external.user}"). HomeBrain will reuse it in read-only mode.`;
+          return { success: true, message };
+        }
+
+        config.serviceStatus = 'running';
+        config.servicePid = null;
+        config.serviceOwner = null;
         config.lastError = null;
         await config.save();
         return { success: true, message: 'Service already running' };
@@ -261,9 +278,31 @@ Please contact your system administrator for assistance.`;
         candidates.push({ pid: config.servicePid, managed: true });
       } else {
         const ownedProcess = await this.findOwnedOllamaProcess();
-        if (ownedProcess) {
-          candidates.push({ pid: ownedProcess.pid, managed: false });
+      if (ownedProcess) {
+        candidates.push({ pid: ownedProcess.pid, managed: false });
+      }
+    }
+
+      if (candidates.length === 0) {
+        const processes = await this.listOllamaProcesses();
+        if (processes.length) {
+          const external = processes[0];
+          const message = `Ollama service is managed by user "${external.user}". HomeBrain does not have permission to stop it. Use "sudo systemctl stop ollama" or grant HomeBrain sudo access.`;
+          config.serviceStatus = 'running_external';
+          config.servicePid = external.pid;
+          config.serviceOwner = external.user;
+          await config.setError(message);
+          await config.save();
+          console.warn(message);
+          return { success: false, message };
         }
+
+        config.serviceStatus = 'stopped';
+        config.servicePid = null;
+        config.serviceOwner = null;
+        config.lastError = null;
+        await config.save();
+        return { success: true, message: 'Service was not running' };
       }
 
       for (const candidate of candidates) {

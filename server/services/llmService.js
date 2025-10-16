@@ -2,9 +2,12 @@ const axios = require('axios');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const Settings = require('../models/Settings');
+const OllamaConfig = require('../models/OllamaConfig');
 const dotenv = require('dotenv');
 
 dotenv.config();
+
+const ollamaModelCache = new Map();
 
 // Initialize OpenAI only if API key is available
 let openai = null;
@@ -24,6 +27,7 @@ if (process.env.ANTHROPIC_API_KEY) {
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
+const OLLAMA_MODEL_CACHE_TTL = 30_000;
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -81,6 +85,50 @@ function buildLocalModelCandidates(preferredModel) {
   });
 
   return candidates;
+}
+
+async function getOllamaInstalledModels(baseUrl) {
+  try {
+    const cacheEntry = ollamaModelCache.get(baseUrl);
+    const now = Date.now();
+
+    if (cacheEntry && now - cacheEntry.timestamp < OLLAMA_MODEL_CACHE_TTL) {
+      return cacheEntry.models;
+    }
+
+    const response = await axios.get(`${baseUrl}/api/tags`, { timeout: 5000 });
+    const models = Array.isArray(response.data?.models)
+      ? response.data.models
+          .map((model) => model?.name)
+          .filter((name) => typeof name === 'string' && name.trim().length > 0)
+      : [];
+
+    ollamaModelCache.set(baseUrl, { timestamp: now, models });
+    return models;
+  } catch (error) {
+    if (error.code === 'ECONNREFUSED') {
+      throw new Error('Local LLM is not running (connection refused)');
+    }
+
+    if (error.response?.status === 404) {
+      return [];
+    }
+
+    console.warn(`LLM Service: Unable to fetch Ollama models from ${baseUrl}: ${error.message}`);
+    return [];
+  }
+}
+
+async function getActiveOllamaModel() {
+  try {
+    const config = await OllamaConfig.getConfig();
+    if (config && typeof config.activeModel === 'string' && config.activeModel.trim().length > 0) {
+      return config.activeModel.trim();
+    }
+  } catch (error) {
+    console.warn(`LLM Service: Could not load active Ollama model from config: ${error.message}`);
+  }
+  return null;
 }
 
 async function sendRequestToOpenAI(model, message, apiKey = null) {
@@ -161,7 +209,41 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
     testUrl = 'http://' + testUrl;
   }
 
+  const installedModels = await getOllamaInstalledModels(testUrl);
   const candidateModels = buildLocalModelCandidates(model);
+
+  const activeModel = await getActiveOllamaModel();
+  if (activeModel) {
+    const activeVariants = normalizeModelVariants(activeModel);
+    activeVariants.reverse().forEach((variant) => {
+      if (!candidateModels.includes(variant)) {
+        candidateModels.unshift(variant);
+      } else {
+        const index = candidateModels.indexOf(variant);
+        if (index > 0) {
+          candidateModels.splice(index, 1);
+          candidateModels.unshift(variant);
+        }
+      }
+    });
+  }
+
+  installedModels.forEach((installedModel) => {
+    normalizeModelVariants(installedModel).forEach((variant) => {
+      if (!candidateModels.includes(variant)) {
+        candidateModels.push(variant);
+      }
+    });
+  });
+
+  if (candidateModels.length === 0) {
+    throw new Error('No local LLM models available. Install a model with "ollama pull <model>" or configure Settings.localLlmModel.');
+  }
+
+  if (!installedModels.length) {
+    console.warn('LLM Service: No Ollama models installed. Install one (e.g., "ollama pull llama3.1:8b") to enable the local provider.');
+  }
+
   let lastError = null;
 
   for (const candidateModel of candidateModels) {
