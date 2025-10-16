@@ -1,10 +1,94 @@
 const { exec, spawn } = require('child_process');
 const { promisify } = require('util');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 const OllamaConfig = require('../models/OllamaConfig');
 const os = require('os');
 
 const execAsync = promisify(exec);
+const fsp = fs.promises;
+
+const MAX_LOG_LINES = 2000;
+const DEFAULT_LOG_LINES = 200;
+const MAX_LOG_BYTES = 1_048_576; // 1 MB
+const LOG_LINE_SPLIT_REGEX = /\r?\n/;
+
+async function commandExists(command) {
+  try {
+    await execAsync(`command -v ${command}`, { timeout: 2000 });
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function isReadableFile(filePath) {
+  try {
+    const stats = await fsp.stat(filePath);
+    if (!stats.isFile()) {
+      return false;
+    }
+    await fsp.access(filePath, fs.constants.R_OK);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function readLastLines(filePath, maxLines) {
+  const stats = await fsp.stat(filePath);
+
+  if (!stats.isFile() || stats.size === 0) {
+    return [];
+  }
+
+  const chunkSize = Math.min(stats.size, MAX_LOG_BYTES);
+  const buffer = Buffer.alloc(chunkSize);
+  const offset = Math.max(stats.size - chunkSize, 0);
+  const fileHandle = await fsp.open(filePath, 'r');
+
+  try {
+    const { bytesRead } = await fileHandle.read(buffer, 0, chunkSize, offset);
+    if (bytesRead === 0) {
+      return [];
+    }
+    const content = buffer.toString('utf8', 0, bytesRead);
+    const lines = content.split(LOG_LINE_SPLIT_REGEX);
+    if (lines.length && lines[lines.length - 1] === '') {
+      lines.pop();
+    }
+    return lines.length > maxLines ? lines.slice(-maxLines) : lines;
+  } finally {
+    await fileHandle.close();
+  }
+}
+
+function buildLogCandidatePaths() {
+  const candidates = [];
+  const homeDir = os.homedir ? os.homedir() : null;
+
+  if (homeDir) {
+    const logsDir = path.join(homeDir, '.ollama', 'logs');
+    ['ollama.log', 'server.log', 'ollama-service.log', 'ollama.jsonl', 'serve.log'].forEach((name) => {
+      candidates.push(path.join(logsDir, name));
+    });
+
+    if (process.platform === 'darwin') {
+      candidates.push(path.join(homeDir, 'Library', 'Logs', 'Ollama', 'ollama.log'));
+    }
+
+    if (process.platform === 'win32') {
+      candidates.push(path.join(homeDir, 'AppData', 'Local', 'Ollama', 'Logs', 'ollama.log'));
+    }
+  }
+
+  candidates.push('/var/log/ollama.log');
+  candidates.push('/var/log/ollama/ollama.log');
+  candidates.push('/var/log/ollama-service.log');
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
 
 class OllamaService {
   constructor() {
@@ -1092,6 +1176,94 @@ Please contact your system administrator for assistance.`;
       { name: 'codellama:latest', description: 'Code Llama for coding', size: '3.8 GB', parameterSize: '7B' },
       { name: 'deepseek-coder:latest', description: 'DeepSeek Coder', size: '3.8 GB', parameterSize: '6.7B' },
     ];
+  }
+
+  /**
+   * Retrieve Ollama service logs for diagnostics
+   */
+  async getServiceLogs(options = {}) {
+    const rawLines = typeof options.lines === 'number' ? options.lines : parseInt(options.lines, 10);
+    const maxLines = Number.isFinite(rawLines)
+      ? Math.min(Math.max(rawLines, 20), MAX_LOG_LINES)
+      : DEFAULT_LOG_LINES;
+
+    const logAttempts = [];
+
+    if (await commandExists('journalctl')) {
+      const units = ['ollama', 'ollama.service'];
+      for (const unit of units) {
+        try {
+          const { stdout } = await execAsync(`journalctl -u ${unit} --no-pager -n ${maxLines}`, {
+            timeout: 7000,
+            maxBuffer: MAX_LOG_BYTES * 4
+          });
+          const lines = (stdout || '')
+            .split(LOG_LINE_SPLIT_REGEX)
+            .map(line => line.trimEnd())
+            .filter(line => line.length > 0);
+
+          if (lines.length) {
+            return {
+              source: `journalctl:${unit}`,
+              sourceType: 'journalctl',
+              lines: lines.slice(-maxLines),
+              lineCount: Math.min(lines.length, maxLines),
+              truncated: lines.length >= maxLines
+            };
+          }
+
+          logAttempts.push({ type: 'journalctl', target: unit, message: 'No output' });
+        } catch (error) {
+          logAttempts.push({
+            type: 'journalctl',
+            target: unit,
+            error: error.message || 'Unknown error'
+          });
+        }
+      }
+    } else {
+      logAttempts.push({ type: 'journalctl', target: 'command', error: 'journalctl not available' });
+    }
+
+    const candidateFiles = buildLogCandidatePaths();
+    for (const filePath of candidateFiles) {
+      try {
+        if (!(await isReadableFile(filePath))) {
+          logAttempts.push({ type: 'file', target: filePath, error: 'unreadable' });
+          continue;
+        }
+
+        const lines = await readLastLines(filePath, maxLines);
+        if (lines.length) {
+          return {
+            source: filePath,
+            sourceType: 'file',
+            lines,
+            lineCount: lines.length,
+            truncated: lines.length >= maxLines
+          };
+        }
+
+        logAttempts.push({ type: 'file', target: filePath, message: 'No content' });
+      } catch (error) {
+        logAttempts.push({
+          type: 'file',
+          target: filePath,
+          error: error.message || 'Unknown error'
+        });
+      }
+    }
+
+    console.warn('OllamaService: No service logs available', logAttempts);
+
+    return {
+      source: null,
+      sourceType: null,
+      lines: [],
+      lineCount: 0,
+      truncated: false,
+      message: 'No Ollama logs available. The service may not have emitted any logs yet.'
+    };
   }
 }
 

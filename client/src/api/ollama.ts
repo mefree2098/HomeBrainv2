@@ -14,6 +14,26 @@ export const getOllamaStatus = async () => {
   }
 };
 
+// Description: Retrieve recent Ollama service logs
+// Endpoint: GET /api/ollama/logs
+// Request: { lines?: number }
+// Response: { success: boolean, source: string|null, sourceType: string|null, lines: string[], lineCount: number, truncated: boolean, message?: string }
+export const getOllamaLogs = async (lines?: number) => {
+  try {
+    const response = await api.get('/api/ollama/logs', {
+      params: typeof lines === 'number' ? { lines } : undefined,
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error(error);
+    throw new Error(
+      error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error.message
+    );
+  }
+};
+
 // Description: Install Ollama
 // Endpoint: POST /api/ollama/install
 // Request: {}

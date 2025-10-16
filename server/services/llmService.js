@@ -173,7 +173,24 @@ async function sendRequestToOpenAI(model, message, apiKey = null) {
 
       const response = await openaiClient.chat.completions.create(payload);
       console.log(`OpenAI response received successfully from model: ${validModel}`);
-      return response.choices[0].message.content;
+      const message = response.choices?.[0]?.message;
+      if (!message) {
+        throw new Error('OpenAI response missing message content');
+      }
+
+      const { content } = message;
+      if (Array.isArray(content)) {
+        const text = content
+          .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+          .join('');
+        return text.trim();
+      }
+
+      if (typeof content === 'string') {
+        return content.trim();
+      }
+
+      return JSON.stringify(content);
     } catch (error) {
       const attemptNumber = attempt + 1;
       console.error(`Error sending request to OpenAI (attempt ${attemptNumber}):`, error.message);

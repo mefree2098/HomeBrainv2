@@ -60,6 +60,35 @@ router.get('/status', auth, async (req, res) => {
   }
 });
 
+// Description: Fetch recent Ollama service logs
+// Endpoint: GET /api/ollama/logs
+// Request: { lines?: number }
+// Response: { success: boolean, source: string|null, sourceType: string|null, lines: string[], lineCount: number, truncated: boolean, message?: string }
+router.get('/logs', auth, async (req, res) => {
+  try {
+    console.log('GET /api/ollama/logs - Fetching Ollama logs');
+
+    const linesParam = Array.isArray(req.query.lines) ? req.query.lines[0] : req.query.lines;
+    const parsedLines = linesParam !== undefined ? parseInt(linesParam, 10) : undefined;
+
+    const result = await ollamaService.getServiceLogs({
+      lines: Number.isNaN(parsedLines) ? undefined : parsedLines
+    });
+
+    res.status(200).json({
+      success: Array.isArray(result.lines) && result.lines.length > 0,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error fetching Ollama logs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Ollama logs',
+      error: error.message
+    });
+  }
+});
+
 // Description: Install Ollama
 // Endpoint: POST /api/ollama/install
 // Request: {}
