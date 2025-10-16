@@ -7,6 +7,18 @@ const deviceService = require('./deviceService');
 const mongoose = require('mongoose');
 
 const MAX_LLM_RETRIES = 3;
+const MAX_DEVICE_PROMPT_ENTRIES = 40;
+const MAX_SCENE_PROMPT_ENTRIES = 25;
+const MIN_KEYWORD_LENGTH = 3;
+
+const DEVICE_TYPE_HINTS = {
+  light: ['light', 'lights', 'lamp', 'bulb'],
+  switch: ['switch', 'outlet', 'plug'],
+  thermostat: ['thermostat', 'temperature', 'heat', 'cool'],
+  lock: ['lock', 'unlock', 'door'],
+  garage: ['garage', 'door'],
+  sensor: ['sensor', 'motion', 'door', 'window', 'temperature', 'humidity']
+};
 
 /**
  * Get all automations
@@ -90,6 +102,215 @@ function flattenDevices(devicesByRoom) {
     });
   });
   return list;
+}
+
+function extractKeywords(text) {
+  if (!text) {
+    return [];
+  }
+  return Array.from(new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token && token.length >= MIN_KEYWORD_LENGTH)
+  ));
+}
+
+function scoreDeviceEntry(entry, keywordSet, normalizedText, roomContextLower) {
+  let score = 1;
+  const device = entry.device;
+  const nameLower = (device.name || '').toLowerCase();
+  const typeLower = (device.type || '').toLowerCase();
+  const roomLower = (entry.room || '').toLowerCase();
+
+  if (nameLower && normalizedText.includes(nameLower)) {
+    score += 10;
+  }
+
+  keywordSet.forEach((token) => {
+    if (!token || token.length < MIN_KEYWORD_LENGTH) {
+      return;
+    }
+    if (nameLower && nameLower.includes(token)) {
+      score += 4;
+    }
+    if (typeLower && typeLower.includes(token)) {
+      score += 3;
+    }
+    if (roomLower && roomLower.includes(token)) {
+      score += 2;
+    }
+  });
+
+  if (typeLower && DEVICE_TYPE_HINTS[typeLower]) {
+    DEVICE_TYPE_HINTS[typeLower].forEach((hint) => {
+      if (keywordSet.has(hint) || normalizedText.includes(hint)) {
+        score += 2;
+      }
+    });
+  }
+
+  if (roomLower && normalizedText.includes(roomLower)) {
+    score += 4;
+  }
+
+  if (roomContextLower && roomLower && roomLower === roomContextLower) {
+    score += 6;
+  }
+
+  return score;
+}
+
+function refineDeviceContextForPrompt(userText, devicesByRoom, roomContext) {
+  const entries = [];
+  Object.entries(devicesByRoom || {}).forEach(([roomName, devices]) => {
+    (devices || []).forEach((device) => {
+      entries.push({
+        room: roomName,
+        device,
+        order: entries.length
+      });
+    });
+  });
+
+  if (entries.length <= MAX_DEVICE_PROMPT_ENTRIES) {
+    return devicesByRoom;
+  }
+
+  const normalizedText = (userText || '').toLowerCase();
+  const roomContextLower = roomContext ? roomContext.toLowerCase() : null;
+  const keywordSet = new Set(extractKeywords(userText));
+
+  const scoredEntries = entries.map((entry) => ({
+    ...entry,
+    score: scoreDeviceEntry(entry, keywordSet, normalizedText, roomContextLower)
+  }));
+
+  const sortedEntries = scoredEntries.slice().sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    return a.order - b.order;
+  });
+
+  const selected = [];
+  const seenIds = new Set();
+
+  const addEntry = (entry) => {
+    if (selected.length >= MAX_DEVICE_PROMPT_ENTRIES) {
+      return;
+    }
+    const id = entry.device.id || (entry.device._id && entry.device._id.toString());
+    if (!id || seenIds.has(id)) {
+      return;
+    }
+    seenIds.add(id);
+    selected.push(entry);
+  };
+
+  if (roomContextLower) {
+    sortedEntries
+      .filter((entry) => (entry.room || '').toLowerCase() === roomContextLower)
+      .forEach(addEntry);
+  }
+
+  sortedEntries
+    .filter((entry) => entry.score >= 6)
+    .forEach(addEntry);
+
+  for (const entry of sortedEntries) {
+    if (selected.length >= MAX_DEVICE_PROMPT_ENTRIES) {
+      break;
+    }
+    addEntry(entry);
+  }
+
+  if (!selected.length) {
+    return devicesByRoom;
+  }
+
+  const trimmed = {};
+  selected.forEach(({ room, device }) => {
+    if (!trimmed[room]) {
+      trimmed[room] = [];
+    }
+    trimmed[room].push(device);
+  });
+
+  return trimmed;
+}
+
+function refineSceneContextForPrompt(userText, scenes) {
+  if (!Array.isArray(scenes) || scenes.length <= MAX_SCENE_PROMPT_ENTRIES) {
+    return scenes;
+  }
+
+  const normalizedText = (userText || '').toLowerCase();
+  const keywordSet = new Set(extractKeywords(userText));
+
+  const scoredScenes = scenes.map((scene, index) => {
+    const nameLower = (scene.name || '').toLowerCase();
+    const categoryLower = (scene.category || '').toLowerCase();
+    let score = 1;
+
+    if (nameLower && normalizedText.includes(nameLower)) {
+      score += 10;
+    }
+
+    keywordSet.forEach((token) => {
+      if (nameLower.includes(token)) {
+        score += 4;
+      }
+      if (categoryLower.includes(token)) {
+        score += 2;
+      }
+    });
+
+    if (categoryLower && normalizedText.includes(categoryLower)) {
+      score += 2;
+    }
+
+    return { scene, score, index };
+  });
+
+  const sortedScenes = scoredScenes.slice().sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    return a.index - b.index;
+  });
+
+  const selected = [];
+  const seenIds = new Set();
+
+  const addScene = (entry) => {
+    if (selected.length >= MAX_SCENE_PROMPT_ENTRIES) {
+      return;
+    }
+    const id = entry.scene.id || entry.scene._id || (entry.scene._id && entry.scene._id.toString());
+    if (!id || seenIds.has(id)) {
+      return;
+    }
+    seenIds.add(id);
+    selected.push(entry.scene);
+  };
+
+  sortedScenes
+    .filter((entry) => entry.score > 1)
+    .forEach(addScene);
+
+  for (const entry of sortedScenes) {
+    if (selected.length >= MAX_SCENE_PROMPT_ENTRIES) {
+      break;
+    }
+    addScene(entry);
+  }
+
+  if (!selected.length) {
+    return scenes.slice(0, MAX_SCENE_PROMPT_ENTRIES);
+  }
+
+  return selected;
 }
 
 function findBestDeviceForText(text, devices, roomContext) {
@@ -697,8 +918,21 @@ async function createAutomationFromText(text, roomContext = null) {
     const devicesByRoom = await buildDeviceContext();
     const scenes = await buildSceneContext();
 
-    // Build detailed prompt with all context
-    let prompt = buildAutomationPrompt(text, devicesByRoom, scenes, roomContext);
+    const promptDeviceContext = refineDeviceContextForPrompt(text, devicesByRoom, roomContext);
+    const promptScenes = refineSceneContextForPrompt(text, scenes);
+
+    const originalDeviceCount = flattenDevices(devicesByRoom).length;
+    const promptDeviceCount = flattenDevices(promptDeviceContext).length;
+    if (promptDeviceCount < originalDeviceCount) {
+      console.log(`AutomationService: Trimmed device context for LLM prompt (${originalDeviceCount} -> ${promptDeviceCount})`);
+    }
+
+    if (promptScenes.length < scenes.length) {
+      console.log(`AutomationService: Trimmed scene context for LLM prompt (${scenes.length} -> ${promptScenes.length})`);
+    }
+
+    // Build detailed prompt with filtered context
+    let prompt = buildAutomationPrompt(text, promptDeviceContext, promptScenes, roomContext);
 
     let parsedAutomation = null;
     let lastError = null;
