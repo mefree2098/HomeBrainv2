@@ -455,6 +455,12 @@ class HomeBrainRemoteDevice {
           this.handleUpdateAvailable(message);
           break;
 
+        case 'audio_received':
+          if (argv.verbose) {
+            console.log('Hub acknowledged audio chunk for session', message.sessionId || 'unknown');
+          }
+          break;
+
         case 'error':
           console.error('Hub error:', message.message);
           this.stats.errors++;
@@ -1616,6 +1622,7 @@ class HomeBrainRemoteDevice {
       this.recordingStream = null;
       this.resumeWakeWordAfterCommand = true;
     }
+    this.stopFeatureSidecar();
 
     // Default: stream PCM to hub during listening window
     console.log('Starting voice command recording (pcm)...');
