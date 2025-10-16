@@ -29,6 +29,7 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
 const OLLAMA_MODEL_CACHE_TTL = 30_000;
 const JSON_ONLY_SYSTEM_PROMPT = 'You are the HomeBrain automation intelligence. Always respond with a single JSON object and no commentary.';
+const DEFAULT_OLLAMA_FORMAT = 'json';
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -153,16 +154,15 @@ async function buildLocalOllamaOptions() {
     const options = {};
 
     const contextLength = sanitizeNumeric(configuration.contextLength, { min: 256, max: 4096, fallback: null });
-    options.num_ctx = contextLength || 1024;
+    options.num_ctx = contextLength || 1536;
 
     const predictSetting = sanitizeNumeric(configuration.maxPredictTokens, { min: 128, max: 2048, fallback: null });
     options.num_predict = predictSetting || 256;
 
-    if (typeof configuration.temperature === 'number') {
-      options.temperature = sanitizeNumeric(configuration.temperature, { min: 0, max: 2, fallback: 0.2 });
-    } else {
-      options.temperature = 0.2;
-    }
+    const temperatureValue = typeof configuration.temperature === 'number'
+      ? sanitizeNumeric(configuration.temperature, { min: 0, max: 2, fallback: 0.1 })
+      : 0.1;
+    options.temperature = temperatureValue;
 
     if (typeof configuration.gpuLayers === 'number' && configuration.gpuLayers >= 0) {
       options.gpu_layers = configuration.gpuLayers;
@@ -183,9 +183,9 @@ async function buildLocalOllamaOptions() {
   } catch (error) {
     console.warn('LLM Service: Unable to load Ollama configuration for request options:', error.message);
     return {
-      num_ctx: 1024,
+      num_ctx: 1536,
       num_predict: 256,
-      temperature: 0.2,
+      temperature: 0.1,
       low_vram: true
     };
   }
@@ -392,9 +392,15 @@ async function attemptLocalModelRequest(baseUrl, modelName, message, requestOpti
   const promptWithInstruction = `${systemInstruction}\n\n${message}`;
 
   const sanitizedOptions = { ...requestOptions };
+  Object.keys(sanitizedOptions).forEach((key) => {
+    if (sanitizedOptions[key] === null || sanitizedOptions[key] === undefined) {
+      delete sanitizedOptions[key];
+    }
+  });
 
   const chatPayload = {
     model: baseModel,
+    format: DEFAULT_OLLAMA_FORMAT,
     messages: chatMessages,
     options: sanitizedOptions,
     stream: false
@@ -409,10 +415,14 @@ async function attemptLocalModelRequest(baseUrl, modelName, message, requestOpti
 
     const chatMessage = chatResponse.data?.message;
     if (chatMessage?.content) {
-      if (Array.isArray(chatMessage.content)) {
-        return chatMessage.content.map((part) => part.text || '').join('').trim();
+      const content = chatMessage.content;
+      if (Array.isArray(content)) {
+        return content.map((part) => (typeof part?.text === 'string' ? part.text : '')).join('').trim();
       }
-      return String(chatMessage.content);
+      if (typeof content === 'string') {
+        return content.trim();
+      }
+      return JSON.stringify(content);
     }
 
     if (typeof chatMessage === 'string') {
@@ -427,6 +437,7 @@ async function attemptLocalModelRequest(baseUrl, modelName, message, requestOpti
     const generateResponse = await axios.post(`${baseUrl}/api/generate`, {
       model: baseModel,
       prompt: promptWithInstruction,
+      format: DEFAULT_OLLAMA_FORMAT,
       options: sanitizedOptions,
       stream: false
     }, {
