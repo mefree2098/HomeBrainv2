@@ -29,6 +29,60 @@ async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function normalizeModelVariants(modelName) {
+  const variants = [];
+  if (!modelName || typeof modelName !== 'string') {
+    return variants;
+  }
+
+  const trimmed = modelName.trim();
+  if (!trimmed) {
+    return variants;
+  }
+
+  const lower = trimmed.toLowerCase();
+  const addVariant = (value) => {
+    if (value && !variants.includes(value)) {
+      variants.push(value);
+    }
+  };
+
+  addVariant(trimmed);
+
+  let colonVariantAdded = trimmed.includes(':');
+
+  if (lower.includes('-')) {
+    const colonVariant = trimmed.replace(/-/g, ':');
+    addVariant(colonVariant);
+    colonVariantAdded = colonVariantAdded || colonVariant.includes(':');
+
+    const dashMatch = lower.match(/^(.+?)-(\d+[a-z0-9]*)$/i);
+    if (dashMatch) {
+      addVariant(`${dashMatch[1]}:${dashMatch[2]}`);
+      colonVariantAdded = true;
+    }
+  }
+
+  if (!colonVariantAdded && !trimmed.includes(':')) {
+    addVariant(`${trimmed}:latest`);
+  }
+
+  return variants;
+}
+
+function buildLocalModelCandidates(preferredModel) {
+  const candidates = normalizeModelVariants(preferredModel);
+  const defaults = ['llama3.1:8b', 'llama3:8b', 'llama2:7b', 'llama2'];
+
+  defaults.forEach((model) => {
+    if (!candidates.includes(model)) {
+      candidates.push(model);
+    }
+  });
+
+  return candidates;
+}
+
 async function sendRequestToOpenAI(model, message, apiKey = null) {
   // Use provided API key or fall back to environment variable
   const openaiClient = apiKey ? new OpenAI({ apiKey }) : openai;
@@ -107,114 +161,120 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
     testUrl = 'http://' + testUrl;
   }
 
-  for (let i = 0; i < MAX_RETRIES; i++) {
+  const candidateModels = buildLocalModelCandidates(model);
+  let lastError = null;
+
+  for (const candidateModel of candidateModels) {
+    console.log(`LLM Service: Attempting local provider with model "${candidateModel}" at ${testUrl}`);
+
     try {
-      console.log(`Sending request to local LLM at ${testUrl} with model: ${model}`);
-
-      // Try OpenAI-compatible endpoint format first
-      const response = await axios.post(`${testUrl}/api/chat`, {
-        model: model || 'default',
-        messages: [{ role: 'user', content: message }],
-        stream: false
-      }, {
-        timeout: 30000,
-        headers: { 'Content-Type': 'application/json' }
-      });
-
-      console.log('LLM Service: Local Ollama /api/chat endpoint responded successfully');
-
-      if (response.data && response.data.message && response.data.message.content) {
-        return Array.isArray(response.data.message.content)
-          ? response.data.message.content.map((part) => part.text || '').join('').trim()
-          : String(response.data.message.content);
+      const responseText = await attemptLocalModelRequest(testUrl, candidateModel, message);
+      if (responseText !== undefined && responseText !== null) {
+        return responseText;
       }
-
-      if (response.data && response.data.message) {
-        return JSON.stringify(response.data.message);
-      }
-
-      // Fallback to OpenAI-compatible endpoint if /api/chat is not supported
-      const completionResponse = await axios.post(`${testUrl}/v1/chat/completions`, {
-        model: model || 'default',
-        messages: [{ role: 'user', content: message }],
-        max_tokens: 1024,
-      }, {
-        timeout: 30000,
-        headers: { 'Content-Type': 'application/json' }
-      });
-
-      console.log(`LLM Service: Local endpoint responded via /v1/chat/completions`);
-
-      // Handle OpenAI-compatible response format
-      if (response.data.choices && response.data.choices[0]) {
-        return response.data.choices[0].message.content;
-      }
-
-      // Handle alternative response formats
-      if (response.data.response) {
-        return response.data.response;
-      }
-
-      throw new Error('Unexpected response format from local LLM');
-
     } catch (error) {
-      console.error(`Error sending request to local LLM (attempt ${i + 1}):`, error.message);
+      lastError = error;
+      const status = error.response?.status;
+      const errorMessage = error.response?.data?.error || error.message;
 
-      // If first attempt failed, try alternative endpoint format
-      if (i === 0 && (error.code === 'ECONNREFUSED' || error.response?.status === 404)) {
-        try {
-          console.log(`Trying alternative endpoint format: ${testUrl}/api/generate`);
-          const altResponse = await axios.post(`${testUrl}/api/generate`, {
-            model: model || 'default',
-            prompt: message,
-            stream: false
-          }, {
-            timeout: 30000,
-            headers: { 'Content-Type': 'application/json' }
-          });
-
-          if (altResponse.data.response) {
-            return altResponse.data.response;
-          }
-
-          if (altResponse.data.output) {
-            return altResponse.data.output;
-          }
-        } catch (altError) {
-          console.error(`Alternative endpoint also failed:`, altError.message);
-        }
-
-        try {
-          console.log(`Trying legacy endpoint format: ${testUrl}/api/chat`);
-          const legacyResponse = await axios.post(`${testUrl}/api/chat`, {
-            model: model || 'default',
-            messages: [{ role: 'user', content: message }],
-            stream: false
-          }, {
-            timeout: 30000,
-            headers: { 'Content-Type': 'application/json' }
-          });
-
-          const legacyMessage = legacyResponse.data?.message;
-          if (legacyMessage?.content) {
-            if (Array.isArray(legacyMessage.content)) {
-              return legacyMessage.content.map((part) => part.text || '').join('').trim();
-            }
-            return String(legacyMessage.content);
-          }
-
-          if (typeof legacyResponse.data?.response === 'string') {
-            return legacyResponse.data.response;
-          }
-        } catch (altError) {
-          console.error(`Legacy endpoint also failed:`, altError.message);
-        }
+      if (status === 404 || (errorMessage && errorMessage.toLowerCase().includes('not found'))) {
+        console.warn(`LLM Service: Local model "${candidateModel}" not available (${errorMessage}). Trying next candidate.`);
+        continue;
       }
 
-      if (i === MAX_RETRIES - 1) throw error;
-      await sleep(RETRY_DELAY);
+      console.error(`Error sending request to local LLM with model "${candidateModel}":`, errorMessage);
+      throw error;
     }
   }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  throw new Error('Local LLM request failed: no models responded successfully.');
+}
+
+async function attemptLocalModelRequest(baseUrl, modelName, message) {
+  const headers = { 'Content-Type': 'application/json' };
+  let lastError = null;
+
+  const chatPayload = {
+    model: modelName || 'default',
+    messages: [{ role: 'user', content: message }],
+    stream: false
+  };
+
+  try {
+    console.log(`LLM Service: Sending request to ${baseUrl}/api/chat`);
+    const chatResponse = await axios.post(`${baseUrl}/api/chat`, chatPayload, {
+      timeout: 30000,
+      headers
+    });
+
+    const chatMessage = chatResponse.data?.message;
+    if (chatMessage?.content) {
+      if (Array.isArray(chatMessage.content)) {
+        return chatMessage.content.map((part) => part.text || '').join('').trim();
+      }
+      return String(chatMessage.content);
+    }
+
+    if (typeof chatMessage === 'string') {
+      return chatMessage;
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  try {
+    console.log(`LLM Service: Sending request to ${baseUrl}/v1/chat/completions`);
+    const completionResponse = await axios.post(`${baseUrl}/v1/chat/completions`, {
+      model: modelName || 'default',
+      messages: [{ role: 'user', content: message }],
+      max_tokens: 1024
+    }, {
+      timeout: 30000,
+      headers
+    });
+
+    if (completionResponse.data?.choices && completionResponse.data.choices[0]) {
+      return completionResponse.data.choices[0].message.content;
+    }
+
+    if (completionResponse.data?.response) {
+      return completionResponse.data.response;
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  try {
+    console.log(`LLM Service: Sending request to ${baseUrl}/api/generate`);
+    const generateResponse = await axios.post(`${baseUrl}/api/generate`, {
+      model: modelName || 'default',
+      prompt: message,
+      stream: false
+    }, {
+      timeout: 30000,
+      headers
+    });
+
+    if (typeof generateResponse.data?.response === 'string') {
+      return generateResponse.data.response;
+    }
+
+    if (typeof generateResponse.data?.output === 'string') {
+      return generateResponse.data.output;
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  throw new Error('Local LLM request did not return a response.');
 }
 
 async function sendLLMRequest(provider, model, message) {
