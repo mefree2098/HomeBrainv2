@@ -255,7 +255,11 @@ class WhisperRuntime {
       );
       return { running: true, model: response.model };
     } catch (error) {
-      return { running: false };
+      const stillAlive = this.child && this.child.exitCode === null && !this.child.killed;
+      return {
+        running: stillAlive,
+        model: stillAlive ? this.modelName : null
+      };
     }
   }
 
