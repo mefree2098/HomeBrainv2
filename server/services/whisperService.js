@@ -531,13 +531,18 @@ class WhisperService {
     const cwd = process.cwd();
     const hasCuda = this._hasCudaSupport();
     let attemptedCudaBuild = false;
+    let cudaBuildSucceeded = false;
     let cudaReady = false;
 
-    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'pip'], { cwd });
-
-    const installSoundfile = async () => {
-      await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'soundfile'], { cwd });
+    const pipInstall = async (packages, options = {}) => {
+      const args = ['-m', 'pip', 'install', ...packages];
+      await this._runCommand(PYTHON_BIN, args, { cwd, ...options });
     };
+
+    await pipInstall(['--upgrade', 'pip']);
+    await pipInstall(['--upgrade', 'setuptools', 'wheel', 'numpy']);
+    await pipInstall(['--upgrade', 'huggingface-hub', 'tokenizers', 'tqdm']);
+    await pipInstall(['--upgrade', 'faster-whisper']);
 
     if (hasCuda) {
       attemptedCudaBuild = true;
@@ -549,37 +554,47 @@ class WhisperService {
       if (arch) {
         buildEnv.CT2_CUDA_ARCH = arch;
       }
+
+      const cudaHome = [
+        process.env.WHISPER_CUDA_HOME,
+        process.env.CUDA_HOME,
+        '/usr/local/cuda',
+        '/usr/local/cuda-12'
+      ].find((candidate) => candidate && fs.existsSync(candidate));
+      if (cudaHome) {
+        buildEnv.CUDA_HOME = cudaHome;
+        buildEnv.CUDA_TOOLKIT_ROOT_DIR = cudaHome;
+        const cudaBin = path.join(cudaHome, 'bin');
+        const cudaLib64 = path.join(cudaHome, 'lib64');
+        buildEnv.PATH = buildEnv.PATH ? `${cudaBin}:${buildEnv.PATH}` : `${cudaBin}`;
+        buildEnv.LD_LIBRARY_PATH = buildEnv.LD_LIBRARY_PATH
+          ? `${cudaLib64}:${buildEnv.LD_LIBRARY_PATH}`
+          : `${cudaLib64}`;
+      }
       if (!buildEnv.MAX_JOBS && typeof os.cpus === 'function') {
         const cpuCount = Array.isArray(os.cpus()) ? os.cpus().length : 4;
         buildEnv.MAX_JOBS = String(cpuCount || 4);
       }
 
       try {
+        await pipInstall(['--upgrade', 'cmake', 'ninja', 'pybind11'], { env: buildEnv });
         await this._runCommand(
           PYTHON_BIN,
-          ['-m', 'pip', 'install', '--upgrade', 'cmake', 'ninja', 'pybind11', 'numpy'],
-          { cwd }
-        );
-        await this._runCommand(
-          PYTHON_BIN,
-          ['-m', 'pip', 'install', '--upgrade', '--no-binary', 'ctranslate2', 'ctranslate2'],
+          ['-m', 'pip', 'install', '--no-binary', 'ctranslate2', '--force-reinstall', 'ctranslate2'],
           { cwd, env: buildEnv }
         );
+        cudaBuildSucceeded = true;
       } catch (error) {
         console.warn(
           `Whisper Service: CUDA-enabled CTranslate2 build failed (${error.message}); falling back to CPU build`
         );
+        cudaBuildSucceeded = false;
       }
     }
 
-    await this._runCommand(
-      PYTHON_BIN,
-      ['-m', 'pip', 'install', '--upgrade', 'faster-whisper'],
-      { cwd }
-    );
-    await installSoundfile();
+    await pipInstall(['--upgrade', 'soundfile']);
 
-    if (attemptedCudaBuild) {
+    if (cudaBuildSucceeded) {
       cudaReady = await this._verifyCudaRuntime();
       if (!cudaReady) {
         console.warn(
@@ -592,9 +607,13 @@ class WhisperService {
     config.serviceStatus = 'stopped';
     await config.save();
 
+    const suffix = cudaBuildSucceeded
+      ? (cudaReady ? ' (CUDA ready)' : ' (CUDA fallback to CPU)')
+      : (attemptedCudaBuild ? ' (CUDA build failed, running on CPU)' : '');
+
     return {
       success: true,
-      message: `faster-whisper installed successfully${attemptedCudaBuild ? (cudaReady ? ' (CUDA ready)' : ' (CUDA fallback to CPU)') : ''}`
+      message: `faster-whisper installed successfully${suffix}`
     };
   }
 
