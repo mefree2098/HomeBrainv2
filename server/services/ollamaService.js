@@ -938,8 +938,35 @@ Please contact your system administrator for assistance.`;
       });
       console.log('Service status checked:', serviceStatus);
 
+      let serviceRunning = false;
+      let externalProcess = null;
+
+      if (config.servicePid && this.isProcessRunning(config.servicePid)) {
+        serviceRunning = true;
+      } else if (serviceStatus.running) {
+        const ownedProcess = await this.findOwnedOllamaProcess();
+        if (ownedProcess) {
+          serviceRunning = true;
+          config.servicePid = ownedProcess.pid;
+          config.serviceOwner = ownedProcess.user;
+        } else {
+          const processes = await this.listOllamaProcesses();
+          if (processes.length) {
+            externalProcess = processes[0];
+            config.servicePid = externalProcess.pid;
+            config.serviceOwner = externalProcess.user;
+            serviceRunning = true;
+          }
+        }
+      } else {
+        config.servicePid = null;
+        config.serviceOwner = null;
+      }
+
       // Update config with current status
-      if (serviceStatus.running) {
+      if (serviceRunning && externalProcess) {
+        config.serviceStatus = 'running_external';
+      } else if (serviceRunning) {
         config.serviceStatus = 'running';
       } else if (installStatus.isInstalled) {
         config.serviceStatus = 'stopped';
@@ -951,7 +978,7 @@ Please contact your system administrator for assistance.`;
       return {
         isInstalled: installStatus.isInstalled,
         version: installStatus.version,
-        serviceRunning: serviceStatus.running,
+        serviceRunning,
         serviceStatus: config.serviceStatus,
         installedModels: config.installedModels,
         activeModel: config.activeModel,
