@@ -1104,6 +1104,26 @@ Return ONLY the corrected JSON, no explanation.`;
   }
 }
 
+const AUTOMATION_JSON_TEMPLATE = `{
+  "name": "Manual: Vault Light On",
+  "description": "Manual trigger to turn on the vault light switch.",
+  "trigger": {
+    "type": "manual",
+    "conditions": {}
+  },
+  "actions": [
+    {
+      "type": "device_control",
+      "target": "<DEVICE_ID>",
+      "parameters": {
+        "action": "turn_on"
+      }
+    }
+  ],
+  "category": "convenience",
+  "priority": 5
+}`;
+
 /**
  * Build detailed automation prompt for LLM
  */
@@ -1118,7 +1138,20 @@ function buildAutomationPrompt(text, devicesByRoom, scenes, roomContext) {
     `  - ${s.name} (ID: ${s.id}, Category: ${s.category})`
   ).join('\n');
 
-  return `You are an expert at creating smart home automations. Parse the following request into a structured JSON format.
+  return `You are an expert at creating smart home automations. Convert the user's request into a JSON object that matches the schema below.
+
+OUTPUT REQUIREMENTS (FOLLOW EXACTLY):
+1. Return a single valid JSON object only. Do not include markdown, prose, comments, code fences, or additional explanations.
+2. Every key must use double quotes. All string values must use double quotes.
+3. The JSON must include the fields: name, description, trigger, actions, category, priority.
+4. The trigger must include a "type" key and a "conditions" object (empty object is fine for manual triggers).
+5. The actions array must contain at least one item. Each action must have "type", "target", and "parameters".
+6. Choose device and scene identifiers strictly from the provided context. If no appropriate device exists, leave "actions" as an empty array and set "category" to "custom".
+7. If the user's request cannot be fulfilled with the available devices/scenes, set "actions" to an empty array and use category "custom".
+8. Respond with valid JSON even when uncertain; never omit required fields.
+
+REQUIRED JSON TEMPLATE (values are examples, not literals to reuse):
+${AUTOMATION_JSON_TEMPLATE}
 
 IMPORTANT RULES:
 1. ALWAYS return at least one action when the user is asking to control something. Simple requests (e.g., "turn on the vault light") must become a manual trigger with one device_control action.
@@ -1126,8 +1159,8 @@ IMPORTANT RULES:
 3. ONLY use device IDs from the provided device list and scene IDs from the provided scene list. Never invent IDs or placeholders.
 4. Match each action to the device’s allowed capabilities (e.g., lights support turn_on/turn_off/set_brightness).
 5. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
-6. Use intent-driven categories (security|comfort|energy|convenience|custom) and pick a sensible priority between 1-10 (default 5).
-7. Return ONLY valid JSON with NO additional text or explanation.
+ 6. Use intent-driven categories (security|comfort|energy|convenience|custom) and pick a sensible priority between 1-10 (default 5).
+7. Never output any prefix/suffix text. Return ONLY the JSON object.
 
 AVAILABLE DEVICES:
 ${deviceList}
