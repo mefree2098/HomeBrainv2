@@ -28,6 +28,7 @@ if (process.env.ANTHROPIC_API_KEY) {
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
 const OLLAMA_MODEL_CACHE_TTL = 30_000;
+const JSON_ONLY_SYSTEM_PROMPT = 'You are the HomeBrain automation intelligence. Always respond with a single JSON object and no commentary.';
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -143,31 +144,55 @@ async function sendRequestToOpenAI(model, message, apiKey = null) {
   const validModel = model || 'gpt-3.5-turbo';
   console.log(`Using OpenAI model: ${validModel}`);
 
-  for (let i = 0; i < MAX_RETRIES; i++) {
+  const normalizedModel = validModel.toLowerCase();
+  let enforceJsonMode = !normalizedModel.includes('gpt-3.5');
+  const systemInstruction = JSON_ONLY_SYSTEM_PROMPT;
+  const baseMessages = [
+    { role: 'system', content: systemInstruction },
+    { role: 'user', content: message }
+  ];
+
+  let attempt = 0;
+  while (attempt < MAX_RETRIES) {
     try {
-      // Check if this is a newer model that requires max_completion_tokens
       // GPT-4, GPT-5, and O1 series use max_completion_tokens
-      // GPT-3.5 and older use max_tokens
-      const isNewerModel = validModel.includes('gpt-4') ||
-                           validModel.includes('gpt-5') ||
-                           validModel.includes('o1');
+      const isNewerModel = normalizedModel.includes('gpt-4') ||
+                           normalizedModel.includes('gpt-5') ||
+                           normalizedModel.includes('o1');
       const tokenParam = isNewerModel ? { max_completion_tokens: 1024 } : { max_tokens: 1024 };
 
-      const response = await openaiClient.chat.completions.create({
+      const payload = {
         model: validModel,
-        messages: [{ role: 'user', content: message }],
-        ...tokenParam,
-      });
+        messages: baseMessages,
+        ...tokenParam
+      };
 
+      if (enforceJsonMode) {
+        payload.response_format = { type: 'json_object' };
+      }
+
+      const response = await openaiClient.chat.completions.create(payload);
       console.log(`OpenAI response received successfully from model: ${validModel}`);
       return response.choices[0].message.content;
     } catch (error) {
-      console.error(`Error sending request to OpenAI (attempt ${i + 1}):`, error.message);
+      const attemptNumber = attempt + 1;
+      console.error(`Error sending request to OpenAI (attempt ${attemptNumber}):`, error.message);
       if (error.response) {
         console.error('OpenAI API Error Response:', JSON.stringify(error.response.data, null, 2));
       }
       if (error.stack) console.error('Stack:', error.stack);
-      if (i === MAX_RETRIES - 1) throw error;
+
+      const errorMessage = `${error.message || ''} ${error.response?.data?.error?.message || ''}`.toLowerCase();
+      if (enforceJsonMode && (errorMessage.includes('response_format') || errorMessage.includes('json mode'))) {
+        console.warn('OpenAI model does not support JSON response_format. Retrying without enforced JSON mode.');
+        enforceJsonMode = false;
+        continue;
+      }
+
+      attempt += 1;
+      if (attempt >= MAX_RETRIES) {
+        throw error;
+      }
       await sleep(RETRY_DELAY);
     }
   }
@@ -280,9 +305,17 @@ async function attemptLocalModelRequest(baseUrl, modelName, message) {
   const headers = { 'Content-Type': 'application/json' };
   let lastError = null;
 
+  const baseModel = modelName || 'default';
+  const systemInstruction = JSON_ONLY_SYSTEM_PROMPT;
+  const chatMessages = [
+    { role: 'system', content: systemInstruction },
+    { role: 'user', content: message }
+  ];
+  const promptWithInstruction = `${systemInstruction}\n\n${message}`;
+
   const chatPayload = {
-    model: modelName || 'default',
-    messages: [{ role: 'user', content: message }],
+    model: baseModel,
+    messages: chatMessages,
     stream: false
   };
 
@@ -311,8 +344,8 @@ async function attemptLocalModelRequest(baseUrl, modelName, message) {
   try {
     console.log(`LLM Service: Sending request to ${baseUrl}/v1/chat/completions`);
     const completionResponse = await axios.post(`${baseUrl}/v1/chat/completions`, {
-      model: modelName || 'default',
-      messages: [{ role: 'user', content: message }],
+      model: baseModel,
+      messages: chatMessages,
       max_tokens: 1024
     }, {
       timeout: 30000,
@@ -333,8 +366,8 @@ async function attemptLocalModelRequest(baseUrl, modelName, message) {
   try {
     console.log(`LLM Service: Sending request to ${baseUrl}/api/generate`);
     const generateResponse = await axios.post(`${baseUrl}/api/generate`, {
-      model: modelName || 'default',
-      prompt: message,
+      model: baseModel,
+      prompt: promptWithInstruction,
       stream: false
     }, {
       timeout: 30000,
