@@ -354,6 +354,8 @@ HomeBrain now includes a dedicated **Whisper Management** page that keeps all sp
 2. **Start the Whisper service**  
    Press **Start Service** once dependencies are in place. The backend launches `server/scripts/whisper_server.py`, keeps it running at boot, and restarts it if you change models.
 
+   HomeBrain automatically detects Jetson hardware and installs NVIDIA’s CUDA-enabled `faster-whisper` wheel. The worker prefers the GPU (`cuda` + `float16`) and gracefully falls back through lower-precision options if the hardware cannot support a combination.
+
 3. **Download a model**  
    Use the *Model Library* section to pull a Whisper checkpoint. The `small` (multilingual) or `small.en` (English-only) models provide the best balance of accuracy and latency on the Orin Nano. Files are cached under `server/data/whisper/models`.
 
