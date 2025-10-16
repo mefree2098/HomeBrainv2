@@ -121,49 +121,50 @@ class VoiceCommandService {
     }).join('\n');
 
     return `
-You are HomeBrain, an intelligent voice assistant for a smart home system. Your job is to translate the user's spoken command into structured JSON instructions for device control.
+You are HomeBrain, an intelligent smart-home orchestrator. Convert the spoken user command into a strict JSON plan that HomeBrain can execute immediately.
 
-IMPORTANT CONTEXT:
-- Command captured in room: ${primaryRoom}
-- Wake word used: ${wakeWordLabel}
+IMPORTANT CONTEXT
+- Room where the command was heard: ${primaryRoom}
+- Wake word that activated the assistant: ${wakeWordLabel}
 
-AVAILABLE DEVICES:
+AVAILABLE DEVICES
 ${deviceLines || 'None'}
 
-AVAILABLE SCENES:
+AVAILABLE SCENES
 ${sceneLines || 'None'}
 
-USER COMMAND: "${commandText}"
+USER COMMAND
+"${commandText}"
 
-RESPONSE FORMAT (must be valid JSON only, no extra commentary):
+OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
 {
   "intent": "device_control|scene_activate|automation_create|query|system_control|unknown",
   "confidence": 0.0-1.0,
-  "normalizedCommand": "Rephrased concise command",
+  "normalizedCommand": "Short paraphrase of the user's request",
   "actions": [
     {
       "type": "device_control|scene_activate|automation_create|query",
-      "deviceId": "DEVICE_ID_IF_APPLICABLE",
-      "sceneId": "SCENE_ID_IF_APPLICABLE",
+      "deviceId": "DEVICE_ID_FROM_LIST",
+      "sceneId": "SCENE_ID_FROM LIST",
       "action": "turn_on|turn_off|toggle|set_brightness|set_color|set_temperature|lock|unlock|open|close",
-      "value": "optional numeric or string value",
-      "room": "optional room name for disambiguation"
+      "value": "optional numeric/string value",
+      "room": "optional room for extra clarity"
     }
   ],
-  "response": "Natural language confirmation to speak back to the user",
-  "followUpQuestion": "Optional follow-up question or null"
+  "response": "Natural-language confirmation the hub should speak back",
+  "followUpQuestion": "Follow-up question string OR null"
 }
 
-STRICT RULES:
-- ONLY use deviceId or sceneId values from the provided lists.
-- If multiple devices match, choose the one in the same room as the user unless clearly stated otherwise.
-- For brightness values, return numbers between 0 and 100 (percentage).
-- For temperature values, return numbers (assume Fahrenheit unless specified).
-- If the command refers to a SmartThings scene, return a scene_activate action with the matching ID.
-- If the command asks to create an automation, set intent to automation_create and summarise the automation in an action object.
-- If uncertain, set intent to "unknown" with a low confidence and no actions.
+DECISION RULES
+1. ALWAYS return at least one action when the user wants something controlled. Map the request to the closest matching device using name + room context. Prefer devices in ${primaryRoom} unless the user clearly specifies another room.
+2. ONLY use deviceId / sceneId values from the lists above. Do not invent IDs. If two devices match equally, pick the most specific (exact name match beats fuzzy match).
+3. For brightness actions return percentages (0-100). For temperature, use whole-number Fahrenheit unless the user specifies another scale.
+4. When activating scenes, use "scene_activate" with the exact scene ID. When creating automations, use "automation_create" and include a short summary in the action.
+5. If you truly cannot determine a device or scene, set intent to "query" or "unknown", leave "actions" empty, and provide a helpful "followUpQuestion". This should be rare.
+6. Never return empty "actions" for "device_control" intents.
+7. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.").
 
-Return ONLY the JSON object.`;
+Return ONLY the JSON object with no commentary.`; 
   }
 
   parseLlmResponse(rawResponse) {
@@ -574,7 +575,9 @@ Return ONLY the JSON object.`;
     let interpretation = interpretationResult.interpretation;
     const llm = interpretationResult.llm;
 
-    if (!interpretation || !Array.isArray(interpretation.actions)) {
+    const hasActions = Array.isArray(interpretation?.actions) && interpretation.actions.length > 0;
+
+    if (!interpretation || !hasActions) {
       interpretation = this.fallbackInterpretation(commandText, context, room);
     }
 
