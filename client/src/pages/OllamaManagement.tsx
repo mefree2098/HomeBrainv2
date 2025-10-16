@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   getOllamaStatus,
+  getOllamaLogs,
   installOllama,
   startOllamaService,
   stopOllamaService,
@@ -42,6 +44,16 @@ export default function OllamaManagement() {
   const [status, setStatus] = useState<OllamaStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState('models');
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [logSource, setLogSource] = useState<string | null>(null);
+  const [logMessage, setLogMessage] = useState<string | null>(null);
+  const [logLineCount, setLogLineCount] = useState(200);
+  const [logReturnedCount, setLogReturnedCount] = useState(0);
+  const [logTruncated, setLogTruncated] = useState(false);
+  const [logFetchedOnce, setLogFetchedOnce] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -66,6 +78,62 @@ export default function OllamaManagement() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadLogs = useCallback(
+    async (lineCount?: number) => {
+      const requested = lineCount ?? logLineCount;
+      const normalized = Number.isFinite(requested) ? requested : 200;
+      const safeLineCount = Math.min(Math.max(normalized, 50), 2000);
+
+      setLogLoading(true);
+      setLogError(null);
+
+      try {
+        const data = await getOllamaLogs(safeLineCount);
+        const entries = Array.isArray(data?.lines) ? data.lines : [];
+        setLogs(entries);
+        setLogSource(data?.source || null);
+        setLogMessage(data?.message || null);
+        setLogLineCount(safeLineCount);
+        setLogReturnedCount(
+          typeof data?.lineCount === 'number' ? data.lineCount : entries.length
+        );
+        setLogTruncated(Boolean(data?.truncated));
+        setLogFetchedOnce(true);
+      } catch (error: any) {
+        console.error('Error loading Ollama logs:', error);
+        setLogError(error?.message || 'Failed to fetch logs');
+        setLogs([]);
+        setLogSource(null);
+        setLogMessage(null);
+        setLogReturnedCount(0);
+        setLogTruncated(false);
+        setLogFetchedOnce(true);
+      } finally {
+        setLogLoading(false);
+      }
+    },
+    [logLineCount]
+  );
+
+  useEffect(() => {
+    if (activeTab === 'logs') {
+      if (!logFetchedOnce && !logLoading) {
+        loadLogs();
+      }
+    } else if (logFetchedOnce) {
+      setLogFetchedOnce(false);
+    }
+  }, [activeTab, logFetchedOnce, logLoading, loadLogs]);
+
+  const handleRefreshLogs = () => {
+    loadLogs();
+  };
+
+  const handleLogLineCountChange = (value: string) => {
+    const parsed = parseInt(value, 10);
+    loadLogs(Number.isNaN(parsed) ? logLineCount : parsed);
   };
 
   const handleInstall = async () => {
@@ -290,9 +358,6 @@ export default function OllamaManagement() {
         </p>
       </div>
 
-      const isExternalService = status.serviceStatus === 'running_external';
-      const isServiceRunning = status.serviceStatus === 'running' || status.serviceStatus === 'running_external';
-
       {/* Status Card */}
       <Card>
         <CardHeader>
@@ -408,10 +473,11 @@ export default function OllamaManagement() {
       </Card>
 
       {/* Main Content Tabs */}
-      <Tabs defaultValue="models" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="models">Models</TabsTrigger>
           <TabsTrigger value="chat">Chat</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
           <TabsTrigger value="resources">Resources</TabsTrigger>
         </TabsList>
 
@@ -435,6 +501,68 @@ export default function OllamaManagement() {
           ) : (
             <ChatInterface activeModel={status.activeModel} />
           )}
+        </TabsContent>
+
+        <TabsContent value="logs" className="space-y-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">
+                {logSource
+                  ? `Showing ${logReturnedCount} line${logReturnedCount === 1 ? '' : 's'} from ${logSource}${
+                      logTruncated ? ' (truncated)' : ''
+                    }.`
+                  : 'View recent Ollama service output.'}
+              </p>
+              {logMessage && (
+                <p className="text-xs text-muted-foreground">{logMessage}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(logLineCount)}
+                onValueChange={handleLogLineCountChange}
+                disabled={logLoading}
+              >
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="Lines" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="100">Last 100 lines</SelectItem>
+                  <SelectItem value="200">Last 200 lines</SelectItem>
+                  <SelectItem value="500">Last 500 lines</SelectItem>
+                  <SelectItem value="1000">Last 1000 lines</SelectItem>
+                  <SelectItem value="2000">Last 2000 lines</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleRefreshLogs}
+                disabled={logLoading}
+              >
+                <ArrowPathIcon className={`h-4 w-4 mr-1 ${logLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
+          </div>
+          <div className="rounded-md border bg-muted/40">
+            {logLoading ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                Loading logs...
+              </div>
+            ) : logError ? (
+              <div className="p-4 text-sm text-destructive">{logError}</div>
+            ) : logs.length ? (
+              <pre className="max-h-[420px] overflow-auto p-4 text-xs leading-5 font-mono whitespace-pre-wrap">
+                {logs.join('\n')}
+              </pre>
+            ) : (
+              <div className="p-4 text-sm text-muted-foreground">
+                No logs available yet. Trigger an Ollama request and refresh.
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="resources" className="space-y-6">
