@@ -184,8 +184,9 @@ class SpeechService {
     }
 
     const activeModel = model || 'small';
+    let status = null;
     try {
-      const status = await whisperService.getStatus();
+      status = await whisperService.getStatus();
       if (status.activeModel !== activeModel && status.installedModels?.some((m) => m.name === activeModel)) {
         await whisperService.setActiveModel(activeModel);
       } else if (status.activeModel !== activeModel && status.installedModels?.length) {
@@ -220,6 +221,7 @@ class SpeechService {
     return {
       provider: 'whisper_local',
       model: response?.model || activeModel,
+      device: response?.device || status?.activeDevice || null,
       computeType: response?.computeType || null,
       text: (response?.text || '').trim(),
       language: response?.language || language,

@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const WhisperConfig = require('../models/WhisperConfig');
 
 const AVAILABLE_MODELS = [
@@ -243,7 +243,7 @@ class WhisperRuntime {
 
     async status() {
       if (!this.child) {
-        return { running: false, model: null, computeType: null };
+        return { running: false, model: null, computeType: null, device: null };
       }
       try {
         const response = await this._send(
@@ -253,13 +253,14 @@ class WhisperRuntime {
           },
           2000
         );
-        return { running: true, model: response.model, computeType: this.computeType };
+        return { running: true, model: response.model, computeType: this.computeType, device: this.device };
       } catch (error) {
         const stillAlive = this.child && this.child.exitCode === null && !this.child.killed;
         return {
           running: stillAlive,
           model: stillAlive ? this.modelName : null,
-          computeType: stillAlive ? this.computeType : null
+          computeType: stillAlive ? this.computeType : null,
+          device: stillAlive ? this.device : null
         };
       }
     }
@@ -344,8 +345,9 @@ class WhisperService {
     return config;
   }
 
-  _resolveComputeCandidates(requested = 'auto') {
+  _resolveComputeCandidates(requested = 'auto', device = 'auto') {
     const normalized = (requested || 'auto').toLowerCase();
+    const preferGpu = device === 'cuda';
     const candidates = [];
     const add = (value) => {
       if (value && !candidates.includes(value)) {
@@ -354,21 +356,100 @@ class WhisperService {
     };
 
     if (normalized === 'auto' || normalized === 'default') {
-      add('float16');
-      add('int8_float16');
-      add('float32');
-      add('int8');
-      add('auto');
-    } else {
-      add(normalized);
-      if (normalized !== 'float32') {
-        add('float32');
-      }
-      if (!normalized.startsWith('int8')) {
+      if (preferGpu) {
+        add('float16');
         add('int8_float16');
+        add('float32');
+        add('int8');
+      } else {
+        add('float32');
         add('int8');
       }
       add('auto');
+    } else {
+      add(normalized);
+      if (preferGpu && normalized !== 'float16') {
+        add('float16');
+      }
+      if (preferGpu && normalized !== 'int8_float16') {
+        add('int8_float16');
+      }
+      add('int8');
+      if (normalized !== 'float32') {
+        add('float32');
+      }
+      add('auto');
+    }
+
+    return candidates;
+  }
+
+  _isJetson() {
+    return (
+      os.platform() === 'linux' &&
+      os.arch() === 'arm64' &&
+      fs.existsSync('/etc/nv_tegra_release')
+    );
+  }
+
+  _getJetsonIndexUrl() {
+    return process.env.WHISPER_JETSON_INDEX_URL || 'https://developer.download.nvidia.com/compute/redist/jp/v60';
+  }
+
+  _hasCudaSupport() {
+    if (process.env.WHISPER_DISABLE_CUDA === '1') {
+      return false;
+    }
+
+    if (this._isJetson()) {
+      return true;
+    }
+
+    if (process.platform === 'linux') {
+      try {
+        const result = spawnSync('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader'], {
+          stdio: 'ignore'
+        });
+        if (result && result.status === 0) {
+          return true;
+        }
+      } catch (error) {
+        // nvidia-smi not available; ignore
+      }
+    }
+
+    if (fs.existsSync('/usr/local/cuda')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  _resolveDeviceCandidates(preference = 'auto') {
+    const normalized = (preference || 'auto').toLowerCase();
+    const hasCuda = this._hasCudaSupport();
+    const candidates = [];
+    const add = (value) => {
+      if (value && !candidates.includes(value)) {
+        candidates.push(value);
+      }
+    };
+
+    if (normalized === 'auto' || normalized === 'default') {
+      if (hasCuda) {
+        add('cuda');
+      }
+      add('auto');
+      add('cpu');
+    } else {
+      add(normalized);
+      if (normalized !== 'cuda' && hasCuda) {
+        add('cuda');
+      }
+      if (normalized !== 'auto') {
+        add('auto');
+      }
+      add('cpu');
     }
 
     return candidates;
@@ -379,8 +460,41 @@ class WhisperService {
     config.serviceStatus = 'installing';
     await config.save();
 
-    const args = ['-m', 'pip', 'install', '--upgrade', 'pip', 'faster-whisper', 'soundfile'];
-    await this._runCommand(PYTHON_BIN, args, { cwd: process.cwd() });
+    const cwd = process.cwd();
+
+    await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'pip'], { cwd });
+
+    const installSoundfile = async () => {
+      await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'soundfile'], { cwd });
+    };
+
+    const installFasterWhisper = async () => {
+      if (this._isJetson()) {
+        const indexUrl = this._getJetsonIndexUrl();
+        try {
+          await this._runCommand(
+            PYTHON_BIN,
+            ['-m', 'pip', 'install', '--upgrade', '--extra-index-url', indexUrl, 'faster-whisper'],
+            { cwd }
+          );
+          await installSoundfile();
+          return;
+        } catch (error) {
+          console.warn(
+            `Whisper Service: Jetson wheel install failed (${error.message}); falling back to PyPI wheel`
+          );
+        }
+      }
+
+      await this._runCommand(
+        PYTHON_BIN,
+        ['-m', 'pip', 'install', '--upgrade', 'faster-whisper'],
+        { cwd }
+      );
+      await installSoundfile();
+    };
+
+    await installFasterWhisper();
 
     await this._detectDependencies();
     config.serviceStatus = 'stopped';
@@ -418,55 +532,67 @@ class WhisperService {
       this.runtime = null;
     }
 
-    const device = process.env.WHISPER_DEVICE || 'auto';
+    const devicePreference = process.env.WHISPER_DEVICE || 'auto';
     const computePreference = process.env.WHISPER_COMPUTE_TYPE || 'auto';
-    const candidates = this._resolveComputeCandidates(computePreference);
+    const deviceCandidates = this._resolveDeviceCandidates(devicePreference);
     let startError = null;
 
-    for (const computeType of candidates) {
-      const runtime = new WhisperRuntime({
-        modelName: targetModel,
-        modelDir: config.modelDirectory || DEFAULT_MODEL_DIR,
-        device,
-        computeType
-      });
-
-      try {
-        await runtime.start(true);
-        const runtimeStatus = await runtime.status();
-        if (!runtimeStatus.running) {
-          throw new Error('Whisper runtime exited before reporting ready');
-        }
-
-        this.runtime = runtime;
-        config.serviceStatus = 'running';
-        config.servicePid = runtime.child?.pid || null;
-        config.serviceOwner = os.userInfo().username;
-        config.activeModel = targetModel;
-        config.activeComputeType = computeType;
-        config.lastError = null;
-        await config.save();
-        return {
-          success: true,
-          message: `Whisper service started (${computeType})`,
-          pid: config.servicePid,
+    for (const device of deviceCandidates) {
+      const computeCandidates = this._resolveComputeCandidates(computePreference, device);
+      for (const computeType of computeCandidates) {
+        const runtime = new WhisperRuntime({
+          modelName: targetModel,
+          modelDir: config.modelDirectory || DEFAULT_MODEL_DIR,
+          device,
           computeType
-        };
-      } catch (error) {
-        startError = error;
-        console.warn(`Whisper Service: failed to start with compute type ${computeType}:`, error.message);
+        });
+
         try {
-          await runtime.stop('SIGKILL');
-        } catch (stopError) {
-          console.warn('Whisper Service: error while stopping failed runtime:', stopError.message);
+          await runtime.start(true);
+          const runtimeStatus = await runtime.status();
+          if (!runtimeStatus.running) {
+            throw new Error('Whisper runtime exited before reporting ready');
+          }
+
+          const resolvedDevice = runtimeStatus.device || device;
+          const resolvedCompute = runtimeStatus.computeType || computeType;
+
+          this.runtime = runtime;
+          config.serviceStatus = 'running';
+          config.servicePid = runtime.child?.pid || null;
+          config.serviceOwner = os.userInfo().username;
+          config.activeModel = targetModel;
+          config.activeDevice = resolvedDevice;
+          config.activeComputeType = resolvedCompute;
+          config.lastError = null;
+          await config.save();
+          return {
+            success: true,
+            message: `Whisper service started (${resolvedDevice}, ${resolvedCompute})`,
+            pid: config.servicePid,
+            device: resolvedDevice,
+            computeType: resolvedCompute
+          };
+        } catch (error) {
+          startError = error;
+          console.warn(
+            `Whisper Service: failed to start with device=${device} computeType=${computeType}:`,
+            error.message
+          );
+          try {
+            await runtime.stop('SIGKILL');
+          } catch (stopError) {
+            console.warn('Whisper Service: error while stopping failed runtime:', stopError.message);
+          }
+          this.runtime = null;
         }
-        this.runtime = null;
       }
     }
 
     config.serviceStatus = 'error';
     config.servicePid = null;
     config.serviceOwner = null;
+    config.activeDevice = null;
     config.activeComputeType = null;
     await config.setError(startError?.message || 'Failed to start Whisper service');
     await config.save();
@@ -483,6 +609,7 @@ class WhisperService {
     config.serviceStatus = 'stopped';
     config.servicePid = null;
     config.serviceOwner = null;
+    config.activeDevice = null;
     config.activeComputeType = null;
     await config.save();
 
@@ -505,6 +632,7 @@ class WhisperService {
       servicePid: config.servicePid,
       serviceOwner: config.serviceOwner,
       activeModel: config.activeModel,
+      activeDevice: config.activeDevice || runtimeStatus.device || null,
       activeComputeType: config.activeComputeType || runtimeStatus.computeType || null,
       installedModels: config.installedModels,
       availableModels: AVAILABLE_MODELS,
@@ -594,16 +722,17 @@ class WhisperService {
         language: language === 'auto' ? null : language
       });
       const duration = Date.now() - started;
-      return {
-        text: (result.text || '').trim(),
-        segments: Array.isArray(result.segments) ? result.segments : [],
-        language: result?.info?.language || language,
-        avgLogProb: result?.info?.avg_logprob ?? null,
-        provider: 'whisper_local',
-        model: config.activeModel,
-        computeType: this.runtime?.computeType || config.activeComputeType || null,
-        processingTimeMs: duration
-      };
+        return {
+          text: (result.text || '').trim(),
+          segments: Array.isArray(result.segments) ? result.segments : [],
+          language: result?.info?.language || language,
+          avgLogProb: result?.info?.avg_logprob ?? null,
+          provider: 'whisper_local',
+          model: config.activeModel,
+          device: this.runtime?.device || config.activeDevice || null,
+          computeType: this.runtime?.computeType || config.activeComputeType || null,
+          processingTimeMs: duration
+        };
     } finally {
       fs.promises.unlink(filePath).catch(() => {});
     }

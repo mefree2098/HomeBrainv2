@@ -47,6 +47,7 @@ interface WhisperStatus {
   servicePid: number | null;
   serviceOwner: string | null;
   activeModel: string | null;
+  activeDevice?: string | null;
   activeComputeType?: string | null;
   installedModels: WhisperModelInfo[];
   availableModels: Array<{
@@ -324,6 +325,11 @@ export default function WhisperManagement() {
                     ? `PID ${status.servicePid || 'unknown'} · Owner ${status.serviceOwner || 'homebrain'}`
                     : 'Start the service to enable local speech-to-text.'}
                 </p>
+                {status.serviceRunning && status.activeDevice && (
+                  <p className="text-xs text-muted-foreground">
+                    Device: {status.activeDevice}
+                  </p>
+                )}
                 {status.serviceRunning && status.activeComputeType && (
                   <p className="text-xs text-muted-foreground">
                     Compute type: {status.activeComputeType}
