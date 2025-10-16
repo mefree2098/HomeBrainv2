@@ -427,6 +427,9 @@ class WhisperService {
     await fs.promises.mkdir(buildDir, { recursive: true });
 
     const buildEnv = this._augmentedEnv(); // includes CUDA paths + LD_LIBRARY_PATH
+    const installPrefix = (process.getuid && process.getuid() === 0)
+      ? '/usr/local'
+      : path.join(os.homedir(), '.local', 'ctranslate2');
 
     const cmakeArgs = [
       '-G','Ninja','..',
@@ -438,7 +441,8 @@ class WhisperService {
       '-DWITH_MKL=OFF',
       '-DWITH_DNNL=OFF',
       '-DWITH_OPENBLAS=ON',
-      '-DBUILD_CTRANSLATE2_CLI=OFF'
+      '-DBUILD_CTRANSLATE2_CLI=OFF',
+      `-DCMAKE_INSTALL_PREFIX=${installPrefix}`,
     ];
 
     console.log('Whisper Service: Configuring CTranslate2 (cmake)');
@@ -448,18 +452,14 @@ class WhisperService {
     console.log(`Whisper Service: Building CTranslate2 (ninja -j${jobs})`);
     await this._runCommand('ninja', ['-j', jobs], { cwd: buildDir, env: buildEnv });
 
-    // Install the C++ library/headers so the Python wheel can find <ctranslate2/...>
+    // Install the C++ library/headers to installPrefix (no sudo required)
     console.log('Whisper Service: Installing CTranslate2 C++ artifacts');
+    await this._runCommand('ninja', ['install'], { cwd: buildDir, env: buildEnv });
+
+    // Make sure the runtime can find the new lib if it’s under ~/.local/ctranslate2
     try {
-      await this._runCommand('sudo', ['ninja', 'install'], { cwd: buildDir, env: buildEnv });
-    } catch (e) {
-      // If sudo is unavailable (container, non-sudo user), try a non-sudo install to /usr/local as current user.
-      await this._runCommand('ninja', ['install'], { cwd: buildDir, env: buildEnv });
-    }
-    // Refresh dynamic linker cache to expose libctranslate2.so
-    try {
-      await this._runCommand('sudo', ['ldconfig'], { env: buildEnv });
-    } catch { /* non-fatal in restricted envs; LD_LIBRARY_PATH still handles it */ }
+      await this._runCommand('sudo', ['ldconfig'], { env: buildEnv }); // best-effort; non-fatal if it fails
+    } catch { /* ignore */ }
 
     // Build + install Python wheel WITHOUT build isolation so pybind11 is honored
     const pythonDir = path.join(sourceRoot, 'python');
@@ -500,13 +500,13 @@ class WhisperService {
     if (userSite) {
       wheelEnv.PYTHONPATH = userSite + (buildEnv.PYTHONPATH ? ':' + buildEnv.PYTHONPATH : '');
     }
-    // Make sure setup.py can find headers & libs from the install step
-    wheelEnv.CTRANSLATE2_ROOT = '/usr/local';
-    wheelEnv.CMAKE_PREFIX_PATH = ['/usr/local', wheelEnv.CMAKE_PREFIX_PATH || ''].filter(Boolean).join(':');
-    wheelEnv.CPATH = ['/usr/local/include', wheelEnv.CPATH || ''].filter(Boolean).join(':');
+    // Ensure headers/libs from installPrefix are visible
+    wheelEnv.CTRANSLATE2_ROOT = installPrefix;
+    wheelEnv.CMAKE_PREFIX_PATH = [installPrefix, wheelEnv.CMAKE_PREFIX_PATH || ''].filter(Boolean).join(':');
+    wheelEnv.CPATH = [path.join(installPrefix, 'include'), wheelEnv.CPATH || ''].filter(Boolean).join(':');
     wheelEnv.CPLUS_INCLUDE_PATH = wheelEnv.CPATH;
-    wheelEnv.LIBRARY_PATH = ['/usr/local/lib', wheelEnv.LIBRARY_PATH || ''].filter(Boolean).join(':');
-    wheelEnv.LD_LIBRARY_PATH = ['/usr/local/lib', wheelEnv.LD_LIBRARY_PATH || ''].filter(Boolean).join(':');
+    wheelEnv.LIBRARY_PATH = [path.join(installPrefix, 'lib'), wheelEnv.LIBRARY_PATH || ''].filter(Boolean).join(':');
+    wheelEnv.LD_LIBRARY_PATH = [path.join(installPrefix, 'lib'), wheelEnv.LD_LIBRARY_PATH || ''].filter(Boolean).join(':');
 
     // 3) Build a wheel WITHOUT build isolation (so it uses the upgraded packages)
     await this._runCommand(
@@ -515,10 +515,17 @@ class WhisperService {
       { cwd: pythonDir, env: wheelEnv }
     );
 
-    // 4) Install the wheel we just produced (don’t let pip grab PyPI’s CPU wheel)
+    const distDir = path.join(pythonDir, 'dist');
+    const files = await fs.promises.readdir(distDir);
+    const wheelFile = files.find((f) => /^ctranslate2-.*\.whl$/.test(f));
+    if (!wheelFile) {
+      throw new Error('CTranslate2 wheel build completed but no ctranslate2-*.whl found in dist/');
+    }
+    const wheelPath = path.join(distDir, wheelFile);
+    console.log(`Whisper Service: Installing Python wheel ${wheelPath}`);
     await this._runCommand(
       PYTHON_BIN,
-      ['-m', 'pip', 'install', '--force-reinstall', '--no-deps', path.join('dist')],
+      ['-m', 'pip', 'install', '--force-reinstall', '--no-deps', wheelPath],
       { cwd: pythonDir, env: wheelEnv }
     );
 
