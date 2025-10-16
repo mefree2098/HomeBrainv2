@@ -132,6 +132,65 @@ async function getActiveOllamaModel() {
   return null;
 }
 
+function sanitizeNumeric(value, { min = 0, max = Number.POSITIVE_INFINITY, fallback = null }) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  if (numeric < min) {
+    return min;
+  }
+  if (numeric > max) {
+    return max;
+  }
+  return numeric;
+}
+
+async function buildLocalOllamaOptions() {
+  try {
+    const config = await OllamaConfig.getConfig();
+    const configuration = config?.configuration || {};
+    const options = {};
+
+    const contextLength = sanitizeNumeric(configuration.contextLength, { min: 256, max: 4096, fallback: null });
+    options.num_ctx = contextLength || 1024;
+
+    const predictSetting = sanitizeNumeric(configuration.maxPredictTokens, { min: 128, max: 2048, fallback: null });
+    options.num_predict = predictSetting || 256;
+
+    if (typeof configuration.temperature === 'number') {
+      options.temperature = sanitizeNumeric(configuration.temperature, { min: 0, max: 2, fallback: 0.2 });
+    } else {
+      options.temperature = 0.2;
+    }
+
+    if (typeof configuration.gpuLayers === 'number' && configuration.gpuLayers >= 0) {
+      options.gpu_layers = configuration.gpuLayers;
+    }
+
+    if (configuration.lowVram === true || process.env.OLLAMA_LOW_VRAM === 'true') {
+      options.low_vram = true;
+    }
+
+    if (process.env.OLLAMA_NUM_GPU) {
+      const numGpu = sanitizeNumeric(process.env.OLLAMA_NUM_GPU, { min: 0, max: 64, fallback: null });
+      if (numGpu !== null) {
+        options.num_gpu = numGpu;
+      }
+    }
+
+    return options;
+  } catch (error) {
+    console.warn('LLM Service: Unable to load Ollama configuration for request options:', error.message);
+    return {
+      num_ctx: 1024,
+      num_predict: 256,
+      temperature: 0.2,
+      low_vram: true
+    };
+  }
+}
+
 async function sendRequestToOpenAI(model, message, apiKey = null) {
   // Use provided API key or fall back to environment variable
   const openaiClient = apiKey ? new OpenAI({ apiKey }) : openai;
@@ -246,6 +305,8 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
     throw new Error('Local LLM endpoint not configured');
   }
 
+  const requestOptions = await buildLocalOllamaOptions();
+
   let testUrl = endpoint.trim();
   if (!testUrl.startsWith('http://') && !testUrl.startsWith('https://')) {
     testUrl = 'http://' + testUrl;
@@ -292,7 +353,7 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
     console.log(`LLM Service: Attempting local provider with model "${candidateModel}" at ${testUrl}`);
 
     try {
-      const responseText = await attemptLocalModelRequest(testUrl, candidateModel, message);
+      const responseText = await attemptLocalModelRequest(testUrl, candidateModel, message, requestOptions);
       if (responseText !== undefined && responseText !== null) {
         return responseText;
       }
@@ -318,7 +379,7 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
   throw new Error('Local LLM request failed: no models responded successfully.');
 }
 
-async function attemptLocalModelRequest(baseUrl, modelName, message) {
+async function attemptLocalModelRequest(baseUrl, modelName, message, requestOptions) {
   const headers = { 'Content-Type': 'application/json' };
   let lastError = null;
 
@@ -330,9 +391,12 @@ async function attemptLocalModelRequest(baseUrl, modelName, message) {
   ];
   const promptWithInstruction = `${systemInstruction}\n\n${message}`;
 
+  const sanitizedOptions = { ...requestOptions };
+
   const chatPayload = {
     model: baseModel,
     messages: chatMessages,
+    options: sanitizedOptions,
     stream: false
   };
 
@@ -359,32 +423,11 @@ async function attemptLocalModelRequest(baseUrl, modelName, message) {
   }
 
   try {
-    console.log(`LLM Service: Sending request to ${baseUrl}/v1/chat/completions`);
-    const completionResponse = await axios.post(`${baseUrl}/v1/chat/completions`, {
-      model: baseModel,
-      messages: chatMessages,
-      max_tokens: 1024
-    }, {
-      timeout: 30000,
-      headers
-    });
-
-    if (completionResponse.data?.choices && completionResponse.data.choices[0]) {
-      return completionResponse.data.choices[0].message.content;
-    }
-
-    if (completionResponse.data?.response) {
-      return completionResponse.data.response;
-    }
-  } catch (error) {
-    lastError = error;
-  }
-
-  try {
     console.log(`LLM Service: Sending request to ${baseUrl}/api/generate`);
     const generateResponse = await axios.post(`${baseUrl}/api/generate`, {
       model: baseModel,
       prompt: promptWithInstruction,
+      options: sanitizedOptions,
       stream: false
     }, {
       timeout: 30000,
