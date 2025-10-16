@@ -542,29 +542,20 @@ class WhisperService {
     return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
   }
 
-  async _installJetsonBuildDependencies() {
-    console.log('Whisper Service: Installing build dependencies via apt-get');
-    await this._runCommand('sudo', ['apt-get', 'update']);
-    await this._runCommand('sudo', [
-      'apt-get',
-      'install',
-      '-y',
-      '--no-install-recommends',
-      'build-essential',
-      'cmake',
-      'ninja-build',
-      'git',
-      'pkg-config',
-      'python3-dev',
-      'python3-pip',
-      'python3-setuptools',
-      'python3-wheel',
-      'libopenblas-dev'
-    ]);
-  }
-
   async _buildCTranslate2FromSource() {
-    await this._installJetsonBuildDependencies();
+    const ensureTool = async (name, command, args, installHint) => {
+      try {
+        await this._runCommand(command, args, { cwd: process.cwd() });
+      } catch (error) {
+        throw new Error(
+          `${name} is required to build CTranslate2 but is not available. Install it (e.g., ${installHint}).`
+        );
+      }
+    };
+
+    await ensureTool('cmake', 'cmake', ['--version'], 'sudo apt-get install cmake');
+    await ensureTool('ninja', 'ninja', ['--version'], 'sudo apt-get install ninja-build');
+    await ensureTool('python build module', PYTHON_BIN, ['-m', 'pip', '--version'], 'sudo apt-get install python3-pip');
 
     const sourceRoot = path.join(os.tmpdir(), 'ctranslate2-src');
     console.log(`Whisper Service: Preparing CTranslate2 source in ${sourceRoot}`);
@@ -610,10 +601,6 @@ class WhisperService {
     console.log(`Whisper Service: Building CTranslate2 (ninja -j${jobs})`);
     await this._runCommand('ninja', ['-j', jobs], { cwd: buildDir, env: buildEnv });
 
-    console.log('Whisper Service: Installing CTranslate2 system libraries');
-    await this._runCommand('sudo', ['ninja', 'install'], { cwd: buildDir, env: buildEnv });
-    await this._runCommand('sudo', ['ldconfig']);
-
     const pythonDir = path.join(sourceRoot, 'python');
     console.log('Whisper Service: Building Python wheel for CTranslate2');
     await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--upgrade', 'build', 'pybind11'], { cwd: pythonDir });
@@ -629,6 +616,7 @@ class WhisperService {
     const wheelPath = path.join(distDir, wheel);
     console.log(`Whisper Service: Installing Python wheel ${wheelPath}`);
     await this._runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '--force-reinstall', wheelPath], { cwd: pythonDir });
+    await fs.promises.rm(sourceRoot, { recursive: true, force: true }).catch(() => {});
   }
 
   async installDependencies() {
