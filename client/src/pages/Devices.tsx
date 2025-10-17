@@ -144,15 +144,83 @@ export function Devices() {
 
   useEffect(() => {
     let socket: WebSocket | null = null
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+    let eventSource: EventSource | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
     let manuallyClosed = false
+    let websocketFailures = 0
 
-    const connect = () => {
+    const handleIncomingPayload = (payload: any) => {
+      if (!payload) {
+        return
+      }
+      if (Array.isArray(payload)) {
+        applyIncomingDevices(payload)
+        return
+      }
+      if (Array.isArray(payload.devices)) {
+        applyIncomingDevices(payload.devices)
+      }
+    }
+
+    const connectEventSource = () => {
+      if (manuallyClosed || eventSource) {
+        return
+      }
+
+      console.log('Device updates: falling back to SSE stream')
+      const source = new EventSource('/api/devices/stream')
+      eventSource = source
+
+      source.onopen = () => {
+        console.log('Device updates SSE connected')
+        websocketFailures = 0
+      }
+
+      source.onmessage = (event) => {
+        if (!event.data) {
+          return
+        }
+
+        try {
+          const payload = JSON.parse(event.data)
+          handleIncomingPayload(payload)
+        } catch (error) {
+          console.warn('Device updates SSE parse error', error)
+        }
+      }
+
+      source.onerror = (event) => {
+        console.warn('Device updates SSE error', event)
+        source.close()
+        eventSource = null
+        if (!manuallyClosed) {
+          if (reconnectTimer) {
+            clearTimeout(reconnectTimer)
+            reconnectTimer = null
+          }
+          reconnectTimer = setTimeout(connectEventSource, 5000)
+        }
+      }
+    }
+
+    const connectWebSocket = () => {
+      if (manuallyClosed) {
+        return
+      }
+
       const socketUrl = resolveDeviceWebSocketUrl()
-      socket = new WebSocket(socketUrl)
+
+      try {
+        socket = new WebSocket(socketUrl)
+      } catch (error) {
+        console.warn('Device updates websocket constructor failed', error)
+        connectEventSource()
+        return
+      }
 
       socket.onopen = () => {
         console.log('Device updates websocket connected', socketUrl)
+        websocketFailures = 0
       }
 
       socket.onerror = (event) => {
@@ -162,33 +230,63 @@ export function Devices() {
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data)
-          if (payload?.type === 'devices:update' && Array.isArray(payload.devices)) {
-            applyIncomingDevices(payload.devices)
-          }
+          handleIncomingPayload(payload)
         } catch (error) {
           console.warn('Failed to parse device update payload', error)
         }
       }
 
       socket.onclose = () => {
-        console.log('Device updates websocket closed')
-        if (!manuallyClosed) {
-          reconnectTimer = setTimeout(connect, 5000)
+        if (manuallyClosed) {
+          return
         }
+
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer)
+          reconnectTimer = null
+        }
+
+        websocketFailures += 1
+
+        if (websocketFailures >= 3) {
+          console.warn('Device updates websocket unavailable, switching to SSE')
+          connectEventSource()
+          return
+        }
+
+        reconnectTimer = setTimeout(connectWebSocket, 5000)
       }
     }
 
-    connect()
-
-    return () => {
+    const cleanup = () => {
       manuallyClosed = true
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
+        reconnectTimer = null
       }
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.close()
+
+      if (socket && socket.readyState !== WebSocket.CLOSED) {
+        try {
+          socket.close()
+        } catch (error) {
+          console.warn('Device updates websocket close error', error)
+        }
       }
+      socket = null
+
+      if (eventSource) {
+        try {
+          eventSource.close()
+        } catch (error) {
+          console.warn('Device updates SSE close error', error)
+        }
+      }
+      eventSource = null
     }
+
+    connectWebSocket()
+
+    return cleanup
   }, [applyIncomingDevices, resolveDeviceWebSocketUrl])
 
   const handleDeviceControl = async (deviceId: string, action: string) => {

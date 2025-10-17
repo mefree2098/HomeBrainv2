@@ -28,6 +28,7 @@ const resourceRoutes = require("./routes/resourceRoutes");
 const whisperRoutes = require("./routes/whisperRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
+const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
 const DiscoveryService = require("./services/discoveryService");
 const settingsService = require("./services/settingsService");
 const remoteUpdateService = require("./services/remoteUpdateService");
@@ -258,6 +259,61 @@ wakeWordTrainingService.resumePendingTraining().catch((error) => {
 app.set('voiceWebSocket', voiceWsServer);
 app.set('voiceWebSocketHttp', voiceWsServer);
 app.set('deviceWebSocket', deviceWebSocket);
+
+app.get('/api/devices/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(':\n\n');
+    } catch (error) {
+      clearInterval(heartbeat);
+    }
+  }, 30000);
+
+  const sendUpdate = (devices) => {
+    try {
+      const normalized = deviceUpdateEmitter.normalizeDevices(devices);
+      if (normalized.length === 0) {
+        return;
+      }
+      const payload = {
+        type: 'devices:update',
+        devices: normalized
+      };
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch (error) {
+      console.warn('Device SSE: failed to write update:', error.message);
+    }
+  };
+
+  deviceUpdateEmitter.on('devices:update', sendUpdate);
+  res.write('event: ready\n');
+  res.write('data: {}\n\n');
+
+  let closed = false;
+  const cleanup = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    clearInterval(heartbeat);
+    deviceUpdateEmitter.removeListener('devices:update', sendUpdate);
+    try {
+      res.end();
+    } catch (error) {
+      console.warn('Device SSE: error ending response:', error.message);
+    }
+  };
+
+  req.on('close', cleanup);
+  req.on('end', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
+});
 
 // Initialize Discovery service
 const discoveryService = new DiscoveryService();
