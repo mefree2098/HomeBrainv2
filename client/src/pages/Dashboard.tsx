@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -23,6 +23,8 @@ import { DashboardWidget } from "@/components/dashboard/DashboardWidget"
 import { QuickActions } from "@/components/dashboard/QuickActions"
 import { VoiceCommandPanel } from "@/components/dashboard/VoiceCommandPanel"
 import { SecurityAlarmWidget } from "@/components/dashboard/SecurityAlarmWidget"
+import { useFavorites } from "@/hooks/useFavorites"
+import { Link } from "react-router-dom"
 
 export function Dashboard() {
   const { toast } = useToast()
@@ -30,6 +32,17 @@ export function Dashboard() {
   const [scenes, setScenes] = useState([])
   const [voiceDevices, setVoiceDevices] = useState([])
   const [loading, setLoading] = useState(true)
+
+  const {
+    loading: favoritesLoading,
+    favoriteDeviceIds,
+    favoriteSceneIds,
+    toggleDeviceFavorite,
+    toggleSceneFavorite,
+    hasProfile,
+    pendingDeviceIds,
+    pendingSceneIds
+  } = useFavorites()
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -113,7 +126,15 @@ export function Dashboard() {
     }
   }
 
-  if (loading) {
+  const favoriteDevices = useMemo(() => {
+    return devices
+      .filter((device) => favoriteDeviceIds.has(device._id))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+  }, [devices, favoriteDeviceIds])
+
+  const isLoaded = !loading && !favoritesLoading
+
+  if (!isLoaded) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
@@ -205,23 +226,55 @@ export function Dashboard() {
       <div className="grid gap-4 lg:grid-cols-3">
         <SecurityAlarmWidget />
         <div className="lg:col-span-2">
-          <QuickActions 
-            scenes={scenes} 
-            onSceneActivate={handleSceneActivation}
-          />
-        </div>
+        <QuickActions 
+          scenes={scenes} 
+          onSceneActivate={handleSceneActivation}
+          favoriteSceneIds={favoriteSceneIds}
+          onToggleFavorite={toggleSceneFavorite}
+          canModifyFavorites={hasProfile}
+          pendingSceneIds={pendingSceneIds}
+        />
       </div>
+    </div>
 
-      {/* Device Widgets */}
+    {/* Device Widgets */}
+    {favoriteDevices.length > 0 ? (
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
-        {devices.slice(0, 12).map((device) => (
+        {favoriteDevices.map((device) => (
           <DashboardWidget
             key={device._id}
             device={device}
             onControl={handleDeviceControl}
+            isFavorite
+            onToggleFavorite={toggleDeviceFavorite}
+            canToggleFavorite={hasProfile}
+            isFavoritePending={pendingDeviceIds.has(device._id)}
           />
         ))}
       </div>
-    </div>
-  )
+    ) : (
+      <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+        <CardHeader>
+          <CardTitle className="text-lg">No Favorite Devices Yet</CardTitle>
+          <CardDescription>
+            {hasProfile
+              ? "Pick your go-to devices to pin them here for quick access."
+              : "Create an active user profile to start favoriting devices."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            asChild
+            variant="outline"
+            className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-dashed"
+          >
+            <Link to="/devices">
+              Browse Devices
+            </Link>
+          </Button>
+        </CardContent>
+      </Card>
+    )}
+  </div>
+ )
 }

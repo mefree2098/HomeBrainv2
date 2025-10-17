@@ -262,6 +262,7 @@ export const addFavoriteDevice = async (profileId: string, deviceId: string) => 
   console.log('Adding favorite device:', profileId, deviceId);
   try {
     const response = await api.post(`/api/profiles/${profileId}/favorites/devices`, { deviceId });
+    requestCache.delete('user-profiles');
     return response.data;
   } catch (error) {
     console.error('Error adding favorite device:', error);
@@ -277,9 +278,42 @@ export const removeFavoriteDevice = async (profileId: string, deviceId: string) 
   console.log('Removing favorite device:', profileId, deviceId);
   try {
     const response = await api.delete(`/api/profiles/${profileId}/favorites/devices/${deviceId}`);
+    requestCache.delete('user-profiles');
     return response.data;
   } catch (error) {
     console.error('Error removing favorite device:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Add scene to profile favorites
+// Endpoint: POST /api/profiles/:id/favorites/scenes
+// Request: { sceneId: string }
+// Response: { success: boolean, message: string, profile: object }
+export const addFavoriteScene = async (profileId: string, sceneId: string) => {
+  console.log('Adding favorite scene:', profileId, sceneId);
+  try {
+    const response = await api.post(`/api/profiles/${profileId}/favorites/scenes`, { sceneId });
+    requestCache.delete('user-profiles');
+    return response.data;
+  } catch (error) {
+    console.error('Error adding favorite scene:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Remove scene from profile favorites
+// Endpoint: DELETE /api/profiles/:id/favorites/scenes/:sceneId
+// Request: {}
+// Response: { success: boolean, message: string, profile: object }
+export const removeFavoriteScene = async (profileId: string, sceneId: string) => {
+  console.log('Removing favorite scene:', profileId, sceneId);
+  try {
+    const response = await api.delete(`/api/profiles/${profileId}/favorites/scenes/${sceneId}`);
+    requestCache.delete('user-profiles');
+    return response.data;
+  } catch (error) {
+    console.error('Error removing favorite scene:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 }

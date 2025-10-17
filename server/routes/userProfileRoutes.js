@@ -507,4 +507,82 @@ router.delete('/:id/favorites/devices/:deviceId', auth, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/profiles/:id/favorites/scenes
+ * Add scene to profile favorites
+ */
+router.post('/:id/favorites/scenes', auth, async (req, res) => {
+  try {
+    console.log(`POST /api/profiles/${req.params.id}/favorites/scenes - Adding favorite scene`);
+
+    const { sceneId } = req.body;
+    if (!sceneId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Scene ID is required'
+      });
+    }
+
+    const profile = await userProfileService.addFavoriteScene(req.params.id, sceneId);
+
+    console.log(`Successfully added favorite scene for profile: ${profile.name}`);
+    res.status(200).json({
+      success: true,
+      message: 'Scene added to favorites successfully',
+      profile: profile
+    });
+  } catch (error) {
+    console.error(`Error in POST /api/profiles/${req.params.id}/favorites/scenes:`, error.message);
+    console.error('Full error:', error);
+
+    if (error.message.includes('not found')) {
+      res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to add scene to favorites',
+        error: error.message
+      });
+    }
+  }
+});
+
+/**
+ * DELETE /api/profiles/:id/favorites/scenes/:sceneId
+ * Remove scene from profile favorites
+ */
+router.delete('/:id/favorites/scenes/:sceneId', auth, async (req, res) => {
+  try {
+    console.log(`DELETE /api/profiles/${req.params.id}/favorites/scenes/${req.params.sceneId} - Removing favorite scene`);
+
+    const profile = await userProfileService.removeFavoriteScene(req.params.id, req.params.sceneId);
+
+    console.log(`Successfully removed favorite scene for profile: ${profile.name}`);
+    res.status(200).json({
+      success: true,
+      message: 'Scene removed from favorites successfully',
+      profile: profile
+    });
+  } catch (error) {
+    console.error(`Error in DELETE /api/profiles/${req.params.id}/favorites/scenes/${req.params.sceneId}:`, error.message);
+    console.error('Full error:', error);
+
+    if (error.message.includes('not found')) {
+      res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to remove scene from favorites',
+        error: error.message
+      });
+    }
+  }
+});
+
 module.exports = router;
