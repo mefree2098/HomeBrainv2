@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -37,6 +37,75 @@ export function Devices() {
     pendingDeviceIds
   } = useFavorites()
 
+  const buildRoomsFromDevices = useCallback((deviceList: any[]) => {
+    const roomMap = new Map<string, any[]>()
+
+    deviceList.forEach((device: any) => {
+      if (!device || !device._id) {
+        return
+      }
+
+      const roomName = device.room || 'Unassigned'
+      const existing = roomMap.get(roomName)
+      if (existing) {
+        existing.push(device)
+      } else {
+        roomMap.set(roomName, [device])
+      }
+    })
+
+    return Array.from(roomMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, items]) => ({
+        name,
+        devices: items
+      }))
+  }, [])
+
+  const applyIncomingDevices = useCallback((incomingDevices: any[]) => {
+    if (!Array.isArray(incomingDevices) || incomingDevices.length === 0) {
+      return
+    }
+
+    setDevices(prevDevices => {
+      const normalizedPrev = Array.isArray(prevDevices) ? prevDevices : []
+      const updatesById = new Map<string, any>()
+
+      incomingDevices.forEach((device: any) => {
+        if (device && device._id) {
+          updatesById.set(device._id, device)
+        }
+      })
+
+      if (updatesById.size === 0) {
+        return prevDevices
+      }
+
+      let hasChanges = false
+      const nextDevices = normalizedPrev.map(device => {
+        const updated = updatesById.get(device._id)
+        if (updated) {
+          hasChanges = true
+          updatesById.delete(device._id)
+          return { ...device, ...updated }
+        }
+        return device
+      })
+
+      updatesById.forEach(device => {
+        hasChanges = true
+        nextDevices.push(device)
+      })
+
+      if (hasChanges) {
+        setRoomDevices(buildRoomsFromDevices(nextDevices))
+        return nextDevices
+      }
+
+      return prevDevices
+    })
+  }, [buildRoomsFromDevices])
+
   useEffect(() => {
     const fetchDevices = async () => {
       try {
@@ -62,6 +131,54 @@ export function Devices() {
 
     fetchDevices()
   }, [toast])
+
+  useEffect(() => {
+    let socket: WebSocket | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+    let manuallyClosed = false
+
+    const connect = () => {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      socket = new WebSocket(`${protocol}//${window.location.host}/ws/devices`)
+
+      socket.onopen = () => {
+        console.log('Device updates websocket connected')
+      }
+
+      socket.onerror = (event) => {
+        console.warn('Device updates websocket error', event)
+      }
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data)
+          if (payload?.type === 'devices:update' && Array.isArray(payload.devices)) {
+            applyIncomingDevices(payload.devices)
+          }
+        } catch (error) {
+          console.warn('Failed to parse device update payload', error)
+        }
+      }
+
+      socket.onclose = () => {
+        if (!manuallyClosed) {
+          reconnectTimer = setTimeout(connect, 5000)
+        }
+      }
+    }
+
+    connect()
+
+    return () => {
+      manuallyClosed = true
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+      }
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close()
+      }
+    }
+  }, [applyIncomingDevices])
 
   const handleDeviceControl = async (deviceId: string, action: string) => {
     try {

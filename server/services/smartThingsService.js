@@ -2,6 +2,7 @@ const axios = require('axios');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
 const Device = require('../models/Device');
+const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 class SmartThingsService {
   constructor() {
@@ -10,7 +11,7 @@ class SmartThingsService {
     this.tokenUrl = 'https://api.smartthings.com/oauth/token';
     this.roomsCache = new Map();
     this.locationNameCache = new Map();
-    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 60000);
+    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 5000);
     this.deviceStatusSyncTimer = null;
     this.deviceStatusSyncInProgress = false;
     if (this.deviceStatusSyncIntervalMs > 0) {
@@ -351,7 +352,7 @@ class SmartThingsService {
       clearInterval(this.deviceStatusSyncTimer);
     }
 
-    const intervalMs = Math.max(this.deviceStatusSyncIntervalMs, 15000);
+    const intervalMs = Math.max(this.deviceStatusSyncIntervalMs, 3000);
 
     this.deviceStatusSyncTimer = setInterval(() => {
       this.runDeviceStatusSync().catch((error) => {
@@ -410,8 +411,9 @@ class SmartThingsService {
         return;
       }
 
-      const bulkOps = [];
-      let updatedCount = 0;
+        const bulkOps = [];
+        let updatedCount = 0;
+        const updatedDeviceIds = new Set();
 
       for (const device of apiDevices) {
         const tracked = trackedMap.get(device.deviceId);
@@ -420,21 +422,34 @@ class SmartThingsService {
         }
 
         const updates = await this.buildSmartThingsDeviceUpdate(tracked, device);
-        if (updates) {
-          bulkOps.push({
-            updateOne: {
-              filter: { _id: tracked._id },
-              update: { $set: updates }
-            }
-          });
-          updatedCount += 1;
+          if (updates) {
+            bulkOps.push({
+              updateOne: {
+                filter: { _id: tracked._id },
+                update: { $set: updates }
+              }
+            });
+            updatedCount += 1;
+            updatedDeviceIds.add(tracked._id.toString());
+          }
         }
-      }
 
-      if (bulkOps.length > 0) {
-        await Device.bulkWrite(bulkOps, { ordered: false });
-        console.log(`SmartThingsService: Updated state for ${updatedCount} SmartThings devices`);
-      }
+        if (bulkOps.length > 0) {
+          await Device.bulkWrite(bulkOps, { ordered: false });
+          console.log(`SmartThingsService: Updated state for ${updatedCount} SmartThings devices`);
+
+          try {
+            const ids = Array.from(updatedDeviceIds);
+            if (ids.length > 0) {
+              const refreshedDevices = await Device.find({ _id: { $in: ids } }).lean();
+              if (refreshedDevices.length > 0) {
+                deviceUpdateEmitter.emit('devices:update', refreshedDevices);
+              }
+            }
+          } catch (emitterError) {
+            console.warn('SmartThingsService: Failed to emit device updates:', emitterError.message);
+          }
+        }
     } catch (error) {
       console.error('SmartThingsService: Device status sync failure:', error.message);
     } finally {
