@@ -915,8 +915,14 @@ class SmartThingsService {
     const candidateIds = new Set();
     const connectedDevices = Array.isArray(integration?.connectedDevices) ? integration.connectedDevices : [];
 
+    const matchesSecurityCapability = (capabilityId) => {
+      if (typeof capabilityId !== 'string') return false;
+      const normalized = capabilityId.toLowerCase();
+      return normalized === 'securitysystem' || (normalized.includes('security') && normalized.includes('system'));
+    };
+
     for (const device of connectedDevices) {
-      if (device?.deviceId && Array.isArray(device.capabilities) && device.capabilities.includes('securitySystem')) {
+      if (device?.deviceId && Array.isArray(device.capabilities) && device.capabilities.some(matchesSecurityCapability)) {
         candidateIds.add(device.deviceId.trim());
       }
     }
@@ -930,7 +936,7 @@ class SmartThingsService {
             continue;
           }
           const capabilities = device?.components?.[0]?.capabilities?.map(cap => cap.id) || [];
-          if (capabilities.includes('securitySystem')) {
+          if (capabilities.some(matchesSecurityCapability)) {
             candidateIds.add(deviceId.trim());
           }
         }
@@ -943,8 +949,33 @@ class SmartThingsService {
       try {
         const status = await this.getDeviceStatus(deviceId);
         const securityComponent = status?.components?.main?.securitySystem;
-        const rawValue = securityComponent?.securitySystemStatus?.value ?? securityComponent?.securitySystemStatus;
+        if (!securityComponent) {
+          continue;
+        }
+
+        const valueFields = [
+          'securitySystemStatus',
+          'securitySystemState',
+          'status',
+          'armState',
+          'securityStatus'
+        ];
+
+        let rawValue = null;
+        for (const field of valueFields) {
+          const candidate = securityComponent[field];
+          if (typeof candidate === 'string' && candidate) {
+            rawValue = candidate;
+            break;
+          }
+          if (candidate && typeof candidate === 'object' && typeof candidate.value !== 'undefined') {
+            rawValue = candidate.value;
+            break;
+          }
+        }
+
         if (!rawValue) {
+          console.debug(`SmartThingsService: Security device ${deviceId} main component missing expected status fields`, Object.keys(securityComponent));
           continue;
         }
 
@@ -974,6 +1005,7 @@ class SmartThingsService {
       }
     }
 
+    console.debug('SmartThingsService: No securitySystem-capable devices reported actionable status');
     return null;
   }
 
