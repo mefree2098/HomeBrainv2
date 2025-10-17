@@ -465,6 +465,53 @@ function extractNumber(text) {
   return null;
 }
 
+function isLikelyImmediateCommand(text) {
+  const normalized = (text || '').toLowerCase().trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const automationIndicators = [
+    'automation',
+    'automations',
+    'routine',
+    'routines',
+    'schedule',
+    'scheduled',
+    'scheduling',
+    'timer',
+    'timers',
+    'reminder',
+    'reminders',
+    'every ',
+    'each ',
+    'per day',
+    'per night',
+    'weekday',
+    'weekend'
+  ];
+
+  if (automationIndicators.some((indicator) => normalized.includes(indicator))) {
+    return false;
+  }
+
+  const schedulePatterns = [
+    /\b(at|around)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/,
+    /\b\d{1,2}\s*(am|pm)\b/,
+    /\b(in|after)\s+\d+\s+(minutes?|hours?|days?)\b/,
+    /\bwhen\b\s+(?:the\s+)?/,
+    /\bif\b\s+(?:the\s+)?/
+  ];
+
+  if (schedulePatterns.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+
+  const directActionPattern = /\b(turn|switch)\s+(on|off)\b|\b(dim|brighten)\b|\bset\s+(?:the\s+)?(?:brightness|temperature)\b|\b(lock|unlock)\b|\b(open|close)\b|\bactivate\s+\w+/;
+
+  return directActionPattern.test(normalized);
+}
+
 /**
  * Get automation by ID
  */
@@ -918,13 +965,52 @@ async function createAutomationFromText(text, roomContext = null) {
     // Build comprehensive context
     const devicesByRoom = await buildDeviceContext();
     const scenes = await buildSceneContext();
+    const flatDevices = flattenDevices(devicesByRoom);
+
+    // For direct control requests like "turn on the vault light", bypass automation creation
+    if (isLikelyImmediateCommand(text)) {
+      const directDevice = findBestDeviceForText(text, flatDevices, roomContext);
+      if (directDevice) {
+        const inferredAction = inferDeviceActionFromText(text, directDevice);
+        if (inferredAction?.action) {
+          try {
+            await deviceService.controlDevice(
+              directDevice.id,
+              inferredAction.action,
+              inferredAction.value != null ? inferredAction.value : undefined
+            );
+
+            console.log(`AutomationService: Executed direct device action (${inferredAction.action}) on ${directDevice.name} instead of creating automation.`);
+            return {
+              success: true,
+              automation: null,
+              message: inferredAction.phrase || `Executed ${inferredAction.action} on ${directDevice.name}`,
+              handledDirectCommand: true,
+              device: {
+                id: directDevice.id,
+                name: directDevice.name,
+                room: directDevice.room,
+                action: inferredAction.action,
+                value: inferredAction.value
+              }
+            };
+          } catch (directError) {
+            console.warn('AutomationService: Direct device execution failed, falling back to automation workflow:', directError.message);
+          }
+        } else {
+          console.log('AutomationService: Immediate command detected but no actionable capability inferred; continuing with automation workflow.');
+        }
+      } else {
+        console.log('AutomationService: Immediate command detected but no matching device found; continuing with automation workflow.');
+      }
+    }
 
     const promptDeviceContext = refineDeviceContextForPrompt(text, devicesByRoom, roomContext);
     const promptScenes = refineSceneContextForPrompt(text, scenes);
     const deviceListForPrompt = formatDeviceList(promptDeviceContext);
     const sceneListForPrompt = formatSceneList(promptScenes);
 
-    const originalDeviceCount = flattenDevices(devicesByRoom).length;
+    const originalDeviceCount = flatDevices.length;
     const promptDeviceCount = flattenDevices(promptDeviceContext).length;
     if (promptDeviceCount < originalDeviceCount) {
       console.log(`AutomationService: Trimmed device context for LLM prompt (${originalDeviceCount} -> ${promptDeviceCount})`);
