@@ -415,18 +415,34 @@ class SmartThingsService {
         let updatedCount = 0;
         const updatedDeviceIds = new Set();
 
-      for (const device of apiDevices) {
-        const tracked = trackedMap.get(device.deviceId);
-        if (!tracked) {
-          continue;
-        }
+        for (const device of apiDevices) {
+          const tracked = trackedMap.get(device.deviceId);
+          if (!tracked) {
+            continue;
+          }
 
-        const updates = await this.buildSmartThingsDeviceUpdate(tracked, device);
-        if (updates) {
-          if ((tracked.name || '').toLowerCase().includes('vault')) {
-            console.debug('SmartThingsService: Vault device payload diff', {
-              name: tracked.name,
-              updates
+          let enrichedDevice = device;
+          let statusRoot = this.extractStatusRoot(device);
+
+          if (!statusRoot || Object.keys(statusRoot).length === 0) {
+            try {
+              const deviceStatus = await this.getDeviceStatus(device.deviceId);
+              enrichedDevice = {
+                ...device,
+                status: deviceStatus
+              };
+              statusRoot = this.extractStatusRoot(enrichedDevice);
+            } catch (statusError) {
+              console.warn(`SmartThingsService: Failed to refresh status for ${device.deviceId}: ${statusError.message}`);
+            }
+          }
+
+          const updates = await this.buildSmartThingsDeviceUpdate(tracked, enrichedDevice);
+          if (updates) {
+            if ((tracked.name || '').toLowerCase().includes('vault')) {
+              console.debug('SmartThingsService: Vault device payload diff', {
+                name: tracked.name,
+                updates
             });
           }
           const previousStatus = tracked.status;
@@ -480,7 +496,11 @@ class SmartThingsService {
       return null;
     }
 
-    const isOnline = (apiDevice.healthState?.state || '').toUpperCase() === 'ONLINE';
+    let isOnline = (apiDevice.healthState?.state || '').toUpperCase() === 'ONLINE';
+    const statusHasData = statusRoot && Object.keys(statusRoot).length > 0;
+    if (!isOnline && statusHasData) {
+      isOnline = true;
+    }
 
     if ((existingDevice.name || '').toLowerCase().includes('vault')) {
       console.debug('SmartThingsService: Vault status root snapshot', {
