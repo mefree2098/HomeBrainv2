@@ -230,6 +230,7 @@ export function Settings() {
       ? (sttModelRaw && localWhisperModels.includes(sttModelRaw) ? sttModelRaw : "small")
       : (sttModelRaw && openaiSttModels.includes(sttModelRaw) ? sttModelRaw : "gpt-4o-mini-transcribe")
   const sttLanguageValue = watch("sttLanguage") || "en"
+  const STHM_NOT_CONFIGURED = "__not_configured__"
   const availableSmartThingsDevices =
     smartThingsDevices.length > 0
       ? smartThingsDevices
@@ -244,6 +245,9 @@ export function Settings() {
   const lastSthmState = smartthingsStatus?.sthm?.lastArmState
   const lastSthmStateUpdatedAt = smartthingsStatus?.sthm?.lastArmStateUpdatedAt
   const lastSthmUpdatedLabel = lastSthmStateUpdatedAt ? new Date(lastSthmStateUpdatedAt).toLocaleString() : null
+  const disarmSelectValue = sthmConfig.disarmDeviceId || STHM_NOT_CONFIGURED
+  const armStaySelectValue = sthmConfig.armStayDeviceId || STHM_NOT_CONFIGURED
+  const armAwaySelectValue = sthmConfig.armAwayDeviceId || STHM_NOT_CONFIGURED
 
   // Load settings on component mount
   useEffect(() => {
@@ -1743,15 +1747,20 @@ export function Settings() {
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Disarm Switch</label>
                       <Select
-                        value={sthmConfig.disarmDeviceId}
-                        onValueChange={(value) => setSthmConfig((prev) => ({ ...prev, disarmDeviceId: value }))}
+                        value={disarmSelectValue}
+                        onValueChange={(value) =>
+                          setSthmConfig((prev) => ({
+                            ...prev,
+                            disarmDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
+                          }))
+                        }
                         disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
                       >
                         <SelectTrigger className="mt-1">
                           <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Not configured</SelectItem>
+                          <SelectItem value={STHM_NOT_CONFIGURED}>Not configured</SelectItem>
                           {switchDevices.map((device: any) => (
                             <SelectItem key={device.deviceId} value={device.deviceId}>
                               {getDeviceDisplayName(device)}
@@ -1767,15 +1776,20 @@ export function Settings() {
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Arm Stay Switch</label>
                       <Select
-                        value={sthmConfig.armStayDeviceId}
-                        onValueChange={(value) => setSthmConfig((prev) => ({ ...prev, armStayDeviceId: value }))}
+                        value={armStaySelectValue}
+                        onValueChange={(value) =>
+                          setSthmConfig((prev) => ({
+                            ...prev,
+                            armStayDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
+                          }))
+                        }
                         disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
                       >
                         <SelectTrigger className="mt-1">
                           <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Not configured</SelectItem>
+                          <SelectItem value={STHM_NOT_CONFIGURED}>Not configured</SelectItem>
                           {switchDevices.map((device: any) => (
                             <SelectItem key={device.deviceId} value={device.deviceId}>
                               {getDeviceDisplayName(device)}
@@ -1791,15 +1805,20 @@ export function Settings() {
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Arm Away Switch</label>
                       <Select
-                        value={sthmConfig.armAwayDeviceId}
-                        onValueChange={(value) => setSthmConfig((prev) => ({ ...prev, armAwayDeviceId: value }))}
+                        value={armAwaySelectValue}
+                        onValueChange={(value) =>
+                          setSthmConfig((prev) => ({
+                            ...prev,
+                            armAwayDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
+                          }))
+                        }
                         disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
                       >
                         <SelectTrigger className="mt-1">
                           <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Not configured</SelectItem>
+                          <SelectItem value={STHM_NOT_CONFIGURED}>Not configured</SelectItem>
                           {switchDevices.map((device: any) => (
                             <SelectItem key={device.deviceId} value={device.deviceId}>
                               {getDeviceDisplayName(device)}
