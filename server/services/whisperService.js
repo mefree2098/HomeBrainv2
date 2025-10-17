@@ -388,16 +388,19 @@ class WhisperService {
       const result = await this._runCommand(
         PYTHON_BIN,
         ['-c',
+         // Convert the set to a list; also report device count
          'import json,ctranslate2 as ct2; ' +
-         'print(json.dumps({"v":getattr(ct2,"__version__",None), "types":getattr(ct2,"get_supported_compute_types")("cuda")}))'
+         'types=list(ct2.get_supported_compute_types("cuda")); ' +
+         'print(json.dumps({"v":getattr(ct2,"__version__",None), "types":types, "devices":ct2.get_cuda_device_count()}))'
         ],
         { cwd: process.cwd(), env: this._augmentedEnv() }
       );
       const line = (result?.stdout || '').trim().split(/\r?\n/).pop() || '{}';
       const obj = JSON.parse(line);
       const types = Array.isArray(obj.types) ? obj.types : [];
-      if (!types.length) throw new Error('No CUDA compute types reported by ctranslate2');
-      console.log(`Whisper Service: CUDA compute types -> ${types.join(', ')} (ct2 ${obj.v || 'unknown'})`);
+      const devices = typeof obj.devices === 'number' ? obj.devices : 0;
+      if (!types.length || devices < 1) throw new Error('CUDA present but no compute types or devices detected');
+      console.log(`Whisper Service: CUDA devices=${devices} compute types=${types.join(', ')} (ct2 ${obj.v || 'unknown'})`);
       return true;
     } catch (error) {
       console.warn('Whisper Service: CUDA verification failed. Falling back to CPU. Details:', error.message);
