@@ -52,6 +52,7 @@ class DeviceWebSocket {
     const heartbeatInterval = setInterval(heartbeat, 30000);
 
     wss.on('connection', (socket) => {
+      console.log('DeviceWebSocket: client connected');
       socket.isAlive = true;
 
       socket.on('pong', () => {
@@ -67,6 +68,10 @@ class DeviceWebSocket {
 
       socket.on('error', (error) => {
         console.warn('DeviceWebSocket: client error', error.message);
+      });
+
+      socket.on('close', () => {
+        console.log('DeviceWebSocket: client disconnected');
       });
 
       socket.send(JSON.stringify({
