@@ -273,7 +273,7 @@ class SmartThingsService {
       const status = error.response?.status;
       const isExpectedSecurityFallback = (
         endpoint.includes('/security/') &&
-        [404, 405, 422].includes(status)
+        [403, 404, 405, 422].includes(status)
       );
 
       const logPayload = error.response?.data || error.message;
@@ -911,6 +911,72 @@ class SmartThingsService {
     return null;
   }
 
+  async determineArmStateFromSecurityDevices({ integration, locationId }) {
+    const candidateIds = new Set();
+    const connectedDevices = Array.isArray(integration?.connectedDevices) ? integration.connectedDevices : [];
+
+    for (const device of connectedDevices) {
+      if (device?.deviceId && Array.isArray(device.capabilities) && device.capabilities.includes('securitySystem')) {
+        candidateIds.add(device.deviceId.trim());
+      }
+    }
+
+    if (candidateIds.size === 0) {
+      try {
+        const devices = await this.getDevices();
+        for (const device of devices) {
+          const deviceId = device?.deviceId;
+          if (!deviceId || candidateIds.has(deviceId)) {
+            continue;
+          }
+          const capabilities = device?.components?.[0]?.capabilities?.map(cap => cap.id) || [];
+          if (capabilities.includes('securitySystem')) {
+            candidateIds.add(deviceId.trim());
+          }
+        }
+      } catch (error) {
+        console.warn(`SmartThingsService: Unable to enumerate devices for security status detection: ${error.message}`);
+      }
+    }
+
+    for (const deviceId of candidateIds) {
+      try {
+        const status = await this.getDeviceStatus(deviceId);
+        const securityComponent = status?.components?.main?.securitySystem;
+        const rawValue = securityComponent?.securitySystemStatus?.value ?? securityComponent?.securitySystemStatus;
+        if (!rawValue) {
+          continue;
+        }
+
+        const normalized = this.normalizeArmState(rawValue);
+
+        if (integration && typeof integration.updateSecurityArmState === 'function') {
+          await integration.updateSecurityArmState({
+            armState: normalized,
+            locationId: locationId || undefined
+          });
+        } else if (integration?.sthm) {
+          integration.sthm.lastArmState = normalized;
+          integration.sthm.lastArmStateUpdatedAt = new Date();
+          if (locationId) {
+            integration.sthm.locationId = locationId;
+          }
+        }
+
+        return {
+          armState: normalized,
+          source: 'securitySystem-device',
+          deviceId,
+          raw: status
+        };
+      } catch (error) {
+        console.warn(`SmartThingsService: Unable to read security device ${deviceId} status: ${error.message}`);
+      }
+    }
+
+    return null;
+  }
+
   async pulseVirtualSwitch(deviceId, { ensureReset = true, delayMs = 300 } = {}) {
     if (!deviceId) {
       throw new Error('SmartThings virtual switch device ID is required');
@@ -1040,29 +1106,39 @@ class SmartThingsService {
       }
     }
 
-    const fallback = await this.determineArmStateFromVirtualSwitches(config);
+    let fallback = await this.determineArmStateFromVirtualSwitches(config);
+
+    if (!fallback?.armState) {
+      fallback = await this.determineArmStateFromSecurityDevices({
+        integration,
+        locationId: resolvedLocationId || config.locationId || null
+      });
+    }
+
     if (fallback?.armState) {
       const fallbackLocation = resolvedLocationId || config.locationId || null;
 
-      if (integration && typeof integration.updateSecurityArmState === 'function') {
-        await integration.updateSecurityArmState({
-          armState: fallback.armState,
-          locationId: fallbackLocation || undefined
-        });
-      } else if (integration?.sthm) {
-        integration.sthm.lastArmState = fallback.armState;
-        integration.sthm.lastArmStateUpdatedAt = new Date();
-        if (fallbackLocation) {
-          integration.sthm.locationId = fallbackLocation;
+      if (fallback.source !== 'securitySystem-device') {
+        if (integration && typeof integration.updateSecurityArmState === 'function') {
+          await integration.updateSecurityArmState({
+            armState: fallback.armState,
+            locationId: fallbackLocation || undefined
+          });
+        } else if (integration?.sthm) {
+          integration.sthm.lastArmState = fallback.armState;
+          integration.sthm.lastArmStateUpdatedAt = new Date();
+          if (fallbackLocation) {
+            integration.sthm.locationId = fallbackLocation;
+          }
         }
       }
 
       return {
         locationId: fallbackLocation,
         armState: fallback.armState,
-        raw: fallback.raw,
+        raw: fallback.raw || null,
         source: fallback.source,
-        deviceId: fallback.deviceId
+        deviceId: fallback.deviceId || null
       };
     }
 
