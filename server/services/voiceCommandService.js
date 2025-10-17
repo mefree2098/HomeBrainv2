@@ -647,19 +647,32 @@ Return ONLY the JSON object with no commentary.`;
     let interpretation = interpretationResult.interpretation;
     const llm = interpretationResult.llm;
 
-    if (interpretation && interpretation.intent === 'automation_create') {
-      const likelyAutomation = this.isLikelyAutomationRequest(commandText);
-      if (!likelyAutomation) {
-        console.log('VoiceCommandService: Interpretation looked like automation but command seems immediate; using fallback device control.');
-        const directFallback = this.fallbackInterpretation(commandText, context, room);
-        if (directFallback) {
+    const likelyAutomation = this.isLikelyAutomationRequest(commandText);
+    const hasAutomationActions = Array.isArray(interpretation?.actions) &&
+      interpretation.actions.some((action) => action?.type === 'automation_create');
+
+    if (interpretation && !likelyAutomation && (interpretation.intent === 'automation_create' || hasAutomationActions)) {
+      console.log('VoiceCommandService: Automation intent/actions detected but command appears immediate; applying device-control fallback.');
+      const directFallback = this.fallbackInterpretation(commandText, context, room);
+      if (directFallback) {
+        interpretation = {
+          ...directFallback,
+          usedFallback: true
+        };
+      } else if (hasAutomationActions) {
+        const filteredActions = interpretation.actions.filter((action) => action?.type !== 'automation_create');
+        if (filteredActions.length) {
           interpretation = {
-            ...directFallback,
+            ...interpretation,
+            actions: filteredActions,
+            intent: interpretation.intent === 'automation_create' ? 'device_control' : interpretation.intent,
             usedFallback: true
           };
         } else {
           interpretation = null;
         }
+      } else {
+        interpretation = null;
       }
     }
 
