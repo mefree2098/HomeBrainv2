@@ -20,6 +20,57 @@ const logCacheStats = () => {
   }
 };
 
+export interface VoiceCommandResult {
+  success: boolean;
+  processedText: string;
+  intent: {
+    action: string;
+    confidence: number;
+    entities: {
+      devices: Array<Record<string, unknown>>;
+      scenes: Array<Record<string, unknown>>;
+      actions: Array<Record<string, unknown>>;
+    };
+  };
+  execution: {
+    status: string;
+    actions: Array<Record<string, unknown>>;
+  };
+  responseText: string;
+  llm?: {
+    provider?: string | null;
+    model?: string | null;
+    prompt?: string;
+    rawResponse?: string | null;
+    processingTimeMs?: number;
+    error?: string | null;
+  };
+  followUpQuestion: string | null;
+  usedFallback: boolean;
+  stt?: unknown;
+}
+
+// Description: Interpret a voice command through the full pipeline
+// Endpoint: POST /api/voice/commands/interpret
+// Request: { commandText: string, room?: string, wakeWord?: string, deviceId?: string }
+// Response: VoiceCommandResult
+export const interpretVoiceCommand = async (payload: {
+  commandText: string;
+  room?: string | null;
+  wakeWord?: string | null;
+  deviceId?: string | null;
+  stt?: unknown;
+}): Promise<VoiceCommandResult> => {
+  console.log('Interpreting voice command:', payload);
+  try {
+    const response = await api.post('/api/voice/commands/interpret', payload);
+    return response.data as VoiceCommandResult;
+  } catch (error: any) {
+    console.error('Error interpreting voice command:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
 // Description: Get voice system status
 // Endpoint: GET /api/voice/status
 // Request: {}
