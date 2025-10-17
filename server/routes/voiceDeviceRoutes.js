@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const voiceDeviceService = require('../services/voiceDeviceService');
+const voiceCommandService = require('../services/voiceCommandService');
 const { requireUser } = require('./middlewares/auth');
 const voiceWs = require('../websocket/voiceWebSocket');
 const VoiceDevice = require('../models/VoiceDevice');
@@ -81,6 +82,53 @@ router.get('/status', requireUser(), async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to get voice system status'
+    });
+  }
+});
+
+/**
+ * @route POST /api/voice/commands/interpret
+ * @desc Interpret and execute a voice command via HTTP (dashboard testing)
+ * @access Private
+ */
+router.post('/commands/interpret', requireUser(), async (req, res) => {
+  const {
+    commandText,
+    room = null,
+    wakeWord = 'dashboard',
+    deviceId = null,
+    stt = null
+  } = req.body || {};
+
+  console.log('POST /api/voice/commands/interpret - Processing voice command via HTTP');
+
+  if (!commandText || !commandText.trim()) {
+    console.warn('POST /api/voice/commands/interpret - Missing commandText in request body');
+    return res.status(400).json({
+      success: false,
+      message: 'commandText is required'
+    });
+  }
+
+  try {
+    const result = await voiceCommandService.processCommand({
+      commandText: commandText.trim(),
+      room: typeof room === 'string' && room.trim() ? room.trim() : null,
+      wakeWord: typeof wakeWord === 'string' && wakeWord.trim() ? wakeWord.trim() : 'dashboard',
+      deviceId: typeof deviceId === 'string' && deviceId.trim() ? deviceId.trim() : null,
+      stt: stt || null
+    });
+
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('POST /api/voice/commands/interpret - Error:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to process voice command'
     });
   }
 });
