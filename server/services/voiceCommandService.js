@@ -285,44 +285,53 @@ Return ONLY the JSON object with no commentary.`;
     };
   }
 
-  isLikelyAutomationRequest(commandText, interpretation) {
-    const text = (commandText || '').toLowerCase();
-    if (!text.trim()) {
+  isLikelyAutomationRequest(commandText) {
+    const text = (commandText || '').toLowerCase().trim();
+    if (!text) {
       return false;
     }
 
-    const automationKeywords = [
+    const explicitAutomationPhrases = [
       'automation',
+      'automations',
       'routine',
+      'routines',
       'schedule',
       'scheduled',
-      'every ',
-      'each ',
-      'when ',
-      'whenever ',
-      'if ',
-      'trigger',
-      'create',
-      'set up',
-      'set a',
-      'start a'
+      'scheduling',
+      'timer',
+      'timers',
+      'reminder',
+      'reminders',
+      'set up an automation',
+      'create an automation',
+      'make an automation',
+      'start a routine'
     ];
 
-    if (automationKeywords.some((keyword) => text.includes(keyword))) {
+    if (explicitAutomationPhrases.some((phrase) => text.includes(phrase))) {
       return true;
     }
 
-    // Detect explicit time references that usually imply scheduling
-    if (/\b(at|around)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/.test(text)) {
+    const repeatingPatterns = [
+      /\bevery\s+(day|night|morning|evening|weekday|weekend|hour|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/,
+      /\beach\s+(day|night|morning|evening|hour)\b/,
+      /\bweekly\b/,
+      /\bdaily\b/
+    ];
+
+    if (repeatingPatterns.some((pattern) => pattern.test(text))) {
       return true;
     }
 
-    if (/\b\d{1,2}\s*(am|pm)\b/.test(text)) {
+    const timePattern = /\b(at|around)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/;
+    if (timePattern.test(text)) {
       return true;
     }
 
-    if (Array.isArray(interpretation?.actions)) {
-      return interpretation.actions.some((action) => action?.type === 'automation_create');
+    const conditionalTriggerPattern = /\bwhen\b.*\b(light|door|sensor|motion|temperature|humidity|garage|switch|lock|thermostat)\b/;
+    if (conditionalTriggerPattern.test(text)) {
+      return true;
     }
 
     return false;
@@ -639,7 +648,7 @@ Return ONLY the JSON object with no commentary.`;
     const llm = interpretationResult.llm;
 
     if (interpretation && interpretation.intent === 'automation_create') {
-      const likelyAutomation = this.isLikelyAutomationRequest(commandText, interpretation);
+      const likelyAutomation = this.isLikelyAutomationRequest(commandText);
       if (!likelyAutomation) {
         console.log('VoiceCommandService: Interpretation looked like automation but command seems immediate; using fallback device control.');
         const directFallback = this.fallbackInterpretation(commandText, context, room);
@@ -648,6 +657,8 @@ Return ONLY the JSON object with no commentary.`;
             ...directFallback,
             usedFallback: true
           };
+        } else {
+          interpretation = null;
         }
       }
     }
