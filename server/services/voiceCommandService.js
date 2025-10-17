@@ -285,6 +285,53 @@ Return ONLY the JSON object with no commentary.`;
     };
   }
 
+  isImmediateControlRequest(commandText) {
+    const normalized = (commandText || '').toLowerCase().trim();
+    if (!normalized) {
+      return false;
+    }
+
+    const automationIndicators = [
+      'automation',
+      'automations',
+      'routine',
+      'routines',
+      'schedule',
+      'scheduled',
+      'scheduling',
+      'timer',
+      'timers',
+      'reminder',
+      'reminders',
+      'every ',
+      'each ',
+      'per day',
+      'per night',
+      'weekday',
+      'weekend'
+    ];
+
+    if (automationIndicators.some((indicator) => normalized.includes(indicator))) {
+      return false;
+    }
+
+    const schedulePatterns = [
+      /\b(at|around)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/,
+      /\b\d{1,2}\s*(am|pm)\b/,
+      /\b(in|after)\s+\d+\s+(minutes?|hours?|days?)\b/,
+      /\bwhen\b\s+(?:the\s+)?/,
+      /\bif\b\s+(?:the\s+)?/
+    ];
+
+    if (schedulePatterns.some((pattern) => pattern.test(normalized))) {
+      return false;
+    }
+
+    const directActionPattern = /\b(turn|switch)\s+(on|off)\b|\b(dim|brighten)\b|\bset\s+(?:the\s+)?(?:brightness|temperature)\b|\b(lock|unlock)\b|\b(open|close)\b|\bactivate\s+\w+/;
+
+    return directActionPattern.test(normalized);
+  }
+
   isLikelyAutomationRequest(commandText) {
     const text = (commandText || '').toLowerCase().trim();
     if (!text) {
@@ -658,10 +705,38 @@ Return ONLY the JSON object with no commentary.`;
     } = options;
 
     const context = await this.getContext();
-    const interpretationResult = await this.interpretCommand(commandText, context, room, wakeWord);
 
-    let interpretation = interpretationResult.interpretation;
-    const llm = interpretationResult.llm;
+    let interpretation = null;
+    let llm = {
+      provider: null,
+      model: null,
+      prompt: null,
+      rawResponse: null,
+      processingTimeMs: 0
+    };
+
+    if (this.isImmediateControlRequest(commandText)) {
+      const heuristicInterpretation = this.fallbackInterpretation(commandText, context, room);
+      if (heuristicInterpretation) {
+        interpretation = {
+          ...heuristicInterpretation,
+          usedFallback: true
+        };
+        llm = {
+          provider: 'heuristic',
+          model: 'rule-based',
+          prompt: null,
+          rawResponse: null,
+          processingTimeMs: 0
+        };
+      }
+    }
+
+    if (!interpretation) {
+      const interpretationResult = await this.interpretCommand(commandText, context, room, wakeWord);
+      interpretation = interpretationResult.interpretation;
+      llm = interpretationResult.llm;
+    }
 
     const likelyAutomation = this.isLikelyAutomationRequest(commandText);
     const hasAutomationActions = Array.isArray(interpretation?.actions) &&
