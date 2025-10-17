@@ -699,7 +699,7 @@ async function buildDeviceContext() {
   console.log('AutomationService: Building device context for LLM');
 
   try {
-    const devices = await Device.find({ isOnline: true }).lean();
+    const devices = await Device.find().lean();
     const devicesByRoom = {};
 
     devices.forEach(device => {
@@ -921,6 +921,8 @@ async function createAutomationFromText(text, roomContext = null) {
 
     const promptDeviceContext = refineDeviceContextForPrompt(text, devicesByRoom, roomContext);
     const promptScenes = refineSceneContextForPrompt(text, scenes);
+    const deviceListForPrompt = formatDeviceList(promptDeviceContext);
+    const sceneListForPrompt = formatSceneList(promptScenes);
 
     const originalDeviceCount = flattenDevices(devicesByRoom).length;
     const promptDeviceCount = flattenDevices(promptDeviceContext).length;
@@ -933,7 +935,14 @@ async function createAutomationFromText(text, roomContext = null) {
     }
 
     // Build detailed prompt with filtered context
-    let prompt = buildAutomationPrompt(text, promptDeviceContext, promptScenes, roomContext);
+    let prompt = buildAutomationPrompt(
+      text,
+      promptDeviceContext,
+      promptScenes,
+      roomContext,
+      deviceListForPrompt,
+      sceneListForPrompt
+    );
 
     const settingsDoc = await Settings.getSettings();
     const defaultPriority = Array.isArray(settingsDoc.llmPriorityList) && settingsDoc.llmPriorityList.length
@@ -1021,6 +1030,13 @@ Please fix these issues and return a corrected JSON. Remember:
 - Use valid action types: device_control, scene_activate, notification, delay, condition
 
 Original request: "${text}"
+
+${roomContext ? `Room context: The user is currently in the "${roomContext}" room.\n` : ''}
+AVAILABLE DEVICES:
+${deviceListForPrompt || 'None'}
+
+AVAILABLE SCENES:
+${sceneListForPrompt || 'None'}
 
 Return ONLY the corrected JSON, no explanation.`;
 
@@ -1127,16 +1143,9 @@ const AUTOMATION_JSON_TEMPLATE = `{
 /**
  * Build detailed automation prompt for LLM
  */
-function buildAutomationPrompt(text, devicesByRoom, scenes, roomContext) {
-  const deviceList = Object.entries(devicesByRoom).map(([room, devices]) => {
-    return `Room: ${room}\n${devices.map(d =>
-      `  - ${d.name} (ID: ${d.id}, Type: ${d.type}, Actions: ${d.capabilities.join(', ')})`
-    ).join('\n')}`;
-  }).join('\n\n');
-
-  const sceneList = scenes.map(s =>
-    `  - ${s.name} (ID: ${s.id}, Category: ${s.category})`
-  ).join('\n');
+function buildAutomationPrompt(text, devicesByRoom, scenes, roomContext, preformattedDeviceList, preformattedSceneList) {
+  const deviceList = preformattedDeviceList ?? formatDeviceList(devicesByRoom);
+  const sceneList = preformattedSceneList ?? formatSceneList(scenes);
 
   return `You are an expert at creating smart home automations. Convert the user's request into a JSON object that matches the schema below.
 
@@ -1157,9 +1166,9 @@ IMPORTANT RULES:
 1. ALWAYS return at least one action when the user is asking to control something. Simple requests (e.g., "turn on the vault light") must become a manual trigger with one device_control action.
 2. Default the trigger to {"type": "manual", "conditions": {}} when no schedule or condition is provided.
 3. ONLY use device IDs from the provided device list and scene IDs from the provided scene list. Never invent IDs or placeholders.
-4. Match each action to the device’s allowed capabilities (e.g., lights support turn_on/turn_off/set_brightness).
+4. Match each action to the device's allowed capabilities (e.g., lights support turn_on/turn_off/set_brightness).
 5. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
- 6. Use intent-driven categories (security|comfort|energy|convenience|custom) and pick a sensible priority between 1-10 (default 5).
+6. Use intent-driven categories (choose from "security", "comfort", "energy", "convenience", "custom") and pick a sensible priority between 1-10 (default 5).
 7. Never output any prefix/suffix text. Return ONLY the JSON object.
 
 AVAILABLE DEVICES:
@@ -1175,28 +1184,31 @@ REQUIRED JSON STRUCTURE:
   "name": "Brief descriptive name (max 50 chars)",
   "description": "Detailed description of what this automation does",
   "trigger": {
-    "type": "time|device_state|sensor|schedule|manual",
+    "type": "<trigger_type>",  // choose one: time, device_state, sensor, schedule, manual
     "conditions": {
       // For time: {"hour": 7, "minute": 0, "days": ["monday", "tuesday", ...]}
       // For schedule: {"cron": "0 7 * * 1-5"}
-      // For device_state: {"deviceId": "ID", "state": "on|off", "property": "brightness", "operator": ">", "value": 50}
-      // For sensor: {"sensorType": "motion|temperature|humidity", "deviceId": "ID", "condition": "detected|above|below", "value": 25}
+      // For device_state: {"deviceId": "ID", "state": "on" or "off", "property": "brightness", "operator": ">", "value": 50}
+      // For sensor: {"sensorType": "<sensor_type>", "deviceId": "ID", "condition": "<condition>", "value": 25}
+      //   sensor_type options: motion, temperature, humidity
+      //   condition options: detected, above, below
       // For manual: {}
     }
   },
   "actions": [
     {
-      "type": "device_control|scene_activate|notification|delay",
-      "target": "EXACT_DEVICE_ID_FROM_LIST_ABOVE or EXACT_SCENE_ID_FROM_LIST_ABOVE",
+      "type": "<action_type>",  // choose one: device_control, scene_activate, notification, delay
+      "target": "DEVICE_ID_FROM_LIST_ABOVE or SCENE_ID_FROM_LIST_ABOVE",
       "parameters": {
-        // For device_control: {"action": "turn_on|turn_off|set_brightness|set_temperature|lock|unlock", "brightness": 0-100, "temperature": number, "color": "#hex"}
+        // For device_control: {"action": "<device_action>", "brightness": 0-100, "temperature": number, "color": "#hex"}
+        // Valid device actions include: turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
         // For scene_activate: {}
         // For notification: {"message": "text"}
         // For delay: {"seconds": number}
       }
     }
   ],
-  "category": "security|comfort|energy|convenience|custom",
+  "category": "<category>",  // choose one: security, comfort, energy, convenience, custom
   "priority": 1-10
 }
 
@@ -1218,6 +1230,37 @@ TRIGGER TYPE EXAMPLES:
 USER REQUEST: "${text}"
 
 Return ONLY the JSON object, nothing else:`;
+}
+
+function formatDeviceList(devicesByRoom = {}) {
+  const entries = Object.entries(devicesByRoom || {}).filter(([, devices]) =>
+    Array.isArray(devices) && devices.length
+  );
+
+  if (!entries.length) {
+    return 'None';
+  }
+
+  return entries.map(([room, devices]) => {
+    const deviceLines = devices.map((device) => {
+      const actions = Array.isArray(device.capabilities) && device.capabilities.length
+        ? device.capabilities.join(', ')
+        : 'None';
+      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Actions: ${actions})`;
+    }).join('\n');
+
+    return `Room: ${room}\n${deviceLines}`;
+  }).join('\n\n');
+}
+
+function formatSceneList(scenes = []) {
+  if (!Array.isArray(scenes) || !scenes.length) {
+    return 'None';
+  }
+
+  return scenes.map((scene) =>
+    `  - ${scene.name} (ID: ${scene.id}, Category: ${scene.category})`
+  ).join('\n');
 }
 
 /**
