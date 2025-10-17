@@ -1,5 +1,6 @@
 const Device = require('../models/Device');
 const smartThingsService = require('./smartThingsService');
+const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 class DeviceService {
   constructor() {
@@ -7,7 +8,7 @@ class DeviceService {
     this.smartThingsPresenceCheckedAt = 0;
     this.smartThingsSyncPromise = null;
     this.lastSmartThingsSyncAt = 0;
-    this.smartThingsSyncCooldownMs = Number(process.env.SMARTTHINGS_DEVICE_REFRESH_MS || 15000);
+    this.smartThingsSyncCooldownMs = Number(process.env.SMARTTHINGS_DEVICE_REFRESH_MS || 5000);
   }
 
   /**
@@ -144,14 +145,22 @@ class DeviceService {
         updateData.lastSeen = new Date();
       }
       
-      const updatedDevice = await Device.findByIdAndUpdate(
-        deviceId,
-        updateData,
-        { new: true, runValidators: true }
-      );
-      
-      console.log('DeviceService: Successfully updated device:', updatedDevice.name);
-      return updatedDevice;
+        const updatedDevice = await Device.findByIdAndUpdate(
+          deviceId,
+          updateData,
+          { new: true, runValidators: true }
+        );
+        
+        if (updatedDevice) {
+          deviceUpdateEmitter.emit('devices:update', [
+            typeof updatedDevice.toObject === 'function'
+              ? updatedDevice.toObject({ depopulate: true })
+              : updatedDevice
+          ]);
+        }
+
+        console.log('DeviceService: Successfully updated device:', updatedDevice.name);
+        return updatedDevice;
     } catch (error) {
       console.error('DeviceService: Error updating device:', error.message);
       console.error(error.stack);
@@ -354,14 +363,22 @@ class DeviceService {
         }
       }
 
-      const updatedDevice = await Device.findByIdAndUpdate(
-        deviceId,
-        updateData,
-        { new: true, runValidators: true }
-      );
+        const updatedDevice = await Device.findByIdAndUpdate(
+          deviceId,
+          updateData,
+          { new: true, runValidators: true }
+        );
 
-      console.log('DeviceService: Successfully controlled device:', updatedDevice.name, 'action:', action);
-      return updatedDevice;
+        if (updatedDevice) {
+          deviceUpdateEmitter.emit('devices:update', [
+            typeof updatedDevice.toObject === 'function'
+              ? updatedDevice.toObject({ depopulate: true })
+              : updatedDevice
+          ]);
+        }
+  
+        console.log('DeviceService: Successfully controlled device:', updatedDevice.name, 'action:', action);
+        return updatedDevice;
     } catch (error) {
       console.error('DeviceService: Error controlling device:', error.message);
       console.error(error.stack);

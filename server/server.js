@@ -27,6 +27,7 @@ const ollamaRoutes = require("./routes/ollamaRoutes");
 const resourceRoutes = require("./routes/resourceRoutes");
 const whisperRoutes = require("./routes/whisperRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
+const deviceWebSocket = require("./websocket/deviceWebSocket");
 const DiscoveryService = require("./services/discoveryService");
 const settingsService = require("./services/settingsService");
 const remoteUpdateService = require("./services/remoteUpdateService");
@@ -231,6 +232,7 @@ async function setupHttpsServer() {
       // Initialize WebSocket server on HTTPS
       const httpsVoiceWsServer = new VoiceWebSocketServer();
       httpsVoiceWsServer.initialize(httpsServer);
+      deviceWebSocket.initialize(httpsServer);
 
       return httpsVoiceWsServer;
     } else {
@@ -246,6 +248,7 @@ async function setupHttpsServer() {
 // Initialize WebSocket server on HTTP
 const voiceWsServer = new VoiceWebSocketServer();
 voiceWsServer.initialize(httpServer);
+deviceWebSocket.initialize(httpServer);
 wakeWordTrainingService.setVoiceWebSocket(voiceWsServer);
 wakeWordTrainingService.resumePendingTraining().catch((error) => {
   console.error('Failed to resume wake word training jobs:', error);
@@ -254,6 +257,7 @@ wakeWordTrainingService.resumePendingTraining().catch((error) => {
 // Store voice WebSocket instance(s) for use in routes
 app.set('voiceWebSocket', voiceWsServer);
 app.set('voiceWebSocketHttp', voiceWsServer);
+app.set('deviceWebSocket', deviceWebSocket);
 
 // Initialize Discovery service
 const discoveryService = new DiscoveryService();
