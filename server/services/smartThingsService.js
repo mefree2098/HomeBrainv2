@@ -422,16 +422,27 @@ class SmartThingsService {
         }
 
         const updates = await this.buildSmartThingsDeviceUpdate(tracked, device);
-          if (updates) {
-            bulkOps.push({
-              updateOne: {
-                filter: { _id: tracked._id },
-                update: { $set: updates }
-              }
+        if (updates) {
+          if ((tracked.name || '').toLowerCase().includes('vault')) {
+            console.debug('SmartThingsService: Vault device payload diff', {
+              name: tracked.name,
+              updates
             });
-            updatedCount += 1;
-            updatedDeviceIds.add(tracked._id.toString());
           }
+          const previousStatus = tracked.status;
+          bulkOps.push({
+            updateOne: {
+              filter: { _id: tracked._id },
+              update: { $set: updates }
+            }
+          });
+          updatedCount += 1;
+          updatedDeviceIds.add(tracked._id.toString());
+
+          if (updates.status !== undefined && updates.status !== previousStatus) {
+            console.log(`SmartThingsService: Detected status change for "${tracked.name}" (${tracked.properties?.smartThingsDeviceId}) -> ${updates.status ? 'ON' : 'OFF'}`);
+          }
+        }
         }
 
         if (bulkOps.length > 0) {
@@ -470,6 +481,14 @@ class SmartThingsService {
     }
 
     const isOnline = (apiDevice.healthState?.state || '').toUpperCase() === 'ONLINE';
+
+    if ((existingDevice.name || '').toLowerCase().includes('vault')) {
+      console.debug('SmartThingsService: Vault status root snapshot', {
+        detectedType,
+        isOnline,
+        statusRoot
+      });
+    }
 
     const statusValue = this.mapSmartThingsStatus(detectedType, capabilities, statusRoot, isOnline);
     if (typeof statusValue === 'boolean' && statusValue !== existingDevice.status) {
