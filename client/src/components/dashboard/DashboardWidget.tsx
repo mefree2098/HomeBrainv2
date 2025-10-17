@@ -8,7 +8,8 @@ import {
   Thermometer, 
   Home,
   Power,
-  PowerOff
+  PowerOff,
+  Heart
 } from "lucide-react"
 import { useState } from "react"
 
@@ -25,9 +26,13 @@ interface Device {
 interface DashboardWidgetProps {
   device: Device
   onControl: (deviceId: string, action: string, value?: number) => void
+  isFavorite: boolean
+  onToggleFavorite: (deviceId: string, nextValue: boolean) => void
+  canToggleFavorite: boolean
+  isFavoritePending?: boolean
 }
 
-export function DashboardWidget({ device, onControl }: DashboardWidgetProps) {
+export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorite, canToggleFavorite, isFavoritePending = false }: DashboardWidgetProps) {
   const [brightness, setBrightness] = useState(device.brightness || 0)
   const [temperature, setTemperature] = useState(device.temperature || 70)
 
@@ -85,9 +90,24 @@ export function DashboardWidget({ device, onControl }: DashboardWidgetProps) {
             <p className="text-xs text-muted-foreground">{device.room}</p>
           </div>
         </div>
-        <Badge variant={device.status ? "default" : "secondary"}>
-          {device.status ? "On" : "Off"}
-        </Badge>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`h-8 w-8 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'} transition-colors`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onToggleFavorite(device._id, !isFavorite)
+            }}
+            disabled={!canToggleFavorite || isFavoritePending}
+            aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
+          >
+            <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
+          </Button>
+          <Badge variant={device.status ? "default" : "secondary"}>
+            {device.status ? "On" : "Off"}
+          </Badge>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <Button

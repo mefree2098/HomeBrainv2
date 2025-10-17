@@ -24,6 +24,7 @@ import { getDevices } from "@/api/devices"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 import { SceneEditDialog } from "@/components/scenes/SceneEditDialog"
+import { useFavorites } from "@/hooks/useFavorites"
 
 export function Scenes() {
   const { toast } = useToast()
@@ -36,6 +37,12 @@ export function Scenes() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [selectedScene, setSelectedScene] = useState<any>(null)
   const { register, handleSubmit, reset, setValue } = useForm()
+  const {
+    favoriteSceneIds,
+    toggleSceneFavorite,
+    hasProfile,
+    pendingSceneIds
+  } = useFavorites()
 
   useEffect(() => {
     const fetchData = async () => {
@@ -383,67 +390,84 @@ export function Scenes() {
 
       {/* Scenes Grid */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {scenes.map((scene) => (
-          <Card key={scene._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 overflow-hidden">
-            <div className={`h-2 bg-gradient-to-r ${getSceneGradient(scene.name)}`} />
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`p-3 rounded-full bg-gradient-to-r ${getSceneGradient(scene.name)} text-white`}>
-                    {getSceneIcon(scene.name)}
+        {scenes.map((scene) => {
+          const isFavorite = favoriteSceneIds.has(scene._id)
+          const isPendingFavorite = pendingSceneIds.has(scene._id)
+
+          return (
+            <Card key={scene._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 overflow-hidden">
+              <div className={`h-2 bg-gradient-to-r ${getSceneGradient(scene.name)}`} />
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-3 rounded-full bg-gradient-to-r ${getSceneGradient(scene.name)} text-white`}>
+                      {getSceneIcon(scene.name)}
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg">{scene.name}</CardTitle>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        {scene.description}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <CardTitle className="text-lg">{scene.name}</CardTitle>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {scene.description}
-                    </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`h-8 w-8 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'}`}
+                      onClick={() => toggleSceneFavorite(scene._id, !isFavorite)}
+                      disabled={!hasProfile || isPendingFavorite}
+                      aria-label={isFavorite ? `Remove ${scene.name} from favorites` : `Add ${scene.name} to favorites`}
+                    >
+                      <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
+                    </Button>
+                    {scene.active && (
+                      <Badge className="bg-green-500 text-white animate-pulse">
+                        Active
+                      </Badge>
+                    )}
                   </div>
                 </div>
-                {scene.active && (
-                  <Badge className="bg-green-500 text-white animate-pulse">
-                    Active
-                  </Badge>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between text-sm text-muted-foreground">
-                <span>{scene.deviceActions?.length || scene.devices?.length || 0} devices</span>
-                <span>Voice enabled</span>
-              </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                  <span>{scene.deviceActions?.length || scene.devices?.length || 0} devices</span>
+                  <span>Voice enabled</span>
+                </div>
 
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => handleSceneActivation(scene._id, scene.name)}
-                  className={`flex-1 bg-gradient-to-r ${getSceneGradient(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
-                  disabled={scene.active}
-                >
-                  <Play className="h-4 w-4 mr-2" />
-                  {scene.active ? "Scene Active" : "Activate Scene"}
-                </Button>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={() => handleEditScene(scene)}
-                  className="hover:bg-blue-50"
-                >
-                  <Edit className="h-4 w-4" />
-                </Button>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={() => handleDeleteScene(scene._id, scene.name)}
-                  className="hover:bg-red-50 hover:text-red-600"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={() => handleSceneActivation(scene._id, scene.name)}
+                    className={`flex-1 bg-gradient-to-r ${getSceneGradient(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
+                    disabled={scene.active}
+                  >
+                    <Play className="h-4 w-4 mr-2" />
+                    {scene.active ? "Scene Active" : "Activate Scene"}
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={() => handleEditScene(scene)}
+                    className="hover:bg-blue-50"
+                  >
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={() => handleDeleteScene(scene._id, scene.name)}
+                    className="hover:bg-red-50 hover:text-red-600"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
 
-              <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
-                <strong>Voice command:</strong> "Hey Anna, activate {scene.name}"
-              </div>
-            </CardContent>
-          </Card>
+                <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
+                  <strong>Voice command:</strong> "Hey Anna, activate {scene.name}"
+                </div>
+              </CardContent>
+            </Card>
+          )
         ))}
       </div>
 

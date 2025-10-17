@@ -313,7 +313,10 @@ class UserProfileService {
           updatedAt: Date.now()
         },
         { new: true }
-      ).populate('favorites.devices');
+      )
+        .populate('favorites.devices')
+        .populate('favorites.scenes')
+        .populate('favorites.automations');
 
       if (!profile) {
         throw new Error(`Profile with ID ${profileId} not found`);
@@ -346,7 +349,10 @@ class UserProfileService {
           updatedAt: Date.now()
         },
         { new: true }
-      ).populate('favorites.devices');
+      )
+        .populate('favorites.devices')
+        .populate('favorites.scenes')
+        .populate('favorites.automations');
 
       if (!profile) {
         throw new Error(`Profile with ID ${profileId} not found`);
@@ -357,6 +363,76 @@ class UserProfileService {
 
     } catch (error) {
       console.error(`Error removing favorite device ${deviceId} from profile ${profileId}:`, error.message);
+      console.error('Full error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Add scene to profile favorites
+   * @param {string} profileId - Profile ID
+   * @param {string} sceneId - Scene ID
+   * @returns {Promise<Object>} Updated profile
+   */
+  async addFavoriteScene(profileId, sceneId) {
+    try {
+      console.log(`Adding scene ${sceneId} to favorites for profile ${profileId}`);
+
+      const profile = await UserProfile.findByIdAndUpdate(
+        profileId,
+        {
+          $addToSet: { 'favorites.scenes': sceneId },
+          updatedAt: Date.now()
+        },
+        { new: true }
+      )
+        .populate('favorites.devices')
+        .populate('favorites.scenes')
+        .populate('favorites.automations');
+
+      if (!profile) {
+        throw new Error(`Profile with ID ${profileId} not found`);
+      }
+
+      console.log(`Added scene to favorites for profile: ${profile.name}`);
+      return profile;
+    } catch (error) {
+      console.error(`Error adding favorite scene ${sceneId} to profile ${profileId}:`, error.message);
+      console.error('Full error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Remove scene from profile favorites
+   * @param {string} profileId - Profile ID
+   * @param {string} sceneId - Scene ID
+   * @returns {Promise<Object>} Updated profile
+   */
+  async removeFavoriteScene(profileId, sceneId) {
+    try {
+      console.log(`Removing scene ${sceneId} from favorites for profile ${profileId}`);
+
+      const profile = await UserProfile.findByIdAndUpdate(
+        profileId,
+        {
+          $pull: { 'favorites.scenes': sceneId },
+          updatedAt: Date.now()
+        },
+        { new: true }
+      )
+        .populate('favorites.devices')
+        .populate('favorites.scenes')
+        .populate('favorites.automations');
+
+      if (!profile) {
+        throw new Error(`Profile with ID ${profileId} not found`);
+      }
+
+      console.log(`Removed scene from favorites for profile: ${profile.name}`);
+      return profile;
+    } catch (error) {
+      console.error(`Error removing favorite scene ${sceneId} from profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }

@@ -2,6 +2,9 @@ const SecurityAlarm = require('../models/SecurityAlarm');
 const smartThingsService = require('./smartThingsService');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 
+const STATUS_STALE_THRESHOLD_MS = Number(process.env.SECURITY_ALARM_STATUS_STALE_MS || 60000);
+const ONLINE_GRACE_PERIOD_MS = Number(process.env.SECURITY_ALARM_ONLINE_GRACE_MS || 120000);
+
 class SecurityAlarmService {
   constructor() {
     this.smartthingsBaseUrl = 'https://api.smartthings.com/v1';
@@ -125,9 +128,33 @@ class SecurityAlarmService {
   async getAlarmStatus() {
     try {
       console.log('SecurityAlarmService: Getting alarm status');
-      
-      const alarm = await SecurityAlarm.getMainAlarm();
-      
+
+      let alarm = await SecurityAlarm.getMainAlarm();
+      const now = Date.now();
+      const lastSyncTimestamp = alarm.lastSyncWithSmartThings ? new Date(alarm.lastSyncWithSmartThings).getTime() : 0;
+      const timeSinceLastSync = lastSyncTimestamp ? now - lastSyncTimestamp : Number.POSITIVE_INFINITY;
+
+      const isSmartThingsConfigured = await this.isSmartThingsConfiguredForSthm();
+      const shouldAttemptSync = isSmartThingsConfigured && (timeSinceLastSync > STATUS_STALE_THRESHOLD_MS || !alarm.isOnline);
+
+      if (shouldAttemptSync) {
+        try {
+          alarm = await this.syncWithSmartThings();
+        } catch (syncError) {
+          console.warn('SecurityAlarmService: SmartThings sync during status lookup failed:', syncError.message);
+          alarm = await SecurityAlarm.getMainAlarm();
+        }
+      }
+
+      const updatedLastSyncTimestamp = alarm.lastSyncWithSmartThings ? new Date(alarm.lastSyncWithSmartThings).getTime() : 0;
+      const updatedTimeSinceSync = updatedLastSyncTimestamp ? now - updatedLastSyncTimestamp : Number.POSITIVE_INFINITY;
+      const computedIsOnline = Boolean(alarm.isOnline) || updatedTimeSinceSync <= ONLINE_GRACE_PERIOD_MS;
+
+      if (computedIsOnline !== alarm.isOnline) {
+        alarm.isOnline = computedIsOnline;
+        await alarm.save();
+      }
+
       const status = {
         alarmState: alarm.alarmState,
         isArmed: ['armedStay', 'armedAway'].includes(alarm.alarmState),
@@ -140,7 +167,8 @@ class SecurityAlarmService {
         zoneCount: alarm.zones.length,
         activeZones: alarm.zones.filter(zone => zone.enabled && !zone.bypassed).length,
         bypassedZones: alarm.zones.filter(zone => zone.bypassed).length,
-        isOnline: alarm.isOnline,
+        isOnline: computedIsOnline,
+        lastSyncWithSmartThings: alarm.lastSyncWithSmartThings,
         batteryLevel: alarm.batteryLevel,
         signalStrength: alarm.signalStrength
       };
