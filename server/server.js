@@ -261,6 +261,7 @@ app.set('voiceWebSocketHttp', voiceWsServer);
 app.set('deviceWebSocket', deviceWebSocket);
 
 app.get('/api/devices/stream', (req, res) => {
+  console.log('Device SSE: client connected');
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -300,6 +301,7 @@ app.get('/api/devices/stream', (req, res) => {
       return;
     }
     closed = true;
+    console.log('Device SSE: client disconnected');
     clearInterval(heartbeat);
     deviceUpdateEmitter.removeListener('devices:update', sendUpdate);
     try {

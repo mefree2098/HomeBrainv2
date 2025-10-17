@@ -139,7 +139,22 @@ export function Devices() {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${protocol}//${window.location.hostname || 'localhost'}:3000/ws/devices`
+    const hostname = window.location.hostname || 'localhost'
+
+    const explicitPort = import.meta.env.VITE_DEVICE_WS_PORT
+    if (explicitPort) {
+      return `${protocol}//${hostname}:${explicitPort}/ws/devices`
+    }
+
+    const currentPort = window.location.port
+    if (currentPort && currentPort !== '80' && currentPort !== '443') {
+      if (currentPort === '5173') {
+        return `${protocol}//${hostname}:3000/ws/devices`
+      }
+      return `${protocol}//${hostname}:${currentPort}/ws/devices`
+    }
+
+    return `${protocol}//${hostname}/ws/devices`
   }, [])
 
   useEffect(() => {
