@@ -132,17 +132,41 @@ export function Devices() {
     fetchDevices()
   }, [toast])
 
+  const resolveDeviceWebSocketUrl = useCallback(() => {
+    const override = import.meta.env.VITE_DEVICE_WS_URL
+    if (override && typeof override === 'string') {
+      return override
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const hostname = window.location.hostname || 'localhost'
+    const port = window.location.port
+
+    if (import.meta.env.DEV) {
+      if (port && port !== '3000' && port !== '443' && port !== '80') {
+        return `${protocol}//${hostname}:3000/ws/devices`
+      }
+
+      const devOverride = import.meta.env.VITE_DEVICE_WS_HOST?.toString().trim()
+      if (devOverride) {
+        return `${protocol}//${devOverride.replace(/\/+$/, '')}/ws/devices`
+      }
+    }
+
+    return `${protocol}//${window.location.host}/ws/devices`
+  }, [])
+
   useEffect(() => {
     let socket: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined
     let manuallyClosed = false
 
     const connect = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      socket = new WebSocket(`${protocol}//${window.location.host}/ws/devices`)
+      const socketUrl = resolveDeviceWebSocketUrl()
+      socket = new WebSocket(socketUrl)
 
       socket.onopen = () => {
-        console.log('Device updates websocket connected')
+        console.log('Device updates websocket connected', socketUrl)
       }
 
       socket.onerror = (event) => {
@@ -161,6 +185,7 @@ export function Devices() {
       }
 
       socket.onclose = () => {
+        console.log('Device updates websocket closed')
         if (!manuallyClosed) {
           reconnectTimer = setTimeout(connect, 5000)
         }
@@ -178,7 +203,7 @@ export function Devices() {
         socket.close()
       }
     }
-  }, [applyIncomingDevices])
+  }, [applyIncomingDevices, resolveDeviceWebSocketUrl])
 
   const handleDeviceControl = async (deviceId: string, action: string) => {
     try {
