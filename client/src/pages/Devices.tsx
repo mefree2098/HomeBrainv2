@@ -135,26 +135,35 @@ export function Devices() {
   const resolveDeviceWebSocketUrl = useCallback(() => {
     const override = import.meta.env.VITE_DEVICE_WS_URL
     if (override && typeof override === 'string') {
+      const token = localStorage.getItem('accessToken')
+      if (token) {
+        const separator = override.includes('?') ? '&' : '?'
+        return `${override}${separator}token=${encodeURIComponent(token)}`
+      }
       return override
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const hostname = window.location.hostname || 'localhost'
+    const token = localStorage.getItem('accessToken')
 
     const explicitPort = import.meta.env.VITE_DEVICE_WS_PORT
     if (explicitPort) {
-      return `${protocol}//${hostname}:${explicitPort}/ws/devices`
+      const base = `${protocol}//${hostname}:${explicitPort}/ws/devices`
+      return token ? `${base}?token=${encodeURIComponent(token)}` : base
     }
 
-    const currentPort = window.location.port
-    if (currentPort && currentPort !== '80' && currentPort !== '443') {
-      if (currentPort === '5173') {
-        return `${protocol}//${hostname}:3000/ws/devices`
+    let port = window.location.port
+    if (port && port !== '80' && port !== '443') {
+      if (port === '5173') {
+        port = '3000'
       }
-      return `${protocol}//${hostname}:${currentPort}/ws/devices`
+      const base = `${protocol}//${hostname}:${port}/ws/devices`
+      return token ? `${base}?token=${encodeURIComponent(token)}` : base
     }
 
-    return `${protocol}//${hostname}/ws/devices`
+    const base = `${protocol}//${hostname}/ws/devices`
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base
   }, [])
 
   useEffect(() => {
@@ -183,7 +192,11 @@ export function Devices() {
       }
 
       console.log('Device updates: falling back to SSE stream')
-      const source = new EventSource('/api/devices/stream')
+      const token = localStorage.getItem('accessToken')
+      const streamUrl = token
+        ? `/api/devices/stream?token=${encodeURIComponent(token)}`
+        : '/api/devices/stream'
+      const source = new EventSource(streamUrl)
       eventSource = source
 
       source.onopen = () => {

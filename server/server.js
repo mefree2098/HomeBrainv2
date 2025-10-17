@@ -29,6 +29,7 @@ const whisperRoutes = require("./routes/whisperRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
+const { requireUser } = require("./routes/middlewares/auth");
 const DiscoveryService = require("./services/discoveryService");
 const settingsService = require("./services/settingsService");
 const remoteUpdateService = require("./services/remoteUpdateService");
@@ -260,7 +261,7 @@ app.set('voiceWebSocket', voiceWsServer);
 app.set('voiceWebSocketHttp', voiceWsServer);
 app.set('deviceWebSocket', deviceWebSocket);
 
-app.get('/api/devices/stream', (req, res) => {
+app.get('/api/devices/stream', requireUser(), (req, res) => {
   console.log('Device SSE: client connected');
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
