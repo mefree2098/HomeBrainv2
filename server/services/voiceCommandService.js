@@ -466,9 +466,18 @@ Return ONLY the JSON object with no commentary.`;
         throw new Error('Automation description missing');
       }
       const creation = await automationService.createAutomationFromText(description, room);
-      result.success = true;
-      result.message = creation?.message || 'Automation created';
-      result.automationId = creation?.automation?._id?.toString();
+      if (creation?.handledDirectCommand) {
+        result.type = 'device_control';
+        result.success = true;
+        result.message = creation?.message || 'Device command executed';
+        result.deviceId = creation?.device?.id || null;
+        result.deviceName = creation?.device?.name || null;
+        result.deviceRoom = creation?.device?.room || null;
+      } else {
+        result.success = true;
+        result.message = creation?.message || 'Automation created';
+        result.automationId = creation?.automation?._id?.toString();
+      }
       return result;
     } catch (error) {
       result.success = false;
@@ -506,6 +515,13 @@ Return ONLY the JSON object with no commentary.`;
       } else if (action.type === 'automation_create') {
         const automationResult = await this.executeAutomationAction(action, room);
         executionResults.push(automationResult);
+        if (automationResult.type === 'device_control' && automationResult.deviceId) {
+          entities.devices.push({
+            name: automationResult.deviceName || '',
+            room: automationResult.deviceRoom || null,
+            deviceId: automationResult.deviceId
+          });
+        }
       } else if (action.type === 'query') {
         executionResults.push({
           type: 'query',

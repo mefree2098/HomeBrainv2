@@ -183,7 +183,12 @@ router.post('/create-from-text', async (req, res) => {
     }
     
     const result = await automationService.createAutomationFromText(text.trim());
-    
+
+    if (result?.handledDirectCommand) {
+      console.log('AutomationRoutes: Request was handled as a direct device command; no automation created.');
+      return res.status(200).json(result);
+    }
+
     console.log(`AutomationRoutes: Automation created from text successfully with ID: ${result.automation._id}`);
     res.status(201).json(result);
   } catch (error) {
