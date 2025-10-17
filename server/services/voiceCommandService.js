@@ -159,7 +159,7 @@ DECISION RULES
 1. ALWAYS return at least one action when the user wants something controlled. Map the request to the closest matching device using name + room context. Prefer devices in ${primaryRoom} unless the user clearly specifies another room.
 2. ONLY use deviceId / sceneId values from the lists above. Do not invent IDs. If two devices match equally, pick the most specific (exact name match beats fuzzy match).
 3. For brightness actions return percentages (0-100). For temperature, use whole-number Fahrenheit unless the user specifies another scale.
-4. When activating scenes, use "scene_activate" with the exact scene ID. When creating automations, use "automation_create" and include a short summary in the action.
+4. Only use intent "automation_create" when the user clearly asks to create/schedule an automation or routine. Immediate commands like "turn on the vault light" must stay "device_control". When you do create automations, include a concise summary in the action.
 5. If the request is a general question or not about controlling devices, set intent to "query", leave "actions" empty, and provide the direct answer in "response". Only use "followUpQuestion" when clarification is required.
 6. Never return empty "actions" for "device_control" intents.
 7. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.") or informative for queries.
@@ -283,6 +283,49 @@ Return ONLY the JSON object with no commentary.`;
       followUpQuestion: null,
       usedFallback: true
     };
+  }
+
+  isLikelyAutomationRequest(commandText, interpretation) {
+    const text = (commandText || '').toLowerCase();
+    if (!text.trim()) {
+      return false;
+    }
+
+    const automationKeywords = [
+      'automation',
+      'routine',
+      'schedule',
+      'scheduled',
+      'every ',
+      'each ',
+      'when ',
+      'whenever ',
+      'if ',
+      'trigger',
+      'create',
+      'set up',
+      'set a',
+      'start a'
+    ];
+
+    if (automationKeywords.some((keyword) => text.includes(keyword))) {
+      return true;
+    }
+
+    // Detect explicit time references that usually imply scheduling
+    if (/\b(at|around)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/.test(text)) {
+      return true;
+    }
+
+    if (/\b\d{1,2}\s*(am|pm)\b/.test(text)) {
+      return true;
+    }
+
+    if (Array.isArray(interpretation?.actions)) {
+      return interpretation.actions.some((action) => action?.type === 'automation_create');
+    }
+
+    return false;
   }
 
   normalizeActionValue(action, device) {
@@ -594,6 +637,20 @@ Return ONLY the JSON object with no commentary.`;
 
     let interpretation = interpretationResult.interpretation;
     const llm = interpretationResult.llm;
+
+    if (interpretation && interpretation.intent === 'automation_create') {
+      const likelyAutomation = this.isLikelyAutomationRequest(commandText, interpretation);
+      if (!likelyAutomation) {
+        console.log('VoiceCommandService: Interpretation looked like automation but command seems immediate; using fallback device control.');
+        const directFallback = this.fallbackInterpretation(commandText, context, room);
+        if (directFallback) {
+          interpretation = {
+            ...directFallback,
+            usedFallback: true
+          };
+        }
+      }
+    }
 
     const hasActions = Array.isArray(interpretation?.actions) && interpretation.actions.length > 0;
 
