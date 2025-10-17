@@ -140,10 +140,15 @@ export function Devices() {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const hostname = window.location.hostname || 'localhost'
-    const port = window.location.port
 
     if (import.meta.env.DEV) {
-      return `${protocol}//${window.location.host}/ws/devices`
+      const explicitOrigin = import.meta.env.VITE_DEVICE_WS_ORIGIN
+      if (explicitOrigin) {
+        return `${explicitOrigin.replace(/\/+$/, '')}/ws/devices`
+      }
+
+      const devPort = import.meta.env.VITE_DEVICE_WS_PORT || '3000'
+      return `${protocol}//${hostname}:${devPort}/ws/devices`
     }
 
     return `${protocol}//${window.location.host}/ws/devices`
