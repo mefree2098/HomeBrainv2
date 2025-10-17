@@ -262,6 +262,10 @@ class SecurityAlarmService {
             if (mappedState && mappedState !== alarm.alarmState) {
               alarm.alarmState = mappedState;
             }
+            if (securityState.deviceId && alarm.smartthingsDeviceId !== securityState.deviceId) {
+              console.log(`SecurityAlarmService: Tracking SmartThings security device ${securityState.deviceId}`);
+              alarm.smartthingsDeviceId = securityState.deviceId;
+            }
             alarm.lastSyncWithSmartThings = new Date();
             alarm.isOnline = true;
             await alarm.save();
