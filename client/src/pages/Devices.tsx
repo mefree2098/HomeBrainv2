@@ -143,14 +143,7 @@ export function Devices() {
     const port = window.location.port
 
     if (import.meta.env.DEV) {
-      if (port && port !== '3000' && port !== '443' && port !== '80') {
-        return `${protocol}//${hostname}:3000/ws/devices`
-      }
-
-      const devOverride = import.meta.env.VITE_DEVICE_WS_HOST?.toString().trim()
-      if (devOverride) {
-        return `${protocol}//${devOverride.replace(/\/+$/, '')}/ws/devices`
-      }
+      return `${protocol}//${window.location.host}/ws/devices`
     }
 
     return `${protocol}//${window.location.host}/ws/devices`
