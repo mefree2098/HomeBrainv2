@@ -442,8 +442,9 @@ class SmartThingsService {
             const ids = Array.from(updatedDeviceIds);
             if (ids.length > 0) {
               const refreshedDevices = await Device.find({ _id: { $in: ids } }).lean();
-              if (refreshedDevices.length > 0) {
-                deviceUpdateEmitter.emit('devices:update', refreshedDevices);
+              const payload = deviceUpdateEmitter.normalizeDevices(refreshedDevices);
+              if (payload.length > 0) {
+                deviceUpdateEmitter.emit('devices:update', payload);
               }
             }
           } catch (emitterError) {

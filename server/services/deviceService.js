@@ -152,11 +152,10 @@ class DeviceService {
         );
         
         if (updatedDevice) {
-          deviceUpdateEmitter.emit('devices:update', [
-            typeof updatedDevice.toObject === 'function'
-              ? updatedDevice.toObject({ depopulate: true })
-              : updatedDevice
-          ]);
+          const payload = deviceUpdateEmitter.normalizeDevices([updatedDevice]);
+          if (payload.length > 0) {
+            deviceUpdateEmitter.emit('devices:update', payload);
+          }
         }
 
         console.log('DeviceService: Successfully updated device:', updatedDevice.name);
@@ -370,11 +369,10 @@ class DeviceService {
         );
 
         if (updatedDevice) {
-          deviceUpdateEmitter.emit('devices:update', [
-            typeof updatedDevice.toObject === 'function'
-              ? updatedDevice.toObject({ depopulate: true })
-              : updatedDevice
-          ]);
+          const payload = deviceUpdateEmitter.normalizeDevices([updatedDevice]);
+          if (payload.length > 0) {
+            deviceUpdateEmitter.emit('devices:update', payload);
+          }
         }
   
         console.log('DeviceService: Successfully controlled device:', updatedDevice.name, 'action:', action);
