@@ -138,20 +138,20 @@ USER COMMAND
 
 OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
 {
-  "intent": "device_control|scene_activate|automation_create|query|system_control|unknown",
+  "intent": "<intent_type>",  // choose one: device_control, scene_activate, automation_create, query, system_control, unknown
   "confidence": 0.0-1.0,
   "normalizedCommand": "Short paraphrase of the user's request",
   "actions": [
     {
-      "type": "device_control|scene_activate|automation_create|query",
+      "type": "<action_type>",  // choose one: device_control, scene_activate, automation_create, query
       "deviceId": "DEVICE_ID_FROM_LIST",
-      "sceneId": "SCENE_ID_FROM LIST",
-      "action": "turn_on|turn_off|toggle|set_brightness|set_color|set_temperature|lock|unlock|open|close",
-      "value": "optional numeric/string value",
+      "sceneId": "SCENE_ID_FROM_LIST",
+      "action": "<device_action>",  // e.g., turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
+      "value": "optional numeric or string value",
       "room": "optional room for extra clarity"
     }
   ],
-  "response": "Natural-language confirmation the hub should speak back",
+  "response": "Natural-language confirmation or answer the hub should speak back",
   "followUpQuestion": "Follow-up question string OR null"
 }
 
@@ -160,9 +160,9 @@ DECISION RULES
 2. ONLY use deviceId / sceneId values from the lists above. Do not invent IDs. If two devices match equally, pick the most specific (exact name match beats fuzzy match).
 3. For brightness actions return percentages (0-100). For temperature, use whole-number Fahrenheit unless the user specifies another scale.
 4. When activating scenes, use "scene_activate" with the exact scene ID. When creating automations, use "automation_create" and include a short summary in the action.
-5. If you truly cannot determine a device or scene, set intent to "query" or "unknown", leave "actions" empty, and provide a helpful "followUpQuestion". This should be rare.
+5. If the request is a general question or not about controlling devices, set intent to "query", leave "actions" empty, and provide the direct answer in "response". Only use "followUpQuestion" when clarification is required.
 6. Never return empty "actions" for "device_control" intents.
-7. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.").
+7. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.") or informative for queries.
 
 Return ONLY the JSON object with no commentary.`; 
   }
@@ -514,10 +514,30 @@ Return ONLY the JSON object with no commentary.`;
 
     const startedAt = Date.now();
     try {
-      const { response, provider, model } = await sendLLMRequestWithFallbackDetailed(prompt);
+      const firstAttempt = await sendLLMRequestWithFallbackDetailed(prompt);
+      let { response, provider, model } = firstAttempt;
+      let parsed = this.parseLlmResponse(response);
+
+      if (!parsed) {
+        console.warn(`VoiceCommandService: First LLM (provider=${provider || 'unknown'}) failed to return valid JSON.`);
+        const providerKey = (provider || '').toLowerCase();
+        if (providerKey === 'local') {
+          const cloudProviders = ['openai', 'anthropic'];
+          try {
+            const cloudAttempt = await sendLLMRequestWithFallbackDetailed(prompt, cloudProviders);
+            response = cloudAttempt.response;
+            provider = cloudAttempt.provider;
+            model = cloudAttempt.model;
+            parsed = this.parseLlmResponse(response);
+            console.log(`VoiceCommandService: Second LLM attempt with ${provider || 'unknown'} ${parsed ? 'succeeded' : 'still failed'}.`);
+          } catch (fallbackError) {
+            console.warn('VoiceCommandService: Cloud fallback attempt failed:', fallbackError.message);
+          }
+        }
+      }
+
       const processingTimeMs = Date.now() - startedAt;
 
-      const parsed = this.parseLlmResponse(response);
       if (!parsed) {
         return {
           interpretation: null,
