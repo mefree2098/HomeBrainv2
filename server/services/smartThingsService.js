@@ -270,16 +270,27 @@ class SmartThingsService {
 
       return response.data;
     } catch (error) {
-      console.error(`SmartThingsService: API request failed for ${endpoint}:`, error.response?.data || error.message);
+      const status = error.response?.status;
+      const isExpectedSecurityFallback = (
+        endpoint.includes('/security/') &&
+        [404, 405, 422].includes(status)
+      );
+
+      const logPayload = error.response?.data || error.message;
+      if (isExpectedSecurityFallback) {
+        console.debug(`SmartThingsService: Expected fallback for ${endpoint} (${status}):`, logPayload);
+      } else {
+        console.error(`SmartThingsService: API request failed for ${endpoint}:`, logPayload);
+      }
 
       // If unauthorized, clear tokens and require re-authorization
-      if (error.response?.status === 401) {
+      if (status === 401) {
         const integration = await SmartThingsIntegration.getIntegration();
         await integration.clearTokens('Access token invalid');
       }
 
       const apiError = new Error(`SmartThings API request failed: ${error.response?.data?.message || error.message}`);
-      apiError.status = error.response?.status;
+      apiError.status = status;
       apiError.data = error.response?.data;
       throw apiError;
     }
