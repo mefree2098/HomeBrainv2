@@ -1,5 +1,7 @@
 const WebSocket = require('ws');
+const { URL } = require('url');
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
+const { verifyAccessToken } = require('../routes/middlewares/auth');
 
 class DeviceWebSocket {
   constructor() {
@@ -51,7 +53,18 @@ class DeviceWebSocket {
 
     const heartbeatInterval = setInterval(heartbeat, 30000);
 
-    wss.on('connection', (socket) => {
+    wss.on('connection', async (socket, request) => {
+      try {
+        const url = new URL(request.url, 'http://localhost');
+        const token = url.searchParams.get('token');
+        const user = await verifyAccessToken(token);
+        socket.user = user;
+      } catch (error) {
+        console.warn('DeviceWebSocket: authentication failed:', error.message);
+        socket.close(4401, 'Unauthorized');
+        return;
+      }
+
       console.log('DeviceWebSocket: client connected');
       socket.isAlive = true;
 
