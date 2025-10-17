@@ -134,18 +134,59 @@ export function Devices() {
 
   const resolveDeviceWebSocketUrl = useCallback(() => {
     const override = import.meta.env.VITE_DEVICE_WS_URL
-    if (override && typeof override === 'string') {
-      const token = localStorage.getItem('accessToken')
-      if (token) {
-        const separator = override.includes('?') ? '&' : '?'
-        return `${override}${separator}token=${encodeURIComponent(token)}`
-      }
-      return override
-    }
-
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const hostname = window.location.hostname || 'localhost'
     const token = localStorage.getItem('accessToken')
+
+    const sanitizeHostname = (value: string) => {
+      if (!value) {
+        return hostname
+      }
+      const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]'])
+      if (loopbackHosts.has(value) && hostname && hostname !== 'localhost') {
+        return hostname
+      }
+      return value
+    }
+
+    const inferredPort = (() => {
+      const port = window.location.port
+      if (!port || port === '80' || port === '443') {
+        return undefined
+      }
+      if (port === '5173') {
+        return '3000'
+      }
+      return port
+    })()
+
+    if (override && typeof override === 'string') {
+      try {
+        const parsedUrl = /^wss?:\/\//i.test(override)
+          ? new URL(override)
+          : new URL(override, `${protocol}//${hostname}`)
+
+        parsedUrl.protocol = protocol
+        parsedUrl.hostname = sanitizeHostname(parsedUrl.hostname)
+
+        const explicitPort = import.meta.env.VITE_DEVICE_WS_PORT
+        if (explicitPort) {
+          parsedUrl.port = explicitPort
+        } else if (!parsedUrl.port && inferredPort) {
+          parsedUrl.port = inferredPort
+        }
+
+        if (token) {
+          parsedUrl.searchParams.set('token', token)
+        } else {
+          parsedUrl.searchParams.delete('token')
+        }
+
+        return parsedUrl.toString()
+      } catch (error) {
+        console.warn('Failed to parse VITE_DEVICE_WS_URL, falling back to inferred URL', error)
+      }
+    }
 
     const explicitPort = import.meta.env.VITE_DEVICE_WS_PORT
     if (explicitPort) {
@@ -153,17 +194,76 @@ export function Devices() {
       return token ? `${base}?token=${encodeURIComponent(token)}` : base
     }
 
-    let port = window.location.port
-    if (port && port !== '80' && port !== '443') {
-      if (port === '5173') {
-        port = '3000'
-      }
-      const base = `${protocol}//${hostname}:${port}/ws/devices`
+    if (inferredPort) {
+      const base = `${protocol}//${hostname}:${inferredPort}/ws/devices`
       return token ? `${base}?token=${encodeURIComponent(token)}` : base
     }
 
     const base = `${protocol}//${hostname}/ws/devices`
     return token ? `${base}?token=${encodeURIComponent(token)}` : base
+  }, [])
+
+  const resolveDeviceStreamUrl = useCallback(() => {
+    const override = import.meta.env.VITE_DEVICE_WS_URL
+    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:'
+    const hostname = window.location.hostname || 'localhost'
+    const token = localStorage.getItem('accessToken')
+
+    const sanitizeHostname = (value: string) => {
+      if (!value) {
+        return hostname
+      }
+      const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]'])
+      if (loopbackHosts.has(value) && hostname && hostname !== 'localhost') {
+        return hostname
+      }
+      return value
+    }
+
+    const inferredPort = (() => {
+      const port = window.location.port
+      if (!port || port === '80' || port === '443') {
+        return undefined
+      }
+      if (port === '5173') {
+        return '3000'
+      }
+      return port
+    })()
+
+    if (override && typeof override === 'string') {
+      try {
+        const parsedUrl = /^wss?:\/\//i.test(override)
+          ? new URL(override)
+          : new URL(override, `${protocol}//${hostname}`)
+
+        parsedUrl.protocol = protocol
+        parsedUrl.hostname = sanitizeHostname(parsedUrl.hostname)
+        parsedUrl.pathname = '/api/devices/stream'
+        parsedUrl.search = ''
+
+        const explicitPort = import.meta.env.VITE_DEVICE_WS_PORT
+        if (explicitPort) {
+          parsedUrl.port = explicitPort
+        } else if (!parsedUrl.port && inferredPort) {
+          parsedUrl.port = inferredPort
+        }
+
+        if (token) {
+          parsedUrl.searchParams.set('token', token)
+        }
+
+        return parsedUrl.toString()
+      } catch (error) {
+        console.warn('Failed to derive devices stream URL from VITE_DEVICE_WS_URL override', error)
+      }
+    }
+
+    if (token) {
+      return `/api/devices/stream?token=${encodeURIComponent(token)}`
+    }
+
+    return '/api/devices/stream'
   }, [])
 
   useEffect(() => {
@@ -192,10 +292,7 @@ export function Devices() {
       }
 
       console.log('Device updates: falling back to SSE stream')
-      const token = localStorage.getItem('accessToken')
-      const streamUrl = token
-        ? `/api/devices/stream?token=${encodeURIComponent(token)}`
-        : '/api/devices/stream'
+      const streamUrl = resolveDeviceStreamUrl()
       const source = new EventSource(streamUrl)
       eventSource = source
 
@@ -315,7 +412,7 @@ export function Devices() {
     connectWebSocket()
 
     return cleanup
-  }, [applyIncomingDevices, resolveDeviceWebSocketUrl])
+  }, [applyIncomingDevices, resolveDeviceStreamUrl, resolveDeviceWebSocketUrl])
 
   const handleDeviceControl = async (deviceId: string, action: string) => {
     try {
