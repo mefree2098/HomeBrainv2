@@ -212,12 +212,13 @@ export const executeSmartThingsScene = async (sceneId: string) => {
 
 // Description: Configure STHM virtual switches
 // Endpoint: POST /api/smartthings/sthm/configure
-// Request: { armAwayDeviceId?: string, armStayDeviceId?: string, disarmDeviceId?: string }
+// Request: { armAwayDeviceId?: string, armStayDeviceId?: string, disarmDeviceId?: string, locationId?: string }
 // Response: { success: boolean, message: string }
 export const configureSmartThingsSthm = async (config: {
   armAwayDeviceId?: string;
   armStayDeviceId?: string;
   disarmDeviceId?: string;
+  locationId?: string;
 }) => {
   try {
     const response = await api.post('/api/smartthings/sthm/configure', config);
