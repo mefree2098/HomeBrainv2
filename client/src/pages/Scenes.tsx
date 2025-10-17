@@ -467,8 +467,8 @@ export function Scenes() {
                 </div>
               </CardContent>
             </Card>
-          )
-        ))}
+          );
+        })}
       </div>
 
       {/* Edit Scene Dialog */}
