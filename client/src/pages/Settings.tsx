@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, ChangeEvent } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -54,7 +54,9 @@ import {
   configureSmartThingsOAuth,
   getSmartThingsAuthUrl,
   testSmartThingsConnection,
-  disconnectSmartThings
+  disconnectSmartThings,
+  configureSmartThingsSthm,
+  getSmartThingsDevices
 } from "@/api/smartThings"
 import {
   clearAllFakeData,
@@ -83,6 +85,20 @@ export function Settings() {
   const [testingSmartThings, setTestingSmartThings] = useState(false)
   const [configuringSmartThings, setConfiguringSmartThings] = useState(false)
   const [disconnectingSmartThings, setDisconnectingSmartThings] = useState(false)
+  const [smartThingsDevices, setSmartThingsDevices] = useState<any[]>([])
+  const [loadingSmartThingsDevices, setLoadingSmartThingsDevices] = useState(false)
+  const [savingSthmConfig, setSavingSthmConfig] = useState(false)
+  const [sthmConfig, setSthmConfig] = useState<{
+    armAwayDeviceId: string;
+    armStayDeviceId: string;
+    disarmDeviceId: string;
+    locationId: string;
+  }>({
+    armAwayDeviceId: "",
+    armStayDeviceId: "",
+    disarmDeviceId: "",
+    locationId: ""
+  })
 
   // Maintenance operation states
   const [clearingFakeData, setClearingFakeData] = useState(false)
@@ -128,6 +144,82 @@ export function Settings() {
     }
   })
 
+  const getDeviceDisplayName = (device: any) => {
+    if (!device) return "Unknown device"
+    return device.label || device.name || device.deviceId || "Unnamed device"
+  }
+
+  const hasSwitchCapability = (device: any) => {
+    if (!device) return false
+
+    const checkCapabilities = (caps: any[]) =>
+      Array.isArray(caps) &&
+      caps.some((cap: any) => {
+        if (!cap) return false
+        if (typeof cap === "string") return cap === "switch"
+        if (typeof cap === "object" && typeof cap.id === "string") return cap.id === "switch"
+        return false
+      })
+
+    if (checkCapabilities(device.capabilities)) {
+      return true
+    }
+
+    if (Array.isArray(device.components)) {
+      return device.components.some((component: any) => {
+        if (!component) return false
+        return checkCapabilities(component.capabilities)
+      })
+    }
+
+    return false
+  }
+
+  const fetchSmartThingsDevices = async (options: { showToast?: boolean; fallbackDevices?: any[]; integration?: any } = {}) => {
+    const { showToast = false, fallbackDevices, integration } = options
+    const activeIntegration = integration ?? smartthingsStatus
+
+    if (!activeIntegration?.isConnected) {
+      if (Array.isArray(fallbackDevices)) {
+        setSmartThingsDevices(fallbackDevices)
+      } else {
+        setSmartThingsDevices([])
+      }
+      return
+    }
+
+    setLoadingSmartThingsDevices(true)
+    try {
+      const response = await getSmartThingsDevices()
+      if (response.success && Array.isArray(response.devices)) {
+        const devices = response.devices.slice()
+        setSmartThingsDevices(devices)
+        if (showToast) {
+          toast({
+            title: "SmartThings devices refreshed",
+            description: `Loaded ${devices.length} devices from SmartThings.`
+          })
+        }
+      } else {
+        throw new Error("Unexpected response from SmartThings device list")
+      }
+    } catch (error: any) {
+      console.error("Failed to load SmartThings devices:", error)
+      if (Array.isArray(fallbackDevices) && fallbackDevices.length > 0) {
+        setSmartThingsDevices(fallbackDevices)
+      }
+      if (showToast) {
+        toast({
+          title: "Failed to refresh SmartThings devices",
+          description: error?.response?.data?.message || error?.message || "Unable to load devices from SmartThings",
+          variant: "destructive"
+        })
+      }
+    } finally {
+      setLoadingSmartThingsDevices(false)
+    }
+  }
+
   const localWhisperModels = ["tiny", "base", "small", "small.en", "medium"]
   const openaiSttModels = ["gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe-latest"]
 
@@ -138,6 +230,20 @@ export function Settings() {
       ? (sttModelRaw && localWhisperModels.includes(sttModelRaw) ? sttModelRaw : "small")
       : (sttModelRaw && openaiSttModels.includes(sttModelRaw) ? sttModelRaw : "gpt-4o-mini-transcribe")
   const sttLanguageValue = watch("sttLanguage") || "en"
+  const availableSmartThingsDevices =
+    smartThingsDevices.length > 0
+      ? smartThingsDevices
+      : Array.isArray((smartthingsStatus as any)?.connectedDevices)
+        ? (smartthingsStatus as any).connectedDevices
+        : []
+  const switchDevices = availableSmartThingsDevices
+    .filter((device: any) => hasSwitchCapability(device))
+    .sort((a: any, b: any) => getDeviceDisplayName(a).localeCompare(getDeviceDisplayName(b)))
+  const allSthmSwitchesSelected =
+    Boolean(sthmConfig.disarmDeviceId) && Boolean(sthmConfig.armStayDeviceId) && Boolean(sthmConfig.armAwayDeviceId)
+  const lastSthmState = smartthingsStatus?.sthm?.lastArmState
+  const lastSthmStateUpdatedAt = smartthingsStatus?.sthm?.lastArmStateUpdatedAt
+  const lastSthmUpdatedLabel = lastSthmStateUpdatedAt ? new Date(lastSthmStateUpdatedAt).toLocaleString() : null
 
   // Load settings on component mount
   useEffect(() => {
@@ -208,7 +314,30 @@ export function Settings() {
 
       if (response.success && response.integration) {
         console.log('SmartThings status loaded:', response.integration);
-        setSmartthingsStatus(response.integration);
+        const integration = response.integration;
+        setSmartthingsStatus(integration);
+
+        const nextSthm = integration.sthm || {};
+        setSthmConfig({
+          armAwayDeviceId: nextSthm.armAwayDeviceId || "",
+          armStayDeviceId: nextSthm.armStayDeviceId || "",
+          disarmDeviceId: nextSthm.disarmDeviceId || "",
+          locationId: nextSthm.locationId || ""
+        });
+
+        if (Array.isArray(integration.connectedDevices)) {
+          setSmartThingsDevices(integration.connectedDevices);
+        } else if (!integration.isConnected) {
+          setSmartThingsDevices([]);
+        }
+
+        if (integration.isConnected) {
+          fetchSmartThingsDevices({
+            integration,
+            fallbackDevices: Array.isArray(integration.connectedDevices) ? integration.connectedDevices : [],
+            showToast: false
+          });
+        }
       }
     } catch (error) {
       console.error('Failed to load SmartThings status:', error);
@@ -221,6 +350,13 @@ export function Settings() {
         redirectUri: '',
         deviceCount: 0
       });
+      setSthmConfig({
+        armAwayDeviceId: "",
+        armStayDeviceId: "",
+        disarmDeviceId: "",
+        locationId: ""
+      });
+      setSmartThingsDevices([]);
       // Don't show error toast for status loading as it's not critical
     }
   };
@@ -580,6 +716,14 @@ export function Settings() {
           title: "Connection Successful",
           description: `SmartThings connection is working! Found ${response.deviceCount || 0} devices.`
         });
+
+        const fallbackDevices = Array.isArray((response as any).devices)
+          ? (response as any).devices
+          : smartThingsDevices;
+        fetchSmartThingsDevices({
+          showToast: false,
+          fallbackDevices
+        });
       }
     } catch (error) {
       console.error('SmartThings connection test failed:', error);
@@ -619,6 +763,94 @@ export function Settings() {
       setDisconnectingSmartThings(false);
     }
   };
+
+  const handleRefreshSmartThingsDevices = async () => {
+    fetchSmartThingsDevices({
+      showToast: true,
+      fallbackDevices: smartThingsDevices.length > 0
+        ? smartThingsDevices
+        : Array.isArray((smartthingsStatus as any)?.connectedDevices)
+          ? (smartthingsStatus as any).connectedDevices
+          : []
+    })
+  }
+
+  const handleSaveSthmConfig = async () => {
+    if (!smartthingsStatus?.isConnected) {
+      toast({
+        title: "SmartThings Not Connected",
+        description: "Connect SmartThings before configuring Home Monitor virtual switches.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    const { disarmDeviceId, armStayDeviceId, armAwayDeviceId, locationId } = sthmConfig
+    if (!disarmDeviceId || !armStayDeviceId || !armAwayDeviceId) {
+      toast({
+        title: "Missing Virtual Switches",
+        description: "Please assign switches for Disarm, Arm Stay, and Arm Away before saving.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setSavingSthmConfig(true)
+    try {
+      const payload: {
+        disarmDeviceId: string
+        armStayDeviceId: string
+        armAwayDeviceId: string
+        locationId?: string
+      } = {
+        disarmDeviceId,
+        armStayDeviceId,
+        armAwayDeviceId
+      }
+      if (locationId && locationId.trim().length > 0) {
+        payload.locationId = locationId.trim()
+      }
+
+      const response = await configureSmartThingsSthm(payload)
+      if (response.success) {
+        toast({
+          title: "STHM Mapping Saved",
+          description: "SmartThings Home Monitor will now sync via the selected virtual switches."
+        })
+
+        if (response.integration) {
+          setSmartthingsStatus(response.integration)
+          const updated = response.integration.sthm || {}
+          setSthmConfig({
+            armAwayDeviceId: updated.armAwayDeviceId || "",
+            armStayDeviceId: updated.armStayDeviceId || "",
+            disarmDeviceId: updated.disarmDeviceId || "",
+            locationId: updated.locationId || payload.locationId || ""
+          })
+          if (Array.isArray(response.integration.connectedDevices)) {
+            setSmartThingsDevices(response.integration.connectedDevices)
+          }
+          fetchSmartThingsDevices({
+            integration: response.integration,
+            fallbackDevices: Array.isArray(response.integration.connectedDevices)
+              ? response.integration.connectedDevices
+              : []
+          })
+        } else {
+          await loadSmartThingsStatus()
+        }
+      }
+    } catch (error: any) {
+      console.error('SmartThings STHM configuration failed:', error)
+      toast({
+        title: "Failed to Save STHM Mapping",
+        description: error?.response?.data?.message || error?.message || "Unexpected error while saving configuration",
+        variant: "destructive"
+      })
+    } finally {
+      setSavingSthmConfig(false)
+    }
+  }
 
   const getSmartThingsStatusIcon = () => {
     if (!smartthingsStatus) return <AlertCircle className="h-4 w-4 text-gray-500" />;
@@ -1449,13 +1681,195 @@ export function Settings() {
                             <strong>Deprecated:</strong> Personal access tokens are no longer supported by SmartThings.
                             Please use OAuth configuration above.
                           </p>
-                        </div>
-                      </div>
-                    </details>
+                    </div>
                   </div>
+                </details>
+
+                <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/40 dark:border-blue-900/50 dark:bg-blue-900/10 p-4 space-y-4">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h4 className="flex items-center gap-2 text-sm font-semibold">
+                        <Shield className="h-4 w-4 text-blue-600" />
+                        SmartThings Home Monitor Bridge
+                      </h4>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Map SmartThings virtual switches so HomeBrain can read and control SmartThings Home Monitor (STHM).
+                      </p>
+                      {lastSthmState && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Last known state:&nbsp;
+                          <span className="font-medium text-foreground">{lastSthmState}</span>
+                          {lastSthmUpdatedLabel ? ` — ${lastSthmUpdatedLabel}` : ""}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRefreshSmartThingsDevices}
+                      disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices}
+                      className="mt-2 md:mt-0"
+                    >
+                      {loadingSmartThingsDevices ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Refreshing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Refresh Devices
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  <div className="bg-white/70 dark:bg-slate-900/40 border border-blue-100 dark:border-blue-900 rounded-md p-3 text-xs text-muted-foreground space-y-1">
+                    <p className="font-medium text-blue-900 dark:text-blue-200">Setup checklist</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Create three SmartThings virtual switches named for Disarm, Arm Stay, and Arm Away.</li>
+                      <li>
+                        Make routines so changing STHM mode turns on its matching switch and turns the others off.
+                      </li>
+                      <li>
+                        Create inverse routines so switching one of these devices on sets the corresponding STHM mode.
+                      </li>
+                      <li>Select the switches below and save to let HomeBrain mirror STHM status automatically.</li>
+                    </ol>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Disarm Switch</label>
+                      <Select
+                        value={sthmConfig.disarmDeviceId}
+                        onValueChange={(value) => setSthmConfig((prev) => ({ ...prev, disarmDeviceId: value }))}
+                        disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Not configured</SelectItem>
+                          {switchDevices.map((device: any) => (
+                            <SelectItem key={device.deviceId} value={device.deviceId}>
+                              {getDeviceDisplayName(device)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Link to the switch that turns on when STHM is disarmed.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Arm Stay Switch</label>
+                      <Select
+                        value={sthmConfig.armStayDeviceId}
+                        onValueChange={(value) => setSthmConfig((prev) => ({ ...prev, armStayDeviceId: value }))}
+                        disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Not configured</SelectItem>
+                          {switchDevices.map((device: any) => (
+                            <SelectItem key={device.deviceId} value={device.deviceId}>
+                              {getDeviceDisplayName(device)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Link to the switch that should be on while STHM is Armed (Stay).
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Arm Away Switch</label>
+                      <Select
+                        value={sthmConfig.armAwayDeviceId}
+                        onValueChange={(value) => setSthmConfig((prev) => ({ ...prev, armAwayDeviceId: value }))}
+                        disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Not configured</SelectItem>
+                          {switchDevices.map((device: any) => (
+                            <SelectItem key={device.deviceId} value={device.deviceId}>
+                              {getDeviceDisplayName(device)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Link to the switch that should be on while STHM is Armed (Away).
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <label className="text-sm font-medium">SmartThings Location ID (optional)</label>
+                      <Input
+                        value={sthmConfig.locationId}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          setSthmConfig((prev) => ({ ...prev, locationId: event.target.value }))
+                        }
+                        placeholder="Auto-detected from selected switches"
+                        disabled={!smartthingsStatus?.isConnected}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Leave blank to allow HomeBrain to infer the location from the mapped switches.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <p className="text-xs text-muted-foreground">
+                      Save after updating switch mappings so security status stays in sync.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      onClick={handleSaveSthmConfig}
+                      disabled={!smartthingsStatus?.isConnected || !allSthmSwitchesSelected || savingSthmConfig}
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                      {savingSthmConfig ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Shield className="h-4 w-4 mr-2" />
+                          Save STHM Mapping
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {!smartthingsStatus?.isConnected && (
+                    <p className="text-xs text-muted-foreground">
+                      Connect SmartThings and run a device sync to populate available virtual switches.
+                    </p>
+                  )}
+                  {smartthingsStatus?.isConnected && switchDevices.length === 0 && !loadingSmartThingsDevices && (
+                    <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                      No switch-capable devices found yet. Create your virtual switches in SmartThings and click “Refresh Devices”.
+                    </p>
+                  )}
                 </div>
-              </CardContent>
-            </Card>
+
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
             <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
               <CardHeader>
