@@ -880,11 +880,17 @@ class SmartThingsService {
 
       try {
         const status = await this.getDeviceStatus(candidate.deviceId);
+        const switchComponent = status?.components?.main?.switch;
+        const switchAttribute = switchComponent?.switch;
         const switchValue =
-          status?.components?.main?.switch?.switch?.value ??
-          status?.components?.main?.switch?.switch ??
-          status?.components?.main?.switch?.value ??
-          status?.components?.main?.switch;
+          switchAttribute?.value ??
+          switchAttribute?.data?.value ??
+          switchAttribute ??
+          switchComponent?.value ??
+          switchComponent;
+
+        const debugValue = typeof switchValue === 'object' ? JSON.stringify(switchValue) : switchValue;
+        console.debug(`SmartThingsService: STHM virtual switch ${candidate.armState} (${candidate.deviceId}) reports value=${debugValue}`);
 
         if (typeof switchValue === 'string' && switchValue.toLowerCase() === 'on') {
           return {
