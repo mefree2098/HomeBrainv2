@@ -4,6 +4,8 @@ const Settings = require('../models/Settings');
 const Device = require('../models/Device');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
+const SHOULD_LOG_SMARTTHINGS_SYNC = process.env.SMARTTHINGS_SYNC_LOGGING === 'true';
+
 class SmartThingsService {
   constructor() {
     this.baseUrl = 'https://api.smartthings.com/v1';
@@ -11,7 +13,7 @@ class SmartThingsService {
     this.tokenUrl = 'https://api.smartthings.com/oauth/token';
     this.roomsCache = new Map();
     this.locationNameCache = new Map();
-    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 5000);
+    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 2000);
     this.deviceStatusSyncTimer = null;
     this.deviceStatusSyncInProgress = false;
     if (this.deviceStatusSyncIntervalMs > 0) {
@@ -352,7 +354,7 @@ class SmartThingsService {
       clearInterval(this.deviceStatusSyncTimer);
     }
 
-    const intervalMs = Math.max(this.deviceStatusSyncIntervalMs, 3000);
+    const intervalMs = Math.max(this.deviceStatusSyncIntervalMs, 2000);
 
     this.deviceStatusSyncTimer = setInterval(() => {
       this.runDeviceStatusSync().catch((error) => {
@@ -455,7 +457,11 @@ class SmartThingsService {
           updatedCount += 1;
           updatedDeviceIds.add(tracked._id.toString());
 
-          if (updates.status !== undefined && updates.status !== previousStatus) {
+          if (
+            SHOULD_LOG_SMARTTHINGS_SYNC &&
+            updates.status !== undefined &&
+            updates.status !== previousStatus
+          ) {
             console.log(`SmartThingsService: Detected status change for "${tracked.name}" (${tracked.properties?.smartThingsDeviceId}) -> ${updates.status ? 'ON' : 'OFF'}`);
           }
         }
@@ -463,7 +469,9 @@ class SmartThingsService {
 
         if (bulkOps.length > 0) {
           await Device.bulkWrite(bulkOps, { ordered: false });
-          console.log(`SmartThingsService: Updated state for ${updatedCount} SmartThings devices`);
+          if (SHOULD_LOG_SMARTTHINGS_SYNC) {
+            console.log(`SmartThingsService: Updated state for ${updatedCount} SmartThings devices`);
+          }
 
           try {
             const ids = Array.from(updatedDeviceIds);
