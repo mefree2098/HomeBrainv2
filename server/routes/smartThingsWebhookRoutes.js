@@ -51,4 +51,36 @@ router.get('/metrics', auth, (req, res) => {
   });
 });
 
+router.get('/metrics/history', auth, (req, res) => {
+  const limit = Number(req.query.limit);
+  const history = smartThingsWebhookService.getMetricsHistory(Number.isNaN(limit) ? undefined : limit);
+  res.json({
+    success: true,
+    count: history.length,
+    history
+  });
+});
+
+router.post('/metrics/config', auth, (req, res) => {
+  try {
+    const { intervalMs, historySize } = req.body || {};
+    const updated = smartThingsWebhookService.updateMetricsConfig({ intervalMs, historySize });
+    res.json({
+      success: true,
+      config: updated
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+router.get('/metrics/prometheus', auth, (req, res) => {
+  const body = smartThingsWebhookService.getPrometheusMetrics();
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.send(body);
+});
+
 module.exports = router;

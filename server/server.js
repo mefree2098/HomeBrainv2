@@ -36,6 +36,7 @@ const settingsService = require("./services/settingsService");
 const remoteUpdateService = require("./services/remoteUpdateService");
 const wakeWordTrainingService = require("./services/wakeWordTrainingService");
 const whisperService = require("./services/whisperService");
+const smartThingsService = require("./services/smartThingsService");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 const http = require("http");
@@ -103,6 +104,26 @@ if (!process.env.DATABASE_URL) {
   console.error("Error: DATABASE_URL variables in .env missing.");
   process.exit(-1);
 }
+
+const SMARTTHINGS_WEBHOOK_DEFAULT_PATH = '/api/smartthings/webhook';
+
+const normalizeWebhookPath = (value, fallback) => {
+  if (!value || typeof value !== 'string') {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  if (withLeadingSlash === '/') {
+    return withLeadingSlash;
+  }
+
+  return withLeadingSlash.replace(/\/+$/, '');
+};
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -207,7 +228,8 @@ app.use('/api/settings', settingsRoutes);
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
-  app.use('/api/smartthings/webhook', smartThingsWebhookRoutes);
+const smartThingsWebhookPath = normalizeWebhookPath(process.env.SMARTTHINGS_WEBHOOK_PATH, SMARTTHINGS_WEBHOOK_DEFAULT_PATH);
+app.use(smartThingsWebhookPath, smartThingsWebhookRoutes);
   app.use('/api/smartthings', smartThingsRoutes);
 // Maintenance Routes
 app.use('/api/maintenance', maintenanceRoutes);
@@ -449,12 +471,20 @@ async function gracefulShutdown(signal) {
 
   try {
     await whisperService.stopService();
-  } catch (error) {
-    console.error('Error stopping Whisper service:', error.message);
-  }
+    } catch (error) {
+      console.error('Error stopping Whisper service:', error.message);
+    }
 
-  await closeServer(challengeServer, 'ACME challenge server');
-  challengeServer = null;
+    try {
+      if (typeof smartThingsService.stopSubscriptionRenewalTask === 'function') {
+        smartThingsService.stopSubscriptionRenewalTask();
+      }
+    } catch (error) {
+      console.error('Error stopping SmartThings subscription task:', error.message);
+    }
+
+    await closeServer(challengeServer, 'ACME challenge server');
+    challengeServer = null;
 
   await closeServer(httpServer, 'HTTP server');
 

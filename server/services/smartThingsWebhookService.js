@@ -34,6 +34,16 @@ class SmartThingsWebhookService {
     this.signatureFailureAlertThreshold = Number(process.env.SMARTTHINGS_SIGNATURE_FAILURE_ALERT_THRESHOLD || 3);
     this.signatureFailureAlerted = false;
     this.eventStallAlerted = false;
+    this.metricsHistory = [];
+    this.metricsHistorySize = Math.max(
+      1,
+      Number(process.env.SMARTTHINGS_WEBHOOK_METRICS_HISTORY || 1440)
+    );
+    this.metricsSnapshotIntervalMs = Number(process.env.SMARTTHINGS_WEBHOOK_METRICS_INTERVAL_MS || 60 * 1000);
+    this.metricsSamplerTimer = null;
+    if (this.metricsSnapshotIntervalMs > 0) {
+      this.startMetricsSampler();
+    }
   }
 
   createEmptyMetrics() {
@@ -67,6 +77,7 @@ class SmartThingsWebhookService {
     this.metrics = this.createEmptyMetrics();
     this.signatureFailureAlerted = false;
     this.eventStallAlerted = false;
+    this.metricsHistory = [];
   }
 
   getMetricsSnapshot() {
@@ -76,6 +87,243 @@ class SmartThingsWebhookService {
       }
       return value;
     }));
+  }
+
+  captureMetricsSnapshot(reason = 'manual') {
+    const entry = {
+      capturedAt: new Date(),
+      reason,
+      metrics: this.getMetricsSnapshot()
+    };
+
+    this.metricsHistory.push(entry);
+    if (this.metricsHistory.length > this.metricsHistorySize) {
+      this.metricsHistory.splice(0, this.metricsHistory.length - this.metricsHistorySize);
+    }
+
+    return entry;
+  }
+
+  getMetricsHistory(limit) {
+    const effectiveLimit = Number.isFinite(limit) && limit > 0
+      ? Math.min(Math.floor(limit), this.metricsHistory.length)
+      : this.metricsHistory.length;
+
+    return this.metricsHistory
+      .slice(effectiveLimit === this.metricsHistory.length ? 0 : -effectiveLimit)
+      .map((entry) => ({
+        capturedAt: entry.capturedAt.toISOString(),
+        reason: entry.reason,
+        metrics: entry.metrics
+      }));
+  }
+
+  startMetricsSampler() {
+    if (this.metricsSnapshotIntervalMs <= 0) {
+      return;
+    }
+
+    this.stopMetricsSampler();
+
+    this.metricsSamplerTimer = setInterval(() => {
+      try {
+        this.captureMetricsSnapshot('interval');
+      } catch (error) {
+        this.log('warn', 'Failed to capture SmartThings webhook metrics snapshot', { error: error.message });
+      }
+    }, this.metricsSnapshotIntervalMs);
+
+    if (this.metricsSamplerTimer && typeof this.metricsSamplerTimer.unref === 'function') {
+      this.metricsSamplerTimer.unref();
+    }
+
+    try {
+      this.captureMetricsSnapshot('interval-start');
+    } catch (error) {
+      this.log('warn', 'Initial SmartThings webhook metrics snapshot failed', { error: error.message });
+    }
+  }
+
+  stopMetricsSampler() {
+    if (this.metricsSamplerTimer) {
+      clearInterval(this.metricsSamplerTimer);
+      this.metricsSamplerTimer = null;
+    }
+  }
+
+  updateMetricsConfig({ intervalMs, historySize } = {}) {
+    const updates = {};
+    let restartSampler = false;
+
+    if (intervalMs !== undefined) {
+      const numericInterval = Number(intervalMs);
+      if (!Number.isFinite(numericInterval) || numericInterval < 0) {
+        throw new Error('metrics interval must be a non-negative number');
+      }
+      const normalizedInterval = Math.floor(numericInterval);
+      if (normalizedInterval !== this.metricsSnapshotIntervalMs) {
+        this.metricsSnapshotIntervalMs = normalizedInterval;
+        restartSampler = true;
+      }
+      updates.intervalMs = this.metricsSnapshotIntervalMs;
+    } else {
+      updates.intervalMs = this.metricsSnapshotIntervalMs;
+    }
+
+    if (historySize !== undefined) {
+      const numericHistory = Number(historySize);
+      if (!Number.isFinite(numericHistory) || numericHistory <= 0) {
+        throw new Error('metrics history size must be a positive number');
+      }
+      const normalizedHistory = Math.floor(numericHistory);
+      if (normalizedHistory !== this.metricsHistorySize) {
+        this.metricsHistorySize = normalizedHistory;
+        if (this.metricsHistory.length > this.metricsHistorySize) {
+          this.metricsHistory.splice(0, this.metricsHistory.length - this.metricsHistorySize);
+        }
+      }
+      updates.historySize = this.metricsHistorySize;
+    } else {
+      updates.historySize = this.metricsHistorySize;
+    }
+
+    if (restartSampler) {
+      this.stopMetricsSampler();
+      if (this.metricsSnapshotIntervalMs > 0) {
+        this.startMetricsSampler();
+      }
+    }
+
+    return updates;
+  }
+
+  getPrometheusMetrics() {
+    const snapshot = this.getMetricsSnapshot();
+    const lines = [];
+    const emittedMeta = new Set();
+
+    const pushMetric = (metadata, value, labels) => {
+      if (value === undefined || value === null || Number.isNaN(Number(value))) {
+        return;
+      }
+
+      const labelString = labels && Object.keys(labels).length > 0
+        ? `{${Object.entries(labels).map(([key, val]) => `${key}="${String(val).replace(/"/g, '\\"')}"`).join(',')}}`
+        : '';
+
+      if (!emittedMeta.has(metadata.name)) {
+        if (metadata.help) {
+          lines.push(`# HELP ${metadata.name} ${metadata.help}`);
+        }
+        if (metadata.type) {
+          lines.push(`# TYPE ${metadata.name} ${metadata.type}`);
+        }
+        emittedMeta.add(metadata.name);
+      }
+      const numericValue = typeof value === 'string' && value.trim() === '' ? 0 : value;
+      lines.push(`${metadata.name}${labelString} ${Number(numericValue)}`);
+    };
+
+    pushMetric({
+      name: 'smartthings_webhook_requests_total',
+      help: 'Total SmartThings webhook requests received',
+      type: 'counter'
+    }, snapshot.received?.total || 0);
+
+    pushMetric({
+      name: 'smartthings_webhook_requests_successful_total',
+      help: 'Total SmartThings webhook lifecycles successfully handled',
+      type: 'counter'
+    }, snapshot.received?.successful || 0);
+
+    const lifecycleCounts = snapshot.received?.byLifecycle || {};
+    Object.entries(lifecycleCounts).forEach(([lifecycle, count]) => {
+      pushMetric({
+        name: 'smartthings_webhook_requests_by_lifecycle_total',
+        help: 'SmartThings webhook requests by lifecycle',
+        type: 'counter'
+      }, count || 0, { lifecycle: lifecycle.toLowerCase() });
+    });
+
+    pushMetric({
+      name: 'smartthings_webhook_signature_failures_total',
+      help: 'Total SmartThings webhook signature verification failures',
+      type: 'counter'
+    }, snapshot.signature?.failures || 0);
+
+    pushMetric({
+      name: 'smartthings_webhook_signature_consecutive_failures',
+      help: 'Current consecutive SmartThings webhook signature failures',
+      type: 'gauge'
+    }, snapshot.signature?.consecutiveFailures || 0);
+
+    const signatureTimestamps = [
+      ['smartthings_webhook_signature_last_success_timestamp', snapshot.signature?.lastSuccessAt, 'Last successful signature verification time'],
+      ['smartthings_webhook_signature_last_failure_timestamp', snapshot.signature?.lastFailureAt, 'Last failed signature verification time']
+    ];
+
+    signatureTimestamps.forEach(([metricName, isoValue, help]) => {
+      if (!isoValue) {
+        return;
+      }
+      const epochSeconds = Number.isNaN(Date.parse(isoValue)) ? null : Math.floor(Date.parse(isoValue) / 1000);
+      if (epochSeconds !== null) {
+        pushMetric({
+          name: metricName,
+          help,
+          type: 'gauge'
+        }, epochSeconds);
+      }
+    });
+
+    pushMetric({
+      name: 'smartthings_webhook_events_total',
+      help: 'Total SmartThings events received via webhook',
+      type: 'counter'
+    }, snapshot.events?.received || 0);
+
+    pushMetric({
+      name: 'smartthings_webhook_events_processed_devices_total',
+      help: 'Total number of SmartThings devices processed from webhook events',
+      type: 'counter'
+    }, snapshot.events?.processedDevices || 0);
+
+    pushMetric({
+      name: 'smartthings_webhook_events_ignored_devices_total',
+      help: 'Total number of SmartThings devices ignored during webhook processing',
+      type: 'counter'
+    }, snapshot.events?.ignoredDevices || 0);
+
+    const perCapability = snapshot.events?.perCapability || {};
+    Object.entries(perCapability).forEach(([capability, count]) => {
+      pushMetric({
+        name: 'smartthings_webhook_events_by_capability_total',
+        help: 'SmartThings webhook events received by capability',
+        type: 'counter'
+      }, count || 0, { capability });
+    });
+
+    const temporalMetrics = [
+      ['smartthings_webhook_last_request_timestamp', snapshot.received?.lastRequestAt, 'Timestamp of the last webhook request received'],
+      ['smartthings_webhook_last_lifecycle_timestamp', snapshot.lifecycle?.lastAt, 'Timestamp of the last lifecycle processed'],
+      ['smartthings_webhook_last_event_timestamp', snapshot.events?.lastAt, 'Timestamp of the last SmartThings event processed']
+    ];
+
+    temporalMetrics.forEach(([metricName, isoValue, help]) => {
+      if (!isoValue) {
+        return;
+      }
+      const epochSeconds = Number.isNaN(Date.parse(isoValue)) ? null : Math.floor(Date.parse(isoValue) / 1000);
+      if (epochSeconds !== null) {
+        pushMetric({
+          name: metricName,
+          help,
+          type: 'gauge'
+        }, epochSeconds);
+      }
+    });
+
+    return `${lines.join('\n')}\n`;
   }
 
   log(level, message, context = {}) {

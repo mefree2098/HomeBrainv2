@@ -168,3 +168,156 @@ test('handleEvent updates devices, emits updates, and records metrics', async (t
   assert.ok(integrationState.lastUpdatePayload);
   assert.ok(integrationState.lastUpdatePayload.lastEventReceivedAt);
 });
+
+test('refreshWebhookSubscriptions renews capability subscriptions and updates state', async (t) => {
+  smartThingsService.stopSubscriptionRenewalTask?.();
+
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const integrationState = {
+    webhook: {
+      installedAppId: 'installed-app-1',
+      locationId: 'location-1'
+    },
+    async updateWebhookState(update) {
+      this.lastUpdatePayload = update;
+    }
+  };
+
+  SmartThingsIntegration.getIntegration = async () => integrationState;
+
+  const originalReplace = smartThingsService.replaceCapabilitySubscriptions;
+  const originalList = smartThingsService.listSubscriptions;
+  const replaceCalls = [];
+
+  smartThingsService.replaceCapabilitySubscriptions = async (installedAppId, locationId, descriptors) => {
+    replaceCalls.push({ installedAppId, locationId, descriptors });
+    return [];
+  };
+
+  const sampleSubscription = {
+    id: 'subscription-1',
+    capability: {
+      capability: 'switch',
+      attribute: 'switch',
+      componentId: 'main',
+      stateChangeOnly: true
+    },
+    createdDate: new Date().toISOString()
+  };
+
+  smartThingsService.listSubscriptions = async () => [sampleSubscription];
+
+  smartThingsService.subscriptionRefreshInProgress = false;
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    smartThingsService.replaceCapabilitySubscriptions = originalReplace;
+    smartThingsService.listSubscriptions = originalList;
+    smartThingsService.stopSubscriptionRenewalTask?.();
+  });
+
+  await smartThingsService.refreshWebhookSubscriptions();
+
+  assert.equal(replaceCalls.length, 1);
+  assert.ok(integrationState.lastUpdatePayload);
+  assert.ok(Array.isArray(integrationState.lastUpdatePayload.subscriptions));
+  assert.equal(integrationState.lastUpdatePayload.subscriptions.length, 1);
+  assert.equal(integrationState.lastUpdatePayload.subscriptions[0].capability, 'switch');
+  assert.ok(integrationState.lastUpdatePayload.lastSubscriptionSync);
+});
+
+test('getPrometheusMetrics exposes counters and gauges', async (t) => {
+  smartThingsWebhookService.resetMetrics();
+
+  const fixedNow = new Date('2025-10-18T12:00:00.000Z');
+  smartThingsWebhookService.recordRequestReceipt();
+  smartThingsWebhookService.recordLifecycle('PING');
+  smartThingsWebhookService.recordSignatureFailure('signature mismatch');
+  smartThingsWebhookService.recordSignatureSuccess();
+  smartThingsWebhookService.incrementCapabilityMetric('switch');
+  smartThingsWebhookService.incrementCapabilityMetric('switch');
+
+  smartThingsWebhookService.metrics.events.received = 3;
+  smartThingsWebhookService.metrics.events.processedDevices = 2;
+  smartThingsWebhookService.metrics.events.ignoredDevices = 1;
+  smartThingsWebhookService.metrics.events.lastAt = fixedNow;
+  smartThingsWebhookService.metrics.received.lastRequestAt = new Date(fixedNow.getTime() - 5000);
+  smartThingsWebhookService.metrics.lifecycle.lastAt = new Date(fixedNow.getTime() - 2000);
+  smartThingsWebhookService.metrics.signature.lastFailureAt = new Date(fixedNow.getTime() - 10000);
+  smartThingsWebhookService.metrics.signature.lastSuccessAt = new Date(fixedNow.getTime() - 1000);
+
+  const body = smartThingsWebhookService.getPrometheusMetrics();
+
+  assert.match(body, /smartthings_webhook_requests_total 1/);
+  assert.match(body, /smartthings_webhook_requests_by_lifecycle_total{lifecycle="ping"} 1/);
+  assert.match(body, /smartthings_webhook_signature_failures_total 1/);
+  assert.match(body, /smartthings_webhook_events_total 3/);
+  assert.match(body, /smartthings_webhook_events_by_capability_total{capability="switch"} 2/);
+  assert.match(body, /smartthings_webhook_events_processed_devices_total 2/);
+  assert.match(body, /smartthings_webhook_events_ignored_devices_total 1/);
+  assert.match(body, /smartthings_webhook_last_event_timestamp \d+/);
+
+  smartThingsWebhookService.resetMetrics();
+});
+
+test('metrics history captures bounded snapshots', async (t) => {
+  smartThingsWebhookService.resetMetrics();
+  smartThingsWebhookService.stopMetricsSampler?.();
+
+  const originalHistorySize = smartThingsWebhookService.metricsHistorySize;
+  const shouldRestartSampler = smartThingsWebhookService.metricsSnapshotIntervalMs > 0;
+
+  t.after(() => {
+    smartThingsWebhookService.metricsHistorySize = originalHistorySize;
+    smartThingsWebhookService.metricsHistory = [];
+    if (shouldRestartSampler) {
+      smartThingsWebhookService.startMetricsSampler();
+    }
+  });
+
+  smartThingsWebhookService.metricsHistorySize = 2;
+
+  smartThingsWebhookService.captureMetricsSnapshot('first');
+  smartThingsWebhookService.captureMetricsSnapshot('second');
+  smartThingsWebhookService.captureMetricsSnapshot('third');
+
+  const fullHistory = smartThingsWebhookService.getMetricsHistory();
+  assert.equal(fullHistory.length, 2);
+  assert.equal(fullHistory[0].reason, 'second');
+  assert.equal(fullHistory[1].reason, 'third');
+
+  const limitedHistory = smartThingsWebhookService.getMetricsHistory(1);
+  assert.equal(limitedHistory.length, 1);
+  assert.equal(limitedHistory[0].reason, 'third');
+});
+
+test('updateMetricsConfig validates and applies production cadence', async (t) => {
+  smartThingsWebhookService.resetMetrics();
+  smartThingsWebhookService.stopMetricsSampler?.();
+
+  const originalInterval = smartThingsWebhookService.metricsSnapshotIntervalMs;
+  const originalHistory = smartThingsWebhookService.metricsHistorySize;
+
+  t.after(() => {
+    smartThingsWebhookService.updateMetricsConfig({
+      intervalMs: originalInterval,
+      historySize: originalHistory
+    });
+  });
+
+  const newConfig = smartThingsWebhookService.updateMetricsConfig({
+    intervalMs: 300000,
+    historySize: 288
+  });
+
+  assert.equal(newConfig.intervalMs, 300000);
+  assert.equal(newConfig.historySize, 288);
+
+  smartThingsWebhookService.captureMetricsSnapshot('post-update');
+  const history = smartThingsWebhookService.getMetricsHistory();
+  assert.equal(history.length, 1);
+  assert.equal(history[0].reason, 'post-update');
+
+  await assert.rejects(() => smartThingsWebhookService.updateMetricsConfig({ intervalMs: -1 }), /metrics interval must be a non-negative number/);
+  await assert.rejects(() => smartThingsWebhookService.updateMetricsConfig({ historySize: 0 }), /metrics history size must be a positive number/);
+});

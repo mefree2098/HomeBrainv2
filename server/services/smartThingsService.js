@@ -26,8 +26,14 @@ class SmartThingsService {
     this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 60000);
     this.deviceStatusSyncTimer = null;
     this.deviceStatusSyncInProgress = false;
+    this.subscriptionRefreshIntervalMs = Number(process.env.SMARTTHINGS_SUBSCRIPTION_REFRESH_INTERVAL_MS || 24 * 60 * 60 * 1000);
+    this.subscriptionRefreshTimer = null;
+    this.subscriptionRefreshInProgress = false;
     if (this.deviceStatusSyncIntervalMs > 0) {
       this.startDeviceStatusSync();
+    }
+    if (this.subscriptionRefreshIntervalMs > 0) {
+      this.startSubscriptionRenewalTask();
     }
   }
 
@@ -184,6 +190,162 @@ class SmartThingsService {
     }
 
     return createdSubscriptions;
+  }
+
+  normalizeSubscriptionForStorage(subscription) {
+    if (!subscription || typeof subscription !== 'object') {
+      return null;
+    }
+
+    const normalizeString = (value, fallback = '') => (
+      typeof value === 'string' ? value.trim() : fallback
+    );
+
+    const sourceType = normalizeString(subscription.sourceType, subscription.device ? 'DEVICE' : 'CAPABILITY') || 'CAPABILITY';
+    const base = {
+      subscriptionId: normalizeString(subscription.id || subscription.subscriptionId),
+      sourceType,
+      deviceId: '',
+      capability: '',
+      attribute: '',
+      componentId: 'main',
+      subscriptionName: '',
+      stateChangeOnly: true,
+      value: '*',
+      createdDate: null,
+      expirationTime: null
+    };
+
+    const populateFrom = (segment) => {
+      if (!segment || typeof segment !== 'object') {
+        return;
+      }
+
+      if (segment.deviceId !== undefined) {
+        base.deviceId = normalizeString(segment.deviceId, base.deviceId);
+      }
+      if (segment.capability !== undefined) {
+        base.capability = normalizeString(segment.capability, base.capability);
+      }
+      if (segment.attribute !== undefined) {
+        base.attribute = normalizeString(segment.attribute, base.attribute);
+      }
+      if (segment.componentId !== undefined) {
+        base.componentId = normalizeString(segment.componentId, base.componentId);
+      }
+      if (segment.subscriptionName !== undefined) {
+        base.subscriptionName = normalizeString(segment.subscriptionName, base.subscriptionName);
+      }
+      if (segment.value !== undefined) {
+        base.value = segment.value;
+      }
+      if (typeof segment.stateChangeOnly === 'boolean') {
+        base.stateChangeOnly = segment.stateChangeOnly;
+      }
+    };
+
+    populateFrom(subscription.capability);
+    populateFrom(subscription.device);
+
+    if (subscription.value !== undefined) {
+      base.value = subscription.value;
+    }
+
+    const created = subscription.createdDate || subscription.creationTime || subscription.created;
+    const expires = subscription.expirationTime || subscription.expiration;
+    base.createdDate = created ? new Date(created) : null;
+    base.expirationTime = expires ? new Date(expires) : null;
+
+    return base;
+  }
+
+  normalizeSubscriptionsForStorage(subscriptions) {
+    if (!Array.isArray(subscriptions)) {
+      return [];
+    }
+
+    return subscriptions
+      .map((subscription) => this.normalizeSubscriptionForStorage(subscription))
+      .filter(Boolean);
+  }
+
+  async refreshWebhookSubscriptions() {
+    if (this.subscriptionRefreshInProgress) {
+      return;
+    }
+
+    this.subscriptionRefreshInProgress = true;
+
+    try {
+      const integration = await SmartThingsIntegration.getIntegration();
+
+      const installedAppId = integration?.webhook?.installedAppId
+        ? integration.webhook.installedAppId.trim()
+        : '';
+      const locationId = integration?.webhook?.locationId
+        ? integration.webhook.locationId.trim()
+        : '';
+
+      if (!installedAppId || !locationId) {
+        return;
+      }
+
+      const capabilityDescriptors = this.getDefaultCapabilitySubscriptions();
+      await this.replaceCapabilitySubscriptions(installedAppId, locationId, capabilityDescriptors);
+      const subscriptions = await this.listSubscriptions(installedAppId);
+      const normalizedSubscriptions = this.normalizeSubscriptionsForStorage(subscriptions);
+
+      if (typeof integration.updateWebhookState === 'function') {
+        await integration.updateWebhookState({
+          installedAppId,
+          locationId,
+          subscriptions: normalizedSubscriptions,
+          lastSubscriptionSync: new Date()
+        });
+      }
+
+      console.log('SmartThingsService: Webhook subscriptions refreshed successfully');
+    } catch (error) {
+      console.error('SmartThingsService: Webhook subscription refresh failed:', error.message);
+    } finally {
+      this.subscriptionRefreshInProgress = false;
+    }
+  }
+
+  startSubscriptionRenewalTask() {
+    if (this.subscriptionRefreshTimer) {
+      clearTimeout(this.subscriptionRefreshTimer);
+      this.subscriptionRefreshTimer = null;
+    }
+
+    const scheduleNext = () => {
+      this.subscriptionRefreshTimer = setTimeout(async () => {
+        try {
+          await this.refreshWebhookSubscriptions();
+        } catch (error) {
+          console.error('SmartThingsService: Subscription renewal task error:', error.message);
+        } finally {
+          scheduleNext();
+        }
+      }, Math.max(this.subscriptionRefreshIntervalMs, 60 * 1000));
+
+      if (this.subscriptionRefreshTimer && typeof this.subscriptionRefreshTimer.unref === 'function') {
+        this.subscriptionRefreshTimer.unref();
+      }
+    };
+
+    scheduleNext();
+
+    this.refreshWebhookSubscriptions().catch((error) => {
+      console.error('SmartThingsService: Initial subscription refresh failed:', error.message);
+    });
+  }
+
+  stopSubscriptionRenewalTask() {
+    if (this.subscriptionRefreshTimer) {
+      clearTimeout(this.subscriptionRefreshTimer);
+      this.subscriptionRefreshTimer = null;
+    }
   }
 
   /**
