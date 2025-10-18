@@ -11,7 +11,7 @@ import {
   PowerOff,
   Heart
 } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 interface Device {
   _id: string
@@ -35,6 +35,14 @@ interface DashboardWidgetProps {
 export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorite, canToggleFavorite, isFavoritePending = false }: DashboardWidgetProps) {
   const [brightness, setBrightness] = useState(device.brightness || 0)
   const [temperature, setTemperature] = useState(device.temperature || 70)
+
+  useEffect(() => {
+    setBrightness(device.brightness ?? 0)
+  }, [device.brightness])
+
+  useEffect(() => {
+    setTemperature(device.temperature ?? 70)
+  }, [device.temperature])
 
   const getDeviceIcon = (type: string) => {
     switch (type) {

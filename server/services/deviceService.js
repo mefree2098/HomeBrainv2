@@ -8,7 +8,7 @@ class DeviceService {
     this.smartThingsPresenceCheckedAt = 0;
     this.smartThingsSyncPromise = null;
     this.lastSmartThingsSyncAt = 0;
-    this.smartThingsSyncCooldownMs = Number(process.env.SMARTTHINGS_DEVICE_REFRESH_MS || 2000);
+    this.smartThingsSyncCooldownMs = Number(process.env.SMARTTHINGS_DEVICE_REFRESH_MS || 5000);
   }
 
   /**

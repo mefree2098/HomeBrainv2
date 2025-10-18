@@ -13,7 +13,7 @@ class SmartThingsService {
     this.tokenUrl = 'https://api.smartthings.com/oauth/token';
     this.roomsCache = new Map();
     this.locationNameCache = new Map();
-    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 2000);
+    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 5000);
     this.deviceStatusSyncTimer = null;
     this.deviceStatusSyncInProgress = false;
     if (this.deviceStatusSyncIntervalMs > 0) {
@@ -341,7 +341,9 @@ class SmartThingsService {
         await integration.updateDevices(devices);
       }
 
-      console.log(`SmartThingsService: Successfully fetched ${devices.length} devices`);
+      if (SHOULD_LOG_SMARTTHINGS_SYNC) {
+        console.log(`SmartThingsService: Successfully fetched ${devices.length} devices`);
+      }
       return devices;
     } catch (error) {
       console.error('SmartThingsService: Error fetching devices:', error.message);
@@ -351,25 +353,31 @@ class SmartThingsService {
 
   startDeviceStatusSync() {
     if (this.deviceStatusSyncTimer) {
-      clearInterval(this.deviceStatusSyncTimer);
+      clearTimeout(this.deviceStatusSyncTimer);
+      this.deviceStatusSyncTimer = null;
     }
 
-    const intervalMs = Math.max(this.deviceStatusSyncIntervalMs, 2000);
+    const scheduleNext = () => {
+      const intervalMs = Math.max(this.deviceStatusSyncIntervalMs, 2000);
+      this.deviceStatusSyncTimer = setTimeout(async () => {
+        try {
+          await this.runDeviceStatusSync();
+        } catch (error) {
+          console.error('SmartThingsService: Device status sync error:', error.message);
+        } finally {
+          scheduleNext();
+        }
+      }, intervalMs);
 
-    this.deviceStatusSyncTimer = setInterval(() => {
-      this.runDeviceStatusSync().catch((error) => {
-        console.error('SmartThingsService: Device status sync error:', error.message);
-      });
-    }, intervalMs);
+      if (typeof this.deviceStatusSyncTimer.unref === 'function') {
+        this.deviceStatusSyncTimer.unref();
+      }
+    };
 
-    if (typeof this.deviceStatusSyncTimer.unref === 'function') {
-      this.deviceStatusSyncTimer.unref();
-    }
+    scheduleNext();
 
-    setImmediate(() => {
-      this.runDeviceStatusSync().catch((error) => {
-        console.error('SmartThingsService: Initial device status sync error:', error.message);
-      });
+    this.runDeviceStatusSync().catch((error) => {
+      console.error('SmartThingsService: Initial device status sync error:', error.message);
     });
   }
 
