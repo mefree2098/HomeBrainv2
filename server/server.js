@@ -122,6 +122,63 @@ app.on("error", (error) => {
   console.error(error.stack);
 });
 
+// Device Updates Stream (SSE)
+app.get('/api/devices/stream', requireUser(), (req, res) => {
+  console.log('Device SSE: client connected');
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(':\n\n');
+    } catch (error) {
+      clearInterval(heartbeat);
+    }
+  }, 30000);
+
+  const sendUpdate = (devices) => {
+    try {
+      const normalized = deviceUpdateEmitter.normalizeDevices(devices);
+      if (normalized.length === 0) {
+        return;
+      }
+      const payload = {
+        type: 'devices:update',
+        devices: normalized
+      };
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch (error) {
+      console.warn('Device SSE: failed to write update:', error.message);
+    }
+  };
+
+  deviceUpdateEmitter.on('devices:update', sendUpdate);
+  res.write('event: ready\n');
+  res.write('data: {}\n\n');
+
+  let closed = false;
+  const cleanup = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    console.log('Device SSE: client disconnected');
+    clearInterval(heartbeat);
+    deviceUpdateEmitter.removeListener('devices:update', sendUpdate);
+    try {
+      res.end();
+    } catch (error) {
+      console.warn('Device SSE: error ending response:', error.message);
+    }
+  };
+
+  req.on('close', cleanup);
+  req.on('end', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
+});
 // Basic Routes
 app.use(basicRoutes);
 // Authentication Routes

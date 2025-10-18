@@ -5,57 +5,25 @@ const { verifyAccessToken } = require('../routes/middlewares/auth');
 
 class DeviceWebSocket {
   constructor() {
-    this.servers = [];
+    this.wss = null;
     this.boundEmitter = false;
+    this.heartbeatInterval = null;
+    this.upgradeHandlers = [];
   }
 
-  /**
-   * Initialize a WebSocket server for device updates on the provided HTTP/S server.
-   * Multiple transports (HTTP/HTTPS) can register by calling initialize more than once.
-   * @param {import('http').Server|import('https').Server} server
-   */
-  initialize(server) {
-    this.registerServer(server);
-
-    if (!this.boundEmitter) {
-      deviceUpdateEmitter.on('devices:update', (payload) => {
-        this.broadcast({
-          type: 'devices:update',
-          devices: payload,
-          timestamp: new Date().toISOString()
-        });
-      });
-      this.boundEmitter = true;
+  ensureServer() {
+    if (this.wss) {
+      return;
     }
-  }
 
-  registerServer(server) {
-    const wss = new WebSocket.Server({ server, path: '/ws/devices' });
+    this.wss = new WebSocket.Server({ noServer: true });
 
-    const heartbeat = () => {
-      this.servers
-        .filter((entry) => entry.wss === wss)
-        .forEach((entry) => {
-          entry.wss.clients.forEach((socket) => {
-            if (socket.isAlive === false) {
-              socket.terminate();
-              return;
-            }
-            socket.isAlive = false;
-            try {
-              socket.ping();
-            } catch (error) {
-              socket.terminate();
-            }
-          });
-        });
-    };
-
-    const heartbeatInterval = setInterval(heartbeat, 30000);
-
-    wss.on('connection', async (socket, request) => {
+    this.wss.on('connection', async (socket, request) => {
       try {
-        const url = new URL(request.url, 'http://localhost');
+        const base = request.headers?.host
+          ? `http://${request.headers.host}`
+          : 'http://localhost';
+        const url = new URL(request.url, base);
         const token = url.searchParams.get('token');
         const user = await verifyAccessToken(token);
         socket.user = user;
@@ -73,7 +41,6 @@ class DeviceWebSocket {
       });
 
       socket.on('message', (message) => {
-        // Currently the channel is broadcast-only. Accept heartbeat messages silently.
         if (typeof message === 'string' && message.includes('ping')) {
           socket.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
         }
@@ -94,26 +61,102 @@ class DeviceWebSocket {
       }));
     });
 
-    wss.on('close', () => {
-      clearInterval(heartbeatInterval);
+    this.wss.on('close', () => {
+      this.stopHeartbeat();
     });
 
-    this.servers.push({ wss, heartbeatInterval });
+    this.startHeartbeat();
+
+    if (!this.boundEmitter) {
+      deviceUpdateEmitter.on('devices:update', (payload) => {
+        this.broadcast({
+          type: 'devices:update',
+          devices: payload,
+          timestamp: new Date().toISOString()
+        });
+      });
+      this.boundEmitter = true;
+    }
+  }
+
+  startHeartbeat() {
+    if (this.heartbeatInterval || !this.wss) {
+      return;
+    }
+
+    this.heartbeatInterval = setInterval(() => {
+      if (!this.wss) {
+        return;
+      }
+
+      this.wss.clients.forEach((socket) => {
+        if (socket.isAlive === false) {
+          socket.terminate();
+          return;
+        }
+        socket.isAlive = false;
+        try {
+          socket.ping();
+        } catch (error) {
+          socket.terminate();
+        }
+      });
+    }, 30000);
+  }
+
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
+  initialize(server) {
+    if (!server || typeof server.on !== 'function') {
+      throw new Error('DeviceWebSocket.initialize requires a valid HTTP/S server');
+    }
+
+    this.ensureServer();
+
+    const upgradeHandler = (request, socket, head) => {
+      let pathname;
+      try {
+        const base = request.headers?.host
+          ? `http://${request.headers.host}`
+          : 'http://localhost';
+        pathname = new URL(request.url, base).pathname;
+      } catch (error) {
+        socket.destroy();
+        return;
+      }
+
+      if (pathname !== '/ws/devices') {
+        return;
+      }
+
+      this.wss.handleUpgrade(request, socket, head, (ws) => {
+        this.wss.emit('connection', ws, request);
+      });
+    };
+
+    server.on('upgrade', upgradeHandler);
+    this.upgradeHandlers.push({ server, upgradeHandler });
   }
 
   broadcast(payload) {
+    if (!this.wss) {
+      return;
+    }
     const message = JSON.stringify(payload);
 
-    this.servers.forEach(({ wss }) => {
-      wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-          try {
-            client.send(message);
-          } catch (error) {
-            console.warn('DeviceWebSocket: failed to send update', error.message);
-          }
+    this.wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(message);
+        } catch (error) {
+          console.warn('DeviceWebSocket: failed to send update', error.message);
         }
-      });
+      }
     });
   }
 }
