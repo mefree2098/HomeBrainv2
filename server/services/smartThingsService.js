@@ -13,7 +13,7 @@ class SmartThingsService {
     this.tokenUrl = 'https://api.smartthings.com/oauth/token';
     this.roomsCache = new Map();
     this.locationNameCache = new Map();
-    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 5000);
+    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 10000);
     this.deviceStatusSyncTimer = null;
     this.deviceStatusSyncInProgress = false;
     if (this.deviceStatusSyncIntervalMs > 0) {
