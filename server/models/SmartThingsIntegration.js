@@ -125,6 +125,76 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
     }
   },
 
+  // Webhook / SmartApp metadata
+  webhook: {
+    installedAppId: {
+      type: String,
+      default: ''
+    },
+    locationId: {
+      type: String,
+      default: ''
+    },
+    subscriptions: [{
+      subscriptionId: {
+        type: String,
+        default: ''
+      },
+      sourceType: {
+        type: String,
+        default: ''
+      },
+      deviceId: {
+        type: String,
+        default: ''
+      },
+      capability: {
+        type: String,
+        default: ''
+      },
+      attribute: {
+        type: String,
+        default: ''
+      },
+      componentId: {
+        type: String,
+        default: ''
+      },
+      subscriptionName: {
+        type: String,
+        default: ''
+      },
+      stateChangeOnly: {
+        type: Boolean,
+        default: true
+      },
+      value: {
+        type: String,
+        default: ''
+      },
+      createdDate: {
+        type: Date,
+        default: null
+      },
+      expirationTime: {
+        type: Date,
+        default: null
+      }
+    }],
+    lastSubscriptionSync: {
+      type: Date,
+      default: null
+    },
+    lastLifecycleHandledAt: {
+      type: Date,
+      default: null
+    },
+    lastEventReceivedAt: {
+      type: Date,
+      default: null
+    }
+  },
+
   // Metadata
   createdAt: {
     type: Date,
@@ -167,29 +237,45 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
       lastSync: null,
       lastError: '',
       connectedDevices: [],
-      sthm: {
-        armAwayDeviceId: '',
-        armStayDeviceId: '',
-        disarmDeviceId: '',
-        locationId: '',
-        lastArmState: '',
-        lastArmStateUpdatedAt: null
-      },
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      // Add methods that would be expected
-      isTokenValid: () => false,
-      clearTokens: async function(errorMessage = '') {
-        // For the mock object, we don't actually need to do anything
-        // since there's no database record to update
-        console.log('SmartThingsIntegration: Mock clearTokens called - no database record to clear');
-        return Promise.resolve();
-      },
-      toSanitized: function() {
-        const sanitized = { ...this };
-        if (sanitized.clientSecret) {
-          sanitized.clientSecret = sanitized.clientSecret.replace(/.(?=.{4})/g, '*');
-        }
+        sthm: {
+          armAwayDeviceId: '',
+          armStayDeviceId: '',
+          disarmDeviceId: '',
+          locationId: '',
+          lastArmState: '',
+          lastArmStateUpdatedAt: null
+        },
+        webhook: {
+          installedAppId: '',
+          locationId: '',
+          subscriptions: [],
+          lastSubscriptionSync: null,
+          lastLifecycleHandledAt: null,
+          lastEventReceivedAt: null
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        // Add methods that would be expected
+        isTokenValid: () => false,
+        clearTokens: async function(errorMessage = '') {
+          // For the mock object, we don't actually need to do anything
+          // since there's no database record to update
+          console.log('SmartThingsIntegration: Mock clearTokens called - no database record to clear');
+          return Promise.resolve();
+        },
+        updateWebhookState: async function() {
+          console.log('SmartThingsIntegration: Mock updateWebhookState called - no database record to update');
+          return Promise.resolve();
+        },
+        clearWebhookState: async function() {
+          console.log('SmartThingsIntegration: Mock clearWebhookState called - no database record to update');
+          return Promise.resolve();
+        },
+        toSanitized: function() {
+          const sanitized = { ...this };
+          if (sanitized.clientSecret) {
+            sanitized.clientSecret = sanitized.clientSecret.replace(/.(?=.{4})/g, '*');
+          }
         if (sanitized.accessToken) {
           sanitized.accessToken = sanitized.accessToken.replace(/.(?=.{4})/g, '*');
         }
@@ -225,6 +311,18 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
         integration.scope.length !== sanitizedScopes.length ||
         sanitizedScopes.some((scope, index) => scope !== integration.scope[index])) {
       integration.scope = sanitizedScopes;
+      changed = true;
+    }
+
+    if (!integration.webhook) {
+      integration.webhook = {
+        installedAppId: '',
+        locationId: '',
+        subscriptions: [],
+        lastSubscriptionSync: null,
+        lastLifecycleHandledAt: null,
+        lastEventReceivedAt: null
+      };
       changed = true;
     }
 
@@ -364,6 +462,83 @@ SmartThingsIntegrationSchema.methods.updateSecurityArmState = async function({ a
   if (!changed) {
     return;
   }
+
+  await this.save();
+};
+
+SmartThingsIntegrationSchema.methods.updateWebhookState = async function({
+  installedAppId,
+  locationId,
+  subscriptions,
+  lastSubscriptionSync,
+  lastLifecycleHandledAt,
+  lastEventReceivedAt
+} = {}) {
+  if (!this.webhook) {
+    this.webhook = {
+      installedAppId: '',
+      locationId: '',
+      subscriptions: [],
+      lastSubscriptionSync: null,
+      lastLifecycleHandledAt: null,
+      lastEventReceivedAt: null
+    };
+  }
+
+  let changed = false;
+
+  if (installedAppId !== undefined) {
+    const trimmedInstalledAppId = trimString(installedAppId);
+    if (this.webhook.installedAppId !== trimmedInstalledAppId) {
+      this.webhook.installedAppId = trimmedInstalledAppId;
+      changed = true;
+    }
+  }
+
+  if (locationId !== undefined) {
+    const trimmedLocationId = trimString(locationId);
+    if (this.webhook.locationId !== trimmedLocationId) {
+      this.webhook.locationId = trimmedLocationId;
+      changed = true;
+    }
+  }
+
+  if (Array.isArray(subscriptions)) {
+    this.webhook.subscriptions = subscriptions;
+    changed = true;
+  }
+
+  if (lastSubscriptionSync !== undefined) {
+    this.webhook.lastSubscriptionSync = lastSubscriptionSync ? new Date(lastSubscriptionSync) : null;
+    changed = true;
+  }
+
+  if (lastLifecycleHandledAt !== undefined) {
+    this.webhook.lastLifecycleHandledAt = lastLifecycleHandledAt ? new Date(lastLifecycleHandledAt) : new Date();
+    changed = true;
+  }
+
+  if (lastEventReceivedAt !== undefined) {
+    this.webhook.lastEventReceivedAt = lastEventReceivedAt ? new Date(lastEventReceivedAt) : null;
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  await this.save();
+};
+
+SmartThingsIntegrationSchema.methods.clearWebhookState = async function() {
+  this.webhook = {
+    installedAppId: '',
+    locationId: '',
+    subscriptions: [],
+    lastSubscriptionSync: null,
+    lastLifecycleHandledAt: new Date(),
+    lastEventReceivedAt: null
+  };
 
   await this.save();
 };
