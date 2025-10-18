@@ -15,6 +15,7 @@ const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
+const smartThingsWebhookRoutes = require("./routes/smartThingsWebhookRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const wakeWordRoutes = require("./routes/wakeWordRoutes");
@@ -111,7 +112,13 @@ app.enable('json spaces');
 app.enable('strict routing');
 
 app.use(cors({}));
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    if (buf && buf.length) {
+      req.rawBody = Buffer.from(buf);
+    }
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Database connection
@@ -199,8 +206,9 @@ app.use('/api/elevenlabs', elevenLabsRoutes);
 app.use('/api/settings', settingsRoutes);
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
-// SmartThings Routes
-app.use('/api/smartthings', smartThingsRoutes);
+  // SmartThings Routes
+  app.use('/api/smartthings/webhook', smartThingsWebhookRoutes);
+  app.use('/api/smartthings', smartThingsRoutes);
 // Maintenance Routes
 app.use('/api/maintenance', maintenanceRoutes);
 // Remote Device Routes

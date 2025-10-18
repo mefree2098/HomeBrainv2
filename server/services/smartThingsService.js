@@ -5,6 +5,16 @@ const Device = require('../models/Device');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 const SHOULD_LOG_SMARTTHINGS_SYNC = process.env.SMARTTHINGS_SYNC_LOGGING === 'true';
+const DEFAULT_CAPABILITY_SUBSCRIPTIONS = [
+  { capability: 'switch', attribute: 'switch' },
+  { capability: 'switchLevel', attribute: 'level' },
+  { capability: 'lock', attribute: 'lock' },
+  { capability: 'temperatureMeasurement', attribute: 'temperature' },
+  { capability: 'thermostatOperatingState', attribute: 'thermostatOperatingState' },
+  { capability: 'contactSensor', attribute: 'contact' },
+  { capability: 'motionSensor', attribute: 'motion' },
+  { capability: 'presenceSensor', attribute: 'presence' }
+];
 
 class SmartThingsService {
   constructor() {
@@ -13,7 +23,7 @@ class SmartThingsService {
     this.tokenUrl = 'https://api.smartthings.com/oauth/token';
     this.roomsCache = new Map();
     this.locationNameCache = new Map();
-    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 10000);
+    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 60000);
     this.deviceStatusSyncTimer = null;
     this.deviceStatusSyncInProgress = false;
     if (this.deviceStatusSyncIntervalMs > 0) {
@@ -37,6 +47,143 @@ class SmartThingsService {
     }
 
     return href;
+  }
+
+  getDefaultCapabilitySubscriptions() {
+    return DEFAULT_CAPABILITY_SUBSCRIPTIONS.map(subscription => ({ ...subscription }));
+  }
+
+  buildSubscriptionPayload(locationId, descriptor = {}) {
+    if (!descriptor || typeof descriptor !== 'object') {
+      throw new Error('Subscription descriptor must be an object');
+    }
+
+    const sourceType = descriptor.sourceType || (descriptor.deviceId ? 'DEVICE' : 'CAPABILITY');
+    const stateChangeOnly = descriptor.stateChangeOnly !== false;
+    const value = descriptor.value || '*';
+
+    if (sourceType === 'DEVICE') {
+      const deviceId = descriptor.deviceId ? descriptor.deviceId.trim() : '';
+      if (!deviceId) {
+        throw new Error('Device subscription requires deviceId');
+      }
+
+      return {
+        sourceType: 'DEVICE',
+        device: {
+          deviceId,
+          componentId: descriptor.componentId ? descriptor.componentId.trim() : 'main',
+          capability: descriptor.capability ? descriptor.capability.trim() : '*',
+          attribute: descriptor.attribute ? descriptor.attribute.trim() : '*',
+          stateChangeOnly,
+          value,
+          subscriptionName: descriptor.subscriptionName ? descriptor.subscriptionName.trim() : undefined
+        }
+      };
+    }
+
+    if (!locationId) {
+      throw new Error('Capability subscription requires locationId');
+    }
+
+    const capability = descriptor.capability ? descriptor.capability.trim() : '';
+    if (!capability) {
+      throw new Error('Capability subscription requires capability name');
+    }
+
+    const attribute = descriptor.attribute ? descriptor.attribute.trim() : '*';
+
+    const payload = {
+      sourceType: 'CAPABILITY',
+      capability: {
+        locationId,
+        capability,
+        attribute,
+        stateChangeOnly,
+        value,
+        subscriptionName: descriptor.subscriptionName ? descriptor.subscriptionName.trim() : undefined
+      }
+    };
+
+    if (descriptor.componentId) {
+      payload.capability.componentId = descriptor.componentId.trim();
+    }
+
+    return payload;
+  }
+
+  async listSubscriptions(installedAppId) {
+    if (!installedAppId) {
+      throw new Error('installedAppId is required to list subscriptions');
+    }
+
+    const result = await this.makeAuthenticatedRequest(`/installedapps/${installedAppId}/subscriptions`);
+    if (!result) {
+      return [];
+    }
+
+    if (Array.isArray(result.items)) {
+      return result.items;
+    }
+
+    if (Array.isArray(result.subscriptions)) {
+      return result.subscriptions;
+    }
+
+    return [];
+  }
+
+  async deleteAllSubscriptions(installedAppId) {
+    if (!installedAppId) {
+      throw new Error('installedAppId is required to delete subscriptions');
+    }
+
+    try {
+      await this.makeAuthenticatedRequest(`/installedapps/${installedAppId}/subscriptions`, {
+        method: 'delete'
+      });
+    } catch (error) {
+      if (error.status === 404) {
+        console.debug(`SmartThingsService: No existing subscriptions to delete for installedApp ${installedAppId}`);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async replaceCapabilitySubscriptions(installedAppId, locationId, capabilityDescriptors = DEFAULT_CAPABILITY_SUBSCRIPTIONS) {
+    if (!Array.isArray(capabilityDescriptors) || capabilityDescriptors.length === 0) {
+      console.warn('SmartThingsService: No capability descriptors provided for subscription replacement');
+      await this.deleteAllSubscriptions(installedAppId);
+      return [];
+    }
+
+    const normalizedLocationId = locationId ? locationId.trim() : '';
+    if (!normalizedLocationId) {
+      throw new Error('locationId is required to replace capability subscriptions');
+    }
+
+    await this.deleteAllSubscriptions(installedAppId);
+
+    const createdSubscriptions = [];
+    for (const descriptor of capabilityDescriptors) {
+      try {
+        const payload = this.buildSubscriptionPayload(normalizedLocationId, descriptor);
+        const response = await this.makeAuthenticatedRequest(`/installedapps/${installedAppId}/subscriptions`, {
+          method: 'post',
+          data: payload
+        });
+        createdSubscriptions.push({
+          payload,
+          response
+        });
+      } catch (error) {
+        console.error(`SmartThingsService: Failed to create subscription for ${descriptor.capability || descriptor.deviceId}:`, error.message);
+        throw error;
+      }
+    }
+
+    return createdSubscriptions;
   }
 
   /**
