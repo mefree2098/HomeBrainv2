@@ -349,8 +349,38 @@ class DeviceService {
         ? !!updateData.status
         : undefined;
 
+      const buildOptimisticPayload = () => {
+        const base =
+          typeof device.toObject === 'function'
+            ? device.toObject({ depopulate: true })
+            : { ...device };
+
+        const snapshot = { ...base, ...updateData };
+
+        if (snapshot._id && typeof snapshot._id !== 'string') {
+          try {
+            snapshot._id = snapshot._id.toString();
+          } catch (error) {
+            snapshot._id = String(snapshot._id);
+          }
+        }
+
+        if (!snapshot.id && snapshot._id) {
+          snapshot.id = snapshot._id;
+        }
+
+        return deviceUpdateEmitter.normalizeDevices([snapshot]);
+      };
+
+      let optimisticPayload = null;
+
       if (isSmartThings) {
         await this.controlSmartThingsDevice(device, normalizedAction, commandValue, updateData);
+
+        optimisticPayload = buildOptimisticPayload();
+        if (optimisticPayload.length > 0) {
+          deviceUpdateEmitter.emit('devices:update', optimisticPayload);
+        }
 
         const remoteUpdate = await this.pollSmartThingsState(device, expectedStatus);
         if (remoteUpdate) {
@@ -360,23 +390,28 @@ class DeviceService {
         if (updateData.isOnline === undefined) {
           updateData.isOnline = true;
         }
+      } else {
+        optimisticPayload = buildOptimisticPayload();
+        if (optimisticPayload.length > 0) {
+          deviceUpdateEmitter.emit('devices:update', optimisticPayload);
+        }
       }
 
-        const updatedDevice = await Device.findByIdAndUpdate(
-          deviceId,
-          updateData,
-          { new: true, runValidators: true }
-        );
+      const updatedDevice = await Device.findByIdAndUpdate(
+        deviceId,
+        updateData,
+        { new: true, runValidators: true }
+      );
 
-        if (updatedDevice) {
-          const payload = deviceUpdateEmitter.normalizeDevices([updatedDevice]);
-          if (payload.length > 0) {
-            deviceUpdateEmitter.emit('devices:update', payload);
-          }
+      if (updatedDevice) {
+        const payload = deviceUpdateEmitter.normalizeDevices([updatedDevice]);
+        if (payload.length > 0) {
+          deviceUpdateEmitter.emit('devices:update', payload);
         }
-  
-        console.log('DeviceService: Successfully controlled device:', updatedDevice.name, 'action:', action);
-        return updatedDevice;
+      }
+
+      console.log('DeviceService: Successfully controlled device:', updatedDevice.name, 'action:', action);
+      return updatedDevice;
     } catch (error) {
       console.error('DeviceService: Error controlling device:', error.message);
       console.error(error.stack);
