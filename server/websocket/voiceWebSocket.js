@@ -17,46 +17,76 @@ class VoiceWebSocketServer {
     this.heartbeatTimer = null;
     this.audioSessions = new Map(); // deviceId -> audio capture session
     this.settingsCache = { value: null, fetchedAt: 0 };
+    this.upgradeHandlers = [];
   }
 
   initialize(server) {
-    console.log('Initializing Voice WebSocket Server');
+    if (!this.wss) {
+      console.log('Initializing Voice WebSocket Server');
 
-    this.wss = new WebSocket.Server({
-      server,
-      path: '/ws/voice-device',
-      verifyClient: (info) => {
-        const url = new URL(info.req.url, `http://${info.req.headers.host}`);
-        let deviceId = url.searchParams.get('deviceId');
+      this.wss = new WebSocket.Server({
+        noServer: true,
+        verifyClient: (info) => {
+          const url = new URL(info.req.url, `http://${info.req.headers.host}`);
+          let deviceId = url.searchParams.get('deviceId');
 
-        if (!deviceId) {
-          const segments = url.pathname.split('/').filter(Boolean);
-          if (segments.length >= 2 && segments[segments.length - 2] === 'voice-device') {
-            deviceId = segments[segments.length - 1];
+          if (!deviceId) {
+            const segments = url.pathname.split('/').filter(Boolean);
+            if (segments.length >= 2 && segments[segments.length - 2] === 'voice-device') {
+              deviceId = segments[segments.length - 1];
+            }
           }
+
+          if (!deviceId || deviceId.length !== 24) {
+            console.warn('WebSocket connection rejected: Invalid device ID');
+            return false;
+          }
+
+          // Attach deviceId to request for later use
+          info.req.deviceId = deviceId;
+
+          return true;
         }
+      });
 
-        if (!deviceId || deviceId.length !== 24) {
-          console.warn('WebSocket connection rejected: Invalid device ID');
-          return false;
-        }
+      this.wss.on('connection', (ws, req) => {
+        console.log('voiceWebSocket.js instrumentation active - connection handler invoked');
+        this.handleConnection(ws, req);
+      });
 
-        // Attach deviceId to request for later use
-        info.req.deviceId = deviceId;
+      // Start heartbeat monitoring
+      this.startHeartbeat();
 
-        return true;
+      console.log('Voice WebSocket Server initialized successfully');
+    }
+
+    if (!server || typeof server.on !== 'function') {
+      return;
+    }
+
+    const upgradeHandler = (request, socket, head) => {
+      let pathname;
+      try {
+        const base = request.headers?.host
+          ? `http://${request.headers.host}`
+          : 'http://localhost';
+        pathname = new URL(request.url, base).pathname;
+      } catch (error) {
+        socket.destroy();
+        return;
       }
-    });
 
-    this.wss.on('connection', (ws, req) => {
-      console.log('voiceWebSocket.js instrumentation active - connection handler invoked');
-      this.handleConnection(ws, req);
-    });
+      if (!pathname.startsWith('/ws/voice-device')) {
+        return;
+      }
 
-    // Start heartbeat monitoring
-    this.startHeartbeat();
+      this.wss.handleUpgrade(request, socket, head, (ws) => {
+        this.wss.emit('connection', ws, request);
+      });
+    };
 
-    console.log('Voice WebSocket Server initialized successfully');
+    server.on('upgrade', upgradeHandler);
+    this.upgradeHandlers.push({ server, upgradeHandler });
   }
 
   async handleConnection(ws, req) {
@@ -1027,6 +1057,17 @@ class VoiceWebSocketServer {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+
+    if (this.upgradeHandlers.length > 0) {
+      this.upgradeHandlers.forEach(({ server, upgradeHandler }) => {
+        if (typeof server.off === 'function') {
+          server.off('upgrade', upgradeHandler);
+        } else {
+          server.removeListener('upgrade', upgradeHandler);
+        }
+      });
+      this.upgradeHandlers = [];
     }
 
     if (this.wss) {
