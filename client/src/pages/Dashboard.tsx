@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -25,6 +25,7 @@ import { VoiceCommandPanel } from "@/components/dashboard/VoiceCommandPanel"
 import { SecurityAlarmWidget } from "@/components/dashboard/SecurityAlarmWidget"
 import { useFavorites } from "@/hooks/useFavorites"
 import { Link } from "react-router-dom"
+import { useDeviceRealtime } from "@/hooks/useDeviceRealtime"
 
 export function Dashboard() {
   const { toast } = useToast()
@@ -43,6 +44,47 @@ export function Dashboard() {
     pendingDeviceIds,
     pendingSceneIds
   } = useFavorites()
+
+  const applyIncomingDevices = useCallback((incomingDevices: any[]) => {
+    if (!Array.isArray(incomingDevices) || incomingDevices.length === 0) {
+      return
+    }
+
+    setDevices(prevDevices => {
+      const normalizedPrev = Array.isArray(prevDevices) ? prevDevices : []
+      const updatesById = new Map<string, any>()
+
+      incomingDevices.forEach((device: any) => {
+        if (device && device._id) {
+          updatesById.set(device._id, device)
+        }
+      })
+
+      if (updatesById.size === 0) {
+        return prevDevices
+      }
+
+      let hasChanges = false
+      const nextDevices = normalizedPrev.map(device => {
+        const updated = updatesById.get(device._id)
+        if (updated) {
+          hasChanges = true
+          updatesById.delete(device._id)
+          return { ...device, ...updated }
+        }
+        return device
+      })
+
+      updatesById.forEach(device => {
+        hasChanges = true
+        nextDevices.push(device)
+      })
+
+      return hasChanges ? nextDevices : prevDevices
+    })
+  }, [setDevices])
+
+  useDeviceRealtime(applyIncomingDevices)
 
   useEffect(() => {
     const fetchDashboardData = async () => {
