@@ -48,12 +48,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.reload();
   };
 
+  const clearAccessTokenCookie = () => {
+    const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `hbAccessToken=; Max-Age=0; path=/; SameSite=Lax${secureFlag}`;
+  };
+
   const resetAuth = () => {
     localStorage.removeItem("refreshToken");
     localStorage.removeItem("accessToken");
     localStorage.removeItem("userData");
     setCurrentUser(null);
     setIsAuthenticated(false);
+    clearAccessTokenCookie();
   };
 
   const setAuthData = (accessToken, refreshToken, userData) => {
@@ -63,6 +69,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("userData", JSON.stringify(userData));
       setCurrentUser(userData);
       setIsAuthenticated(true);
+      const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
+      document.cookie = `hbAccessToken=${encodeURIComponent(accessToken)}; path=/; SameSite=Lax${secureFlag}`;
     } else {
       throw new Error('Neither refreshToken nor accessToken was returned.');
     }
