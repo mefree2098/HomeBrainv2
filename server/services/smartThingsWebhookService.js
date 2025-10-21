@@ -1065,6 +1065,10 @@ class SmartThingsWebhookService {
         const refreshedDevices = await Device.find({ _id: { $in: updatedDeviceIds } }).lean();
         const payloadUpdates = deviceUpdateEmitter.normalizeDevices(refreshedDevices);
         if (payloadUpdates.length > 0) {
+          this.log('info', 'Emitting SmartThings device updates', {
+            deviceCount: payloadUpdates.length,
+            deviceIds: payloadUpdates.map(device => device?._id || device?.id).filter(Boolean)
+          });
           deviceUpdateEmitter.emit('devices:update', payloadUpdates);
         }
       } catch (error) {
