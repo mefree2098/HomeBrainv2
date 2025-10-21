@@ -23,12 +23,16 @@ class SmartThingsService {
     this.tokenUrl = 'https://api.smartthings.com/oauth/token';
     this.roomsCache = new Map();
     this.locationNameCache = new Map();
-    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 60000);
+    this.deviceStatusSyncIntervalMs = Number(process.env.SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS || 5 * 60 * 1000);
     this.deviceStatusSyncTimer = null;
     this.deviceStatusSyncInProgress = false;
     this.subscriptionRefreshIntervalMs = Number(process.env.SMARTTHINGS_SUBSCRIPTION_REFRESH_INTERVAL_MS || 24 * 60 * 60 * 1000);
     this.subscriptionRefreshTimer = null;
     this.subscriptionRefreshInProgress = false;
+    this.webhookEventFreshnessMs = Number(process.env.SMARTTHINGS_WEBHOOK_EVENT_STALENESS_MS || 5 * 60 * 1000);
+    this.disablePollingWhenWebhookHealthy = process.env.SMARTTHINGS_DISABLE_POLLING_ON_WEBHOOK === 'false' ? false : true;
+    this.forceDevicePolling = process.env.SMARTTHINGS_FORCE_DEVICE_POLLING === 'true';
+    this.lastSuccessfulDeviceSyncAt = 0;
     if (this.deviceStatusSyncIntervalMs > 0) {
       this.startDeviceStatusSync();
     }
@@ -116,6 +120,73 @@ class SmartThingsService {
     }
 
     return payload;
+  }
+
+  getLastWebhookActivity(integration) {
+    if (!integration || typeof integration !== 'object') {
+      return null;
+    }
+
+    const candidates = [
+      integration?.webhook?.lastEventReceivedAt,
+      integration?.webhook?.lastLifecycleHandledAt,
+      integration?.webhook?.lastSubscriptionSync,
+      integration?.lastSync
+    ];
+
+    const timestamps = candidates
+      .map((value) => {
+        if (!value) {
+          return null;
+        }
+        const date = value instanceof Date ? value : new Date(value);
+        const time = date.getTime();
+        return Number.isNaN(time) ? null : time;
+      })
+      .filter((value) => typeof value === 'number');
+
+    if (timestamps.length === 0) {
+      return null;
+    }
+
+    return Math.max(...timestamps);
+  }
+
+  isWebhookFresh(integration) {
+    const lastActivity = this.getLastWebhookActivity(integration);
+    if (!lastActivity) {
+      return false;
+    }
+
+    const freshnessThreshold = Math.max(0, this.webhookEventFreshnessMs);
+    return Date.now() - lastActivity <= freshnessThreshold;
+  }
+
+  shouldSkipDevicePolling({ integration, force = false, reason = 'unspecified' } = {}) {
+    if (force || this.forceDevicePolling) {
+      return false;
+    }
+
+    if (!this.disablePollingWhenWebhookHealthy) {
+      return false;
+    }
+
+    const hasWebhook = Boolean(integration?.webhook?.installedAppId);
+    if (!hasWebhook) {
+      return false;
+    }
+
+    if (this.lastSuccessfulDeviceSyncAt === 0 && this.isWebhookFresh(integration)) {
+      console.debug(`SmartThingsService: Skipping initial device poll (${reason}); webhook already delivered recent data.`);
+      return true;
+    }
+
+    if (this.lastSuccessfulDeviceSyncAt > 0 && this.isWebhookFresh(integration)) {
+      console.debug(`SmartThingsService: Skipping device polling (${reason}); webhook activity remains fresh.`);
+      return true;
+    }
+
+    return false;
   }
 
   async listSubscriptions(installedAppId) {
@@ -670,7 +741,7 @@ class SmartThingsService {
       const intervalMs = Math.max(this.deviceStatusSyncIntervalMs, 2000);
       this.deviceStatusSyncTimer = setTimeout(async () => {
         try {
-          await this.runDeviceStatusSync();
+          await this.runDeviceStatusSync({ reason: 'periodic-tick' });
         } catch (error) {
           console.error('SmartThingsService: Device status sync error:', error.message);
         } finally {
@@ -685,12 +756,12 @@ class SmartThingsService {
 
     scheduleNext();
 
-    this.runDeviceStatusSync().catch((error) => {
+    this.runDeviceStatusSync({ reason: 'initial-start' }).catch((error) => {
       console.error('SmartThingsService: Initial device status sync error:', error.message);
     });
   }
 
-  async runDeviceStatusSync() {
+  async runDeviceStatusSync({ integration: providedIntegration, force = false, reason = 'unspecified' } = {}) {
     if (this.deviceStatusSyncInProgress) {
       return;
     }
@@ -698,12 +769,20 @@ class SmartThingsService {
     this.deviceStatusSyncInProgress = true;
 
     try {
-      const integration = await SmartThingsIntegration.findOne();
+      let integration = providedIntegration;
+      if (!integration || typeof integration !== 'object') {
+        integration = await SmartThingsIntegration.getIntegration();
+      }
+
       if (!integration || !integration.isConfigured) {
         return;
       }
 
       if (!integration.accessToken && !integration.refreshToken) {
+        return;
+      }
+
+      if (this.shouldSkipDevicePolling({ integration, force, reason })) {
         return;
       }
 
@@ -803,6 +882,7 @@ class SmartThingsService {
             console.warn('SmartThingsService: Failed to emit device updates:', emitterError.message);
           }
         }
+      this.lastSuccessfulDeviceSyncAt = Date.now();
     } catch (error) {
       console.error('SmartThingsService: Device status sync failure:', error.message);
     } finally {
