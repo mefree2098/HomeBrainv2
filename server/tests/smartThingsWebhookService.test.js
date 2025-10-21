@@ -138,13 +138,17 @@ test('handleEvent updates devices, emits updates, and records metrics', async (t
     eventData: {
       events: [
         {
-          eventId: 'evt-1',
-          deviceId: 'device-1',
-          componentId: 'main',
-          capability: 'switch',
-          attribute: 'switch',
-          value: 'on',
-          eventTime: nowIso
+          eventType: 'DEVICE_EVENT',
+          deviceEvent: {
+            eventId: 'evt-1',
+            deviceId: 'device-1',
+            componentId: 'main',
+            capability: 'switch',
+            attribute: 'switch',
+            value: 'on',
+            locationId: 'location-1',
+            eventTime: nowIso
+          }
         }
       ]
     }
@@ -167,6 +171,54 @@ test('handleEvent updates devices, emits updates, and records metrics', async (t
 
   assert.ok(integrationState.lastUpdatePayload);
   assert.ok(integrationState.lastUpdatePayload.lastEventReceivedAt);
+});
+
+test('handleEvent returns NO_DEVICE_EVENTS when payload lacks usable device events', async (t) => {
+  smartThingsWebhookService.resetMetrics();
+
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const integrationState = {
+    async updateWebhookState(update) {
+      this.lastUpdate = update;
+    }
+  };
+
+  SmartThingsIntegration.getIntegration = async () => integrationState;
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+  });
+
+  const response = await smartThingsWebhookService.handleEvent({
+    lifecycle: 'EVENT',
+    eventData: {
+      events: [
+        { eventType: 'TIMER_EVENT', timerEvent: { name: 'heartbeat' } },
+        {
+          eventType: 'DEVICE_EVENT',
+          deviceEvent: {
+            componentId: 'main',
+            capability: 'switch',
+            attribute: 'switch',
+            value: 'on'
+          }
+        }
+      ]
+    }
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.eventData.status, 'NO_DEVICE_EVENTS');
+  assert.deepEqual(response.body.eventData.skippedEventTypes, ['TIMER_EVENT']);
+  assert.equal(response.body.eventData.malformedCount, 1);
+
+  const metrics = smartThingsWebhookService.getMetricsSnapshot();
+  assert.equal(metrics.events.received, 0);
+  assert.equal(metrics.events.processedDevices, 0);
+  assert.equal(metrics.events.ignoredDevices, 0);
+
+  assert.ok(integrationState.lastUpdate);
+  assert.ok(integrationState.lastUpdate.lastEventReceivedAt);
 });
 
 test('refreshWebhookSubscriptions renews capability subscriptions and updates state', async (t) => {
