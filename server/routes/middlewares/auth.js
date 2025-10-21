@@ -2,6 +2,31 @@ const UserService = require('../../services/userService.js');
 const jwt = require('jsonwebtoken');
 const {ALL_ROLES} = require("../../../shared/config/roles");
 
+function extractToken(req) {
+  const authorizationHeader = req.headers.authorization;
+  const headerToken = authorizationHeader?.split(' ')[1];
+  const queryToken = req.query?.token;
+
+  let cookieToken = null;
+  const rawCookies = req.headers.cookie;
+  if (rawCookies) {
+    cookieToken = rawCookies
+      .split(';')
+      .map(part => part.trim())
+      .map(part => part.split('='))
+      .reduce((acc, [key, value]) => {
+        if (key && value && !acc) {
+          if (decodeURIComponent(key) === 'hbAccessToken') {
+            acc = decodeURIComponent(value);
+          }
+        }
+        return acc;
+      }, null);
+  }
+
+  return headerToken || queryToken || cookieToken || null;
+}
+
 async function verifyAccessToken(token, allowedRoles = ALL_ROLES) {
   if (!token) {
     const error = new Error('Unauthorized');
@@ -46,11 +71,10 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES) {
 
 const requireUser = (allowedRoles = ALL_ROLES) => {
   return async (req, res, next) => {
-    const authHeaderToken = req.headers.authorization?.split(' ')[1];
-    const queryToken = req.query?.token;
+    const token = extractToken(req);
 
     try {
-      const user = await verifyAccessToken(authHeaderToken || queryToken, allowedRoles);
+      const user = await verifyAccessToken(token, allowedRoles);
       req.user = user;
       next();
     } catch (error) {
@@ -62,4 +86,5 @@ const requireUser = (allowedRoles = ALL_ROLES) => {
 module.exports = {
   requireUser,
   verifyAccessToken,
+  extractToken
 };
