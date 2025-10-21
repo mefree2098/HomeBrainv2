@@ -177,6 +177,7 @@ test('handleEvent returns NO_DEVICE_EVENTS when payload lacks usable device even
   smartThingsWebhookService.resetMetrics();
 
   const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalGetDeviceStatus = smartThingsService.getDeviceStatus;
   const integrationState = {
     async updateWebhookState(update) {
       this.lastUpdate = update;
@@ -184,9 +185,11 @@ test('handleEvent returns NO_DEVICE_EVENTS when payload lacks usable device even
   };
 
   SmartThingsIntegration.getIntegration = async () => integrationState;
+  smartThingsService.getDeviceStatus = originalGetDeviceStatus;
 
   t.after(() => {
     SmartThingsIntegration.getIntegration = originalGetIntegration;
+    smartThingsService.getDeviceStatus = originalGetDeviceStatus;
   });
 
   const response = await smartThingsWebhookService.handleEvent({
@@ -219,6 +222,123 @@ test('handleEvent returns NO_DEVICE_EVENTS when payload lacks usable device even
 
   assert.ok(integrationState.lastUpdate);
   assert.ok(integrationState.lastUpdate.lastEventReceivedAt);
+});
+
+test('handleEvent fetches device status for unsupported event types', async (t) => {
+  smartThingsWebhookService.resetMetrics();
+
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalBuildUpdate = smartThingsService.buildSmartThingsDeviceUpdate;
+  const originalGetStatus = smartThingsService.getDeviceStatus;
+
+  const integrationState = {
+    webhook: { locationId: 'location-1' },
+    async updateWebhookState(update) {
+      this.lastUpdatePayload = update;
+    }
+  };
+
+  SmartThingsIntegration.getIntegration = async () => integrationState;
+  smartThingsService.buildSmartThingsDeviceUpdate = async () => ({
+    status: true,
+    isOnline: true
+  });
+
+  let getStatusCalls = 0;
+  smartThingsService.getDeviceStatus = async () => {
+    getStatusCalls += 1;
+    return {
+      components: {
+        main: {
+          switch: {
+            switch: {
+              value: 'on'
+            }
+          }
+        }
+      },
+      healthState: {
+        state: 'ONLINE',
+        lastUpdatedDate: new Date().toISOString()
+      }
+    };
+  };
+
+  const trackedDevice = {
+    _id: 'mongo-id-1',
+    name: 'Test Lamp',
+    status: false,
+    isOnline: false,
+    lastSeen: new Date('2024-01-01T00:00:00.000Z'),
+    properties: {
+      smartThingsDeviceId: 'device-1',
+      smartThingsCapabilities: ['switch'],
+      smartThingsLocationId: 'location-1'
+    }
+  };
+
+  const refreshedDevice = {
+    _id: 'mongo-id-1',
+    status: true,
+    isOnline: true,
+    properties: {
+      smartThingsDeviceId: 'device-1'
+    }
+  };
+
+  const originalDeviceFind = Device.find;
+  const originalBulkWrite = Device.bulkWrite;
+  let capturedBulkOps = null;
+
+  Device.find = (query) => {
+    if (query && query._id && query._id.$in) {
+      return {
+        lean: async () => [refreshedDevice]
+      };
+    }
+    return {
+      lean: async () => [trackedDevice]
+    };
+  };
+
+  Device.bulkWrite = async (ops) => {
+    capturedBulkOps = ops;
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    smartThingsService.buildSmartThingsDeviceUpdate = originalBuildUpdate;
+    smartThingsService.getDeviceStatus = originalGetStatus;
+    Device.find = originalDeviceFind;
+    Device.bulkWrite = originalBulkWrite;
+  });
+
+  const response = await smartThingsWebhookService.handleEvent({
+    lifecycle: 'EVENT',
+    eventData: {
+      events: [
+        {
+          eventType: 'DEVICE_HEALTH_EVENT',
+          deviceHealthEvent: {
+            deviceId: 'device-1',
+            componentId: 'main',
+            status: 'ONLINE'
+          }
+        }
+      ]
+    }
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.eventData.status, 'PROCESSED');
+  assert.ok(Array.isArray(capturedBulkOps));
+  assert.equal(capturedBulkOps.length, 1);
+  assert.equal(getStatusCalls, 1);
+
+  const metrics = smartThingsWebhookService.getMetricsSnapshot();
+  assert.equal(metrics.events.received, 0);
+  assert.equal(metrics.events.processedDevices, 1);
+  assert.equal(metrics.events.ignoredDevices, 0);
 });
 
 test('refreshWebhookSubscriptions renews capability subscriptions and updates state', async (t) => {

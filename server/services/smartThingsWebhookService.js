@@ -514,13 +514,15 @@ class SmartThingsWebhookService {
     if (!Array.isArray(events)) {
       return {
         deviceEvents: [],
-        ignoredEventTypes: [],
+        relatedDeviceIds: [],
+        ignoredEventTypeCounts: [],
         malformedCount: 0
       };
     }
 
     const deviceEvents = [];
-    const ignoredEventTypes = new Set();
+    const ignoredEventTypes = new Map();
+    const relatedDeviceIds = new Set();
     let malformedCount = 0;
 
     for (const entry of events) {
@@ -530,50 +532,61 @@ class SmartThingsWebhookService {
       }
 
       const eventType = typeof entry.eventType === 'string' ? entry.eventType.toUpperCase() : '';
-      if (eventType && eventType !== 'DEVICE_EVENT') {
-        ignoredEventTypes.add(eventType);
-        continue;
-      }
-
       const candidate = entry.deviceEvent && typeof entry.deviceEvent === 'object'
         ? entry.deviceEvent
-        : entry;
+        : null;
 
-      if (!candidate || typeof candidate !== 'object') {
-        malformedCount += 1;
+      if (eventType === 'DEVICE_EVENT' && candidate) {
+        const deviceId = trim(candidate.deviceId || '');
+        const capability = trim(candidate.capability || '');
+        const attribute = trim(candidate.attribute || '');
+        const componentId = trim(candidate.componentId || 'main');
+
+        if (!deviceId || !capability || !attribute) {
+          malformedCount += 1;
+          if (deviceId) {
+            relatedDeviceIds.add(deviceId);
+          }
+          continue;
+        }
+
+        relatedDeviceIds.add(deviceId);
+
+        const { timestampMs, timestampIso } = this.resolveEventTimestamp(candidate);
+
+        deviceEvents.push({
+          deviceId,
+          capability,
+          attribute,
+          componentId,
+          value: candidate.value,
+          unit: candidate.unit || candidate.unitOfMeasure || null,
+          data: candidate.data || candidate.additionalData,
+          locationId: trim(candidate.locationId || ''),
+          timestampMs,
+          timestampIso,
+          raw: candidate
+        });
         continue;
       }
 
-      const deviceId = trim(candidate.deviceId || '');
-      const capability = trim(candidate.capability || '');
-      const attribute = trim(candidate.attribute || '');
-      const componentId = trim(candidate.componentId || 'main');
-
-      if (!deviceId || !capability || !attribute) {
-        malformedCount += 1;
-        continue;
+      const fallbackDeviceId = this.extractDeviceIdFromEvent(entry);
+      if (fallbackDeviceId) {
+        relatedDeviceIds.add(fallbackDeviceId);
       }
 
-      const { timestampMs, timestampIso } = this.resolveEventTimestamp(candidate);
-
-      deviceEvents.push({
-        deviceId,
-        capability,
-        attribute,
-        componentId,
-        value: candidate.value,
-        unit: candidate.unit || candidate.unitOfMeasure || null,
-        data: candidate.data || candidate.additionalData,
-        locationId: trim(candidate.locationId || ''),
-        timestampMs,
-        timestampIso,
-        raw: candidate
-      });
+      if (eventType) {
+        const previousCount = ignoredEventTypes.get(eventType) || 0;
+        ignoredEventTypes.set(eventType, previousCount + 1);
+      } else {
+        malformedCount += 1;
+      }
     }
 
     return {
       deviceEvents,
-      ignoredEventTypes: Array.from(ignoredEventTypes),
+      relatedDeviceIds: Array.from(relatedDeviceIds),
+      ignoredEventTypeCounts: Array.from(ignoredEventTypes.entries()),
       malformedCount
     };
   }
@@ -626,6 +639,72 @@ class SmartThingsWebhookService {
     return {
       timestampMs: fallbackMs,
       timestampIso: new Date(fallbackMs).toISOString()
+    };
+  }
+
+  extractDeviceIdFromEvent(entry) {
+    if (!entry || typeof entry !== 'object') {
+      return '';
+    }
+
+    const candidates = [
+      entry?.deviceEvent?.deviceId,
+      entry?.deviceLifecycleEvent?.deviceId,
+      entry?.deviceHealthEvent?.deviceId,
+      entry?.deviceStateEvent?.deviceId,
+      entry?.deviceCommandsEvent?.deviceId,
+      entry?.deviceCommandEvent?.deviceId,
+      entry?.device?.deviceId,
+      entry?.deviceId
+    ];
+
+    for (const candidate of candidates) {
+      const trimmed = trim(candidate || '');
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+
+    return '';
+  }
+
+  buildPseudoDeviceFromStatus(tracked, status, integration) {
+    if (!tracked || !status || typeof status !== 'object') {
+      return null;
+    }
+
+    const capabilityIds = Array.isArray(tracked?.properties?.smartThingsCapabilities)
+      ? tracked.properties.smartThingsCapabilities
+      : [];
+
+    const componentIds = Array.isArray(tracked?.properties?.componentIds) && tracked.properties.componentIds.length > 0
+      ? tracked.properties.componentIds
+      : ['main'];
+
+    const components = componentIds.map((componentId) => ({
+      id: componentId,
+      capabilities: capabilityIds.map((capabilityId) => ({ id: capabilityId }))
+    }));
+
+    const healthState = status?.healthState || tracked?.properties?.smartThingsHealthState || (typeof tracked.isOnline === 'boolean'
+      ? {
+          state: tracked.isOnline ? 'ONLINE' : 'OFFLINE',
+          lastUpdatedDate: new Date(tracked.lastSeen || Date.now()).toISOString()
+        }
+      : null);
+
+    const statusComponents = status?.components && typeof status.components === 'object'
+      ? status.components
+      : {};
+
+    return {
+      deviceId: tracked?.properties?.smartThingsDeviceId || tracked?.deviceId || String(tracked?._id || ''),
+      components,
+      status: {
+        components: statusComponents
+      },
+      healthState,
+      locationId: tracked?.properties?.smartThingsLocationId || integration?.webhook?.locationId || ''
     };
   }
 
@@ -973,13 +1052,17 @@ class SmartThingsWebhookService {
     this.log('debug', 'SmartThings EVENT lifecycle received', { eventCount: rawEvents.length });
 
     const integration = await SmartThingsIntegration.getIntegration();
-    const { deviceEvents, ignoredEventTypes, malformedCount } = this.extractDeviceEvents(rawEvents);
+    const extracted = this.extractDeviceEvents(rawEvents);
+    const deviceEvents = extracted.deviceEvents;
+    const ignoredEventTypeCounts = extracted.ignoredEventTypeCounts || [];
+    const relatedDeviceIds = extracted.relatedDeviceIds || [];
+    const malformedCount = extracted.malformedCount || 0;
 
     this.metrics.events.received += deviceEvents.length;
 
-    if (ignoredEventTypes.length > 0) {
+    if (ignoredEventTypeCounts.length > 0) {
       this.log('debug', 'SmartThings EVENT lifecycle skipped unsupported event types', {
-        eventTypes: ignoredEventTypes
+        eventTypes: ignoredEventTypeCounts.map(([type, count]) => ({ type, count }))
       });
     }
 
@@ -989,7 +1072,10 @@ class SmartThingsWebhookService {
       });
     }
 
-    if (deviceEvents.length === 0) {
+    const relatedDeviceIdSet = new Set(Array.isArray(relatedDeviceIds) ? relatedDeviceIds : []);
+    deviceEvents.forEach((event) => relatedDeviceIdSet.add(event.deviceId));
+
+    if (deviceEvents.length === 0 && relatedDeviceIdSet.size === 0) {
       const now = new Date();
       if (typeof integration.updateWebhookState === 'function') {
         await integration.updateWebhookState({
@@ -1004,14 +1090,14 @@ class SmartThingsWebhookService {
         body: {
           eventData: {
             status: rawEvents.length === 0 ? 'NO_EVENTS' : 'NO_DEVICE_EVENTS',
-            skippedEventTypes: ignoredEventTypes.length > 0 ? ignoredEventTypes : undefined,
+            skippedEventTypes: ignoredEventTypeCounts.map(([type]) => type),
             malformedCount: malformedCount > 0 ? malformedCount : undefined
           }
         }
       };
     }
 
-    const deviceIds = Array.from(new Set(deviceEvents.map(event => event.deviceId)));
+    const deviceIds = Array.from(relatedDeviceIdSet);
 
     const trackedDevices = deviceIds.length > 0
       ? await Device.find({ 'properties.smartThingsDeviceId': { $in: deviceIds } }).lean()
@@ -1095,32 +1181,8 @@ class SmartThingsWebhookService {
     this.metrics.events.lastAt = lastEventDate;
     this.eventStallAlerted = false;
 
-    if (aggregatedByDevice.size === 0) {
-      this.metrics.events.ignoredDevices += ignoredDevices.size;
-      if (ignoredDevices.size > 0) {
-        this.log('warn', 'SmartThings EVENT lifecycle ignored devices', {
-          ignoredDeviceIds: Array.from(ignoredDevices)
-        });
-      }
-      if (typeof integration.updateWebhookState === 'function') {
-        await integration.updateWebhookState({
-          lastLifecycleHandledAt: new Date(),
-          lastEventReceivedAt: lastEventDate
-        });
-      }
-      return {
-        statusCode: 200,
-        body: {
-          eventData: {
-            status: 'NO_MATCH',
-            ignoredDeviceIds: ignoredDevices.size > 0 ? Array.from(ignoredDevices) : undefined
-          }
-        }
-      };
-    }
-
     const bulkOps = [];
-    const updatedDeviceIds = [];
+    const updatedDeviceIds = new Set();
 
     for (const [deviceId, aggregation] of aggregatedByDevice.entries()) {
       const tracked = trackedMap.get(deviceId);
@@ -1181,7 +1243,47 @@ class SmartThingsWebhookService {
             update: { $set: updates }
           }
         });
-        updatedDeviceIds.push(String(tracked._id));
+        updatedDeviceIds.add(String(tracked._id));
+      }
+    }
+
+    const fallbackDeviceIds = Array.from(relatedDeviceIdSet).filter((deviceId) => !aggregatedByDevice.has(deviceId));
+
+    if (fallbackDeviceIds.length > 0) {
+      for (const deviceId of fallbackDeviceIds) {
+        const tracked = trackedMap.get(deviceId);
+        if (!tracked) {
+          ignoredDevices.add(deviceId);
+          continue;
+        }
+
+        try {
+          const statusSnapshot = await smartThingsService.getDeviceStatus(deviceId);
+          if (!statusSnapshot || typeof statusSnapshot !== 'object') {
+            continue;
+          }
+
+          const pseudoDevice = this.buildPseudoDeviceFromStatus(tracked, statusSnapshot, integration);
+          if (!pseudoDevice) {
+            continue;
+          }
+
+          const updates = await smartThingsService.buildSmartThingsDeviceUpdate(tracked, pseudoDevice);
+          if (updates && Object.keys(updates).length > 0) {
+            bulkOps.push({
+              updateOne: {
+                filter: { _id: tracked._id },
+                update: { $set: updates }
+              }
+            });
+            updatedDeviceIds.add(String(tracked._id));
+          }
+        } catch (error) {
+          this.log('warn', 'SmartThings fallback device status refresh failed', {
+            deviceId,
+            error: error.message
+          });
+        }
       }
     }
 
@@ -1193,9 +1295,11 @@ class SmartThingsWebhookService {
       }
     }
 
-    if (updatedDeviceIds.length > 0) {
+    const updatedDeviceIdArray = Array.from(updatedDeviceIds);
+
+    if (updatedDeviceIdArray.length > 0) {
       try {
-        const refreshedDevices = await Device.find({ _id: { $in: updatedDeviceIds } }).lean();
+        const refreshedDevices = await Device.find({ _id: { $in: updatedDeviceIdArray } }).lean();
         const payloadUpdates = deviceUpdateEmitter.normalizeDevices(refreshedDevices);
         if (payloadUpdates.length > 0) {
           this.log('info', 'Emitting SmartThings device updates', {
@@ -1209,7 +1313,7 @@ class SmartThingsWebhookService {
       }
     }
 
-    this.metrics.events.processedDevices += updatedDeviceIds.length;
+    this.metrics.events.processedDevices += updatedDeviceIdArray.length;
     this.metrics.events.ignoredDevices += ignoredDevices.size;
     if (ignoredDevices.size > 0) {
       this.log('warn', 'SmartThings EVENT lifecycle ignored tracked devices', {
@@ -1224,18 +1328,23 @@ class SmartThingsWebhookService {
       });
     }
 
+    const status = updatedDeviceIdArray.length > 0
+      ? 'PROCESSED'
+      : (aggregatedByDevice.size === 0 && fallbackDeviceIds.length === 0 ? 'NO_MATCH' : 'ACKNOWLEDGED');
+
     this.log('info', 'SmartThings EVENT lifecycle processed', {
       eventsReceived: deviceEvents.length,
-      devicesUpdated: updatedDeviceIds.length,
-      ignoredDevices: ignoredDevices.size
+      devicesUpdated: updatedDeviceIdArray.length,
+      ignoredDevices: ignoredDevices.size,
+      status
     });
 
     return {
       statusCode: 200,
       body: {
         eventData: {
-          status: updatedDeviceIds.length > 0 ? 'PROCESSED' : 'ACKNOWLEDGED',
-          processedDeviceCount: updatedDeviceIds.length,
+          status,
+          processedDeviceCount: updatedDeviceIdArray.length,
           ignoredDeviceIds: ignoredDevices.size > 0 ? Array.from(ignoredDevices) : undefined
         }
       }
