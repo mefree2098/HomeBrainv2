@@ -43,7 +43,12 @@ export function useDeviceRealtime(applyIncomingDevices: (devices: any[]) => void
           : new URL(override, `${protocol}//${hostname}`);
 
         parsedUrl.protocol = protocol;
+        const overrideHostname = parsedUrl.hostname;
         parsedUrl.hostname = sanitizeHostname(parsedUrl.hostname);
+        const hostChanged = overrideHostname !== parsedUrl.hostname;
+        if (hostChanged && loopbackHosts.has(overrideHostname)) {
+          parsedUrl.port = "";
+        }
 
         const explicitPort = import.meta.env.VITE_DEVICE_WS_PORT;
         if (explicitPort) {
@@ -93,7 +98,12 @@ export function useDeviceRealtime(applyIncomingDevices: (devices: any[]) => void
           : new URL(override, `${protocol}//${hostname}`);
 
         parsedUrl.protocol = protocol;
+        const overrideHostname = parsedUrl.hostname;
         parsedUrl.hostname = sanitizeHostname(parsedUrl.hostname);
+        const hostChanged = overrideHostname !== parsedUrl.hostname;
+        if (hostChanged && loopbackHosts.has(overrideHostname)) {
+          parsedUrl.port = "";
+        }
         parsedUrl.pathname = "/api/devices/stream";
         parsedUrl.search = "";
 
