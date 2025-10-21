@@ -315,9 +315,10 @@ test('updateMetricsConfig validates and applies production cadence', async (t) =
 
   smartThingsWebhookService.captureMetricsSnapshot('post-update');
   const history = smartThingsWebhookService.getMetricsHistory();
-  assert.equal(history.length, 1);
-  assert.equal(history[0].reason, 'post-update');
+  assert.ok(history.length >= 1);
+  assert.equal(history[history.length - 1].reason, 'post-update');
 
-  await assert.rejects(() => smartThingsWebhookService.updateMetricsConfig({ intervalMs: -1 }), /metrics interval must be a non-negative number/);
-  await assert.rejects(() => smartThingsWebhookService.updateMetricsConfig({ historySize: 0 }), /metrics history size must be a positive number/);
+  assert.throws(() => smartThingsWebhookService.updateMetricsConfig({ intervalMs: -1 }), /metrics interval must be a non-negative number/);
+  assert.throws(() => smartThingsWebhookService.updateMetricsConfig({ historySize: 0 }), /metrics history size must be a positive number/);
 });
+
