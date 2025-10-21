@@ -510,6 +510,126 @@ class SmartThingsWebhookService {
 
     return normalized;
   }
+  extractDeviceEvents(events) {
+    if (!Array.isArray(events)) {
+      return {
+        deviceEvents: [],
+        ignoredEventTypes: [],
+        malformedCount: 0
+      };
+    }
+
+    const deviceEvents = [];
+    const ignoredEventTypes = new Set();
+    let malformedCount = 0;
+
+    for (const entry of events) {
+      if (!entry || typeof entry !== 'object') {
+        malformedCount += 1;
+        continue;
+      }
+
+      const eventType = typeof entry.eventType === 'string' ? entry.eventType.toUpperCase() : '';
+      if (eventType && eventType !== 'DEVICE_EVENT') {
+        ignoredEventTypes.add(eventType);
+        continue;
+      }
+
+      const candidate = entry.deviceEvent && typeof entry.deviceEvent === 'object'
+        ? entry.deviceEvent
+        : entry;
+
+      if (!candidate || typeof candidate !== 'object') {
+        malformedCount += 1;
+        continue;
+      }
+
+      const deviceId = trim(candidate.deviceId || '');
+      const capability = trim(candidate.capability || '');
+      const attribute = trim(candidate.attribute || '');
+      const componentId = trim(candidate.componentId || 'main');
+
+      if (!deviceId || !capability || !attribute) {
+        malformedCount += 1;
+        continue;
+      }
+
+      const { timestampMs, timestampIso } = this.resolveEventTimestamp(candidate);
+
+      deviceEvents.push({
+        deviceId,
+        capability,
+        attribute,
+        componentId,
+        value: candidate.value,
+        unit: candidate.unit || candidate.unitOfMeasure || null,
+        data: candidate.data || candidate.additionalData,
+        locationId: trim(candidate.locationId || ''),
+        timestampMs,
+        timestampIso,
+        raw: candidate
+      });
+    }
+
+    return {
+      deviceEvents,
+      ignoredEventTypes: Array.from(ignoredEventTypes),
+      malformedCount
+    };
+  }
+
+  resolveEventTimestamp(eventBody) {
+    const stringTimestampSources = [
+      eventBody?.eventTime,
+      eventBody?.utcTime,
+      eventBody?.localTime,
+      eventBody?.stateChangeTime,
+      eventBody?.sourceTime
+    ].filter((value) => typeof value === 'string' && value.trim().length > 0);
+
+    for (const value of stringTimestampSources) {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) {
+        return {
+          timestampMs: parsed,
+          timestampIso: new Date(parsed).toISOString()
+        };
+      }
+    }
+
+    const numericTimestampSources = [
+      eventBody?.epochMillis,
+      eventBody?.epochTimeMs,
+      eventBody?.epochTime,
+      eventBody?.time,
+      eventBody?.timestamp
+    ];
+
+    for (const candidate of numericTimestampSources) {
+      if (candidate === undefined || candidate === null) {
+        continue;
+      }
+
+      const numericValue = typeof candidate === 'number' ? candidate : Number(candidate);
+      if (!Number.isFinite(numericValue)) {
+        continue;
+      }
+
+      const timestampMs = numericValue >= 1e12 ? numericValue : numericValue * 1000;
+      return {
+        timestampMs,
+        timestampIso: new Date(timestampMs).toISOString()
+      };
+    }
+
+    const fallbackMs = Date.now();
+    return {
+      timestampMs: fallbackMs,
+      timestampIso: new Date(fallbackMs).toISOString()
+    };
+  }
+
+
 
   async verifyRequestSignature(rawBody, headers = {}) {
     this.recordRequestReceipt();
@@ -849,13 +969,27 @@ class SmartThingsWebhookService {
   }
 
   async handleEvent(payload) {
-    const events = Array.isArray(payload?.eventData?.events) ? payload.eventData.events : [];
-    this.log('debug', 'SmartThings EVENT lifecycle received', { eventCount: events.length });
-    this.metrics.events.received += events.length;
+    const rawEvents = Array.isArray(payload?.eventData?.events) ? payload.eventData.events : [];
+    this.log('debug', 'SmartThings EVENT lifecycle received', { eventCount: rawEvents.length });
 
     const integration = await SmartThingsIntegration.getIntegration();
+    const { deviceEvents, ignoredEventTypes, malformedCount } = this.extractDeviceEvents(rawEvents);
 
-    if (events.length === 0) {
+    this.metrics.events.received += deviceEvents.length;
+
+    if (ignoredEventTypes.length > 0) {
+      this.log('debug', 'SmartThings EVENT lifecycle skipped unsupported event types', {
+        eventTypes: ignoredEventTypes
+      });
+    }
+
+    if (malformedCount > 0) {
+      this.log('warn', 'SmartThings EVENT lifecycle encountered malformed events', {
+        malformedCount
+      });
+    }
+
+    if (deviceEvents.length === 0) {
       const now = new Date();
       if (typeof integration.updateWebhookState === 'function') {
         await integration.updateWebhookState({
@@ -869,13 +1003,15 @@ class SmartThingsWebhookService {
         statusCode: 200,
         body: {
           eventData: {
-            status: 'NO_EVENTS'
+            status: rawEvents.length === 0 ? 'NO_EVENTS' : 'NO_DEVICE_EVENTS',
+            skippedEventTypes: ignoredEventTypes.length > 0 ? ignoredEventTypes : undefined,
+            malformedCount: malformedCount > 0 ? malformedCount : undefined
           }
         }
       };
     }
 
-    const deviceIds = Array.from(new Set(events.map(event => trim(event.deviceId || '')).filter(Boolean)));
+    const deviceIds = Array.from(new Set(deviceEvents.map(event => event.deviceId)));
 
     const trackedDevices = deviceIds.length > 0
       ? await Device.find({ 'properties.smartThingsDeviceId': { $in: deviceIds } }).lean()
@@ -893,31 +1029,29 @@ class SmartThingsWebhookService {
     const ignoredDevices = new Set();
     let latestEventTime = 0;
 
-    for (const event of events) {
-      const deviceId = trim(event.deviceId || '');
-      const capability = trim(event.capability || '');
-      const attribute = trim(event.attribute || '');
-      const componentId = trim(event.componentId || 'main');
+    for (const event of deviceEvents) {
+      const {
+        deviceId,
+        capability,
+        attribute,
+        componentId,
+        value,
+        unit,
+        data,
+        locationId,
+        timestampMs,
+        timestampIso
+      } = event;
 
-      const parsedTime = Date.parse(event.eventTime || event.utcTime || '');
-      const eventTimestamp = Number.isNaN(parsedTime) ? Date.now() : parsedTime;
-      if (eventTimestamp > latestEventTime) {
-        latestEventTime = eventTimestamp;
+      if (timestampMs > latestEventTime) {
+        latestEventTime = timestampMs;
       }
 
       this.incrementCapabilityMetric(capability);
 
-      if (!deviceId) {
-        continue;
-      }
-
       const tracked = trackedMap.get(deviceId);
       if (!tracked) {
         ignoredDevices.add(deviceId);
-        continue;
-      }
-
-      if (!capability || !attribute) {
         continue;
       }
 
@@ -931,7 +1065,7 @@ class SmartThingsWebhookService {
               : []
           ),
           locationId: trim(
-            event.locationId ||
+            locationId ||
             tracked?.properties?.smartThingsLocationId ||
             integration?.webhook?.locationId ||
             ''
@@ -943,18 +1077,17 @@ class SmartThingsWebhookService {
 
       const componentBucket = aggregation.components[componentId] || (aggregation.components[componentId] = {});
       const capabilityBucket = componentBucket[capability] || (componentBucket[capability] = {});
-      const eventValue = event.value;
-      capabilityBucket.value = eventValue;
+      capabilityBucket.value = value;
       capabilityBucket[attribute] = {
-        value: eventValue,
-        unit: event.unit || event.unitOfMeasure || null,
-        data: event.data || undefined,
-        timestamp: event.eventTime || event.utcTime || new Date(eventTimestamp).toISOString()
+        value,
+        unit: unit ?? null,
+        data: data || undefined,
+        timestamp: timestampIso
       };
 
       aggregation.capabilityIds.add(capability);
-      if (!aggregation.lastEventTime || eventTimestamp > aggregation.lastEventTime) {
-        aggregation.lastEventTime = eventTimestamp;
+      if (!aggregation.lastEventTime || timestampMs > aggregation.lastEventTime) {
+        aggregation.lastEventTime = timestampMs;
       }
     }
 
@@ -1092,7 +1225,7 @@ class SmartThingsWebhookService {
     }
 
     this.log('info', 'SmartThings EVENT lifecycle processed', {
-      eventsReceived: events.length,
+      eventsReceived: deviceEvents.length,
       devicesUpdated: updatedDeviceIds.length,
       ignoredDevices: ignoredDevices.size
     });
