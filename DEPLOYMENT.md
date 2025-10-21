@@ -511,7 +511,85 @@ When you are finished, close the PowerShell session or run `Remove-Item Env:\SMA
 
 ---
 
-## Step 18 - Ongoing maintenance
+## Step 18 - SmartThings Webhook Production Cutover
+Follow this runbook when you go live in production (feel free to dry-run it on the lab hub first). Expect roughly 10–15 minutes where live updates may pause while the SmartApp is reinstalled, but devices keep working.
+
+1. **Pre-flight**
+   - Confirm HTTPS is working for the public HomeBrain domain. SmartThings will only call HTTPS endpoints with a valid certificate.
+   - Ensure the latest codebase (this branch) is deployed on the hub and `npm test` passes locally.
+   - Verify the process environment contains `SMARTTHINGS_APP_ID`, `SMARTTHINGS_APP_SECRET`, `SMARTTHINGS_WEBHOOK_PATH` (if overridden), and database credentials.
+
+2. **Deploy new backend build**
+   ```bash
+   cd ~/homebrain/HomeBrainv2
+   git pull
+   npm install
+
+   cd server
+   npm install
+   cd ..
+   npm run build --workspace client   # skip if you only use the dev server
+   sudo systemctl restart homebrain
+   journalctl -u homebrain -n 50
+   ```
+
+3. **Set webhook metrics cadence (default settings)**
+   - The server now defaults to a 60-second sampling interval and 24-hour history window (1440 samples). If you need to override the cadence without redeploying (for example, slowing to 5 minutes), call:
+     ```bash
+     curl -X POST "https://your-domain.com/api/smartthings/webhook/metrics/config" \
+       -H "Authorization: Bearer <ADMIN_JWT>" \
+       -H "Content-Type: application/json" \
+       --data '{"intervalMs":60000,"historySize":1440}'
+     ```
+     Replace `<ADMIN_JWT>` with an authenticated bearer token generated from the HomeBrain UI.
+
+4. **Reinstall and authorize the SmartApp**
+   - From the HomeBrain UI, go to **Settings → SmartThings Integration → Connect** and complete the OAuth flow (this refreshes the installed app and grants webhook permissions).
+   - Accept the webhook prompt in SmartThings if you are asked to approve the endpoint.
+
+5. **Validate lifecycle handling**
+   - Watch the HomeBrain logs in a second shell:
+     ```bash
+     journalctl -u homebrain -f | grep -i smartthings
+     ```
+   - Trigger a few device changes (switches, locks, thermostats). You should see `SmartThings EVENT lifecycle processed` messages and matching device updates in the UI within a second or two.
+   - Check the metrics snapshot:
+     ```bash
+     curl -H "Authorization: Bearer <ADMIN_JWT>" \
+       https://your-domain.com/api/smartthings/webhook/metrics | jq '.metrics'
+     ```
+   - Run the CLI health probe (fails with exit code 1 on issues):
+     ```bash
+     cd ~/homebrain/HomeBrainv2/server
+     npm run check:webhook -- \
+       --url https://your-domain.com/api/smartthings/webhook/metrics \
+       --token <ADMIN_JWT> \
+       --max-event-minutes 15
+     ```
+   - Optional: inspect the rolling history for the last few samples:
+     ```bash
+     curl -H "Authorization: Bearer <ADMIN_JWT>" \
+       "https://your-domain.com/api/smartthings/webhook/metrics/history?limit=5" | jq '.history'
+     ```
+
+6. **Lower the fallback poller**
+   - The service automatically backs off to the slower polling cadence, but you can confirm by checking the environment variables (`SMARTTHINGS_DEVICE_SYNC_INTERVAL_MS` and `SMARTTHINGS_DEVICE_REFRESH_MS`). Adjust them only if you need something higher than the current 60‑second fallback.
+
+7. **Post-cutover sanity checks**
+   - On the Devices page, flip a few lights and confirm state changes propagate to other browsers without refreshing.
+   - Temporarily disconnect the hub from the Internet, re-enable it, and confirm the webhook reconnects (look for `SmartThings signature verification` messages followed by successful events).
+    - Capture a metrics snapshot for future comparison:
+      ```bash
+      curl -H "Authorization: Bearer <ADMIN_JWT>" \
+        https://your-domain.com/api/smartthings/webhook/metrics | jq '.metrics'
+      ```
+
+8. **Rollback plan**
+   - If you see persistent webhook failures, open **Settings → SmartThings Integration** and toggle the “Enable Webhook” switch off (if exposed) or set the environment variable `SMARTTHINGS_WEBHOOK_DISABLE=true` followed by `sudo systemctl restart homebrain`. The polling loop will resume its previous cadence until the issue is resolved.
+
+---
+
+## Step 19 - Ongoing maintenance
 - Update code:
   ```bash
   cd ~/homebrain/HomeBrainv2
@@ -553,3 +631,9 @@ When you are finished, close the PowerShell session or run `Remove-Item Env:\SMA
 - Client build artifacts: `client/dist/`
 - Remote installer assets: `server/public/downloads/`
 - Systemd unit created in this guide: `/etc/systemd/system/homebrain.service`
+
+
+
+
+
+
