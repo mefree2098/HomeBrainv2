@@ -7,6 +7,13 @@ const auth = requireUser();
 
 // SmartThings webhook endpoint (no authentication; SmartThings signs requests)
 router.post('/', async (req, res) => {
+  smartThingsWebhookService.log('debug', 'Incoming SmartThings webhook request', {
+    headers: {
+      userAgent: req.headers['user-agent'],
+      lifecycle: req.body?.lifecycle || req.query?.lifecycle
+    }
+  });
+
   const rawBody = smartThingsWebhookService.getRawBody(req);
   let payload = req.body;
 
