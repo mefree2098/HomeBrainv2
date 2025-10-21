@@ -1,4 +1,5 @@
 const Device = require('../models/Device');
+const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
@@ -8,7 +9,7 @@ class DeviceService {
     this.smartThingsPresenceCheckedAt = 0;
     this.smartThingsSyncPromise = null;
     this.lastSmartThingsSyncAt = 0;
-    this.smartThingsSyncCooldownMs = Number(process.env.SMARTTHINGS_DEVICE_REFRESH_MS || 60000);
+    this.smartThingsSyncCooldownMs = Number(process.env.SMARTTHINGS_DEVICE_REFRESH_MS || 5 * 60 * 1000);
   }
 
   /**
@@ -824,6 +825,17 @@ class DeviceService {
       return;
     }
 
+    let integrationSnapshot = null;
+    try {
+      integrationSnapshot = await SmartThingsIntegration.getIntegration();
+    } catch (error) {
+      console.warn('DeviceService: Unable to load SmartThings integration while preparing device refresh:', error.message);
+    }
+
+    if (!immediate && smartThingsService.shouldSkipDevicePolling({ integration: integrationSnapshot, reason: 'api-fetch' })) {
+      return;
+    }
+
     const now = Date.now();
 
     if (this.smartThingsSyncPromise) {
@@ -842,7 +854,11 @@ class DeviceService {
     this.smartThingsSyncPromise = (async () => {
       let succeeded = false;
       try {
-        await smartThingsService.runDeviceStatusSync();
+        await smartThingsService.runDeviceStatusSync({
+          integration: integrationSnapshot,
+          reason: immediate ? 'api-fetch-force' : 'api-fetch',
+          force: immediate
+        });
         succeeded = true;
       } catch (error) {
         console.warn('DeviceService: SmartThings state refresh failed:', error.message);
