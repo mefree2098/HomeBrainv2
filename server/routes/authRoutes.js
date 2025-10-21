@@ -8,6 +8,10 @@ const { ALL_ROLES } = require('../../shared/config/roles.js');
 
 const router = express.Router();
 
+const ACCESS_TOKEN_COOKIE_NAME = 'hbAccessToken';
+const SECURE_COOKIE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
+const ACCESS_TOKEN_COOKIE_MAX_AGE = Number(process.env.ACCESS_TOKEN_COOKIE_MAX_AGE || 60 * 60 * 1000);
+
 router.post('/login', async (req, res) => {
   const sendError = msg => res.status(400).json({ message: msg });
   const { email, password } = req.body;
@@ -24,6 +28,12 @@ router.post('/login', async (req, res) => {
 
     user.refreshToken = refreshToken;
     await user.save();
+    res.cookie(ACCESS_TOKEN_COOKIE_NAME, accessToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: SECURE_COOKIE,
+      maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE
+    });
     return res.json({...user.toObject(), accessToken, refreshToken});
   } else {
     return sendError('Email or password is incorrect');
@@ -52,6 +62,12 @@ router.post('/logout', async (req, res) => {
     user.refreshToken = null;
     await user.save();
   }
+
+  res.clearCookie(ACCESS_TOKEN_COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: SECURE_COOKIE
+  });
 
   res.status(200).json({ message: 'User logged out successfully.' });
 });
