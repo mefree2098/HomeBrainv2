@@ -8,6 +8,8 @@
  */
 
 const { URL } = require('url');
+const mongoose = require('mongoose');
+const { connectDB } = require('../config/database');
 
 const DEFAULTS = {
   url: 'http://localhost:3000/api/smartthings/webhook/metrics',
@@ -187,6 +189,13 @@ function evaluate(metrics, options) {
 }
 
 async function main() {
+  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.trim().length === 0) {
+    process.env.DATABASE_URL = 'mongodb://localhost:27017/HomeBrain';
+  }
+  if (mongoose.connection.readyState === 0) {
+    await connectDB();
+  }
+
   const options = parseArgs(process.argv);
   if (options.help) {
     printHelp();
