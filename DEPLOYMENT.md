@@ -372,9 +372,11 @@ With these steps in place, every HomeBrain device streams microphone audio to th
 
 ---
 
-## Step 16 - Deploy a remote voice device (Raspberry Pi 4B)
+## Step 16 - Deploy a remote voice device (Raspberry Pi 5 / 4B)
 1. **Prepare the Pi**
-   - Flash Raspberry Pi OS Lite (64-bit) and enable SSH (using Raspberry Pi Imager “Advanced options”).
+   - Use Raspberry Pi Imager to flash Raspberry Pi OS Lite (64-bit). Pi 5 requires Bookworm or later (Trixie also works); older images will not boot.
+   - In Imager OS customization, set hostname/user, enable SSH, configure Wi-Fi, and locale/timezone.
+   - For Pi 5, use a 5V/5A USB-C power supply (27W official PSU recommended) and active cooling for sustained use.
    - Boot, connect to your network, and update packages:
      ```bash
      sudo apt update && sudo apt upgrade -y
@@ -390,7 +392,7 @@ With these steps in place, every HomeBrain device streams microphone audio to th
    ```bash
    scp -r remote-device pi@<pi-ip>:/home/pi/
    ```
-   Replace `<pi-ip>` with the Pi’s address; the default username is `pi` unless you customised it.
+   Replace `<pi-ip>` with the Pi's address; use the username you set in Imager (Bookworm requires you to create one).
 
 4. **Run the installer on the Pi (handles dependencies automatically)**
    ```bash
@@ -398,7 +400,7 @@ With these steps in place, every HomeBrain device streams microphone audio to th
    cd ~/remote-device
    bash install.sh
    ```
-   The script installs ALSA/SOX utilities, Node.js 18, auto-detects matching capture/playback ALSA cards (favoring USB devices), and creates `/home/pi/homebrain-remote` with helper scripts. To override the defaults later, edit `/etc/asound.conf` on the Pi.
+   The script installs ALSA/SOX utilities, Node.js 18, auto-detects matching capture/playback ALSA cards (favoring USB devices), and creates `/home/pi/homebrain-remote` with helper scripts. To override the defaults later, edit `/etc/asound.conf` on the Pi.
 
 5. **Verify audio and register the device**
    ```bash
