@@ -17,7 +17,8 @@ HomeBrain Remote Devices are Raspberry Pi-based voice-activated units that conne
 ## Hardware Requirements
 
 ### Supported Devices
-- **Raspberry Pi 4B** (recommended - best performance)
+- **Raspberry Pi 5** (recommended - best performance; requires Raspberry Pi OS Bookworm or later)
+- **Raspberry Pi 4B** (supported)
 - **Raspberry Pi Zero 2W** (compact option)
 - **Raspberry Pi 3B+** (legacy support)
 
@@ -42,6 +43,7 @@ HomeBrain Remote Devices are Raspberry Pi-based voice-activated units that conne
 - **3.5mm Jack**: For speakers/headphones
 - **USB Microphone**: Required for input
 - **Limitations**: Lower audio quality
+- **Pi 5 Note**: Use USB or I2S audio on Raspberry Pi 5.
 
 ### Network Requirements
 - **Wi-Fi Connection**: 2.4GHz or 5GHz (5GHz preferred)
@@ -50,7 +52,8 @@ HomeBrain Remote Devices are Raspberry Pi-based voice-activated units that conne
 
 ### Power Requirements
 - **Official Power Supply**: Recommended for stability
-- **Minimum Current**: 2.5A for Pi 4B, 1.5A for Pi Zero 2W
+- **Minimum Current**: 5A for Pi 5 (5V/5A USB-C recommended; 27W official PSU), 2.5A for Pi 4B, 1.5A for Pi Zero 2W
+- **Active Cooling**: Recommended for Pi 5 under sustained load
 - **Quality Cables**: Use good USB cables to prevent voltage drops
 
 ## Quick Installation
@@ -62,7 +65,7 @@ curl -fsSL https://preview-0py18bcb.ui.pythagora.ai/api/remote-devices/setup | b
 ```
 
 ### Manual Installation Steps
-1. Flash Raspberry Pi OS Lite
+1. Flash Raspberry Pi OS Lite (64-bit; Bookworm or later required for Pi 5)
 2. Enable SSH and configure Wi-Fi
 3. Boot and SSH into device
 4. Run installation script
@@ -75,7 +78,7 @@ curl -fsSL https://preview-0py18bcb.ui.pythagora.ai/api/remote-devices/setup | b
 
 #### Flash Operating System
 1. Download [Raspberry Pi Imager](https://www.raspberrypi.org/software/)
-2. Flash **Raspberry Pi OS Lite** (64-bit recommended)
+2. Flash **Raspberry Pi OS Lite** (64-bit; Bookworm or later required for Pi 5)
 3. During imaging, configure:
    - Enable SSH with password or key
    - Configure Wi-Fi network
@@ -115,8 +118,8 @@ If not configured during imaging:
 # Find Pi IP address
 nmap -sn 192.168.1.0/24 | grep -i raspberry
 
-# SSH into Pi
-ssh pi@192.168.1.xxx
+# SSH into Pi (replace with the username you created in Imager)
+ssh <user>@192.168.1.xxx
 ```
 
 #### Update System
