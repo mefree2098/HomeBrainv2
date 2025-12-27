@@ -517,7 +517,7 @@ export function VoiceDevices() {
                 )}
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {needsUpdate(device) && !isUpdating(device) && (
                   <Button
                     onClick={() => handleUpdateDevice(device._id, device.name)}

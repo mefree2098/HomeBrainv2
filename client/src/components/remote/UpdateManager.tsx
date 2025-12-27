@@ -78,7 +78,7 @@ export default function UpdateManager({ deviceId, deviceName }: Props) {
         <CardTitle>Remote Update Manager {deviceName ? `- ${deviceName}` : ''}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={refreshPackage} disabled={busy}>Refresh Package Info</Button>
           <Button onClick={() => handleGenerate(false)} disabled={busy}>Generate Package</Button>
           <Button variant="outline" onClick={() => handleGenerate(true)} disabled={busy}>Force Rebuild</Button>
