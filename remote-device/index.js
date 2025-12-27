@@ -769,6 +769,7 @@ class HomeBrainRemoteDevice {
 
   async restartWakeWordDetection() {
     console.log('Restarting wake word detection with updated configuration...');
+    this.isWakeWordListening = false;
     this.disableTestMode();
     this.releaseWakeWordEngine();
 
@@ -784,9 +785,7 @@ class HomeBrainRemoteDevice {
     // Give ALSA a moment to release device
     await new Promise((r) => setTimeout(r, 1000));
 
-    this.isWakeWordListening = false;
     this.wakeWordEngineFailed = false;
-
     await this.startWakeWordDetection();
   }
 
@@ -1129,6 +1128,9 @@ class HomeBrainRemoteDevice {
         });
 
         micStream.on('error', (streamError) => {
+          if (!this.isWakeWordListening) {
+            return;
+          }
           this.handleWakeWordEngineFailure(streamError);
         });
 
@@ -1176,6 +1178,9 @@ class HomeBrainRemoteDevice {
       });
 
       micStream.on('error', (streamError) => {
+        if (!this.isWakeWordListening) {
+          return;
+        }
         this.handleWakeWordEngineFailure(streamError);
       });
 
@@ -1207,8 +1212,9 @@ class HomeBrainRemoteDevice {
     const args = [script];
     this.sidecar = spawn(python, args, { stdio: ['pipe', 'pipe', 'inherit'] });
 
-    this.sidecar.on('close', (code) => {
-      console.warn(`Feature sidecar exited with code ${code}`);
+    this.sidecar.on('close', (code, signal) => {
+      const details = signal ? `signal ${signal}` : `code ${code}`;
+      console.warn(`Feature sidecar exited with ${details}`);
       this.sidecar = null;
       if (this.isWakeWordListening) {
         this.handleWakeWordEngineFailure(new Error('Feature sidecar exited'));
@@ -1237,6 +1243,12 @@ class HomeBrainRemoteDevice {
         if (!line.trim()) continue;
         try {
           const msg = JSON.parse(line);
+          if (msg.type === 'ready' && (argv.verbose || this.config?.wakeWord?.debug)) {
+            console.log(`[sidecar] ready: ${JSON.stringify(msg.models || [])}`);
+          }
+          if (msg.type === 'error') {
+            console.warn(`[sidecar] error: ${msg.message || 'unknown error'}`);
+          }
           if (msg.type === 'score' && (argv.verbose || this.config?.wakeWord?.debug)) {
             const s = typeof msg.score === 'number' ? msg.score.toFixed(3) : String(msg.score);
             console.log(`[sidecar] ${msg.model}: ${s}`);
@@ -1641,46 +1653,57 @@ class HomeBrainRemoteDevice {
       format: 'S16LE'
     });
 
-    try {
-      const { spawn } = require('child_process');
-      const device = this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default';
-      const rate = String(this.wakeWordSampleRate);
-      // Prefer arecord directly to avoid sox/rec issues
-      let proc = spawn('arecord', ['-q', '-D', device, '-t', 'raw', '-f', 'S16_LE', '-r', rate, '-c', '1'], { stdio: ['ignore', 'pipe', 'inherit'] });
-      const attach = (p) => {
-        this.commandProc = p;
-        p.stdout.on('data', (buf) => {
-          if (!this.isRecording || !this.commandSessionId) return;
-          const b64 = Buffer.from(buf).toString('base64');
-          this.sendMessage({
-            type: 'audio_data',
-            sessionId: this.commandSessionId,
-            sequence: this.commandSequence++,
-            audioData: b64,
-            sampleRate: this.wakeWordSampleRate,
-            channels: 1,
-            format: 'S16LE'
+    const startCommandCapture = (attempt = 0) => {
+      if (!this.isRecording) return;
+      try {
+        const { spawn } = require('child_process');
+        const device = this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default';
+        const rate = String(this.wakeWordSampleRate);
+        let sawAudio = false;
+        // Prefer arecord directly to avoid sox/rec issues
+        let proc = spawn('arecord', ['-q', '-D', device, '-t', 'raw', '-f', 'S16_LE', '-r', rate, '-c', '1'], { stdio: ['ignore', 'pipe', 'inherit'] });
+        const attach = (p) => {
+          this.commandProc = p;
+          p.stdout.on('data', (buf) => {
+            sawAudio = true;
+            if (!this.isRecording || !this.commandSessionId) return;
+            const b64 = Buffer.from(buf).toString('base64');
+            this.sendMessage({
+              type: 'audio_data',
+              sessionId: this.commandSessionId,
+              sequence: this.commandSequence++,
+              audioData: b64,
+              sampleRate: this.wakeWordSampleRate,
+              channels: 1,
+              format: 'S16LE'
+            });
           });
-        });
-        p.on('close', (code) => {
-          if (this.isRecording) {
-            console.warn(`Command recorder exited with code ${code}`);
+          p.on('close', (code) => {
+            if (this.isRecording) {
+              console.warn(`Command recorder exited with code ${code}`);
+              if (!sawAudio && attempt < 1) {
+                setTimeout(() => startCommandCapture(attempt + 1), 400);
+              }
+            }
+          });
+        };
+        proc.on('error', (err) => {
+          console.warn(`arecord failed (${err?.message || err}); attempting rec fallback`);
+          try {
+            const p2 = spawn('rec', ['-q', '-c', '1', '-r', rate, '-e', 'signed-integer', '-b', '16', '-t', 'raw', '-'], { stdio: ['ignore', 'pipe', 'inherit'] });
+            attach(p2);
+          } catch (e2) {
+            console.warn('rec fallback failed:', e2?.message || e2);
           }
         });
-      };
-      proc.on('error', (err) => {
-        console.warn(`arecord failed (${err?.message || err}); attempting rec fallback`);
-        try {
-          const p2 = spawn('rec', ['-q', '-c', '1', '-r', rate, '-e', 'signed-integer', '-b', '16', '-t', 'raw', '-'], { stdio: ['ignore', 'pipe', 'inherit'] });
-          attach(p2);
-        } catch (e2) {
-          console.warn('rec fallback failed:', e2?.message || e2);
-        }
-      });
-      attach(proc);
-    } catch (e) {
-      console.warn('Failed to start command recording:', e?.message || e);
-    }
+        attach(proc);
+      } catch (e) {
+        console.warn('Failed to start command recording:', e?.message || e);
+      }
+    };
+
+    const delayMs = this.resumeWakeWordAfterCommand ? 250 : 0;
+    setTimeout(() => startCommandCapture(), delayMs);
   }
 
   stopVoiceRecording() {

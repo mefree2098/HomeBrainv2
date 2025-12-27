@@ -374,8 +374,69 @@ With these steps in place, every HomeBrain device streams microphone audio to th
 
 ## Step 16 - Deploy a remote voice device (Raspberry Pi 5 / 4B)
 1. **Prepare the Pi**
-   - Use Raspberry Pi Imager to flash Raspberry Pi OS Lite (64-bit). Pi 5 requires Bookworm or later (Trixie also works); older images will not boot.
-   - In Imager OS customization, set hostname/user, enable SSH, configure Wi-Fi, and locale/timezone.
+   - Use Raspberry Pi Imager to flash Raspberry Pi OS Lite (64-bit) **Bookworm**. (HomeBrain remote wake-word support requires Python 3.11-era packages; Trixie/Python 3.13 breaks the ONNX runtime on Pi.)
+   - If Bookworm Lite is not listed in Imager, download it and use **Choose OS -> Use custom**:
+     - https://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2024-07-04/2024-07-04-raspios-bookworm-arm64-lite.img.xz
+   - Imager steps (exact):
+     1. Open Raspberry Pi Imager.
+     2. **Device**: Raspberry Pi 5.
+     3. **Choose OS**:
+        - If listed: **Raspberry Pi OS (other)** -> **Raspberry Pi OS Lite (64-bit)**.
+        - If not listed: **Use custom** and pick the downloaded `2024-07-04-raspios-bookworm-arm64-lite.img.xz`.
+     4. **Choose Storage**: select your SD card.
+     5. If OS customization is available, open it (gear icon or **Edit settings** prompt).
+     6. **General** tab:
+        - Set hostname (e.g., `pi5remote`).
+        - Set username and password (e.g., user `matt`).
+        - Configure wireless LAN (SSID, password, country) if you are using Wi-Fi.
+        - Set locale settings (timezone and keyboard layout).
+     7. **Services** tab:
+        - Enable SSH.
+        - Choose password authentication (or paste your SSH public key if you use keys).
+     8. Save, confirm you want to apply customization, then write the image.
+   - If OS customization is NOT available (common when using **Use custom** on Imager 2.x), configure headless access manually after writing:
+     1. Reinsert the SD card so the **boot** partition mounts in Windows (usually labeled `bootfs`).
+     2. Create an empty file named `ssh` (no extension) in the boot partition:
+        ```powershell
+        New-Item -Path X:\ssh -ItemType File -Force | Out-Null
+        ```
+     3. Create `userconf.txt` with `username:password_hash`:
+        - Generate a hash (Git Bash or any OpenSSL install):
+          ```bash
+          openssl passwd -6
+          ```
+          Enter the password; copy the full output hash (include everything, including any trailing `.b1`).
+        - Create the file (PowerShell, replace `X:` with your boot drive letter). Use single quotes so `$` is not stripped:
+          ```powershell
+          $line = 'matt:<PASTE_HASH_HERE>'
+          Set-Content -Path X:\userconf.txt -Value $line -Encoding ASCII -NoNewline
+          ```
+        - You will still log in with the plain password you entered for the hash (not the hash itself).
+     4. If using Wi-Fi, create `wpa_supplicant.conf` in the boot partition:
+        ```
+        country=US
+        ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+        update_config=1
+
+        network={
+          ssid="YOUR_WIFI_NAME"
+          psk="YOUR_WIFI_PASSWORD"
+        }
+        ```
+     5. Safely eject the SD card and boot the Pi.
+        - After the first successful boot, `userconf.txt` should disappear from the boot partition. If it is still there, the user was not created and login will fail.
+   - If `userconf.txt` is still present after boot, force-create/reset the user (no reflash required):
+     1. Power off, insert the SD card in Windows, and edit `cmdline.txt` (single line). Append ` init=/bin/sh` at the end.
+     2. Boot the Pi; you should land at a root shell.
+     3. Run:
+        ```bash
+        mount -o remount,rw /
+        useradd -m -s /bin/bash matt
+        passwd matt
+        usermod -aG sudo,audio,video,plugdev,netdev,gpio,i2c,spi matt
+        sync
+        ```
+     4. Power off, remove `init=/bin/sh` from `cmdline.txt`, boot normally, and log in as `matt`.
    - For Pi 5, use a 5V/5A USB-C power supply (27W official PSU recommended) and active cooling for sustained use.
    - Boot, connect to your network, and update packages:
      ```bash
@@ -402,11 +463,16 @@ With these steps in place, every HomeBrain device streams microphone audio to th
 
 4. **Run the installer on the Pi (handles dependencies automatically)**
    ```bash
-   ssh pi@<pi-ip>
+   ssh <user>@<pi-ip>
    cd ~/remote-device
    bash install.sh
    ```
-   The script installs ALSA/SOX utilities, Node.js 18, auto-detects matching capture/playback ALSA cards (favoring USB devices), and creates `/home/pi/homebrain-remote` with helper scripts. To override the defaults later, edit `/etc/asound.conf` on the Pi.
+   If you see errors like `$'\r': command not found`, convert line endings and retry:
+   ```bash
+   sed -i 's/\r$//' install.sh
+   bash install.sh
+   ```
+   The script installs ALSA/SOX utilities, Node.js 18, auto-detects matching capture/playback ALSA cards (favoring USB devices), and creates `/home/<user>/homebrain-remote` with helper scripts. To override the defaults later, edit `/etc/asound.conf` on the Pi.
 
 5. **Verify audio and register the device**
    ```bash
@@ -416,18 +482,27 @@ With these steps in place, every HomeBrain device streams microphone audio to th
    ```
    Obtain the registration code from the HomeBrain UI -> Remote Devices -> Add Remote Device. `<hub-ip>` is your Jetson address.
 
-6. **Start the service and enable auto-start**
+6. **Confirm speech-to-text (STT) is configured on the hub**
+   The Pi streams raw audio to the hub after a wake word. If STT is not running, you'll see `command_error: Sorry, I could not understand the audio.` even though the Pi is working.
+   - In the HomeBrain UI, open **Settings -> Voice & Audio** and confirm the STT provider.
+   - If using **On-device Whisper (Jetson)**:
+     - Go to `http://<hub-ip>:3000/whisper`
+     - Click **Install Dependencies**, then **Start Service**
+     - Download and **Activate** the `small` model (recommended)
+   - If using **OpenAI**, set your API key in the UI or via `OPENAI_API_KEY`, then restart the hub service.
+
+7. **Start the service and enable auto-start**
    ```bash
    sudo systemctl enable homebrain-remote
    sudo systemctl start homebrain-remote
-   sudo systemctl status homebrain-remote    # expect “active (running)”
+   sudo systemctl status homebrain-remote    # expect "active (running)"
    ```
    Check logs any time with `sudo journalctl -u homebrain-remote -f`.
 
-7. **Confirm from the hub**
-   Refresh the Remote Devices page; the Pi should display as “Online”. Repeat the copy/install steps for additional rooms, generating a new registration code each time.
+8. **Confirm from the hub**
+   Refresh the Remote Devices page; the Pi should display as "Online". Repeat the copy/install steps for additional rooms, generating a new registration code each time.
 
-8. **Verify on-device wake-word detection (OpenWakeWord)**
+9. **Verify on-device wake-word detection (OpenWakeWord)**
    - Update the remote device workspace to capture the latest dependencies (notably `node-webrtcvad` for voice activity detection). For best compatibility with hub‑trained models, install TFLite runtime so the remote prefers `.tflite` models and only falls back to ONNX when necessary:
    ```bash
    cd ~/homebrain-remote
