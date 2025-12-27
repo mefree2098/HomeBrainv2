@@ -174,8 +174,12 @@ if [ ! -d "$INSTALL_DIR/.venv" ]; then
     python3 -m venv "$INSTALL_DIR/.venv" || true
 fi
 if [ -x "$INSTALL_DIR/.venv/bin/python" ]; then
-    "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip setuptools wheel || true
-    "$INSTALL_DIR/.venv/bin/pip" install numpy onnxruntime openwakeword || true
+    "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
+    if ! "$INSTALL_DIR/.venv/bin/python" -m pip install "numpy<2" "onnxruntime<2" "openwakeword==0.6.0"; then
+        print_error "Failed to install wake-word dependencies in the venv."
+        print_error "Re-run once networking is stable, or install manually with the venv's pip."
+        exit 1
+    fi
     print_success "Python sidecar environment prepared"
 else
     print_warning "Python venv not available; sidecar will attempt system python3"

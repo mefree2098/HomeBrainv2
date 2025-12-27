@@ -389,10 +389,16 @@ With these steps in place, every HomeBrain device streams microphone audio to th
    ```
 
 3. **Copy the remote device folder to the Pi**
+   Run this from the machine that has the HomeBrain repo, in the repo root (so `./remote-device` is the local source folder):
    ```bash
-   scp -r remote-device pi@<pi-ip>:/home/pi/
+   cd path/to/HomeBrainv2
+   scp -r ./remote-device <user>@<pi-ip>:~/
    ```
-   Replace `<pi-ip>` with the Pi's address; use the username you set in Imager (Bookworm requires you to create one).
+   Replace `<pi-ip>` with the Pi's address; use the username you set in Imager (Bookworm requires you to create one). `~/` resolves to that user's home directory (e.g., `/home/matt`).
+   To confirm the home directory first:
+   ```bash
+   ssh <user>@<pi-ip> 'echo $HOME'
+   ```
 
 4. **Run the installer on the Pi (handles dependencies automatically)**
    ```bash

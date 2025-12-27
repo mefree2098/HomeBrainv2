@@ -25,6 +25,7 @@ import os
 import time
 import json
 import struct
+import inspect
 import threading
 from pathlib import Path
 from dataclasses import dataclass
@@ -38,16 +39,19 @@ except Exception as exc:  # pragma: no cover
     sys.stderr.write(f"onnxruntime is required: {exc}\n")
     sys.exit(1)
 
-# Ensure OpenWakeWord resources are present
+OWW_UTILS = None
+# Ensure OpenWakeWord resources are present (if supported by installed version)
 try:
     from openwakeword import utils as oww_utils  # type: ignore
-    try:
-        oww_utils.download_models()
-    except Exception as _download_err:
-        # Non-fatal; AudioFeatures init will fail if truly missing
-        pass
+    OWW_UTILS = oww_utils
+    if hasattr(OWW_UTILS, "download_models"):
+        try:
+            OWW_UTILS.download_models()
+        except Exception as _download_err:
+            # Non-fatal; AudioFeatures init will fail if truly missing
+            pass
 except Exception:
-    pass
+    OWW_UTILS = None
 
 try:
     from openwakeword.utils import AudioFeatures
@@ -80,15 +84,24 @@ class FeatureInfer:
         self.last_detect_ts: Dict[str, float] = {}
         # Initialize AudioFeatures; if resources missing, attempt one more download, then retry once
         try:
-            self.features = AudioFeatures(device="cpu")
+            self.features = self._init_features()
         except Exception as init_err:
             try:
-                from openwakeword import utils as oww_utils  # type: ignore
-                oww_utils.download_models()
-                self.features = AudioFeatures(device="cpu")
+                if OWW_UTILS and hasattr(OWW_UTILS, "download_models"):
+                    OWW_UTILS.download_models()
+                self.features = self._init_features()
             except Exception:
                 raise init_err
         self.lock = threading.Lock()
+
+    def _init_features(self):
+        try:
+            sig = inspect.signature(AudioFeatures.__init__)
+            if "device" in sig.parameters:
+                return AudioFeatures(device="cpu")
+        except Exception:
+            pass
+        return AudioFeatures()
 
     def log(self, **kwargs):
         sys.stderr.write(json.dumps({"ts": time.time(), **kwargs}) + "\n")
