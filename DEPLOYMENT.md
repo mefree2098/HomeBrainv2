@@ -703,6 +703,7 @@ Follow this runbook when you go live in production (feel free to dry-run it on t
 - Port conflicts: `sudo netstat -tulpn | grep -E '3000|5173|443|12345'`
 - Discovery diagnostics: `sudo tcpdump -i any udp port 12345`
 - Reset admin: rerun `node server/scripts/createAdminUser.js --force --email ...`
+- Whisper stuck on "Service installing": restart HomeBrain (`sudo systemctl restart homebrain`), then open `/whisper` and click **Install Dependencies** again. Check logs with `journalctl -u homebrain -n 200 | grep -i whisper`.
 
 ---
 
