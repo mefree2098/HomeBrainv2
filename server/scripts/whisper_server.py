@@ -7,6 +7,7 @@ This keeps the model loaded in memory for fast, low-latency transcriptions.
 """
 
 import argparse
+import inspect
 import json
 import os
 import queue
@@ -65,6 +66,10 @@ class CommandLoop:
         self.model_name = model_name
         self.device = requested_device
         self.compute_type = requested_compute
+        try:
+            self._transcribe_params = set(inspect.signature(self.model.transcribe).parameters.keys())
+        except Exception:
+            self._transcribe_params = None
         internal_model = getattr(model, "_model", None) or getattr(model, "model", None)
         if internal_model is not None:
             self.device = getattr(internal_model, "device", self.device)
@@ -142,13 +147,32 @@ class CommandLoop:
         )
         try:
             started = time.time()
+            transcribe_kwargs = {
+                "language": language,
+                "beam_size": beam_size,
+                "temperature": temperature,
+                "vad_filter": vad_filter,
+            }
+            if translate:
+                if self._transcribe_params and "task" in self._transcribe_params:
+                    transcribe_kwargs["task"] = "translate"
+                else:
+                    transcribe_kwargs["translate"] = True
+            else:
+                if self._transcribe_params and "task" in self._transcribe_params:
+                    transcribe_kwargs["task"] = "transcribe"
+                else:
+                    transcribe_kwargs["translate"] = False
+
+            if self._transcribe_params:
+                transcribe_kwargs = {
+                    key: value for key, value in transcribe_kwargs.items()
+                    if key in self._transcribe_params
+                }
+
             segments, info = self.model.transcribe(
                 str(audio_path),
-                language=language,
-                beam_size=beam_size,
-                temperature=temperature,
-                vad_filter=vad_filter,
-                translate=translate,
+                **transcribe_kwargs,
             )
             transcript = []
             segment_payload = []
