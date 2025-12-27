@@ -78,11 +78,65 @@ curl -fsSL https://preview-0py18bcb.ui.pythagora.ai/api/remote-devices/setup | b
 
 #### Flash Operating System
 1. Download [Raspberry Pi Imager](https://www.raspberrypi.org/software/)
-2. Flash **Raspberry Pi OS Lite** (64-bit; Bookworm or later required for Pi 5)
-3. During imaging, configure:
-   - Enable SSH with password or key
-   - Configure Wi-Fi network
+2. In Imager:
+   - Device: Raspberry Pi 5
+   - Choose OS:
+     - If listed: **Raspberry Pi OS (other)** -> **Raspberry Pi OS Lite (64-bit)**.
+     - If not listed, use **Use custom** and select:
+       - https://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2024-07-04/2024-07-04-raspios-bookworm-arm64-lite.img.xz
+   - Choose Storage: select your SD card
+3. If OS customization is available, open it (gear icon or **Edit settings** prompt).
+4. **General** tab:
+   - Set hostname
    - Set username and password
+   - Configure wireless LAN (SSID, password, country)
+   - Set locale settings (timezone, keyboard)
+5. **Services** tab:
+   - Enable SSH (password auth or your SSH public key)
+6. Save, confirm, and write the image.
+7. If OS customization is NOT available (common when using **Use custom** on Imager 2.x), configure headless access manually after writing:
+   1. Reinsert the SD card so the **boot** partition mounts in Windows (usually labeled `bootfs`).
+   2. Create an empty file named `ssh` (no extension) in the boot partition:
+      ```powershell
+      New-Item -Path X:\ssh -ItemType File -Force | Out-Null
+      ```
+   3. Create `userconf.txt` with `username:password_hash`:
+      - Generate a hash (Git Bash or any OpenSSL install):
+        ```bash
+        openssl passwd -6
+        ```
+        Enter the password; copy the full output hash (include everything, including any trailing `.b1`).
+      - Create the file (PowerShell, replace `X:` with your boot drive letter). Use single quotes so `$` is not stripped:
+        ```powershell
+        $line = 'matt:<PASTE_HASH_HERE>'
+        Set-Content -Path X:\userconf.txt -Value $line -Encoding ASCII -NoNewline
+        ```
+      - You will still log in with the plain password you entered for the hash (not the hash itself).
+   4. If using Wi-Fi, create `wpa_supplicant.conf` in the boot partition:
+      ```
+      country=US
+      ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+      update_config=1
+
+      network={
+        ssid="YOUR_WIFI_NAME"
+        psk="YOUR_WIFI_PASSWORD"
+      }
+      ```
+   5. Safely eject the SD card and boot the Pi.
+      - After the first successful boot, `userconf.txt` should disappear from the boot partition. If it is still there, the user was not created and login will fail.
+      - If it still exists after boot, you can force-create the user without reflashing:
+        1. Power off, insert the SD card in Windows, and edit `cmdline.txt` (single line). Append ` init=/bin/sh` at the end.
+        2. Boot the Pi; you should land at a root shell.
+        3. Run:
+           ```bash
+           mount -o remount,rw /
+           useradd -m -s /bin/bash matt
+           passwd matt
+           usermod -aG sudo,audio,video,plugdev,netdev,gpio,i2c,spi matt
+           sync
+           ```
+        4. Power off, remove `init=/bin/sh` from `cmdline.txt`, boot normally, and log in as `matt`.
 
 #### Alternative: Manual Configuration
 If not configured during imaging:
@@ -155,6 +209,17 @@ aplay test.wav
 curl -fsSL https://preview-0py18bcb.ui.pythagora.ai/api/remote-devices/setup | bash
 ```
 
+#### Installer Script (copied `remote-device` folder)
+```bash
+cd ~/remote-device
+bash install.sh
+```
+If `install.sh` fails with `$'\r': command not found`, convert line endings and retry:
+```bash
+sed -i 's/\r$//' install.sh
+bash install.sh
+```
+
 #### Manual Installation
 ```bash
 # Clone repository
@@ -223,6 +288,16 @@ Edit `config.json`:
    sudo systemctl restart homebrain-remote
    journalctl -u homebrain-remote -n 20
    ```
+
+### Step 5: Confirm speech-to-text is running on the hub
+The Pi streams raw audio to the hub after a wake word. If STT is not running, you will see `command_error: Sorry, I could not understand the audio.` even when the Pi is fine.
+
+- In the HomeBrain UI, open **Settings -> Voice & Audio** and confirm the STT provider.
+- If using **On-device Whisper (Jetson)**:
+  - Go to `http://<hub-ip>:3000/whisper`
+  - Click **Install Dependencies**, then **Start Service**
+  - Download and **Activate** the `small` model (recommended)
+- If using **OpenAI**, set your API key in the UI or via `OPENAI_API_KEY`, then restart the hub service.
 3. **Let the hub manage models.** Trained `.tflite` files are downloaded automatically into `~/homebrain-remote/wake-words/` based on the profile wake words configured in the UI—no AccessKey or manual copying is required.
 4. **Monitor detection** with `journalctl -u homebrain-remote -f`; successful triggers appear as `wake_word_detected` events.
 
