@@ -573,6 +573,8 @@ class WhisperService {
     await pipInstall('Upgrade huggingface hub toolchain', ['--upgrade', 'huggingface-hub', 'tokenizers', 'tqdm']);
     await pipInstall('Install faster-whisper', ['--upgrade', 'faster-whisper']);
 
+    let cpuFallbackInstalled = false;
+
     if (hasCuda) {
       attemptedCudaInstall = true;
       if (this._isJetson()) {
@@ -597,6 +599,15 @@ class WhisperService {
       }
     }
 
+    if (!cudaInstallSucceeded) {
+      try {
+        await pipInstall('Install CPU ctranslate2 wheel', ['--only-binary=:all:', '--no-cache-dir', 'ctranslate2>=4.4,<5']);
+        cpuFallbackInstalled = true;
+      } catch (error) {
+        console.warn(`Whisper Service: CPU CTranslate2 wheel install failed (${error.message})`);
+      }
+    }
+
     await pipInstall('Install soundfile', ['--upgrade', 'soundfile']);
 
     if (cudaInstallSucceeded) {
@@ -609,7 +620,7 @@ class WhisperService {
     await config.save();
 
     const suffix = attemptedCudaInstall
-      ? (cudaInstallSucceeded ? (cudaReady ? ' (CUDA ready)' : ' (CUDA installed but runtime not ready, CPU fallback)') : ' (CUDA install failed, CPU fallback)')
+      ? (cudaInstallSucceeded ? (cudaReady ? ' (CUDA ready)' : ' (CUDA installed but runtime not ready, CPU fallback)') : (cpuFallbackInstalled ? ' (CUDA install failed, CPU fallback)' : ' (CUDA install failed)'))
       : '';
 
     return { success: finalInstalled, message: `faster-whisper installed ${finalInstalled ? 'successfully' : 'with issues'}${suffix}` };
