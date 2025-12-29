@@ -484,16 +484,22 @@ class VoiceWebSocketServer {
 
     const { wakeWord, confidence, timestamp } = message;
     const normalizedWake = (wakeWord || 'anna').toString().toLowerCase();
+    const eventTimestamp = timestamp ? new Date(timestamp) : new Date();
+    const displayWake = typeof wakeWord === 'string' && wakeWord.trim().length > 0
+      ? wakeWord.trim()
+      : normalizedWake;
+    const safeConfidence = typeof confidence === 'number'
+      ? Math.max(0, Math.min(1, confidence))
+      : null;
     connection.pendingWakeWord = {
       wakeWord: normalizedWake,
-      timestamp: new Date()
+      timestamp: eventTimestamp
     };
 
-      console.log(`Wake word detected by ${connection.device.name}: ${normalizedWake} (confidence: ${confidence})`);
+    console.log(`Wake word detected by ${connection.device.name}: ${displayWake} (confidence: ${confidence})`);
 
     try {
       // Persist a minimal, schema-compliant VoiceCommand record for wake word events
-      const now = timestamp ? new Date(timestamp) : new Date();
       const original = `[WAKE_WORD] ${normalizedWake}`;
       const sourceRoom = connection.device?.room || 'unknown';
 
@@ -510,8 +516,8 @@ class VoiceWebSocketServer {
         },
         execution: {
           status: 'success',
-          startedAt: now,
-          completedAt: now
+          startedAt: eventTimestamp,
+          completedAt: eventTimestamp
         },
         llmProcessing: {
           provider: 'local',
@@ -523,7 +529,7 @@ class VoiceWebSocketServer {
         },
         response: {
           text: 'Wake word detected',
-          playedAt: now,
+          playedAt: eventTimestamp,
           responseTime: 0
         }
       });
@@ -539,7 +545,10 @@ class VoiceWebSocketServer {
 
       // Update device last interaction
       await VoiceDevice.findByIdAndUpdate(deviceId, {
-        lastInteraction: new Date()
+        lastInteraction: eventTimestamp,
+        lastWakeWord: displayWake,
+        lastWakeWordAt: eventTimestamp,
+        ...(safeConfidence !== null ? { lastWakeWordConfidence: safeConfidence } : {})
       });
 
     } catch (error) {
@@ -617,6 +626,13 @@ class VoiceWebSocketServer {
       return;
     }
 
+    const normalizeLlmProvider = (provider) => {
+      const normalized = (provider || '').toString().trim().toLowerCase();
+      if (['openai', 'anthropic', 'local'].includes(normalized)) return normalized;
+      if (['whisper_local', 'whisper', 'heuristic', 'rules'].includes(normalized)) return 'local';
+      return 'local';
+    };
+
     const command = (context.commandText || context.command || '').toString().trim();
     if (!command) {
       console.warn(`Empty command received from device ${deviceId}`);
@@ -652,13 +668,6 @@ class VoiceWebSocketServer {
     });
 
     try {
-      const normalizeLlmProvider = (provider) => {
-        const normalized = (provider || '').toString().trim().toLowerCase();
-        if (['openai', 'anthropic', 'local'].includes(normalized)) return normalized;
-        if (['whisper_local', 'whisper'].includes(normalized)) return 'local';
-        return 'local';
-      };
-
       const voiceCommand = new VoiceCommand({
         deviceId: deviceId,
         originalText: command,
@@ -755,7 +764,9 @@ class VoiceWebSocketServer {
       };
 
       const llmInfo = result.llm || {};
-      voiceCommand.llmProcessing.provider = llmInfo.provider || voiceCommand.llmProcessing.provider || 'local';
+      voiceCommand.llmProcessing.provider = normalizeLlmProvider(
+        llmInfo.provider || voiceCommand.llmProcessing.provider || 'local'
+      );
       voiceCommand.llmProcessing.model = llmInfo.model || voiceCommand.llmProcessing.model || 'unknown';
       voiceCommand.llmProcessing.prompt = llmInfo.prompt || '';
       voiceCommand.llmProcessing.rawResponse = llmInfo.rawResponse || '';

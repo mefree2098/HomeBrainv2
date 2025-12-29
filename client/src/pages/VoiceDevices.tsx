@@ -476,6 +476,9 @@ export function VoiceDevices() {
           const transcriptConfidence = typeof device.lastTranscriptConfidence === 'number'
             ? Math.round(device.lastTranscriptConfidence * 100)
             : null
+          const wakeWordConfidence = typeof device.lastWakeWordConfidence === 'number'
+            ? Math.round(device.lastWakeWordConfidence * 100)
+            : null
 
           return (
             <Card key={device._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
@@ -770,6 +773,21 @@ export function VoiceDevices() {
                     <Trash2 className="h-4 w-4 text-red-600" />
                   )}
                 </Button>
+              </div>
+
+              <div className="rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-muted-foreground dark:border-gray-700 dark:bg-gray-800">
+                <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <span>Last wake word</span>
+                  <span>{formatTranscriptTime(device.lastWakeWordAt)}</span>
+                </div>
+                <div className="mt-1 text-sm text-gray-900 dark:text-gray-100">
+                  {device.lastWakeWord || 'No wake word detected yet.'}
+                </div>
+                {wakeWordConfidence !== null && (
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    Confidence {wakeWordConfidence}%
+                  </div>
+                )}
               </div>
 
               <div className="rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-muted-foreground dark:border-gray-700 dark:bg-gray-800">
