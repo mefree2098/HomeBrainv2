@@ -20,7 +20,7 @@ import {
   CheckCircle2,
   XCircle
 } from "lucide-react"
-import { getVoiceDevices, testVoiceDevice, pushConfigToDevice, pingTtsToDevice } from "@/api/voice"
+import { getVoiceDevices, testVoiceDevice, pushConfigToDevice, pingTtsToDevice, updateVoiceDeviceSettings } from "@/api/voice"
 import {
   deleteRemoteDevice,
   getUpdateStatistics,
@@ -138,6 +138,34 @@ export function VoiceDevices() {
     }
   }
 
+  const commitDeviceSettings = useCallback(async (
+    deviceId: string,
+    updates: Record<string, unknown>,
+    description: string,
+    localUpdate?: (device: any) => any
+  ) => {
+    try {
+      const result = await updateVoiceDeviceSettings(deviceId, updates)
+      if (result?.device) {
+        setDevices((prev) => prev.map((device) => (
+          device._id === deviceId ? { ...device, ...result.device } : device
+        )))
+      } else if (localUpdate) {
+        setDevices((prev) => prev.map((device) => (
+          device._id === deviceId ? localUpdate(device) : device
+        )))
+      }
+      toast({ title: 'Settings updated', description })
+    } catch (error: any) {
+      console.error('Failed to update device settings:', error)
+      toast({
+        title: 'Update failed',
+        description: error?.message || 'Unable to update settings',
+        variant: 'destructive'
+      })
+    }
+  }, [toast])
+
   const handleUpdateDevice = async (deviceId: string, deviceName: string) => {
     setUpdatingDevice(deviceId)
     try {
@@ -253,6 +281,23 @@ export function VoiceDevices() {
     if (diffMins < 60) return `${diffMins}m ago`
     if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`
     return date.toLocaleDateString()
+  }
+
+  const formatTranscriptTime = (timestamp?: string) => {
+    if (!timestamp) return 'Never'
+    return formatLastSeen(timestamp)
+  }
+
+  const formatElapsed = (timestamp?: string) => {
+    if (!timestamp) return ''
+    const date = new Date(timestamp)
+    if (Number.isNaN(date.getTime())) return ''
+    const diffSeconds = Math.floor((Date.now() - date.getTime()) / 1000)
+    if (diffSeconds < 60) return `${diffSeconds}s`
+    const diffMinutes = Math.floor(diffSeconds / 60)
+    if (diffMinutes < 60) return `${diffMinutes}m`
+    const diffHours = Math.floor(diffMinutes / 60)
+    return `${diffHours}h`
   }
 
   const needsUpdate = (device: any) => {
@@ -426,98 +471,183 @@ export function VoiceDevices() {
 
       {/* Voice Devices Grid */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {devices.map((device) => (
-          <Card key={device._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`p-3 rounded-full ${getStatusColor(device.status)} text-white`}>
-                    <Mic className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-lg">{device.name}</CardTitle>
-                    <div className="flex items-center gap-2 mt-1">
-                      <MapPin className="h-3 w-3 text-muted-foreground" />
-                      <span className="text-sm text-muted-foreground">{device.room}</span>
+        {devices.map((device) => {
+          const streamElapsed = formatElapsed(device.audioStreamStartedAt)
+          const transcriptConfidence = typeof device.lastTranscriptConfidence === 'number'
+            ? Math.round(device.lastTranscriptConfidence * 100)
+            : null
+
+          return (
+            <Card key={device._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-3 rounded-full ${getStatusColor(device.status)} text-white`}>
+                      <Mic className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg">{device.name}</CardTitle>
+                      <div className="flex items-center gap-2 mt-1">
+                        <MapPin className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-sm text-muted-foreground">{device.room}</span>
+                      </div>
                     </div>
                   </div>
+                  <Badge variant={device.status === 'online' ? "default" : "destructive"} className="flex items-center gap-1">
+                    {getStatusIcon(device.status)}
+                    {device.status}
+                  </Badge>
                 </div>
-                <Badge variant={device.status === 'online' ? "default" : "destructive"} className="flex items-center gap-1">
-                  {getStatusIcon(device.status)}
-                  {device.status}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {device.batteryLevel !== null && (
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="flex items-center gap-1">
-                      <Battery className="h-3 w-3" />
-                      Battery
-                    </span>
-                    <span className={device.batteryLevel < 20 ? "text-red-600" : "text-green-600"}>
-                      {device.batteryLevel}%
-                    </span>
-                  </div>
-                  <Progress 
-                    value={device.batteryLevel} 
-                    className={`h-2 ${device.batteryLevel < 20 ? 'bg-red-100' : 'bg-green-100'}`}
-                  />
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm text-muted-foreground">
-                  <span>Firmware:</span>
-                  <span className="font-mono">{device.firmwareVersion || 'Unknown'}</span>
-                </div>
-                <div className="flex justify-between text-sm text-muted-foreground">
-                  <span>Wake-word Sensitivity:</span>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      defaultValue={device.settings?.wakeWordVad?.minRms ?? 0.02}
-                      onMouseUp={async (e) => {
-                        const val = Number((e.target as HTMLInputElement).value);
-                        try {
-                          await fetch(`/api/voice/devices/${device._id}/settings`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('accessToken')}` },
-                            body: JSON.stringify({ wakeWordVad: { minRms: val } })
-                          });
-                          toast({ title: 'Sensitivity updated', description: `minRms set to ${val.toFixed(2)}` });
-                        } catch (err: any) {
-                          toast({ title: 'Update failed', description: err?.message || 'Unable to update', variant: 'destructive' });
-                        }
-                      }}
-                      className="w-40"
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {device.batteryLevel !== null && (
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="flex items-center gap-1">
+                        <Battery className="h-3 w-3" />
+                        Battery
+                      </span>
+                      <span className={device.batteryLevel < 20 ? "text-red-600" : "text-green-600"}>
+                        {device.batteryLevel}%
+                      </span>
+                    </div>
+                    <Progress 
+                      value={device.batteryLevel} 
+                      className={`h-2 ${device.batteryLevel < 20 ? 'bg-red-100' : 'bg-green-100'}`}
                     />
-                    <span className="font-mono text-xs">{(device.settings?.wakeWordVad?.minRms ?? 0.02).toFixed(2)}</span>
-                  </div>
-                </div>
-
-                <div className="flex justify-between text-sm text-muted-foreground">
-                  <span>Latest:</span>
-                  <span className="font-mono">{latestVersion}</span>
-                </div>
-
-                <div className="flex justify-between text-sm text-muted-foreground">
-                  <span>Last seen:</span>
-                  <span>{formatLastSeen(device.lastSeen)}</span>
-                </div>
-
-                {getUpdateBadge(device) && (
-                  <div className="flex justify-center pt-1">
-                    {getUpdateBadge(device)}
                   </div>
                 )}
-              </div>
 
-              <div className="flex flex-wrap gap-2">
+                {device.audioStreamActive && (
+                  <div className="flex items-center gap-2 rounded-md bg-blue-50 px-2 py-1 text-xs text-blue-700">
+                    <Activity className="h-3 w-3 animate-pulse" />
+                    <span>Streaming audio</span>
+                    {streamElapsed && (
+                      <span className="text-blue-600/80">({streamElapsed})</span>
+                    )}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Firmware:</span>
+                    <span className="font-mono">{device.firmwareVersion || 'Unknown'}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-muted-foreground items-center">
+                    <span className="flex items-center gap-1">
+                      <Volume2 className="h-3 w-3" />
+                      Volume
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        defaultValue={device.volume ?? 50}
+                        onMouseUp={(e) => {
+                          const val = Number((e.target as HTMLInputElement).value)
+                          commitDeviceSettings(
+                            device._id,
+                            { volume: val },
+                            `Volume set to ${val}%`
+                          )
+                        }}
+                        onTouchEnd={(e) => {
+                          const val = Number((e.target as HTMLInputElement).value)
+                          commitDeviceSettings(
+                            device._id,
+                            { volume: val },
+                            `Volume set to ${val}%`
+                          )
+                        }}
+                        className="w-40"
+                      />
+                      <span className="font-mono text-xs">{device.volume ?? 50}%</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between text-sm text-muted-foreground items-center">
+                    <span className="flex items-center gap-1">
+                      <Mic className="h-3 w-3" />
+                      Mic Sensitivity
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        defaultValue={device.microphoneSensitivity ?? 50}
+                        onMouseUp={(e) => {
+                          const val = Number((e.target as HTMLInputElement).value)
+                          commitDeviceSettings(
+                            device._id,
+                            { microphoneSensitivity: val },
+                            `Microphone sensitivity set to ${val}%`
+                          )
+                        }}
+                        onTouchEnd={(e) => {
+                          const val = Number((e.target as HTMLInputElement).value)
+                          commitDeviceSettings(
+                            device._id,
+                            { microphoneSensitivity: val },
+                            `Microphone sensitivity set to ${val}%`
+                          )
+                        }}
+                        className="w-40"
+                      />
+                      <span className="font-mono text-xs">{device.microphoneSensitivity ?? 50}%</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between text-sm text-muted-foreground items-center">
+                    <span>Wake-word Sensitivity:</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        defaultValue={device.settings?.wakeWordVad?.minRms ?? 0.02}
+                        onMouseUp={(e) => {
+                          const val = Number((e.target as HTMLInputElement).value)
+                          commitDeviceSettings(
+                            device._id,
+                            { wakeWordVad: { minRms: val } },
+                            `Wake-word minRms set to ${val.toFixed(2)}`
+                          )
+                        }}
+                        onTouchEnd={(e) => {
+                          const val = Number((e.target as HTMLInputElement).value)
+                          commitDeviceSettings(
+                            device._id,
+                            { wakeWordVad: { minRms: val } },
+                            `Wake-word minRms set to ${val.toFixed(2)}`
+                          )
+                        }}
+                        className="w-40"
+                      />
+                      <span className="font-mono text-xs">{(device.settings?.wakeWordVad?.minRms ?? 0.02).toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Latest:</span>
+                    <span className="font-mono">{latestVersion}</span>
+                  </div>
+
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Last seen:</span>
+                    <span>{formatLastSeen(device.lastSeen)}</span>
+                  </div>
+
+                  {getUpdateBadge(device) && (
+                    <div className="flex justify-center pt-1">
+                      {getUpdateBadge(device)}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2">
                 {needsUpdate(device) && !isUpdating(device) && (
                   <Button
                     onClick={() => handleUpdateDevice(device._id, device.name)}
@@ -642,6 +772,23 @@ export function VoiceDevices() {
                 </Button>
               </div>
 
+              <div className="rounded-md border border-gray-100 bg-gray-50 p-2 text-xs text-muted-foreground dark:border-gray-700 dark:bg-gray-800">
+                <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <span>Last transcript</span>
+                  <span>{formatTranscriptTime(device.lastTranscriptAt)}</span>
+                </div>
+                <div className={`mt-1 text-sm ${device.lastTranscriptError ? 'text-red-600' : 'text-gray-900 dark:text-gray-100'}`}>
+                  {device.lastTranscriptError
+                    ? device.lastTranscriptError
+                    : device.lastTranscriptText || 'No transcript captured yet.'}
+                </div>
+                {!device.lastTranscriptError && transcriptConfidence !== null && (
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    Confidence {transcriptConfidence}%{device.lastTranscriptProvider ? ` | ${device.lastTranscriptProvider}` : ''}{device.lastTranscriptModel ? ` (${device.lastTranscriptModel})` : ''}
+                  </div>
+                )}
+              </div>
+
               <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
                 <strong>Wake words:</strong> "Hey Anna", "Henry", "Home Brain"
               </div>
@@ -649,7 +796,8 @@ export function VoiceDevices() {
               <UpdateManager deviceId={device._id} deviceName={device.name} />
             </CardContent>
           </Card>
-        ))}
+          )
+        })}
       </div>
 
       {devices.length === 0 && (

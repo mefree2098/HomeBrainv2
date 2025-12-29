@@ -346,7 +346,24 @@ Pick only one path; you do not need both.
 
 ## Step 15 - Enable on-device Whisper speech-to-text
 
-HomeBrain now includes a dedicated **Whisper Management** page that keeps all speech recognition on your Jetson Orin Nano. The workflow mirrors the Ollama UI but targets OpenAI’s Whisper models and the new background transcription worker.
+HomeBrain now includes a dedicated **Whisper Management** page that keeps all speech recognition on your Jetson Orin Nano. The workflow mirrors the Ollama UI but targets OpenAI's Whisper models and the new background transcription worker.
+
+Before installing Whisper on Jetson, confirm the CUDA toolkit and cuDNN dev packages are available (needed for GPU builds):
+```bash
+which nvcc || true
+ls /usr/local | grep -E '^cuda' || true
+ls /usr/lib/aarch64-linux-gnu/libcudnn.so* || true
+```
+If `nvcc` is missing but JetPack installed CUDA 12.6 under `/usr/local/cuda-12.6`, add it to your shell and create the standard symlink:
+```bash
+echo 'export PATH=/usr/local/cuda-12.6/bin:$PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+sudo ln -s /usr/local/cuda-12.6 /usr/local/cuda
+```
+Install the cuDNN dev packages that match CUDA 12:
+```bash
+sudo apt install -y libcudnn9-cuda-12 libcudnn9-dev-cuda-12
+```
 
 1. **Install the dependencies**  
    Open **Whisper STT** from the sidebar and click **Install Dependencies**. HomeBrain installs `faster-whisper` and supporting audio libraries inside the system Python environment. On Jetson hardware it automatically builds CTranslate2 with CUDA support (targeting compute capability 8.7) so the Whisper worker can run on the GPU; if the CUDA toolchain is unavailable it falls back to a CPU build. If you already installed the packages manually, the page will detect them automatically and mark the step complete.

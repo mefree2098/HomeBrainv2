@@ -582,6 +582,14 @@ class VoiceWebSocketServer {
     return 'default';
   }
 
+  async updateDeviceAudioState(deviceId, updates) {
+    try {
+      await VoiceDevice.findByIdAndUpdate(deviceId, updates);
+    } catch (error) {
+      console.warn(`Failed to update audio state for device ${deviceId}:`, error.message);
+    }
+  }
+
   async processVoiceCommandText(deviceId, context = {}) {
     const connection = this.deviceConnections.get(deviceId);
     if (!connection || !connection.authenticated) {
@@ -800,6 +808,11 @@ class VoiceWebSocketServer {
       };
       this.audioSessions.set(deviceId, session);
       console.log(`Started audio session ${resolvedSessionId} for device ${deviceId}`);
+      await this.updateDeviceAudioState(deviceId, {
+        audioStreamActive: true,
+        audioStreamStartedAt: session.startedAt,
+        lastTranscriptError: null
+      });
     }
 
     if (typeof sequence === 'number') {
@@ -841,8 +854,25 @@ class VoiceWebSocketServer {
       return;
     }
 
+    const completedAt = new Date();
+    const markInactive = async (fields = {}) => {
+      await this.updateDeviceAudioState(deviceId, {
+        audioStreamActive: false,
+        lastTranscriptAt: completedAt,
+        ...fields
+      });
+    };
+
     if (!session || !Array.isArray(session.chunks) || session.chunks.length === 0) {
       console.warn(`Audio session ${session?.sessionId || 'unknown'} for device ${deviceId} contained no data`);
+      await markInactive({
+        lastTranscriptText: null,
+        lastTranscriptConfidence: null,
+        lastTranscriptProvider: null,
+        lastTranscriptModel: null,
+        lastTranscriptLanguage: null,
+        lastTranscriptError: 'No audio received'
+      });
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: "I didn't hear anything. Let's try again."
@@ -864,6 +894,14 @@ class VoiceWebSocketServer {
       });
     } catch (error) {
       console.error(`Speech-to-text failed for device ${deviceId}:`, error.message);
+      await markInactive({
+        lastTranscriptText: null,
+        lastTranscriptConfidence: null,
+        lastTranscriptProvider: null,
+        lastTranscriptModel: null,
+        lastTranscriptLanguage: null,
+        lastTranscriptError: error.message || 'Speech-to-text failed'
+      });
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: 'Sorry, I could not understand the audio.'
@@ -873,12 +911,29 @@ class VoiceWebSocketServer {
 
     if (!transcription || !transcription.text) {
       console.warn(`Transcription for device ${deviceId} session ${session.sessionId} returned no text`);
+      await markInactive({
+        lastTranscriptText: null,
+        lastTranscriptConfidence: typeof transcription?.confidence === 'number' ? transcription.confidence : null,
+        lastTranscriptProvider: transcription?.provider || null,
+        lastTranscriptModel: transcription?.model || null,
+        lastTranscriptLanguage: transcription?.language || null,
+        lastTranscriptError: 'No speech detected'
+      });
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: 'I did not catch that. Please try again.'
       });
       return;
     }
+
+    await markInactive({
+      lastTranscriptText: transcription.text,
+      lastTranscriptConfidence: typeof transcription.confidence === 'number' ? transcription.confidence : null,
+      lastTranscriptProvider: transcription.provider || null,
+      lastTranscriptModel: transcription.model || null,
+      lastTranscriptLanguage: transcription.language || null,
+      lastTranscriptError: null
+    });
 
     await this.processVoiceCommandText(deviceId, {
       commandText: transcription.text,
@@ -959,7 +1014,8 @@ class VoiceWebSocketServer {
       // Update device status to offline
       await VoiceDevice.findByIdAndUpdate(deviceId, {
         status: 'offline',
-        lastSeen: new Date()
+        lastSeen: new Date(),
+        audioStreamActive: false
       });
 
       // Remove from active connections
@@ -989,12 +1045,18 @@ class VoiceWebSocketServer {
     }
   }
 
-  playTtsToDevice(deviceId, text = 'Ping from hub') {
+  async playTtsToDevice(deviceId, text = 'Ping from hub') {
     const connection = this.deviceConnections.get(deviceId);
     if (!connection) {
       return { success: false, error: 'Device not connected' };
     }
-    const payload = { type: 'tts_response', text, voice: 'default' };
+    let voiceId = 'default';
+    try {
+      voiceId = await this.getPreferredVoiceId(connection);
+    } catch (error) {
+      console.warn(`Failed to resolve preferred voice for device ${deviceId}:`, error.message);
+    }
+    const payload = { type: 'tts_response', text, voice: voiceId || 'default' };
     const ok = this.sendMessage(deviceId, payload);
     return ok ? { success: true } : { success: false, error: 'Send failed' };
   }

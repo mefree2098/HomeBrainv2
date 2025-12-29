@@ -95,6 +95,41 @@ const schema = new mongoose.Schema({
     type: Number, // Uptime in seconds
     default: 0,
   },
+  audioStreamActive: {
+    type: Boolean,
+    default: false,
+  },
+  audioStreamStartedAt: {
+    type: Date,
+  },
+  lastTranscriptText: {
+    type: String,
+    trim: true,
+  },
+  lastTranscriptAt: {
+    type: Date,
+  },
+  lastTranscriptConfidence: {
+    type: Number,
+    min: 0,
+    max: 1,
+  },
+  lastTranscriptProvider: {
+    type: String,
+    trim: true,
+  },
+  lastTranscriptModel: {
+    type: String,
+    trim: true,
+  },
+  lastTranscriptLanguage: {
+    type: String,
+    trim: true,
+  },
+  lastTranscriptError: {
+    type: String,
+    trim: true,
+  },
   // Configuration
   settings: {
     type: mongoose.Schema.Types.Mixed,
