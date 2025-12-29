@@ -600,7 +600,7 @@ export function VoiceDevices() {
                     </div>
                   </div>
                   <div className="flex justify-between text-sm text-muted-foreground items-center">
-                    <span>Wake-word Sensitivity:</span>
+                    <span>Wake-word Noise Gate (higher = less sensitive):</span>
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
@@ -777,12 +777,15 @@ export function VoiceDevices() {
                   <span>Last transcript</span>
                   <span>{formatTranscriptTime(device.lastTranscriptAt)}</span>
                 </div>
-                <div className={`mt-1 text-sm ${device.lastTranscriptError ? 'text-red-600' : 'text-gray-900 dark:text-gray-100'}`}>
-                  {device.lastTranscriptError
-                    ? device.lastTranscriptError
-                    : device.lastTranscriptText || 'No transcript captured yet.'}
+                <div className="mt-1 text-sm text-gray-900 dark:text-gray-100">
+                  {device.lastTranscriptText || 'No transcript captured yet.'}
                 </div>
-                {!device.lastTranscriptError && transcriptConfidence !== null && (
+                {device.lastTranscriptError && (
+                  <div className="mt-1 text-xs text-red-600">
+                    Error: {device.lastTranscriptError}
+                  </div>
+                )}
+                {transcriptConfidence !== null && (
                   <div className="mt-1 text-[11px] text-muted-foreground">
                     Confidence {transcriptConfidence}%{device.lastTranscriptProvider ? ` | ${device.lastTranscriptProvider}` : ''}{device.lastTranscriptModel ? ` (${device.lastTranscriptModel})` : ''}
                   </div>
