@@ -667,7 +667,7 @@ class WhisperService {
     }
   }
 
-  async startService(modelName) {
+  async startService(modelName, options = {}) {
     await this._ensureInstalled();
     const config = await this._getConfig();
 
@@ -677,8 +677,8 @@ class WhisperService {
 
     if (this.runtime) { await this.runtime.stop(); this.runtime = null; }
 
-    const devicePreference  = process.env.WHISPER_DEVICE || 'auto';
-    const computePreference = process.env.WHISPER_COMPUTE_TYPE || 'auto';
+    const devicePreference = options.devicePreference || process.env.WHISPER_DEVICE || 'auto';
+    const computePreference = options.computePreference || process.env.WHISPER_COMPUTE_TYPE || 'auto';
     const deviceCandidates  = this._resolveDeviceCandidates(devicePreference);
     let startError = null;
 
@@ -748,9 +748,9 @@ class WhisperService {
     return { success: true, message: 'Whisper service stopped' };
   }
 
-  async restartService(modelName) {
+  async restartService(modelName, options = {}) {
     await this.stopService();
-    return this.startService(modelName);
+    return this.startService(modelName, options);
   }
 
   async getStatus() {
@@ -834,7 +834,7 @@ class WhisperService {
     const filePath = path.join(tmpDir, filename);
     await fs.promises.writeFile(filePath, wavBuffer);
 
-    try {
+    const transcribeOnce = async () => {
       const started = Date.now();
       const result = await this.runtime.transcribe({
         file: filePath,
@@ -852,6 +852,31 @@ class WhisperService {
         computeType: this.runtime?.computeType || config.activeComputeType || null,
         processingTimeMs: duration
       };
+    };
+
+    try {
+      return await transcribeOnce();
+    } catch (error) {
+      const recentLogs = this._getRecentRuntimeLogs(40);
+      const isCudaFailure = this.runtime?.device === 'cuda' && this._isCudaExecutionFailure(error, recentLogs);
+      if (!isCudaFailure) {
+        throw error;
+      }
+
+      console.warn('Whisper Service: CUDA transcription failed; restarting on CPU float32.');
+      try {
+        await this.restartService(config.activeModel, {
+          devicePreference: 'cpu',
+          computePreference: 'float32'
+        });
+      } catch (restartError) {
+        const message = `Whisper CUDA execution failed and CPU fallback could not start: ${restartError.message}`;
+        throw new Error(message);
+      }
+
+      const retry = await transcribeOnce();
+      retry.fallback = { from: 'cuda', to: 'cpu', reason: 'cudnn_execution_failed' };
+      return retry;
     } finally {
       fs.promises.unlink(filePath).catch(() => {});
     }
@@ -890,6 +915,20 @@ class WhisperService {
     } catch {
       return 0;
     }
+  }
+
+  _getRecentRuntimeLogs(limit = 20) {
+    if (!this.runtime?.logBuffer?.length) {
+      return '';
+    }
+    return this.runtime.logBuffer.slice(-limit).join('\n');
+  }
+
+  _isCudaExecutionFailure(error, logs = '') {
+    const combined = `${error?.message || ''}\n${logs || ''}`.toLowerCase();
+    return combined.includes('cudnn_status_execution_failed')
+      || combined.includes('cudnn failed')
+      || combined.includes('cuda error');
   }
 }
 
