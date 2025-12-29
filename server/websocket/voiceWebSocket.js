@@ -652,6 +652,13 @@ class VoiceWebSocketServer {
     });
 
     try {
+      const normalizeLlmProvider = (provider) => {
+        const normalized = (provider || '').toString().trim().toLowerCase();
+        if (['openai', 'anthropic', 'local'].includes(normalized)) return normalized;
+        if (['whisper_local', 'whisper'].includes(normalized)) return 'local';
+        return 'local';
+      };
+
       const voiceCommand = new VoiceCommand({
         deviceId: deviceId,
         originalText: command,
@@ -680,7 +687,7 @@ class VoiceWebSocketServer {
       }
 
       if (context.stt && typeof context.stt === 'object') {
-        voiceCommand.llmProcessing.provider = context.stt.provider || 'openai';
+        voiceCommand.llmProcessing.provider = normalizeLlmProvider(context.stt.provider);
         voiceCommand.llmProcessing.model = context.stt.model || 'stt';
         voiceCommand.llmProcessing.rawResponse = JSON.stringify({
           provider: context.stt.provider,
