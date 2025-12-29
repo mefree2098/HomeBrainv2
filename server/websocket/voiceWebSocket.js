@@ -1,6 +1,7 @@
 const WebSocket = require('ws');
 const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
+const UserProfile = require('../models/UserProfile');
 const wakeWordAssets = require('../utils/wakeWordAssets');
 const WakeWordModel = require('../models/WakeWordModel');
 const speechService = require('../services/speechService');
@@ -17,6 +18,7 @@ class VoiceWebSocketServer {
     this.heartbeatTimer = null;
     this.audioSessions = new Map(); // deviceId -> audio capture session
     this.settingsCache = { value: null, fetchedAt: 0 };
+    this.profileCache = { value: null, fetchedAt: 0 };
     this.upgradeHandlers = [];
   }
 
@@ -579,6 +581,24 @@ class VoiceWebSocketServer {
       return globalVoice.trim();
     }
 
+    const profileCacheValid = this.profileCache.value && now - this.profileCache.fetchedAt < 30_000;
+    if (!profileCacheValid) {
+      try {
+        const profile = await UserProfile.findOne({ active: true })
+          .select('voiceId')
+          .sort({ lastUsed: -1, usageCount: -1, name: 1 });
+        this.profileCache = { value: profile, fetchedAt: now };
+      } catch (error) {
+        console.warn('VoiceWebSocket: Unable to load active profile voice:', error.message);
+        this.profileCache = { value: null, fetchedAt: now };
+      }
+    }
+
+    const profileVoice = this.profileCache.value?.voiceId;
+    if (typeof profileVoice === 'string' && profileVoice.trim().length > 0) {
+      return profileVoice.trim();
+    }
+
     return 'default';
   }
 
@@ -620,6 +640,16 @@ class VoiceWebSocketServer {
       : (context.timestamp ? new Date(context.timestamp) : new Date());
 
     console.log(`Voice command received from ${connection.device.name}: ${command}`);
+
+    await this.updateDeviceAudioState(deviceId, {
+      lastTranscriptText: command,
+      lastTranscriptAt: timestamp,
+      lastTranscriptConfidence: typeof confidence === 'number' ? Math.max(0, Math.min(1, confidence)) : null,
+      lastTranscriptProvider: context?.stt?.provider || null,
+      lastTranscriptModel: context?.stt?.model || null,
+      lastTranscriptLanguage: context?.stt?.language || null,
+      lastTranscriptError: null
+    });
 
     try {
       const voiceCommand = new VoiceCommand({
@@ -754,6 +784,10 @@ class VoiceWebSocketServer {
       if (connection) {
         connection.pendingWakeWord = null;
       }
+      await this.updateDeviceAudioState(deviceId, {
+        lastTranscriptError: error.message || 'Command processing failed',
+        lastTranscriptAt: new Date()
+      });
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: 'Failed to process voice command'
