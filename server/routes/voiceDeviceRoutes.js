@@ -318,10 +318,10 @@ router.post('/devices/:id/ping-tts', requireUser(), async (req, res) => {
     const app = req.app;
     const wsHttps = app.get('voiceWebSocket');
     const wsHttp = app.get('voiceWebSocketHttp');
-    const tryPing = (ws) => ws && typeof ws.playTtsToDevice === 'function' ? ws.playTtsToDevice(id, text || 'Ping from hub') : { success: false, error: 'WS instance unavailable' };
-    let result = tryPing(wsHttps);
+    const tryPing = async (ws) => ws && typeof ws.playTtsToDevice === 'function' ? await ws.playTtsToDevice(id, text || 'Ping from hub') : { success: false, error: 'WS instance unavailable' };
+    let result = await tryPing(wsHttps);
     if (!result.success) {
-      result = tryPing(wsHttp);
+      result = await tryPing(wsHttp);
     }
     if (!result.success) {
       return res.status(400).json({ success: false, message: result.error || 'Failed to send TTS' });
@@ -342,7 +342,36 @@ router.put('/devices/:id/settings', requireUser(), async (req, res) => {
     if (!device) {
       return res.status(404).json({ success: false, message: 'Voice device not found' });
     }
-    device.settings = { ...(device.settings || {}), ...(updates || {}) };
+
+    const clampValue = (value, min, max) => Math.min(Math.max(value, min), max);
+    const { volume, microphoneSensitivity, ...settingsUpdates } = updates || {};
+
+    if (typeof volume === 'number' && Number.isFinite(volume)) {
+      device.volume = clampValue(volume, 0, 100);
+    }
+
+    if (typeof microphoneSensitivity === 'number' && Number.isFinite(microphoneSensitivity)) {
+      device.microphoneSensitivity = clampValue(microphoneSensitivity, 0, 100);
+    }
+
+    const nextSettings = { ...(device.settings || {}) };
+    if (settingsUpdates && typeof settingsUpdates === 'object') {
+      if (settingsUpdates.wakeWordVad && typeof settingsUpdates.wakeWordVad === 'object') {
+        nextSettings.wakeWordVad = {
+          ...(nextSettings.wakeWordVad || {}),
+          ...settingsUpdates.wakeWordVad
+        };
+        delete settingsUpdates.wakeWordVad;
+      }
+
+      device.settings = {
+        ...nextSettings,
+        ...settingsUpdates
+      };
+    } else {
+      device.settings = nextSettings;
+    }
+
     await device.save();
 
     // Push updated config to device if connected

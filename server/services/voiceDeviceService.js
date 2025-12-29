@@ -13,7 +13,7 @@ class VoiceDeviceService {
     console.log('VoiceDeviceService: Fetching all voice devices');
     try {
       const devices = await VoiceDevice.find()
-        .select('name room deviceType status lastSeen batteryLevel powerSource connectionType ipAddress volume microphoneSensitivity firmwareVersion uptime')
+        .select('name room deviceType status lastSeen batteryLevel powerSource connectionType ipAddress volume microphoneSensitivity firmwareVersion uptime settings audioStreamActive audioStreamStartedAt lastTranscriptText lastTranscriptAt lastTranscriptConfidence lastTranscriptProvider lastTranscriptModel lastTranscriptLanguage lastTranscriptError')
         .sort({ room: 1, name: 1 });
       
       console.log(`VoiceDeviceService: Found ${devices.length} voice devices`);
