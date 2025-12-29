@@ -440,12 +440,17 @@ export default function OllamaManagement() {
                     disabled={actionLoading === 'update'}
                   >
                     <CloudArrowDownIcon className="h-4 w-4 mr-1" />
-                    Update
+                    Update Ollama (sudo)
                   </Button>
                 )}
               </div>
             </div>
           </div>
+
+          <p className="mt-4 text-xs text-muted-foreground">
+            Note: this updates the Ollama service binary (requires sudo). To update models, use the
+            Models tab and click Update on a model.
+          </p>
 
           {status.activeModel && (
             <div className="mt-4 pt-4 border-t">
