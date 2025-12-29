@@ -556,7 +556,36 @@ class VoiceWebSocketServer {
     }
   }
 
-  async getPreferredVoiceId(connection) {
+  async getPreferredVoiceId(connection, options = {}) {
+    const wakeWord = (options.wakeWord || '').toString().trim();
+    if (wakeWord) {
+      const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const normalizedWake = wakeWord.toLowerCase();
+      const candidates = new Set([normalizedWake]);
+      if (!normalizedWake.startsWith('hey ')) {
+        candidates.add(`hey ${normalizedWake}`);
+      }
+
+      try {
+        const wakeWordPatterns = [...candidates].map((candidate) => (
+          new RegExp(`^${escapeRegex(candidate)}$`, 'i')
+        ));
+        const wakeProfile = await UserProfile.findOne({
+          active: true,
+          wakeWords: { $in: wakeWordPatterns }
+        })
+          .select('voiceId')
+          .sort({ lastUsed: -1, usageCount: -1, name: 1 });
+
+        const wakeVoiceId = wakeProfile?.voiceId;
+        if (typeof wakeVoiceId === 'string' && wakeVoiceId.trim().length > 0) {
+          return wakeVoiceId.trim();
+        }
+      } catch (error) {
+        console.warn('VoiceWebSocket: Unable to resolve wake word voice:', error.message);
+      }
+    }
+
     const deviceSettings = connection?.device?.settings || {};
     const candidateVoices = [
       deviceSettings.voiceId,
@@ -593,9 +622,9 @@ class VoiceWebSocketServer {
     const profileCacheValid = this.profileCache.value && now - this.profileCache.fetchedAt < 30_000;
     if (!profileCacheValid) {
       try {
-        const profile = await UserProfile.findOne({ active: true })
-          .select('voiceId')
-          .sort({ lastUsed: -1, usageCount: -1, name: 1 });
+      const profile = await UserProfile.findOne({ active: true })
+        .select('voiceId')
+        .sort({ lastUsed: -1, usageCount: -1, name: 1 });
         this.profileCache = { value: profile, fetchedAt: now };
       } catch (error) {
         console.warn('VoiceWebSocket: Unable to load active profile voice:', error.message);
@@ -785,9 +814,12 @@ class VoiceWebSocketServer {
 
       await voiceCommand.save();
 
+      const wakeWordForVoice = connection.pendingWakeWord?.wakeWord;
       connection.pendingWakeWord = null;
 
-      const preferredVoiceId = await this.getPreferredVoiceId(connection);
+      const preferredVoiceId = await this.getPreferredVoiceId(connection, {
+        wakeWord: wakeWordForVoice
+      });
 
       this.sendMessage(deviceId, {
         type: 'tts_response',

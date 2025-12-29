@@ -86,18 +86,18 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
     }
   };
 
-  const handlePullModel = async (modelName: string) => {
+  const handlePullModel = async (modelName: string, isUpdate = false) => {
     setDownloadingModel(modelName);
     toast({
-      title: 'Downloading Model',
-      description: `Starting download of ${modelName}. This may take several minutes...`,
+      title: isUpdate ? 'Updating Model' : 'Downloading Model',
+      description: `${isUpdate ? 'Refreshing' : 'Starting download of'} ${modelName}. This may take several minutes...`,
     });
 
     try {
       await pullModel(modelName);
       toast({
         title: 'Success',
-        description: `Model ${modelName} downloaded successfully`,
+        description: `Model ${modelName} ${isUpdate ? 'updated' : 'downloaded'} successfully`,
       });
       await loadModels();
       onModelChange();
@@ -210,7 +210,14 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                         <TableCell>{model.size}</TableCell>
                         <TableCell className="text-right">
                           {isInstalled ? (
-                            <Badge variant="secondary">Installed</Badge>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handlePullModel(model.name, true)}
+                              disabled={isDownloading}
+                            >
+                              {isDownloading ? 'Updating...' : 'Update'}
+                            </Button>
                           ) : (
                             <Button
                               size="sm"
@@ -290,6 +297,14 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                       )}
                     </TableCell>
                     <TableCell className="text-right space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handlePullModel(model.name, true)}
+                        disabled={downloadingModel === model.name}
+                      >
+                        {downloadingModel === model.name ? 'Updating...' : 'Update'}
+                      </Button>
                       {!isActive && (
                         <Button
                           size="sm"
