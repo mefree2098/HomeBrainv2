@@ -130,6 +130,18 @@ const schema = new mongoose.Schema({
     type: String,
     trim: true,
   },
+  lastWakeWord: {
+    type: String,
+    trim: true,
+  },
+  lastWakeWordAt: {
+    type: Date,
+  },
+  lastWakeWordConfidence: {
+    type: Number,
+    min: 0,
+    max: 1,
+  },
   // Configuration
   settings: {
     type: mongoose.Schema.Types.Mixed,
