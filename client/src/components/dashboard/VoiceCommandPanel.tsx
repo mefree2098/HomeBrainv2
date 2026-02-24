@@ -150,6 +150,8 @@ export function VoiceCommandPanel() {
             <li>- "Turn on kitchen lights at sunset"</li>
             <li>- "Lock all doors when I leave"</li>
             <li>- "Set temperature to 72 degrees at 7 AM"</li>
+            <li>- "Create a workflow to turn lights off at 11 PM"</li>
+            <li>- "Run bedtime workflow"</li>
           </ul>
         </div>
       </CardContent>

@@ -16,7 +16,20 @@ echo "[wakeword] Project root: ${PROJECT_ROOT}"
 echo "[wakeword] Requested Python: ${PYTHON_BIN}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "[wakeword] ERROR: ${PYTHON_BIN} not found on PATH. Set PYTHON_BIN or install Python 3.8+." >&2
+  echo "[wakeword] ERROR: ${PYTHON_BIN} not found on PATH. Set PYTHON_BIN or install Python 3.10+." >&2
+  exit 1
+fi
+
+PYTHON_VERSION="$(${PYTHON_BIN} - <<'PYCODE'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PYCODE
+)"
+
+PYTHON_VERSION_MAJOR="$(echo "${PYTHON_VERSION}" | cut -d'.' -f1)"
+PYTHON_VERSION_MINOR="$(echo "${PYTHON_VERSION}" | cut -d'.' -f2)"
+if [ "${PYTHON_VERSION_MAJOR}" -lt 3 ] || { [ "${PYTHON_VERSION_MAJOR}" -eq 3 ] && [ "${PYTHON_VERSION_MINOR}" -lt 10 ]; }; then
+  echo "[wakeword] ERROR: openWakeWord now requires Python 3.10+. Detected ${PYTHON_VERSION}." >&2
   exit 1
 fi
 

@@ -421,10 +421,10 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Description: Get automation execution history
-// Endpoint: GET /api/automations/history/:id?
+// Endpoint: GET /api/automations/history{/:id}
 // Request: { limit?: number }
 // Response: { success: boolean, history: Array<object> }
-router.get('/history/:id?', async (req, res) => {
+router.get('/history{/:id}', async (req, res) => {
   try {
     const { id } = req.params;
     const { limit } = req.query;

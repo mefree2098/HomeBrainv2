@@ -25,8 +25,9 @@ import {
   deleteRemoteDevice,
   getUpdateStatistics,
   initiateDeviceUpdate,
-  initiateUpdateForAllDevices,
-  getRemoteDeviceVersion
+  initiateUpdateForAllDevicesWithOptions,
+  getRemoteDeviceVersion,
+  getRemoteFleetStatus
 } from "@/api/remoteDevices"
 import { RemoteDeviceSetup } from "@/components/remote/RemoteDeviceSetup"
 import { PendingDevices } from "@/components/discovery/PendingDevices"
@@ -48,8 +49,24 @@ export function VoiceDevices() {
   const [showAutoDiscovery, setShowAutoDiscovery] = useState(false)
   const [updateStats, setUpdateStats] = useState<any>(null)
   const [latestVersion, setLatestVersion] = useState<string>('')
+  const [fleetStatus, setFleetStatus] = useState<any>(null)
+  const [verifyingFleet, setVerifyingFleet] = useState(false)
+  const [bulkUpdateSummary, setBulkUpdateSummary] = useState<string | null>(null)
+  const verificationDeadlineRef = useRef<number | null>(null)
 
   const componentId = useRef(`voice-devices-${Date.now()}-${Math.random()}`).current
+
+  const refreshUpdateTelemetry = useCallback(async () => {
+    const [statsData, versionData, fleetData] = await Promise.all([
+      getUpdateStatistics().catch(() => null),
+      getRemoteDeviceVersion().catch(() => ({ version: 'Unknown' })),
+      getRemoteFleetStatus().catch(() => null)
+    ])
+    setUpdateStats(statsData)
+    setLatestVersion(versionData?.version || 'Unknown')
+    setFleetStatus(fleetData)
+    return fleetData
+  }, [])
 
   useEffect(() => {
     console.log(`VoiceDevices component ${componentId} mounting - fetching initial data`)
@@ -57,14 +74,11 @@ export function VoiceDevices() {
     const fetchInitialData = async () => {
       try {
         console.log('Fetching voice devices data (initial)')
-        const [devicesData, statsData, versionData] = await Promise.all([
+        const [devicesData] = await Promise.all([
           getVoiceDevices(),
-          getUpdateStatistics().catch(() => null),
-          getRemoteDeviceVersion().catch(() => ({ version: 'Unknown' }))
+          refreshUpdateTelemetry()
         ])
         setDevices(devicesData.devices || [])
-        setUpdateStats(statsData)
-        setLatestVersion(versionData?.version || 'Unknown')
       } catch (error) {
         console.error('Failed to fetch voice devices:', error)
         toast({
@@ -84,7 +98,10 @@ export function VoiceDevices() {
     const interval = setInterval(async () => {
       try {
         console.log(`VoiceDevices ${componentId}: Periodic refresh`)
-        const data = await getVoiceDevices()
+        const [data] = await Promise.all([
+          getVoiceDevices(),
+          refreshUpdateTelemetry()
+        ])
         setDevices(data.devices || [])
       } catch (error) {
         console.error(`VoiceDevices ${componentId}: Periodic refresh failed:`, error)
@@ -96,7 +113,7 @@ export function VoiceDevices() {
       console.log(`VoiceDevices component ${componentId} unmounting - clearing interval`)
       clearInterval(interval)
     }
-  }, [componentId, toast])
+  }, [componentId, toast, refreshUpdateTelemetry])
 
   const handleTestDevice = async (deviceId: string, deviceName: string) => {
     setTestingDevice(deviceId)
@@ -122,12 +139,11 @@ export function VoiceDevices() {
   const refreshDevices = async () => {
     try {
       console.log('Refreshing voice devices data')
-      const [devicesData, statsData] = await Promise.all([
+      const [devicesData] = await Promise.all([
         getVoiceDevices(),
-        getUpdateStatistics().catch(() => null)
+        refreshUpdateTelemetry()
       ])
       setDevices(devicesData.devices || [])
-      setUpdateStats(statsData)
     } catch (error) {
       console.error('Failed to refresh voice devices:', error)
       toast({
@@ -137,6 +153,58 @@ export function VoiceDevices() {
       })
     }
   }
+
+  useEffect(() => {
+    if (!verifyingFleet) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const [devicesData, telemetry] = await Promise.all([
+          getVoiceDevices(),
+          refreshUpdateTelemetry()
+        ]);
+
+        setDevices(devicesData.devices || []);
+        const fleetData = telemetry || null;
+        if (fleetData) {
+          setFleetStatus(fleetData);
+          const summary = fleetData?.summary;
+          if (summary && summary.updatingDevices === 0) {
+            setVerifyingFleet(false);
+            verificationDeadlineRef.current = null;
+            if (summary.outdatedOnline === 0) {
+              toast({
+                title: "Fleet update verified",
+                description: "All online remote devices are now running the latest version."
+              });
+            } else {
+              toast({
+                title: "Verification complete",
+                description: `${summary.outdatedOnline} online device(s) are still behind latest.`,
+                variant: "destructive"
+              });
+            }
+          }
+        }
+
+        if (verificationDeadlineRef.current && Date.now() > verificationDeadlineRef.current) {
+          setVerifyingFleet(false);
+          verificationDeadlineRef.current = null;
+          toast({
+            title: "Verification timed out",
+            description: "Some devices may still be updating. Use Verify Versions to check again.",
+            variant: "destructive"
+          });
+        }
+      } catch (error) {
+        console.error('Fleet verification polling failed:', error);
+      }
+    }, 12000);
+
+    return () => clearInterval(interval);
+  }, [verifyingFleet, toast, refreshUpdateTelemetry]);
 
   const commitDeviceSettings = useCallback(async (
     deviceId: string,
@@ -199,12 +267,19 @@ export function VoiceDevices() {
     setUpdatingAll(true)
     try {
       console.log('Initiating update for all devices')
-      const result = await initiateUpdateForAllDevices()
+      const result = await initiateUpdateForAllDevicesWithOptions({ onlyOutdated: true })
 
       toast({
         title: "Bulk Update Initiated",
         description: `Update initiated for ${result.initiated} device(s). ${result.failed} failed.`
       })
+      setBulkUpdateSummary(
+        `Started ${result.initiated}/${result.targetDevices ?? result.totalOnlineDevices ?? 0} target updates`
+        + (result.failed > 0 ? `, ${result.failed} failed` : '')
+        + (result.skipped > 0 ? `, ${result.skipped} already current` : '')
+      )
+      setVerifyingFleet(true)
+      verificationDeadlineRef.current = Date.now() + (6 * 60 * 1000)
 
       // Refresh devices to show new status
       await refreshDevices()
@@ -217,6 +292,38 @@ export function VoiceDevices() {
       })
     } finally {
       setUpdatingAll(false)
+    }
+  }
+
+  const handleVerifyFleetNow = async () => {
+    try {
+      const [fleetData] = await Promise.all([
+        getRemoteFleetStatus(),
+        refreshDevices()
+      ])
+      setFleetStatus(fleetData)
+      const summary = fleetData?.summary
+      if (summary) {
+        if (summary.outdatedOnline === 0) {
+          toast({
+            title: "Fleet verified",
+            description: "All online remote devices are on the latest version."
+          })
+        } else {
+          toast({
+            title: "Verification found outdated devices",
+            description: `${summary.outdatedOnline} online device(s) still need updates.`,
+            variant: "destructive"
+          })
+        }
+      }
+    } catch (error: any) {
+      console.error('Failed to verify fleet status:', error)
+      toast({
+        title: "Verification failed",
+        description: error?.message || "Unable to verify fleet versions.",
+        variant: "destructive"
+      })
     }
   }
 
@@ -300,9 +407,34 @@ export function VoiceDevices() {
     return `${diffHours}h`
   }
 
+  const normalizeVersion = (value: string | undefined | null) => {
+    const text = (value || "0.0.0").toString().trim().toLowerCase().replace(/^v/, "")
+    const parts = text
+      .split(/[.\-+_]/)
+      .slice(0, 3)
+      .map((segment) => {
+        const numeric = Number.parseInt(segment.replace(/[^0-9]/g, ''), 10)
+        return Number.isFinite(numeric) ? numeric : 0
+      })
+    while (parts.length < 3) {
+      parts.push(0)
+    }
+    return parts
+  }
+
+  const compareVersions = (left: string | undefined | null, right: string | undefined | null) => {
+    const a = normalizeVersion(left)
+    const b = normalizeVersion(right)
+    for (let i = 0; i < 3; i += 1) {
+      if (a[i] > b[i]) return 1
+      if (a[i] < b[i]) return -1
+    }
+    return 0
+  }
+
   const needsUpdate = (device: any) => {
     if (!device.firmwareVersion || !latestVersion || latestVersion === 'Unknown') return false
-    return device.firmwareVersion !== latestVersion && device.status === 'online'
+    return compareVersions(device.firmwareVersion, latestVersion) < 0 && device.status === 'online'
   }
 
   const isUpdating = (device: any) => {
@@ -350,6 +482,10 @@ export function VoiceDevices() {
 
   const onlineDevices = devices.filter(device => device.status === 'online').length
   const lowBatteryDevices = devices.filter(device => device.batteryLevel && device.batteryLevel < 20).length
+  const fleetSummary = fleetStatus?.summary || null
+  const fleetProblemDevices = Array.isArray(fleetStatus?.devices)
+    ? fleetStatus.devices.filter((device: any) => device.status === 'updating' || !device.isUpToDate || device.updateStatus?.status === 'failed')
+    : []
 
   return (
     <div className="space-y-6">
@@ -363,25 +499,6 @@ export function VoiceDevices() {
           </p>
         </div>
         <div className="flex gap-2">
-          {updateStats && updateStats.outdated > 0 && (
-            <Button
-              onClick={handleUpdateAllDevices}
-              disabled={updatingAll}
-              className="bg-gradient-to-r from-blue-600 to-purple-600"
-            >
-              {updatingAll ? (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  Updating...
-                </>
-              ) : (
-                <>
-                  <Download className="h-4 w-4 mr-2" />
-                  Update All ({updateStats.outdated})
-                </>
-              )}
-            </Button>
-          )}
           <RemoteDeviceSetup onDeviceRegistered={refreshDevices} />
           <Button
             variant="outline"
@@ -392,6 +509,97 @@ export function VoiceDevices() {
           </Button>
         </div>
       </div>
+
+      <Card className="border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 dark:border-blue-900 dark:from-blue-950/40 dark:to-indigo-950/40">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Remote Fleet Updates</span>
+            <Badge variant="outline">Latest: {latestVersion || 'Unknown'}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2 md:grid-cols-5">
+            <div className="rounded-md border bg-white/70 p-3 text-sm dark:bg-gray-900/30">
+              <div className="text-xs text-muted-foreground">Online</div>
+              <div className="text-xl font-semibold">{fleetSummary?.onlineDevices ?? onlineDevices}</div>
+            </div>
+            <div className="rounded-md border bg-white/70 p-3 text-sm dark:bg-gray-900/30">
+              <div className="text-xs text-muted-foreground">Updating</div>
+              <div className="text-xl font-semibold">{fleetSummary?.updatingDevices ?? updateStats?.updating ?? 0}</div>
+            </div>
+            <div className="rounded-md border bg-white/70 p-3 text-sm dark:bg-gray-900/30">
+              <div className="text-xs text-muted-foreground">Online + Latest</div>
+              <div className="text-xl font-semibold">{fleetSummary?.upToDateOnline ?? 0}</div>
+            </div>
+            <div className="rounded-md border bg-white/70 p-3 text-sm dark:bg-gray-900/30">
+              <div className="text-xs text-muted-foreground">Online + Outdated</div>
+              <div className="text-xl font-semibold">{fleetSummary?.outdatedOnline ?? updateStats?.outdated ?? 0}</div>
+            </div>
+            <div className="rounded-md border bg-white/70 p-3 text-sm dark:bg-gray-900/30">
+              <div className="text-xs text-muted-foreground">Offline</div>
+              <div className="text-xl font-semibold">{fleetSummary?.offlineDevices ?? updateStats?.offline ?? 0}</div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={handleUpdateAllDevices}
+              disabled={updatingAll || (fleetSummary?.onlineDevices ?? onlineDevices) === 0}
+              className="bg-gradient-to-r from-blue-600 to-purple-600"
+            >
+              {updatingAll ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Starting Updates...
+                </>
+              ) : (
+                <>
+                  <Download className="h-4 w-4 mr-2" />
+                  Update All Outdated Devices
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleVerifyFleetNow}
+            >
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+              Verify Versions
+            </Button>
+            {verifyingFleet && (
+              <Badge variant="secondary" className="px-3 py-1">
+                <RefreshCw className="mr-2 h-3 w-3 animate-spin" />
+                Verifying update rollout...
+              </Badge>
+            )}
+          </div>
+
+          {bulkUpdateSummary && (
+            <p className="text-sm text-muted-foreground">{bulkUpdateSummary}</p>
+          )}
+
+          {fleetProblemDevices.length > 0 && (
+            <div className="rounded-md border bg-white/70 p-3 text-xs dark:bg-gray-900/30">
+              <p className="mb-2 font-medium text-sm">Devices needing attention</p>
+              <div className="space-y-1">
+                {fleetProblemDevices.slice(0, 8).map((device: any) => (
+                  <div key={device.id} className="flex items-center justify-between gap-2">
+                    <span>{device.name} ({device.room})</span>
+                    <span className="font-mono">
+                      {device.firmwareVersion || 'unknown'}{" -> "}{device.latestVersion || latestVersion}
+                      {' '}| {device.status}
+                      {device.updateStatus?.status ? ` (${device.updateStatus.status})` : ''}
+                    </span>
+                  </div>
+                ))}
+                {fleetProblemDevices.length > 8 && (
+                  <div className="text-muted-foreground">+{fleetProblemDevices.length - 8} more...</div>
+                )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Auto-Discovery Settings */}
       {showAutoDiscovery && (

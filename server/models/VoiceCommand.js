@@ -49,7 +49,7 @@ const voiceCommandSchema = new mongoose.Schema({
     action: {
       type: String,
       required: true,
-      enum: ['device_control', 'scene_activate', 'automation_create', 'automation_control', 'query', 'system_control', 'unknown']
+      enum: ['device_control', 'scene_activate', 'automation_create', 'automation_control', 'workflow_create', 'workflow_control', 'query', 'system_control', 'unknown']
     },
     confidence: {
       type: Number,
@@ -100,7 +100,7 @@ const voiceCommandSchema = new mongoose.Schema({
     actions: [{
       type: {
         type: String,
-        enum: ['device_control', 'scene_activate', 'automation_trigger', 'tts_response', 'notification']
+        enum: ['device_control', 'scene_activate', 'automation_trigger', 'workflow_create', 'workflow_control', 'tts_response', 'notification']
       },
       target: String,
       parameters: mongoose.Schema.Types.Mixed,

@@ -32,11 +32,12 @@ class SmartThingsService {
     this.webhookEventFreshnessMs = Number(process.env.SMARTTHINGS_WEBHOOK_EVENT_STALENESS_MS || 5 * 60 * 1000);
     this.disablePollingWhenWebhookHealthy = process.env.SMARTTHINGS_DISABLE_POLLING_ON_WEBHOOK === 'false' ? false : true;
     this.forceDevicePolling = process.env.SMARTTHINGS_FORCE_DEVICE_POLLING === 'true';
+    this.backgroundTasksEnabled = process.env.SMARTTHINGS_BACKGROUND_TASKS !== 'false' && process.env.NODE_ENV !== 'test';
     this.lastSuccessfulDeviceSyncAt = 0;
-    if (this.deviceStatusSyncIntervalMs > 0) {
+    if (this.backgroundTasksEnabled && this.deviceStatusSyncIntervalMs > 0) {
       this.startDeviceStatusSync();
     }
-    if (this.subscriptionRefreshIntervalMs > 0) {
+    if (this.backgroundTasksEnabled && this.subscriptionRefreshIntervalMs > 0) {
       this.startSubscriptionRenewalTask();
     }
   }

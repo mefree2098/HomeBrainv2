@@ -6,8 +6,145 @@ const crypto = require('crypto');
 const wakeWordAssets = require('../utils/wakeWordAssets');
 const WakeWordModel = require('../models/WakeWordModel');
 const fs = require('fs');
+const fsPromises = require('fs/promises');
 const path = require('path');
+const os = require('os');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const elevenLabsService = require('../services/elevenLabsService');
+const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
+
+const execFileAsync = promisify(execFile);
+const REMOTE_SETUP_PACKAGE_NAME = 'homebrain-remote-setup.tar.gz';
+const REMOTE_SETUP_PACKAGE_DIR = path.join(__dirname, '..', 'public', 'downloads');
+const REMOTE_SETUP_PACKAGE_PATH = path.join(REMOTE_SETUP_PACKAGE_DIR, REMOTE_SETUP_PACKAGE_NAME);
+const REMOTE_SETUP_SOURCE_DIR = path.join(__dirname, '..', '..', 'remote-device');
+const REMOTE_SETUP_FILES = [
+  'index.js',
+  'package.json',
+  'install.sh',
+  'README.md',
+  'updater.js',
+  'feature_infer.py'
+];
+const BOOTSTRAP_RATE_LIMIT_WINDOW_MS = Math.max(
+  1_000,
+  Number(process.env.REMOTE_BOOTSTRAP_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)
+);
+const BOOTSTRAP_RATE_LIMIT_MAX_PER_IP = Math.max(
+  1,
+  Number(process.env.REMOTE_BOOTSTRAP_RATE_LIMIT_MAX_PER_IP || 30)
+);
+const BOOTSTRAP_RATE_LIMIT_MAX_PER_DEVICE = Math.max(
+  1,
+  Number(process.env.REMOTE_BOOTSTRAP_RATE_LIMIT_MAX_PER_DEVICE || 20)
+);
+const BOOTSTRAP_INVALID_ATTEMPT_MAX = Math.max(
+  1,
+  Number(process.env.REMOTE_BOOTSTRAP_INVALID_ATTEMPT_MAX || 8)
+);
+const bootstrapIpAccessWindow = new Map();
+const bootstrapDeviceAccessWindow = new Map();
+const bootstrapInvalidAttemptWindow = new Map();
+
+const shellQuote = (value) => `'${String(value ?? '').replace(/'/g, `'\"'\"'`)}'`;
+
+function consumeSlidingWindow(map, key, limit, windowMs) {
+  const now = Date.now();
+  const cutoff = now - windowMs;
+  const existing = map.get(key) || [];
+  const active = existing.filter((timestamp) => timestamp > cutoff);
+
+  if (active.length === 0) {
+    map.delete(key);
+  } else {
+    map.set(key, active);
+  }
+
+  if (active.length >= limit) {
+    const retryAfterMs = Math.max((active[0] + windowMs) - now, 1_000);
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.ceil(retryAfterMs / 1000)
+    };
+  }
+
+  active.push(now);
+  map.set(key, active);
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+function getRequesterIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+
+  if (Array.isArray(forwarded) && forwarded.length > 0) {
+    return forwarded[0];
+  }
+
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function sendBootstrapRateLimited(res, retryAfterSeconds, message) {
+  const retryAfter = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+    ? retryAfterSeconds
+    : 60;
+  res.setHeader('Retry-After', String(retryAfter));
+  return res.status(429).type('text/plain').send(message || 'Too many bootstrap requests. Please retry later.');
+}
+
+async function getLatestRemoteSetupSourceMtimeMs() {
+  const sourceStats = await Promise.all(
+    REMOTE_SETUP_FILES.map(async (file) => {
+      try {
+        return await fsPromises.stat(path.join(REMOTE_SETUP_SOURCE_DIR, file));
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return sourceStats.reduce((latest, stat) => (
+    stat ? Math.max(latest, stat.mtimeMs) : latest
+  ), 0);
+}
+
+async function ensureRemoteSetupPackage() {
+  await fsPromises.mkdir(REMOTE_SETUP_PACKAGE_DIR, { recursive: true });
+
+  const latestSourceMtimeMs = await getLatestRemoteSetupSourceMtimeMs();
+  const existingStat = await fsPromises.stat(REMOTE_SETUP_PACKAGE_PATH).catch(() => null);
+  if (existingStat && existingStat.mtimeMs >= latestSourceMtimeMs) {
+    return REMOTE_SETUP_PACKAGE_PATH;
+  }
+
+  const stagingRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'homebrain-remote-'));
+  const stagingDir = path.join(stagingRoot, 'homebrain-remote');
+
+  try {
+    await fsPromises.mkdir(stagingDir, { recursive: true });
+
+    for (const file of REMOTE_SETUP_FILES) {
+      const sourcePath = path.join(REMOTE_SETUP_SOURCE_DIR, file);
+      const targetPath = path.join(stagingDir, file);
+      await fsPromises.copyFile(sourcePath, targetPath);
+    }
+
+    await execFileAsync('tar', [
+      '-czf',
+      REMOTE_SETUP_PACKAGE_PATH,
+      '-C',
+      stagingRoot,
+      'homebrain-remote'
+    ]);
+  } finally {
+    await fsPromises.rm(stagingRoot, { recursive: true, force: true });
+  }
+
+  return REMOTE_SETUP_PACKAGE_PATH;
+}
 
 // Description: Register a new remote device
 // Endpoint: POST /api/remote-devices/register
@@ -82,6 +219,117 @@ async function validateDeviceAccess(deviceId, registrationCode) {
 
   return device;
 }
+
+router.get('/:deviceId/bootstrap.sh', async (req, res) => {
+  const { deviceId } = req.params;
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const requesterIp = getRequesterIp(req);
+  const ipWindowKey = requesterIp;
+  const deviceWindowKey = deviceId;
+  const invalidAttemptKey = `${deviceId}:${requesterIp}`;
+
+  try {
+    const ipRateLimit = consumeSlidingWindow(
+      bootstrapIpAccessWindow,
+      ipWindowKey,
+      BOOTSTRAP_RATE_LIMIT_MAX_PER_IP,
+      BOOTSTRAP_RATE_LIMIT_WINDOW_MS
+    );
+    if (!ipRateLimit.allowed) {
+      return sendBootstrapRateLimited(
+        res,
+        ipRateLimit.retryAfterSeconds,
+        'Too many bootstrap requests from this network. Please wait and retry.'
+      );
+    }
+
+    const deviceRateLimit = consumeSlidingWindow(
+      bootstrapDeviceAccessWindow,
+      deviceWindowKey,
+      BOOTSTRAP_RATE_LIMIT_MAX_PER_DEVICE,
+      BOOTSTRAP_RATE_LIMIT_WINDOW_MS
+    );
+    if (!deviceRateLimit.allowed) {
+      return sendBootstrapRateLimited(
+        res,
+        deviceRateLimit.retryAfterSeconds,
+        'Too many bootstrap requests for this device. Please wait and retry.'
+      );
+    }
+
+    const device = await validateDeviceAccess(deviceId, code);
+    if (!device) {
+      const invalidAttemptLimit = consumeSlidingWindow(
+        bootstrapInvalidAttemptWindow,
+        invalidAttemptKey,
+        BOOTSTRAP_INVALID_ATTEMPT_MAX,
+        BOOTSTRAP_RATE_LIMIT_WINDOW_MS
+      );
+      if (!invalidAttemptLimit.allowed) {
+        return sendBootstrapRateLimited(
+          res,
+          invalidAttemptLimit.retryAfterSeconds,
+          'Too many invalid bootstrap attempts. Please wait before retrying.'
+        );
+      }
+      return res.status(403).type('text/plain').send('Invalid device credentials');
+    }
+    bootstrapInvalidAttemptWindow.delete(invalidAttemptKey);
+
+    await ensureRemoteSetupPackage();
+
+    const hubOrigin = `${req.protocol}://${req.get('host')}`;
+    const safeHubOrigin = shellQuote(hubOrigin);
+    const safeRegistrationCode = shellQuote(device.settings?.registrationCode || code);
+    const archiveUrl = `${hubOrigin}/downloads/${REMOTE_SETUP_PACKAGE_NAME}`;
+
+    const script = `#!/usr/bin/env bash
+set -euo pipefail
+
+HUB_URL=${safeHubOrigin}
+REGISTRATION_CODE=${safeRegistrationCode}
+ARCHIVE_URL=${shellQuote(archiveUrl)}
+INSTALL_DIR="\${HOME}/homebrain-remote"
+TMP_DIR="$(mktemp -d /tmp/homebrain-remote-setup-XXXXXX)"
+
+cleanup() {
+  rm -rf "\${TMP_DIR}"
+}
+trap cleanup EXIT
+
+if ! command -v curl >/dev/null 2>&1; then
+  sudo apt-get update -y
+  sudo apt-get install -y curl
+fi
+
+echo "[HomeBrain] Downloading remote listener package..."
+curl -fsSL "\${ARCHIVE_URL}" -o "\${TMP_DIR}/homebrain-remote-setup.tar.gz"
+
+mkdir -p "\${INSTALL_DIR}"
+tar -xzf "\${TMP_DIR}/homebrain-remote-setup.tar.gz" -C "\${INSTALL_DIR}" --strip-components=1
+
+cd "\${INSTALL_DIR}"
+chmod +x ./install.sh
+./install.sh
+
+./register.sh "\${REGISTRATION_CODE}" "\${HUB_URL}"
+sudo systemctl enable homebrain-remote >/dev/null 2>&1 || true
+sudo systemctl restart homebrain-remote
+
+echo "[HomeBrain] Installation complete for device: ${device.name}"
+echo "[HomeBrain] Check status: sudo systemctl status homebrain-remote --no-pager"
+echo "[HomeBrain] Follow logs: sudo journalctl -u homebrain-remote -f"
+`;
+
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).send(script);
+  } catch (error) {
+    console.error(`GET /api/remote-devices/${deviceId}/bootstrap.sh - Error:`, error.message);
+    console.error(error.stack);
+    return res.status(500).type('text/plain').send('Failed to generate bootstrap script');
+  }
+});
 
 router.get('/:deviceId/wake-words', async (req, res) => {
   const { deviceId } = req.params;
@@ -167,6 +415,20 @@ router.get('/:deviceId/tts', async (req, res) => {
     }
     if (!text || !voiceId) {
       return res.status(400).json({ success: false, message: 'Missing text or voiceId' });
+    }
+
+    const cachedAudioPath = await voiceAcknowledgmentService.findCachedAudio(String(voiceId), String(text));
+    if (cachedAudioPath) {
+      const stat = await fsPromises.stat(cachedAudioPath);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', stat.size);
+      res.setHeader('Cache-Control', 'no-store');
+      const cachedStream = fs.createReadStream(cachedAudioPath);
+      cachedStream.on('error', () => {
+        res.status(500).end();
+      });
+      cachedStream.pipe(res);
+      return;
     }
 
     const audioBuffer = await elevenLabsService.textToSpeech(String(text), String(voiceId));
@@ -408,57 +670,39 @@ router.get('/setup-instructions', requireUser(), async (req, res) => {
   console.log('GET /api/remote-devices/setup-instructions - Fetching setup instructions');
 
   try {
+    await ensureRemoteSetupPackage();
+
+    const origin = `${req.protocol}://${req.get('host')}`;
     const instructions = {
-      overview: 'Set up a Raspberry Pi as a remote voice device for HomeBrain',
+      overview: 'Set up a Raspberry Pi as a HomeBrain remote listener with a single command.',
       requirements: [
-        'Raspberry Pi 3B+ or newer',
-        'MicroSD card (16GB or larger)',
-        'USB microphone or HAT with microphone',
-        'Speakers or headphones',
-        'WiFi connection'
+        'Raspberry Pi 4/5 (Raspberry Pi OS Lite recommended)',
+        'A local user account with sudo access',
+        'Working network connection to the HomeBrain hub',
+        'Microphone + speaker hardware configured'
       ],
       steps: [
         {
-          title: 'Prepare Raspberry Pi',
-          description: 'Install Raspberry Pi OS and enable SSH',
+          title: 'Run the one-command installer',
+          description: 'After registering a device in the UI, run the generated command on the Pi.',
           commands: [
-            'sudo apt update && sudo apt upgrade -y',
-            'sudo apt install git nodejs npm python3-pip -y'
+            'curl -fsSL <HUB_URL>/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE> | bash'
           ]
         },
         {
-          title: 'Download HomeBrain Remote',
-          description: 'Download and install the remote device software',
+          title: 'Monitor startup status',
+          description: 'Verify the service came online and connected to the hub.',
           commands: [
-            'git clone https://github.com/homebrain/remote-device.git',
-            'cd remote-device',
-            'npm install'
-          ]
-        },
-        {
-          title: 'Configure Audio',
-          description: 'Set up microphone and speakers',
-          commands: [
-            'arecord -l  # List recording devices',
-            'aplay -l   # List playback devices',
-            'sudo nano /etc/asound.conf  # Configure default audio devices'
-          ]
-        },
-        {
-          title: 'Register Device',
-          description: 'Use the HomeBrain interface to register your device and get a registration code'
-        },
-        {
-          title: 'Start Remote Service',
-          description: 'Start the remote device service with your registration code',
-          commands: [
-            'npm start -- --register <REGISTRATION_CODE>'
+            'sudo systemctl status homebrain-remote --no-pager',
+            'sudo journalctl -u homebrain-remote -f'
           ]
         }
       ],
-      downloadUrl: `http://${req.get('host')}/downloads/homebrain-remote-setup.sh`,
+      bootstrapUrlTemplate: `${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE>`,
+      quickInstallCommandTemplate: `curl -fsSL ${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE> | bash`,
+      downloadUrl: `${origin}/downloads/homebrain-remote-setup.sh`,
       configTemplate: {
-        hubUrl: `http://${req.get('host')}`,
+        hubUrl: origin,
         audioConfig: {
           sampleRate: 16000,
           channels: 1,

@@ -436,6 +436,15 @@ class HomeBrainRemoteDevice {
 
         case 'command_processing':
           console.log('Command is being processed...');
+          if (typeof message.acknowledgmentText === 'string' && message.acknowledgmentText.trim().length > 0) {
+            const ackText = message.acknowledgmentText.trim();
+            const ackVoice = typeof message.voice === 'string' && message.voice.trim().length > 0
+              ? message.voice.trim()
+              : 'default';
+            void this.playTTSResponse(ackText, ackVoice).catch((error) => {
+              console.warn(`Failed to play acknowledgment prompt: ${error.message}`);
+            });
+          }
           break;
 
         case 'tts_response':
@@ -1957,6 +1966,7 @@ class HomeBrainRemoteDevice {
     this.sendMessage({
       type: 'heartbeat',
       status: 'online',
+      firmwareVersion: PACKAGE_VERSION,
       uptime: uptime,
       stats: this.stats,
       batteryLevel: this.getBatteryLevel(),

@@ -1,15 +1,33 @@
 const VoiceDevice = require('../models/VoiceDevice');
 const fs = require('fs').promises;
 const path = require('path');
-const archiver = require('archiver');
 const { createWriteStream } = require('fs');
 const crypto = require('crypto');
+const { ZipFile } = require('yazl');
 
 class RemoteUpdateService {
   constructor() {
     this.updatePackagePath = path.join(__dirname, '..', 'public', 'downloads', 'updates');
     this.remoteDevicePath = path.join(__dirname, '..', '..', 'remote-device');
     this.currentVersion = null;
+  }
+
+  normalizeVersion(version) {
+    const raw = (version || '0.0.0').toString().trim().toLowerCase();
+    const normalized = raw.replace(/^v/, '');
+    const parts = normalized
+      .split(/[.\-+_]/)
+      .slice(0, 3)
+      .map((part) => {
+        const numeric = Number.parseInt(part.replace(/[^0-9]/g, ''), 10);
+        return Number.isFinite(numeric) ? numeric : 0;
+      });
+
+    while (parts.length < 3) {
+      parts.push(0);
+    }
+
+    return parts;
   }
 
   /**
@@ -76,8 +94,8 @@ class RemoteUpdateService {
    * Returns: 1 if v1 > v2, -1 if v1 < v2, 0 if equal
    */
   compareVersions(v1, v2) {
-    const parts1 = v1.split('.').map(Number);
-    const parts2 = v2.split('.').map(Number);
+    const parts1 = this.normalizeVersion(v1);
+    const parts2 = this.normalizeVersion(v2);
 
     for (let i = 0; i < 3; i++) {
       const p1 = parts1[i] || 0;
@@ -158,20 +176,22 @@ class RemoteUpdateService {
   async createZipArchive(outputPath) {
     return new Promise((resolve, reject) => {
       const output = createWriteStream(outputPath);
-      const archive = archiver('zip', { zlib: { level: 9 } });
+      const zipfile = new ZipFile();
 
-      output.on('close', () => {
-        console.log(`Archive created: ${archive.pointer()} bytes`);
-        resolve();
+      output.on('close', async () => {
+        try {
+          const stats = await fs.stat(outputPath);
+          console.log(`Archive created: ${stats.size} bytes`);
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
       });
+      output.on('error', reject);
+      zipfile.outputStream.on('error', reject);
 
-      archive.on('error', (err) => {
-        reject(err);
-      });
+      zipfile.outputStream.pipe(output);
 
-      archive.pipe(output);
-
-      // Add remote device files
       const filesToInclude = [
         'index.js',
         'package.json',
@@ -180,12 +200,12 @@ class RemoteUpdateService {
         'feature_infer.py'
       ];
 
-      filesToInclude.forEach(file => {
+      for (const file of filesToInclude) {
         const filePath = path.join(this.remoteDevicePath, file);
-        archive.file(filePath, { name: file });
-      });
+        zipfile.addFile(filePath, file, { compress: true });
+      }
 
-      archive.finalize();
+      zipfile.end();
     });
   }
 
@@ -291,8 +311,13 @@ class RemoteUpdateService {
       // Only mark as updating after the command was sent
       await VoiceDevice.findByIdAndUpdate(deviceId, {
         status: 'updating',
+        updateStatus: {
+          status: 'downloading',
+          version: packageInfo.version,
+          startedAt: new Date()
+        },
         'settings.updateStatus': {
-          status: 'initiated',
+          status: 'downloading',
           version: packageInfo.version,
           startedAt: new Date()
         }
@@ -313,6 +338,12 @@ class RemoteUpdateService {
       try {
         await VoiceDevice.findByIdAndUpdate(deviceId, {
           status: 'online',
+          updateStatus: {
+            status: 'failed',
+            version: options?.version || this.currentVersion,
+            error: error.message,
+            failedAt: new Date()
+          },
           'settings.updateStatus': {
             status: 'failed',
             error: error.message,
@@ -328,21 +359,35 @@ class RemoteUpdateService {
   /**
    * Initiate update for all devices
    */
-  async initiateUpdateForAll(voiceWebSocket) {
+  async initiateUpdateForAll(voiceWebSocket, options = {}) {
     console.log('Initiating update for all devices...');
 
     try {
-      const devices = await VoiceDevice.find({ status: 'online' });
+      const force = options.force === true;
+      const onlyOutdated = options.onlyOutdated !== false;
+      const baseUrl = options.baseUrl || null;
+      const onlineDevices = await VoiceDevice.find({ status: 'online' });
+      const devices = onlineDevices.filter((device) => {
+        if (force || !onlyOutdated) {
+          return true;
+        }
+        const installedVersion = device.firmwareVersion || '0.0.0';
+        return this.compareVersions(this.currentVersion, installedVersion) > 0;
+      });
 
       const results = [];
       for (const device of devices) {
         try {
-          const result = await this.initiateUpdate(device._id.toString(), voiceWebSocket);
+          const result = await this.initiateUpdate(device._id.toString(), voiceWebSocket, {
+            force,
+            baseUrl
+          });
           results.push(result);
         } catch (error) {
           console.error(`Failed to initiate update for device ${device.name}:`, error.message);
           results.push({
             success: false,
+            deviceId: device._id.toString(),
             device: device.name,
             error: error.message
           });
@@ -350,9 +395,12 @@ class RemoteUpdateService {
       }
 
       return {
-        totalDevices: devices.length,
+        totalOnlineDevices: onlineDevices.length,
+        targetDevices: devices.length,
         initiated: results.filter(r => r.success).length,
         failed: results.filter(r => !r.success).length,
+        skipped: onlineDevices.length - devices.length,
+        latestVersion: this.currentVersion,
         results
       };
     } catch (error) {
@@ -364,25 +412,37 @@ class RemoteUpdateService {
   /**
    * Update device update status
    */
-  async updateDeviceStatus(deviceId, status, error = null) {
+  async updateDeviceStatus(deviceId, status, error = null, reportedVersion = null) {
     console.log(`Updating device ${deviceId} update status: ${status}`);
 
     try {
+      const resolvedVersion = (reportedVersion || this.currentVersion || '').toString().trim() || this.currentVersion;
       const updateData = {
+        updateStatus: {
+          status,
+          version: resolvedVersion,
+          lastUpdated: new Date()
+        },
         'settings.updateStatus.status': status,
+        'settings.updateStatus.version': resolvedVersion,
         'settings.updateStatus.lastUpdated': new Date()
       };
 
       if (status === 'completed') {
         updateData.status = 'online';
-        updateData.firmwareVersion = this.currentVersion;
+        updateData.firmwareVersion = resolvedVersion;
+        updateData.lastUpdate = new Date();
+        updateData['updateStatus.completedAt'] = new Date();
         updateData['settings.updateStatus.completedAt'] = new Date();
       } else if (status === 'failed') {
         updateData.status = 'error';
+        updateData['updateStatus.error'] = error;
+        updateData['updateStatus.failedAt'] = new Date();
         updateData['settings.updateStatus.error'] = error;
         updateData['settings.updateStatus.failedAt'] = new Date();
       } else if (status === 'downloading') {
         updateData.status = 'updating';
+        updateData['updateStatus.startedAt'] = new Date();
       } else if (status === 'installing') {
         updateData.status = 'updating';
       }
@@ -423,7 +483,7 @@ class RemoteUpdateService {
           stats.updating++;
         } else if (device.status === 'offline') {
           stats.offline++;
-        } else if (this.compareVersions(version, this.currentVersion) === 0) {
+        } else if (this.compareVersions(version, this.currentVersion) >= 0) {
           stats.upToDate++;
         } else {
           stats.outdated++;
@@ -465,6 +525,90 @@ class RemoteUpdateService {
       }));
     } catch (error) {
       console.error('Error fetching devices needing update:', error);
+      throw error;
+    }
+  }
+
+  async getFleetStatus() {
+    console.log('Fetching remote device fleet status...');
+    try {
+      const devices = await VoiceDevice.find({}).sort({ room: 1, name: 1 });
+      const latestVersion = this.currentVersion || '0.0.0';
+      const summary = {
+        totalDevices: devices.length,
+        onlineDevices: 0,
+        offlineDevices: 0,
+        updatingDevices: 0,
+        upToDateDevices: 0,
+        outdatedDevices: 0,
+        upToDateOnline: 0,
+        outdatedOnline: 0,
+        latestVersion
+      };
+
+      const rows = devices.map((device) => {
+        const installedVersion = device.firmwareVersion || '0.0.0';
+        const isUpToDate = this.compareVersions(installedVersion, latestVersion) >= 0;
+        const isOnline = device.status === 'online';
+        const isUpdating = device.status === 'updating';
+        const topLevelUpdateStatus = device?.updateStatus || {};
+        const settingsUpdateStatus = device?.settings?.updateStatus || {};
+        const persistedUpdateStatus = (
+          topLevelUpdateStatus?.status && topLevelUpdateStatus.status !== 'idle'
+        )
+          ? topLevelUpdateStatus
+          : { ...topLevelUpdateStatus, ...settingsUpdateStatus };
+
+        if (isOnline) {
+          summary.onlineDevices += 1;
+        } else {
+          summary.offlineDevices += 1;
+        }
+
+        if (isUpdating) {
+          summary.updatingDevices += 1;
+        }
+
+        if (isUpToDate) {
+          summary.upToDateDevices += 1;
+          if (isOnline) {
+            summary.upToDateOnline += 1;
+          }
+        } else {
+          summary.outdatedDevices += 1;
+          if (isOnline) {
+            summary.outdatedOnline += 1;
+          }
+        }
+
+        return {
+          id: device._id.toString(),
+          name: device.name,
+          room: device.room,
+          status: device.status,
+          firmwareVersion: installedVersion,
+          latestVersion,
+          isOnline,
+          isUpToDate,
+          updateStatus: {
+            status: persistedUpdateStatus.status || (isUpdating ? 'installing' : 'idle'),
+            version: persistedUpdateStatus.version || null,
+            startedAt: persistedUpdateStatus.startedAt || null,
+            completedAt: persistedUpdateStatus.completedAt || null,
+            failedAt: persistedUpdateStatus.failedAt || null,
+            error: persistedUpdateStatus.error || null
+          },
+          lastSeen: device.lastSeen || null
+        };
+      });
+
+      return {
+        latestVersion,
+        summary,
+        devices: rows
+      };
+    } catch (error) {
+      console.error('Error fetching remote fleet status:', error);
       throw error;
     }
   }

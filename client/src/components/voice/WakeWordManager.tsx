@@ -29,7 +29,8 @@ import {
   createWakeWordModel,
   retrainWakeWordModel,
   deleteWakeWordModel,
-  getWakeWordQueueStatus
+  getWakeWordQueueStatus,
+  broadcastWakeWordUpdate
 } from "@/api/wakeWords";
 import { getPiperVoices, downloadPiperVoice, removePiperVoice, PiperVoice, probePiperDevice } from "@/api/wakeWordVoices";
 import { getSetting, updateSettings } from "@/api/settings";
@@ -80,6 +81,7 @@ interface WakeWordModel {
 }
 
 const TRAINING_STATUSES: WakeWordStatus[] = ["pending", "queued", "generating", "training", "exporting"];
+const QUICK_WAKE_WORDS = ["Anna", "Hey Anna", "Henry", "Hey Henry", "Home Brain"];
 
 export function WakeWordManager() {
   const { toast } = useToast();
@@ -527,6 +529,19 @@ export function WakeWordManager() {
                   onChange={(event) => setNewPhrase(event.target.value)}
                   autoFocus
                 />
+                <div className="flex flex-wrap gap-2">
+                  {QUICK_WAKE_WORDS.map((phrase) => (
+                    <Button
+                      key={phrase}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setNewPhrase(phrase)}
+                    >
+                      {phrase}
+                    </Button>
+                  ))}
+                </div>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="sample-count">Synthetic samples</Label>
@@ -767,7 +782,6 @@ export function WakeWordManager() {
               variant="outline"
               onClick={async () => {
                 try {
-                  const { broadcastWakeWordUpdate } = await import('@/api/wakeWords');
                   const resp = await broadcastWakeWordUpdate();
                   toast({
                     title: 'Wake words pushed',
