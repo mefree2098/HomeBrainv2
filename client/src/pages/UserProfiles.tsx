@@ -78,7 +78,6 @@ export function UserProfiles() {
     return () => {
       cancelled = true;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // toast is stable from useToast hook, safe to exclude
 
   const handleCreateProfile = async (data: any) => {
@@ -99,7 +98,7 @@ export function UserProfiles() {
 
       toast({
         title: "Profile Created",
-        description: "User profile has been created successfully"
+        description: "Character created. Wake-word training and instant acknowledgment lines are now being prepared."
       })
     } catch (error) {
       console.error('Failed to create profile:', error)
@@ -175,7 +174,7 @@ export function UserProfiles() {
 
       toast({
         title: "Profile Updated",
-        description: "User profile has been updated successfully"
+        description: "Character updated. Wake-word models and acknowledgment lines are being refreshed."
       })
     } catch (error) {
       console.error('Failed to update profile:', error)
@@ -345,6 +344,15 @@ export function UserProfiles() {
 
       {/* Profile Stats */}
       <div className="grid gap-4 md:grid-cols-3">
+        <Card className="md:col-span-3 border-dashed border-blue-300 bg-blue-50/70 dark:bg-blue-900/20">
+          <CardContent className="pt-4">
+            <p className="text-sm text-blue-900 dark:text-blue-100">
+              Character onboarding is automatic: when you create or update a profile, HomeBrain trains OpenWakeWord models for
+              wake phrases and pre-generates multiple spoken acknowledgment lines for that character voice.
+            </p>
+          </CardContent>
+        </Card>
+
         <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 border-blue-200 dark:border-blue-800">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Profiles</CardTitle>

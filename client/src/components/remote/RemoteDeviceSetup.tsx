@@ -6,8 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
-import { Copy, Plus, Smartphone, Speaker, Monitor, Mic, Download, Terminal, CheckCircle, XCircle } from "lucide-react";
+import { Copy, Plus, Smartphone, Speaker, Monitor, Mic, Download, Terminal, CheckCircle } from "lucide-react";
 import { registerRemoteDevice, getRemoteDeviceSetupInstructions } from "@/api/remoteDevices";
 import { useToast } from "@/hooks/useToast";
 
@@ -19,6 +18,8 @@ interface SetupInstructions {
     description: string;
     commands?: string[];
   }>;
+  bootstrapUrlTemplate?: string;
+  quickInstallCommandTemplate?: string;
   downloadUrl: string;
   configTemplate: {
     hubUrl: string;
@@ -53,6 +54,22 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
     device: any;
     registrationCode: string;
   } | null>(null);
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const deviceId = registrationResult?.device?._id;
+  const registrationCode = registrationResult?.registrationCode || "";
+  const fallbackBootstrapScriptUrl = deviceId
+    ? `${origin}/api/remote-devices/${deviceId}/bootstrap.sh?code=${encodeURIComponent(registrationCode)}`
+    : "";
+  const bootstrapScriptUrl = setupInstructions?.bootstrapUrlTemplate && deviceId
+    ? setupInstructions.bootstrapUrlTemplate
+      .replace("<DEVICE_ID>", deviceId)
+      .replace("<REGISTRATION_CODE>", encodeURIComponent(registrationCode))
+    : fallbackBootstrapScriptUrl;
+  const quickInstallCommand = setupInstructions?.quickInstallCommandTemplate && deviceId
+    ? setupInstructions.quickInstallCommandTemplate
+      .replace("<DEVICE_ID>", deviceId)
+      .replace("<REGISTRATION_CODE>", registrationCode)
+    : (bootstrapScriptUrl ? `curl -fsSL "${bootstrapScriptUrl}" | bash` : "");
 
   const handleOpenDialog = async () => {
     setIsOpen(true);
@@ -299,6 +316,29 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
               </CardContent>
             </Card>
 
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">One-Command Install (Recommended)</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Run this command on the Raspberry Pi to install, register, and start the listener automatically.
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="text-xs bg-muted px-2 py-1 rounded flex-1 font-mono break-all">
+                    {quickInstallCommand}
+                  </code>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => copyToClipboard(quickInstallCommand, "Install command")}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
             {setupInstructions && (
               <Card>
                 <CardHeader>
@@ -328,7 +368,7 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
                   <div>
                     <h4 className="font-semibold mb-2">Quick Setup Commands</h4>
                     <div className="space-y-3">
-                      {setupInstructions.steps.slice(0, 2).map((step, index) => (
+                      {setupInstructions.steps.map((step, index) => (
                         <div key={index} className="border rounded-lg p-3">
                           <h5 className="font-medium text-sm mb-1">{step.title}</h5>
                           <p className="text-xs text-muted-foreground mb-2">{step.description}</p>
@@ -352,28 +392,6 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
                           )}
                         </div>
                       ))}
-
-                      <div className="border rounded-lg p-3 bg-blue-50 dark:bg-blue-950/20">
-                        <h5 className="font-medium text-sm mb-1">Start Remote Service</h5>
-                        <p className="text-xs text-muted-foreground mb-2">
-                          Run this command with your registration code:
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <code className="text-xs bg-white dark:bg-gray-800 px-2 py-1 rounded flex-1 font-mono">
-                            npm start -- --register {registrationResult.registrationCode}
-                          </code>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => copyToClipboard(
-                              `npm start -- --register ${registrationResult.registrationCode}`,
-                              'Start command'
-                            )}
-                          >
-                            <Copy className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
                     </div>
                   </div>
 
@@ -381,10 +399,10 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => window.open(setupInstructions.downloadUrl, '_blank')}
+                      onClick={() => window.open(bootstrapScriptUrl || setupInstructions.downloadUrl, '_blank')}
                     >
                       <Download className="h-4 w-4 mr-2" />
-                      Download Setup Script
+                      Download Bootstrap Script
                     </Button>
                   </div>
                 </CardContent>

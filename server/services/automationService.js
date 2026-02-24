@@ -6,6 +6,7 @@ const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
 const deviceService = require('./deviceService');
 const mongoose = require('mongoose');
 const Settings = require('../models/Settings');
+const { executeActionSequence } = require('./workflowExecutionService');
 
 const MAX_LLM_RETRIES = 3;
 const MAX_DEVICE_PROMPT_ENTRIES = 40;
@@ -1406,7 +1407,7 @@ async function getAutomationStats() {
 /**
  * Execute automation by ID (for manual triggers)
  */
-async function executeAutomation(id) {
+async function executeAutomation(id, options = {}) {
   console.log(`AutomationService: Manually executing automation with ID: ${id}`);
 
   try {
@@ -1424,53 +1425,29 @@ async function executeAutomation(id) {
       throw new Error(`Automation "${automation.name}" is currently disabled`);
     }
 
+    const triggerType = options.triggerType || automation.trigger?.type || 'manual';
+    const triggerSource = options.triggerSource || 'manual';
+
     // Create history entry
     const history = new AutomationHistory({
       automationId: automation._id,
       automationName: automation.name,
-      triggerType: 'manual',
-      triggerSource: 'manual',
+      triggerType,
+      triggerSource,
+      ...(options.voiceCommandId ? { voiceCommandId: options.voiceCommandId } : {}),
       totalActions: automation.actions.length,
       status: 'running'
     });
     await history.save();
 
-    // Execute actions (placeholder - actual execution would happen here)
-    const actionResults = [];
-    for (let i = 0; i < automation.actions.length; i++) {
-      const action = automation.actions[i];
-      const startTime = Date.now();
-
-      try {
-        // TODO: Execute actual action based on type
-        actionResults.push({
-          actionIndex: i,
-          actionType: action.type,
-          target: action.target,
-          parameters: action.parameters,
-          success: true,
-          executedAt: new Date(),
-          durationMs: Date.now() - startTime
-        });
-      } catch (actionError) {
-        actionResults.push({
-          actionIndex: i,
-          actionType: action.type,
-          target: action.target,
-          parameters: action.parameters,
-          success: false,
-          error: actionError.message,
-          executedAt: new Date(),
-          durationMs: Date.now() - startTime
-        });
-      }
-    }
+    const execution = await executeActionSequence(automation.actions, {
+      context: options.context || {}
+    });
+    const actionResults = execution.actionResults || [];
+    const finalStatus = execution.status || 'failed';
+    const allSuccess = finalStatus === 'success';
 
     history.actionResults = actionResults;
-    const allSuccess = actionResults.every(r => r.success);
-    const allFailed = actionResults.every(r => !r.success);
-    const finalStatus = allSuccess ? 'success' : (allFailed ? 'failed' : 'partial_success');
-
     await history.markCompleted(finalStatus);
 
     // Update execution tracking
@@ -1479,9 +1456,11 @@ async function executeAutomation(id) {
 
     if (!allSuccess) {
       automation.lastError = {
-        message: `${actionResults.filter(r => !r.success).length} actions failed`,
+        message: `${execution.failedActions || actionResults.filter((r) => !r.success).length} actions failed`,
         timestamp: new Date()
       };
+    } else {
+      automation.lastError = undefined;
     }
 
     await automation.save();
@@ -1492,6 +1471,8 @@ async function executeAutomation(id) {
       message: `Automation "${automation.name}" executed ${finalStatus === 'success' ? 'successfully' : 'with issues'}`,
       automation: automation.toObject(),
       executedActions: automation.actions.length,
+      successfulActions: execution.successfulActions,
+      failedActions: execution.failedActions,
       history: history.toObject()
     };
   } catch (error) {

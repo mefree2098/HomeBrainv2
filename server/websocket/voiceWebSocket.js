@@ -7,6 +7,7 @@ const WakeWordModel = require('../models/WakeWordModel');
 const speechService = require('../services/speechService');
 const voiceCommandService = require('../services/voiceCommandService');
 const settingsService = require('../services/settingsService');
+const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 
 console.log('voiceWebSocket.js loaded with enhanced logging');
 
@@ -386,6 +387,22 @@ class VoiceWebSocketServer {
       connection.authenticated = true;
       connection.deviceInfo = deviceInfo;
 
+      const authUpdate = {
+        status: 'online',
+        lastSeen: new Date()
+      };
+      if (typeof deviceInfo?.version === 'string' && deviceInfo.version.trim().length > 0) {
+        authUpdate.firmwareVersion = deviceInfo.version.trim();
+      }
+      const refreshedDevice = await VoiceDevice.findByIdAndUpdate(
+        deviceId,
+        authUpdate,
+        { new: true }
+      );
+      if (refreshedDevice) {
+        connection.device = refreshedDevice;
+      }
+
       console.log(`Authenticating device ${deviceId} (${device.name}) with code ${registrationCode}`);
 
       const { config, assets } = await this.buildWakeWordConfig(device, registrationCode, deviceInfo);
@@ -458,15 +475,20 @@ class VoiceWebSocketServer {
   }
 
   async handleHeartbeat(deviceId, message) {
-    const { status, batteryLevel, uptime } = message;
+    const { status, batteryLevel, uptime, firmwareVersion } = message;
 
     try {
-      await VoiceDevice.findByIdAndUpdate(deviceId, {
+      const updateData = {
         lastSeen: new Date(),
         ...(status && { status }),
         ...(typeof batteryLevel === 'number' && { batteryLevel }),
         ...(typeof uptime === 'number' && { uptime })
-      });
+      };
+      if (typeof firmwareVersion === 'string' && firmwareVersion.trim().length > 0) {
+        updateData.firmwareVersion = firmwareVersion.trim();
+      }
+
+      await VoiceDevice.findByIdAndUpdate(deviceId, updateData);
 
       this.sendMessage(deviceId, {
         type: 'heartbeat_ack',
@@ -737,10 +759,26 @@ class VoiceWebSocketServer {
 
       await voiceCommand.save();
 
+      const wakeWordForVoice = connection.pendingWakeWord?.wakeWord;
+      const preferredVoiceId = await this.getPreferredVoiceId(connection, {
+        wakeWord: wakeWordForVoice
+      });
+      let acknowledgment = null;
+      try {
+        acknowledgment = await voiceAcknowledgmentService.getRandomAcknowledgment(
+          wakeWordForVoice,
+          preferredVoiceId
+        );
+      } catch (ackError) {
+        console.warn(`Failed to fetch acknowledgment for ${deviceId}:`, ackError.message);
+      }
+
       this.sendMessage(deviceId, {
         type: 'command_processing',
         commandId: voiceCommand._id,
-        message: 'Processing your command...'
+        message: 'Processing your command...',
+        acknowledgmentText: acknowledgment?.text || null,
+        voice: acknowledgment?.voiceId || preferredVoiceId || 'default'
       });
 
       const processingStart = Date.now();
@@ -814,18 +852,13 @@ class VoiceWebSocketServer {
 
       await voiceCommand.save();
 
-      const wakeWordForVoice = connection.pendingWakeWord?.wakeWord;
       connection.pendingWakeWord = null;
-
-      const preferredVoiceId = await this.getPreferredVoiceId(connection, {
-        wakeWord: wakeWordForVoice
-      });
 
       this.sendMessage(deviceId, {
         type: 'tts_response',
         commandId: voiceCommand._id,
         text: responseText,
-        voice: preferredVoiceId || 'default'
+        voice: preferredVoiceId || acknowledgment?.voiceId || 'default'
       });
 
     } catch (error) {
@@ -1062,7 +1095,7 @@ class VoiceWebSocketServer {
       const remoteUpdateService = require('../services/remoteUpdateService');
 
       // Update device status using the service
-      await remoteUpdateService.updateDeviceStatus(deviceId, status, error);
+      await remoteUpdateService.updateDeviceStatus(deviceId, status, error, version);
 
       console.log(`Update status for device ${deviceId} updated to: ${status}`);
 

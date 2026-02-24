@@ -3,6 +3,7 @@ const Scene = require('../models/Scene');
 const deviceService = require('./deviceService');
 const sceneService = require('./sceneService');
 const automationService = require('./automationService');
+const workflowService = require('./workflowService');
 const insteonService = require('./insteonService');
 const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
 
@@ -138,14 +139,17 @@ USER COMMAND
 
 OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
 {
-  "intent": "<intent_type>",  // choose one: device_control, scene_activate, automation_create, query, system_control, unknown
+  "intent": "<intent_type>",  // choose one: device_control, scene_activate, automation_create, workflow_create, workflow_control, query, system_control, unknown
   "confidence": 0.0-1.0,
   "normalizedCommand": "Short paraphrase of the user's request",
   "actions": [
     {
-      "type": "<action_type>",  // choose one: device_control, scene_activate, automation_create, query
+      "type": "<action_type>",  // choose one: device_control, scene_activate, automation_create, workflow_create, workflow_control, query
       "deviceId": "DEVICE_ID_FROM_LIST",
       "sceneId": "SCENE_ID_FROM_LIST",
+      "workflowId": "WORKFLOW_ID_IF_KNOWN",
+      "workflowName": "WORKFLOW_NAME_IF_REFERENCED",
+      "operation": "run|enable|disable",
       "action": "<device_action>",  // e.g., turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
       "value": "optional numeric or string value",
       "room": "optional room for extra clarity"
@@ -159,7 +163,7 @@ DECISION RULES
 1. ALWAYS return at least one action when the user wants something controlled. Map the request to the closest matching device using name + room context. Prefer devices in ${primaryRoom} unless the user clearly specifies another room.
 2. ONLY use deviceId / sceneId values from the lists above. Do not invent IDs. If two devices match equally, pick the most specific (exact name match beats fuzzy match).
 3. For brightness actions return percentages (0-100). For temperature, use whole-number Fahrenheit unless the user specifies another scale.
-4. Only use intent "automation_create" when the user clearly asks to create/schedule an automation or routine. Immediate commands like "turn on the vault light" must stay "device_control". When you do create automations, include a concise summary in the action.
+4. Use "workflow_create" when the user asks to create/schedule a routine or workflow. Use "workflow_control" when the user asks to run/enable/disable an existing workflow. Immediate commands like "turn on the vault light" must stay "device_control".
 5. If the request is a general question or not about controlling devices, set intent to "query", leave "actions" empty, and provide the direct answer in "response". Only use "followUpQuestion" when clarification is required.
 6. Never return empty "actions" for "device_control" intents.
 7. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.") or informative for queries.
@@ -341,6 +345,8 @@ Return ONLY the JSON object with no commentary.`;
     const explicitAutomationPhrases = [
       'automation',
       'automations',
+      'workflow',
+      'workflows',
       'routine',
       'routines',
       'schedule',
@@ -352,6 +358,8 @@ Return ONLY the JSON object with no commentary.`;
       'reminders',
       'set up an automation',
       'create an automation',
+      'create a workflow',
+      'build a workflow',
       'make an automation',
       'start a routine'
     ];
@@ -533,6 +541,69 @@ Return ONLY the JSON object with no commentary.`;
     }
   }
 
+  async executeWorkflowCreateAction(action, room) {
+    const result = {
+      type: 'workflow_create',
+      success: false,
+      message: ''
+    };
+
+    try {
+      const description = action.description || action.summary || action.details || action.text || '';
+      if (!description) {
+        throw new Error('Workflow description missing');
+      }
+
+      const creation = await workflowService.createWorkflowFromText(description, room, 'voice');
+      if (creation?.handledDirectCommand) {
+        result.type = 'device_control';
+        result.success = true;
+        result.message = creation?.message || 'Device command executed';
+        result.deviceId = creation?.device?.id || null;
+        result.deviceName = creation?.device?.name || null;
+        result.deviceRoom = creation?.device?.room || null;
+      } else {
+        result.success = true;
+        result.message = creation?.message || 'Workflow created';
+        result.workflowId = creation?.workflow?._id?.toString();
+      }
+
+      return result;
+    } catch (error) {
+      result.success = false;
+      result.message = error.message || 'Failed to create workflow';
+      return result;
+    }
+  }
+
+  async executeWorkflowControlAction(action) {
+    const result = {
+      type: 'workflow_control',
+      success: false,
+      message: ''
+    };
+
+    try {
+      const operation = action.operation || action.command || 'run';
+      const control = await workflowService.controlWorkflow({
+        workflowId: action.workflowId || null,
+        workflowName: action.workflowName || action.name || null,
+        operation
+      });
+
+      result.success = Boolean(control?.success);
+      result.operation = control?.operation || operation;
+      result.workflowId = control?.workflow?._id?.toString() || action.workflowId || null;
+      result.workflowName = control?.workflow?.name || action.workflowName || action.name || null;
+      result.message = control?.message || 'Workflow command executed';
+      return result;
+    } catch (error) {
+      result.success = false;
+      result.message = error.message || 'Failed to control workflow';
+      return result;
+    }
+  }
+
   async executeActions(actions, context, room) {
     const entities = { devices: [], scenes: [], actions: [] };
     const executionResults = [];
@@ -569,6 +640,19 @@ Return ONLY the JSON object with no commentary.`;
             deviceId: automationResult.deviceId
           });
         }
+      } else if (action.type === 'workflow_create') {
+        const workflowResult = await this.executeWorkflowCreateAction(action, room);
+        executionResults.push(workflowResult);
+        if (workflowResult.type === 'device_control' && workflowResult.deviceId) {
+          entities.devices.push({
+            name: workflowResult.deviceName || '',
+            room: workflowResult.deviceRoom || null,
+            deviceId: workflowResult.deviceId
+          });
+        }
+      } else if (action.type === 'workflow_control') {
+        const workflowControlResult = await this.executeWorkflowControlAction(action);
+        executionResults.push(workflowControlResult);
       } else if (action.type === 'query') {
         executionResults.push({
           type: 'query',
@@ -612,6 +696,9 @@ Return ONLY the JSON object with no commentary.`;
       }
       if (item.type === 'scene_activate') {
         return item.message || 'Scene activated';
+      }
+      if (item.type === 'workflow_create' || item.type === 'workflow_control') {
+        return item.message;
       }
       return item.message;
     }).filter(Boolean);
@@ -739,10 +826,14 @@ Return ONLY the JSON object with no commentary.`;
     }
 
     const likelyAutomation = this.isLikelyAutomationRequest(commandText);
-    const hasAutomationActions = Array.isArray(interpretation?.actions) &&
-      interpretation.actions.some((action) => action?.type === 'automation_create');
+    const hasAutomationLikeActions = Array.isArray(interpretation?.actions) &&
+      interpretation.actions.some((action) => ['automation_create', 'workflow_create'].includes(action?.type));
 
-    if (interpretation && !likelyAutomation && (interpretation.intent === 'automation_create' || hasAutomationActions)) {
+    if (
+      interpretation &&
+      !likelyAutomation &&
+      (['automation_create', 'workflow_create'].includes(interpretation.intent) || hasAutomationLikeActions)
+    ) {
       console.log('VoiceCommandService: Automation intent/actions detected but command appears immediate; applying device-control fallback.');
       const directFallback = this.fallbackInterpretation(commandText, context, room);
       if (directFallback) {
@@ -750,13 +841,17 @@ Return ONLY the JSON object with no commentary.`;
           ...directFallback,
           usedFallback: true
         };
-      } else if (hasAutomationActions) {
-        const filteredActions = interpretation.actions.filter((action) => action?.type !== 'automation_create');
+      } else if (hasAutomationLikeActions) {
+        const filteredActions = interpretation.actions.filter((action) =>
+          !['automation_create', 'workflow_create'].includes(action?.type)
+        );
         if (filteredActions.length) {
           interpretation = {
             ...interpretation,
             actions: filteredActions,
-            intent: interpretation.intent === 'automation_create' ? 'device_control' : interpretation.intent,
+            intent: ['automation_create', 'workflow_create'].includes(interpretation.intent)
+              ? 'device_control'
+              : interpretation.intent,
             usedFallback: true
           };
         } else {

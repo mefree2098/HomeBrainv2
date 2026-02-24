@@ -88,7 +88,7 @@ sudo apt-get install -y \
 # Install Node.js (if not present)
 if ! command -v node &> /dev/null; then
     print_status "Installing Node.js..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
 else
     NODE_VERSION=$(node --version)
@@ -97,8 +97,8 @@ fi
 
 # Verify Node.js version
 NODE_MAJOR=$(node --version | cut -d. -f1 | sed 's/v//')
-if [[ "$NODE_MAJOR" -lt 16 ]]; then
-    print_error "Node.js version 16 or higher is required"
+if [[ "$NODE_MAJOR" -lt 20 ]]; then
+    print_error "Node.js version 20 or higher is required"
     exit 1
 fi
 
@@ -106,24 +106,25 @@ fi
 INSTALL_DIR="$HOME/homebrain-remote"
 print_status "Creating installation directory: $INSTALL_DIR"
 
-if [[ -d "$INSTALL_DIR" ]]; then
-    print_warning "Directory already exists, backing up..."
-    mv "$INSTALL_DIR" "$INSTALL_DIR.backup.$(date +%s)"
-fi
+if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
+    if [[ -d "$INSTALL_DIR" ]]; then
+        print_warning "Directory already exists, backing up..."
+        mv "$INSTALL_DIR" "$INSTALL_DIR.backup.$(date +%s)"
+    fi
 
-mkdir -p "$INSTALL_DIR"
-cd "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
 
-# Copy or download the remote device files
-if [[ -f "$SCRIPT_DIR/package.json" ]]; then
-    print_status "Copying application files..."
-    rsync -a --delete \
-        --exclude 'node_modules' \
-        --exclude '.git' \
-        --exclude '.DS_Store' \
-        "$SCRIPT_DIR"/ "$INSTALL_DIR"/
-else
-    print_status "Source files not found. Creating minimal HomeBrain Remote package..."
+    # Copy or download the remote device files
+    if [[ -f "$SCRIPT_DIR/package.json" ]]; then
+        print_status "Copying application files..."
+        rsync -a --delete \
+            --exclude 'node_modules' \
+            --exclude '.git' \
+            --exclude '.DS_Store' \
+            "$SCRIPT_DIR"/ "$INSTALL_DIR"/
+    else
+        print_status "Source files not found. Creating minimal HomeBrain Remote package..."
 cat > package.json << 'EOF'
 {
   "name": "homebrain-remote-device",
@@ -146,10 +147,14 @@ cat > package.json << 'EOF'
     "tflite-node": "1.0.0"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=20.0.0"
   }
 }
 EOF
+    fi
+else
+    print_status "Installer is already running from $INSTALL_DIR, using in-place files."
+    cd "$INSTALL_DIR"
 fi
 
 # Install Node.js dependencies
@@ -170,8 +175,26 @@ fi
 
 # Prepare Python venv for sidecar automatically
 print_status "Creating Python virtual environment for wake-word sidecar..."
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    print_error "Python 3.10+ is required for OpenWakeWord but was not found ($PYTHON_BIN)."
+    exit 1
+fi
+
+PYTHON_VERSION="$("$PYTHON_BIN" - <<'PYCODE'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PYCODE
+)"
+PYTHON_VERSION_MAJOR="$(echo "$PYTHON_VERSION" | cut -d'.' -f1)"
+PYTHON_VERSION_MINOR="$(echo "$PYTHON_VERSION" | cut -d'.' -f2)"
+if [ "$PYTHON_VERSION_MAJOR" -lt 3 ] || { [ "$PYTHON_VERSION_MAJOR" -eq 3 ] && [ "$PYTHON_VERSION_MINOR" -lt 10 ]; }; then
+    print_error "OpenWakeWord requires Python 3.10+ (detected $PYTHON_VERSION)."
+    exit 1
+fi
+
 if [ ! -d "$INSTALL_DIR/.venv" ]; then
-    python3 -m venv "$INSTALL_DIR/.venv" || true
+    "$PYTHON_BIN" -m venv "$INSTALL_DIR/.venv" || true
 fi
 if [ -x "$INSTALL_DIR/.venv/bin/python" ]; then
     "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip setuptools wheel

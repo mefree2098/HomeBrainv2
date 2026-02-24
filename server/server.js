@@ -2,13 +2,12 @@
 require("dotenv").config();
 const mongoose = require("mongoose");
 const express = require("express");
-const session = require("express-session");
-const MongoStore = require('connect-mongo');
 const basicRoutes = require("./routes/index");
 const authRoutes = require("./routes/authRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const sceneRoutes = require("./routes/sceneRoutes");
 const automationRoutes = require("./routes/automationRoutes");
+const workflowRoutes = require("./routes/workflowRoutes");
 const userProfileRoutes = require("./routes/userProfileRoutes");
 const voiceDeviceRoutes = require("./routes/voiceDeviceRoutes");
 const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
@@ -17,6 +16,7 @@ const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const smartThingsWebhookRoutes = require("./routes/smartThingsWebhookRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
+const platformDeployRoutes = require("./routes/platformDeployRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
@@ -35,8 +35,10 @@ const DiscoveryService = require("./services/discoveryService");
 const settingsService = require("./services/settingsService");
 const remoteUpdateService = require("./services/remoteUpdateService");
 const wakeWordTrainingService = require("./services/wakeWordTrainingService");
+const voiceAcknowledgmentService = require("./services/voiceAcknowledgmentService");
 const whisperService = require("./services/whisperService");
 const smartThingsService = require("./services/smartThingsService");
+const automationSchedulerService = require("./services/automationSchedulerService");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 const http = require("http");
@@ -217,6 +219,8 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/scenes', sceneRoutes);
 // Automation Routes
 app.use('/api/automations', automationRoutes);
+// Workflow Routes
+app.use('/api/workflows', workflowRoutes);
 // User Profile Routes
 app.use('/api/profiles', userProfileRoutes);
 // Voice Device Routes
@@ -233,6 +237,8 @@ app.use(smartThingsWebhookPath, smartThingsWebhookRoutes);
   app.use('/api/smartthings', smartThingsRoutes);
 // Maintenance Routes
 app.use('/api/maintenance', maintenanceRoutes);
+// Platform Deploy Routes
+app.use('/api/platform-deploy', platformDeployRoutes);
 // Remote Device Routes
 app.use('/api/remote-devices', remoteDeviceRoutes);
 // Piper Voice Routes
@@ -267,7 +273,7 @@ if (fs.existsSync(clientDistPath)) {
   console.log(`Serving client build from ${clientDistPath}`);
   app.use(express.static(clientDistPath));
 
-  app.get('*', (req, res, next) => {
+  app.get('/{*splat}', (req, res, next) => {
     if (req.path.startsWith('/api/') || req.path.startsWith('/downloads/')) {
       return next();
     }
@@ -348,63 +354,6 @@ app.set('voiceWebSocket', voiceWsServer);
 app.set('voiceWebSocketHttp', voiceWsServer);
 app.set('deviceWebSocket', deviceWebSocket);
 
-app.get('/api/devices/stream', requireUser(), (req, res) => {
-  console.log('Device SSE: client connected');
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
-
-  const heartbeat = setInterval(() => {
-    try {
-      res.write(':\n\n');
-    } catch (error) {
-      clearInterval(heartbeat);
-    }
-  }, 30000);
-
-  const sendUpdate = (devices) => {
-    try {
-      const normalized = deviceUpdateEmitter.normalizeDevices(devices);
-      if (normalized.length === 0) {
-        return;
-      }
-      const payload = {
-        type: 'devices:update',
-        devices: normalized
-      };
-      res.write(`data: ${JSON.stringify(payload)}\n\n`);
-    } catch (error) {
-      console.warn('Device SSE: failed to write update:', error.message);
-    }
-  };
-
-  deviceUpdateEmitter.on('devices:update', sendUpdate);
-  res.write('event: ready\n');
-  res.write('data: {}\n\n');
-
-  let closed = false;
-  const cleanup = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    console.log('Device SSE: client disconnected');
-    clearInterval(heartbeat);
-    deviceUpdateEmitter.removeListener('devices:update', sendUpdate);
-    try {
-      res.end();
-    } catch (error) {
-      console.warn('Device SSE: error ending response:', error.message);
-    }
-  };
-
-  req.on('close', cleanup);
-  req.on('end', cleanup);
-  res.on('close', cleanup);
-  res.on('error', cleanup);
-});
-
 // Initialize Discovery service
 const discoveryService = new DiscoveryService();
 app.locals.discoveryService = discoveryService;
@@ -426,6 +375,7 @@ async function initializeDiscoveryService() {
 }
 
 void initializeDiscoveryService();
+automationSchedulerService.start();
 
 // Initialize Remote Update Service
 (async () => {
@@ -444,6 +394,16 @@ void initializeDiscoveryService();
     console.log('Whisper Service initialized successfully');
   } catch (error) {
     console.error('Failed to initialize Whisper Service:', error.message);
+  }
+})();
+
+// Prime profile acknowledgment audio in background
+(async () => {
+  try {
+    await voiceAcknowledgmentService.primeAllProfiles();
+    console.log('Voice acknowledgment cache primed');
+  } catch (error) {
+    console.warn('Failed to prime voice acknowledgment cache:', error.message);
   }
 })();
 
@@ -467,6 +427,12 @@ async function gracefulShutdown(signal) {
     discoveryService.stop();
   } catch (error) {
     console.error('Error stopping discovery service:', error.message);
+  }
+
+  try {
+    automationSchedulerService.stop();
+  } catch (error) {
+    console.error('Error stopping automation scheduler service:', error.message);
   }
 
   try {

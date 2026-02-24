@@ -1,6 +1,7 @@
 const UserProfile = require('../models/UserProfile');
 const elevenLabsService = require('./elevenLabsService');
 const wakeWordTrainingService = require('./wakeWordTrainingService');
+const voiceAcknowledgmentService = require('./voiceAcknowledgmentService');
 
 class UserProfileService {
   /**
@@ -124,6 +125,8 @@ class UserProfileService {
         .populate('favorites.scenes')
         .populate('favorites.automations')
         .populate('wakeWordModels');
+
+      await voiceAcknowledgmentService.queueAcknowledgmentGeneration(populatedProfile, { force: true });
       
       console.log(`Successfully created user profile: ${populatedProfile.name} with ID: ${populatedProfile._id}`);
       return populatedProfile;
@@ -197,6 +200,8 @@ class UserProfileService {
         .populate('favorites.scenes')
         .populate('favorites.automations')
         .populate('wakeWordModels');
+
+      await voiceAcknowledgmentService.queueAcknowledgmentGeneration(refreshedProfile, { force: true });
       
       console.log(`Successfully updated user profile: ${refreshedProfile.name}`);
       return refreshedProfile;
@@ -224,6 +229,7 @@ class UserProfileService {
 
       await UserProfile.findByIdAndDelete(profileId);
       await wakeWordTrainingService.unregisterProfile(profileId);
+      await voiceAcknowledgmentService.removeForProfile(profileId);
 
       console.log(`Successfully deleted user profile: ${profile.name}`);
       return true;

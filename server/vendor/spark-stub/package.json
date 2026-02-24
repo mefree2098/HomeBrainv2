@@ -1,0 +1,7 @@
+{
+  "name": "spark",
+  "version": "1.1.1-homebrain.0",
+  "description": "HomeBrain compatibility stub for legacy spark optional dependency",
+  "main": "index.js",
+  "license": "MIT"
+}

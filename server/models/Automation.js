@@ -80,6 +80,15 @@ const schema = new mongoose.Schema({
     type: Number, // Cooldown period in minutes
     default: 0,
   },
+  workflowId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Workflow',
+    default: null,
+  },
+  workflowGraph: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
   createdAt: {
     type: Date,
     default: Date.now,
@@ -104,6 +113,7 @@ schema.index({ enabled: 1 });
 schema.index({ 'trigger.type': 1 });
 schema.index({ category: 1 });
 schema.index({ priority: -1 });
+schema.index({ workflowId: 1 });
 
 const Automation = mongoose.model('Automation', schema);
 

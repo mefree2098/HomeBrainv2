@@ -2,8 +2,40 @@ const express = require('express');
 const router = express.Router();
 const { requireUser } = require('./middlewares/auth');
 const remoteUpdateService = require('../services/remoteUpdateService');
-const path = require('path');
 const os = require('os');
+
+function getVoiceWebSocketCandidates(app) {
+  const wsPrimary = app.get('voiceWebSocket');
+  const wsHttp = app.get('voiceWebSocketHttp');
+  const wsHttps = app.get('voiceWebSocketHttps');
+  return [wsPrimary, wsHttp, wsHttps].filter(Boolean);
+}
+
+function buildDeviceReachableBaseUrl(req) {
+  const hostHeader = req.get('host') || '';
+  const parts = hostHeader.split(':');
+  const hostName = parts[0] || 'localhost';
+  const port = parts[1] || String(process.env.PORT || 3000);
+  const isLoopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostName);
+
+  let lanIp = null;
+  if (isLoopback) {
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const iface of nets[name] || []) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          lanIp = iface.address;
+          break;
+        }
+      }
+      if (lanIp) break;
+    }
+  }
+
+  return isLoopback && lanIp
+    ? `http://${lanIp}:${port}`
+    : `${req.protocol}://${hostHeader}`;
+}
 
 // Description: Get current remote device software version
 // Endpoint: GET /api/remote-updates/version
@@ -124,36 +156,8 @@ router.post('/initiate/:deviceId', requireUser(), async (req, res) => {
   console.log(`POST /api/remote-updates/initiate/${deviceId} - Initiating update`);
 
   try {
-    // Get WebSocket server instances from app (try both HTTP and HTTPS)
-    const wsPrimary = req.app.get('voiceWebSocket');
-    const wsHttp = req.app.get('voiceWebSocketHttp');
-    const wsHttps = req.app.get('voiceWebSocketHttps');
-    const sockets = [wsPrimary, wsHttp, wsHttps].filter(Boolean);
-
-    // Build a device-safe base URL. Avoid localhost/127.0.0.1 which are not reachable from the device.
-    const hostHeader = req.get('host') || '';
-    const parts = hostHeader.split(':');
-    const hostName = parts[0] || 'localhost';
-    const port = parts[1] || String(process.env.PORT || 3000);
-    const isLoopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostName);
-
-    let lanIp = null;
-    if (isLoopback) {
-      const nets = os.networkInterfaces();
-      for (const name of Object.keys(nets)) {
-        for (const iface of nets[name] || []) {
-          if (iface.family === 'IPv4' && !iface.internal) {
-            lanIp = iface.address;
-            break;
-          }
-        }
-        if (lanIp) break;
-      }
-    }
-
-    const baseUrl = isLoopback && lanIp
-      ? `http://${lanIp}:${port}`
-      : `${req.protocol}://${hostHeader}`;
+    const sockets = getVoiceWebSocketCandidates(req.app);
+    const baseUrl = buildDeviceReachableBaseUrl(req);
 
     const result = await remoteUpdateService.initiateUpdate(deviceId, sockets, { force: Boolean(req.body?.force), baseUrl });
 
@@ -178,10 +182,13 @@ router.post('/initiate-all', requireUser(), async (req, res) => {
   console.log('POST /api/remote-updates/initiate-all - Initiating update for all devices');
 
   try {
-    // Get WebSocket server instance from app
-    const voiceWebSocket = req.app.get('voiceWebSocket');
-
-    const result = await remoteUpdateService.initiateUpdateForAll(voiceWebSocket);
+    const sockets = getVoiceWebSocketCandidates(req.app);
+    const baseUrl = buildDeviceReachableBaseUrl(req);
+    const result = await remoteUpdateService.initiateUpdateForAll(sockets, {
+      force: Boolean(req.body?.force),
+      onlyOutdated: req.body?.onlyOutdated !== false,
+      baseUrl
+    });
 
     console.log('POST /api/remote-updates/initiate-all - Update initiated for all devices');
     res.status(200).json({
@@ -195,6 +202,29 @@ router.post('/initiate-all', requireUser(), async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to initiate update for all devices'
+    });
+  }
+});
+
+// Description: Get fleet update + verification status
+// Endpoint: GET /api/remote-updates/fleet-status
+// Request: {}
+// Response: { success: boolean, latestVersion: string, summary: object, devices: Array }
+router.get('/fleet-status', requireUser(), async (req, res) => {
+  console.log('GET /api/remote-updates/fleet-status - Fetching fleet verification state');
+
+  try {
+    const fleet = await remoteUpdateService.getFleetStatus();
+    return res.status(200).json({
+      success: true,
+      ...fleet
+    });
+  } catch (error) {
+    console.error('GET /api/remote-updates/fleet-status - Error:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch fleet status'
     });
   }
 });

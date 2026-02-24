@@ -199,6 +199,20 @@ export const initiateUpdateForAllDevices = async () => {
   }
 };
 
+export const initiateUpdateForAllDevicesWithOptions = async (options?: {
+  force?: boolean;
+  onlyOutdated?: boolean;
+}) => {
+  console.log('Initiating update for all devices with options:', options);
+  try {
+    const response = await api.post('/api/remote-updates/initiate-all', options || {});
+    return response.data;
+  } catch (error) {
+    console.error('Error initiating update for all devices:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
 // Description: Get update statistics
 // Endpoint: GET /api/remote-updates/statistics
 // Request: {}
@@ -225,6 +239,17 @@ export const getDevicesNeedingUpdate = async () => {
     return response.data;
   } catch (error) {
     console.error('Error fetching devices needing update:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+export const getRemoteFleetStatus = async () => {
+  console.log('Fetching remote update fleet status');
+  try {
+    const response = await api.get('/api/remote-updates/fleet-status');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching remote fleet status:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };

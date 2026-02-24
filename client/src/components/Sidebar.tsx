@@ -9,34 +9,47 @@ import {
   Shield,
   ChevronRight,
   Brain,
-  Cpu
+  Cpu,
+  Rocket,
+  Workflow
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
 import { Button } from "./ui/button"
+import { useAuth } from "@/contexts/AuthContext"
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'Devices', href: '/devices', icon: Lightbulb },
   { name: 'Scenes', href: '/scenes', icon: Palette },
+  { name: 'Workflows', href: '/workflows', icon: Workflow },
   { name: 'Automations', href: '/automations', icon: Zap },
   { name: 'Voice Devices', href: '/voice-devices', icon: Mic },
   { name: 'User Profiles', href: '/profiles', icon: Users },
   { name: 'Ollama / LLM', href: '/ollama', icon: Brain },
   { name: 'Whisper STT', href: '/whisper', icon: Cpu },
+  { name: 'Platform Deploy', href: '/platform-deploy', icon: Rocket, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Settings },
-  { name: 'SSL Certificates', href: '/ssl', icon: Shield },
+  { name: 'SSL Certificates', href: '/ssl', icon: Shield, adminOnly: true },
 ]
 
 export function Sidebar() {
   const location = useLocation()
   const navigate = useNavigate()
+  const { currentUser } = useAuth()
+
+  const visibleNavigation = navigation.filter((item) => {
+    if (!item.adminOnly) {
+      return true
+    }
+    return currentUser?.role === "admin"
+  })
 
   return (
     <div className="fixed left-0 top-16 z-40 h-[calc(100vh-4rem)] w-64 border-r bg-white/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/60 dark:bg-gray-900/80 dark:supports-[backdrop-filter]:bg-gray-900/60">
       <div className="flex h-full flex-col">
         <nav className="flex-1 space-y-2 p-4">
-          {navigation.map((item) => {
+          {visibleNavigation.map((item) => {
             const isActive = location.pathname === item.href
             return (
               <Button
