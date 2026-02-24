@@ -20,6 +20,20 @@ export const registerRemoteDevice = async (data: {
   }
 };
 
+// Description: Rotate onboarding claim token for a remote device
+// Endpoint: POST /api/remote-devices/:deviceId/claim-token/rotate
+// Request: {}
+// Response: { success: boolean, claimToken: string, claimTokenExpires: string }
+export const rotateRemoteDeviceClaimToken = async (deviceId: string) => {
+  try {
+    const response = await api.post(`/api/remote-devices/${deviceId}/claim-token/rotate`);
+    return response.data;
+  } catch (error) {
+    console.error('Error rotating claim token:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
 // Description: Activate device with registration code
 // Endpoint: POST /api/remote-devices/activate
 // Request: { registrationCode: string, ipAddress?: string, firmwareVersion?: string }

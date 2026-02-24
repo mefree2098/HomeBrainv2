@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const mongoose = require('mongoose');
 const wakeWordTrainingService = require('./wakeWordTrainingService');
+const eventStreamService = require('./eventStreamService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
 
@@ -447,6 +448,17 @@ class PlatformDeployService {
       stdio: 'ignore'
     });
     child.unref();
+
+    void eventStreamService.publishSafe({
+      type: 'deploy.services_restart_triggered',
+      source: 'platform_deploy',
+      category: 'deploy',
+      payload: {
+        jobId: jobId || null,
+        command: restartCommand
+      },
+      tags: ['deploy', 'restart']
+    });
   }
 
   async startDeploy(options = {}, actor = 'unknown') {
@@ -505,6 +517,20 @@ class PlatformDeployService {
       await this.writeJob(job);
       await this.writeLatestJobRef(job.id);
       await this.appendJobLog(job.id, `[${new Date().toISOString()}] Deployment job created by ${actor}\n`);
+
+      void eventStreamService.publishSafe({
+        type: 'deploy.started',
+        source: 'platform_deploy',
+        category: 'deploy',
+        payload: {
+          jobId: job.id,
+          actor,
+          preset: job.options?.preset || 'safe',
+          allowDirty: Boolean(job.options?.allowDirty),
+          restartServices: Boolean(job.options?.restartServices)
+        },
+        tags: ['deploy', 'job']
+      });
 
       void this.executeJob(job.id);
       return this.readJob(job.id);
@@ -583,6 +609,19 @@ class PlatformDeployService {
       });
       await this.appendJobLog(jobId, `[${new Date().toISOString()}] Deployment completed successfully\n`);
 
+      void eventStreamService.publishSafe({
+        type: 'deploy.completed',
+        source: 'platform_deploy',
+        category: 'deploy',
+        payload: {
+          jobId,
+          preset: job.options?.preset || 'safe',
+          restartServices: Boolean(job.options?.restartServices),
+          repoCommit: repoAfter?.shortCommit || null
+        },
+        tags: ['deploy', 'job']
+      });
+
       if (job.options.restartServices) {
         await this.markStep(jobId, 'Restart services', 'running');
         await this.triggerServiceRestart(jobId);
@@ -594,6 +633,19 @@ class PlatformDeployService {
         currentStep: 'failed',
         completedAt: new Date().toISOString(),
         error: error.message || 'Deployment failed'
+      });
+
+      void eventStreamService.publishSafe({
+        type: 'deploy.failed',
+        source: 'platform_deploy',
+        category: 'deploy',
+        severity: 'error',
+        payload: {
+          jobId,
+          preset: job.options?.preset || 'safe',
+          error: error.message || 'Deployment failed'
+        },
+        tags: ['deploy', 'job']
       });
     }
   }

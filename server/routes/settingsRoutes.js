@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const settingsService = require('../services/settingsService');
+const { testOpenAIModelCompatibility } = require('../services/llmService');
 const { requireUser } = require('./middlewares/auth');
 
 // Create auth middleware instance
@@ -190,36 +191,24 @@ router.post('/test-openai', auth, async (req, res) => {
         message: 'API key is required for testing'
       });
     }
-    
-    // Test the API key by making a request to OpenAI
-    const OpenAI = require('openai');
+
+    const testModel = (typeof model === 'string' && model.trim())
+      ? model.trim()
+      : 'gpt-5.2-codex';
     
     try {
-      console.log('Creating OpenAI client and testing connection...');
-      const openai = new OpenAI({
-        apiKey: apiKey.trim()
-      });
-      
-      // Make a simple completion request to test the key
-      const testModel = model || 'gpt-3.5-turbo';
       console.log(`Testing with model: ${testModel}`);
 
-      // Check if this is a newer model that requires max_completion_tokens
-      const isNewerModel = testModel.includes('gpt-4') ||
-                           testModel.includes('gpt-5') ||
-                           testModel.includes('o1');
-      const tokenParam = isNewerModel ? { max_completion_tokens: 10 } : { max_tokens: 10 };
-
-      const response = await openai.chat.completions.create({
-        model: testModel,
-        messages: [{ role: 'user', content: 'Hello, this is a test.' }],
-        ...tokenParam
-      });
+      await testOpenAIModelCompatibility(
+        testModel,
+        apiKey.trim(),
+        'Return JSON with one key: {"status":"ok"}'
+      );
       
       console.log('OpenAI API key test successful');
       res.status(200).json({
         success: true,
-        message: 'OpenAI API key is valid',
+        message: 'OpenAI API key/model are valid for HomeBrain requests',
         model: testModel
       });
       
@@ -240,17 +229,17 @@ router.post('/test-openai', auth, async (req, res) => {
       } else if (apiError.status === 404) {
         res.status(400).json({
           success: false,
-          message: `Model "${testModel}" not found or you don't have access to it. Try using gpt-3.5-turbo or gpt-4 instead.`
+          message: `Model "${testModel}" not found or you do not have access. Try "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5", or "gpt-5-mini".`
         });
       } else if (apiError.status === 429) {
         res.status(400).json({
           success: false,
           message: 'OpenAI API rate limit exceeded'
         });
-      } else if (apiError.code === 'unsupported_parameter') {
+      } else if (apiError.code === 'unsupported_parameter' || apiError.code === 'invalid_request_error') {
         res.status(400).json({
           success: false,
-          message: `Model configuration error: ${apiError.message}`
+          message: `Model configuration error: ${apiError.message}. HomeBrain now tries Responses API first with Chat Completions fallback; confirm the model ID is correct.`
         });
       } else {
         res.status(400).json({

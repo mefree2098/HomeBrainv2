@@ -13,6 +13,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const elevenLabsService = require('../services/elevenLabsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
+const eventStreamService = require('../services/eventStreamService');
 
 const execFileAsync = promisify(execFile);
 const REMOTE_SETUP_PACKAGE_NAME = 'homebrain-remote-setup.tar.gz';
@@ -42,6 +43,10 @@ const BOOTSTRAP_RATE_LIMIT_MAX_PER_DEVICE = Math.max(
 const BOOTSTRAP_INVALID_ATTEMPT_MAX = Math.max(
   1,
   Number(process.env.REMOTE_BOOTSTRAP_INVALID_ATTEMPT_MAX || 8)
+);
+const DEVICE_CLAIM_TOKEN_TTL_MS = Math.max(
+  60_000,
+  Number(process.env.REMOTE_DEVICE_CLAIM_TOKEN_TTL_MS || 60 * 60 * 1000)
 );
 const bootstrapIpAccessWindow = new Map();
 const bootstrapDeviceAccessWindow = new Map();
@@ -93,6 +98,13 @@ function sendBootstrapRateLimited(res, retryAfterSeconds, message) {
     : 60;
   res.setHeader('Retry-After', String(retryAfter));
   return res.status(429).type('text/plain').send(message || 'Too many bootstrap requests. Please retry later.');
+}
+
+function issueDeviceClaimToken() {
+  return {
+    claimToken: crypto.randomBytes(16).toString('hex'),
+    claimTokenExpires: new Date(Date.now() + DEVICE_CLAIM_TOKEN_TTL_MS)
+  };
 }
 
 async function getLatestRemoteSetupSourceMtimeMs() {
@@ -167,6 +179,7 @@ router.post('/register', requireUser(), async (req, res) => {
     // Generate unique registration code and device ID
     const registrationCode = crypto.randomBytes(4).toString('hex').toUpperCase();
     const deviceId = crypto.randomUUID();
+    const { claimToken, claimTokenExpires } = issueDeviceClaimToken();
 
     // Create new voice device
     const device = new VoiceDevice({
@@ -178,6 +191,8 @@ router.post('/register', requireUser(), async (req, res) => {
       supportedWakeWords: ['Anna', 'Henry', 'Home Brain'],
       settings: {
         registrationCode,
+        claimToken,
+        claimTokenExpires,
         registered: false,
         registrationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
       }
@@ -185,11 +200,26 @@ router.post('/register', requireUser(), async (req, res) => {
 
     await device.save();
 
+    void eventStreamService.publishSafe({
+      type: 'remote_device.registered',
+      source: 'remote_device',
+      category: 'fleet',
+      payload: {
+        deviceId: device._id.toString(),
+        name: device.name,
+        room: device.room,
+        deviceType: device.deviceType
+      },
+      tags: ['remote-device', 'registration']
+    });
+
     console.log(`POST /api/remote-devices/register - Successfully registered device: ${device.name} (${device._id})`);
     res.status(201).json({
       success: true,
       device: device,
       registrationCode: registrationCode,
+      claimToken,
+      claimTokenExpires,
       message: 'Device registered successfully. Use the registration code to complete setup.'
     });
 
@@ -203,8 +233,19 @@ router.post('/register', requireUser(), async (req, res) => {
   }
 });
 
-async function validateDeviceAccess(deviceId, registrationCode) {
-  if (!registrationCode) {
+async function validateDeviceAccess(deviceId, credentials = {}) {
+  if (typeof credentials === 'string') {
+    credentials = { registrationCode: credentials };
+  }
+
+  const registrationCode = typeof credentials.registrationCode === 'string'
+    ? credentials.registrationCode.trim()
+    : '';
+  const claimToken = typeof credentials.claimToken === 'string'
+    ? credentials.claimToken.trim()
+    : '';
+
+  if (!registrationCode && !claimToken) {
     return null;
   }
 
@@ -213,16 +254,30 @@ async function validateDeviceAccess(deviceId, registrationCode) {
     return null;
   }
 
-  if (device.settings?.registrationCode !== registrationCode) {
-    return null;
+  if (registrationCode && device.settings?.registrationCode === registrationCode) {
+    return device;
   }
 
-  return device;
+  const claimTokenValue = device.settings?.claimToken;
+  const claimTokenExpires = device.settings?.claimTokenExpires;
+  const claimTokenActive = Boolean(
+    claimTokenValue
+    && claimTokenExpires
+    && new Date(claimTokenExpires).getTime() > Date.now()
+    && device.settings?.registered === false
+  );
+
+  if (claimToken && claimTokenActive && claimTokenValue === claimToken) {
+    return device;
+  }
+
+  return null;
 }
 
 router.get('/:deviceId/bootstrap.sh', async (req, res) => {
   const { deviceId } = req.params;
   const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const claim = typeof req.query.claim === 'string' ? req.query.claim : '';
   const requesterIp = getRequesterIp(req);
   const ipWindowKey = requesterIp;
   const deviceWindowKey = deviceId;
@@ -257,7 +312,10 @@ router.get('/:deviceId/bootstrap.sh', async (req, res) => {
       );
     }
 
-    const device = await validateDeviceAccess(deviceId, code);
+    const device = await validateDeviceAccess(deviceId, {
+      registrationCode: code,
+      claimToken: claim
+    });
     if (!device) {
       const invalidAttemptLimit = consumeSlidingWindow(
         bootstrapInvalidAttemptWindow,
@@ -331,12 +389,106 @@ echo "[HomeBrain] Follow logs: sudo journalctl -u homebrain-remote -f"
   }
 });
 
-router.get('/:deviceId/wake-words', async (req, res) => {
+router.get('/:deviceId/cloud-init.yaml', async (req, res) => {
   const { deviceId } = req.params;
-  const { code, platform, arch } = req.query;
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const claim = typeof req.query.claim === 'string' ? req.query.claim : '';
+  const requesterIp = getRequesterIp(req);
+  const ipWindowKey = requesterIp;
+  const deviceWindowKey = deviceId;
+  const invalidAttemptKey = `${deviceId}:${requesterIp}`;
 
   try {
-    const device = await validateDeviceAccess(deviceId, code);
+    const ipRateLimit = consumeSlidingWindow(
+      bootstrapIpAccessWindow,
+      ipWindowKey,
+      BOOTSTRAP_RATE_LIMIT_MAX_PER_IP,
+      BOOTSTRAP_RATE_LIMIT_WINDOW_MS
+    );
+    if (!ipRateLimit.allowed) {
+      return sendBootstrapRateLimited(
+        res,
+        ipRateLimit.retryAfterSeconds,
+        'Too many cloud-init requests from this network. Please wait and retry.'
+      );
+    }
+
+    const deviceRateLimit = consumeSlidingWindow(
+      bootstrapDeviceAccessWindow,
+      deviceWindowKey,
+      BOOTSTRAP_RATE_LIMIT_MAX_PER_DEVICE,
+      BOOTSTRAP_RATE_LIMIT_WINDOW_MS
+    );
+    if (!deviceRateLimit.allowed) {
+      return sendBootstrapRateLimited(
+        res,
+        deviceRateLimit.retryAfterSeconds,
+        'Too many cloud-init requests for this device. Please wait and retry.'
+      );
+    }
+
+    const device = await validateDeviceAccess(deviceId, {
+      registrationCode: code,
+      claimToken: claim
+    });
+    if (!device) {
+      const invalidAttemptLimit = consumeSlidingWindow(
+        bootstrapInvalidAttemptWindow,
+        invalidAttemptKey,
+        BOOTSTRAP_INVALID_ATTEMPT_MAX,
+        BOOTSTRAP_RATE_LIMIT_WINDOW_MS
+      );
+      if (!invalidAttemptLimit.allowed) {
+        return sendBootstrapRateLimited(
+          res,
+          invalidAttemptLimit.retryAfterSeconds,
+          'Too many invalid cloud-init attempts. Please wait before retrying.'
+        );
+      }
+      return res.status(403).type('text/plain').send('Invalid device credentials');
+    }
+    bootstrapInvalidAttemptWindow.delete(invalidAttemptKey);
+
+    const hubOrigin = `${req.protocol}://${req.get('host')}`;
+    const credentialQuery = claim
+      ? `claim=${encodeURIComponent(claim)}`
+      : `code=${encodeURIComponent(device.settings?.registrationCode || code)}`;
+    const bootstrapUrl = `${hubOrigin}/api/remote-devices/${deviceId}/bootstrap.sh?${credentialQuery}`;
+    const hostLabel = (device.name || 'listener')
+      .toString()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 32);
+
+    const cloudInit = `#cloud-config
+hostname: homebrain-${hostLabel || 'listener'}
+package_update: true
+packages:
+  - curl
+runcmd:
+  - [ bash, -lc, "curl -fsSL '${bootstrapUrl}' | bash" ]
+final_message: "HomeBrain listener bootstrap completed."
+`;
+
+    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).send(cloudInit);
+  } catch (error) {
+    console.error(`GET /api/remote-devices/${deviceId}/cloud-init.yaml - Error:`, error.message);
+    return res.status(500).type('text/plain').send('Failed to generate cloud-init user-data');
+  }
+});
+
+router.get('/:deviceId/wake-words', async (req, res) => {
+  const { deviceId } = req.params;
+  const { code, claim, platform, arch } = req.query;
+
+  try {
+    const device = await validateDeviceAccess(deviceId, {
+      registrationCode: code,
+      claimToken: claim
+    });
     if (!device) {
       return res.status(403).json({
         success: false,
@@ -406,10 +558,13 @@ router.get('/:deviceId/wake-words', async (req, res) => {
 // Stream TTS audio for a device using ElevenLabs with device validation
 router.get('/:deviceId/tts', async (req, res) => {
   const { deviceId } = req.params;
-  const { code, text, voiceId } = req.query;
+  const { code, claim, text, voiceId } = req.query;
 
   try {
-    const device = await validateDeviceAccess(deviceId, code);
+    const device = await validateDeviceAccess(deviceId, {
+      registrationCode: code,
+      claimToken: claim
+    });
     if (!device) {
       return res.status(403).json({ success: false, message: 'Invalid device credentials' });
     }
@@ -445,10 +600,13 @@ router.get('/:deviceId/tts', async (req, res) => {
 
 router.get('/:deviceId/wake-words/:slug', async (req, res) => {
   const { deviceId, slug } = req.params;
-  const { code, platform, arch } = req.query;
+  const { code, claim, platform, arch } = req.query;
 
   try {
-    const device = await validateDeviceAccess(deviceId, code);
+    const device = await validateDeviceAccess(deviceId, {
+      registrationCode: code,
+      claimToken: claim
+    });
     if (!device) {
       return res.status(403).json({
         success: false,
@@ -534,9 +692,25 @@ router.post('/activate', async (req, res) => {
     device.ipAddress = ipAddress;
     device.firmwareVersion = firmwareVersion;
     device.settings.registered = true;
+    device.settings.claimToken = undefined;
+    device.settings.claimTokenExpires = undefined;
     device.lastSeen = new Date();
 
     await device.save();
+
+    void eventStreamService.publishSafe({
+      type: 'remote_device.activated',
+      source: 'remote_device',
+      category: 'fleet',
+      payload: {
+        deviceId: device._id.toString(),
+        name: device.name,
+        room: device.room,
+        firmwareVersion: device.firmwareVersion || null,
+        ipAddress: device.ipAddress || null
+      },
+      tags: ['remote-device', 'activation']
+    });
 
     // Generate hub WebSocket URL
     const hubUrl = `ws://${req.get('host')}/ws/voice-device?deviceId=${device._id}`;
@@ -555,6 +729,51 @@ router.post('/activate', async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to activate device'
+    });
+  }
+});
+
+router.post('/:deviceId/claim-token/rotate', requireUser(), async (req, res) => {
+  const { deviceId } = req.params;
+  try {
+    const device = await VoiceDevice.findById(deviceId);
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: 'Device not found'
+      });
+    }
+
+    const issued = issueDeviceClaimToken();
+    device.settings = {
+      ...(device.settings || {}),
+      claimToken: issued.claimToken,
+      claimTokenExpires: issued.claimTokenExpires
+    };
+    await device.save();
+
+    void eventStreamService.publishSafe({
+      type: 'remote_device.claim_token_rotated',
+      source: 'remote_device',
+      category: 'security',
+      payload: {
+        deviceId: device._id.toString(),
+        name: device.name,
+        expiresAt: issued.claimTokenExpires
+      },
+      tags: ['remote-device', 'security']
+    });
+
+    return res.status(200).json({
+      success: true,
+      claimToken: issued.claimToken,
+      claimTokenExpires: issued.claimTokenExpires
+    });
+  } catch (error) {
+    console.error(`POST /api/remote-devices/${deviceId}/claim-token/rotate - Error:`, error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to rotate claim token'
     });
   }
 });
@@ -690,6 +909,13 @@ router.get('/setup-instructions', requireUser(), async (req, res) => {
           ]
         },
         {
+          title: 'Optional: zero-touch with cloud-init',
+          description: 'Use the generated cloud-init URL in Raspberry Pi Imager advanced options for first boot automation.',
+          commands: [
+            'curl -fsSL <HUB_URL>/api/remote-devices/<DEVICE_ID>/cloud-init.yaml?claim=<CLAIM_TOKEN>'
+          ]
+        },
+        {
           title: 'Monitor startup status',
           description: 'Verify the service came online and connected to the hub.',
           commands: [
@@ -699,7 +925,9 @@ router.get('/setup-instructions', requireUser(), async (req, res) => {
         }
       ],
       bootstrapUrlTemplate: `${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE>`,
+      bootstrapClaimUrlTemplate: `${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?claim=<CLAIM_TOKEN>`,
       quickInstallCommandTemplate: `curl -fsSL ${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE> | bash`,
+      cloudInitUrlTemplate: `${origin}/api/remote-devices/<DEVICE_ID>/cloud-init.yaml?claim=<CLAIM_TOKEN>`,
       downloadUrl: `${origin}/downloads/homebrain-remote-setup.sh`,
       configTemplate: {
         hubUrl: origin,
@@ -748,6 +976,20 @@ router.delete('/:deviceId', requireUser(), async (req, res) => {
     }
 
     console.log(`DELETE /api/remote-devices/${deviceId} - Successfully deleted device: ${device.name}`);
+
+    void eventStreamService.publishSafe({
+      type: 'remote_device.deleted',
+      source: 'remote_device',
+      category: 'fleet',
+      severity: 'warn',
+      payload: {
+        deviceId: device._id.toString(),
+        name: device.name,
+        room: device.room
+      },
+      tags: ['remote-device', 'lifecycle']
+    });
+
     res.status(200).json({
       success: true,
       message: 'Device deleted successfully'

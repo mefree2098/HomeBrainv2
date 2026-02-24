@@ -135,7 +135,7 @@ export function Settings() {
       elevenlabsApiKey: "",
       llmProvider: "openai",
       openaiApiKey: "",
-      openaiModel: "gpt-5-thinking-nano",
+      openaiModel: "gpt-5.2-codex",
       anthropicApiKey: "",
       anthropicModel: "claude-3-sonnet-20240229",
       localLlmEndpoint: "http://localhost:8080",
@@ -222,6 +222,18 @@ export function Settings() {
 
   const localWhisperModels = ["tiny", "base", "small", "small.en", "medium"]
   const openaiSttModels = ["gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe-latest"]
+  const openaiLlmModelPresets = [
+    "gpt-5.3-codex",
+    "gpt-5.2-codex",
+    "gpt-5-codex",
+    "gpt-5.2",
+    "gpt-5.1",
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-thinking",
+    "gpt-5-thinking-mini",
+    "gpt-5-thinking-nano"
+  ]
 
   const sttProviderValue = watch("sttProvider") || "openai"
   const sttModelRaw = watch("sttModel")
@@ -2007,13 +2019,20 @@ export function Settings() {
                         <SelectValue placeholder="Select OpenAI model" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="gpt-5">gpt-5</SelectItem>
-                        <SelectItem value="gpt-5-mini">gpt-5-mini</SelectItem>
-                        <SelectItem value="gpt-5-thinking">gpt-5-thinking</SelectItem>
-                        <SelectItem value="gpt-5-thinking-mini">gpt-5-thinking-mini</SelectItem>
-                        <SelectItem value="gpt-5-thinking-nano">gpt-5-thinking-nano</SelectItem>
+                        {openaiLlmModelPresets.map((modelName) => (
+                          <SelectItem key={modelName} value={modelName}>{modelName}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
+                    <Input
+                      className="mt-2"
+                      value={watch("openaiModel") || ""}
+                      onChange={(event) => setValue("openaiModel", event.target.value)}
+                      placeholder="Or enter any OpenAI model ID (e.g., gpt-5.2-codex)"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Pick a preset or type any OpenAI model ID for newer releases.
+                    </p>
                   </div>
                 </div>
 

@@ -6,12 +6,14 @@ This guide is for the person who manages the HomeBrain system.
 
 ### 1. Check System Health
 
-Open `Dashboard` and `Voice Devices`.
+Open `Dashboard`, `Voice Devices`, and `Operations`.
 
 Look for:
 - Offline devices
 - Update failures
 - Low battery warnings
+- New `error` events in Operations feed
+- Degraded API/WebSocket/DB/wake-word checks
 
 ### 2. Manage Listener Devices (Raspberry Pi)
 
@@ -24,8 +26,8 @@ To add a new room:
 4. Run it on the Pi.
 
 To update your full fleet:
-1. In `Remote Fleet Updates`, click `Update All Outdated Devices`.
-2. Click `Verify Versions`.
+1. In `Remote Fleet Updates`, click `Update + Verify Outdated Devices`.
+2. If needed, click `Verify Versions` for an on-demand recheck.
 
 ### 3. Manage Users and Voice Profiles
 
@@ -68,6 +70,15 @@ Open `Platform Deploy`.
 2. Click `Pull + Deploy Latest`.
 3. Monitor job log tail in the same page.
 
+### 7. Review Operations Event Stream
+
+Open `Operations`.
+
+Use this page to:
+1. Watch real-time workflow/voice/device/deploy events.
+2. Filter by `source` or `type`.
+3. Quickly identify failures and recent operational changes.
+
 If restart fails with permissions, configure sudoers:
 
 ```bash
@@ -86,6 +97,7 @@ sudo chmod 0440 /etc/sudoers.d/homebrain-deploy
 2. Run one full remote fleet version verification.
 3. Confirm SmartThings/INSTEON integrations are still healthy.
 4. Review `Platform Deploy` status for last successful update.
+5. Review top error event types in `Operations`.
 
 ## Security Baseline
 

@@ -118,7 +118,7 @@ Manual fallback instructions: [remote-device/README.md](remote-device/README.md)
 ## Remote Fleet Updates (From UI)
 
 Open `Voice Devices` and use the `Remote Fleet Updates` card:
-- `Update All Outdated Devices` pushes updates to online outdated devices.
+- `Update + Verify Outdated Devices` pushes updates and runs automatic version verification.
 - `Verify Versions` confirms fleet version state.
 
 Expected result: online devices converge to the latest package version.
@@ -178,6 +178,16 @@ sudo systemctl daemon-reload
 sudo systemctl restart homebrain
 ```
 
+## Operations Center (Live Events + Health)
+
+Open `Operations` in the sidebar (admin):
+- View live event stream for workflow, voice, fleet update, and deploy activity.
+- Filter events by source/type.
+- See rolling event counts and severity totals.
+- Review API/WebSocket/DB/wake-word worker health in one panel.
+
+Expected result: admins can diagnose most issues from UI without shell access.
+
 ## Wake Words (Anna/Henry/Custom)
 
 Open `Settings -> Voice & Audio -> Wake Word Models`:
@@ -198,6 +208,7 @@ Full guide: [docs/wake-word-setup.md](docs/wake-word-setup.md)
 - [User Guide](docs/user-guide.md)
 - [Configuration Guide](docs/configuration.md)
 - [Deployment Runbook](DEPLOYMENT.md)
+- [Active Implementation Roadmap](docs/IMPLEMENTATION_ROADMAP.md)
 - [Troubleshooting](docs/troubleshooting.md)
 
 ## Contributor Quick Start
