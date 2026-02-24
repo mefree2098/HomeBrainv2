@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Workflow = require('../models/Workflow');
 const Automation = require('../models/Automation');
 const automationService = require('./automationService');
+const eventStreamService = require('./eventStreamService');
 
 function normalizeTrigger(trigger) {
   if (!trigger || typeof trigger !== 'object') {
@@ -286,7 +287,24 @@ class WorkflowService {
 
     const savedWorkflow = await workflow.save();
     await this.syncWorkflowToAutomation(savedWorkflow._id);
-    return Workflow.findById(savedWorkflow._id).lean();
+    const fullWorkflow = await Workflow.findById(savedWorkflow._id).lean();
+
+    void eventStreamService.publishSafe({
+      type: 'workflow.created',
+      source: 'workflow',
+      category: 'automation',
+      payload: {
+        workflowId: savedWorkflow._id.toString(),
+        name: fullWorkflow?.name || savedWorkflow.name,
+        source: fullWorkflow?.source || savedWorkflow.source,
+        enabled: fullWorkflow?.enabled !== false,
+        triggerType: fullWorkflow?.trigger?.type || 'manual',
+        steps: Array.isArray(fullWorkflow?.actions) ? fullWorkflow.actions.length : 0
+      },
+      tags: ['workflow', 'create']
+    });
+
+    return fullWorkflow;
   }
 
   async updateWorkflow(id, updateData = {}) {
@@ -339,7 +357,23 @@ class WorkflowService {
 
     await workflow.save();
     await this.syncWorkflowToAutomation(workflow._id);
-    return Workflow.findById(workflow._id).lean();
+    const updatedWorkflow = await Workflow.findById(workflow._id).lean();
+
+    void eventStreamService.publishSafe({
+      type: 'workflow.updated',
+      source: 'workflow',
+      category: 'automation',
+      payload: {
+        workflowId: workflow._id.toString(),
+        name: updatedWorkflow?.name || workflow.name,
+        enabled: updatedWorkflow?.enabled !== false,
+        triggerType: updatedWorkflow?.trigger?.type || workflow.trigger?.type || 'manual',
+        steps: Array.isArray(updatedWorkflow?.actions) ? updatedWorkflow.actions.length : workflow.actions.length
+      },
+      tags: ['workflow', 'update']
+    });
+
+    return updatedWorkflow;
   }
 
   async deleteWorkflow(id) {
@@ -362,6 +396,19 @@ class WorkflowService {
     }
 
     await Workflow.deleteOne({ _id: workflow._id });
+
+    void eventStreamService.publishSafe({
+      type: 'workflow.deleted',
+      source: 'workflow',
+      category: 'automation',
+      severity: 'warn',
+      payload: {
+        workflowId: workflow._id.toString(),
+        name: workflow.name
+      },
+      tags: ['workflow', 'delete']
+    });
+
     return {
       success: true,
       message: `Workflow "${workflow.name}" deleted successfully`
@@ -374,6 +421,17 @@ class WorkflowService {
     }
 
     const workflow = await this.updateWorkflow(id, { enabled });
+    void eventStreamService.publishSafe({
+      type: 'workflow.toggled',
+      source: 'workflow',
+      category: 'automation',
+      payload: {
+        workflowId: workflow._id.toString(),
+        name: workflow.name,
+        enabled
+      },
+      tags: ['workflow', 'toggle']
+    });
     return {
       message: `Workflow "${workflow.name}" has been ${enabled ? 'enabled' : 'disabled'}`,
       workflow
@@ -414,6 +472,22 @@ class WorkflowService {
     }
     await workflow.save();
 
+    void eventStreamService.publishSafe({
+      type: execution.success ? 'workflow.executed' : 'workflow.execution_failed',
+      source: 'workflow',
+      category: 'automation',
+      severity: execution.success ? 'info' : 'error',
+      payload: {
+        workflowId: workflow._id.toString(),
+        name: workflow.name,
+        triggerType: options.triggerType || workflow.trigger?.type || 'manual',
+        triggerSource: options.triggerSource || 'manual',
+        success: Boolean(execution.success),
+        message: execution.message || null
+      },
+      tags: ['workflow', 'execution']
+    });
+
     return {
       ...execution,
       workflow: workflow.toObject()
@@ -427,6 +501,18 @@ class WorkflowService {
 
     const creation = await automationService.createAutomationFromText(text.trim(), roomContext);
     if (creation?.handledDirectCommand) {
+      void eventStreamService.publishSafe({
+        type: 'workflow.command_handled',
+        source: 'workflow',
+        category: 'automation',
+        payload: {
+          source,
+          text: text.trim(),
+          message: creation.message || null
+        },
+        tags: ['workflow', 'nl']
+      });
+
       return {
         success: true,
         handledDirectCommand: true,
@@ -470,6 +556,19 @@ class WorkflowService {
       workflowGraph: savedWorkflow.graph
     });
     await this.syncWorkflowToAutomation(savedWorkflow._id);
+
+    void eventStreamService.publishSafe({
+      type: 'workflow.created_from_text',
+      source: 'workflow',
+      category: 'automation',
+      payload: {
+        workflowId: savedWorkflow._id.toString(),
+        name: savedWorkflow.name,
+        source,
+        triggerType: savedWorkflow.trigger?.type || 'manual'
+      },
+      tags: ['workflow', 'nl']
+    });
 
     return {
       success: true,

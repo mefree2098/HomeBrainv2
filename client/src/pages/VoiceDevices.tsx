@@ -271,7 +271,7 @@ export function VoiceDevices() {
 
       toast({
         title: "Bulk Update Initiated",
-        description: `Update initiated for ${result.initiated} device(s). ${result.failed} failed.`
+        description: `Update initiated for ${result.initiated} device(s). Automatic verification has started.`
       })
       setBulkUpdateSummary(
         `Started ${result.initiated}/${result.targetDevices ?? result.totalOnlineDevices ?? 0} target updates`
@@ -555,7 +555,7 @@ export function VoiceDevices() {
               ) : (
                 <>
                   <Download className="h-4 w-4 mr-2" />
-                  Update All Outdated Devices
+                  Update + Verify Outdated Devices
                 </>
               )}
             </Button>

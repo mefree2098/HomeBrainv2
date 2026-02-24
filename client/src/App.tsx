@@ -18,6 +18,7 @@ const VoiceDevices = lazy(() => import("./pages/VoiceDevices").then((module) => 
 const UserProfiles = lazy(() => import("./pages/UserProfiles").then((module) => ({ default: module.UserProfiles })))
 const Settings = lazy(() => import("./pages/Settings").then((module) => ({ default: module.Settings })))
 const PlatformDeploy = lazy(() => import("./pages/PlatformDeploy").then((module) => ({ default: module.PlatformDeploy })))
+const Operations = lazy(() => import("./pages/Operations").then((module) => ({ default: module.Operations })))
 const SSLManagement = lazy(() => import("./pages/SSLManagement"))
 const OllamaManagement = lazy(() => import("./pages/OllamaManagement"))
 const WhisperManagement = lazy(() => import("./pages/WhisperManagement"))
@@ -54,6 +55,7 @@ function App() {
             <Route path="/profiles" element={withLayout(<UserProfiles />)} />
             <Route path="/settings" element={withLayout(<Settings />)} />
             <Route path="/platform-deploy" element={withLayout(<PlatformDeploy />)} />
+            <Route path="/operations" element={withLayout(<Operations />)} />
             <Route path="/ssl" element={withLayout(<SSLManagement />)} />
             <Route path="/ollama" element={withLayout(<OllamaManagement />)} />
             <Route path="/whisper" element={withLayout(<WhisperManagement />)} />

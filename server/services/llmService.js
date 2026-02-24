@@ -30,9 +30,141 @@ const RETRY_DELAY = 1000;
 const OLLAMA_MODEL_CACHE_TTL = 30_000;
 const JSON_ONLY_SYSTEM_PROMPT = 'You are the HomeBrain automation intelligence. Always respond with a single JSON object and no commentary.';
 const DEFAULT_OLLAMA_FORMAT = 'json';
+const DEFAULT_OPENAI_MODEL = 'gpt-5.2-codex';
+const OPENAI_MAX_OUTPUT_TOKENS = 1024;
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function buildOpenAIErrorMessage(error) {
+  const primaryMessage = error?.message || '';
+  const apiMessage = error?.response?.data?.error?.message || '';
+  const code = error?.code || '';
+  return `${primaryMessage} ${apiMessage} ${code}`.trim().toLowerCase();
+}
+
+function isJsonModeUnsupportedError(errorMessage) {
+  if (!errorMessage) {
+    return false;
+  }
+
+  return errorMessage.includes('response_format') ||
+    errorMessage.includes('json mode') ||
+    errorMessage.includes('json_object') ||
+    (errorMessage.includes('text.format') && errorMessage.includes('json')) ||
+    (errorMessage.includes('unsupported_parameter') && errorMessage.includes('json'));
+}
+
+function isNewerOpenAIChatModel(normalizedModel) {
+  return normalizedModel.includes('gpt-4') ||
+    normalizedModel.includes('gpt-5') ||
+    normalizedModel.includes('o1') ||
+    normalizedModel.includes('o3') ||
+    normalizedModel.includes('o4');
+}
+
+function extractOpenAIResponseText(response) {
+  if (!response) {
+    throw new Error('OpenAI response payload is empty');
+  }
+
+  if (typeof response.output_text === 'string' && response.output_text.trim()) {
+    return response.output_text.trim();
+  }
+
+  if (Array.isArray(response.output_text)) {
+    const text = response.output_text
+      .map((part) => {
+        if (typeof part === 'string') {
+          return part;
+        }
+        if (typeof part?.text === 'string') {
+          return part.text;
+        }
+        return '';
+      })
+      .join('')
+      .trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  if (Array.isArray(response.output)) {
+    const text = response.output
+      .flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
+      .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+      .join('')
+      .trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  throw new Error('OpenAI response missing text output');
+}
+
+function extractOpenAIChatCompletionText(response) {
+  const message = response?.choices?.[0]?.message;
+  if (!message) {
+    throw new Error('OpenAI response missing message content');
+  }
+
+  const { content } = message;
+  if (Array.isArray(content)) {
+    const text = content
+      .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+      .join('');
+    return text.trim();
+  }
+
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+
+  return JSON.stringify(content);
+}
+
+async function requestOpenAIResponses(openaiClient, model, message, enforceJsonMode) {
+  const payload = {
+    model,
+    instructions: JSON_ONLY_SYSTEM_PROMPT,
+    input: message,
+    max_output_tokens: OPENAI_MAX_OUTPUT_TOKENS
+  };
+
+  if (enforceJsonMode) {
+    payload.text = { format: { type: 'json_object' } };
+  }
+
+  const response = await openaiClient.responses.create(payload);
+  return extractOpenAIResponseText(response);
+}
+
+async function requestOpenAIChatCompletions(openaiClient, model, message, enforceJsonMode) {
+  const normalizedModel = model.toLowerCase();
+  const tokenParam = isNewerOpenAIChatModel(normalizedModel)
+    ? { max_completion_tokens: OPENAI_MAX_OUTPUT_TOKENS }
+    : { max_tokens: OPENAI_MAX_OUTPUT_TOKENS };
+
+  const payload = {
+    model,
+    messages: [
+      { role: 'system', content: JSON_ONLY_SYSTEM_PROMPT },
+      { role: 'user', content: message }
+    ],
+    ...tokenParam
+  };
+
+  if (enforceJsonMode) {
+    payload.response_format = { type: 'json_object' };
+  }
+
+  const response = await openaiClient.chat.completions.create(payload);
+  return extractOpenAIChatCompletionText(response);
 }
 
 function normalizeModelVariants(modelName) {
@@ -199,79 +331,86 @@ async function sendRequestToOpenAI(model, message, apiKey = null) {
     throw new Error('OpenAI API key not configured');
   }
 
-  // Use the model as configured, defaulting to gpt-3.5-turbo if not provided
-  const validModel = model || 'gpt-3.5-turbo';
+  // Use the model as configured, defaulting to a modern Responses-compatible model.
+  const validModel = (typeof model === 'string' && model.trim())
+    ? model.trim()
+    : DEFAULT_OPENAI_MODEL;
   console.log(`Using OpenAI model: ${validModel}`);
 
-  const normalizedModel = validModel.toLowerCase();
-  let enforceJsonMode = !normalizedModel.includes('gpt-3.5');
-  const systemInstruction = JSON_ONLY_SYSTEM_PROMPT;
-  const baseMessages = [
-    { role: 'system', content: systemInstruction },
-    { role: 'user', content: message }
-  ];
-
+  let enforceJsonMode = true;
   let attempt = 0;
+  let lastError = null;
+
   while (attempt < MAX_RETRIES) {
+    let retryImmediately = false;
+
     try {
-      // GPT-4, GPT-5, and O1 series use max_completion_tokens
-      const isNewerModel = normalizedModel.includes('gpt-4') ||
-                           normalizedModel.includes('gpt-5') ||
-                           normalizedModel.includes('o1');
-      const tokenParam = isNewerModel ? { max_completion_tokens: 1024 } : { max_tokens: 1024 };
-
-      const payload = {
-        model: validModel,
-        messages: baseMessages,
-        ...tokenParam
-      };
-
-      if (enforceJsonMode) {
-        payload.response_format = { type: 'json_object' };
-      }
-
-      const response = await openaiClient.chat.completions.create(payload);
-      console.log(`OpenAI response received successfully from model: ${validModel}`);
-      const message = response.choices?.[0]?.message;
-      if (!message) {
-        throw new Error('OpenAI response missing message content');
-      }
-
-      const { content } = message;
-      if (Array.isArray(content)) {
-        const text = content
-          .map((part) => (typeof part?.text === 'string' ? part.text : ''))
-          .join('');
-        return text.trim();
-      }
-
-      if (typeof content === 'string') {
-        return content.trim();
-      }
-
-      return JSON.stringify(content);
-    } catch (error) {
+      const responseText = await requestOpenAIResponses(openaiClient, validModel, message, enforceJsonMode);
+      console.log(`OpenAI response received successfully from model: ${validModel} (Responses API)`);
+      return responseText;
+    } catch (responsesError) {
+      lastError = responsesError;
+      const errorMessage = buildOpenAIErrorMessage(responsesError);
       const attemptNumber = attempt + 1;
-      console.error(`Error sending request to OpenAI (attempt ${attemptNumber}):`, error.message);
-      if (error.response) {
-        console.error('OpenAI API Error Response:', JSON.stringify(error.response.data, null, 2));
+      console.error(`Error sending request to OpenAI Responses API (attempt ${attemptNumber}):`, responsesError.message);
+      if (responsesError.response) {
+        console.error('OpenAI Responses API Error Response:', JSON.stringify(responsesError.response.data, null, 2));
       }
-      if (error.stack) console.error('Stack:', error.stack);
+      if (responsesError.stack) console.error('Stack:', responsesError.stack);
 
-      const errorMessage = `${error.message || ''} ${error.response?.data?.error?.message || ''}`.toLowerCase();
-      if (enforceJsonMode && (errorMessage.includes('response_format') || errorMessage.includes('json mode'))) {
-        console.warn('OpenAI model does not support JSON response_format. Retrying without enforced JSON mode.');
+      if (enforceJsonMode && isJsonModeUnsupportedError(errorMessage)) {
+        console.warn('OpenAI model does not support enforced JSON format via Responses API. Retrying without enforced JSON mode.');
         enforceJsonMode = false;
-        continue;
-      }
+        retryImmediately = true;
+      } else {
+        try {
+          const responseText = await requestOpenAIChatCompletions(openaiClient, validModel, message, enforceJsonMode);
+          console.log(`OpenAI response received successfully from model: ${validModel} (Chat Completions fallback)`);
+          return responseText;
+        } catch (chatError) {
+          lastError = chatError;
+          const chatErrorMessage = buildOpenAIErrorMessage(chatError);
+          console.error(`Error sending request to OpenAI Chat Completions fallback (attempt ${attemptNumber}):`, chatError.message);
+          if (chatError.response) {
+            console.error('OpenAI Chat Completions Error Response:', JSON.stringify(chatError.response.data, null, 2));
+          }
+          if (chatError.stack) console.error('Stack:', chatError.stack);
 
-      attempt += 1;
-      if (attempt >= MAX_RETRIES) {
-        throw error;
+          if (enforceJsonMode && isJsonModeUnsupportedError(chatErrorMessage)) {
+            console.warn('OpenAI model does not support enforced JSON format via Chat Completions. Retrying without enforced JSON mode.');
+            enforceJsonMode = false;
+            retryImmediately = true;
+          }
+        }
       }
-      await sleep(RETRY_DELAY);
     }
+
+    if (retryImmediately) {
+      continue;
+    }
+
+    attempt += 1;
+    if (attempt >= MAX_RETRIES) {
+      break;
+    }
+
+    await sleep(RETRY_DELAY);
   }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  throw new Error('OpenAI request failed after retries');
+}
+
+async function testOpenAIModelCompatibility(model, apiKey, message = 'Return JSON: {"status":"ok"}') {
+  const response = await sendRequestToOpenAI(model, message, apiKey);
+  return {
+    success: true,
+    model: (typeof model === 'string' && model.trim()) ? model.trim() : DEFAULT_OPENAI_MODEL,
+    sample: response
+  };
 }
 
 async function sendRequestToAnthropic(model, message, apiKey = null) {
@@ -639,6 +778,8 @@ async function sendLLMRequestWithFallbackDetailed(message, priorityList = null) 
 }
 
 module.exports = {
+  sendRequestToOpenAI,
+  testOpenAIModelCompatibility,
   sendLLMRequest,
   sendLLMRequestWithFallback,
   sendLLMRequestWithFallbackDetailed

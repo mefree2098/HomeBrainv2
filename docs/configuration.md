@@ -77,7 +77,7 @@ Expected result: device comes online and appears in the table.
 ## 7. Fleet Update Management
 
 Still in `Voice Devices`, use the `Remote Fleet Updates` card:
-- `Update All Outdated Devices`
+- `Update + Verify Outdated Devices`
 - `Verify Versions`
 
 Expected result: online devices show latest version.
@@ -104,3 +104,11 @@ Back up:
 - `server/data`
 - `server/public/wake-words`
 
+## 11. Operations Monitoring
+
+Open `Operations` (admin users).
+
+Use it to:
+- watch live events (workflows, deploys, fleet updates, voice commands),
+- filter by source/type,
+- confirm platform health checks remain `healthy`.

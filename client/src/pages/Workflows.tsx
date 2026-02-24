@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   Bot,
+  Copy,
+  Download,
   History,
   MessageSquareText,
   Play,
   Plus,
   Sparkles,
   Trash2,
+  Upload,
   Wand2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,6 +22,7 @@ import { useToast } from "@/hooks/useToast";
 import { WorkflowBuilderDialog } from "@/components/workflows/WorkflowBuilderDialog";
 import {
   Workflow,
+  WorkflowAction,
   createWorkflow,
   createWorkflowFromText,
   deleteWorkflow,
@@ -64,8 +68,116 @@ const formatLastRun = (value?: string | null) => {
   return Number.isNaN(date.getTime()) ? "Never" : date.toLocaleString();
 };
 
+type WorkflowTemplateDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  build: (context: {
+    firstDeviceId: string | null;
+    firstSceneId: string | null;
+  }) => Partial<Workflow>;
+};
+
+const TEMPLATE_DEFINITIONS: WorkflowTemplateDefinition[] = [
+  {
+    id: "goodnight",
+    name: "Goodnight Routine",
+    description: "Run a night shutdown manually by voice/chat or button.",
+    build: ({ firstSceneId }) => ({
+      name: "Goodnight Routine",
+      description: "Night shutdown routine for lights and household status.",
+      source: "manual",
+      enabled: true,
+      category: "comfort",
+      trigger: { type: "manual", conditions: {} },
+      actions: firstSceneId
+        ? [{ type: "scene_activate", target: firstSceneId, parameters: {} }]
+        : [{ type: "notification", target: "system", parameters: { message: "Goodnight routine executed." } }]
+    })
+  },
+  {
+    id: "morning-weekday",
+    name: "Weekday Morning Start",
+    description: "Weekday schedule to start morning automations.",
+    build: ({ firstSceneId, firstDeviceId }) => ({
+      name: "Weekday Morning Start",
+      description: "Starts key systems on weekdays at 6:30 AM.",
+      source: "manual",
+      enabled: true,
+      category: "convenience",
+      trigger: { type: "schedule", conditions: { cron: "30 6 * * 1-5" } },
+      actions: firstSceneId
+        ? [{ type: "scene_activate", target: firstSceneId, parameters: {} }]
+        : firstDeviceId
+          ? [{ type: "device_control", target: firstDeviceId, parameters: { action: "turn_on" } }]
+          : [{ type: "notification", target: "system", parameters: { message: "Morning routine triggered." } }]
+    })
+  },
+  {
+    id: "away-alert",
+    name: "Away Motion Alert",
+    description: "When motion is detected, send a security notification.",
+    build: () => ({
+      name: "Away Motion Alert",
+      description: "Alerts when motion is detected while away mode is active.",
+      source: "manual",
+      enabled: true,
+      category: "security",
+      trigger: { type: "sensor", conditions: { sensorType: "motion", condition: "detected" } },
+      actions: [
+        {
+          type: "notification",
+          target: "system",
+          parameters: { message: "Motion detected while away." }
+        }
+      ]
+    })
+  },
+  {
+    id: "night-energy",
+    name: "Night Energy Saver",
+    description: "Turn off one key device nightly (customize after creation).",
+    build: ({ firstDeviceId }) => ({
+      name: "Night Energy Saver",
+      description: "Turns off devices nightly to reduce idle energy use.",
+      source: "manual",
+      enabled: true,
+      category: "energy",
+      trigger: { type: "time", conditions: { hour: 23, minute: 0 } },
+      actions: firstDeviceId
+        ? [{ type: "device_control", target: firstDeviceId, parameters: { action: "turn_off" } }]
+        : [{ type: "notification", target: "system", parameters: { message: "Night energy saver executed." } }]
+    })
+  }
+];
+
+const sanitizeWorkflowPayload = (workflow: Partial<Workflow>): Partial<Workflow> => {
+  const actions = (Array.isArray(workflow.actions) ? workflow.actions : [])
+    .filter((action): action is WorkflowAction => Boolean(action && action.type))
+    .map((action) => ({
+      type: action.type,
+      target: action.target ?? null,
+      parameters: action.parameters || {}
+    }));
+
+  return {
+    name: workflow.name?.trim() || "Imported Workflow",
+    description: workflow.description || "",
+    source: workflow.source || "import",
+    enabled: typeof workflow.enabled === "boolean" ? workflow.enabled : true,
+    category: workflow.category || "custom",
+    priority: typeof workflow.priority === "number" ? workflow.priority : 5,
+    cooldown: typeof workflow.cooldown === "number" ? workflow.cooldown : 0,
+    trigger: workflow.trigger || { type: "manual", conditions: {} },
+    actions,
+    graph: workflow.graph,
+    voiceAliases: Array.isArray(workflow.voiceAliases) ? workflow.voiceAliases : []
+  };
+};
+
 export function Workflows() {
   const { toast } = useToast();
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [devices, setDevices] = useState<DeviceLite[]>([]);
   const [scenes, setScenes] = useState<SceneLite[]>([]);
@@ -123,6 +235,42 @@ export function Workflows() {
   const openEditDialog = (workflow: Workflow) => {
     setSelectedWorkflow(workflow);
     setDialogOpen(true);
+  };
+
+  const createTemplateWorkflow = async (templateId: string) => {
+    const template = TEMPLATE_DEFINITIONS.find((entry) => entry.id === templateId);
+    if (!template) {
+      return;
+    }
+
+    const payload = sanitizeWorkflowPayload(template.build({
+      firstDeviceId: devices[0]?._id || null,
+      firstSceneId: scenes[0]?._id || null
+    }));
+
+    if (!payload.actions || payload.actions.length === 0) {
+      toast({
+        title: "Template unavailable",
+        description: "No valid actions could be generated for this template.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    try {
+      const response = await createWorkflow(payload);
+      setWorkflows((prev) => [response.workflow, ...prev]);
+      toast({
+        title: "Template created",
+        description: `${response.workflow.name} is ready.`
+      });
+    } catch (error) {
+      toast({
+        title: "Template failed",
+        description: errorMessage(error, "Unable to create template workflow."),
+        variant: "destructive"
+      });
+    }
   };
 
   const handleSaveWorkflow = async (payload: Partial<Workflow>) => {
@@ -215,6 +363,97 @@ export function Workflows() {
     }
   };
 
+  const handleCloneWorkflow = async (workflow: Workflow) => {
+    const cloned = sanitizeWorkflowPayload({
+      ...workflow,
+      name: `${workflow.name} Copy`,
+      source: "import"
+    });
+
+    try {
+      const response = await createWorkflow(cloned);
+      setWorkflows((prev) => [response.workflow, ...prev]);
+      toast({
+        title: "Workflow cloned",
+        description: `${workflow.name} copied successfully.`
+      });
+    } catch (error) {
+      toast({
+        title: "Clone failed",
+        description: errorMessage(error, "Unable to clone workflow."),
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleExportWorkflow = (workflow: Workflow) => {
+    const payload = {
+      format: "homebrain.workflow.v1",
+      exportedAt: new Date().toISOString(),
+      workflow: sanitizeWorkflowPayload(workflow)
+    };
+    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {
+      type: "application/json"
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    const safeName = workflow.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    anchor.href = url;
+    anchor.download = `${safeName || "workflow"}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportClick = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportWorkflows = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as unknown;
+      const candidates = Array.isArray(parsed)
+        ? parsed
+        : (parsed && typeof parsed === "object" && "workflow" in parsed)
+          ? [(parsed as { workflow: unknown }).workflow]
+          : [parsed];
+
+      const created: Workflow[] = [];
+      for (const candidate of candidates) {
+        const payload = sanitizeWorkflowPayload(candidate as Partial<Workflow>);
+        if (!payload.actions || payload.actions.length === 0) {
+          continue;
+        }
+        const response = await createWorkflow(payload);
+        created.push(response.workflow);
+      }
+
+      if (created.length === 0) {
+        throw new Error("No valid workflow definitions found in file.");
+      }
+
+      setWorkflows((prev) => [...created, ...prev]);
+      toast({
+        title: "Import complete",
+        description: `Imported ${created.length} workflow(s).`
+      });
+    } catch (error) {
+      toast({
+        title: "Import failed",
+        description: errorMessage(error, "Unable to import workflows from file."),
+        variant: "destructive"
+      });
+    }
+  };
+
   const handleCreateFromText = async () => {
     const text = nlPrompt.trim();
     if (!text) {
@@ -291,11 +530,24 @@ export function Workflows() {
             Build automations visually, create them with AI chat, and trigger them by voice.
           </p>
         </div>
-        <Button onClick={openCreateDialog}>
-          <Plus className="mr-2 h-4 w-4" />
-          New Workflow
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleImportClick}>
+            <Upload className="mr-2 h-4 w-4" />
+            Import JSON
+          </Button>
+          <Button onClick={openCreateDialog}>
+            <Plus className="mr-2 h-4 w-4" />
+            New Workflow
+          </Button>
+        </div>
       </div>
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden"
+        onChange={(event) => void handleImportWorkflows(event)}
+      />
 
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
@@ -323,6 +575,31 @@ export function Workflows() {
           <CardContent className="text-2xl font-semibold">{stats.withVoiceAliases}</CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4" />
+            Quick Templates
+          </CardTitle>
+          <CardDescription>
+            Start from a proven template, then customize in the visual builder.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {TEMPLATE_DEFINITIONS.map((template) => (
+            <button
+              key={template.id}
+              type="button"
+              className="rounded-md border p-3 text-left transition hover:border-blue-300 hover:bg-blue-50/60 dark:hover:bg-blue-950/20"
+              onClick={() => void createTemplateWorkflow(template.id)}
+            >
+              <div className="mb-1 font-medium">{template.name}</div>
+              <p className="text-xs text-muted-foreground">{template.description}</p>
+            </button>
+          ))}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -440,6 +717,14 @@ export function Workflows() {
                 <Button size="sm" variant="outline" onClick={() => openEditDialog(workflow)}>
                   <History className="mr-2 h-4 w-4" />
                   Edit Flow
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => void handleCloneWorkflow(workflow)}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  Clone
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => handleExportWorkflow(workflow)}>
+                  <Download className="mr-2 h-4 w-4" />
+                  Export
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => void handleDeleteWorkflow(workflow)}>
                   <Trash2 className="mr-2 h-4 w-4" />

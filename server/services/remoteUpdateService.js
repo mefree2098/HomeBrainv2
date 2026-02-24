@@ -4,6 +4,7 @@ const path = require('path');
 const { createWriteStream } = require('fs');
 const crypto = require('crypto');
 const { ZipFile } = require('yazl');
+const eventStreamService = require('./eventStreamService');
 
 class RemoteUpdateService {
   constructor() {
@@ -156,6 +157,19 @@ class RemoteUpdateService {
       console.log(`Update package generated: ${packageName}`);
       console.log(`Checksum: ${checksum}`);
 
+      void eventStreamService.publishSafe({
+        type: 'remote_update.package_generated',
+        source: 'remote_update',
+        category: 'fleet',
+        payload: {
+          version,
+          packageName,
+          size: stat.size,
+          checksum
+        },
+        tags: ['remote-update', 'package']
+      });
+
       return {
         version,
         packageName,
@@ -166,6 +180,18 @@ class RemoteUpdateService {
       };
     } catch (error) {
       console.error('Error generating update package:', error);
+
+      void eventStreamService.publishSafe({
+        type: 'remote_update.package_generation_failed',
+        source: 'remote_update',
+        category: 'fleet',
+        severity: 'error',
+        payload: {
+          error: error.message || 'Unknown error'
+        },
+        tags: ['remote-update', 'package']
+      });
+
       throw error;
     }
   }
@@ -323,6 +349,21 @@ class RemoteUpdateService {
         }
       });
 
+      void eventStreamService.publishSafe({
+        type: 'remote_update.initiated',
+        source: 'remote_update',
+        category: 'fleet',
+        payload: {
+          deviceId: device._id.toString(),
+          deviceName: device.name,
+          room: device.room,
+          fromVersion: device.firmwareVersion || '0.0.0',
+          toVersion: packageInfo.version,
+          force: Boolean(options.force)
+        },
+        tags: ['remote-update', 'fleet']
+      });
+
       console.log(`Update initiated for device ${device.name} to version ${packageInfo.version}`);
 
       return {
@@ -351,6 +392,18 @@ class RemoteUpdateService {
           }
         });
       } catch (_) {}
+
+      void eventStreamService.publishSafe({
+        type: 'remote_update.initiation_failed',
+        source: 'remote_update',
+        category: 'fleet',
+        severity: 'error',
+        payload: {
+          deviceId: String(deviceId),
+          error: error.message || 'Unknown error'
+        },
+        tags: ['remote-update', 'fleet']
+      });
 
       throw error;
     }
@@ -394,7 +447,7 @@ class RemoteUpdateService {
         }
       }
 
-      return {
+      const summary = {
         totalOnlineDevices: onlineDevices.length,
         targetDevices: devices.length,
         initiated: results.filter(r => r.success).length,
@@ -403,8 +456,37 @@ class RemoteUpdateService {
         latestVersion: this.currentVersion,
         results
       };
+
+      void eventStreamService.publishSafe({
+        type: 'remote_update.bulk_initiated',
+        source: 'remote_update',
+        category: 'fleet',
+        payload: {
+          totalOnlineDevices: summary.totalOnlineDevices,
+          targetDevices: summary.targetDevices,
+          initiated: summary.initiated,
+          failed: summary.failed,
+          skipped: summary.skipped,
+          latestVersion: summary.latestVersion
+        },
+        tags: ['remote-update', 'fleet']
+      });
+
+      return summary;
     } catch (error) {
       console.error('Error initiating update for all devices:', error);
+
+      void eventStreamService.publishSafe({
+        type: 'remote_update.bulk_initiation_failed',
+        source: 'remote_update',
+        category: 'fleet',
+        severity: 'error',
+        payload: {
+          error: error.message || 'Unknown error'
+        },
+        tags: ['remote-update', 'fleet']
+      });
+
       throw error;
     }
   }
@@ -448,6 +530,20 @@ class RemoteUpdateService {
       }
 
       await VoiceDevice.findByIdAndUpdate(deviceId, updateData);
+
+      void eventStreamService.publishSafe({
+        type: 'remote_update.device_status_changed',
+        source: 'remote_update',
+        category: 'fleet',
+        severity: status === 'failed' ? 'error' : 'info',
+        payload: {
+          deviceId: String(deviceId),
+          status,
+          version: resolvedVersion,
+          error: error || null
+        },
+        tags: ['remote-update', 'device-status']
+      });
 
       console.log(`Device ${deviceId} status updated to: ${status}`);
     } catch (error) {

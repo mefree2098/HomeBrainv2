@@ -19,7 +19,9 @@ interface SetupInstructions {
     commands?: string[];
   }>;
   bootstrapUrlTemplate?: string;
+  bootstrapClaimUrlTemplate?: string;
   quickInstallCommandTemplate?: string;
+  cloudInitUrlTemplate?: string;
   downloadUrl: string;
   configTemplate: {
     hubUrl: string;
@@ -53,23 +55,42 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
   const [registrationResult, setRegistrationResult] = useState<{
     device: any;
     registrationCode: string;
+    claimToken?: string;
+    claimTokenExpires?: string;
   } | null>(null);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const deviceId = registrationResult?.device?._id;
   const registrationCode = registrationResult?.registrationCode || "";
+  const claimToken = registrationResult?.claimToken || "";
   const fallbackBootstrapScriptUrl = deviceId
     ? `${origin}/api/remote-devices/${deviceId}/bootstrap.sh?code=${encodeURIComponent(registrationCode)}`
+    : "";
+  const fallbackClaimBootstrapUrl = deviceId && claimToken
+    ? `${origin}/api/remote-devices/${deviceId}/bootstrap.sh?claim=${encodeURIComponent(claimToken)}`
+    : "";
+  const fallbackCloudInitUrl = deviceId && claimToken
+    ? `${origin}/api/remote-devices/${deviceId}/cloud-init.yaml?claim=${encodeURIComponent(claimToken)}`
     : "";
   const bootstrapScriptUrl = setupInstructions?.bootstrapUrlTemplate && deviceId
     ? setupInstructions.bootstrapUrlTemplate
       .replace("<DEVICE_ID>", deviceId)
       .replace("<REGISTRATION_CODE>", encodeURIComponent(registrationCode))
     : fallbackBootstrapScriptUrl;
+  const bootstrapScriptClaimUrl = setupInstructions?.bootstrapClaimUrlTemplate && deviceId && claimToken
+    ? setupInstructions.bootstrapClaimUrlTemplate
+      .replace("<DEVICE_ID>", deviceId)
+      .replace("<CLAIM_TOKEN>", encodeURIComponent(claimToken))
+    : fallbackClaimBootstrapUrl;
+  const cloudInitUrl = setupInstructions?.cloudInitUrlTemplate && deviceId && claimToken
+    ? setupInstructions.cloudInitUrlTemplate
+      .replace("<DEVICE_ID>", deviceId)
+      .replace("<CLAIM_TOKEN>", encodeURIComponent(claimToken))
+    : fallbackCloudInitUrl;
   const quickInstallCommand = setupInstructions?.quickInstallCommandTemplate && deviceId
     ? setupInstructions.quickInstallCommandTemplate
       .replace("<DEVICE_ID>", deviceId)
       .replace("<REGISTRATION_CODE>", registrationCode)
-    : (bootstrapScriptUrl ? `curl -fsSL "${bootstrapScriptUrl}" | bash` : "");
+    : ((bootstrapScriptClaimUrl || bootstrapScriptUrl) ? `curl -fsSL "${bootstrapScriptClaimUrl || bootstrapScriptUrl}" | bash` : "");
 
   const handleOpenDialog = async () => {
     setIsOpen(true);
@@ -107,7 +128,9 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
 
       setRegistrationResult({
         device: result.device,
-        registrationCode: result.registrationCode
+        registrationCode: result.registrationCode,
+        claimToken: result.claimToken,
+        claimTokenExpires: result.claimTokenExpires
       });
 
       setStep(2);
@@ -313,6 +336,27 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
                     This code expires in 24 hours
                   </p>
                 </div>
+
+                {registrationResult.claimToken && (
+                  <div>
+                    <Label className="text-sm font-semibold">Claim Token (Cloud-init)</Label>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge variant="outline" className="text-xs font-mono px-3 py-2 break-all">
+                        {registrationResult.claimToken}
+                      </Badge>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => copyToClipboard(registrationResult.claimToken || '', 'Claim token')}
+                      >
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      One-time onboarding token for bootstrap/cloud-init URLs.
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -334,6 +378,41 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
                     onClick={() => copyToClipboard(quickInstallCommand, "Install command")}
                   >
                     <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Cloud-init (Pi Imager)</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  For zero-touch setup, use this cloud-init URL in Raspberry Pi Imager advanced options.
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="text-xs bg-muted px-2 py-1 rounded flex-1 font-mono break-all">
+                    {cloudInitUrl || "Register device to generate cloud-init URL"}
+                  </code>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!cloudInitUrl}
+                    onClick={() => copyToClipboard(cloudInitUrl, "Cloud-init URL")}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!cloudInitUrl}
+                    onClick={() => window.open(cloudInitUrl || '', '_blank')}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Download cloud-init YAML
                   </Button>
                 </div>
               </CardContent>
@@ -399,7 +478,7 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => window.open(bootstrapScriptUrl || setupInstructions.downloadUrl, '_blank')}
+                      onClick={() => window.open(bootstrapScriptClaimUrl || bootstrapScriptUrl || setupInstructions.downloadUrl, '_blank')}
                     >
                       <Download className="h-4 w-4 mr-2" />
                       Download Bootstrap Script

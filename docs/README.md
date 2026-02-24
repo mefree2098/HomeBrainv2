@@ -14,6 +14,8 @@ This folder is organized by role so new users can get running quickly.
 2. Workflow Studio (covered in Admin Guide)
 3. [Wake Word Setup](wake-word-setup.md)
 4. [Deployment Runbook](../DEPLOYMENT.md)
+5. Operations Center (covered in Admin Guide)
+6. [Implementation Roadmap](IMPLEMENTATION_ROADMAP.md)
 
 ## If You Are an End User in the Home
 

@@ -5,6 +5,7 @@ const voiceCommandService = require('../services/voiceCommandService');
 const { requireUser } = require('./middlewares/auth');
 const voiceWs = require('../websocket/voiceWebSocket');
 const VoiceDevice = require('../models/VoiceDevice');
+const eventStreamService = require('../services/eventStreamService');
 
 /**
  * @route GET /api/voice/devices
@@ -119,6 +120,20 @@ router.post('/commands/interpret', requireUser(), async (req, res) => {
       stt: stt || null
     });
 
+    void eventStreamService.publishSafe({
+      type: 'voice.command_processed',
+      source: 'voice',
+      category: 'voice',
+      payload: {
+        wakeWord: typeof wakeWord === 'string' ? wakeWord : 'dashboard',
+        room: typeof room === 'string' ? room : null,
+        deviceId: typeof deviceId === 'string' ? deviceId : null,
+        command: commandText.trim(),
+        responseText: result?.responseText || null
+      },
+      tags: ['voice', 'command']
+    });
+
     return res.status(200).json({
       success: true,
       ...result
@@ -126,6 +141,22 @@ router.post('/commands/interpret', requireUser(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/voice/commands/interpret - Error:', error.message);
     console.error(error.stack);
+
+    void eventStreamService.publishSafe({
+      type: 'voice.command_failed',
+      source: 'voice',
+      category: 'voice',
+      severity: 'error',
+      payload: {
+        wakeWord: typeof wakeWord === 'string' ? wakeWord : 'dashboard',
+        room: typeof room === 'string' ? room : null,
+        deviceId: typeof deviceId === 'string' ? deviceId : null,
+        command: commandText.trim(),
+        error: error.message || 'Unknown error'
+      },
+      tags: ['voice', 'command']
+    });
+
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to process voice command'

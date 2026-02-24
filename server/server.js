@@ -20,6 +20,7 @@ const platformDeployRoutes = require("./routes/platformDeployRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
+const eventStreamRoutes = require("./routes/eventStreamRoutes");
 const discoveryRoutes = require("./routes/discoveryRoutes");
 const insteonRoutes = require("./routes/insteonRoutes");
 const piperVoiceRoutes = require("./routes/piperVoiceRoutes");
@@ -247,6 +248,8 @@ app.use('/api/wake-words/voices', piperVoiceRoutes);
 app.use('/api/wake-words', wakeWordRoutes);
 // Remote Update Routes
 app.use('/api/remote-updates', remoteUpdateRoutes);
+// Event Stream Routes
+app.use('/api/events', eventStreamRoutes);
 // Discovery Routes
 app.use('/api/discovery', discoveryRoutes);
 // Insteon Routes

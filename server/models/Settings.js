@@ -105,7 +105,7 @@ const SettingsSchema = new mongoose.Schema({
   },
   openaiModel: {
     type: String,
-    default: 'gpt-5-thinking-nano'
+    default: 'gpt-5.2-codex'
   },
   anthropicApiKey: {
     type: String,
