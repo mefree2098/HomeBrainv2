@@ -144,6 +144,9 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true }));
+// Serve ACME HTTP-01 challenge files on the primary app server as a fallback.
+// This allows deployments that forward external :80 traffic to app :3000.
+app.use('/.well-known/acme-challenge', express.static(ACME_CHALLENGE_DIR));
 
 // Database connection
 connectDB();

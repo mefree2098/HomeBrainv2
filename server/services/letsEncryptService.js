@@ -50,6 +50,31 @@ class LetsEncryptService {
   }
 
   /**
+   * Resolve/reject a promise within a timeout window
+   * @param {Promise<any>} promise
+   * @param {number} timeoutMs
+   * @param {string} label
+   * @returns {Promise<any>}
+   */
+  async withTimeout(promise, timeoutMs, label) {
+    let timeoutId;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  /**
    * Initialize directories for certificates and challenges
    */
   async initializeDirectories() {
@@ -170,28 +195,32 @@ class LetsEncryptService {
           // Handle HTTP-01 challenge
           const keyAuthorization = await client.getChallengeKeyAuthorization(challenge);
           const challengePath = path.join(this.challengeDir, challenge.token);
+          const challengeUrl = `http://${domain}/.well-known/acme-challenge/${challenge.token}`;
 
           console.log(`Setting up HTTP-01 challenge at: ${challengePath}`);
+          console.log(`HTTP-01 challenge URL: ${challengeUrl}`);
           await fs.writeFile(challengePath, keyAuthorization);
 
           try {
-            // Optional local preflight. Some acme-client/axios combinations throw
-            // internal errors here for network-level issues; CA validation below is authoritative.
-            console.log('Verifying challenge (local preflight)...');
-            try {
-              await client.verifyChallenge(authz, challenge);
-              console.log('Local challenge verification passed');
-            } catch (verifyError) {
-              console.warn('Local challenge verification failed, continuing with ACME validation:', this.getErrorMessage(verifyError));
-            }
+            // Skip local preflight verification: Let's Encrypt validation below is authoritative
+            // and avoids process-local network/proxy edge-cases blocking issuance.
+            console.log('Skipping local preflight verification; proceeding to ACME validation');
 
             // Complete challenge
             console.log('Completing challenge...');
-            await client.completeChallenge(challenge);
+            await this.withTimeout(
+              client.completeChallenge(challenge),
+              30_000,
+              'Complete challenge'
+            );
 
             // Wait for validation
             console.log('Waiting for validation...');
-            await client.waitForValidStatus(challenge);
+            await this.withTimeout(
+              client.waitForValidStatus(challenge),
+              180_000,
+              'Challenge validation'
+            );
 
             console.log('Challenge validated successfully');
           } finally {
@@ -231,9 +260,13 @@ class LetsEncryptService {
       };
     } catch (error) {
       console.error('Let\'s Encrypt certificate obtainment error:', error);
+      const errorMessage = this.getErrorMessage(error);
+      const hint = errorMessage.includes('Challenge validation timed out')
+        ? ' Ensure public HTTP on port 80 reaches /.well-known/acme-challenge/ for this domain.'
+        : '';
       return {
         success: false,
-        error: this.getErrorMessage(error)
+        error: `${errorMessage}${hint}`
       };
     }
   }
