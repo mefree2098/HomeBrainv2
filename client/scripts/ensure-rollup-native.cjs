@@ -49,12 +49,16 @@ function getPackageVersion(packageName) {
 }
 
 function ensurePackage(packageName, version, label) {
+  return ensurePackageWithProbe(packageName, version, label, packageName);
+}
+
+function ensurePackageWithProbe(packageName, version, label, probeSpecifier) {
   if (!version) {
     return;
   }
 
   try {
-    resolveFromCwd(packageName);
+    resolveFromCwd(probeSpecifier);
     return;
   } catch {
     // Missing package for current platform. Install it below.
@@ -63,7 +67,13 @@ function ensurePackage(packageName, version, label) {
   const target = `${packageName}@${version}`;
   console.log(`[${label}] Missing ${packageName}. Installing ${target}...`);
   installPackage(target);
-  resolveFromCwd(packageName);
+
+  try {
+    resolveFromCwd(probeSpecifier);
+  } catch {
+    throw new Error(`Install verification failed for ${packageName}`);
+  }
+
   console.log(`[${label}] Installed ${target}`);
 }
 
@@ -80,7 +90,12 @@ function main() {
   ensurePackage(rollupNativePackage, rollupVersion, 'rollup-fix');
 
   const esbuildVersion = getPackageVersion('esbuild');
-  ensurePackage('@esbuild/linux-arm64', esbuildVersion, 'esbuild-fix');
+  ensurePackageWithProbe(
+    '@esbuild/linux-arm64',
+    esbuildVersion,
+    'esbuild-fix',
+    '@esbuild/linux-arm64/bin/esbuild'
+  );
 }
 
 try {
