@@ -579,24 +579,28 @@ class PlatformDeployService {
       }
     };
 
+    const runNpmStep = async (stepName, npmArgs, options = {}) => {
+      await runStep(stepName, 'node', ['scripts/run-with-modern-node.js', 'npm', ...npmArgs], options);
+    };
+
     try {
       await runStep('Fetch latest refs', 'git', ['fetch', '--all', '--prune']);
       await runStep('Pull latest changes', 'git', ['pull', '--ff-only']);
 
       if (job.options.installDependencies) {
-        await runStep('Install root dependencies', 'npm', ['install', '--no-audit', '--no-fund']);
-        await runStep('Install server dependencies', 'npm', ['install', '--no-audit', '--no-fund', '--prefix', 'server']);
-        await runStep('Install client dependencies', 'npm', ['install', '--no-audit', '--no-fund', '--prefix', 'client']);
+        await runNpmStep('Install root dependencies', ['install', '--no-audit', '--no-fund']);
+        await runNpmStep('Install server dependencies', ['install', '--no-audit', '--no-fund', '--prefix', 'server']);
+        await runNpmStep('Install client dependencies', ['install', '--no-audit', '--no-fund', '--prefix', 'client']);
       }
 
       if (job.options.runClientLint) {
-        await runStep('Run client lint', 'npm', ['run', 'lint', '--prefix', 'client', '--', '--max-warnings=0']);
+        await runNpmStep('Run client lint', ['run', 'lint', '--prefix', 'client', '--', '--max-warnings=0']);
       }
 
-      await runStep('Build client', 'npm', ['run', 'build', '--prefix', 'client']);
+      await runNpmStep('Build client', ['run', 'build', '--prefix', 'client']);
 
       if (job.options.runServerTests) {
-        await runStep('Run server tests', 'npm', ['test', '--prefix', 'server']);
+        await runNpmStep('Run server tests', ['test', '--prefix', 'server']);
       }
 
       const repoAfter = await this.getRepoStatus();
