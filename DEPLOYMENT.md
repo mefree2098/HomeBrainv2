@@ -44,13 +44,17 @@ Expected result:
 ## 2. Install HomeBrain
 
 ```bash
-mkdir -p ~/homebrain
-cd ~/homebrain
 git clone https://github.com/mefree2098/HomeBrainv2.git
 cd HomeBrainv2
 npm install
-npm install --prefix server
-npm install --prefix client
+```
+
+Optional but recommended (for healthy wake-word worker on clean hosts):
+
+```bash
+cd server
+PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh
+cd ..
 ```
 
 ## 3. Configure Environment
@@ -80,7 +84,7 @@ Optional but common:
 ## 4. Build Frontend
 
 ```bash
-npm run build --prefix client
+node scripts/run-with-modern-node.js npm run build --prefix client
 ```
 
 Expected result: `client/dist` is created.
@@ -98,9 +102,10 @@ Requires=mongod.service
 [Service]
 Type=simple
 User=<JETSON_USER>
-WorkingDirectory=/home/<JETSON_USER>/homebrain/HomeBrainv2
+WorkingDirectory=/home/<JETSON_USER>/HomeBrainv2
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/npm start
+Environment=WAKEWORD_PIPER_EXEC=/home/<JETSON_USER>/HomeBrainv2/server/.wakeword-venv/bin/piper
+ExecStart=/usr/bin/node scripts/run-with-modern-node.js npm start
 Restart=on-failure
 RestartSec=5
 
@@ -117,6 +122,14 @@ sudo systemctl status homebrain --no-pager
 ```
 
 Expected result: `homebrain` status is `active (running)`.
+
+Grant Node the ability to bind ports 80/443 (required for HTTPS + ACME):
+
+```bash
+NODE_BIN="$(cd ~/HomeBrainv2 && node scripts/run-with-modern-node.js node -p 'process.execPath')"
+sudo setcap 'cap_net_bind_service=+ep' "$NODE_BIN"
+getcap "$NODE_BIN"
+```
 
 ## 6. Allow Platform Deploy to Restart Services
 
@@ -187,13 +200,13 @@ Preferred:
 Fallback (terminal):
 
 ```bash
-cd ~/homebrain/HomeBrainv2
+cd ~/HomeBrainv2
 git pull --ff-only
-npm install
-npm install --prefix server
-npm install --prefix client
-npm run build --prefix client
-npm test --prefix server
+node scripts/run-with-modern-node.js npm install --no-audit --no-fund
+node scripts/run-with-modern-node.js npm install --no-audit --no-fund --prefix server
+node scripts/run-with-modern-node.js npm install --no-audit --no-fund --prefix client
+node scripts/run-with-modern-node.js npm run build --prefix client
+node scripts/run-with-modern-node.js npm test --prefix server
 sudo systemctl restart homebrain
 ```
 

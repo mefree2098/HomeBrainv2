@@ -55,6 +55,6 @@ User-selected backlog items: `#1, #5, #6, #7, #8, #9, #11, #12`
 2. Run:
    - `node --check server/routes/*.js`
    - `npm run lint --prefix client`
-   - `npm run build --prefix client`
+   - `node scripts/run-with-modern-node.js npm run build --prefix client`
 3. Continue from first `In Progress`/`Pending` item in the table above.
 4. Update this roadmap file after each completed item.

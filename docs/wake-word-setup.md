@@ -12,7 +12,7 @@ No Picovoice console or AccessKey is required.
 Run once on the hub:
 
 ```bash
-cd ~/homebrain/HomeBrainv2/server
+cd ~/HomeBrainv2/server
 scripts/install-openwakeword-deps.sh
 ```
 
@@ -93,4 +93,3 @@ If listener detection fails:
 1. Verify model status is `ready`.
 2. Verify listener is online in `Voice Devices`.
 3. Confirm listener has latest code via `Remote Fleet Updates`.
-

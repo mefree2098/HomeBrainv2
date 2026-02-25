@@ -56,6 +56,13 @@ Expected result: profile appears as active and can be used by listeners.
 
 Open `Settings -> Voice & Audio -> Wake Word Models`.
 
+Before first training on a clean hub, run once:
+
+```bash
+cd ~/HomeBrainv2/server
+PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh
+```
+
 1. Download at least one Piper voice.
 2. Create wake word phrase(s).
 3. Wait for each model status to become `ready`.
