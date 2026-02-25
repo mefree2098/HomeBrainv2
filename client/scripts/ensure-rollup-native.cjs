@@ -30,9 +30,13 @@ function resolveFromCwd(specifier) {
   return require.resolve(specifier, { paths: [process.cwd()] });
 }
 
-function installPackage(pkgWithVersion) {
+function installPackages(packageSpecs) {
+  if (!Array.isArray(packageSpecs) || packageSpecs.length === 0) {
+    return;
+  }
+
   const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const args = ['install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', pkgWithVersion];
+  const args = ['install', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', ...packageSpecs];
   execFileSync(npmCmd, args, {
     cwd: process.cwd(),
     stdio: 'inherit'
@@ -48,33 +52,13 @@ function getPackageVersion(packageName) {
   }
 }
 
-function ensurePackage(packageName, version, label) {
-  return ensurePackageWithProbe(packageName, version, label, packageName);
-}
-
-function ensurePackageWithProbe(packageName, version, label, probeSpecifier) {
-  if (!version) {
-    return;
-  }
-
+function shouldInstall(probeSpecifier) {
   try {
     resolveFromCwd(probeSpecifier);
-    return;
+    return false;
   } catch {
-    // Missing package for current platform. Install it below.
+    return true;
   }
-
-  const target = `${packageName}@${version}`;
-  console.log(`[${label}] Missing ${packageName}. Installing ${target}...`);
-  installPackage(target);
-
-  try {
-    resolveFromCwd(probeSpecifier);
-  } catch {
-    throw new Error(`Install verification failed for ${packageName}`);
-  }
-
-  console.log(`[${label}] Installed ${target}`);
 }
 
 function main() {
@@ -87,15 +71,46 @@ function main() {
   const rollupNativePackage = isMusl()
     ? '@rollup/rollup-linux-arm64-musl'
     : '@rollup/rollup-linux-arm64-gnu';
-  ensurePackage(rollupNativePackage, rollupVersion, 'rollup-fix');
 
   const esbuildVersion = getPackageVersion('esbuild');
-  ensurePackageWithProbe(
-    '@esbuild/linux-arm64',
-    esbuildVersion,
-    'esbuild-fix',
-    '@esbuild/linux-arm64/bin/esbuild'
-  );
+  const candidates = [
+    {
+      packageName: rollupNativePackage,
+      version: rollupVersion,
+      label: 'rollup-fix',
+      probeSpecifier: rollupNativePackage
+    },
+    {
+      packageName: '@esbuild/linux-arm64',
+      version: esbuildVersion,
+      label: 'esbuild-fix',
+      probeSpecifier: '@esbuild/linux-arm64/bin/esbuild'
+    }
+  ];
+
+  const missing = candidates
+    .filter((item) => item.version && shouldInstall(item.probeSpecifier))
+    .map((item) => ({
+      ...item,
+      target: `${item.packageName}@${item.version}`
+    }));
+
+  if (missing.length === 0) {
+    return;
+  }
+
+  for (const item of missing) {
+    console.log(`[${item.label}] Missing ${item.packageName}. Installing ${item.target}...`);
+  }
+
+  installPackages(missing.map((item) => item.target));
+
+  for (const item of missing) {
+    if (shouldInstall(item.probeSpecifier)) {
+      throw new Error(`Install verification failed for ${item.packageName}`);
+    }
+    console.log(`[${item.label}] Installed ${item.target}`);
+  }
 }
 
 try {
