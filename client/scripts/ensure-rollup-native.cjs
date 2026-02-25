@@ -39,45 +39,53 @@ function installPackage(pkgWithVersion) {
   });
 }
 
+function getPackageVersion(packageName) {
+  try {
+    const pkgPath = resolveFromCwd(`${packageName}/package.json`);
+    return require(pkgPath).version;
+  } catch {
+    return null;
+  }
+}
+
+function ensurePackage(packageName, version, label) {
+  if (!version) {
+    return;
+  }
+
+  try {
+    resolveFromCwd(packageName);
+    return;
+  } catch {
+    // Missing package for current platform. Install it below.
+  }
+
+  const target = `${packageName}@${version}`;
+  console.log(`[${label}] Missing ${packageName}. Installing ${target}...`);
+  installPackage(target);
+  resolveFromCwd(packageName);
+  console.log(`[${label}] Installed ${target}`);
+}
+
 function main() {
   // This issue is relevant to Linux ARM64 deploy hosts (Jetson/RPi class).
   if (process.platform !== 'linux' || process.arch !== 'arm64') {
     return;
   }
 
-  let rollupVersion;
-  try {
-    const rollupPkgPath = resolveFromCwd('rollup/package.json');
-    rollupVersion = require(rollupPkgPath).version;
-  } catch {
-    // Rollup is not installed yet (or not needed for this install).
-    return;
-  }
-
-  const packageName = isMusl()
+  const rollupVersion = getPackageVersion('rollup');
+  const rollupNativePackage = isMusl()
     ? '@rollup/rollup-linux-arm64-musl'
     : '@rollup/rollup-linux-arm64-gnu';
+  ensurePackage(rollupNativePackage, rollupVersion, 'rollup-fix');
 
-  try {
-    resolveFromCwd(packageName);
-    return;
-  } catch {
-    // Missing optional native package; install exact Rollup-matching version.
-  }
-
-  const target = `${packageName}@${rollupVersion}`;
-  console.log(`[rollup-fix] Missing ${packageName}. Installing ${target}...`);
-  installPackage(target);
-
-  // Verify install succeeded so downstream build errors are explicit.
-  resolveFromCwd(packageName);
-  console.log(`[rollup-fix] Installed ${target}`);
+  const esbuildVersion = getPackageVersion('esbuild');
+  ensurePackage('@esbuild/linux-arm64', esbuildVersion, 'esbuild-fix');
 }
 
 try {
   main();
 } catch (error) {
-  console.error(`[rollup-fix] Failed: ${error.message}`);
+  console.error(`[native-deps-fix] Failed: ${error.message}`);
   process.exit(1);
 }
-
