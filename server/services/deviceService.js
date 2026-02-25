@@ -149,7 +149,7 @@ class DeviceService {
         const updatedDevice = await Device.findByIdAndUpdate(
           deviceId,
           updateData,
-          { new: true, runValidators: true }
+          { returnDocument: 'after', runValidators: true }
         );
         
         if (updatedDevice) {
@@ -401,7 +401,7 @@ class DeviceService {
       const updatedDevice = await Device.findByIdAndUpdate(
         deviceId,
         updateData,
-        { new: true, runValidators: true }
+        { returnDocument: 'after', runValidators: true }
       );
 
       if (updatedDevice) {

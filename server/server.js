@@ -324,11 +324,53 @@ async function setupHttpsServer() {
         cert: sslConfig.cert
       }, app);
 
-      const httpsPort = process.env.HTTPS_PORT || 443;
+      const httpsPort = Number(process.env.HTTPS_PORT || 443);
 
-      httpsServer.listen(httpsPort, () => {
-        console.log(`HTTPS server running at https://localhost:${httpsPort}`);
+      const listenResult = await new Promise((resolve) => {
+        const onError = (error) => {
+          httpsServer.off('listening', onListening);
+          resolve({ ok: false, error });
+        };
+
+        const onListening = () => {
+          httpsServer.off('error', onError);
+          resolve({ ok: true });
+        };
+
+        httpsServer.once('error', onError);
+        httpsServer.once('listening', onListening);
+
+        try {
+          httpsServer.listen(httpsPort);
+        } catch (error) {
+          onError(error);
+        }
       });
+
+      if (!listenResult.ok) {
+        const { error } = listenResult;
+        if (error && error.code === 'EACCES') {
+          console.warn(`HTTPS disabled: insufficient privileges to bind port ${httpsPort}`);
+        } else if (error && error.code === 'EADDRINUSE') {
+          console.warn(`HTTPS disabled: port ${httpsPort} already in use`);
+        } else {
+          console.warn(`HTTPS disabled: failed to bind port ${httpsPort}: ${error?.message || 'unknown error'}`);
+        }
+
+        try {
+          await closeServer(httpsServer, 'HTTPS server');
+        } catch (closeError) {
+          // noop
+        }
+        httpsServer = null;
+        return null;
+      }
+
+      httpsServer.on('error', (error) => {
+        console.error(`HTTPS server error: ${error.message}`);
+      });
+
+      console.log(`HTTPS server running at https://localhost:${httpsPort}`);
 
       // Initialize WebSocket server on HTTPS
       const httpsVoiceWsServer = new VoiceWebSocketServer();

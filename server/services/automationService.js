@@ -647,7 +647,7 @@ async function updateAutomation(id, updateData) {
     const updatedAutomation = await Automation.findByIdAndUpdate(
       id,
       { ...updateData, updatedAt: Date.now() },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).lean();
 
     console.log(`AutomationService: Automation updated successfully: ${updatedAutomation.name}`);
@@ -716,7 +716,7 @@ async function toggleAutomation(id, enabled) {
     const updatedAutomation = await Automation.findByIdAndUpdate(
       id,
       { enabled, updatedAt: Date.now() },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).lean();
 
     if (!updatedAutomation) {

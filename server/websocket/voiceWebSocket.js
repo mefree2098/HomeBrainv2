@@ -397,7 +397,7 @@ class VoiceWebSocketServer {
       const refreshedDevice = await VoiceDevice.findByIdAndUpdate(
         deviceId,
         authUpdate,
-        { new: true }
+        { returnDocument: 'after' }
       );
       if (refreshedDevice) {
         connection.device = refreshedDevice;
