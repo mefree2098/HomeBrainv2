@@ -183,12 +183,11 @@ const schema = new mongoose.Schema({
 });
 
 // Update the updatedAt field and lastSeen before saving
-schema.pre('save', function(next) {
+schema.pre('save', function() {
   this.updatedAt = Date.now();
   if (this.status === 'online') {
     this.lastSeen = Date.now();
   }
-  next();
 });
 
 // Indexes for better query performance

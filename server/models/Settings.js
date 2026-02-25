@@ -160,9 +160,8 @@ const SettingsSchema = new mongoose.Schema({
 });
 
 // Update lastModified on save
-SettingsSchema.pre('save', function(next) {
+SettingsSchema.pre('save', function() {
   this.lastModified = new Date();
-  next();
 });
 
 // Static method to get or create settings

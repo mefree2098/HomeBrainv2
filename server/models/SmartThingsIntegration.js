@@ -209,9 +209,8 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
 });
 
 // Update updatedAt on save
-SmartThingsIntegrationSchema.pre('save', function(next) {
+SmartThingsIntegrationSchema.pre('save', function() {
   this.updatedAt = new Date();
-  next();
 });
 
 // Static method to get or create integration
