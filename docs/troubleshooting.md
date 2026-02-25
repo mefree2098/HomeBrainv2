@@ -45,6 +45,29 @@ Fix:
 1. Confirm `JWT_SECRET` and `REFRESH_TOKEN_SECRET` are set in `server/.env`.
 2. Restart service after env changes.
 
+### INSTEON PLM will not connect
+
+Important:
+- The 2413S PLM RJ45 jack is serial, not Ethernet networking.
+- A direct Jetson Ethernet NIC -> PLM cable will not work.
+
+Use one of these endpoint formats in `Settings -> Integrations`:
+- Local serial: `/dev/ttyUSB0`
+- Serial-over-TCP bridge: `tcp://<bridge-host>:<port>`
+
+Checks:
+
+```bash
+# HomeBrain status
+curl -s http://127.0.0.1:3000/api/insteon/status
+
+# If using local serial
+ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+
+# If using TCP bridge
+nc -vz <bridge-host> <port>
+```
+
 ### Remote device will not come online
 
 On Pi:

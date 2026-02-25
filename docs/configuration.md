@@ -36,9 +36,21 @@ Open `Settings -> Integrations`.
 
 ### INSTEON
 
-1. Connect the PLM via USB to the hub.
-2. Set serial port (for example `/dev/ttyUSB0`) in integration settings.
-3. Test connection.
+The 2413S PLM RJ45 jack is a serial interface, not Ethernet networking.
+
+Use one of these supported endpoint formats in `Settings -> Integrations -> INSTEON PLM Endpoint`:
+
+1. Direct local serial:
+`/dev/ttyUSB0`
+2. Serial-over-TCP bridge:
+`tcp://<bridge-host>:<port>` (for example `tcp://192.168.1.50:9761`)
+
+Recommended setup for "Ethernet cable" operation:
+
+1. PLM -> RS-232 serial bridge device (or PLM WiFi/Ethernet adapter that exposes raw PLM TCP).
+2. Jetson -> same network (built-in NIC or USB Ethernet adapter).
+3. Set endpoint to `tcp://...` in HomeBrain settings.
+4. Test connection from the INSTEON page.
 
 ## 4. User Profiles (Voices + Personalities)
 

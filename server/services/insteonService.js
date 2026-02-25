@@ -2,6 +2,9 @@ const Insteon = require('home-controller').Insteon;
 const Device = require('../models/Device');
 const Settings = require('../models/Settings');
 
+const DEFAULT_INSTEON_SERIAL_PORT = '/dev/ttyUSB0';
+const DEFAULT_INSTEON_TCP_PORT = 9761;
+
 /**
  * Insteon PLM Service
  * Provides comprehensive integration with Insteon PowerLinc Modem (PLM)
@@ -14,7 +17,91 @@ class InsteonService {
     this.devices = new Map(); // Cache of discovered devices
     this.connectionAttempts = 0;
     this.maxConnectionAttempts = 3;
+    this.connectionTransport = null;
+    this.connectionTarget = null;
     console.log('InsteonService: Initialized');
+  }
+
+  /**
+   * Resolve INSTEON connection target from settings.
+   * Supports:
+   * - Serial path: /dev/ttyUSB0
+   * - TCP endpoint: tcp://host:port or host:port
+   * @param {string} rawTarget
+   * @returns {{transport: 'serial', serialPath: string, label: string} | {transport: 'tcp', host: string, port: number, label: string}}
+   */
+  resolveConnectionTarget(rawTarget) {
+    if (typeof rawTarget !== 'string' || !rawTarget.trim()) {
+      return {
+        transport: 'serial',
+        serialPath: DEFAULT_INSTEON_SERIAL_PORT,
+        label: DEFAULT_INSTEON_SERIAL_PORT
+      };
+    }
+
+    const target = rawTarget.trim();
+
+    const parsePort = (value) => {
+      const port = Number(value);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`Invalid TCP port "${value}"`);
+      }
+      return port;
+    };
+    const formatTcpLabel = (host, port) => {
+      const printableHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+      return `tcp://${printableHost}:${port}`;
+    };
+
+    if (/^tcp:\/\//i.test(target)) {
+      try {
+        const url = new URL(target);
+        if (!url.hostname) {
+          throw new Error('Missing TCP host');
+        }
+        const port = url.port ? parsePort(url.port) : DEFAULT_INSTEON_TCP_PORT;
+        const host = url.hostname;
+        return {
+          transport: 'tcp',
+          host,
+          port,
+          label: formatTcpLabel(host, port)
+        };
+      } catch (error) {
+        throw new Error(`Invalid INSTEON TCP endpoint "${target}". Use tcp://<host>:<port>`);
+      }
+    }
+
+    const bracketHost = target.match(/^\[([^\]]+)\]:(\d{1,5})$/);
+    if (bracketHost) {
+      const host = bracketHost[1];
+      const port = parsePort(bracketHost[2]);
+      return {
+        transport: 'tcp',
+        host,
+        port,
+        label: formatTcpLabel(host, port)
+      };
+    }
+
+    const firstColon = target.indexOf(':');
+    const lastColon = target.lastIndexOf(':');
+    if (firstColon > 0 && firstColon === lastColon && !target.startsWith('/')) {
+      const host = target.slice(0, lastColon);
+      const port = parsePort(target.slice(lastColon + 1));
+      return {
+        transport: 'tcp',
+        host,
+        port,
+        label: formatTcpLabel(host, port)
+      };
+    }
+
+    return {
+      transport: 'serial',
+      serialPath: target,
+      label: target
+    };
   }
 
   /**
@@ -26,43 +113,81 @@ class InsteonService {
 
     try {
       const settings = await Settings.getSettings();
-      const port = settings.insteonPort || '/dev/ttyUSB0';
+      const configuredTarget = settings.insteonPort || DEFAULT_INSTEON_SERIAL_PORT;
+      const connection = this.resolveConnectionTarget(configuredTarget);
 
       if (this.isConnected && this.hub) {
         console.log('InsteonService: Already connected to PLM');
         return {
           success: true,
           message: 'Already connected to Insteon PLM',
-          port
+          port: this.connectionTarget || connection.label,
+          transport: this.connectionTransport || connection.transport
         };
       }
 
-      console.log(`InsteonService: Connecting to PLM on port ${port}`);
+      if (connection.transport === 'tcp') {
+        console.log(`InsteonService: Connecting to PLM over TCP at ${connection.label}`);
+      } else {
+        console.log(`InsteonService: Connecting to PLM on serial port ${connection.serialPath}`);
+      }
 
       this.hub = new Insteon();
 
       // Connect with timeout handling
       const connectionPromise = new Promise((resolve, reject) => {
+        let settled = false;
+
         const timeout = setTimeout(() => {
-          reject(new Error('Connection timeout after 10 seconds'));
+          onError(new Error('Connection timeout after 10 seconds'));
         }, 10000);
 
-        this.hub.serial(port, {}, (error) => {
+        const cleanup = () => {
           clearTimeout(timeout);
-          if (error) {
-            console.error('InsteonService: Connection error:', error.message);
-            reject(error);
-          } else {
-            this.isConnected = true;
-            this.connectionAttempts = 0;
-            console.log('InsteonService: Successfully connected to PLM');
-            resolve({
-              success: true,
-              message: 'Successfully connected to Insteon PLM',
-              port
-            });
+          if (this.hub && typeof this.hub.removeListener === 'function') {
+            this.hub.removeListener('connect', onConnect);
+            this.hub.removeListener('error', onError);
           }
-        });
+        };
+
+        const onConnect = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          this.isConnected = true;
+          this.connectionAttempts = 0;
+          this.connectionTransport = connection.transport;
+          this.connectionTarget = connection.label;
+          console.log('InsteonService: Successfully connected to PLM');
+          resolve({
+            success: true,
+            message: 'Successfully connected to Insteon PLM',
+            port: connection.label,
+            transport: connection.transport
+          });
+        };
+
+        const onError = (error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          const err = error instanceof Error ? error : new Error(String(error || 'Unknown connection error'));
+          console.error('InsteonService: Connection error:', err.message);
+          reject(err);
+        };
+
+        this.hub.once('connect', onConnect);
+        this.hub.once('error', onError);
+
+        try {
+          if (connection.transport === 'tcp') {
+            this.hub.connect(connection.host, connection.port);
+          } else {
+            this.hub.serial(connection.serialPath, {});
+          }
+        } catch (error) {
+          onError(error);
+        }
       });
 
       return await connectionPromise;
@@ -73,6 +198,8 @@ class InsteonService {
 
       this.isConnected = false;
       this.hub = null;
+      this.connectionTransport = null;
+      this.connectionTarget = null;
 
       throw new Error(`Failed to connect to Insteon PLM: ${error.message}`);
     }
@@ -93,6 +220,8 @@ class InsteonService {
       this.hub = null;
       this.isConnected = false;
       this.devices.clear();
+      this.connectionTransport = null;
+      this.connectionTarget = null;
 
       console.log('InsteonService: Successfully disconnected from PLM');
 
@@ -128,6 +257,8 @@ class InsteonService {
         success: true,
         message: 'Insteon PLM connection is working',
         connected: this.isConnected,
+        transport: this.connectionTransport,
+        port: this.connectionTarget,
         plmInfo: info
       };
     } catch (error) {
@@ -803,7 +934,9 @@ class InsteonService {
     return {
       connected: this.isConnected,
       deviceCount: this.devices.size,
-      connectionAttempts: this.connectionAttempts
+      connectionAttempts: this.connectionAttempts,
+      transport: this.connectionTransport,
+      port: this.connectionTarget
     };
   }
 }
