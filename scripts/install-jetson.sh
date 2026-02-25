@@ -1,484 +1,339 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# HomeBrain Jetson Orin Nano Installation Script
-# This script automates the complete installation of HomeBrain on NVIDIA Jetson Orin Nano
+# HomeBrain Jetson installation script (clean install path)
+# - Installs system prerequisites
+# - Installs Node.js 22 and MongoDB 6.0
+# - Clones/updates HomeBrain
+# - Installs/builds app with modern-node wrapper
+# - Optionally bootstraps wake-word training dependencies
+# - Configures systemd services
 
-set -e  # Exit on error
+set -euo pipefail
 
-# Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Configuration
-HOMEBRAIN_USER="homebrain"
-HOMEBRAIN_DIR="/opt/homebrain"
-GITHUB_REPO="https://github.com/yourusername/homebrain.git"
-NODE_VERSION="18"
-MONGODB_VERSION="6.0"
+DEFAULT_REPO_URL="https://github.com/mefree2098/HomeBrainv2.git"
+REPO_URL="${HOMEBRAIN_REPO_URL:-$DEFAULT_REPO_URL}"
+HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$HOME/HomeBrainv2}"
+NODE_MAJOR="${NODE_MAJOR:-22}"
+MONGODB_VERSION="${MONGODB_VERSION:-6.0}"
+INSTALL_WAKEWORD_DEPS="${INSTALL_WAKEWORD_DEPS:-1}"
+ENABLE_FIREWALL="${ENABLE_FIREWALL:-0}"
 
-# Function to print colored output
-print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+check_prerequisites() {
+  if [[ $EUID -eq 0 ]]; then
+    print_error "Run this script as a regular sudo-capable user, not root."
+    exit 1
+  fi
+
+  if ! command -v sudo >/dev/null 2>&1; then
+    print_error "sudo is required."
+    exit 1
+  fi
+
+  if ! sudo -n true >/dev/null 2>&1; then
+    print_warning "sudo may prompt for your password during installation."
+  fi
+
+  if grep -qi tegra /proc/cpuinfo 2>/dev/null; then
+    print_success "Jetson platform detected."
+  else
+    print_warning "Jetson platform not detected; continuing anyway."
+  fi
 }
 
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+install_base_packages() {
+  print_status "Installing base system packages..."
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    curl wget git gnupg ca-certificates lsb-release \
+    build-essential python3 python3-pip python3-venv \
+    pkg-config libcap2-bin net-tools
+  print_success "Base packages installed."
 }
 
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
+install_node() {
+  print_status "Ensuring Node.js ${NODE_MAJOR}.x or newer..."
 
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Function to check if running as root
-check_root() {
-    if [[ $EUID -eq 0 ]]; then
-        print_error "This script should not be run as root. Please run as a regular user with sudo privileges."
-        exit 1
+  if command -v node >/dev/null 2>&1; then
+    local major
+    major="$(node -p 'process.versions.node.split(".")[0]')"
+    if [[ "$major" =~ ^[0-9]+$ ]] && (( major >= NODE_MAJOR )); then
+      print_success "Node.js $(node -v) already satisfies requirement."
+      return
     fi
+  fi
+
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+
+  print_success "Installed Node $(node -v), npm $(npm -v)."
 }
 
-# Function to check if running on Jetson
-check_jetson() {
-    if ! grep -q "tegra" /proc/cpuinfo; then
-        print_warning "This script is designed for NVIDIA Jetson devices. Continuing anyway..."
-    fi
-}
-
-# Function to update system packages
-update_system() {
-    print_status "Updating system packages..."
-    sudo apt update
-    sudo apt upgrade -y
-    sudo apt install -y curl wget git vim nano htop build-essential
-    print_success "System packages updated"
-}
-
-# Function to install Node.js
-install_nodejs() {
-    print_status "Installing Node.js ${NODE_VERSION}..."
-
-    # Check if Node.js is already installed
-    if command -v node &> /dev/null; then
-        CURRENT_VERSION=$(node --version | grep -o '[0-9]*' | head -1)
-        if [[ $CURRENT_VERSION -ge $NODE_VERSION ]]; then
-            print_success "Node.js ${CURRENT_VERSION} already installed"
-            return
-        fi
-    fi
-
-    # Install Node.js
-    curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | sudo -E bash -
-    sudo apt install -y nodejs
-
-    # Verify installation
-    NODE_VER=$(node --version)
-    NPM_VER=$(npm --version)
-    print_success "Node.js ${NODE_VER} and npm ${NPM_VER} installed"
-}
-
-# Function to install MongoDB
 install_mongodb() {
-    print_status "Installing MongoDB ${MONGODB_VERSION}..."
+  print_status "Ensuring MongoDB ${MONGODB_VERSION}..."
 
-    # Check if MongoDB is already installed
-    if command -v mongod &> /dev/null; then
-        print_success "MongoDB already installed"
-        return
-    fi
+  if ! command -v mongod >/dev/null 2>&1; then
+    local codename
+    codename="$(lsb_release -cs)"
 
-    # Import MongoDB GPG key
-    wget -qO - https://www.mongodb.org/static/pgp/server-${MONGODB_VERSION}.asc | sudo apt-key add -
+    curl -fsSL "https://pgp.mongodb.com/server-${MONGODB_VERSION}.asc" \
+      | sudo gpg --dearmor -o "/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg"
 
-    # Add MongoDB repository
-    echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/${MONGODB_VERSION} multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list
+    echo "deb [ arch=arm64,amd64 signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/ubuntu ${codename}/mongodb-org/${MONGODB_VERSION} multiverse" \
+      | sudo tee "/etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list" >/dev/null
 
-    # Install MongoDB
-    sudo apt update
-    sudo apt install -y mongodb-org
+    sudo apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org
+  fi
 
-    # Start and enable MongoDB
-    sudo systemctl daemon-reload
-    sudo systemctl enable mongod
-    sudo systemctl start mongod
-
-    # Verify installation
-    sleep 5
-    if sudo systemctl is-active --quiet mongod; then
-        print_success "MongoDB installed and running"
-    else
-        print_error "MongoDB installation failed"
-        exit 1
-    fi
+  sudo systemctl enable --now mongod
+  if sudo systemctl is-active --quiet mongod; then
+    print_success "MongoDB is active."
+  else
+    print_error "MongoDB failed to start."
+    sudo systemctl status mongod --no-pager || true
+    exit 1
+  fi
 }
 
-# Function to install PM2
-install_pm2() {
-    print_status "Installing PM2 process manager..."
+clone_or_update_repo() {
+  print_status "Preparing HomeBrain repository at ${HOMEBRAIN_DIR}..."
 
-    if command -v pm2 &> /dev/null; then
-        print_success "PM2 already installed"
-        return
-    fi
+  if [[ -d "${HOMEBRAIN_DIR}/.git" ]]; then
+    git -C "${HOMEBRAIN_DIR}" fetch --all --prune
+    git -C "${HOMEBRAIN_DIR}" pull --ff-only
+  else
+    mkdir -p "$(dirname "${HOMEBRAIN_DIR}")"
+    git clone "${REPO_URL}" "${HOMEBRAIN_DIR}"
+  fi
 
-    sudo npm install -g pm2
-
-    # Configure PM2 startup
-    pm2 startup
-    print_success "PM2 installed"
+  print_success "Repository ready."
 }
 
-# Function to create homebrain user
-create_user() {
-    print_status "Creating homebrain user..."
+configure_env() {
+  print_status "Configuring server environment file..."
+  local env_file="${HOMEBRAIN_DIR}/server/.env"
 
-    if id "$HOMEBRAIN_USER" &>/dev/null; then
-        print_success "User ${HOMEBRAIN_USER} already exists"
-    else
-        sudo useradd -r -s /bin/bash -d /opt/homebrain -m $HOMEBRAIN_USER
-        sudo usermod -a -G dialout,audio,video $HOMEBRAIN_USER
-        print_success "User ${HOMEBRAIN_USER} created"
+  if [[ ! -f "$env_file" ]]; then
+    cp "${HOMEBRAIN_DIR}/server/.env.example" "$env_file"
+
+    local jwt_secret refresh_secret
+    jwt_secret="$(openssl rand -hex 32)"
+    refresh_secret="$(openssl rand -hex 32)"
+
+    sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${jwt_secret}|" "$env_file"
+    sed -i "s|^REFRESH_TOKEN_SECRET=.*|REFRESH_TOKEN_SECRET=${refresh_secret}|" "$env_file"
+
+    if ! grep -q '^DATABASE_URL=' "$env_file"; then
+      echo 'DATABASE_URL=mongodb://localhost/HomeBrain' >> "$env_file"
     fi
+
+    print_success "Created ${env_file}."
+    print_warning "Review ${env_file} and add API keys before production use."
+  else
+    print_success "Existing ${env_file} found; leaving it unchanged."
+  fi
 }
 
-# Function to install HomeBrain application
-install_homebrain() {
-    print_status "Installing HomeBrain application..."
+install_app_dependencies() {
+  print_status "Installing HomeBrain dependencies..."
+  cd "${HOMEBRAIN_DIR}"
 
-    # Create application directory
-    if [[ ! -d "$HOMEBRAIN_DIR" ]]; then
-        sudo mkdir -p $HOMEBRAIN_DIR
-        sudo chown $HOMEBRAIN_USER:$HOMEBRAIN_USER $HOMEBRAIN_DIR
-    fi
+  node scripts/run-with-modern-node.js npm install --no-audit --no-fund
+  node scripts/run-with-modern-node.js npm install --no-audit --no-fund --prefix server
+  node scripts/run-with-modern-node.js npm install --no-audit --no-fund --prefix client
 
-    # Clone or update repository
-    if [[ -d "$HOMEBRAIN_DIR/.git" ]]; then
-        print_status "Updating existing HomeBrain installation..."
-        cd $HOMEBRAIN_DIR
-        sudo -u $HOMEBRAIN_USER git pull
-    else
-        print_status "Cloning HomeBrain repository..."
-        sudo -u $HOMEBRAIN_USER git clone $GITHUB_REPO $HOMEBRAIN_DIR
-        cd $HOMEBRAIN_DIR
-    fi
-
-    # Install dependencies
-    print_status "Installing application dependencies..."
-    sudo -u $HOMEBRAIN_USER npm install
-
-    # Install server dependencies
-    cd server
-    sudo -u $HOMEBRAIN_USER npm install
-
-    # Install client dependencies
-    cd ../client
-    sudo -u $HOMEBRAIN_USER npm install
-
-    # Build client application
-    cd ..
-    print_status "Building client application..."
-    sudo -u $HOMEBRAIN_USER npm run build
-
-    print_success "HomeBrain application installed"
+  print_status "Building client..."
+  node scripts/run-with-modern-node.js npm run build --prefix client
+  print_success "Dependencies installed and client built."
 }
 
-# Function to configure environment
-configure_environment() {
-    print_status "Configuring environment..."
+bootstrap_wakeword() {
+  if [[ "$INSTALL_WAKEWORD_DEPS" != "1" ]]; then
+    print_warning "Skipping wake-word dependency bootstrap (INSTALL_WAKEWORD_DEPS=${INSTALL_WAKEWORD_DEPS})."
+    return
+  fi
 
-    ENV_FILE="$HOMEBRAIN_DIR/server/.env"
+  if [[ -x "${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/python" ]]; then
+    print_success "Wake-word virtualenv already present."
+    return
+  fi
 
-    if [[ ! -f "$ENV_FILE" ]]; then
-        sudo -u $HOMEBRAIN_USER cp $HOMEBRAIN_DIR/server/.env.example $ENV_FILE
-
-        # Generate JWT secrets
-        JWT_ACCESS_SECRET=$(openssl rand -base64 64)
-        JWT_REFRESH_SECRET=$(openssl rand -base64 64)
-
-        # Update environment file with generated secrets
-        sudo -u $HOMEBRAIN_USER sed -i "s/your-super-secret-jwt-access-key-here/$JWT_ACCESS_SECRET/" $ENV_FILE
-        sudo -u $HOMEBRAIN_USER sed -i "s/your-super-secret-jwt-refresh-key-here/$JWT_REFRESH_SECRET/" $ENV_FILE
-
-        print_success "Environment configuration created"
-        print_warning "Please edit $ENV_FILE to configure your API keys and location settings"
-    else
-        print_success "Environment configuration already exists"
-    fi
+  print_status "Bootstrapping wake-word training dependencies (this can take several minutes)..."
+  if (cd "${HOMEBRAIN_DIR}/server" && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh); then
+    print_success "Wake-word dependencies installed."
+  else
+    print_warning "Wake-word dependency install failed. You can retry later:"
+    print_warning "  cd ${HOMEBRAIN_DIR}/server && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh"
+  fi
 }
 
-# Function to configure audio
-configure_audio() {
-    print_status "Configuring audio system..."
+ensure_node_capability() {
+  print_status "Granting Node permission to bind ports 80/443..."
 
-    # Install audio packages
-    sudo apt install -y alsa-utils pulseaudio pulseaudio-utils
+  local node_bin
+  node_bin="$(cd "${HOMEBRAIN_DIR}" && node scripts/run-with-modern-node.js node -p 'process.execPath' 2>/dev/null | tail -n 1 || true)"
 
-    # Add homebrain user to audio group
-    sudo usermod -a -G audio $HOMEBRAIN_USER
+  if [[ -z "$node_bin" ]]; then
+    node_bin="$(readlink -f "$(command -v node)")"
+  fi
 
-    # Create basic ALSA configuration if no USB audio detected
-    if ! arecord -l | grep -q "USB Audio"; then
-        print_warning "No USB audio device detected. Using default audio configuration."
-    fi
+  if [[ -z "$node_bin" ]]; then
+    print_warning "Could not resolve Node binary for setcap."
+    return
+  fi
 
-    print_success "Audio system configured"
+  if sudo setcap 'cap_net_bind_service=+ep' "$node_bin"; then
+    print_success "Set cap_net_bind_service on ${node_bin}."
+  else
+    print_warning "Failed to set capability on ${node_bin}."
+  fi
 }
 
-# Function to setup systemd services
-setup_services() {
-    print_status "Setting up systemd services..."
+configure_systemd() {
+  print_status "Configuring systemd services..."
 
-    # Create HomeBrain service
-    sudo tee /etc/systemd/system/homebrain.service > /dev/null << EOF
+  local run_user
+  run_user="${SUDO_USER:-$USER}"
+
+  sudo tee /etc/systemd/system/homebrain.service >/dev/null <<EOF2
 [Unit]
 Description=HomeBrain Smart Home Hub
-After=network.target mongodb.service
-Requires=mongodb.service
-StartLimitBurst=3
-StartLimitIntervalSec=60
+After=network.target mongod.service
+Requires=mongod.service
 
 [Service]
 Type=simple
-User=$HOMEBRAIN_USER
-WorkingDirectory=$HOMEBRAIN_DIR
-ExecStart=/usr/bin/npm start
-Restart=always
-RestartSec=10
+User=${run_user}
+WorkingDirectory=${HOMEBRAIN_DIR}
 Environment=NODE_ENV=production
-
-# Resource limits
-MemoryLimit=1G
-CPUQuota=80%
+Environment=WAKEWORD_PIPER_EXEC=${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/piper
+ExecStart=/usr/bin/node scripts/run-with-modern-node.js npm start
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF2
 
-    # Create Discovery service
-    sudo tee /etc/systemd/system/homebrain-discovery.service > /dev/null << EOF
+  sudo tee /etc/systemd/system/homebrain-discovery.service >/dev/null <<EOF2
 [Unit]
-Description=HomeBrain Device Discovery
+Description=HomeBrain Device Discovery Service
 After=network.target homebrain.service
 Requires=homebrain.service
-StartLimitBurst=3
-StartLimitIntervalSec=60
 
 [Service]
 Type=simple
-User=$HOMEBRAIN_USER
-WorkingDirectory=$HOMEBRAIN_DIR/server
+User=${run_user}
+WorkingDirectory=${HOMEBRAIN_DIR}/server
 ExecStart=/usr/bin/node services/discoveryService.js
 Restart=always
-RestartSec=10
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF2
 
-    # Reload systemd and enable services
-    sudo systemctl daemon-reload
-    sudo systemctl enable homebrain
-    sudo systemctl enable homebrain-discovery
+  sudo systemctl daemon-reload
+  sudo systemctl enable homebrain homebrain-discovery
 
-    print_success "Systemd services configured"
+  print_success "Systemd services configured."
 }
 
-# Function to configure firewall
+configure_deploy_sudoers() {
+  print_status "Configuring passwordless restart for UI deploy..."
+  local run_user
+  run_user="${SUDO_USER:-$USER}"
+
+  echo "${run_user} ALL=(ALL) NOPASSWD:/usr/bin/systemctl,/bin/systemctl" \
+    | sudo tee /etc/sudoers.d/homebrain-deploy >/dev/null
+  sudo chmod 0440 /etc/sudoers.d/homebrain-deploy
+  print_success "sudoers file created: /etc/sudoers.d/homebrain-deploy"
+}
+
 configure_firewall() {
-    print_status "Configuring firewall..."
+  if [[ "$ENABLE_FIREWALL" != "1" ]]; then
+    print_warning "Skipping UFW configuration (ENABLE_FIREWALL=${ENABLE_FIREWALL})."
+    return
+  fi
 
-    # Install UFW if not present
-    sudo apt install -y ufw
-
-    # Configure basic rules
-    sudo ufw --force reset
-    sudo ufw default deny incoming
-    sudo ufw default allow outgoing
-
-    # Allow SSH
-    sudo ufw allow ssh
-
-    # Allow HomeBrain ports
-    sudo ufw allow 3000/tcp comment 'HomeBrain API'
-    sudo ufw allow 5173/tcp comment 'HomeBrain Web'
-    sudo ufw allow 8080/tcp comment 'HomeBrain WebSocket'
-    sudo ufw allow 12345/udp comment 'HomeBrain Discovery'
-
-    # Allow local network access (modify as needed)
-    LOCAL_NETWORK=$(ip route | grep $(ip route | grep default | awk '{print $5}') | grep -E '192\.168\.|10\.|172\.' | head -1 | awk '{print $1}')
-    if [[ -n "$LOCAL_NETWORK" ]]; then
-        sudo ufw allow from $LOCAL_NETWORK
-        print_success "Allowed access from local network: $LOCAL_NETWORK"
-    fi
-
-    # Enable firewall
-    sudo ufw --force enable
-
-    print_success "Firewall configured"
+  print_status "Configuring UFW..."
+  sudo apt-get install -y ufw
+  sudo ufw --force reset
+  sudo ufw default deny incoming
+  sudo ufw default allow outgoing
+  sudo ufw allow ssh
+  sudo ufw allow 80/tcp
+  sudo ufw allow 443/tcp
+  sudo ufw allow 3000/tcp
+  sudo ufw allow 5173/tcp
+  sudo ufw allow 12345/udp
+  sudo ufw --force enable
+  print_success "UFW configured."
 }
 
-# Function to optimize Jetson performance
-optimize_jetson() {
-    print_status "Optimizing Jetson performance..."
+start_and_verify() {
+  print_status "Starting HomeBrain services..."
+  sudo systemctl restart homebrain homebrain-discovery
 
-    # Set maximum performance mode
-    if command -v nvpmodel &> /dev/null; then
-        sudo nvpmodel -m 0
-        print_success "Set Jetson to maximum performance mode"
-    fi
+  sleep 5
+  if ! sudo systemctl is-active --quiet homebrain; then
+    print_error "homebrain service failed to start."
+    sudo systemctl status homebrain --no-pager || true
+    exit 1
+  fi
 
-    # Set CPU governor to performance
-    echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null
-
-    # Configure swap if using microSD
-    if ! grep -q '/swapfile' /proc/swaps; then
-        print_status "Creating swap file..."
-        sudo fallocate -l 2G /swapfile
-        sudo chmod 600 /swapfile
-        sudo mkswap /swapfile
-        sudo swapon /swapfile
-
-        # Add to fstab
-        echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-
-        # Configure swappiness
-        echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
-
-        print_success "Swap file created and configured"
-    fi
-
-    print_success "Jetson optimization complete"
+  print_success "homebrain service is running."
+  print_status "Recent logs:"
+  sudo journalctl -u homebrain -n 20 --no-pager || true
 }
 
-# Function to initialize database
-initialize_database() {
-    print_status "Initializing database..."
+print_summary() {
+  local ip
+  ip="$(hostname -I | awk '{print $1}')"
 
-    cd $HOMEBRAIN_DIR
-
-    # Wait for MongoDB to be ready
-    sleep 10
-
-    # Test database connection
-    if ! sudo -u $HOMEBRAIN_USER npm run test-db; then
-        print_error "Database connection test failed"
-        exit 1
-    fi
-
-    # Create admin user if it doesn't exist
-    sudo -u $HOMEBRAIN_USER npm run create-admin || true
-
-    # Seed initial data
-    sudo -u $HOMEBRAIN_USER npm run seed || true
-
-    print_success "Database initialized"
+  echo
+  print_success "HomeBrain installation complete"
+  echo "Repository: ${HOMEBRAIN_DIR}"
+  echo "UI: http://${ip}:5173"
+  echo "API: http://${ip}:3000"
+  echo
+  echo "Useful commands:"
+  echo "  sudo systemctl status homebrain --no-pager"
+  echo "  sudo journalctl -u homebrain -f"
+  echo "  cd ${HOMEBRAIN_DIR} && node scripts/run-with-modern-node.js npm run build --prefix client"
+  echo
 }
 
-# Function to start services
-start_services() {
-    print_status "Starting HomeBrain services..."
-
-    # Start services
-    sudo systemctl start homebrain
-    sudo systemctl start homebrain-discovery
-
-    # Wait for services to start
-    sleep 10
-
-    # Check service status
-    if sudo systemctl is-active --quiet homebrain; then
-        print_success "HomeBrain service started"
-    else
-        print_error "HomeBrain service failed to start"
-        sudo systemctl status homebrain
-        exit 1
-    fi
-
-    if sudo systemctl is-active --quiet homebrain-discovery; then
-        print_success "Discovery service started"
-    else
-        print_warning "Discovery service failed to start (this may be normal)"
-    fi
-}
-
-# Function to verify installation
-verify_installation() {
-    print_status "Verifying installation..."
-
-    # Check web interface
-    if curl -s http://localhost:5173 > /dev/null; then
-        print_success "Web interface is accessible"
-    else
-        print_warning "Web interface may not be ready yet"
-    fi
-
-    # Check API
-    if curl -s http://localhost:3000/api/ping > /dev/null; then
-        print_success "API is accessible"
-    else
-        print_warning "API may not be ready yet"
-    fi
-
-    # Get system IP
-    SYSTEM_IP=$(hostname -I | awk '{print $1}')
-
-    print_success "Installation verification complete"
-    echo
-    print_success "HomeBrain installation completed successfully!"
-    echo
-    echo -e "${GREEN}Next Steps:${NC}"
-    echo "1. Access the web interface at: ${BLUE}http://$SYSTEM_IP:5173${NC}"
-    echo "2. Complete the initial setup wizard"
-    echo "3. Configure your integrations in Settings"
-    echo "4. Set up remote voice devices using the provided installer"
-    echo
-    echo -e "${YELLOW}Configuration:${NC}"
-    echo "- Edit environment: $ENV_FILE"
-    echo "- Check logs: sudo journalctl -u homebrain -f"
-    echo "- Service control: sudo systemctl {start|stop|restart} homebrain"
-    echo
-    echo -e "${YELLOW}Documentation:${NC}"
-    echo "- Configuration guide: $HOMEBRAIN_DIR/docs/configuration.md"
-    echo "- Troubleshooting: $HOMEBRAIN_DIR/docs/troubleshooting.md"
-}
-
-# Main installation function
 main() {
-    echo -e "${BLUE}"
-    echo "=========================================="
-    echo "  HomeBrain Jetson Installation Script"
-    echo "=========================================="
-    echo -e "${NC}"
+  echo -e "${BLUE}========================================${NC}"
+  echo -e "${BLUE} HomeBrain Jetson Clean Install${NC}"
+  echo -e "${BLUE}========================================${NC}"
 
-    check_root
-    check_jetson
-
-    print_status "Starting HomeBrain installation..."
-
-    update_system
-    install_nodejs
-    install_mongodb
-    install_pm2
-    create_user
-    install_homebrain
-    configure_environment
-    configure_audio
-    setup_services
-    configure_firewall
-    optimize_jetson
-    initialize_database
-    start_services
-    verify_installation
-
-    echo
-    print_success "Installation completed successfully!"
+  check_prerequisites
+  install_base_packages
+  install_node
+  install_mongodb
+  clone_or_update_repo
+  configure_env
+  install_app_dependencies
+  bootstrap_wakeword
+  ensure_node_capability
+  configure_systemd
+  configure_deploy_sudoers
+  configure_firewall
+  start_and_verify
+  print_summary
 }
 
-# Run main function
 main "$@"

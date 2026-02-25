@@ -47,8 +47,6 @@ Expected result: MongoDB status is `active (running)`.
 ## Step 4: Download HomeBrain
 
 ```bash
-mkdir -p ~/homebrain
-cd ~/homebrain
 git clone https://github.com/mefree2098/HomeBrainv2.git
 cd HomeBrainv2
 ```
@@ -57,8 +55,6 @@ cd HomeBrainv2
 
 ```bash
 npm install
-npm install --prefix server
-npm install --prefix client
 ```
 
 Expected result: installs complete without fatal errors.
@@ -81,7 +77,27 @@ Generate random values:
 openssl rand -hex 32
 ```
 
-## Step 7: Start HomeBrain
+## Step 7: Bootstrap Wake-Word Dependencies (Recommended)
+
+```bash
+cd server
+PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh
+cd ..
+```
+
+Expected result: `server/.wakeword-venv/bin/python` exists.
+
+## Step 8: Allow Node to bind ports 80/443 (HTTPS + ACME)
+
+```bash
+NODE_BIN="$(cd ~/HomeBrainv2 && node scripts/run-with-modern-node.js node -p 'process.execPath')"
+sudo setcap 'cap_net_bind_service=+ep' "$NODE_BIN"
+getcap "$NODE_BIN"
+```
+
+Expected result: output includes `cap_net_bind_service=ep`.
+
+## Step 9: Start HomeBrain
 
 ```bash
 npm start
@@ -102,10 +118,17 @@ Open:
 
 Create your first account when prompted.
 
-## Step 8: Optional Production Auto-Start
+## Step 10: Optional Production Auto-Start
 
 If you want HomeBrain to run at boot, follow:
 - [Deployment Runbook](../DEPLOYMENT.md)
+
+For a one-command clean install path, you can also run:
+
+```bash
+cd ~/HomeBrainv2
+./scripts/install-jetson.sh
+```
 
 ## Next Step
 

@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # HomeBrain Services Setup Script
 # Additional configuration and service management utilities
 
-set -e
+set -euo pipefail
 
 # Color codes
 RED='\033[0;31m'
@@ -12,17 +12,54 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-HOMEBRAIN_DIR="/opt/homebrain"
-HOMEBRAIN_USER="homebrain"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+HOMEBRAIN_USER="${HOMEBRAIN_USER:-${SUDO_USER:-$USER}}"
 NODE_BIN=""
 
+run_modern_npm() {
+    if [[ "${USER}" == "${HOMEBRAIN_USER}" ]]; then
+        (cd "$HOMEBRAIN_DIR" && node scripts/run-with-modern-node.js npm "$@")
+    else
+        local quoted_args=()
+        local arg
+        for arg in "$@"; do
+            quoted_args+=("$(printf '%q' "$arg")")
+        done
+        sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node scripts/run-with-modern-node.js npm ${quoted_args[*]}"
+    fi
+}
+
+setup_wakeword_if_missing() {
+    local venv_python="$HOMEBRAIN_DIR/server/.wakeword-venv/bin/python"
+    if [[ -x "$venv_python" ]]; then
+        return
+    fi
+
+    print_status "Wake-word virtualenv missing; installing OpenWakeWord dependencies..."
+    if (cd "$HOMEBRAIN_DIR/server" && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh); then
+        print_success "Wake-word dependencies installed"
+    else
+        print_warning "Wake-word dependency install failed. Retry manually:"
+        print_warning "  cd $HOMEBRAIN_DIR/server && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh"
+    fi
+}
+
 ensure_node_capability() {
+    if [[ ! -d "$HOMEBRAIN_DIR" ]]; then
+        print_warning "HomeBrain directory not found at $HOMEBRAIN_DIR; skipping capability setup"
+        return
+    fi
+
     if ! command -v node &>/dev/null; then
         print_warning "Node.js not found; cannot set privileged port capability"
         return
     fi
 
-    NODE_BIN=$(readlink -f "$(command -v node)")
+    NODE_BIN="$(cd "$HOMEBRAIN_DIR" && node scripts/run-with-modern-node.js node -p 'process.execPath' 2>/dev/null | tail -n 1 || true)"
+    if [[ -z "$NODE_BIN" ]]; then
+        NODE_BIN=$(readlink -f "$(command -v node)")
+    fi
     if [[ -z "$NODE_BIN" ]]; then
         print_warning "Unable to resolve node binary path for capability setup"
         return
@@ -66,6 +103,7 @@ show_usage() {
     echo "  health          Run system health check"
     echo "  setup-nginx     Configure nginx reverse proxy"
     echo "  setup-ssl       Configure SSL certificates"
+    echo "  setup-wakeword  Install wake-word training dependencies if missing"
     echo "  optimize        Run performance optimizations"
     echo
 }
@@ -74,7 +112,7 @@ show_usage() {
 start_services() {
     print_status "Starting HomeBrain services..."
     ensure_node_capability
-    sudo systemctl start mongodb
+    sudo systemctl start mongod
     sudo systemctl start homebrain
     sudo systemctl start homebrain-discovery
     print_success "Services started"
@@ -98,7 +136,7 @@ restart_services() {
 show_status() {
     echo "HomeBrain Service Status:"
     echo "========================"
-    sudo systemctl status mongodb --no-pager
+    sudo systemctl status mongod --no-pager
     echo
     sudo systemctl status homebrain --no-pager
     echo
@@ -153,17 +191,17 @@ update_homebrain() {
     print_status "Backed up current version to $BACKUP_DIR"
 
     # Update application
-    cd $HOMEBRAIN_DIR
-    sudo -u $HOMEBRAIN_USER git pull
+    cd "$HOMEBRAIN_DIR"
+    sudo -u "$HOMEBRAIN_USER" git pull --ff-only
 
-    # Update dependencies
-    sudo -u $HOMEBRAIN_USER npm install
-    cd server && sudo -u $HOMEBRAIN_USER npm install
-    cd ../client && sudo -u $HOMEBRAIN_USER npm install
+    # Update dependencies and build using modern node wrapper
+    run_modern_npm install --no-audit --no-fund
+    run_modern_npm install --no-audit --no-fund --prefix server
+    run_modern_npm install --no-audit --no-fund --prefix client
+    run_modern_npm run build --prefix client
 
-    # Build client
-    cd ..
-    sudo -u $HOMEBRAIN_USER npm run build
+    # Ensure wake-word worker is bootstrapped on clean hosts.
+    setup_wakeword_if_missing
     ensure_node_capability
 
     # Start services
@@ -284,7 +322,7 @@ run_health_check() {
     # Check services
     echo "Service Health:"
     echo "=============="
-    for service in mongodb homebrain homebrain-discovery; do
+    for service in mongod homebrain homebrain-discovery; do
         if sudo systemctl is-active --quiet $service; then
             echo -e "  $service: ${GREEN}Running${NC}"
         else
@@ -326,7 +364,7 @@ run_health_check() {
     # Test database connection
     echo "Database Connection:"
     echo "==================="
-    if mongo --eval "db.runCommand('ping')" homebrain &>/dev/null; then
+    if mongosh --quiet --eval "db.runCommand({ ping: 1 })" "mongodb://localhost/HomeBrain" &>/dev/null; then
         echo -e "  MongoDB: ${GREEN}Connected${NC}"
     else
         echo -e "  MongoDB: ${RED}Connection Failed${NC}"
@@ -497,6 +535,7 @@ main() {
         health) run_health_check ;;
         setup-nginx) setup_nginx ;;
         setup-ssl) setup_ssl ;;
+        setup-wakeword) setup_wakeword_if_missing ;;
         optimize) run_optimizations ;;
         *) show_usage ;;
     esac

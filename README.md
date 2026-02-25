@@ -62,8 +62,6 @@ Expected result: status shows `active (running)`.
 git clone https://github.com/mefree2098/HomeBrainv2.git
 cd HomeBrainv2
 npm install
-npm install --prefix server
-npm install --prefix client
 ```
 
 Expected result: installs finish without fatal errors.
@@ -99,6 +97,26 @@ Expected result:
 - UI on `http://<hub-ip>:5173`
 
 Open the UI and create your first account.
+
+### 7. Bootstrap wake-word worker (recommended)
+
+```bash
+cd server
+PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh
+cd ..
+```
+
+Expected result: `server/.wakeword-venv/bin/python` exists and wake-word health check can become `healthy`.
+
+### 8. Allow Node to bind ports 80/443 (required for HTTPS + ACME)
+
+```bash
+NODE_BIN="$(cd ~/HomeBrainv2 && node scripts/run-with-modern-node.js node -p 'process.execPath')"
+sudo setcap 'cap_net_bind_service=+ep' "$NODE_BIN"
+getcap "$NODE_BIN"
+```
+
+Expected result: output includes `cap_net_bind_service=ep`.
 
 ## Raspberry Pi Onboarding (Insanely Simple)
 

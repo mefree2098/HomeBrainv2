@@ -31,7 +31,7 @@ sudo lsof -i :5173 -i :3000
 Fix:
 1. Restart service: `sudo systemctl restart homebrain`
 2. Confirm `.env` exists: `ls -la server/.env`
-3. Rebuild client if needed: `npm run build --prefix client`
+3. Rebuild client if needed: `node scripts/run-with-modern-node.js npm run build --prefix client`
 
 ### Cannot login / auth errors
 
@@ -72,6 +72,20 @@ On Pi:
 sudo journalctl -u homebrain-remote -f
 ```
 
+### Wake-word worker health is degraded (executable missing)
+
+Symptom in `Platform Deploy -> Post-Deploy Health Check`:
+- `Wake-word worker executable is missing`
+
+Fix on hub:
+
+```bash
+cd ~/HomeBrainv2/server
+PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh
+test -x .wakeword-venv/bin/python && .wakeword-venv/bin/python --version
+sudo systemctl restart homebrain homebrain-discovery
+```
+
 ### Fleet updates not finishing
 
 In UI:
@@ -93,7 +107,7 @@ Common causes:
 Fix checks:
 
 ```bash
-cd ~/homebrain/HomeBrainv2
+cd ~/HomeBrainv2
 git status --short
 git remote -v
 ```
