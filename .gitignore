@@ -1,6 +1,10 @@
 server/node_modules/
 server/.env
 server/package-lock.json
+server/certificates/
+server/data/voice-acknowledgments/
+server/data/whisper/
+server/data/platform-deploy/
 client/node_modules/
 client/package-lock.json
 node_modules/
