@@ -1531,14 +1531,14 @@ export function Settings() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
-                  <label className="text-sm font-medium">INSTEON PLM Port</label>
+                  <label className="text-sm font-medium">INSTEON PLM Endpoint</label>
                   <Input
                     {...register("insteonPort")}
-                    placeholder="/dev/ttyUSB0"
+                    placeholder="/dev/ttyUSB0 or tcp://192.168.1.50:9761"
                     className="mt-1"
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    Serial port for INSTEON PowerLinc Modem
+                    Local serial path (for example /dev/ttyUSB0) or TCP serial bridge (for example tcp://host:9761)
                   </p>
                 </div>
                 <div className="space-y-4">
