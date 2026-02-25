@@ -165,9 +165,8 @@ const workflowSchema = new mongoose.Schema({
   collection: 'workflows'
 });
 
-workflowSchema.pre('save', function preSave(next) {
+workflowSchema.pre('save', function preSave() {
   this.updatedAt = new Date();
-  next();
 });
 
 workflowSchema.index({ enabled: 1, updatedAt: -1 });

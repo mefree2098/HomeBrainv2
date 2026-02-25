@@ -127,9 +127,8 @@ sslCertificateSchema.index({ status: 1, expiryDate: 1 });
 sslCertificateSchema.index({ domain: 1, status: 1 });
 
 // Update timestamp on save
-sslCertificateSchema.pre('save', function(next) {
+sslCertificateSchema.pre('save', function() {
   this.updatedAt = Date.now();
-  next();
 });
 
 // Instance method to encrypt private key

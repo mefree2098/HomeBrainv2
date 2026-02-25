@@ -238,11 +238,42 @@ class LetsEncryptService {
 
       // Finalize order
       console.log('Finalizing certificate order...');
-      await client.finalizeOrder(order, csr);
+      const finalizedOrder = await this.withTimeout(
+        client.finalizeOrder(order, csr),
+        30_000,
+        'Finalize order'
+      );
+
+      console.log('Waiting for finalized order status...');
+      const validOrder = await this.withTimeout(
+        client.waitForValidStatus(finalizedOrder),
+        180_000,
+        'Order finalization'
+      );
+
+      let certificateOrder = validOrder;
+      if (!certificateOrder.certificate && order.url) {
+        console.log('Certificate URL not yet present, refreshing order details...');
+        for (let attempt = 1; attempt <= 6 && !certificateOrder.certificate; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+          certificateOrder = await client.getOrder({ url: order.url });
+          console.log(
+            `Order refresh attempt ${attempt}: status=${certificateOrder.status || 'unknown'} certificateUrl=${certificateOrder.certificate ? 'present' : 'missing'}`
+          );
+        }
+      }
+
+      if (!certificateOrder.certificate) {
+        throw new Error(`Certificate URL missing after order finalization (status: ${certificateOrder.status || 'unknown'})`);
+      }
 
       // Get certificate
       console.log('Retrieving certificate...');
-      const certificate = await client.getCertificate(order);
+      const certificate = await this.withTimeout(
+        client.getCertificate(certificateOrder),
+        60_000,
+        'Certificate download'
+      );
 
       // Parse certificate to extract chain
       const certMatch = certificate.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g);
