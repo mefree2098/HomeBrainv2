@@ -8,7 +8,7 @@ Run on the hub:
 
 ```bash
 sudo systemctl status homebrain mongod --no-pager
-curl -s http://localhost:3000/api/ping || true
+curl -s http://localhost:3000/ping || true
 df -h
 free -h
 ```
