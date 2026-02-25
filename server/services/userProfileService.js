@@ -181,7 +181,7 @@ class UserProfileService {
           updatedAt: Date.now()
         },
         { 
-          new: true, 
+          returnDocument: 'after', 
           runValidators: true 
         }
       ).populate('favorites.devices')
@@ -285,7 +285,7 @@ class UserProfileService {
           lastUsed: Date.now(),
           updatedAt: Date.now()
         },
-        { new: true }
+        { returnDocument: 'after' }
       );
 
       if (!profile) {
@@ -318,7 +318,7 @@ class UserProfileService {
           $addToSet: { 'favorites.devices': deviceId },
           updatedAt: Date.now()
         },
-        { new: true }
+        { returnDocument: 'after' }
       )
         .populate('favorites.devices')
         .populate('favorites.scenes')
@@ -354,7 +354,7 @@ class UserProfileService {
           $pull: { 'favorites.devices': deviceId },
           updatedAt: Date.now()
         },
-        { new: true }
+        { returnDocument: 'after' }
       )
         .populate('favorites.devices')
         .populate('favorites.scenes')
@@ -390,7 +390,7 @@ class UserProfileService {
           $addToSet: { 'favorites.scenes': sceneId },
           updatedAt: Date.now()
         },
-        { new: true }
+        { returnDocument: 'after' }
       )
         .populate('favorites.devices')
         .populate('favorites.scenes')
@@ -425,7 +425,7 @@ class UserProfileService {
           $pull: { 'favorites.scenes': sceneId },
           updatedAt: Date.now()
         },
-        { new: true }
+        { returnDocument: 'after' }
       )
         .populate('favorites.devices')
         .populate('favorites.scenes')

@@ -678,7 +678,7 @@ class WakeWordTrainingService extends EventEmitter {
       }
     }
 
-    const model = await WakeWordModel.findOneAndUpdate({ slug }, update, { new: true });
+    const model = await WakeWordModel.findOneAndUpdate({ slug }, update, { returnDocument: 'after' });
     if (model) {
       this.emit('status', {
         slug,

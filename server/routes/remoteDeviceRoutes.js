@@ -854,7 +854,7 @@ router.post('/:deviceId/heartbeat', async (req, res) => {
     const device = await VoiceDevice.findByIdAndUpdate(
       deviceId,
       updateData,
-      { new: true }
+      { returnDocument: 'after' }
     );
 
     if (!device) {

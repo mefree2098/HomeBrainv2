@@ -30,7 +30,7 @@ class UserService {
 
   static async update(id, data) {
     try {
-      return User.findOneAndUpdate({ _id: id }, data, { new: true, upsert: false });
+      return User.findOneAndUpdate({ _id: id }, data, { returnDocument: 'after', upsert: false });
     } catch (err) {
       throw new Error(`Database error while updating user ${id}: ${err}`);
     }

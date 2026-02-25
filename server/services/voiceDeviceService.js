@@ -216,7 +216,7 @@ class VoiceDeviceService {
           status,
           lastSeen: status === 'online' ? new Date() : undefined
         },
-        { new: true }
+        { returnDocument: 'after' }
       );
 
       if (!device) {
