@@ -105,9 +105,8 @@ const schema = new mongoose.Schema({
   versionKey: false
 });
 
-schema.pre('save', function(next) {
+schema.pre('save', function() {
   this.updatedAt = Date.now();
-  next();
 });
 
 const WakeWordModel = mongoose.model('WakeWordModel', schema);
