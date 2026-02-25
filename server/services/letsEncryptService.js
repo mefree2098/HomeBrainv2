@@ -11,6 +11,45 @@ class LetsEncryptService {
   }
 
   /**
+   * Convert different ACME/axios error shapes into a readable message
+   * @param {Error|Object|string} error
+   * @returns {string}
+   */
+  getErrorMessage(error) {
+    if (!error) {
+      return 'Unknown error';
+    }
+
+    if (typeof error === 'string') {
+      return error;
+    }
+
+    // acme-client/axios often place details on response payloads
+    const responseData = error.response?.data;
+    if (responseData) {
+      if (typeof responseData === 'string') {
+        return responseData;
+      }
+
+      if (typeof responseData === 'object') {
+        if (responseData.detail) {
+          return responseData.detail;
+        }
+
+        if (responseData.type || responseData.title) {
+          return `${responseData.type || 'acme-error'}: ${responseData.title || 'Request failed'}`;
+        }
+      }
+    }
+
+    if (error.message) {
+      return error.message;
+    }
+
+    return String(error);
+  }
+
+  /**
    * Initialize directories for certificates and challenges
    */
   async initializeDirectories() {
@@ -136,9 +175,15 @@ class LetsEncryptService {
           await fs.writeFile(challengePath, keyAuthorization);
 
           try {
-            // Verify challenge
-            console.log('Verifying challenge...');
-            await client.verifyChallenge(authz, challenge);
+            // Optional local preflight. Some acme-client/axios combinations throw
+            // internal errors here for network-level issues; CA validation below is authoritative.
+            console.log('Verifying challenge (local preflight)...');
+            try {
+              await client.verifyChallenge(authz, challenge);
+              console.log('Local challenge verification passed');
+            } catch (verifyError) {
+              console.warn('Local challenge verification failed, continuing with ACME validation:', this.getErrorMessage(verifyError));
+            }
 
             // Complete challenge
             console.log('Completing challenge...');
@@ -188,7 +233,7 @@ class LetsEncryptService {
       console.error('Let\'s Encrypt certificate obtainment error:', error);
       return {
         success: false,
-        error: error.message
+        error: this.getErrorMessage(error)
       };
     }
   }
