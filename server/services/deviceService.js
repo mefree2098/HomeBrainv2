@@ -27,7 +27,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Fetching all devices with filters:', filters);
 
-      await this.ensureIntegrationState();
+      this.scheduleIntegrationRefresh({ reason: 'getAllDevices' });
 
       const query = {};
       if (filters.room) query.room = filters.room;
@@ -55,7 +55,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Fetching device by ID:', deviceId);
 
-      await this.ensureIntegrationState();
+      this.scheduleIntegrationRefresh({ reason: 'getDeviceById' });
 
       const device = await Device.findById(deviceId);
       if (!device) {
@@ -878,7 +878,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Fetching devices grouped by room');
 
-      await this.ensureIntegrationState();
+      this.scheduleIntegrationRefresh({ reason: 'getDevicesByRoom' });
 
       const devices = await Device.find().sort({ room: 1, name: 1 });
       
@@ -914,7 +914,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Fetching device statistics');
 
-      await this.ensureIntegrationState();
+      this.scheduleIntegrationRefresh({ reason: 'getDeviceStats' });
 
       const totalDevices = await Device.countDocuments();
       const onlineDevices = await Device.countDocuments({ isOnline: true });
@@ -954,6 +954,14 @@ class DeviceService {
       this.ensureSmartThingsState({ immediate }),
       this.ensureHarmonyState({ immediate })
     ]);
+  }
+
+  scheduleIntegrationRefresh({ immediate = false, reason = 'background' } = {}) {
+    Promise.resolve()
+      .then(() => this.ensureIntegrationState({ immediate }))
+      .catch((error) => {
+        console.warn(`DeviceService: Background integration refresh failed (${reason}): ${error.message}`);
+      });
   }
 
   async ensureHarmonyState({ immediate = false } = {}) {
