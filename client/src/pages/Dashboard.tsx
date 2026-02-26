@@ -35,7 +35,6 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true)
 
   const {
-    loading: favoritesLoading,
     favoriteDeviceIds,
     favoriteSceneIds,
     toggleDeviceFavorite,
@@ -174,7 +173,7 @@ export function Dashboard() {
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
   }, [devices, favoriteDeviceIds])
 
-  const isLoaded = !loading && !favoritesLoading
+  const isLoaded = !loading
 
   if (!isLoaded) {
     return (

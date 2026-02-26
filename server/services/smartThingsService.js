@@ -33,6 +33,8 @@ class SmartThingsService {
     this.disablePollingWhenWebhookHealthy = process.env.SMARTTHINGS_DISABLE_POLLING_ON_WEBHOOK === 'false' ? false : true;
     this.forceDevicePolling = process.env.SMARTTHINGS_FORCE_DEVICE_POLLING === 'true';
     this.backgroundTasksEnabled = process.env.SMARTTHINGS_BACKGROUND_TASKS !== 'false' && process.env.NODE_ENV !== 'test';
+    this.connectionBootstrapInProgress = false;
+    this.lastRecordedConnectionState = null;
     this.lastSuccessfulDeviceSyncAt = 0;
     if (this.backgroundTasksEnabled && this.deviceStatusSyncIntervalMs > 0) {
       this.startDeviceStatusSync();
@@ -652,6 +654,119 @@ class SmartThingsService {
     }
   }
 
+  async persistConnectionStatus({ isConnected, lastError = '', reason = 'unspecified' } = {}) {
+    const connected = Boolean(isConnected);
+    const normalizedError = connected ? '' : (typeof lastError === 'string' ? lastError : '');
+
+    try {
+      const integration = await SmartThingsIntegration.getIntegration();
+      if (!integration || typeof integration.save !== 'function') {
+        this.lastRecordedConnectionState = connected;
+        return false;
+      }
+
+      const currentError = integration.lastError || '';
+      const connectionChanged = integration.isConnected !== connected;
+      const errorChanged = currentError !== normalizedError;
+      if (!connectionChanged && !errorChanged) {
+        this.lastRecordedConnectionState = connected;
+        return false;
+      }
+
+      integration.isConnected = connected;
+      integration.lastError = normalizedError;
+      await integration.save();
+
+      this.lastRecordedConnectionState = connected;
+      console.log(`SmartThingsService: Persisted connection state ${connected ? 'connected' : 'disconnected'} (${reason})`);
+      return true;
+    } catch (error) {
+      console.warn(`SmartThingsService: Failed to persist connection state (${reason}): ${error.message}`);
+      return false;
+    }
+  }
+
+  async bootstrapConnectionState({ reason = 'startup' } = {}) {
+    if (this.connectionBootstrapInProgress) {
+      return {
+        success: false,
+        skipped: true,
+        reason: 'already-in-progress'
+      };
+    }
+
+    this.connectionBootstrapInProgress = true;
+
+    try {
+      const integration = await SmartThingsIntegration.getIntegration();
+      const settings = await Settings.getSettings();
+      const useOAuth = settings?.smartthingsUseOAuth !== false;
+      const hasPatToken = Boolean(settings?.smartthingsToken && settings.smartthingsToken.trim());
+      const hasOAuthCredentials = Boolean(
+        integration?.isConfigured &&
+        (integration?.accessToken || integration?.refreshToken)
+      );
+
+      if (useOAuth && !hasOAuthCredentials) {
+        await this.persistConnectionStatus({
+          isConnected: false,
+          lastError: 'SmartThings OAuth is not authorized',
+          reason: `${reason}:missing-oauth`
+        });
+
+        return {
+          success: false,
+          skipped: true,
+          reason: 'missing-oauth-credentials'
+        };
+      }
+
+      if (!useOAuth && !hasPatToken) {
+        await this.persistConnectionStatus({
+          isConnected: false,
+          lastError: 'SmartThings PAT token is not configured',
+          reason: `${reason}:missing-pat`
+        });
+
+        return {
+          success: false,
+          skipped: true,
+          reason: 'missing-pat-token'
+        };
+      }
+
+      // Probe a lightweight endpoint so connection state is ready after service restart.
+      await this.withTimeout(
+        this.makeAuthenticatedRequest('/locations'),
+        12000,
+        'SmartThings startup connection probe'
+      );
+
+      await this.persistConnectionStatus({
+        isConnected: true,
+        lastError: '',
+        reason: `${reason}:probe-success`
+      });
+
+      return {
+        success: true
+      };
+    } catch (error) {
+      await this.persistConnectionStatus({
+        isConnected: false,
+        lastError: error.message,
+        reason: `${reason}:probe-failed`
+      });
+
+      return {
+        success: false,
+        error: error.message
+      };
+    } finally {
+      this.connectionBootstrapInProgress = false;
+    }
+  }
+
   /**
    * Make authenticated request to SmartThings API
    * @param {string} endpoint - API endpoint (without base URL)
@@ -677,6 +792,14 @@ class SmartThingsService {
         ...config
       });
 
+      if (this.lastRecordedConnectionState !== true) {
+        await this.persistConnectionStatus({
+          isConnected: true,
+          lastError: '',
+          reason: `request:${endpoint}`
+        });
+      }
+
       return response.data;
     } catch (error) {
       const status = error.response?.status;
@@ -696,6 +819,7 @@ class SmartThingsService {
       if (status === 401) {
         const integration = await SmartThingsIntegration.getIntegration();
         await integration.clearTokens('Access token invalid');
+        this.lastRecordedConnectionState = false;
       }
 
       const apiError = new Error(`SmartThings API request failed: ${error.response?.data?.message || error.message}`);
@@ -2432,6 +2556,7 @@ class SmartThingsService {
       }
 
       console.log('SmartThingsService: Successfully disconnected');
+      this.lastRecordedConnectionState = false;
     } catch (error) {
       console.error('SmartThingsService: Error disconnecting:', error.message);
       throw error;

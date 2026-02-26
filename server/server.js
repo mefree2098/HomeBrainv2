@@ -49,6 +49,7 @@ const fs = require("fs");
 const path = require("path");
 
 const ACME_CHALLENGE_PORT = Number(process.env.ACME_CHALLENGE_PORT || 80);
+const SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS = Math.max(0, Number(process.env.SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS || 5000));
 const ACME_CHALLENGE_DIR = path.join(__dirname, 'public', '.well-known', 'acme-challenge');
 let challengeServer = null;
 let isShuttingDown = false;
@@ -528,5 +529,25 @@ httpServer.listen(port, async () => {
     console.log('Voice WebSocket (HTTPS) selected for device operations');
   } else {
     console.log('Voice WebSocket (HTTP) selected for device operations');
+  }
+
+  const bootstrapTimer = setTimeout(() => {
+    smartThingsService.bootstrapConnectionState({ reason: 'server-startup' })
+      .then((result) => {
+        if (result?.success) {
+          console.log('SmartThings startup bootstrap completed successfully');
+        } else if (result?.skipped) {
+          console.log(`SmartThings startup bootstrap skipped: ${result.reason}`);
+        } else {
+          console.warn(`SmartThings startup bootstrap failed: ${result?.error || 'unknown error'}`);
+        }
+      })
+      .catch((error) => {
+        console.warn(`SmartThings startup bootstrap error: ${error.message}`);
+      });
+  }, SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS);
+
+  if (typeof bootstrapTimer?.unref === 'function') {
+    bootstrapTimer.unref();
   }
 });
