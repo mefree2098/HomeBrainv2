@@ -1334,6 +1334,8 @@ class SmartThingsService {
       { armState: 'ArmedAway', deviceId: config.armAwayDeviceId }
     ];
 
+    const activeCandidates = [];
+
     for (const candidate of candidates) {
       if (!candidate.deviceId) {
         continue;
@@ -1354,25 +1356,48 @@ class SmartThingsService {
         console.debug(`SmartThingsService: STHM virtual switch ${candidate.armState} (${candidate.deviceId}) reports value=${debugValue}`);
 
         if (typeof switchValue === 'string' && switchValue.toLowerCase() === 'on') {
-          return {
+          activeCandidates.push({
             armState: candidate.armState,
             source: 'virtualSwitch-status',
             deviceId: candidate.deviceId,
             raw: status
-          };
+          });
+          continue;
         }
 
         if (switchValue === true) {
-          return {
+          activeCandidates.push({
             armState: candidate.armState,
             source: 'virtualSwitch-status',
             deviceId: candidate.deviceId,
             raw: status
-          };
+          });
         }
       } catch (error) {
         console.warn(`SmartThingsService: Unable to read STHM virtual switch ${candidate.armState} status (${candidate.deviceId}): ${error.message}`);
       }
+    }
+
+    if (activeCandidates.length === 1) {
+      return activeCandidates[0];
+    }
+
+    if (activeCandidates.length > 1) {
+      const preferredBySafety = ['ArmedAway', 'ArmedStay', 'Disarmed'];
+      const selected = preferredBySafety
+        .map((state) => activeCandidates.find((candidate) => candidate.armState === state))
+        .find(Boolean) || activeCandidates[0];
+
+      console.warn('SmartThingsService: Multiple STHM virtual switches are ON simultaneously; using safety-priority arm state selection', {
+        activeStates: activeCandidates.map((candidate) => candidate.armState),
+        selectedState: selected.armState
+      });
+
+      return {
+        ...selected,
+        source: 'virtualSwitch-status-conflict',
+        conflictStates: activeCandidates.map((candidate) => candidate.armState)
+      };
     }
 
     return null;
@@ -1676,6 +1701,26 @@ class SmartThingsService {
     const targetDeviceId = deviceMap[normalizedState];
     if (!targetDeviceId) {
       throw new Error(`SmartThings virtual switch not configured for STHM state ${normalizedState}`);
+    }
+
+    const devicesToTurnOff = Array.from(new Set(
+      Object.values(deviceMap).filter((candidateId) => candidateId && candidateId !== targetDeviceId)
+    ));
+
+    for (const deviceId of devicesToTurnOff) {
+      try {
+        await this.sendDeviceCommand(deviceId, [{
+          component: 'main',
+          capability: 'switch',
+          command: 'off'
+        }]);
+      } catch (error) {
+        if (error?.status && [400, 404, 409, 422].includes(error.status)) {
+          console.debug(`SmartThingsService: Ignoring companion STHM switch reset failure for ${deviceId}: ${error.message}`);
+        } else {
+          throw error;
+        }
+      }
     }
 
     console.log(`SmartThingsService: Triggering STHM virtual switch ${targetDeviceId} for state ${normalizedState}`);

@@ -528,6 +528,32 @@ Please contact your system administrator for assistance.`;
         }
       }
 
+      const systemStartResult = await this.startSystemService();
+      if (systemStartResult.success) {
+        const ownedProcess = await this.findOwnedOllamaProcess();
+        if (ownedProcess) {
+          config.serviceStatus = 'running';
+          config.servicePid = ownedProcess.pid;
+          config.serviceOwner = ownedProcess.user;
+        } else {
+          const processes = await this.listOllamaProcesses();
+          const external = processes[0] || null;
+          config.serviceStatus = 'running_external';
+          config.servicePid = external?.pid || null;
+          config.serviceOwner = external?.user || 'external';
+        }
+
+        config.lastError = null;
+        await config.save();
+        this.addOperationLog('service', systemStartResult.message);
+        return { success: true, message: systemStartResult.message };
+      }
+
+      this.addOperationLog(
+        'service',
+        `System service start was unavailable (${systemStartResult.message}). Falling back to managed process.`
+      );
+
       const childEnv = {
         ...process.env,
         OLLAMA_HOST: this.getOllamaHostForEnv()
@@ -912,6 +938,62 @@ Please contact your system administrator for assistance.`;
 
   delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async startSystemService() {
+    const commands = [];
+    const currentUser = this.getCurrentUser();
+
+    if (currentUser === 'root') {
+      commands.push('systemctl start ollama');
+      commands.push('service ollama start');
+      if (process.platform === 'darwin') {
+        commands.push('launchctl start com.ollama.ollama');
+      }
+    }
+
+    commands.push('sudo -n systemctl start ollama');
+    commands.push('sudo -n service ollama start');
+    if (process.platform === 'darwin') {
+      commands.push('sudo -n launchctl start com.ollama.ollama');
+    }
+
+    let lastError = null;
+
+    for (const command of commands) {
+      try {
+        await execAsync(command);
+        this.addOperationLog('service', `Executed start command: ${command}`);
+
+        const started = await this.waitForServiceReady(8, 500);
+        if (started) {
+          return { success: true, message: `Service started using "${command}"` };
+        }
+
+        lastError = new Error(`Command "${command}" completed, but service did not become ready`);
+      } catch (error) {
+        lastError = error;
+        const output = `${error.stderr || ''}${error.stdout || ''}`.toLowerCase();
+
+        if (output.includes('password') || output.includes('permission denied')) {
+          this.addOperationLog('service', `Permission denied while executing "${command}"`);
+          continue;
+        }
+        if (output.includes('command not found') || output.includes('not loaded')) {
+          continue;
+        }
+
+        this.addOperationLog(
+          'service',
+          `Start command failed (${command}): ${(error && error.message) || 'Unknown error'}`
+        );
+      }
+    }
+
+    return {
+      success: false,
+      message: lastError?.message || 'Unable to start system Ollama service'
+    };
   }
 
   async stopSystemService() {

@@ -163,6 +163,26 @@ Test connectivity from hub:
 curl -I https://api.smartthings.com/v1/devices
 ```
 
+### Security alarm does not arm/disarm in SmartThings
+
+Check:
+1. `Settings -> Integrations -> SmartThings Home Monitor Bridge` has all three switches mapped (`Disarm`, `Arm Stay`, `Arm Away`).
+2. Those mapped devices are virtual switches that accept `on/off` (or `momentary` push).
+3. SmartThings routines enforce one-hot state:
+   - STHM mode change turns on one switch and turns the other two off.
+   - Turning on each bridge switch sets the matching STHM mode.
+4. SmartThings account is connected via OAuth (new PATs expire after 24 hours).
+5. HomeBrain service can reach your MongoDB and SmartThings API (if DB is down, alarm sync/status will fail).
+
+Quick checks:
+
+```bash
+# Verify backend can start and reach DB
+sudo journalctl -u homebrain -n 200 --no-pager | rg -n "Mongo|SmartThings|security|alarm"
+```
+
+If the alarm still appears stale/offline, run a SmartThings webhook/activity check and confirm event delivery is current.
+
 ### Logitech Harmony Hubs are not discovered or won’t sync
 
 Check:
