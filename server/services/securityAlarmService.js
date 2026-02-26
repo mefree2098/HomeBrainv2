@@ -17,8 +17,13 @@ class SecurityAlarmService {
   async isSmartThingsConfiguredForSthm() {
     try {
       const integration = await SmartThingsIntegration.getIntegration();
+      const hasSthmMapping = Boolean(
+        integration?.sthm?.disarmDeviceId &&
+        integration?.sthm?.armStayDeviceId &&
+        integration?.sthm?.armAwayDeviceId
+      );
 
-      return !!(integration.isConfigured && integration.isConnected);
+      return !!(integration.isConfigured && integration.isConnected && hasSthmMapping);
     } catch (error) {
       console.error('SecurityAlarmService: Error checking SmartThings configuration:', error.message);
       return false;

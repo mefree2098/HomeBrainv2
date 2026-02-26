@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
+const SecurityAlarm = require('../models/SecurityAlarm');
 const Device = require('../models/Device');
 const smartThingsService = require('./smartThingsService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
@@ -536,6 +537,10 @@ class SmartThingsWebhookService {
         ? entry.deviceEvent
         : null;
 
+      if (eventType === 'SECURITY_ARM_STATE_EVENT') {
+        continue;
+      }
+
       if (eventType === 'DEVICE_EVENT' && candidate) {
         const deviceId = trim(candidate.deviceId || '');
         const capability = trim(candidate.capability || '');
@@ -589,6 +594,81 @@ class SmartThingsWebhookService {
       ignoredEventTypeCounts: Array.from(ignoredEventTypes.entries()),
       malformedCount
     };
+  }
+
+  extractSecurityArmStateEvents(events) {
+    if (!Array.isArray(events)) {
+      return {
+        securityArmStateEvents: [],
+        malformedCount: 0
+      };
+    }
+
+    const securityArmStateEvents = [];
+    let malformedCount = 0;
+
+    for (const entry of events) {
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+
+      const eventType = typeof entry.eventType === 'string' ? entry.eventType.toUpperCase() : '';
+      if (eventType !== 'SECURITY_ARM_STATE_EVENT') {
+        continue;
+      }
+
+      const candidate = entry.securityArmStateEvent && typeof entry.securityArmStateEvent === 'object'
+        ? entry.securityArmStateEvent
+        : null;
+
+      if (!candidate) {
+        malformedCount += 1;
+        continue;
+      }
+
+      const armState = trim(candidate.armState || '');
+      if (!armState) {
+        malformedCount += 1;
+        continue;
+      }
+
+      const locationId = trim(candidate.locationId || '');
+      const { timestampMs, timestampIso } = this.resolveEventTimestamp(candidate);
+
+      securityArmStateEvents.push({
+        armState,
+        locationId,
+        timestampMs,
+        timestampIso,
+        raw: candidate
+      });
+    }
+
+    return {
+      securityArmStateEvents,
+      malformedCount
+    };
+  }
+
+  normalizeSecurityArmState(armState) {
+    try {
+      return smartThingsService.normalizeArmState(armState);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  mapNormalizedArmStateToLocalAlarm(normalizedArmState) {
+    if (normalizedArmState === 'Disarmed') {
+      return 'disarmed';
+    }
+    if (normalizedArmState === 'ArmedStay') {
+      return 'armedStay';
+    }
+    if (normalizedArmState === 'ArmedAway') {
+      return 'armedAway';
+    }
+    return null;
   }
 
   resolveEventTimestamp(eventBody) {
@@ -1052,13 +1132,15 @@ class SmartThingsWebhookService {
     this.log('debug', 'SmartThings EVENT lifecycle received', { eventCount: rawEvents.length });
 
     const integration = await SmartThingsIntegration.getIntegration();
-    const extracted = this.extractDeviceEvents(rawEvents);
-    const deviceEvents = extracted.deviceEvents;
-    const ignoredEventTypeCounts = extracted.ignoredEventTypeCounts || [];
-    const relatedDeviceIds = extracted.relatedDeviceIds || [];
-    const malformedCount = extracted.malformedCount || 0;
+    const extractedDeviceEvents = this.extractDeviceEvents(rawEvents);
+    const extractedSecurityEvents = this.extractSecurityArmStateEvents(rawEvents);
+    const deviceEvents = extractedDeviceEvents.deviceEvents;
+    const ignoredEventTypeCounts = extractedDeviceEvents.ignoredEventTypeCounts || [];
+    const relatedDeviceIds = extractedDeviceEvents.relatedDeviceIds || [];
+    const malformedCount = (extractedDeviceEvents.malformedCount || 0) + (extractedSecurityEvents.malformedCount || 0);
+    const securityArmStateEvents = extractedSecurityEvents.securityArmStateEvents || [];
 
-    this.metrics.events.received += deviceEvents.length;
+    this.metrics.events.received += deviceEvents.length + securityArmStateEvents.length;
 
     if (ignoredEventTypeCounts.length > 0) {
       this.log('debug', 'SmartThings EVENT lifecycle skipped unsupported event types', {
@@ -1075,7 +1157,7 @@ class SmartThingsWebhookService {
     const relatedDeviceIdSet = new Set(Array.isArray(relatedDeviceIds) ? relatedDeviceIds : []);
     deviceEvents.forEach((event) => relatedDeviceIdSet.add(event.deviceId));
 
-    if (deviceEvents.length === 0 && relatedDeviceIdSet.size === 0) {
+    if (deviceEvents.length === 0 && relatedDeviceIdSet.size === 0 && securityArmStateEvents.length === 0) {
       const now = new Date();
       if (typeof integration.updateWebhookState === 'function') {
         await integration.updateWebhookState({
@@ -1095,6 +1177,83 @@ class SmartThingsWebhookService {
           }
         }
       };
+    }
+
+    let securityStateUpdateCount = 0;
+    let securityStateUpdateFailures = 0;
+    let latestSecurityArmState = null;
+
+    for (const event of securityArmStateEvents) {
+      this.incrementCapabilityMetric('securityArmState');
+
+      const normalizedArmState = this.normalizeSecurityArmState(event.armState);
+      if (!normalizedArmState) {
+        securityStateUpdateFailures += 1;
+        this.log('warn', 'SmartThings SECURITY_ARM_STATE_EVENT had unsupported arm state', {
+          armState: event.armState
+        });
+        continue;
+      }
+
+      const eventLocationId = trim(
+        event.locationId ||
+        integration?.webhook?.locationId ||
+        integration?.sthm?.locationId ||
+        ''
+      );
+
+      try {
+        if (typeof integration.updateSecurityArmState === 'function') {
+          await integration.updateSecurityArmState({
+            armState: normalizedArmState,
+            locationId: eventLocationId || undefined
+          });
+        } else if (integration?.sthm) {
+          integration.sthm.lastArmState = normalizedArmState;
+          integration.sthm.lastArmStateUpdatedAt = new Date(event.timestampMs || Date.now());
+          if (eventLocationId) {
+            integration.sthm.locationId = eventLocationId;
+          }
+          if (typeof integration.save === 'function') {
+            await integration.save();
+          }
+        }
+
+        securityStateUpdateCount += 1;
+
+        if (!latestSecurityArmState || event.timestampMs > latestSecurityArmState.timestampMs) {
+          latestSecurityArmState = {
+            normalizedArmState,
+            timestampMs: event.timestampMs,
+            locationId: eventLocationId
+          };
+        }
+      } catch (error) {
+        securityStateUpdateFailures += 1;
+        this.log('warn', 'Failed to persist SmartThings security arm state from webhook event', {
+          armState: normalizedArmState,
+          locationId: eventLocationId,
+          error: error.message
+        });
+      }
+    }
+
+    if (latestSecurityArmState) {
+      try {
+        const alarm = await SecurityAlarm.getMainAlarm();
+        const mappedState = this.mapNormalizedArmStateToLocalAlarm(latestSecurityArmState.normalizedArmState);
+        if (mappedState) {
+          alarm.alarmState = mappedState;
+        }
+        alarm.isOnline = true;
+        alarm.lastSyncWithSmartThings = new Date(latestSecurityArmState.timestampMs || Date.now());
+        await alarm.save();
+      } catch (error) {
+        this.log('warn', 'Failed to mirror SmartThings security arm state into local alarm model', {
+          armState: latestSecurityArmState.normalizedArmState,
+          error: error.message
+        });
+      }
     }
 
     const deviceIds = Array.from(relatedDeviceIdSet);
@@ -1329,11 +1488,15 @@ class SmartThingsWebhookService {
     }
 
     const status = updatedDeviceIdArray.length > 0
+      || securityStateUpdateCount > 0
       ? 'PROCESSED'
-      : (aggregatedByDevice.size === 0 && fallbackDeviceIds.length === 0 ? 'NO_MATCH' : 'ACKNOWLEDGED');
+      : (aggregatedByDevice.size === 0 && fallbackDeviceIds.length === 0 && securityArmStateEvents.length === 0 ? 'NO_MATCH' : 'ACKNOWLEDGED');
 
     this.log('info', 'SmartThings EVENT lifecycle processed', {
       eventsReceived: deviceEvents.length,
+      securityEventsReceived: securityArmStateEvents.length,
+      securityEventsApplied: securityStateUpdateCount,
+      securityEventsFailed: securityStateUpdateFailures,
       devicesUpdated: updatedDeviceIdArray.length,
       ignoredDevices: ignoredDevices.size,
       status
@@ -1345,6 +1508,7 @@ class SmartThingsWebhookService {
         eventData: {
           status,
           processedDeviceCount: updatedDeviceIdArray.length,
+          processedSecurityStateCount: securityStateUpdateCount,
           ignoredDeviceIds: ignoredDevices.size > 0 ? Array.from(ignoredDevices) : undefined
         }
       }
@@ -1353,6 +1517,5 @@ class SmartThingsWebhookService {
 }
 
 module.exports = new SmartThingsWebhookService();
-
 
 

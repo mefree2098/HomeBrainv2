@@ -34,6 +34,21 @@ Open `Settings -> Integrations`.
 3. Click `Connect SmartThings` and complete SmartThings authorization.
 4. Test connection and sync devices.
 
+#### SmartThings Home Monitor (Security Alarm bridge)
+
+HomeBrain mirrors SmartThings Home Monitor (STHM) through virtual switches.
+
+1. In SmartThings, create three virtual switches (Disarm, Arm Stay, Arm Away).
+2. Create routines that keep these three switches one-hot:
+   - When STHM mode changes, turn on the matching switch and turn the other two off.
+   - When one bridge switch turns on, set STHM to the matching mode.
+3. In `Settings -> Integrations -> SmartThings Home Monitor Bridge`, map each switch and save.
+4. Use `Refresh Devices` after creating switches/routines if they are not listed yet.
+
+Notes:
+- New SmartThings PATs expire after 24 hours; prefer OAuth.
+- SmartThings currently exposes security arm-state as an event subscription source, so HomeBrain relies on virtual-switch + webhook/event sync for control/state mirroring.
+
 ### INSTEON
 
 The 2413S PLM RJ45 jack is a serial interface, not Ethernet networking.
