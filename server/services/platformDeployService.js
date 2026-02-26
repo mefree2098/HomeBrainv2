@@ -67,6 +67,10 @@ class PlatformDeployService {
     this.latestJobRefPath = path.join(this.dataDir, 'latest-job.txt');
     this.initialized = false;
     this.startDeployInProgress = false;
+    this.autoCleanClientDist = process.env.HOMEBRAIN_DEPLOY_AUTOCLEAN_CLIENT_DIST !== 'false';
+    this.restartOllamaOnDeploy = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA !== 'false';
+    this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD
+      || 'sudo systemctl restart ollama';
     this.defaultRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD
       || 'sudo systemctl restart homebrain homebrain-discovery';
   }
@@ -266,6 +270,61 @@ class PlatformDeployService {
     return ['-c', `safe.directory=${this.projectRoot}`, ...args];
   }
 
+  async getClientDistStatusLines() {
+    const result = await this.runCommand(
+      'git',
+      this.getSafeGitArgs(['status', '--porcelain', '--', 'client/dist'])
+    );
+
+    return (result.stdout || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  async cleanupClientDistArtifacts({ jobId = null } = {}) {
+    const log = async (message) => {
+      if (!jobId) return;
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [Clean client dist artifacts] ${message}\n`
+      );
+    };
+
+    const changes = await this.getClientDistStatusLines();
+    if (changes.length === 0) {
+      return { cleaned: false };
+    }
+
+    await log(`Detected ${changes.length} generated change(s) in client/dist; resetting.`);
+
+    const runGitNoOutput = (args) => this.runCommand(
+      'git',
+      this.getSafeGitArgs(args),
+      { captureStdout: false }
+    );
+
+    try {
+      await runGitNoOutput(['restore', '--source=HEAD', '--worktree', '--staged', '--', 'client/dist']);
+    } catch (error) {
+      await log(`"git restore" failed (${error.message}); trying fallback.`);
+      await runGitNoOutput(['reset', '--', 'client/dist']).catch(() => {});
+      await runGitNoOutput(['checkout', '--', 'client/dist']);
+    }
+
+    await runGitNoOutput(['clean', '-fd', '--', 'client/dist']).catch(async (error) => {
+      await log(`WARN: git clean failed: ${error.message}`);
+    });
+
+    const remaining = await this.getClientDistStatusLines();
+    if (remaining.length > 0) {
+      throw new Error(`Unable to clean generated client/dist artifacts (${remaining.length} changes remain).`);
+    }
+
+    await log('client/dist artifacts normalized.');
+    return { cleaned: true };
+  }
+
   async getRepoStatus() {
     await this.initialize();
 
@@ -438,14 +497,17 @@ class PlatformDeployService {
 
   async triggerServiceRestart(jobId = null) {
     const restartCommand = this.defaultRestartCommand;
+    const fullCommand = this.restartOllamaOnDeploy
+      ? `${this.defaultOllamaRestartCommand} || true; ${restartCommand}`
+      : restartCommand;
     if (jobId) {
       await this.appendJobLog(
         jobId,
-        `[${new Date().toISOString()}] [restart] Triggering service restart command: ${restartCommand}\n`
+        `[${new Date().toISOString()}] [restart] Triggering service restart command: ${fullCommand}\n`
       );
     }
 
-    const child = spawn('bash', ['-lc', restartCommand], {
+    const child = spawn('bash', ['-lc', fullCommand], {
       cwd: this.projectRoot,
       env: process.env,
       detached: true,
@@ -459,7 +521,7 @@ class PlatformDeployService {
       category: 'deploy',
       payload: {
         jobId: jobId || null,
-        command: restartCommand
+        command: fullCommand
       },
       tags: ['deploy', 'restart']
     });
@@ -483,6 +545,10 @@ class PlatformDeployService {
         error.code = 'DEPLOY_RUNNING';
         error.job = running;
         throw error;
+      }
+
+      if (this.autoCleanClientDist) {
+        await this.cleanupClientDistArtifacts().catch(() => {});
       }
 
       const resolvedOptions = this.resolveDeployOptions(options);
@@ -583,6 +649,18 @@ class PlatformDeployService {
       }
     };
 
+    const runCustomStep = async (stepName, operation) => {
+      await this.markStep(jobId, stepName, 'running');
+      try {
+        await operation();
+        await this.markStep(jobId, stepName, 'completed');
+      } catch (error) {
+        await this.appendJobLog(jobId, `[${new Date().toISOString()}] [${stepName}] FAILED: ${error.message}\n`);
+        await this.markStep(jobId, stepName, 'failed', error.message);
+        throw error;
+      }
+    };
+
     const runNpmStep = async (stepName, npmArgs, options = {}) => {
       await runStep(stepName, 'node', ['scripts/run-with-modern-node.js', 'npm', ...npmArgs], options);
     };
@@ -605,6 +683,12 @@ class PlatformDeployService {
 
       if (job.options.runServerTests) {
         await runNpmStep('Run server tests', ['test', '--prefix', 'server']);
+      }
+
+      if (this.autoCleanClientDist) {
+        await runCustomStep('Clean client dist artifacts', async () => {
+          await this.cleanupClientDistArtifacts({ jobId });
+        });
       }
 
       const repoAfter = await this.getRepoStatus();
