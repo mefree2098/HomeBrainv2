@@ -619,6 +619,15 @@ class BrowserVoiceAssistant {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Server STT fallback capture failed";
         this.updateStatus({}, `server-stt fallback error: ${message}`);
+        if (
+          message.includes('HTTP 404') ||
+          message.toLowerCase().includes('page not found')
+        ) {
+          this.updateStatus({
+            mode: "error",
+            error: "Server route /api/voice/browser/transcribe is unavailable. Deploy/restart backend.",
+          }, "server-stt endpoint missing on backend");
+        }
       } finally {
         this.fallbackCaptureInFlight = false;
       }

@@ -73,23 +73,23 @@ final class APIClient {
             throw APIError.invalidURL
         }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = method.rawValue
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = method.rawValue
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         if authorized, let accessToken = sessionStore.accessToken {
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         }
 
         if let body {
             if JSONSerialization.isValidJSONObject(body) {
-                request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+                urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
             } else {
                 throw APIError.parsingFailed
             }
         }
 
-        let (data, response) = try await urlSession.data(for: request)
+        let (data, response) = try await urlSession.data(for: urlRequest)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
