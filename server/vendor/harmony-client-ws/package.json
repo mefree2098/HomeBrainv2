@@ -1,0 +1,10 @@
+{
+  "name": "@harmonyhub/client-ws",
+  "version": "1.0.9-homebrain.1",
+  "description": "HomeBrain-maintained Harmony Hub websocket client without deprecated or vulnerable transitive dependencies",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

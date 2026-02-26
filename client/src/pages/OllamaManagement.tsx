@@ -127,6 +127,21 @@ export default function OllamaManagement() {
     }
   }, [activeTab, logFetchedOnce, logLoading, loadLogs]);
 
+  useEffect(() => {
+    if (activeTab !== 'logs') {
+      return;
+    }
+
+    const intervalMs = actionLoading ? 2500 : 8000;
+    const interval = setInterval(() => {
+      if (!logLoading) {
+        loadLogs();
+      }
+    }, intervalMs);
+
+    return () => clearInterval(interval);
+  }, [activeTab, actionLoading, loadLogs, logLoading]);
+
   const handleRefreshLogs = () => {
     loadLogs();
   };
@@ -158,6 +173,9 @@ export default function OllamaManagement() {
         description: error.message || 'Failed to install Ollama',
       });
     } finally {
+      if (activeTab === 'logs') {
+        await loadLogs();
+      }
       setActionLoading(null);
     }
   };
@@ -180,6 +198,9 @@ export default function OllamaManagement() {
         description: error.message || 'Failed to start service',
       });
     } finally {
+      if (activeTab === 'logs') {
+        await loadLogs();
+      }
       setActionLoading(null);
     }
   };
@@ -212,6 +233,9 @@ export default function OllamaManagement() {
         description: error.message || 'Failed to stop service',
       });
     } finally {
+      if (activeTab === 'logs') {
+        await loadLogs();
+      }
       setActionLoading(null);
     }
   };
@@ -254,10 +278,10 @@ export default function OllamaManagement() {
     });
 
     try {
-      await updateOllama();
+      const result = await updateOllama();
       toast({
         title: 'Success',
-        description: 'Ollama updated successfully',
+        description: `Ollama updated successfully${result?.version ? ` to ${result.version}` : ''}`,
       });
       await loadStatus();
     } catch (error: any) {
@@ -268,6 +292,9 @@ export default function OllamaManagement() {
         description: error.message || 'Failed to update Ollama',
       });
     } finally {
+      if (activeTab === 'logs') {
+        await loadLogs();
+      }
       setActionLoading(null);
     }
   };
@@ -396,10 +423,10 @@ export default function OllamaManagement() {
                     size="sm"
                     variant="outline"
                     onClick={handleStopService}
-                    disabled={actionLoading === 'stop' || isExternalService}
+                    disabled={actionLoading === 'stop'}
                   >
                     <StopIcon className="h-4 w-4 mr-1" />
-                    {isExternalService ? 'Managed Externally' : 'Stop'}
+                    {isExternalService ? 'Stop (sudo)' : 'Stop'}
                   </Button>
                 ) : (
                   <Button

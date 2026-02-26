@@ -4,14 +4,21 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { sendChatMessage, getChatHistory, clearChatHistory } from '@/api/ollama';
-import { PaperAirplaneIcon, TrashIcon } from '@heroicons/react/24/outline';
+import {
+  ArrowPathIcon,
+  PaperAirplaneIcon,
+  SparklesIcon,
+  TrashIcon,
+  UserIcon,
+} from '@heroicons/react/24/outline';
 import { useToast } from '@/hooks/useToast';
+import { Badge } from '@/components/ui/badge';
 
 interface ChatMessage {
   _id?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
-  timestamp: Date;
+  timestamp: Date | string;
   model: string;
 }
 
@@ -127,83 +134,145 @@ export default function ChatInterface({ activeModel }: ChatInterfaceProps) {
     }
   };
 
+  const formatTimestamp = (timestamp: Date | string) => {
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) {
+      return '';
+    }
+    return parsed.toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+
+  const modelLabel = activeModel || 'No model selected';
+
   return (
-    <Card className="flex flex-col h-[600px]">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>Chat with {activeModel || 'Model'}</CardTitle>
+    <Card className="flex h-[min(78vh,760px)] flex-col overflow-hidden border-border/70 bg-card/95">
+      <CardHeader className="flex flex-row items-start justify-between gap-4 border-b border-border/50 pb-4">
+        <div className="space-y-2">
+          <CardTitle className="text-2xl">Chat Playground</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="font-mono text-xs">
+              {modelLabel}
+            </Badge>
+            <Badge variant="secondary" className="text-xs">
+              {messages.length} message{messages.length === 1 ? '' : 's'}
+            </Badge>
+          </div>
+        </div>
         <Button
           variant="outline"
           size="sm"
           onClick={handleClearHistory}
-          disabled={messages.length === 0}
+          disabled={messages.length === 0 || loading}
         >
           <TrashIcon className="h-4 w-4 mr-2" />
           Clear History
         </Button>
       </CardHeader>
-      <CardContent className="flex-1 flex flex-col p-4 gap-4">
-        <ScrollArea className="flex-1 pr-4">
-          {loadingHistory ? (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-muted-foreground">Loading chat history...</p>
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-muted-foreground">No messages yet. Start a conversation!</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {messages.map((msg, idx) => (
-                <div
-                  key={msg._id || idx}
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-lg p-3 ${
-                      msg.role === 'user'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted'
-                    }`}
-                  >
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                    <p className="text-xs opacity-70 mt-1">
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </p>
-                  </div>
+      <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+        <div className="mx-4 mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/60 bg-muted/20">
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-5 sm:px-6">
+              {loadingHistory ? (
+                <div className="flex min-h-[200px] items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                  Loading chat history...
                 </div>
-              ))}
+              ) : messages.length === 0 ? (
+                <div className="flex min-h-[260px] flex-col items-center justify-center gap-3 text-center">
+                  <SparklesIcon className="h-8 w-8 text-muted-foreground" />
+                  <p className="text-base font-medium">No conversation yet</p>
+                  <p className="max-w-md text-sm text-muted-foreground">
+                    Send a message to test your active model and verify local Ollama responses.
+                  </p>
+                </div>
+              ) : (
+                messages.map((msg, idx) => {
+                  const isUser = msg.role === 'user';
+                  const roleLabel = isUser
+                    ? 'You'
+                    : msg.role === 'assistant'
+                      ? 'Assistant'
+                      : 'System';
+
+                  return (
+                    <div
+                      key={msg._id || idx}
+                      className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div
+                        className={`max-w-[min(88%,760px)] rounded-2xl border px-4 py-3 shadow-sm ${
+                          isUser
+                            ? 'border-primary/50 bg-primary text-primary-foreground'
+                            : 'border-border/60 bg-card/90 text-foreground'
+                        }`}
+                      >
+                        <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide opacity-75">
+                          {isUser ? (
+                            <UserIcon className="h-3 w-3" />
+                          ) : (
+                            <SparklesIcon className="h-3 w-3" />
+                          )}
+                          <span>{roleLabel}</span>
+                          {formatTimestamp(msg.timestamp) && (
+                            <span className="opacity-70">• {formatTimestamp(msg.timestamp)}</span>
+                          )}
+                        </div>
+                        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                          {msg.content}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
               {loading && (
                 <div className="flex justify-start">
-                  <div className="bg-muted rounded-lg p-3">
-                    <p className="text-sm text-muted-foreground">Thinking...</p>
+                  <div className="rounded-2xl border border-border/60 bg-card/90 px-4 py-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                      Thinking...
+                    </div>
                   </div>
                 </div>
               )}
               <div ref={messagesEndRef} />
             </div>
-          )}
-        </ScrollArea>
+          </ScrollArea>
+        </div>
 
-        <div className="flex gap-2">
-          <Textarea
-            value={inputMessage}
-            onChange={e => setInputMessage(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder={
-              activeModel
-                ? 'Type your message... (Shift+Enter for new line)'
-                : 'Please select an active model first'
-            }
-            className="flex-1 min-h-[60px] max-h-[120px]"
-            disabled={!activeModel || loading}
-          />
-          <Button
-            onClick={handleSend}
-            disabled={!inputMessage.trim() || !activeModel || loading}
-            size="lg"
-          >
-            <PaperAirplaneIcon className="h-5 w-5" />
-          </Button>
+        <div className="mt-4 border-t border-border/50 bg-card/80 p-4">
+          <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 sm:flex-row sm:items-end">
+            <Textarea
+              value={inputMessage}
+              onChange={e => setInputMessage(e.target.value)}
+              onKeyDown={handleKeyPress}
+              placeholder={
+                activeModel
+                  ? 'Ask anything about your smart home, automations, or local tasks...'
+                  : 'Select an active model in the Models tab first'
+              }
+              className="min-h-[80px] max-h-[220px] flex-1 resize-y rounded-xl border-border/70 bg-background/90"
+              disabled={!activeModel || loading}
+            />
+            <Button
+              onClick={handleSend}
+              disabled={!inputMessage.trim() || !activeModel || loading}
+              className="h-11 gap-2 px-5"
+            >
+              {loading ? (
+                <ArrowPathIcon className="h-4 w-4 animate-spin" />
+              ) : (
+                <PaperAirplaneIcon className="h-4 w-4" />
+              )}
+              <span>{loading ? 'Sending' : 'Send'}</span>
+            </Button>
+          </div>
+          <p className="mx-auto mt-2 w-full max-w-4xl text-xs text-muted-foreground">
+            Press Enter to send. Use Shift+Enter for a new line.
+          </p>
         </div>
       </CardContent>
     </Card>

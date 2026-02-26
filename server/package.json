@@ -16,7 +16,7 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",
-    "@harmonyhub/client-ws": "^1.0.9",
+    "@harmonyhub/client-ws": "file:vendor/harmony-client-ws",
     "@harmonyhub/discover": "^1.0.9",
     "acme-client": "^5.4.0",
     "axios": "^1.7.7",
