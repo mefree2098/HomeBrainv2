@@ -12,8 +12,7 @@ import {
   Cpu,
   Rocket,
   Workflow,
-  Activity,
-  Wifi
+  Activity
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -28,7 +27,6 @@ const navigation = [
   { name: 'Automations', href: '/automations', icon: Zap },
   { name: 'Voice Devices', href: '/voice-devices', icon: Mic },
   { name: 'User Profiles', href: '/profiles', icon: Users },
-  { name: 'Integrations', href: '/integrations', icon: Wifi },
   { name: 'Ollama / LLM', href: '/ollama', icon: Brain },
   { name: 'Whisper STT', href: '/whisper', icon: Cpu },
   { name: 'Platform Deploy', href: '/platform-deploy', icon: Rocket, adminOnly: true },

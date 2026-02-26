@@ -85,23 +85,9 @@ import {
 } from "@/api/harmony"
 import { useNavigate } from "react-router-dom"
 
-type SettingsTab = "general" | "voice" | "integrations" | "security" | "maintenance"
-
-interface SettingsProps {
-  initialTab?: SettingsTab
-}
-
-function normalizeSettingsTab(tab?: string): SettingsTab {
-  if (tab === "voice" || tab === "integrations" || tab === "security" || tab === "maintenance") {
-    return tab
-  }
-  return "general"
-}
-
-export function Settings({ initialTab = "general" }: SettingsProps = {}) {
+export function Settings() {
   const { toast } = useToast()
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState<SettingsTab>(normalizeSettingsTab(initialTab))
   const [loading, setLoading] = useState(false)
   const [testingApiKey, setTestingApiKey] = useState(false)
   const [testingOpenAI, setTestingOpenAI] = useState(false)
@@ -296,10 +282,6 @@ export function Settings({ initialTab = "general" }: SettingsProps = {}) {
   const disarmSelectValue = sthmConfig.disarmDeviceId || STHM_NOT_CONFIGURED
   const armStaySelectValue = sthmConfig.armStayDeviceId || STHM_NOT_CONFIGURED
   const armAwaySelectValue = sthmConfig.armAwayDeviceId || STHM_NOT_CONFIGURED
-
-  useEffect(() => {
-    setActiveTab(normalizeSettingsTab(initialTab))
-  }, [initialTab])
 
   // Load settings on component mount
   useEffect(() => {
@@ -1520,7 +1502,7 @@ export function Settings({ initialTab = "general" }: SettingsProps = {}) {
       </div>
 
       <form onSubmit={handleSubmit(handleSaveSettings)}>
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(normalizeSettingsTab(value))} className="space-y-6">
+        <Tabs defaultValue="general" className="space-y-6">
           <TabsList className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="voice">Voice & Audio</TabsTrigger>

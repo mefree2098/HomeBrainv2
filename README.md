@@ -162,7 +162,7 @@ What this gives you:
 
 ## Logitech Harmony Hub Integration
 
-Open `Integrations` in the sidebar (or `Settings -> Integrations`), then use the `Logitech Harmony Hub Integration` card.
+Open `Settings -> Integrations`, then use the `Logitech Harmony Hub Integration` card.
 
 1. (Optional) Enter known hub IPs/hosts in `Configured Harmony Hub IPs/Hosts`.
 2. Click `Discover Hubs`.
