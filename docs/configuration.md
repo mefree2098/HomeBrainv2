@@ -64,6 +64,7 @@ Open the `Logitech Harmony Hub Integration` card in `Settings -> Integrations`.
 Behavior notes:
 - Harmony Hub activity devices support `turn_on`, `turn_off`, and `toggle`.
 - `turn_on` starts that activity, `turn_off` powers the hub activity off.
+- Discovered hubs stay listed in `Settings -> Integrations` with last device-sync and activity-state-sync status.
 
 ## 4. User Profiles (Voices + Personalities)
 

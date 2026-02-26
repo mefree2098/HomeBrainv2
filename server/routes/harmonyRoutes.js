@@ -26,10 +26,12 @@ router.post('/discover', async (req, res) => {
   try {
     const timeoutMs = Number(req.body?.timeoutMs || 0) || undefined;
     const hubs = await harmonyService.discoverHubs({ timeoutMs, force: true });
+    const discoveredCount = hubs.filter((hub) => hub?.discovered).length;
     return res.status(200).json({
       success: true,
       hubs,
-      count: hubs.length
+      count: discoveredCount,
+      totalKnown: hubs.length
     });
   } catch (error) {
     console.error('HarmonyRoutes: Discovery failed:', error.message);
