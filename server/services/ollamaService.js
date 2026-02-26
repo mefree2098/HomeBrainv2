@@ -15,6 +15,7 @@ const MAX_LOG_BYTES = 1_048_576; // 1 MB
 const LOG_LINE_SPLIT_REGEX = /\r?\n/;
 const MAX_OPERATION_LOG_LINES = 4000;
 const VERSION_REGEX = /v?(\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.-]+)?)/i;
+const MAX_MANIFEST_SCAN_FILES = 5000;
 
 async function commandExists(command) {
   try {
@@ -90,6 +91,120 @@ function buildLogCandidatePaths() {
   candidates.push('/var/log/ollama-service.log');
 
   return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+async function isReadableDirectory(dirPath) {
+  try {
+    const stats = await fsp.stat(dirPath);
+    if (!stats.isDirectory()) {
+      return false;
+    }
+    await fsp.access(dirPath, fs.constants.R_OK);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function normalizeOllamaRootPath(candidate) {
+  if (!candidate || typeof candidate !== 'string') {
+    return null;
+  }
+
+  const normalized = path.resolve(candidate.trim());
+  if (!normalized) {
+    return null;
+  }
+
+  if (path.basename(normalized) === 'models') {
+    return path.dirname(normalized);
+  }
+
+  return normalized;
+}
+
+function buildModelStoreCandidateRoots() {
+  const candidates = new Set();
+  const homeDir = os.homedir ? os.homedir() : null;
+
+  if (homeDir) {
+    candidates.add(path.join(homeDir, '.ollama'));
+  }
+
+  candidates.add('/usr/share/ollama/.ollama');
+  candidates.add('/var/lib/ollama/.ollama');
+  candidates.add('/home/ollama/.ollama');
+  candidates.add('/root/.ollama');
+
+  const envModelPath = normalizeOllamaRootPath(process.env.OLLAMA_MODELS);
+  if (envModelPath) {
+    candidates.add(envModelPath);
+  }
+
+  return Array.from(candidates);
+}
+
+async function collectManifestFiles(manifestRoot, limit = MAX_MANIFEST_SCAN_FILES) {
+  const files = [];
+  const pending = [manifestRoot];
+
+  while (pending.length && files.length < limit) {
+    const current = pending.pop();
+
+    let entries = [];
+    try {
+      entries = await fsp.readdir(current, { withFileTypes: true });
+    } catch (error) {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+
+      if (entry.isDirectory()) {
+        pending.push(fullPath);
+        continue;
+      }
+
+      if (entry.isFile()) {
+        files.push(fullPath);
+        if (files.length >= limit) {
+          break;
+        }
+      }
+    }
+  }
+
+  return files;
+}
+
+function deriveModelFromManifestPath(manifestPath, manifestRoot) {
+  const relative = path.relative(manifestRoot, manifestPath);
+  if (!relative || relative.startsWith('..')) {
+    return null;
+  }
+
+  const parts = relative.split(path.sep).filter(Boolean);
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const tag = parts[parts.length - 1];
+  const model = parts[parts.length - 2];
+  if (!model || !tag) {
+    return null;
+  }
+
+  let fullModelName = model;
+  const possibleNamespace = parts[parts.length - 3];
+  if (possibleNamespace && possibleNamespace !== 'library' && possibleNamespace !== 'models') {
+    fullModelName = `${possibleNamespace}/${model}`;
+  }
+
+  return {
+    name: `${fullModelName}:${tag}`,
+    tag
+  };
 }
 
 function normalizeVersionString(value) {
@@ -319,6 +434,143 @@ class OllamaService {
     });
   }
 
+  transformApiModels(models = []) {
+    return models.map((model) => {
+      const modelName = model.name || '';
+      const tagIndex = modelName.lastIndexOf(':');
+      const parsedTag = tagIndex > -1 ? modelName.slice(tagIndex + 1) : 'latest';
+
+      return {
+        name: modelName,
+        tag: parsedTag || 'latest',
+        size: model.size || 0,
+        digest: model.digest || '',
+        modifiedAt: model.modified_at ? new Date(model.modified_at) : new Date(),
+        family: model.details?.family || '',
+        parameterSize: model.details?.parameter_size || '',
+        quantizationLevel: model.details?.quantization_level || '',
+        format: model.details?.format || '',
+        details: {
+          ...(model.details || {}),
+          availableInService: true,
+          sources: ['service_api']
+        }
+      };
+    });
+  }
+
+  async fetchModelsFromApi() {
+    const response = await axios.get(`${this.apiUrl}/api/tags`, { timeout: 10000 });
+    const models = Array.isArray(response.data?.models) ? response.data.models : [];
+    return this.transformApiModels(models);
+  }
+
+  async discoverFilesystemModels() {
+    const roots = buildModelStoreCandidateRoots();
+    const modelMap = new Map();
+
+    for (const root of roots) {
+      const manifestRoot = path.join(root, 'models', 'manifests');
+      if (!(await isReadableDirectory(manifestRoot))) {
+        continue;
+      }
+
+      const files = await collectManifestFiles(manifestRoot);
+      for (const manifestFile of files) {
+        const modelInfo = deriveModelFromManifestPath(manifestFile, manifestRoot);
+        if (!modelInfo) {
+          continue;
+        }
+
+        let stats;
+        try {
+          stats = await fsp.stat(manifestFile);
+        } catch (error) {
+          continue;
+        }
+
+        const existing = modelMap.get(modelInfo.name);
+        if (!existing) {
+          modelMap.set(modelInfo.name, {
+            name: modelInfo.name,
+            tag: modelInfo.tag || 'latest',
+            size: 0,
+            digest: '',
+            modifiedAt: stats.mtime || new Date(),
+            family: '',
+            parameterSize: '',
+            quantizationLevel: '',
+            format: '',
+            details: {
+              availableInService: false,
+              sources: ['filesystem_manifest'],
+              manifestPaths: [manifestFile],
+              modelStoreRoots: [root]
+            }
+          });
+          continue;
+        }
+
+        if (stats.mtime && new Date(existing.modifiedAt).getTime() < stats.mtime.getTime()) {
+          existing.modifiedAt = stats.mtime;
+        }
+
+        const paths = Array.isArray(existing.details?.manifestPaths) ? existing.details.manifestPaths : [];
+        if (!paths.includes(manifestFile)) {
+          paths.push(manifestFile);
+        }
+        existing.details.manifestPaths = paths;
+
+        const stores = Array.isArray(existing.details?.modelStoreRoots) ? existing.details.modelStoreRoots : [];
+        if (!stores.includes(root)) {
+          stores.push(root);
+        }
+        existing.details.modelStoreRoots = stores;
+      }
+    }
+
+    return Array.from(modelMap.values());
+  }
+
+  mergeServiceAndFilesystemModels(serviceModels = [], filesystemModels = []) {
+    const modelMap = new Map();
+
+    for (const serviceModel of serviceModels) {
+      modelMap.set(serviceModel.name, {
+        ...serviceModel,
+        details: {
+          ...(serviceModel.details || {}),
+          availableInService: true
+        }
+      });
+    }
+
+    for (const fsModel of filesystemModels) {
+      const existing = modelMap.get(fsModel.name);
+      if (!existing) {
+        modelMap.set(fsModel.name, fsModel);
+        continue;
+      }
+
+      const existingPaths = Array.isArray(existing.details?.manifestPaths) ? existing.details.manifestPaths : [];
+      const fsPaths = Array.isArray(fsModel.details?.manifestPaths) ? fsModel.details.manifestPaths : [];
+      const manifestPaths = Array.from(new Set([...existingPaths, ...fsPaths]));
+
+      const existingRoots = Array.isArray(existing.details?.modelStoreRoots) ? existing.details.modelStoreRoots : [];
+      const fsRoots = Array.isArray(fsModel.details?.modelStoreRoots) ? fsModel.details.modelStoreRoots : [];
+      const modelStoreRoots = Array.from(new Set([...existingRoots, ...fsRoots]));
+
+      existing.details = {
+        ...(existing.details || {}),
+        manifestPaths,
+        modelStoreRoots,
+        availableInService: true
+      };
+    }
+
+    return Array.from(modelMap.values()).sort((left, right) => left.name.localeCompare(right.name));
+  }
+
   /**
    * Check if Ollama is installed
    */
@@ -503,21 +755,44 @@ Please contact your system administrator for assistance.`;
         console.log('Ollama service is already running');
         const ownedProcess = await this.findOwnedOllamaProcess();
         if (!ownedProcess) {
-          const processes = await this.listOllamaProcesses();
-          const external = processes[0] || null;
-          config.serviceStatus = 'running_external';
-          config.servicePid = external?.pid || null;
-          config.serviceOwner = external?.user || 'external';
-          config.lastError = null;
-          await config.save();
-          this.addOperationLog(
-            'service',
-            `Ollama already running externally as ${config.serviceOwner}. Start treated as success.`
-          );
-          return {
-            success: true,
-            message: `Service already running (managed by ${config.serviceOwner})`
-          };
+          this.addOperationLog('service', 'Detected external Ollama process. Attempting to switch back to managed service.');
+          const stopResult = await this.stopSystemService();
+          if (!stopResult.success) {
+            const processes = await this.listOllamaProcesses();
+            const external = processes[0] || null;
+            config.serviceStatus = 'running_external';
+            config.servicePid = external?.pid || null;
+            config.serviceOwner = external?.user || 'external';
+            config.lastError = null;
+            await config.save();
+            this.addOperationLog(
+              'service',
+              `Could not stop external service (${stopResult.message}). Continuing to use externally managed Ollama.`
+            );
+            return {
+              success: true,
+              message: `Service already running externally (managed by ${config.serviceOwner})`
+            };
+          }
+
+          const stopped = await this.waitForServiceStopped(8, 500);
+          if (!stopped) {
+            const processes = await this.listOllamaProcesses();
+            const external = processes[0] || null;
+            config.serviceStatus = 'running_external';
+            config.servicePid = external?.pid || null;
+            config.serviceOwner = external?.user || 'external';
+            config.lastError = null;
+            await config.save();
+            this.addOperationLog(
+              'service',
+              `External service still running after stop attempt. Using externally managed Ollama (${config.serviceOwner}).`
+            );
+            return {
+              success: true,
+              message: `Service already running externally (managed by ${config.serviceOwner})`
+            };
+          }
         } else {
           config.serviceStatus = 'running';
           config.servicePid = ownedProcess.pid;
@@ -527,32 +802,6 @@ Please contact your system administrator for assistance.`;
           return { success: true, message: 'Service already running' };
         }
       }
-
-      const systemStartResult = await this.startSystemService();
-      if (systemStartResult.success) {
-        const ownedProcess = await this.findOwnedOllamaProcess();
-        if (ownedProcess) {
-          config.serviceStatus = 'running';
-          config.servicePid = ownedProcess.pid;
-          config.serviceOwner = ownedProcess.user;
-        } else {
-          const processes = await this.listOllamaProcesses();
-          const external = processes[0] || null;
-          config.serviceStatus = 'running_external';
-          config.servicePid = external?.pid || null;
-          config.serviceOwner = external?.user || 'external';
-        }
-
-        config.lastError = null;
-        await config.save();
-        this.addOperationLog('service', systemStartResult.message);
-        return { success: true, message: systemStartResult.message };
-      }
-
-      this.addOperationLog(
-        'service',
-        `System service start was unavailable (${systemStartResult.message}). Falling back to managed process.`
-      );
 
       const childEnv = {
         ...process.env,
@@ -940,62 +1189,6 @@ Please contact your system administrator for assistance.`;
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async startSystemService() {
-    const commands = [];
-    const currentUser = this.getCurrentUser();
-
-    if (currentUser === 'root') {
-      commands.push('systemctl start ollama');
-      commands.push('service ollama start');
-      if (process.platform === 'darwin') {
-        commands.push('launchctl start com.ollama.ollama');
-      }
-    }
-
-    commands.push('sudo -n systemctl start ollama');
-    commands.push('sudo -n service ollama start');
-    if (process.platform === 'darwin') {
-      commands.push('sudo -n launchctl start com.ollama.ollama');
-    }
-
-    let lastError = null;
-
-    for (const command of commands) {
-      try {
-        await execAsync(command);
-        this.addOperationLog('service', `Executed start command: ${command}`);
-
-        const started = await this.waitForServiceReady(8, 500);
-        if (started) {
-          return { success: true, message: `Service started using "${command}"` };
-        }
-
-        lastError = new Error(`Command "${command}" completed, but service did not become ready`);
-      } catch (error) {
-        lastError = error;
-        const output = `${error.stderr || ''}${error.stdout || ''}`.toLowerCase();
-
-        if (output.includes('password') || output.includes('permission denied')) {
-          this.addOperationLog('service', `Permission denied while executing "${command}"`);
-          continue;
-        }
-        if (output.includes('command not found') || output.includes('not loaded')) {
-          continue;
-        }
-
-        this.addOperationLog(
-          'service',
-          `Start command failed (${command}): ${(error && error.message) || 'Unknown error'}`
-        );
-      }
-    }
-
-    return {
-      success: false,
-      message: lastError?.message || 'Unable to start system Ollama service'
-    };
-  }
-
   async stopSystemService() {
     const commands = [];
     const currentUser = this.getCurrentUser();
@@ -1316,30 +1509,39 @@ Please contact your system administrator for assistance.`;
       console.log('Fetching installed Ollama models...');
       const config = await OllamaConfig.getConfig();
       this.syncApiUrl(config);
+      let serviceModels = [];
+      let serviceError = null;
 
-      const response = await axios.get(`${this.apiUrl}/api/tags`, { timeout: 10000 });
+      try {
+        serviceModels = await this.fetchModelsFromApi();
+        this.addOperationLog(
+          'model',
+          `Service reported ${serviceModels.length} model${serviceModels.length === 1 ? '' : 's'}`
+        );
+      } catch (error) {
+        serviceError = error;
+        this.addOperationLog('model', `Service model query failed: ${error.message}`);
+      }
 
-      const models = response.data.models || [];
-      console.log(`Found ${models.length} installed models`);
+      const filesystemModels = await this.discoverFilesystemModels();
+      if (filesystemModels.length) {
+        this.addOperationLog(
+          'model',
+          `Filesystem scan discovered ${filesystemModels.length} model${filesystemModels.length === 1 ? '' : 's'}`
+        );
+      }
 
-      // Transform to our schema
-      const transformedModels = models.map(model => ({
-        name: model.name,
-        tag: model.name.includes(':') ? model.name.split(':')[1] : 'latest',
-        size: model.size || 0,
-        digest: model.digest || '',
-        modifiedAt: model.modified_at ? new Date(model.modified_at) : new Date(),
-        family: model.details?.family || '',
-        parameterSize: model.details?.parameter_size || '',
-        quantizationLevel: model.details?.quantization_level || '',
-        format: model.details?.format || '',
-        details: model.details || {}
-      }));
+      const mergedModels = this.mergeServiceAndFilesystemModels(serviceModels, filesystemModels);
+      console.log(`Found ${mergedModels.length} installed model entries`);
 
       // Update config
-      await config.updateModels(transformedModels);
+      await config.updateModels(mergedModels);
 
-      return transformedModels;
+      if (!mergedModels.length && serviceError?.code === 'ECONNREFUSED') {
+        throw new Error('Ollama service is not running');
+      }
+
+      return mergedModels;
     } catch (error) {
       console.error('Error listing Ollama models:', error);
       if (error.code === 'ECONNREFUSED') {

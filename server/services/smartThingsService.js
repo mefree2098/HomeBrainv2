@@ -1290,6 +1290,52 @@ class SmartThingsService {
     throw new Error(`Unsupported SmartThings arm state: ${state}`);
   }
 
+  extractSwitchValueFromStatus(status) {
+    const switchComponent = status?.components?.main?.switch;
+    const switchAttribute = switchComponent?.switch;
+    const switchValue =
+      switchAttribute?.value ??
+      switchAttribute?.data?.value ??
+      switchAttribute ??
+      switchComponent?.value ??
+      switchComponent;
+
+    let normalized = null;
+    if (typeof switchValue === 'string') {
+      const lowered = switchValue.toLowerCase();
+      if (lowered === 'on' || lowered === 'off') {
+        normalized = lowered;
+      }
+    } else if (typeof switchValue === 'boolean') {
+      normalized = switchValue ? 'on' : 'off';
+    }
+
+    return {
+      value: switchValue,
+      normalized
+    };
+  }
+
+  async updateSthmCommandLog({
+    integration,
+    requestedState,
+    result,
+    deviceId = '',
+    errorMessage = ''
+  } = {}) {
+    if (!integration?.sthm || typeof integration.save !== 'function') {
+      return;
+    }
+
+    integration.sthm.lastCommandRequestedState = requestedState || '';
+    integration.sthm.lastCommandRequestedAt = new Date();
+    integration.sthm.lastCommandResult = result || '';
+    integration.sthm.lastCommandError = errorMessage || '';
+    integration.sthm.lastCommandDeviceId = deviceId || '';
+
+    await integration.save();
+  }
+
   async getSthmVirtualSwitchConfig({ requireAll = true } = {}) {
     const integration = await SmartThingsIntegration.getIntegration();
     const rawConfig = integration?.sthm || {};
@@ -1343,14 +1389,7 @@ class SmartThingsService {
 
       try {
         const status = await this.getDeviceStatus(candidate.deviceId);
-        const switchComponent = status?.components?.main?.switch;
-        const switchAttribute = switchComponent?.switch;
-        const switchValue =
-          switchAttribute?.value ??
-          switchAttribute?.data?.value ??
-          switchAttribute ??
-          switchComponent?.value ??
-          switchComponent;
+        const { value: switchValue } = this.extractSwitchValueFromStatus(status);
 
         const debugValue = typeof switchValue === 'object' ? JSON.stringify(switchValue) : switchValue;
         console.debug(`SmartThingsService: STHM virtual switch ${candidate.armState} (${candidate.deviceId}) reports value=${debugValue}`);
@@ -1401,6 +1440,81 @@ class SmartThingsService {
     }
 
     return null;
+  }
+
+  async getSthmDiagnostics() {
+    const { integration, config } = await this.getSthmVirtualSwitchConfig({ requireAll: false });
+
+    const switchEntries = [
+      { key: 'disarm', label: 'Disarm', deviceId: config.disarmDeviceId },
+      { key: 'armStay', label: 'Arm Stay', deviceId: config.armStayDeviceId },
+      { key: 'armAway', label: 'Arm Away', deviceId: config.armAwayDeviceId }
+    ];
+
+    const connectedDevices = Array.isArray(integration?.connectedDevices) ? integration.connectedDevices : [];
+    const switchStatuses = {};
+
+    for (const entry of switchEntries) {
+      const status = {
+        label: entry.label,
+        deviceId: entry.deviceId || '',
+        mapped: Boolean(entry.deviceId),
+        deviceLabel: '',
+        switchState: 'unknown',
+        error: ''
+      };
+
+      if (entry.deviceId) {
+        const mappedDevice = connectedDevices.find((device) => device?.deviceId === entry.deviceId);
+        status.deviceLabel = mappedDevice?.label || mappedDevice?.name || '';
+
+        try {
+          const deviceStatus = await this.getDeviceStatus(entry.deviceId);
+          const extracted = this.extractSwitchValueFromStatus(deviceStatus);
+          status.switchState = extracted.normalized || 'unknown';
+        } catch (error) {
+          status.error = error.message;
+        }
+      }
+
+      switchStatuses[entry.key] = status;
+    }
+
+    let resolvedState = null;
+    let resolvedStateSource = 'unknown';
+    let resolvedStateError = '';
+
+    try {
+      const state = await this.getSecurityArmState(config.locationId || undefined);
+      resolvedState = state?.armState || null;
+      resolvedStateSource = state?.source || 'unknown';
+    } catch (error) {
+      resolvedStateError = error.message;
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      integration: integration?.toSanitized ? integration.toSanitized() : integration,
+      configuration: {
+        isConfigured: Boolean(integration?.isConfigured),
+        isConnected: Boolean(integration?.isConnected),
+        hasFullMapping: Boolean(config.disarmDeviceId && config.armStayDeviceId && config.armAwayDeviceId),
+        locationId: config.locationId || null
+      },
+      switchStatuses,
+      resolvedSecurityState: {
+        armState: resolvedState,
+        source: resolvedStateSource,
+        error: resolvedStateError || null
+      },
+      lastCommand: {
+        requestedState: integration?.sthm?.lastCommandRequestedState || null,
+        requestedAt: integration?.sthm?.lastCommandRequestedAt || null,
+        result: integration?.sthm?.lastCommandResult || null,
+        error: integration?.sthm?.lastCommandError || null,
+        deviceId: integration?.sthm?.lastCommandDeviceId || null
+      }
+    };
   }
 
   async determineArmStateFromSecurityDevices({ integration, locationId }) {
@@ -1679,72 +1793,101 @@ class SmartThingsService {
 
   async setSecurityArmState(state, locationId) {
     const normalizedState = this.normalizeArmState(state);
-    const { integration, config } = await this.getSthmVirtualSwitchConfig({ requireAll: true });
+    let integration = null;
+    let targetDeviceId = '';
 
-    const requestedLocationId = typeof locationId === 'string' ? locationId.trim() : '';
-    let resolvedLocationId = requestedLocationId || config.locationId || null;
+    try {
+      const resolved = await this.getSthmVirtualSwitchConfig({ requireAll: true });
+      integration = resolved.integration;
+      const { config } = resolved;
 
-    if (!resolvedLocationId) {
-      try {
-        resolvedLocationId = await this.resolveLocationId();
-      } catch (resolveError) {
-        console.debug(`SmartThingsService: Unable to auto-resolve SmartThings location for STHM command: ${resolveError.message}`);
-      }
-    }
+      const requestedLocationId = typeof locationId === 'string' ? locationId.trim() : '';
+      let resolvedLocationId = requestedLocationId || config.locationId || null;
 
-    const deviceMap = {
-      Disarmed: config.disarmDeviceId,
-      ArmedStay: config.armStayDeviceId,
-      ArmedAway: config.armAwayDeviceId
-    };
-
-    const targetDeviceId = deviceMap[normalizedState];
-    if (!targetDeviceId) {
-      throw new Error(`SmartThings virtual switch not configured for STHM state ${normalizedState}`);
-    }
-
-    const devicesToTurnOff = Array.from(new Set(
-      Object.values(deviceMap).filter((candidateId) => candidateId && candidateId !== targetDeviceId)
-    ));
-
-    for (const deviceId of devicesToTurnOff) {
-      try {
-        await this.sendDeviceCommand(deviceId, [{
-          component: 'main',
-          capability: 'switch',
-          command: 'off'
-        }]);
-      } catch (error) {
-        if (error?.status && [400, 404, 409, 422].includes(error.status)) {
-          console.debug(`SmartThingsService: Ignoring companion STHM switch reset failure for ${deviceId}: ${error.message}`);
-        } else {
-          throw error;
+      if (!resolvedLocationId) {
+        try {
+          resolvedLocationId = await this.resolveLocationId();
+        } catch (resolveError) {
+          console.debug(`SmartThingsService: Unable to auto-resolve SmartThings location for STHM command: ${resolveError.message}`);
         }
       }
-    }
 
-    console.log(`SmartThingsService: Triggering STHM virtual switch ${targetDeviceId} for state ${normalizedState}`);
-    await this.pulseVirtualSwitch(targetDeviceId, { ensureReset: true, delayMs: 300 });
+      const deviceMap = {
+        Disarmed: config.disarmDeviceId,
+        ArmedStay: config.armStayDeviceId,
+        ArmedAway: config.armAwayDeviceId
+      };
 
-    if (integration && typeof integration.updateSecurityArmState === 'function') {
-      await integration.updateSecurityArmState({
-        armState: normalizedState,
-        locationId: resolvedLocationId || config.locationId || ''
-      });
-    } else if (integration?.sthm) {
-      integration.sthm.lastArmState = normalizedState;
-      integration.sthm.lastArmStateUpdatedAt = new Date();
-      if (resolvedLocationId || config.locationId) {
-        integration.sthm.locationId = resolvedLocationId || config.locationId;
+      targetDeviceId = deviceMap[normalizedState];
+      if (!targetDeviceId) {
+        throw new Error(`SmartThings virtual switch not configured for STHM state ${normalizedState}`);
       }
-    }
 
-    return {
-      locationId: resolvedLocationId || config.locationId || null,
-      armState: normalizedState,
-      triggeredDeviceId: targetDeviceId,
-      via: 'virtualSwitch'
-    };
+      const devicesToTurnOff = Array.from(new Set(
+        Object.values(deviceMap).filter((candidateId) => candidateId && candidateId !== targetDeviceId)
+      ));
+
+      for (const deviceId of devicesToTurnOff) {
+        try {
+          await this.sendDeviceCommand(deviceId, [{
+            component: 'main',
+            capability: 'switch',
+            command: 'off'
+          }]);
+        } catch (error) {
+          if (error?.status && [400, 404, 409, 422].includes(error.status)) {
+            console.debug(`SmartThingsService: Ignoring companion STHM switch reset failure for ${deviceId}: ${error.message}`);
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      console.log(`SmartThingsService: Triggering STHM virtual switch ${targetDeviceId} for state ${normalizedState}`);
+      await this.pulseVirtualSwitch(targetDeviceId, { ensureReset: true, delayMs: 300 });
+
+      if (integration && typeof integration.updateSecurityArmState === 'function') {
+        await integration.updateSecurityArmState({
+          armState: normalizedState,
+          locationId: resolvedLocationId || config.locationId || ''
+        });
+      } else if (integration?.sthm) {
+        integration.sthm.lastArmState = normalizedState;
+        integration.sthm.lastArmStateUpdatedAt = new Date();
+        if (resolvedLocationId || config.locationId) {
+          integration.sthm.locationId = resolvedLocationId || config.locationId;
+        }
+      }
+
+      await this.updateSthmCommandLog({
+        integration,
+        requestedState: normalizedState,
+        result: 'success',
+        deviceId: targetDeviceId,
+        errorMessage: ''
+      });
+
+      return {
+        locationId: resolvedLocationId || config.locationId || null,
+        armState: normalizedState,
+        triggeredDeviceId: targetDeviceId,
+        via: 'virtualSwitch'
+      };
+    } catch (error) {
+      try {
+        await this.updateSthmCommandLog({
+          integration,
+          requestedState: normalizedState,
+          result: 'failed',
+          deviceId: targetDeviceId,
+          errorMessage: error.message
+        });
+      } catch (logError) {
+        console.warn(`SmartThingsService: Failed to record STHM command error telemetry: ${logError.message}`);
+      }
+
+      throw error;
+    }
   }
 
   /**

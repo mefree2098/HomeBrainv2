@@ -174,6 +174,14 @@ Check:
 4. SmartThings account is connected via OAuth (new PATs expire after 24 hours).
 5. HomeBrain service can reach your MongoDB and SmartThings API (if DB is down, alarm sync/status will fail).
 
+In UI:
+1. Open `Settings -> Integrations -> SmartThings Home Monitor Bridge`.
+2. Click `Run Diagnostics`.
+3. Review:
+   - Last command result/error
+   - Resolved security state source
+   - Per-switch on/off/error status
+
 Quick checks:
 
 ```bash

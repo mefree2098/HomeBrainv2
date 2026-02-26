@@ -229,6 +229,20 @@ export const configureSmartThingsSthm = async (config: {
   }
 };
 
+// Description: Run STHM diagnostics
+// Endpoint: GET /api/smartthings/sthm/diagnostics
+// Request: {}
+// Response: { success: boolean, diagnostics: Object }
+export const getSmartThingsSthmDiagnostics = async () => {
+  try {
+    const response = await api.get('/api/smartthings/sthm/diagnostics');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
 // Description: Arm STHM (Stay mode)
 // Endpoint: POST /api/smartthings/sthm/arm-stay
 // Request: {}

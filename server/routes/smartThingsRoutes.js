@@ -458,6 +458,30 @@ router.post('/sthm/configure', auth, async (req, res) => {
   }
 });
 
+// Description: Run STHM diagnostics
+// Endpoint: GET /api/smartthings/sthm/diagnostics
+// Request: {}
+// Response: { success: boolean, diagnostics: Object }
+router.get('/sthm/diagnostics', auth, async (req, res) => {
+  try {
+    console.log('SmartThings Routes: Running STHM diagnostics');
+
+    const diagnostics = await smartThingsService.getSthmDiagnostics();
+
+    console.log('SmartThings Routes: STHM diagnostics completed');
+    res.json({
+      success: true,
+      diagnostics
+    });
+  } catch (error) {
+    console.error('SmartThings Routes: Error running STHM diagnostics:', error.message);
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 // Description: Arm STHM (Stay mode)
 // Endpoint: POST /api/smartthings/sthm/arm-stay
 // Request: {}

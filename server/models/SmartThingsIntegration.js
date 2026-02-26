@@ -122,6 +122,26 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
     lastArmStateUpdatedAt: {
       type: Date,
       default: null
+    },
+    lastCommandRequestedState: {
+      type: String,
+      default: ''
+    },
+    lastCommandRequestedAt: {
+      type: Date,
+      default: null
+    },
+    lastCommandResult: {
+      type: String,
+      default: ''
+    },
+    lastCommandError: {
+      type: String,
+      default: ''
+    },
+    lastCommandDeviceId: {
+      type: String,
+      default: ''
     }
   },
 
@@ -242,7 +262,12 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
           disarmDeviceId: '',
           locationId: '',
           lastArmState: '',
-          lastArmStateUpdatedAt: null
+          lastArmStateUpdatedAt: null,
+          lastCommandRequestedState: '',
+          lastCommandRequestedAt: null,
+          lastCommandResult: '',
+          lastCommandError: '',
+          lastCommandDeviceId: ''
         },
         webhook: {
           installedAppId: '',
