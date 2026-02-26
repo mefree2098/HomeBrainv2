@@ -54,7 +54,6 @@ function App() {
             <Route path="/voice-devices" element={withLayout(<VoiceDevices />)} />
             <Route path="/profiles" element={withLayout(<UserProfiles />)} />
             <Route path="/settings" element={withLayout(<Settings />)} />
-            <Route path="/integrations" element={withLayout(<Settings initialTab="integrations" />)} />
             <Route path="/platform-deploy" element={withLayout(<PlatformDeploy />)} />
             <Route path="/operations" element={withLayout(<Operations />)} />
             <Route path="/ssl" element={withLayout(<SSLManagement />)} />
