@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -26,6 +26,7 @@ import {
   activateModel,
 } from '@/api/ollama';
 import {
+  ArrowPathIcon,
   ArrowDownTrayIcon,
   TrashIcon,
   CheckCircleIcon,
@@ -89,15 +90,18 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
   const handlePullModel = async (modelName: string, isUpdate = false) => {
     setDownloadingModel(modelName);
     toast({
-      title: isUpdate ? 'Updating Model' : 'Downloading Model',
-      description: `${isUpdate ? 'Refreshing' : 'Starting download of'} ${modelName}. This may take several minutes...`,
+      title: isUpdate ? 'Refreshing Model' : 'Downloading Model',
+      description: `${isUpdate ? 'Re-pulling tag for' : 'Starting download of'} ${modelName}. This may take several minutes...`,
     });
 
     try {
-      await pullModel(modelName);
+      const result = await pullModel(modelName);
+      const upToDate = Boolean(result && result.modelUpdated === false && result.wasInstalled === true);
       toast({
-        title: 'Success',
-        description: `Model ${modelName} ${isUpdate ? 'updated' : 'downloaded'} successfully`,
+        title: upToDate ? 'Already Current' : 'Success',
+        description:
+          result?.message ||
+          `Model ${modelName} ${isUpdate ? 'refreshed' : 'downloaded'} successfully`,
       });
       await loadModels();
       onModelChange();
@@ -107,7 +111,7 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
       toast({
         variant: 'destructive',
         title: 'Error',
-        description: error.message || 'Failed to download model',
+        description: error.message || (isUpdate ? 'Failed to refresh model' : 'Failed to download model'),
       });
     } finally {
       setDownloadingModel(null);
@@ -166,7 +170,12 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>Model Management</CardTitle>
+        <div className="space-y-1">
+          <CardTitle>Model Management</CardTitle>
+          <CardDescription>
+            `Re-pull` refreshes a model tag (like <code>llama3.2:latest</code>) and downloads new weights only if that tag changed upstream.
+          </CardDescription>
+        </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button>
@@ -216,7 +225,7 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                               onClick={() => handlePullModel(model.name, true)}
                               disabled={isDownloading}
                             >
-                              {isDownloading ? 'Updating...' : 'Update'}
+                              {isDownloading ? 'Refreshing...' : 'Re-pull'}
                             </Button>
                           ) : (
                             <Button
@@ -303,7 +312,14 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                         onClick={() => handlePullModel(model.name, true)}
                         disabled={downloadingModel === model.name}
                       >
-                        {downloadingModel === model.name ? 'Updating...' : 'Update'}
+                        {downloadingModel === model.name ? (
+                          'Refreshing...'
+                        ) : (
+                          <>
+                            <ArrowPathIcon className="h-4 w-4 mr-1" />
+                            Re-pull
+                          </>
+                        )}
                       </Button>
                       {!isActive && (
                         <Button

@@ -1278,6 +1278,14 @@ Please contact your system administrator for assistance.`;
       const config = await OllamaConfig.getConfig();
       this.syncApiUrl(config);
 
+      let modelBefore = null;
+      try {
+        const beforeModels = await this.listModels();
+        modelBefore = beforeModels.find((model) => model.name === modelName) || null;
+      } catch (beforeError) {
+        this.addOperationLog('model', `Pre-pull model state unavailable: ${beforeError.message}`);
+      }
+
       const serviceStatus = await this.checkServiceStatus();
       if (!serviceStatus.running) {
         this.addOperationLog('model', 'Ollama service is not running. Attempting to start before model pull.');
@@ -1331,9 +1339,33 @@ Please contact your system administrator for assistance.`;
       }
 
       // Refresh model list
-      await this.listModels();
+      const refreshedModels = await this.listModels();
+      const modelAfter = refreshedModels.find((model) => model.name === modelName) || null;
 
-      return { success: true, message: `Model ${modelName} downloaded successfully` };
+      const beforeDigest = modelBefore?.digest || null;
+      const afterDigest = modelAfter?.digest || null;
+      const beforeModified = modelBefore?.modifiedAt ? new Date(modelBefore.modifiedAt).getTime() : 0;
+      const afterModified = modelAfter?.modifiedAt ? new Date(modelAfter.modifiedAt).getTime() : 0;
+
+      const modelChanged = !modelBefore ||
+        !modelAfter ||
+        (beforeDigest && afterDigest && beforeDigest !== afterDigest) ||
+        (afterModified > beforeModified);
+
+      const message = !modelBefore
+        ? `Model ${modelName} downloaded successfully`
+        : modelChanged
+          ? `Model ${modelName} refreshed successfully`
+          : `Model ${modelName} is already up to date`;
+
+      this.addOperationLog('model', message);
+
+      return {
+        success: true,
+        message,
+        modelUpdated: modelChanged,
+        wasInstalled: Boolean(modelBefore)
+      };
     } catch (error) {
       console.error(`Error pulling model ${modelName}:`, error);
       const detail =
