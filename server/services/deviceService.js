@@ -2,6 +2,7 @@ const Device = require('../models/Device');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
+const ecobeeService = require('./ecobeeService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 class DeviceService {
@@ -16,6 +17,11 @@ class DeviceService {
     this.harmonySyncPromise = null;
     this.lastHarmonySyncAt = 0;
     this.harmonySyncCooldownMs = Number(process.env.HARMONY_DEVICE_REFRESH_MS || 30 * 1000);
+    this.ecobeePresence = null;
+    this.ecobeePresenceCheckedAt = 0;
+    this.ecobeeSyncPromise = null;
+    this.lastEcobeeSyncAt = 0;
+    this.ecobeeSyncCooldownMs = Number(process.env.ECOBEE_DEVICE_REFRESH_MS || 2 * 60 * 1000);
   }
 
   /**
@@ -227,12 +233,16 @@ class DeviceService {
 
       const isSmartThings = this.isSmartThingsDevice(device);
       const isHarmony = this.isHarmonyDevice(device);
+      const isEcobee = this.isEcobeeDevice(device);
 
       if (isSmartThings) {
         await this.ensureSmartThingsState({ immediate: true });
       }
       if (isHarmony) {
         await this.ensureHarmonyState({ immediate: true });
+      }
+      if (isEcobee) {
+        await this.ensureEcobeeState({ immediate: true });
       }
 
       if (isHarmony && normalizedAction === 'toggle') {
@@ -248,6 +258,12 @@ class DeviceService {
           if (!refreshedOnline) {
             const smartThingsId = device?.properties?.smartThingsDeviceId || 'unknown-id';
             console.warn(`DeviceService: SmartThings device ${smartThingsId} still reports offline; attempting command anyway`);
+          }
+        } else if (isEcobee) {
+          const refreshedOnline = await this.refreshEcobeeOnlineStatus(device);
+          if (!refreshedOnline) {
+            const ecobeeId = device?.properties?.ecobeeThermostatIdentifier || 'unknown-id';
+            console.warn(`DeviceService: Ecobee thermostat ${ecobeeId} still reports offline; attempting command anyway`);
           }
         } else if (isHarmony) {
           const refreshedOnline = await this.refreshHarmonyOnlineStatus(device);
@@ -398,7 +414,23 @@ class DeviceService {
 
       let optimisticPayload = null;
 
-      if (isSmartThings) {
+      if (isEcobee) {
+        await this.controlEcobeeDevice(device, normalizedAction, commandValue, updateData);
+
+        optimisticPayload = buildOptimisticPayload();
+        if (optimisticPayload.length > 0) {
+          deviceUpdateEmitter.emit('devices:update', optimisticPayload);
+        }
+
+        const remoteUpdate = await this.pollEcobeeState(device, expectedStatus);
+        if (remoteUpdate) {
+          Object.assign(updateData, remoteUpdate);
+        }
+
+        if (updateData.isOnline === undefined) {
+          updateData.isOnline = true;
+        }
+      } else if (isSmartThings) {
         await this.controlSmartThingsDevice(device, normalizedAction, commandValue, updateData);
 
         optimisticPayload = buildOptimisticPayload();
@@ -484,6 +516,11 @@ class DeviceService {
     return source === 'harmony' &&
       !!device?.properties?.harmonyHubIp &&
       !!device?.properties?.harmonyActivityId;
+  }
+
+  isEcobeeDevice(device) {
+    const source = (device?.properties?.source || '').toString().toLowerCase();
+    return source === 'ecobee' && !!device?.properties?.ecobeeThermostatIdentifier;
   }
 
   normalizeHexColor(color) {
@@ -659,6 +696,113 @@ class DeviceService {
       console.warn(`DeviceService: Unable to refresh SmartThings device ${smartThingsId} status: ${error.message}`);
       return device.isOnline;
     }
+  }
+
+  async refreshEcobeeOnlineStatus(device) {
+    const thermostatIdentifier = device?.properties?.ecobeeThermostatIdentifier;
+    if (!thermostatIdentifier) {
+      return device.isOnline;
+    }
+
+    try {
+      await ecobeeService.runDeviceStatusSync({
+        force: true,
+        reason: 'refresh-online-status',
+        thermostatIdentifiers: [thermostatIdentifier]
+      });
+
+      const refreshed = await Device.findById(device._id).lean();
+      if (!refreshed) {
+        return device.isOnline;
+      }
+
+      device.isOnline = refreshed.isOnline;
+      device.status = refreshed.status;
+      device.lastSeen = refreshed.lastSeen || device.lastSeen;
+      device.temperature = refreshed.temperature;
+      device.targetTemperature = refreshed.targetTemperature;
+      device.properties = {
+        ...(refreshed.properties || {})
+      };
+
+      return refreshed.isOnline;
+    } catch (error) {
+      console.warn(`DeviceService: Unable to refresh Ecobee thermostat ${thermostatIdentifier} status: ${error.message}`);
+      return device.isOnline;
+    }
+  }
+
+  resolveEcobeeActiveMode(device) {
+    const currentMode = (device?.properties?.ecobeeHvacMode || '').toString().trim();
+    if (currentMode && currentMode.toLowerCase() !== 'off') {
+      return currentMode;
+    }
+
+    const previousMode = (device?.properties?.ecobeeLastActiveHvacMode || '').toString().trim();
+    if (previousMode && previousMode.toLowerCase() !== 'off') {
+      return previousMode;
+    }
+
+    return 'auto';
+  }
+
+  async controlEcobeeDevice(device, normalizedAction, commandValue, updateData) {
+    const thermostatIdentifier = device?.properties?.ecobeeThermostatIdentifier;
+    if (!thermostatIdentifier) {
+      throw new Error('Ecobee thermostat identifier is not configured for this device');
+    }
+
+    if (device.type !== 'thermostat' || device?.properties?.ecobeeDeviceType === 'sensor') {
+      throw new Error('Ecobee sensors are read-only in HomeBrain');
+    }
+
+    switch (normalizedAction) {
+      case 'toggle': {
+        if (commandValue) {
+          const mode = this.resolveEcobeeActiveMode(device);
+          await ecobeeService.setHvacMode(thermostatIdentifier, mode);
+          updateData.status = true;
+        } else {
+          await ecobeeService.setHvacMode(thermostatIdentifier, 'off');
+          updateData.status = false;
+        }
+        break;
+      }
+
+      case 'turnon': {
+        const mode = this.resolveEcobeeActiveMode(device);
+        await ecobeeService.setHvacMode(thermostatIdentifier, mode);
+        updateData.status = true;
+        break;
+      }
+
+      case 'turnoff':
+        await ecobeeService.setHvacMode(thermostatIdentifier, 'off');
+        updateData.status = false;
+        break;
+
+      case 'settemperature': {
+        const target = Number(commandValue);
+        if (!Number.isFinite(target)) {
+          throw new Error('Temperature must be between -50 and 150');
+        }
+        const mode = this.resolveEcobeeActiveMode(device);
+        const currentMode = (device?.properties?.ecobeeHvacMode || '').toString().trim().toLowerCase();
+        if (currentMode === 'off') {
+          await ecobeeService.setHvacMode(thermostatIdentifier, mode);
+        }
+        await ecobeeService.setTemperatureHold(thermostatIdentifier, target, mode);
+        updateData.targetTemperature = target;
+        updateData.status = true;
+        break;
+      }
+
+      default:
+        throw new Error('Ecobee thermostats support only turn_on, turn_off, toggle, and set_temperature actions');
+    }
+
+    updateData.isOnline = true;
+    updateData.lastSeen = new Date();
   }
 
   async controlSmartThingsDevice(device, normalizedAction, commandValue, updateData) {
@@ -870,6 +1014,47 @@ class DeviceService {
     return lastUpdates;
   }
 
+  async pollEcobeeState(device, expectedStatus) {
+    const thermostatIdentifier = device?.properties?.ecobeeThermostatIdentifier;
+    if (!thermostatIdentifier) {
+      return null;
+    }
+
+    try {
+      await ecobeeService.runDeviceStatusSync({
+        force: true,
+        reason: 'post-command-poll',
+        thermostatIdentifiers: [thermostatIdentifier]
+      });
+
+      const refreshed = await Device.findById(device._id).lean();
+      if (!refreshed) {
+        return null;
+      }
+
+      const updates = {
+        status: !!refreshed.status,
+        isOnline: refreshed.isOnline !== false,
+        temperature: refreshed.temperature,
+        targetTemperature: refreshed.targetTemperature,
+        properties: refreshed.properties || {}
+      };
+
+      if (expectedStatus !== undefined && updates.status !== expectedStatus) {
+        // Preserve remote Ecobee state even when it differs from optimistic command state.
+      }
+
+      if (refreshed.lastSeen) {
+        updates.lastSeen = new Date(refreshed.lastSeen);
+      }
+
+      return updates;
+    } catch (error) {
+      console.warn(`DeviceService: Unable to fetch Ecobee state for ${thermostatIdentifier}: ${error.message}`);
+      return null;
+    }
+  }
+
   /**
    * Get devices grouped by room
    * @returns {Promise<Array>} Array of rooms with their devices
@@ -952,7 +1137,8 @@ class DeviceService {
   async ensureIntegrationState({ immediate = false } = {}) {
     await Promise.all([
       this.ensureSmartThingsState({ immediate }),
-      this.ensureHarmonyState({ immediate })
+      this.ensureHarmonyState({ immediate }),
+      this.ensureEcobeeState({ immediate })
     ]);
   }
 
@@ -1067,6 +1253,53 @@ class DeviceService {
     }
   }
 
+  async ensureEcobeeState({ immediate = false } = {}) {
+    const hasEcobee = await this.detectEcobeePresence();
+    if (!hasEcobee) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (this.ecobeeSyncPromise) {
+      try {
+        await this.ecobeeSyncPromise;
+      } catch (error) {
+        console.warn('DeviceService: Ecobee state refresh in progress failed:', error.message);
+      }
+      if (!immediate && now - this.lastEcobeeSyncAt < this.ecobeeSyncCooldownMs) {
+        return;
+      }
+    } else if (!immediate && now - this.lastEcobeeSyncAt < this.ecobeeSyncCooldownMs) {
+      return;
+    }
+
+    this.ecobeeSyncPromise = (async () => {
+      let succeeded = false;
+      try {
+        await ecobeeService.runDeviceStatusSync({
+          force: immediate,
+          reason: immediate ? 'api-fetch-force' : 'api-fetch'
+        });
+        succeeded = true;
+      } catch (error) {
+        console.warn('DeviceService: Ecobee state refresh failed:', error.message);
+        throw error;
+      } finally {
+        if (succeeded) {
+          this.lastEcobeeSyncAt = Date.now();
+        }
+        this.ecobeeSyncPromise = null;
+      }
+    })();
+
+    try {
+      await this.ecobeeSyncPromise;
+    } catch (error) {
+      // already logged above
+    }
+  }
+
   async detectSmartThingsPresence() {
     const now = Date.now();
     if (this.smartThingsPresence !== null && (now - this.smartThingsPresenceCheckedAt) < 60000) {
@@ -1107,6 +1340,27 @@ class DeviceService {
     }
 
     return this.harmonyPresence;
+  }
+
+  async detectEcobeePresence() {
+    const now = Date.now();
+    if (this.ecobeePresence !== null && (now - this.ecobeePresenceCheckedAt) < 60000) {
+      return this.ecobeePresence;
+    }
+
+    try {
+      this.ecobeePresence = await Device.exists({
+        'properties.source': 'ecobee',
+        'properties.ecobeeThermostatIdentifier': { $exists: true }
+      });
+    } catch (error) {
+      console.warn('DeviceService: Failed to detect Ecobee devices:', error.message);
+      this.ecobeePresence = false;
+    } finally {
+      this.ecobeePresenceCheckedAt = now;
+    }
+
+    return this.ecobeePresence;
   }
 }
 
