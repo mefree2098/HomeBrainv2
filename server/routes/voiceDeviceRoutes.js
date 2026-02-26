@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const voiceDeviceService = require('../services/voiceDeviceService');
 const voiceCommandService = require('../services/voiceCommandService');
+const speechService = require('../services/speechService');
 const { requireUser } = require('./middlewares/auth');
 const voiceWs = require('../websocket/voiceWebSocket');
 const VoiceDevice = require('../models/VoiceDevice');
@@ -83,6 +84,53 @@ router.get('/status', requireUser(), async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to get voice system status'
+    });
+  }
+});
+
+/**
+ * @route POST /api/voice/browser/transcribe
+ * @desc Transcribe short browser-captured audio snippets for dashboard voice fallback
+ * @access Private
+ */
+router.post('/browser/transcribe', requireUser(), async (req, res) => {
+  const {
+    audioBase64,
+    mimeType = 'audio/webm',
+    language = 'en'
+  } = req.body || {};
+
+  if (typeof audioBase64 !== 'string' || audioBase64.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'audioBase64 is required'
+    });
+  }
+
+  try {
+    const audioBuffer = Buffer.from(audioBase64, 'base64');
+    if (!audioBuffer.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Decoded audio payload is empty'
+      });
+    }
+
+    const stt = await speechService.transcribeMediaBuffer({
+      audioBuffer,
+      mimeType: typeof mimeType === 'string' ? mimeType : 'audio/webm',
+      language: typeof language === 'string' ? language : 'en'
+    });
+
+    return res.status(200).json({
+      success: true,
+      stt
+    });
+  } catch (error) {
+    console.error('POST /api/voice/browser/transcribe - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to transcribe browser audio'
     });
   }
 });

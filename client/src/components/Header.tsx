@@ -133,6 +133,7 @@ export function Header() {
     const lines = [
       `Mode: ${voiceStatus.mode}`,
       `Enabled: ${voiceStatus.enabled}`,
+      `Engine: ${voiceStatus.engine}`,
       `Pending wake word: ${voiceStatus.pendingWakeWord || "none"}`,
       `Last wake word: ${voiceStatus.lastWakeWord || "none"}`,
       `Last transcript: ${voiceStatus.lastTranscript || "none"}`,
@@ -167,10 +168,10 @@ export function Header() {
       ? "Starting..."
       : voiceStatus.mode === "processing"
         ? "Processing..."
-        : voiceStatus.mode === "waiting_command"
+      : voiceStatus.mode === "waiting_command"
           ? "Awaiting Command"
           : isVoiceEnabled
-            ? "Listening"
+            ? (voiceStatus.engine === "server_stt_fallback" ? "Listening (Fallback)" : "Listening")
             : "Voice Off"
 
   return (
@@ -255,6 +256,7 @@ export function Header() {
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div><strong>Mode:</strong> {voiceStatus.mode}</div>
               <div><strong>Enabled:</strong> {voiceStatus.enabled ? "yes" : "no"}</div>
+              <div><strong>Engine:</strong> {voiceStatus.engine}</div>
               <div><strong>Pending wake:</strong> {voiceStatus.pendingWakeWord || "none"}</div>
               <div><strong>Last wake:</strong> {voiceStatus.lastWakeWord || "none"}</div>
             </div>

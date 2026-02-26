@@ -50,6 +50,17 @@ export interface VoiceCommandResult {
   stt?: unknown;
 }
 
+export interface BrowserTranscriptionResult {
+  provider: string;
+  model: string;
+  text: string;
+  language?: string | null;
+  confidence?: number | null;
+  processingTimeMs?: number | null;
+  duration?: number | null;
+  segments?: Array<Record<string, unknown>>;
+}
+
 // Description: Interpret a voice command through the full pipeline
 // Endpoint: POST /api/voice/commands/interpret
 // Request: { commandText: string, room?: string, wakeWord?: string, deviceId?: string }
@@ -67,6 +78,24 @@ export const interpretVoiceCommand = async (payload: {
     return response.data as VoiceCommandResult;
   } catch (error: any) {
     console.error('Error interpreting voice command:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Transcribe browser-recorded audio through server STT
+// Endpoint: POST /api/voice/browser/transcribe
+// Request: { audioBase64: string, mimeType?: string, language?: string }
+// Response: { success: boolean, stt: BrowserTranscriptionResult }
+export const transcribeBrowserAudio = async (payload: {
+  audioBase64: string;
+  mimeType?: string;
+  language?: string;
+}): Promise<BrowserTranscriptionResult> => {
+  try {
+    const response = await api.post('/api/voice/browser/transcribe', payload);
+    return response.data?.stt as BrowserTranscriptionResult;
+  } catch (error: any) {
+    console.error('Error transcribing browser audio:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };

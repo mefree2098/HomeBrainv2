@@ -1,10 +1,15 @@
-import { interpretVoiceCommand } from "@/api/voice";
+import { interpretVoiceCommand, transcribeBrowserAudio } from "@/api/voice";
 import { getUserProfiles } from "@/api/profiles";
 import { textToSpeechElevenLabs, playAudioBlob } from "@/api/elevenLabs";
 import { getSettings } from "@/api/settings";
 
 const DEFAULT_WAKE_WORDS = ["anna", "hey anna", "henry", "hey henry", "home brain", "computer"];
 const WAIT_FOR_COMMAND_TIMEOUT_MS = 8000;
+const NETWORK_ERROR_WINDOW_MS = 15000;
+const NETWORK_ERROR_THRESHOLD = 6;
+const FALLBACK_CAPTURE_INTERVAL_MS = 2500;
+const FALLBACK_CAPTURE_DURATION_MS = 1600;
+const MAX_AUDIO_B64_LENGTH = 500000;
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;
@@ -50,10 +55,13 @@ export type BrowserVoiceMode =
   | "error"
   | "unsupported";
 
+export type BrowserVoiceEngine = "browser_speech" | "server_stt_fallback";
+
 export interface BrowserVoiceStatus {
   supported: boolean;
   enabled: boolean;
   mode: BrowserVoiceMode;
+  engine: BrowserVoiceEngine;
   configuredWakeWords: string[];
   pendingWakeWord: string | null;
   lastWakeWord: string | null;
@@ -75,19 +83,26 @@ class BrowserVoiceAssistant {
   private recognition: BrowserSpeechRecognition | null = null;
   private waitForCommandTimer: ReturnType<typeof setTimeout> | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private fallbackLoopTimer: ReturnType<typeof setInterval> | null = null;
   private isStopping = false;
   private resumeRecognitionAfterStop = false;
   private isProcessing = false;
+  private fallbackCaptureInFlight = false;
+  private useServerSttFallback = false;
   private awaitingCommand = false;
   private wakeWords = [...DEFAULT_WAKE_WORDS];
   private voiceProfiles: VoiceProfile[] = [];
   private defaultVoiceId = "";
+  private mediaStream: MediaStream | null = null;
+  private recentNetworkErrors: number[] = [];
+  private playbackMutedUntil = 0;
   private readonly maxTraceEntries = 80;
 
   private status: BrowserVoiceStatus = {
     supported: false,
     enabled: false,
     mode: "unsupported",
+    engine: "browser_speech",
     configuredWakeWords: [...DEFAULT_WAKE_WORDS],
     pendingWakeWord: null,
     lastWakeWord: null,
@@ -139,10 +154,15 @@ class BrowserVoiceAssistant {
     this.updateStatus({
       enabled: true,
       mode: "starting",
+      engine: "browser_speech",
       error: null
     }, "enable requested");
 
     this.isStopping = false;
+    this.useServerSttFallback = false;
+    this.recentNetworkErrors = [];
+    this.playbackMutedUntil = 0;
+    this.stopFallbackLoop();
 
     try {
       await this.ensureMicrophoneAccess();
@@ -168,8 +188,13 @@ class BrowserVoiceAssistant {
     this.awaitingCommand = false;
     this.isProcessing = false;
     this.resumeRecognitionAfterStop = false;
+    this.useServerSttFallback = false;
+    this.recentNetworkErrors = [];
+    this.playbackMutedUntil = 0;
     this.clearWaitForCommandTimer();
     this.clearRestartTimer();
+    this.stopFallbackLoop();
+    this.stopMediaStream();
 
     if (this.recognition) {
       try {
@@ -182,6 +207,7 @@ class BrowserVoiceAssistant {
     this.updateStatus({
       enabled: false,
       mode: this.status.supported ? "off" : "unsupported",
+      engine: "browser_speech",
       pendingWakeWord: null,
       error: null
     }, "disabled by user");
@@ -207,15 +233,33 @@ class BrowserVoiceAssistant {
       return;
     }
 
+    if (this.mediaStream && this.mediaStream.active) {
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      this.mediaStream = stream;
       this.updateStatus({}, "microphone access verified");
     } catch (error) {
       const message = this.mapMicrophoneAccessError(error);
       this.updateStatus({}, `microphone access failed: ${message}`);
       throw new Error(message);
     }
+  }
+
+  private stopMediaStream(): void {
+    if (!this.mediaStream) {
+      return;
+    }
+    this.mediaStream.getTracks().forEach((track) => track.stop());
+    this.mediaStream = null;
   }
 
   private updateStatus(patch: Partial<BrowserVoiceStatus>, traceMessage?: string): void {
@@ -360,6 +404,12 @@ class BrowserVoiceAssistant {
     this.clearRestartTimer();
     this.updateStatus({}, "recognition ended");
 
+    if (this.useServerSttFallback) {
+      this.isStopping = false;
+      this.resumeRecognitionAfterStop = false;
+      return;
+    }
+
     if (this.status.enabled) {
       if (this.isStopping) {
         this.isStopping = false;
@@ -426,7 +476,7 @@ class BrowserVoiceAssistant {
       return;
     }
     if (code === "network") {
-      // Web Speech network hiccups are common; onend restart logic will recover.
+      this.handleNetworkRecognitionError();
       return;
     }
     if (code === "not-allowed" && this.isStopping) {
@@ -457,7 +507,217 @@ class BrowserVoiceAssistant {
     }, `recognition error: ${message}`);
   }
 
+  private handleNetworkRecognitionError(): void {
+    const now = Date.now();
+    this.recentNetworkErrors = [...this.recentNetworkErrors, now]
+      .filter((timestamp) => now - timestamp <= NETWORK_ERROR_WINDOW_MS);
+
+    this.updateStatus({}, `network error burst count: ${this.recentNetworkErrors.length}`);
+
+    if (
+      !this.useServerSttFallback &&
+      this.recentNetworkErrors.length >= NETWORK_ERROR_THRESHOLD
+    ) {
+      void this.activateServerSttFallback('persistent browser speech network errors');
+    }
+  }
+
+  private async activateServerSttFallback(reason: string): Promise<void> {
+    if (!this.status.enabled || this.useServerSttFallback) {
+      return;
+    }
+
+    if (typeof window === "undefined" || typeof MediaRecorder === "undefined") {
+      this.updateStatus({
+        mode: "error",
+        error: "Browser MediaRecorder is unavailable for STT fallback."
+      }, "cannot activate server STT fallback: MediaRecorder unsupported");
+      return;
+    }
+
+    try {
+      await this.ensureMicrophoneAccess();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Microphone unavailable for STT fallback.";
+      this.updateStatus({
+        mode: "error",
+        error: message
+      }, `cannot activate server STT fallback: ${message}`);
+      return;
+    }
+
+    this.useServerSttFallback = true;
+    this.awaitingCommand = false;
+    this.clearWaitForCommandTimer();
+    this.clearRestartTimer();
+    this.isStopping = true;
+    this.resumeRecognitionAfterStop = false;
+
+    if (this.recognition) {
+      try {
+        this.recognition.stop();
+      } catch (_error) {
+        // Ignore stop failures here.
+      }
+    }
+
+    this.updateStatus({
+      engine: "server_stt_fallback",
+      mode: "listening",
+      error: null
+    }, `switched to server STT fallback: ${reason}`);
+
+    this.startFallbackLoop();
+  }
+
+  private startFallbackLoop(): void {
+    if (this.fallbackLoopTimer) {
+      return;
+    }
+
+    const runCapture = async () => {
+      if (!this.status.enabled || !this.useServerSttFallback || this.fallbackCaptureInFlight) {
+        return;
+      }
+
+      if (Date.now() < this.playbackMutedUntil) {
+        return;
+      }
+
+      this.fallbackCaptureInFlight = true;
+      try {
+        const clip = await this.captureFallbackAudioClip(FALLBACK_CAPTURE_DURATION_MS);
+        if (!clip || clip.size < 600) {
+          return;
+        }
+
+        const audioBase64 = await this.blobToBase64(clip);
+        if (!audioBase64 || audioBase64.length > MAX_AUDIO_B64_LENGTH) {
+          this.updateStatus({}, "fallback clip skipped (empty or too large)");
+          return;
+        }
+
+        const stt = await transcribeBrowserAudio({
+          audioBase64,
+          mimeType: clip.type || "audio/webm",
+          language: "en"
+        });
+
+        const transcript = (stt?.text || "").trim();
+        if (!transcript) {
+          return;
+        }
+
+        this.updateStatus({
+          lastTranscript: transcript
+        }, `server-stt transcript: "${transcript}"`);
+
+        await this.processTranscript(
+          transcript,
+          typeof stt?.confidence === "number" ? stt.confidence : null
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Server STT fallback capture failed";
+        this.updateStatus({}, `server-stt fallback error: ${message}`);
+      } finally {
+        this.fallbackCaptureInFlight = false;
+      }
+    };
+
+    void runCapture();
+    this.fallbackLoopTimer = setInterval(() => {
+      void runCapture();
+    }, FALLBACK_CAPTURE_INTERVAL_MS);
+  }
+
+  private stopFallbackLoop(): void {
+    if (!this.fallbackLoopTimer) {
+      return;
+    }
+    clearInterval(this.fallbackLoopTimer);
+    this.fallbackLoopTimer = null;
+  }
+
+  private async captureFallbackAudioClip(durationMs: number): Promise<Blob | null> {
+    if (!this.mediaStream || !this.mediaStream.active) {
+      await this.ensureMicrophoneAccess();
+    }
+
+    if (!this.mediaStream) {
+      return null;
+    }
+
+    const preferredMimeTypes = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus"
+    ];
+
+    const selectedMimeType = preferredMimeTypes.find((mimeType) => {
+      try {
+        return typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(mimeType);
+      } catch (_error) {
+        return false;
+      }
+    }) || "";
+
+    return await new Promise<Blob | null>((resolve, reject) => {
+      const chunks: BlobPart[] = [];
+      let recorder: MediaRecorder;
+
+      try {
+        recorder = selectedMimeType
+          ? new MediaRecorder(this.mediaStream as MediaStream, { mimeType: selectedMimeType })
+          : new MediaRecorder(this.mediaStream as MediaStream);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+
+      recorder.onerror = (event: Event) => {
+        reject(new Error(`MediaRecorder error: ${(event as unknown as { type?: string }).type || "unknown"}`));
+      };
+
+      recorder.onstop = () => {
+        if (!chunks.length) {
+          resolve(null);
+          return;
+        }
+        resolve(new Blob(chunks, { type: recorder.mimeType || selectedMimeType || "audio/webm" }));
+      };
+
+      recorder.start();
+      setTimeout(() => {
+        if (recorder.state !== "inactive") {
+          recorder.stop();
+        }
+      }, durationMs);
+    });
+  }
+
+  private async blobToBase64(blob: Blob): Promise<string> {
+    const arrayBuffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  }
+
   private async handleRecognitionResult(event: BrowserSpeechRecognitionEvent): Promise<void> {
+    if (this.useServerSttFallback) {
+      return;
+    }
+
     const results = event?.results;
     if (!results) {
       return;
@@ -655,6 +915,7 @@ class BrowserVoiceAssistant {
   }
 
   private async playResponse(text: string, wakeWord: string): Promise<void> {
+    this.playbackMutedUntil = Date.now() + 1400;
     await this.pauseRecognitionForPlayback();
 
     const voiceId = this.resolveVoiceId(wakeWord);
@@ -678,6 +939,7 @@ class BrowserVoiceAssistant {
       await this.playWithBrowserSpeech(text);
       this.updateStatus({}, "response playback completed (browser speech)");
     } finally {
+      this.playbackMutedUntil = Date.now() + 700;
       this.resumeRecognitionAfterPlayback();
     }
   }
@@ -753,7 +1015,7 @@ class BrowserVoiceAssistant {
   }
 
   private async pauseRecognitionForPlayback(): Promise<void> {
-    if (!this.status.enabled || !this.recognition) {
+    if (!this.status.enabled || !this.recognition || this.useServerSttFallback) {
       return;
     }
 
@@ -773,7 +1035,7 @@ class BrowserVoiceAssistant {
   }
 
   private resumeRecognitionAfterPlayback(): void {
-    if (!this.status.enabled || !this.recognition) {
+    if (!this.status.enabled || !this.recognition || this.useServerSttFallback) {
       return;
     }
 
