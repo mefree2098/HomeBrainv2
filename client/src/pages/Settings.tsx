@@ -57,7 +57,8 @@ import {
   testSmartThingsConnection,
   disconnectSmartThings,
   configureSmartThingsSthm,
-  getSmartThingsDevices
+  getSmartThingsDevices,
+  getSmartThingsSthmDiagnostics
 } from "@/api/smartThings"
 import {
   clearAllFakeData,
@@ -107,6 +108,8 @@ export function Settings() {
   const [syncingHarmonyState, setSyncingHarmonyState] = useState(false)
   const [harmonyQuickActionKey, setHarmonyQuickActionKey] = useState("")
   const [savingSthmConfig, setSavingSthmConfig] = useState(false)
+  const [runningSthmDiagnostics, setRunningSthmDiagnostics] = useState(false)
+  const [sthmDiagnostics, setSthmDiagnostics] = useState<any>(null)
   const [sthmConfig, setSthmConfig] = useState<{
     armAwayDeviceId: string;
     armStayDeviceId: string;
@@ -279,6 +282,12 @@ export function Settings() {
   const lastSthmState = smartthingsStatus?.sthm?.lastArmState
   const lastSthmStateUpdatedAt = smartthingsStatus?.sthm?.lastArmStateUpdatedAt
   const lastSthmUpdatedLabel = lastSthmStateUpdatedAt ? new Date(lastSthmStateUpdatedAt).toLocaleString() : null
+  const lastSthmCommandResult = smartthingsStatus?.sthm?.lastCommandResult
+  const lastSthmCommandAt = smartthingsStatus?.sthm?.lastCommandRequestedAt
+  const lastSthmCommandAtLabel = lastSthmCommandAt ? new Date(lastSthmCommandAt).toLocaleString() : null
+  const lastSthmCommandState = smartthingsStatus?.sthm?.lastCommandRequestedState
+  const lastSthmCommandError = smartthingsStatus?.sthm?.lastCommandError
+  const lastSthmCommandDeviceId = smartthingsStatus?.sthm?.lastCommandDeviceId
   const disarmSelectValue = sthmConfig.disarmDeviceId || STHM_NOT_CONFIGURED
   const armStaySelectValue = sthmConfig.armStayDeviceId || STHM_NOT_CONFIGURED
   const armAwaySelectValue = sthmConfig.armAwayDeviceId || STHM_NOT_CONFIGURED
@@ -1070,6 +1079,43 @@ export function Settings() {
       })
     } finally {
       setSavingSthmConfig(false)
+    }
+  }
+
+  const handleRunSthmDiagnostics = async () => {
+    if (!smartthingsStatus?.isConnected) {
+      toast({
+        title: "SmartThings Not Connected",
+        description: "Connect SmartThings before running STHM diagnostics.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setRunningSthmDiagnostics(true)
+    try {
+      const response = await getSmartThingsSthmDiagnostics()
+      if (response.success && response.diagnostics) {
+        setSthmDiagnostics(response.diagnostics)
+        if (response.diagnostics.integration) {
+          setSmartthingsStatus(response.diagnostics.integration)
+        }
+        toast({
+          title: "STHM Diagnostics Complete",
+          description: "Latest SmartThings bridge diagnostics have been loaded below."
+        })
+      } else {
+        throw new Error("Unexpected diagnostics response")
+      }
+    } catch (error: any) {
+      console.error('STHM diagnostics failed:', error)
+      toast({
+        title: "STHM Diagnostics Failed",
+        description: error?.response?.data?.message || error?.message || "Unable to run diagnostics",
+        variant: "destructive"
+      })
+    } finally {
+      setRunningSthmDiagnostics(false)
     }
   }
 
@@ -2177,27 +2223,56 @@ export function Settings() {
                           {lastSthmUpdatedLabel ? ` — ${lastSthmUpdatedLabel}` : ""}
                         </p>
                       )}
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleRefreshSmartThingsDevices}
-                      disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices}
-                      className="mt-2 md:mt-0"
-                    >
-                      {loadingSmartThingsDevices ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
-                          Refreshing...
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-2" />
-                          Refresh Devices
-                        </>
+                      {lastSthmCommandResult && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Last command:&nbsp;
+                          <span className={`font-medium ${lastSthmCommandResult === 'success' ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'}`}>
+                            {lastSthmCommandResult.toUpperCase()}
+                          </span>
+                          {lastSthmCommandState ? ` (${lastSthmCommandState})` : ""}
+                          {lastSthmCommandAtLabel ? ` — ${lastSthmCommandAtLabel}` : ""}
+                          {lastSthmCommandDeviceId ? ` — device ${lastSthmCommandDeviceId}` : ""}
+                          {lastSthmCommandError ? ` — ${lastSthmCommandError}` : ""}
+                        </p>
                       )}
-                    </Button>
+                    </div>
+                    <div className="mt-2 md:mt-0 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRefreshSmartThingsDevices}
+                        disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices}
+                      >
+                        {loadingSmartThingsDevices ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Refreshing...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Refresh Devices
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRunSthmDiagnostics}
+                        disabled={!smartthingsStatus?.isConnected || runningSthmDiagnostics}
+                      >
+                        {runningSthmDiagnostics ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Running...
+                          </>
+                        ) : (
+                          "Run Diagnostics"
+                        )}
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="bg-white/70 dark:bg-slate-900/40 border border-blue-100 dark:border-blue-900 rounded-md p-3 text-xs text-muted-foreground space-y-1">
@@ -2343,6 +2418,46 @@ export function Settings() {
                       )}
                     </Button>
                   </div>
+
+                  {sthmDiagnostics && (
+                    <div className="bg-white/70 dark:bg-slate-900/40 border border-blue-100 dark:border-blue-900 rounded-md p-3 text-xs space-y-2">
+                      <p className="font-medium text-blue-900 dark:text-blue-200">Latest diagnostics</p>
+                      <p className="text-muted-foreground">
+                        Generated: {sthmDiagnostics.generatedAt ? new Date(sthmDiagnostics.generatedAt).toLocaleString() : "Unknown"}
+                      </p>
+                      <p className="text-muted-foreground">
+                        Resolved security state:{" "}
+                        <span className="font-medium text-foreground">
+                          {sthmDiagnostics?.resolvedSecurityState?.armState || "Unknown"}
+                        </span>
+                        {sthmDiagnostics?.resolvedSecurityState?.source ? ` via ${sthmDiagnostics.resolvedSecurityState.source}` : ""}
+                        {sthmDiagnostics?.resolvedSecurityState?.error ? ` (error: ${sthmDiagnostics.resolvedSecurityState.error})` : ""}
+                      </p>
+                      <div className="space-y-1 text-muted-foreground">
+                        <p>
+                          Disarm switch:{" "}
+                          <span className="font-medium text-foreground">
+                            {sthmDiagnostics?.switchStatuses?.disarm?.switchState || "unknown"}
+                          </span>
+                          {sthmDiagnostics?.switchStatuses?.disarm?.error ? ` (error: ${sthmDiagnostics.switchStatuses.disarm.error})` : ""}
+                        </p>
+                        <p>
+                          Arm Stay switch:{" "}
+                          <span className="font-medium text-foreground">
+                            {sthmDiagnostics?.switchStatuses?.armStay?.switchState || "unknown"}
+                          </span>
+                          {sthmDiagnostics?.switchStatuses?.armStay?.error ? ` (error: ${sthmDiagnostics.switchStatuses.armStay.error})` : ""}
+                        </p>
+                        <p>
+                          Arm Away switch:{" "}
+                          <span className="font-medium text-foreground">
+                            {sthmDiagnostics?.switchStatuses?.armAway?.switchState || "unknown"}
+                          </span>
+                          {sthmDiagnostics?.switchStatuses?.armAway?.error ? ` (error: ${sthmDiagnostics.switchStatuses.armAway.error})` : ""}
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   {!smartthingsStatus?.isConnected && (
                     <p className="text-xs text-muted-foreground">
