@@ -603,6 +603,13 @@ class BrowserVoiceAssistant {
           language: "en"
         });
 
+        if (stt?.provider || stt?.model) {
+          this.updateStatus(
+            {},
+            `server-stt result provider=${stt?.provider || "unknown"} model=${stt?.model || "unknown"}`
+          );
+        }
+
         const transcript = (stt?.text || "").trim();
         if (!transcript) {
           return;

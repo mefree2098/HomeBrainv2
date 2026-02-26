@@ -834,25 +834,7 @@ class WhisperService {
     const filePath = path.join(tmpDir, filename);
     await fs.promises.writeFile(filePath, wavBuffer);
 
-    const transcribeOnce = async () => {
-      const started = Date.now();
-      const result = await this.runtime.transcribe({
-        file: filePath,
-        language: language === 'auto' ? null : language
-      });
-      const duration = Date.now() - started;
-      return {
-        text: (result.text || '').trim(),
-        segments: Array.isArray(result.segments) ? result.segments : [],
-        language: result?.info?.language || language,
-        avgLogProb: result?.info?.avg_logprob ?? null,
-        provider: 'whisper_local',
-        model: config.activeModel,
-        device: this.runtime?.device || config.activeDevice || null,
-        computeType: this.runtime?.computeType || config.activeComputeType || null,
-        processingTimeMs: duration
-      };
-    };
+    const transcribeOnce = async () => this._transcribeRuntimeFile({ filePath, language, config });
 
     try {
       return await transcribeOnce();
@@ -880,6 +862,71 @@ class WhisperService {
     } finally {
       fs.promises.unlink(filePath).catch(() => {});
     }
+  }
+
+  async transcribeFile({ filePath, language = 'en' }) {
+    await this._ensureInstalled();
+    const config = await this._getConfig();
+    if (!this.runtime) {
+      if (config.autoStart) await this.startService(config.activeModel);
+      else throw new Error('Whisper service is not running');
+    }
+
+    const resolvedPath = path.resolve(String(filePath || ''));
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      throw new Error(`Audio file not found: ${resolvedPath || '(empty path)'}`);
+    }
+
+    const transcribeOnce = async () => this._transcribeRuntimeFile({
+      filePath: resolvedPath,
+      language,
+      config
+    });
+
+    try {
+      return await transcribeOnce();
+    } catch (error) {
+      const recentLogs = this._getRecentRuntimeLogs(40);
+      const isCudaFailure = this.runtime?.device === 'cuda' && this._isCudaExecutionFailure(error, recentLogs);
+      if (!isCudaFailure) {
+        throw error;
+      }
+
+      console.warn('Whisper Service: CUDA transcription failed; restarting on CPU float32.');
+      try {
+        await this.restartService(config.activeModel, {
+          devicePreference: 'cpu',
+          computePreference: 'float32'
+        });
+      } catch (restartError) {
+        const message = `Whisper CUDA execution failed and CPU fallback could not start: ${restartError.message}`;
+        throw new Error(message);
+      }
+
+      const retry = await transcribeOnce();
+      retry.fallback = { from: 'cuda', to: 'cpu', reason: 'cudnn_execution_failed' };
+      return retry;
+    }
+  }
+
+  async _transcribeRuntimeFile({ filePath, language, config }) {
+    const started = Date.now();
+    const result = await this.runtime.transcribe({
+      file: filePath,
+      language: language === 'auto' ? null : language
+    });
+    const duration = Date.now() - started;
+    return {
+      text: (result.text || '').trim(),
+      segments: Array.isArray(result.segments) ? result.segments : [],
+      language: result?.info?.language || language,
+      avgLogProb: result?.info?.avg_logprob ?? null,
+      provider: 'whisper_local',
+      model: config.activeModel,
+      device: this.runtime?.device || config.activeDevice || null,
+      computeType: this.runtime?.computeType || config.activeComputeType || null,
+      processingTimeMs: duration
+    };
   }
 
   async _runCommand(command, args, options = {}) {

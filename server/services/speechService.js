@@ -1,4 +1,7 @@
 const OpenAI = require('openai');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const Settings = require('../models/Settings');
 const whisperService = require('./whisperService');
 
@@ -278,13 +281,17 @@ class SpeechService {
 
     const providerConfig = await this.getProviderConfig();
     const sttLanguage = language || providerConfig.language || 'en';
-    const fallbackModel = providerConfig.provider === 'whisper_local'
-      ? 'gpt-4o-mini-transcribe'
-      : (providerConfig.model || 'gpt-4o-mini-transcribe');
-    const resolvedModel = model || fallbackModel;
+    if (providerConfig.provider === 'whisper_local') {
+      const resolvedModel = model || providerConfig.model || 'small';
+      return this.transcribeMediaWithWhisperLocal({
+        audioBuffer,
+        mimeType,
+        language: sttLanguage,
+        model: resolvedModel
+      });
+    }
 
-    // Local whisper path currently expects raw PCM and cannot decode browser-compressed media.
-    // Use OpenAI transcription for browser media uploads regardless of current provider.
+    const resolvedModel = model || providerConfig.model || 'gpt-4o-mini-transcribe';
     return this.transcribeMediaWithOpenAI({
       audioBuffer,
       mimeType,
@@ -361,6 +368,63 @@ class SpeechService {
       confidence: this.computeConfidence(segments),
       processingTimeMs: durationMs
     };
+  }
+
+  async transcribeMediaWithWhisperLocal({ audioBuffer, mimeType, language, model }) {
+    const normalizedMimeType = normalizeMimeType(mimeType);
+    const extension = extensionForMimeType(normalizedMimeType);
+    const tempDir = path.join(os.tmpdir(), 'homebrain-whisper-media');
+    await fs.promises.mkdir(tempDir, { recursive: true });
+    const filePath = path.join(tempDir, `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`);
+    await fs.promises.writeFile(filePath, audioBuffer);
+
+    const activeModel = model || 'small';
+    let status = null;
+    try {
+      status = await whisperService.getStatus();
+      if (status.activeModel !== activeModel && status.installedModels?.some((m) => m.name === activeModel)) {
+        await whisperService.setActiveModel(activeModel);
+      } else if (status.activeModel !== activeModel && status.installedModels?.length) {
+        try {
+          await whisperService.downloadModel(activeModel);
+          await whisperService.setActiveModel(activeModel);
+        } catch (downloadError) {
+          console.warn(`Whisper local: failed to download model ${activeModel}:`, downloadError.message);
+        }
+      }
+    } catch (error) {
+      console.warn('Whisper local: failed to sync model state:', error.message);
+    }
+
+    try {
+      const startedAt = Date.now();
+      const response = await whisperService.transcribeFile({
+        filePath,
+        language
+      });
+      const durationMs = Date.now() - startedAt;
+
+      const segments = Array.isArray(response?.segments) ? response.segments : [];
+      const confidenceFromAvg = typeof response?.avgLogProb === 'number'
+        ? Math.max(0, Math.min(1, 1 + (response.avgLogProb / 5)))
+        : null;
+      const confidence = confidenceFromAvg ?? this.computeConfidence(segments);
+
+      return {
+        provider: 'whisper_local',
+        model: response?.model || activeModel,
+        device: response?.device || status?.activeDevice || null,
+        computeType: response?.computeType || null,
+        text: (response?.text || '').trim(),
+        language: response?.language || language,
+        duration: null,
+        segments,
+        confidence,
+        processingTimeMs: response?.processingTimeMs || durationMs
+      };
+    } finally {
+      fs.promises.unlink(filePath).catch(() => {});
+    }
   }
 
   async transcribeWithWhisperLocal({ audioBuffer, sampleRate, channels, format, language, model }) {
