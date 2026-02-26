@@ -54,12 +54,14 @@ export interface BrowserVoiceStatus {
   supported: boolean;
   enabled: boolean;
   mode: BrowserVoiceMode;
+  configuredWakeWords: string[];
   pendingWakeWord: string | null;
   lastWakeWord: string | null;
   lastTranscript: string | null;
   lastCommand: string | null;
   lastResponse: string | null;
   error: string | null;
+  trace: string[];
 }
 
 type BrowserVoiceSubscriber = (status: BrowserVoiceStatus) => void;
@@ -80,17 +82,20 @@ class BrowserVoiceAssistant {
   private wakeWords = [...DEFAULT_WAKE_WORDS];
   private voiceProfiles: VoiceProfile[] = [];
   private defaultVoiceId = "";
+  private readonly maxTraceEntries = 80;
 
   private status: BrowserVoiceStatus = {
     supported: false,
     enabled: false,
     mode: "unsupported",
+    configuredWakeWords: [...DEFAULT_WAKE_WORDS],
     pendingWakeWord: null,
     lastWakeWord: null,
     lastTranscript: null,
     lastCommand: null,
     lastResponse: null,
-    error: null
+    error: null,
+    trace: []
   };
 
   private constructor() {
@@ -135,7 +140,7 @@ class BrowserVoiceAssistant {
       enabled: true,
       mode: "starting",
       error: null
-    });
+    }, "enable requested");
 
     this.isStopping = false;
 
@@ -151,7 +156,7 @@ class BrowserVoiceAssistant {
         mode: "error",
         pendingWakeWord: null,
         error: message
-      });
+      }, `enable failed: ${message}`);
       throw new Error(message);
     }
 
@@ -179,7 +184,7 @@ class BrowserVoiceAssistant {
       mode: this.status.supported ? "off" : "unsupported",
       pendingWakeWord: null,
       error: null
-    });
+    }, "disabled by user");
 
     return this.status;
   }
@@ -205,16 +210,25 @@ class BrowserVoiceAssistant {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
+      this.updateStatus({}, "microphone access verified");
     } catch (error) {
       const message = this.mapMicrophoneAccessError(error);
+      this.updateStatus({}, `microphone access failed: ${message}`);
       throw new Error(message);
     }
   }
 
-  private updateStatus(patch: Partial<BrowserVoiceStatus>): void {
+  private updateStatus(patch: Partial<BrowserVoiceStatus>, traceMessage?: string): void {
+    let nextTrace = this.status.trace;
+    if (traceMessage && traceMessage.trim().length > 0) {
+      const entry = `[${new Date().toLocaleTimeString()}] ${traceMessage.trim()}`;
+      nextTrace = [...nextTrace, entry].slice(-this.maxTraceEntries);
+    }
+
     this.status = {
       ...this.status,
-      ...patch
+      ...patch,
+      trace: nextTrace
     };
     this.notifySubscribers();
   }
@@ -269,6 +283,9 @@ class BrowserVoiceAssistant {
 
     this.voiceProfiles = profiles;
     this.wakeWords = Array.from(wakeWordSet).sort((a, b) => b.length - a.length);
+    this.updateStatus({
+      configuredWakeWords: [...this.wakeWords]
+    }, `configured wake words: ${this.wakeWords.join(", ")}`);
   }
 
   private ensureRecognition(): void {
@@ -287,7 +304,8 @@ class BrowserVoiceAssistant {
     }
 
     const recognition = new RecognitionCtor();
-    recognition.continuous = true;
+    // Edge/Chromium tends to produce more reliable final results with non-continuous sessions.
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = "en-US";
     recognition.maxAlternatives = 1;
@@ -297,11 +315,11 @@ class BrowserVoiceAssistant {
         return;
       }
       if (this.isProcessing) {
-        this.updateStatus({ mode: "processing" });
+        this.updateStatus({ mode: "processing" }, "recognition started (processing)");
       } else if (this.awaitingCommand) {
-        this.updateStatus({ mode: "waiting_command" });
+        this.updateStatus({ mode: "waiting_command" }, "recognition started (awaiting command)");
       } else {
-        this.updateStatus({ mode: "listening" });
+        this.updateStatus({ mode: "listening" }, "recognition started (listening)");
       }
     };
 
@@ -318,6 +336,7 @@ class BrowserVoiceAssistant {
     };
 
     this.recognition = recognition;
+    this.updateStatus({}, "speech recognition engine initialized");
   }
 
   private startRecognition(): void {
@@ -327,6 +346,7 @@ class BrowserVoiceAssistant {
 
     try {
       this.recognition.start();
+      this.updateStatus({}, "recognition.start()");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to start speech recognition.";
       if (message.toLowerCase().includes("already started")) {
@@ -338,6 +358,7 @@ class BrowserVoiceAssistant {
 
   private handleRecognitionEnded(): void {
     this.clearRestartTimer();
+    this.updateStatus({}, "recognition ended");
 
     if (this.status.enabled) {
       if (this.isStopping) {
@@ -351,12 +372,13 @@ class BrowserVoiceAssistant {
             }
             try {
               this.startRecognition();
+              this.updateStatus({}, "recognition restart after playback");
             } catch (error) {
               const message = error instanceof Error ? error.message : "Voice listener restart failed.";
               this.updateStatus({
                 mode: "error",
                 error: message
-              });
+              }, `restart failed after playback: ${message}`);
             }
           }, 200);
         }
@@ -369,12 +391,13 @@ class BrowserVoiceAssistant {
         }
         try {
           this.startRecognition();
+          this.updateStatus({}, "recognition auto-restart");
         } catch (error) {
           const message = error instanceof Error ? error.message : "Voice listener restart failed.";
           this.updateStatus({
             mode: "error",
             error: message
-          });
+          }, `auto-restart failed: ${message}`);
         }
       }, 300);
       return;
@@ -391,6 +414,7 @@ class BrowserVoiceAssistant {
 
   private handleRecognitionError(event: BrowserSpeechRecognitionErrorEvent): void {
     const code = typeof event?.error === "string" ? event.error : "unknown";
+    this.updateStatus({}, `recognition error: ${code}`);
     if (code === "no-speech") {
       return;
     }
@@ -423,14 +447,14 @@ class BrowserVoiceAssistant {
         mode: "error",
         pendingWakeWord: null,
         error: message
-      });
+      }, `fatal recognition error: ${message}`);
       return;
     }
 
     this.updateStatus({
       mode: "error",
       error: message
-    });
+    }, `recognition error: ${message}`);
   }
 
   private async handleRecognitionResult(event: BrowserSpeechRecognitionEvent): Promise<void> {
@@ -456,6 +480,14 @@ class BrowserVoiceAssistant {
         lastTranscript: transcript
       });
 
+      if (!result?.isFinal && !this.awaitingCommand) {
+        const interimWakeMatch = this.matchWakeWord(transcript);
+        if (interimWakeMatch) {
+          this.updateStatus({}, `interim wake-word candidate: ${interimWakeMatch.wakeWord} | "${transcript}"`);
+          this.waitForCommand(interimWakeMatch.wakeWord);
+        }
+      }
+
       if (!result?.isFinal) {
         continue;
       }
@@ -464,6 +496,7 @@ class BrowserVoiceAssistant {
         ? bestAlternative.confidence
         : null;
 
+      this.updateStatus({}, `final transcript: "${transcript}"`);
       await this.processTranscript(transcript, confidence);
     }
   }
@@ -474,18 +507,24 @@ class BrowserVoiceAssistant {
     }
 
     const wakeMatch = this.matchWakeWord(transcript);
+    if (!wakeMatch && !this.awaitingCommand) {
+      this.updateStatus({}, `no wake word matched for: "${transcript}"`);
+    }
 
     if (this.awaitingCommand) {
       if (wakeMatch?.commandText) {
+        this.updateStatus({}, `wake + command in same utterance (${wakeMatch.wakeWord})`);
         await this.executeCommand(wakeMatch.commandText, wakeMatch.wakeWord, confidence);
         return;
       }
 
       if (wakeMatch && !wakeMatch.commandText) {
+        this.updateStatus({}, `wake word repeated while awaiting command: ${wakeMatch.wakeWord}`);
         this.waitForCommand(wakeMatch.wakeWord);
         return;
       }
 
+      this.updateStatus({}, `captured command after wake word: "${transcript}"`);
       await this.executeCommand(transcript, this.status.pendingWakeWord || "browser", confidence);
       return;
     }
@@ -495,6 +534,7 @@ class BrowserVoiceAssistant {
     }
 
     if (wakeMatch.commandText) {
+      this.updateStatus({}, `wake + command detected: ${wakeMatch.wakeWord}`);
       await this.executeCommand(wakeMatch.commandText, wakeMatch.wakeWord, confidence);
       return;
     }
@@ -511,20 +551,21 @@ class BrowserVoiceAssistant {
       pendingWakeWord: wakeWord,
       lastWakeWord: wakeWord,
       error: null
-    });
+    }, `wake word detected: ${wakeWord}`);
 
     this.waitForCommandTimer = setTimeout(() => {
       this.awaitingCommand = false;
       this.updateStatus({
         mode: this.status.enabled ? "listening" : "off",
         pendingWakeWord: null
-      });
+      }, "command wait timeout");
     }, WAIT_FOR_COMMAND_TIMEOUT_MS);
   }
 
   private async executeCommand(commandText: string, wakeWord: string, confidence: number | null): Promise<void> {
     const sanitizedCommand = commandText.replace(/^[\s,.:;-]+/, "").trim();
     if (!sanitizedCommand) {
+      this.updateStatus({}, `empty command after wake word: ${wakeWord}`);
       this.waitForCommand(wakeWord);
       return;
     }
@@ -539,7 +580,7 @@ class BrowserVoiceAssistant {
       lastWakeWord: wakeWord,
       lastCommand: sanitizedCommand,
       error: null
-    });
+    }, `processing command: "${sanitizedCommand}"`);
 
     try {
       const result = await interpretVoiceCommand({
@@ -556,7 +597,7 @@ class BrowserVoiceAssistant {
 
       this.updateStatus({
         lastResponse: result?.responseText || null
-      });
+      }, "command processed by server");
 
       if (result?.responseText) {
         await this.playResponse(result.responseText, wakeWord);
@@ -565,12 +606,12 @@ class BrowserVoiceAssistant {
       const message = error instanceof Error ? error.message : "Failed to process voice command.";
       this.updateStatus({
         error: message
-      });
+      }, `command failed: ${message}`);
     } finally {
       this.isProcessing = false;
       this.updateStatus({
         mode: this.status.enabled ? "listening" : "off"
-      });
+      }, "processing complete");
     }
   }
 
@@ -620,18 +661,22 @@ class BrowserVoiceAssistant {
     try {
       if (voiceId) {
         try {
+          this.updateStatus({}, `playing ElevenLabs response (voice=${voiceId})`);
           const audioBlob = await textToSpeechElevenLabs({
             text,
             voiceId
           });
           await playAudioBlob(audioBlob);
+          this.updateStatus({}, "response playback completed (ElevenLabs)");
           return;
         } catch (_error) {
           // Fall through to browser speech synthesis when ElevenLabs is unavailable.
+          this.updateStatus({}, "ElevenLabs playback failed, using browser speech synthesis");
         }
       }
 
       await this.playWithBrowserSpeech(text);
+      this.updateStatus({}, "response playback completed (browser speech)");
     } finally {
       this.resumeRecognitionAfterPlayback();
     }

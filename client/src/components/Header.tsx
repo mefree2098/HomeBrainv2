@@ -1,7 +1,14 @@
-import { Loader2, Mic, MicOff, Settings, LogOut } from "lucide-react"
+import { Bug, Copy, Loader2, Mic, MicOff, Settings, LogOut } from "lucide-react"
 import { Button } from "./ui/button"
 import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from "./ui/dialog"
 import { useAuth } from "@/contexts/AuthContext"
 import { useNavigate } from "react-router-dom"
 import { useState, useEffect, useRef } from "react"
@@ -19,6 +26,7 @@ export function Header() {
     total: 0,
     loaded: false
   })
+  const [isVoiceDiagnosticsOpen, setIsVoiceDiagnosticsOpen] = useState(false)
   
   const subscriptionId = useRef(`header-browser-voice-${Date.now()}-${Math.random()}`).current
   const lastVoiceErrorRef = useRef<string | null>(null)
@@ -121,6 +129,36 @@ export function Header() {
     }
   }
 
+  const handleCopyVoiceDiagnostics = async () => {
+    const lines = [
+      `Mode: ${voiceStatus.mode}`,
+      `Enabled: ${voiceStatus.enabled}`,
+      `Pending wake word: ${voiceStatus.pendingWakeWord || "none"}`,
+      `Last wake word: ${voiceStatus.lastWakeWord || "none"}`,
+      `Last transcript: ${voiceStatus.lastTranscript || "none"}`,
+      `Last command: ${voiceStatus.lastCommand || "none"}`,
+      `Last response: ${voiceStatus.lastResponse || "none"}`,
+      `Configured wake words: ${voiceStatus.configuredWakeWords.join(", ") || "none"}`,
+      "",
+      "Trace:",
+      ...(voiceStatus.trace.length > 0 ? voiceStatus.trace : ["(no trace entries)"])
+    ]
+
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"))
+      toast({
+        title: "Diagnostics Copied",
+        description: "Browser voice diagnostics copied to clipboard."
+      })
+    } catch (_error) {
+      toast({
+        title: "Copy Failed",
+        description: "Unable to copy diagnostics. Select and copy manually from the dialog.",
+        variant: "destructive"
+      })
+    }
+  }
+
   const isVoiceEnabled = voiceStatus.enabled
   const isVoiceBusy = voiceStatus.mode === "starting" || voiceStatus.mode === "processing"
   const voiceLabel = !voiceStatus.supported
@@ -153,6 +191,15 @@ export function Header() {
         </div>
         
         <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsVoiceDiagnosticsOpen(true)}
+            title="Browser voice diagnostics"
+          >
+            <Bug className="h-5 w-5" />
+          </Button>
+
           <Button
             variant={isVoiceEnabled ? "default" : "outline"}
             size="sm"
@@ -194,6 +241,59 @@ export function Header() {
           </Button>
         </div>
       </div>
+
+      <Dialog open={isVoiceDiagnosticsOpen} onOpenChange={setIsVoiceDiagnosticsOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Browser Voice Diagnostics</DialogTitle>
+            <DialogDescription>
+              Use this trace to verify wake-word detection, transcription, and command execution flow.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div><strong>Mode:</strong> {voiceStatus.mode}</div>
+              <div><strong>Enabled:</strong> {voiceStatus.enabled ? "yes" : "no"}</div>
+              <div><strong>Pending wake:</strong> {voiceStatus.pendingWakeWord || "none"}</div>
+              <div><strong>Last wake:</strong> {voiceStatus.lastWakeWord || "none"}</div>
+            </div>
+
+            <div className="text-sm">
+              <strong>Configured wake words:</strong>{" "}
+              {voiceStatus.configuredWakeWords.length > 0
+                ? voiceStatus.configuredWakeWords.join(", ")
+                : "none"}
+            </div>
+
+            <div className="rounded border bg-muted/30 p-3 text-xs">
+              <div><strong>Last transcript:</strong> {voiceStatus.lastTranscript || "none"}</div>
+              <div><strong>Last command:</strong> {voiceStatus.lastCommand || "none"}</div>
+              <div><strong>Last response:</strong> {voiceStatus.lastResponse || "none"}</div>
+              {voiceStatus.error ? (
+                <div className="text-red-600 dark:text-red-400"><strong>Error:</strong> {voiceStatus.error}</div>
+              ) : null}
+            </div>
+
+            <div className="flex justify-end">
+              <Button variant="outline" size="sm" onClick={handleCopyVoiceDiagnostics}>
+                <Copy className="h-4 w-4 mr-2" />
+                Copy Diagnostics
+              </Button>
+            </div>
+
+            <div className="max-h-72 overflow-y-auto rounded border bg-black/90 p-3 font-mono text-xs text-green-300">
+              {voiceStatus.trace.length > 0 ? (
+                voiceStatus.trace.map((line, index) => (
+                  <div key={`${index}-${line}`}>{line}</div>
+                ))
+              ) : (
+                <div>[trace] no entries yet</div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </header>
   )
 }
