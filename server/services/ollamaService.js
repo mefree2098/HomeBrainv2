@@ -503,21 +503,21 @@ Please contact your system administrator for assistance.`;
         console.log('Ollama service is already running');
         const ownedProcess = await this.findOwnedOllamaProcess();
         if (!ownedProcess) {
-          console.log('Existing Ollama process is owned by another user, attempting to stop system service...');
-          const stopResult = await this.stopSystemService();
-          if (!stopResult.success) {
-            config.serviceStatus = 'running_external';
-            config.servicePid = null;
-            config.serviceOwner = 'external';
-            config.lastError = {
-              message: stopResult.message,
-              timestamp: new Date()
-            };
-            await config.save();
-            this.addOperationLog('service', `Failed to stop external Ollama process: ${stopResult.message}`);
-            throw new Error(stopResult.message);
-          }
-          await this.delay(1000);
+          const processes = await this.listOllamaProcesses();
+          const external = processes[0] || null;
+          config.serviceStatus = 'running_external';
+          config.servicePid = external?.pid || null;
+          config.serviceOwner = external?.user || 'external';
+          config.lastError = null;
+          await config.save();
+          this.addOperationLog(
+            'service',
+            `Ollama already running externally as ${config.serviceOwner}. Start treated as success.`
+          );
+          return {
+            success: true,
+            message: `Service already running (managed by ${config.serviceOwner})`
+          };
         } else {
           config.serviceStatus = 'running';
           config.servicePid = ownedProcess.pid;
@@ -1111,11 +1111,22 @@ Please contact your system administrator for assistance.`;
 
       if (serviceWasRunning) {
         this.addOperationLog('update', 'Stopping Ollama service before updating');
-        const stopResult = await this.stopService();
-        if (!stopResult.success) {
-          throw new Error(`Unable to stop Ollama service before update: ${stopResult.message}`);
+        try {
+          const stopResult = await this.stopService();
+          if (!stopResult.success) {
+            this.addOperationLog(
+              'update',
+              `Pre-update stop did not fully succeed: ${stopResult.message}. Continuing update anyway.`
+            );
+          } else {
+            serviceStoppedForUpdate = true;
+          }
+        } catch (stopError) {
+          this.addOperationLog(
+            'update',
+            `Pre-update stop failed (${stopError.message}). Continuing update anyway.`
+          );
         }
-        serviceStoppedForUpdate = true;
       }
 
       // Prepare update command
@@ -1154,10 +1165,18 @@ Please contact your system administrator for assistance.`;
         );
       }
 
-      if (serviceWasRunning) {
+      if (serviceWasRunning && serviceStoppedForUpdate) {
         this.addOperationLog('update', 'Restarting Ollama service after update');
         await this.startService();
         serviceStoppedForUpdate = false;
+      } else if (serviceWasRunning) {
+        const postUpdateServiceStatus = await this.checkServiceStatus();
+        if (!postUpdateServiceStatus.running) {
+          this.addOperationLog('update', 'Service not detected after update. Attempting to start.');
+          await this.startService();
+        } else {
+          this.addOperationLog('update', 'Service remained running through update.');
+        }
       }
 
       await config.updateInstallation(installStatus.version, true);

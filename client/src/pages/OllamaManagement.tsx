@@ -19,6 +19,7 @@ import ChatInterface from '@/components/ollama/ChatInterface';
 import ResourceMonitor from '@/components/ollama/ResourceMonitor';
 import {
   CheckCircleIcon,
+  ClipboardDocumentIcon,
   XCircleIcon,
   ArrowPathIcon,
   PlayIcon,
@@ -92,7 +93,7 @@ export default function OllamaManagement() {
       try {
         const data = await getOllamaLogs(safeLineCount);
         const entries = Array.isArray(data?.lines) ? data.lines : [];
-        setLogs(entries);
+        setLogs([...entries].reverse());
         setLogSource(data?.source || null);
         setLogMessage(data?.message || null);
         setLogLineCount(safeLineCount);
@@ -132,7 +133,11 @@ export default function OllamaManagement() {
       return;
     }
 
-    const intervalMs = actionLoading ? 2500 : 8000;
+    if (!actionLoading) {
+      return;
+    }
+
+    const intervalMs = 2500;
     const interval = setInterval(() => {
       if (!logLoading) {
         loadLogs();
@@ -149,6 +154,35 @@ export default function OllamaManagement() {
   const handleLogLineCountChange = (value: string) => {
     const parsed = parseInt(value, 10);
     loadLogs(Number.isNaN(parsed) ? logLineCount : parsed);
+  };
+
+  const handleCopyLogs = async () => {
+    if (!logs.length) {
+      return;
+    }
+
+    const payload = [
+      logSource ? `Source: ${logSource}` : null,
+      logMessage ? `Info: ${logMessage}` : null,
+      '',
+      ...logs,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    try {
+      await navigator.clipboard.writeText(payload);
+      toast({
+        title: 'Logs copied',
+        description: `${logs.length} log line${logs.length === 1 ? '' : 's'} copied to clipboard`,
+      });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Copy failed',
+        description: 'Could not copy logs to clipboard',
+      });
+    }
   };
 
   const handleInstall = async () => {
@@ -540,7 +574,7 @@ export default function OllamaManagement() {
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">
                 {logSource
-                  ? `Showing ${logReturnedCount} line${logReturnedCount === 1 ? '' : 's'} from ${logSource}${
+                  ? `Showing ${logReturnedCount} line${logReturnedCount === 1 ? '' : 's'} (newest first) from ${logSource}${
                       logTruncated ? ' (truncated)' : ''
                     }.`
                   : 'View recent Ollama service output.'}
@@ -574,6 +608,15 @@ export default function OllamaManagement() {
               >
                 <ArrowPathIcon className={`h-4 w-4 mr-1 ${logLoading ? 'animate-spin' : ''}`} />
                 Refresh
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCopyLogs}
+                disabled={!logs.length || logLoading}
+              >
+                <ClipboardDocumentIcon className="h-4 w-4 mr-1" />
+                Copy Logs
               </Button>
             </div>
           </div>
