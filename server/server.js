@@ -139,13 +139,14 @@ app.enable('strict routing');
 
 app.use(cors({}));
 app.use(express.json({
+  limit: '8mb',
   verify: (req, res, buf) => {
     if (buf && buf.length) {
       req.rawBody = Buffer.from(buf);
     }
   }
 }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '8mb' }));
 // Serve ACME HTTP-01 challenge files on the primary app server as a fallback.
 // This allows deployments that forward external :80 traffic to app :3000.
 app.use('/.well-known/acme-challenge', express.static(ACME_CHALLENGE_DIR));

@@ -93,7 +93,7 @@ router.get('/status', requireUser(), async (req, res) => {
  * @desc Transcribe short browser-captured audio snippets for dashboard voice fallback
  * @access Private
  */
-router.post('/browser/transcribe', requireUser(), async (req, res) => {
+router.post(['/browser/transcribe', '/browser/transcribe/'], requireUser(), async (req, res) => {
   const {
     audioBase64,
     mimeType = 'audio/webm',

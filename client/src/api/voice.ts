@@ -91,12 +91,59 @@ export const transcribeBrowserAudio = async (payload: {
   mimeType?: string;
   language?: string;
 }): Promise<BrowserTranscriptionResult> => {
+  const attempt = async (path: string) => {
+    const token = localStorage.getItem('accessToken');
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const raw = await response.text();
+    let parsed: any = null;
+    if (raw && raw.trim()) {
+      try {
+        parsed = JSONbig.parse(raw);
+      } catch (_error) {
+        parsed = null;
+      }
+    }
+
+    if (!response.ok) {
+      const serverMessage = parsed?.message || parsed?.error;
+      const snippet = typeof raw === 'string' ? raw.trim().slice(0, 200) : '';
+      throw new Error(serverMessage || `HTTP ${response.status} from ${path}: ${snippet || response.statusText}`);
+    }
+
+    if (!parsed?.stt) {
+      throw new Error(`Missing STT payload from ${path}`);
+    }
+
+    return parsed.stt as BrowserTranscriptionResult;
+  };
+
   try {
-    const response = await api.post('/api/voice/browser/transcribe', payload);
-    return response.data?.stt as BrowserTranscriptionResult;
+    return await attempt('/api/voice/browser/transcribe');
   } catch (error: any) {
+    const firstMessage = error?.message || 'Unknown browser transcription error';
+    const shouldRetryWithSlash =
+      firstMessage.includes('HTTP 404') ||
+      firstMessage.toLowerCase().includes('page not found');
+
+    if (shouldRetryWithSlash) {
+      try {
+        return await attempt('/api/voice/browser/transcribe/');
+      } catch (retryError: any) {
+        console.error('Error transcribing browser audio (retry failed):', retryError);
+        throw new Error(retryError?.message || firstMessage);
+      }
+    }
+
     console.error('Error transcribing browser audio:', error);
-    throw new Error(error?.response?.data?.message || error.message);
+    throw new Error(firstMessage);
   }
 };
 

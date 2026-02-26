@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AppShellView: View {
-    enum Section: String, CaseIterable, Identifiable {
+    enum AppSection: String, CaseIterable, Identifiable {
         case dashboard
         case devices
         case scenes
@@ -65,10 +65,10 @@ struct AppShellView: View {
     }
 
     @EnvironmentObject private var session: SessionStore
-    @State private var selection: Section? = .dashboard
+    @State private var selection: AppSection? = .dashboard
 
-    private var visibleSections: [Section] {
-        Section.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
+    private var visibleSections: [AppSection] {
+        AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
     }
 
     var body: some View {
@@ -112,7 +112,7 @@ struct AppShellView: View {
     }
 
     @ViewBuilder
-    private func sectionView(_ section: Section) -> some View {
+    private func sectionView(_ section: AppSection) -> some View {
         switch section {
         case .dashboard:
             DashboardView()
