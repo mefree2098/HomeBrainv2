@@ -71,8 +71,9 @@ class PlatformDeployService {
     this.restartOllamaOnDeploy = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA !== 'false';
     this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD
       || 'sudo systemctl restart ollama';
-    this.defaultRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD
-      || 'sudo systemctl restart homebrain homebrain-discovery';
+    this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
+    this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
+      || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain-discovery || true; sudo systemctl restart homebrain';
   }
 
   async initialize() {
@@ -495,16 +496,62 @@ class PlatformDeployService {
     return latest;
   }
 
+  sanitizeShellCommand(command) {
+    if (typeof command !== 'string') {
+      return '';
+    }
+    return command
+      .replace(/\r?\n/g, '; ')
+      .trim();
+  }
+
+  commandRestartsHomebrain(command) {
+    if (!command) {
+      return false;
+    }
+    return /\bsystemctl\s+(?:restart|try-restart|start)\s+[^;]*\bhomebrain\b/i.test(command);
+  }
+
+  buildServiceRestartCommand() {
+    const commandParts = [];
+    const notes = [];
+
+    if (this.restartOllamaOnDeploy) {
+      commandParts.push(`${this.defaultOllamaRestartCommand} || true`);
+    }
+
+    const customRestart = this.sanitizeShellCommand(this.customRestartCommand);
+    if (customRestart) {
+      if (this.commandRestartsHomebrain(customRestart)) {
+        notes.push(
+          'Ignored HOMEBRAIN_DEPLOY_RESTART_CMD because it restarts homebrain. ' +
+          'Use HOMEBRAIN_DEPLOY_CORE_RESTART_CMD for full restart override.'
+        );
+      } else {
+        commandParts.push(customRestart);
+      }
+    }
+
+    const coreRestart = this.sanitizeShellCommand(this.coreRestartCommand)
+      || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain-discovery || true; sudo systemctl restart homebrain';
+    commandParts.push(coreRestart);
+
+    return {
+      fullCommand: commandParts.join('; '),
+      notes
+    };
+  }
+
   async triggerServiceRestart(jobId = null) {
-    const restartCommand = this.defaultRestartCommand;
-    const fullCommand = this.restartOllamaOnDeploy
-      ? `${this.defaultOllamaRestartCommand} || true; ${restartCommand}`
-      : restartCommand;
+    const { fullCommand, notes } = this.buildServiceRestartCommand();
     if (jobId) {
       await this.appendJobLog(
         jobId,
         `[${new Date().toISOString()}] [restart] Triggering service restart command: ${fullCommand}\n`
       );
+      for (const note of notes) {
+        await this.appendJobLog(jobId, `[${new Date().toISOString()}] [restart] ${note}\n`);
+      }
     }
 
     const child = spawn('bash', ['-lc', fullCommand], {
