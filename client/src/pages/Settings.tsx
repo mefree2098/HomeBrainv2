@@ -1094,7 +1094,7 @@ export function Settings() {
 
     setRunningSthmDiagnostics(true)
     try {
-      const response = await getSmartThingsSthmDiagnostics()
+      const response = await getSmartThingsSthmDiagnostics({ deepProbe: false })
       if (response.diagnostics) {
         setSthmDiagnostics(response.diagnostics)
         if (response.diagnostics.integration) {
@@ -2432,6 +2432,16 @@ export function Settings() {
                       <p className="text-muted-foreground">
                         Generated: {sthmDiagnostics.generatedAt ? new Date(sthmDiagnostics.generatedAt).toLocaleString() : "Unknown"}
                       </p>
+                      {typeof sthmDiagnostics?.tookMs === "number" && (
+                        <p className="text-muted-foreground">
+                          Diagnostics time: {Math.round(sthmDiagnostics.tookMs)}ms
+                        </p>
+                      )}
+                      {sthmDiagnostics?.fallback && (
+                        <p className="text-red-700 dark:text-red-300">
+                          Fallback mode: {sthmDiagnostics?.error || "Diagnostics probe failed"}
+                        </p>
+                      )}
                       <p className="text-muted-foreground">
                         Resolved security state:{" "}
                         <span className="font-medium text-foreground">
@@ -2470,6 +2480,23 @@ export function Settings() {
                           {sthmDiagnostics?.switchStatuses?.armAway?.error ? ` (error: ${sthmDiagnostics.switchStatuses.armAway.error})` : ""}
                         </p>
                       </div>
+                      {Array.isArray(sthmDiagnostics?.trace) && sthmDiagnostics.trace.length > 0 && (
+                        <div className="pt-1 space-y-1 text-[11px] text-muted-foreground">
+                          <p className="font-medium text-blue-900 dark:text-blue-200">Trace</p>
+                          {sthmDiagnostics.trace.slice(-8).map((entry: any, index: number) => {
+                            const details = Object.entries(entry || {})
+                              .filter(([key]) => key !== "at" && key !== "event")
+                              .map(([key, value]) => `${key}=${String(value)}`)
+                              .join(" ");
+                            return (
+                              <p key={`sthm-trace-${index}`}>
+                                [{entry?.at ? new Date(entry.at).toLocaleTimeString() : "?"}] {entry?.event || "event"}
+                                {details ? ` ${details}` : ""}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
 

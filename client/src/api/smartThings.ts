@@ -233,13 +233,15 @@ export const configureSmartThingsSthm = async (config: {
 // Endpoint: GET /api/smartthings/sthm/diagnostics
 // Request: {}
 // Response: { success: boolean, diagnostics: Object }
-export const getSmartThingsSthmDiagnostics = async () => {
+export const getSmartThingsSthmDiagnostics = async (options: { deepProbe?: boolean } = {}) => {
   try {
-    const response = await api.get('/api/smartthings/sthm/diagnostics');
+    const response = await api.get('/api/smartthings/sthm/diagnostics', {
+      params: options.deepProbe ? { deep: '1' } : undefined
+    });
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.message || error.message);
+    throw error;
   }
 };
 

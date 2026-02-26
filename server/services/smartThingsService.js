@@ -1467,80 +1467,223 @@ class SmartThingsService {
     return null;
   }
 
-  async getSthmDiagnostics() {
-    const { integration, config } = await this.getSthmVirtualSwitchConfig({ requireAll: false });
-    const settings = await Settings.getSettings();
-    const useOAuth = settings?.smartthingsUseOAuth !== false;
-    const hasPatToken = Boolean(settings?.smartthingsToken && settings.smartthingsToken.trim());
-    const hasOAuthAccess = Boolean(
-      integration?.isConfigured &&
-      (
-        integration?.isConnected ||
-        integration?.accessToken ||
-        integration?.refreshToken
-      )
-    );
-    const authCanIssueCommands = useOAuth ? hasOAuthAccess : hasPatToken;
-
-    const switchEntries = [
-      { key: 'disarm', label: 'Disarm', deviceId: config.disarmDeviceId },
-      { key: 'armStay', label: 'Arm Stay', deviceId: config.armStayDeviceId },
-      { key: 'armAway', label: 'Arm Away', deviceId: config.armAwayDeviceId }
+  resolveArmStateFromSwitchStatuses(switchStatuses, cachedArmState = null) {
+    const entries = [
+      { key: 'disarm', armState: 'Disarmed' },
+      { key: 'armStay', armState: 'ArmedStay' },
+      { key: 'armAway', armState: 'ArmedAway' }
     ];
 
-    const connectedDevices = Array.isArray(integration?.connectedDevices) ? integration.connectedDevices : [];
-    const switchStatuses = {};
+    const active = entries.filter((entry) => switchStatuses?.[entry.key]?.switchState === 'on');
+    if (active.length === 1) {
+      return {
+        armState: active[0].armState,
+        source: 'virtualSwitch-status',
+        error: null
+      };
+    }
 
-    await Promise.all(switchEntries.map(async (entry) => {
-      const status = {
-        label: entry.label,
-        deviceId: entry.deviceId || '',
-        mapped: Boolean(entry.deviceId),
+    if (active.length > 1) {
+      const preferredBySafety = ['ArmedAway', 'ArmedStay', 'Disarmed'];
+      const selected = preferredBySafety
+        .map((state) => active.find((entry) => entry.armState === state))
+        .find(Boolean) || active[0];
+
+      return {
+        armState: selected.armState,
+        source: 'virtualSwitch-status-conflict',
+        error: `Multiple STHM switches are ON (${active.map((entry) => entry.armState).join(', ')})`
+      };
+    }
+
+    if (cachedArmState) {
+      return {
+        armState: cachedArmState,
+        source: 'cached',
+        error: null
+      };
+    }
+
+    return {
+      armState: null,
+      source: 'unknown',
+      error: null
+    };
+  }
+
+  async getSthmDiagnostics(options = {}) {
+    const startedAt = Date.now();
+    const trace = [];
+    const track = (event, meta = {}) => {
+      trace.push({
+        at: new Date().toISOString(),
+        event,
+        ...meta
+      });
+    };
+
+    const switchProbeTimeoutMs = Math.max(800, Math.min(Number(options.switchProbeTimeoutMs) || 2000, 6000));
+    const deepProbeTimeoutMs = Math.max(800, Math.min(Number(options.deepProbeTimeoutMs) || 2000, 6000));
+    const includeDeepProbe = options.includeDeepProbe === true;
+
+    let integration = null;
+    let config = {
+      armAwayDeviceId: '',
+      armStayDeviceId: '',
+      disarmDeviceId: '',
+      locationId: '',
+      lastArmState: ''
+    };
+    let useOAuth = true;
+    let hasPatToken = false;
+    let hasOAuthAccess = false;
+
+    const switchStatuses = {
+      disarm: {
+        label: 'Disarm',
+        deviceId: '',
+        mapped: false,
         deviceLabel: '',
         switchState: 'unknown',
         error: ''
-      };
+      },
+      armStay: {
+        label: 'Arm Stay',
+        deviceId: '',
+        mapped: false,
+        deviceLabel: '',
+        switchState: 'unknown',
+        error: ''
+      },
+      armAway: {
+        label: 'Arm Away',
+        deviceId: '',
+        mapped: false,
+        deviceLabel: '',
+        switchState: 'unknown',
+        error: ''
+      }
+    };
 
-      if (entry.deviceId) {
+    let resolvedState = null;
+    let resolvedStateSource = 'unknown';
+    let resolvedStateError = null;
+
+    track('start', { switchProbeTimeoutMs, includeDeepProbe, deepProbeTimeoutMs });
+
+    try {
+      const virtualSwitchConfig = await this.getSthmVirtualSwitchConfig({ requireAll: false });
+      integration = virtualSwitchConfig.integration;
+      config = virtualSwitchConfig.config;
+
+      const settings = await Settings.getSettings();
+      useOAuth = settings?.smartthingsUseOAuth !== false;
+      hasPatToken = Boolean(settings?.smartthingsToken && settings.smartthingsToken.trim());
+      hasOAuthAccess = Boolean(
+        integration?.isConfigured &&
+        (
+          integration?.isConnected ||
+          integration?.accessToken ||
+          integration?.refreshToken
+        )
+      );
+
+      track('auth-mode', {
+        mode: useOAuth ? 'oauth' : 'pat',
+        canIssueCommands: useOAuth ? hasOAuthAccess : hasPatToken
+      });
+
+      const switchEntries = [
+        { key: 'disarm', label: 'Disarm', armState: 'Disarmed', deviceId: config.disarmDeviceId },
+        { key: 'armStay', label: 'Arm Stay', armState: 'ArmedStay', deviceId: config.armStayDeviceId },
+        { key: 'armAway', label: 'Arm Away', armState: 'ArmedAway', deviceId: config.armAwayDeviceId }
+      ];
+
+      const connectedDevices = Array.isArray(integration?.connectedDevices) ? integration.connectedDevices : [];
+      await Promise.all(switchEntries.map(async (entry) => {
+        const status = switchStatuses[entry.key];
+        status.deviceId = entry.deviceId || '';
+        status.mapped = Boolean(entry.deviceId);
+
+        if (!entry.deviceId) {
+          track('switch-probe-skipped', { key: entry.key, reason: 'not-mapped' });
+          return;
+        }
+
         const mappedDevice = connectedDevices.find((device) => device?.deviceId === entry.deviceId);
         status.deviceLabel = mappedDevice?.label || mappedDevice?.name || '';
 
+        const probeStartedAt = Date.now();
         try {
           const deviceStatus = await this.withTimeout(
             this.getDeviceStatus(entry.deviceId),
-            3500,
+            switchProbeTimeoutMs,
             `device status lookup for ${entry.label}`
           );
           const extracted = this.extractSwitchValueFromStatus(deviceStatus);
           status.switchState = extracted.normalized || 'unknown';
+          track('switch-probe-ok', {
+            key: entry.key,
+            state: status.switchState,
+            tookMs: Date.now() - probeStartedAt
+          });
         } catch (error) {
           status.error = error.message;
+          track('switch-probe-error', {
+            key: entry.key,
+            error: error.message,
+            tookMs: Date.now() - probeStartedAt
+          });
+        }
+      }));
+
+      const cachedArmState = integration?.sthm?.lastArmState || null;
+      let resolved = this.resolveArmStateFromSwitchStatuses(switchStatuses, cachedArmState);
+      resolvedState = resolved.armState;
+      resolvedStateSource = resolved.source;
+      resolvedStateError = resolved.error;
+      track('state-from-switches', {
+        armState: resolvedState,
+        source: resolvedStateSource,
+        error: resolvedStateError || undefined
+      });
+
+      if (includeDeepProbe && (!resolvedState || resolvedStateSource === 'cached')) {
+        const deepProbeStartedAt = Date.now();
+        try {
+          const state = await this.withTimeout(
+            this.getSecurityArmState(config.locationId || undefined),
+            deepProbeTimeoutMs,
+            'security arm state lookup'
+          );
+          if (state?.armState) {
+            resolvedState = state.armState;
+            resolvedStateSource = state.source || 'security-endpoint-probe';
+            resolvedStateError = null;
+          }
+          track('deep-probe-ok', {
+            armState: state?.armState || null,
+            source: state?.source || 'unknown',
+            tookMs: Date.now() - deepProbeStartedAt
+          });
+        } catch (error) {
+          track('deep-probe-error', {
+            error: error.message,
+            tookMs: Date.now() - deepProbeStartedAt
+          });
+          if (!resolvedStateError) {
+            resolvedStateError = error.message;
+          }
         }
       }
-
-      switchStatuses[entry.key] = status;
-    }));
-
-    let resolvedState = null;
-    let resolvedStateSource = 'unknown';
-    let resolvedStateError = '';
-
-    try {
-      const state = await this.withTimeout(
-        this.getSecurityArmState(config.locationId || undefined),
-        4500,
-        'security arm state lookup'
-      );
-      resolvedState = state?.armState || null;
-      resolvedStateSource = state?.source || 'unknown';
     } catch (error) {
-      resolvedStateError = error.message;
-      const cachedArmState = integration?.sthm?.lastArmState || null;
-      if (cachedArmState) {
-        resolvedState = cachedArmState;
-        resolvedStateSource = 'cached';
+      track('diagnostics-error', { error: error.message });
+      if (!resolvedStateError) {
+        resolvedStateError = error.message;
       }
     }
+
+    track('complete', { tookMs: Date.now() - startedAt });
 
     return {
       generatedAt: new Date().toISOString(),
@@ -1555,7 +1698,7 @@ class SmartThingsService {
         mode: useOAuth ? 'oauth' : 'pat',
         hasPatToken,
         hasOAuthAccess,
-        canIssueCommands: authCanIssueCommands
+        canIssueCommands: useOAuth ? hasOAuthAccess : hasPatToken
       },
       switchStatuses,
       resolvedSecurityState: {
@@ -1569,7 +1712,9 @@ class SmartThingsService {
         result: integration?.sthm?.lastCommandResult || null,
         error: integration?.sthm?.lastCommandError || null,
         deviceId: integration?.sthm?.lastCommandDeviceId || null
-      }
+      },
+      trace,
+      tookMs: Date.now() - startedAt
     };
   }
 
