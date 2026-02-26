@@ -140,6 +140,7 @@ class BrowserVoiceAssistant {
     this.isStopping = false;
 
     try {
+      await this.ensureMicrophoneAccess();
       await this.refreshVoiceConfiguration();
       this.ensureRecognition();
       this.startRecognition();
@@ -194,6 +195,20 @@ class BrowserVoiceAssistant {
     };
 
     return Boolean(win.SpeechRecognition || win.webkitSpeechRecognition);
+  }
+
+  private async ensureMicrophoneAccess(): Promise<void> {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      const message = this.mapMicrophoneAccessError(error);
+      throw new Error(message);
+    }
   }
 
   private updateStatus(patch: Partial<BrowserVoiceStatus>): void {
@@ -379,7 +394,18 @@ class BrowserVoiceAssistant {
     if (code === "no-speech") {
       return;
     }
-    if (code === "aborted" && this.isStopping) {
+    if (code === "aborted") {
+      if (this.isStopping) {
+        return;
+      }
+      // Chromium-based browsers can emit aborted during automatic restarts.
+      return;
+    }
+    if (code === "network") {
+      // Web Speech network hiccups are common; onend restart logic will recover.
+      return;
+    }
+    if (code === "not-allowed" && this.isStopping) {
       return;
     }
 
@@ -653,11 +679,31 @@ class BrowserVoiceAssistant {
       case "audio-capture":
         return "No microphone was detected. Check your input device and browser permissions.";
       case "network":
-        return "Speech recognition network error. Verify internet connectivity and try again.";
+        return "Speech recognition network service is unavailable right now. It should auto-retry.";
       case "aborted":
         return "Speech recognition was interrupted.";
       default:
         return "Browser speech recognition failed. Try toggling Voice Off/On again.";
+    }
+  }
+
+  private mapMicrophoneAccessError(error: unknown): string {
+    const name = typeof error === "object" && error !== null && "name" in error
+      ? String((error as { name?: string }).name)
+      : "";
+
+    switch (name) {
+      case "NotAllowedError":
+      case "SecurityError":
+        return "Microphone access is blocked. Allow microphone permission for this site and reload.";
+      case "NotFoundError":
+      case "DevicesNotFoundError":
+        return "No microphone device is available in this browser session.";
+      case "NotReadableError":
+      case "TrackStartError":
+        return "Microphone is busy or unavailable. Close other apps using the mic and try again.";
+      default:
+        return "Unable to access microphone. Check browser/device microphone settings and try again.";
     }
   }
 
