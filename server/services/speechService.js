@@ -29,6 +29,33 @@ function pcmToWav(pcmBuffer, sampleRate, channels, bitsPerSample = 16) {
   return Buffer.concat([header, pcmBuffer]);
 }
 
+function normalizeMimeType(mimeType) {
+  if (!mimeType || typeof mimeType !== 'string') {
+    return 'audio/webm';
+  }
+  return mimeType.split(';')[0].trim().toLowerCase();
+}
+
+function extensionForMimeType(mimeType) {
+  const normalized = normalizeMimeType(mimeType);
+  switch (normalized) {
+    case 'audio/webm':
+      return 'webm';
+    case 'audio/mp4':
+    case 'audio/m4a':
+      return 'm4a';
+    case 'audio/mpeg':
+      return 'mp3';
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return 'wav';
+    case 'audio/ogg':
+      return 'ogg';
+    default:
+      return 'webm';
+  }
+}
+
 class SpeechService {
   constructor() {
     this.cachedConfigKey = null;
@@ -142,6 +169,28 @@ class SpeechService {
     }
   }
 
+  async transcribeMediaBuffer({ audioBuffer, mimeType = 'audio/webm', language, model }) {
+    if (!audioBuffer || !audioBuffer.length) {
+      throw new Error('No audio data provided for transcription');
+    }
+
+    const providerConfig = await this.getProviderConfig();
+    const sttLanguage = language || providerConfig.language || 'en';
+    const fallbackModel = providerConfig.provider === 'whisper_local'
+      ? 'gpt-4o-mini-transcribe'
+      : (providerConfig.model || 'gpt-4o-mini-transcribe');
+    const resolvedModel = model || fallbackModel;
+
+    // Local whisper path currently expects raw PCM and cannot decode browser-compressed media.
+    // Use OpenAI transcription for browser media uploads regardless of current provider.
+    return this.transcribeMediaWithOpenAI({
+      audioBuffer,
+      mimeType,
+      language: sttLanguage,
+      model: resolvedModel
+    });
+  }
+
   async transcribeWithOpenAI({ audioBuffer, sampleRate, channels, format, language, model }) {
     if (format && format.toUpperCase() !== 'S16LE') {
       throw new Error(`Unsupported audio format "${format}". Only S16LE PCM is currently supported.`);
@@ -151,6 +200,40 @@ class SpeechService {
     const wavBuffer = pcmToWav(audioBuffer, sampleRate, channels);
     const file = await OpenAI.toFile(wavBuffer, `command-${Date.now()}.wav`, {
       type: 'audio/wav'
+    });
+
+    const startedAt = Date.now();
+    const response = await client.audio.transcriptions.create({
+      file,
+      model: model || 'gpt-4o-mini-transcribe',
+      response_format: 'verbose_json',
+      language,
+      temperature: 0
+    });
+    const durationMs = Date.now() - startedAt;
+
+    const text = (response?.text || '').trim();
+    const segments = Array.isArray(response?.segments) ? response.segments : [];
+
+    return {
+      provider: 'openai',
+      model: model || 'gpt-4o-mini-transcribe',
+      text,
+      language: response?.language || language,
+      duration: response?.duration || null,
+      segments,
+      confidence: this.computeConfidence(segments),
+      processingTimeMs: durationMs
+    };
+  }
+
+  async transcribeMediaWithOpenAI({ audioBuffer, mimeType, language, model }) {
+    const client = await this.getOpenAiClient();
+    const normalizedMimeType = normalizeMimeType(mimeType);
+    const extension = extensionForMimeType(normalizedMimeType);
+
+    const file = await OpenAI.toFile(audioBuffer, `browser-${Date.now()}.${extension}`, {
+      type: normalizedMimeType
     });
 
     const startedAt = Date.now();
