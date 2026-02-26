@@ -262,12 +262,16 @@ class PlatformDeployService {
     });
   }
 
+  getSafeGitArgs(args = []) {
+    return ['-c', `safe.directory=${this.projectRoot}`, ...args];
+  }
+
   async getRepoStatus() {
     await this.initialize();
 
     const runGit = async (args, fallback = '') => {
       try {
-        const result = await this.runCommand('git', args);
+        const result = await this.runCommand('git', this.getSafeGitArgs(args));
         return result.stdout || fallback;
       } catch (error) {
         return fallback;
@@ -584,8 +588,8 @@ class PlatformDeployService {
     };
 
     try {
-      await runStep('Fetch latest refs', 'git', ['fetch', '--all', '--prune']);
-      await runStep('Pull latest changes', 'git', ['pull', '--ff-only']);
+      await runStep('Fetch latest refs', 'git', this.getSafeGitArgs(['fetch', '--all', '--prune']));
+      await runStep('Pull latest changes', 'git', this.getSafeGitArgs(['pull', '--ff-only']));
 
       if (job.options.installDependencies) {
         await runNpmStep('Install root dependencies', ['install', '--no-audit', '--no-fund']);
