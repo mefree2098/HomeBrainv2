@@ -2433,6 +2433,13 @@ export function Settings() {
                         {sthmDiagnostics?.resolvedSecurityState?.source ? ` via ${sthmDiagnostics.resolvedSecurityState.source}` : ""}
                         {sthmDiagnostics?.resolvedSecurityState?.error ? ` (error: ${sthmDiagnostics.resolvedSecurityState.error})` : ""}
                       </p>
+                      <p className="text-muted-foreground">
+                        Auth mode:{" "}
+                        <span className="font-medium text-foreground">{sthmDiagnostics?.auth?.mode || "unknown"}</span>
+                        {typeof sthmDiagnostics?.auth?.canIssueCommands === "boolean"
+                          ? ` (${sthmDiagnostics.auth.canIssueCommands ? "commands enabled" : "commands blocked"})`
+                          : ""}
+                      </p>
                       <div className="space-y-1 text-muted-foreground">
                         <p>
                           Disarm switch:{" "}

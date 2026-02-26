@@ -1444,6 +1444,18 @@ class SmartThingsService {
 
   async getSthmDiagnostics() {
     const { integration, config } = await this.getSthmVirtualSwitchConfig({ requireAll: false });
+    const settings = await Settings.getSettings();
+    const useOAuth = settings?.smartthingsUseOAuth !== false;
+    const hasPatToken = Boolean(settings?.smartthingsToken && settings.smartthingsToken.trim());
+    const hasOAuthAccess = Boolean(
+      integration?.isConfigured &&
+      (
+        integration?.isConnected ||
+        integration?.accessToken ||
+        integration?.refreshToken
+      )
+    );
+    const authCanIssueCommands = useOAuth ? hasOAuthAccess : hasPatToken;
 
     const switchEntries = [
       { key: 'disarm', label: 'Disarm', deviceId: config.disarmDeviceId },
@@ -1500,6 +1512,12 @@ class SmartThingsService {
         isConnected: Boolean(integration?.isConnected),
         hasFullMapping: Boolean(config.disarmDeviceId && config.armStayDeviceId && config.armAwayDeviceId),
         locationId: config.locationId || null
+      },
+      auth: {
+        mode: useOAuth ? 'oauth' : 'pat',
+        hasPatToken,
+        hasOAuthAccess,
+        canIssueCommands: authCanIssueCommands
       },
       switchStatuses,
       resolvedSecurityState: {

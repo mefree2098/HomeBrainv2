@@ -1,6 +1,7 @@
 const SecurityAlarm = require('../models/SecurityAlarm');
 const smartThingsService = require('./smartThingsService');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
+const Settings = require('../models/Settings');
 
 const STATUS_STALE_THRESHOLD_MS = Number(process.env.SECURITY_ALARM_STATUS_STALE_MS || 60000);
 const ONLINE_GRACE_PERIOD_MS = Number(process.env.SECURITY_ALARM_ONLINE_GRACE_MS || 120000);
@@ -17,13 +18,33 @@ class SecurityAlarmService {
   async isSmartThingsConfiguredForSthm() {
     try {
       const integration = await SmartThingsIntegration.getIntegration();
+      const settings = await Settings.getSettings();
       const hasSthmMapping = Boolean(
         integration?.sthm?.disarmDeviceId &&
         integration?.sthm?.armStayDeviceId &&
         integration?.sthm?.armAwayDeviceId
       );
 
-      return !!(integration.isConfigured && integration.isConnected && hasSthmMapping);
+      if (!hasSthmMapping) {
+        return false;
+      }
+
+      const useOAuth = settings?.smartthingsUseOAuth !== false;
+      if (!useOAuth) {
+        const hasPatToken = Boolean(settings?.smartthingsToken && settings.smartthingsToken.trim());
+        return hasPatToken;
+      }
+
+      const hasOAuthAccess = Boolean(
+        integration?.isConfigured &&
+        (
+          integration?.isConnected ||
+          integration?.accessToken ||
+          integration?.refreshToken
+        )
+      );
+
+      return hasOAuthAccess;
     } catch (error) {
       console.error('SecurityAlarmService: Error checking SmartThings configuration:', error.message);
       return false;
