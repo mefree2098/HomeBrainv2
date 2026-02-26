@@ -1,4 +1,4 @@
-import { Mic, MicOff, Volume2, VolumeX, Settings, LogOut } from "lucide-react"
+import { Loader2, Mic, MicOff, Settings, LogOut } from "lucide-react"
 import { Button } from "./ui/button"
 import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
@@ -6,56 +6,80 @@ import { useAuth } from "@/contexts/AuthContext"
 import { useNavigate } from "react-router-dom"
 import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/useToast"
-import { voicePollingManager } from "@/services/voicePollingManager"
-
-// Debug mode controlled by environment variable
-const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === 'true';
+import { getDeviceStats } from "@/api/devices"
+import { browserVoiceAssistant, type BrowserVoiceStatus } from "@/services/browserVoiceAssistant"
 
 export function Header() {
   const { logout } = useAuth()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const [voiceStatus, setVoiceStatus] = useState({
-    listening: false,
-    connected: true,
-    activeDevices: 5
+  const [voiceStatus, setVoiceStatus] = useState<BrowserVoiceStatus>(() => browserVoiceAssistant.getStatus())
+  const [homeDeviceStats, setHomeDeviceStats] = useState({
+    active: 0,
+    total: 0,
+    loaded: false
   })
   
-  const componentId = useRef(`header-${Date.now()}-${Math.random()}`).current
-  const errorCountRef = useRef(0)
+  const subscriptionId = useRef(`header-browser-voice-${Date.now()}-${Math.random()}`).current
+  const lastVoiceErrorRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (DEBUG_MODE) console.log(`Header component ${componentId} mounting - subscribing to voice polling manager`)
-
-    // Subscribe to voice status updates from singleton manager
-    voicePollingManager.subscribe(
-      componentId,
-      (status) => {
-        if (DEBUG_MODE) console.log(`Header ${componentId} received voice status update:`, status)
-        setVoiceStatus(status)
-        errorCountRef.current = 0
-      },
-      (error) => {
-        errorCountRef.current += 1
-        console.error(`Header ${componentId} voice status error (attempt ${errorCountRef.current}):`, error)
-        
-        // Only show toast for first few errors to avoid spam
-        if (errorCountRef.current <= 2) {
-          toast({
-            title: "Voice Status Error",
-            description: "Failed to get voice device status",
-            variant: "destructive"
-          })
-        }
-      }
-    )
-
-    // Cleanup on unmount
+    browserVoiceAssistant.subscribe(subscriptionId, setVoiceStatus)
     return () => {
-      if (DEBUG_MODE) console.log(`Header component ${componentId} unmounting - unsubscribing from voice polling manager`)
-      voicePollingManager.unsubscribe(componentId)
+      browserVoiceAssistant.unsubscribe(subscriptionId)
     }
-  }, [componentId, toast])
+  }, [subscriptionId])
+
+  useEffect(() => {
+    if (!voiceStatus.error || voiceStatus.error === lastVoiceErrorRef.current) {
+      return
+    }
+
+    lastVoiceErrorRef.current = voiceStatus.error
+    toast({
+      title: "Browser Voice Error",
+      description: voiceStatus.error,
+      variant: "destructive"
+    })
+  }, [voiceStatus.error, toast])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchDeviceStats = async () => {
+      try {
+        const response = await getDeviceStats()
+        const stats = response?.stats || {}
+
+        if (cancelled) {
+          return
+        }
+
+        setHomeDeviceStats({
+          active: Number(stats.active) || 0,
+          total: Number(stats.total) || 0,
+          loaded: true
+        })
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+
+        setHomeDeviceStats((prev) => ({
+          ...prev,
+          loaded: true
+        }))
+      }
+    }
+
+    fetchDeviceStats()
+    const interval = setInterval(fetchDeviceStats, 60000)
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
 
   const handleLogout = () => {
     console.log('User logging out')
@@ -63,14 +87,53 @@ export function Header() {
     navigate("/login")
   }
 
-  const toggleVoiceListening = () => {
-    if (DEBUG_MODE) console.log('Toggling voice listening:', !voiceStatus.listening)
-    setVoiceStatus(prev => ({ ...prev, listening: !prev.listening }))
-    toast({
-      title: voiceStatus.listening ? "Voice Disabled" : "Voice Enabled",
-      description: voiceStatus.listening ? "Voice commands are now disabled" : "Voice commands are now active"
-    })
+  const toggleVoiceListening = async () => {
+    if (!voiceStatus.supported) {
+      toast({
+        title: "Voice Unsupported",
+        description: "This browser does not support microphone speech recognition.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      if (voiceStatus.enabled) {
+        browserVoiceAssistant.disable()
+        toast({
+          title: "Browser Voice Disabled",
+          description: "Wake-word listening from this browser tab is now off."
+        })
+      } else {
+        await browserVoiceAssistant.enable()
+        toast({
+          title: "Browser Voice Enabled",
+          description: "Say your wake word (for example: 'Hey Anna') and then your command."
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to start browser voice."
+      toast({
+        title: "Voice Startup Failed",
+        description: message,
+        variant: "destructive"
+      })
+    }
   }
+
+  const isVoiceEnabled = voiceStatus.enabled
+  const isVoiceBusy = voiceStatus.mode === "starting" || voiceStatus.mode === "processing"
+  const voiceLabel = !voiceStatus.supported
+    ? "Voice Unsupported"
+    : voiceStatus.mode === "starting"
+      ? "Starting..."
+      : voiceStatus.mode === "processing"
+        ? "Processing..."
+        : voiceStatus.mode === "waiting_command"
+          ? "Awaiting Command"
+          : isVoiceEnabled
+            ? "Listening"
+            : "Voice Off"
 
   return (
     <header className="fixed top-0 z-50 w-full border-b bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75">
@@ -82,31 +145,40 @@ export function Header() {
           >
             Home Brain
           </div>
-          <Badge variant={voiceStatus.connected ? "default" : "destructive"} className="animate-pulse">
-            {voiceStatus.activeDevices} devices online
+          <Badge variant="default" className={homeDeviceStats.loaded ? "" : "animate-pulse"}>
+            {homeDeviceStats.loaded
+              ? `${homeDeviceStats.active}/${homeDeviceStats.total} devices active`
+              : "Loading devices..."}
           </Badge>
         </div>
         
         <div className="flex items-center gap-4">
           <Button
-            variant={voiceStatus.listening ? "default" : "outline"}
+            variant={isVoiceEnabled ? "default" : "outline"}
             size="sm"
             onClick={toggleVoiceListening}
+            disabled={!voiceStatus.supported}
+            title={voiceStatus.pendingWakeWord ? `Wake word: ${voiceStatus.pendingWakeWord}` : undefined}
             className={`transition-all duration-200 ${
-              voiceStatus.listening 
+              isVoiceEnabled
                 ? "bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/25" 
                 : "hover:bg-red-50 hover:text-red-600 hover:border-red-300 dark:hover:bg-red-950/30 dark:hover:text-red-300 dark:hover:border-red-900"
             }`}
           >
-            {voiceStatus.listening ? (
+            {isVoiceBusy ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                {voiceLabel}
+              </>
+            ) : isVoiceEnabled ? (
               <>
                 <Mic className="h-4 w-4 mr-2" />
-                Listening
+                {voiceLabel}
               </>
             ) : (
               <>
                 <MicOff className="h-4 w-4 mr-2" />
-                Voice Off
+                {voiceLabel}
               </>
             )}
           </Button>
