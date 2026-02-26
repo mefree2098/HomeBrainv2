@@ -465,6 +465,62 @@ class OllamaService {
     return this.transformApiModels(models);
   }
 
+  async fetchModelsFromCli() {
+    if (!(await commandExists('ollama'))) {
+      return [];
+    }
+
+    try {
+      const { stdout } = await execAsync('ollama list', {
+        timeout: 10000,
+        maxBuffer: MAX_LOG_BYTES * 2
+      });
+
+      const lines = String(stdout || '')
+        .split(LOG_LINE_SPLIT_REGEX)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      if (!lines.length) {
+        return [];
+      }
+
+      const dataLines = lines[0].toLowerCase().startsWith('name') ? lines.slice(1) : lines;
+      const models = [];
+
+      for (const line of dataLines) {
+        const name = line.split(/\s+/)[0];
+        if (!name) {
+          continue;
+        }
+
+        const tagIndex = name.lastIndexOf(':');
+        const parsedTag = tagIndex > -1 ? name.slice(tagIndex + 1) : 'latest';
+
+        models.push({
+          name,
+          tag: parsedTag || 'latest',
+          size: 0,
+          digest: '',
+          modifiedAt: new Date(),
+          family: '',
+          parameterSize: '',
+          quantizationLevel: '',
+          format: '',
+          details: {
+            availableInService: false,
+            sources: ['cli_list']
+          }
+        });
+      }
+
+      return models;
+    } catch (error) {
+      this.addOperationLog('model', `CLI model query failed: ${error.message}`);
+      return [];
+    }
+  }
+
   async discoverFilesystemModels() {
     const roots = buildModelStoreCandidateRoots();
     const modelMap = new Map();
@@ -564,7 +620,9 @@ class OllamaService {
         ...(existing.details || {}),
         manifestPaths,
         modelStoreRoots,
-        availableInService: true
+        availableInService:
+          Boolean(existing.details?.availableInService) ||
+          Boolean(fsModel.details?.availableInService)
       };
     }
 
@@ -1531,7 +1589,16 @@ Please contact your system administrator for assistance.`;
         );
       }
 
-      const mergedModels = this.mergeServiceAndFilesystemModels(serviceModels, filesystemModels);
+      const cliModels = await this.fetchModelsFromCli();
+      if (cliModels.length) {
+        this.addOperationLog(
+          'model',
+          `CLI list discovered ${cliModels.length} model${cliModels.length === 1 ? '' : 's'}`
+        );
+      }
+
+      const discoveredModels = [...filesystemModels, ...cliModels];
+      const mergedModels = this.mergeServiceAndFilesystemModels(serviceModels, discoveredModels);
       console.log(`Found ${mergedModels.length} installed model entries`);
 
       // Update config
