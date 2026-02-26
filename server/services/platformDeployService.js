@@ -592,9 +592,9 @@ class PlatformDeployService {
       await runStep('Pull latest changes', 'git', this.getSafeGitArgs(['pull', '--ff-only']));
 
       if (job.options.installDependencies) {
-        await runNpmStep('Install root dependencies', ['install', '--no-audit', '--no-fund']);
-        await runNpmStep('Install server dependencies', ['install', '--no-audit', '--no-fund', '--prefix', 'server']);
-        await runNpmStep('Install client dependencies', ['install', '--no-audit', '--no-fund', '--prefix', 'client']);
+        await runNpmStep('Install root dependencies', ['install', '--include=dev', '--no-audit', '--no-fund']);
+        await runNpmStep('Install server dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'server']);
+        await runNpmStep('Install client dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'client']);
       }
 
       if (job.options.runClientLint) {

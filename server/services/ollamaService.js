@@ -13,6 +13,8 @@ const MAX_LOG_LINES = 2000;
 const DEFAULT_LOG_LINES = 200;
 const MAX_LOG_BYTES = 1_048_576; // 1 MB
 const LOG_LINE_SPLIT_REGEX = /\r?\n/;
+const MAX_OPERATION_LOG_LINES = 4000;
+const VERSION_REGEX = /v?(\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.-]+)?)/i;
 
 async function commandExists(command) {
   try {
@@ -90,9 +92,231 @@ function buildLogCandidatePaths() {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
+function normalizeVersionString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'unknown') {
+    return null;
+  }
+
+  const match = trimmed.match(VERSION_REGEX);
+  if (!match || !match[1]) {
+    return trimmed;
+  }
+
+  return match[1];
+}
+
+function parseVersion(value) {
+  const normalized = normalizeVersionString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const [core, preRelease = null] = normalized.split('-', 2);
+  const numbers = core.split('.').map((segment) => Number.parseInt(segment, 10));
+  if (numbers.some((part) => Number.isNaN(part))) {
+    return { normalized, numbers: [], preRelease };
+  }
+
+  return { normalized, numbers, preRelease };
+}
+
+function compareVersionStrings(leftVersion, rightVersion) {
+  const left = parseVersion(leftVersion);
+  const right = parseVersion(rightVersion);
+
+  if (!left || !right) {
+    return null;
+  }
+
+  if (!left.numbers.length || !right.numbers.length) {
+    return left.normalized.localeCompare(right.normalized, undefined, { numeric: true, sensitivity: 'base' });
+  }
+
+  const length = Math.max(left.numbers.length, right.numbers.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = left.numbers[index] || 0;
+    const rightPart = right.numbers[index] || 0;
+
+    if (leftPart < rightPart) {
+      return -1;
+    }
+    if (leftPart > rightPart) {
+      return 1;
+    }
+  }
+
+  if (left.preRelease === right.preRelease) {
+    return 0;
+  }
+
+  if (!left.preRelease && right.preRelease) {
+    return 1;
+  }
+
+  if (left.preRelease && !right.preRelease) {
+    return -1;
+  }
+
+  return left.preRelease.localeCompare(right.preRelease, undefined, { numeric: true, sensitivity: 'base' });
+}
+
 class OllamaService {
   constructor() {
     this.apiUrl = 'http://localhost:11434';
+    this.operationLogs = [];
+  }
+
+  syncApiUrl(config) {
+    if (config?.configuration?.apiUrl) {
+      this.apiUrl = config.configuration.apiUrl;
+    }
+  }
+
+  addOperationLog(scope, message) {
+    if (typeof message !== 'string') {
+      return;
+    }
+
+    const lines = message
+      .split(LOG_LINE_SPLIT_REGEX)
+      .map((line) => line.trimEnd())
+      .filter(Boolean);
+
+    if (!lines.length) {
+      return;
+    }
+
+    for (const line of lines) {
+      this.operationLogs.push(`[${new Date().toISOString()}] [${scope}] ${line}`);
+    }
+
+    if (this.operationLogs.length > MAX_OPERATION_LOG_LINES) {
+      this.operationLogs = this.operationLogs.slice(-MAX_OPERATION_LOG_LINES);
+    }
+  }
+
+  addCommandOutputToOperationLogs(scope, output, stream = 'stdout') {
+    if (!output || typeof output !== 'string') {
+      return;
+    }
+
+    const lines = output
+      .split(LOG_LINE_SPLIT_REGEX)
+      .map((line) => line.trimEnd())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      this.addOperationLog(scope, `${stream}: ${line}`);
+    }
+  }
+
+  getOperationLogLines(maxLines) {
+    if (!Number.isFinite(maxLines) || maxLines <= 0) {
+      return [];
+    }
+    return this.operationLogs.slice(-maxLines);
+  }
+
+  isUpdateAvailable(currentVersion, latestVersion) {
+    const normalizedCurrent = normalizeVersionString(currentVersion);
+    const normalizedLatest = normalizeVersionString(latestVersion);
+
+    if (!normalizedCurrent || !normalizedLatest) {
+      return Boolean(normalizedCurrent && normalizedLatest && normalizedCurrent !== normalizedLatest);
+    }
+
+    const comparison = compareVersionStrings(normalizedCurrent, normalizedLatest);
+    if (comparison === null) {
+      return normalizedCurrent !== normalizedLatest;
+    }
+
+    return comparison < 0;
+  }
+
+  extractVersionFromOutput(...outputs) {
+    for (const output of outputs) {
+      const normalized = normalizeVersionString(output);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return 'unknown';
+  }
+
+  getOllamaHostForEnv() {
+    try {
+      const parsed = new URL(this.apiUrl);
+      if (parsed.host) {
+        return parsed.host;
+      }
+    } catch (error) {
+      // Fall back to raw API URL parsing.
+    }
+
+    const fallback = (this.apiUrl || '').replace(/^https?:\/\//i, '').replace(/\/$/, '').trim();
+    return fallback || '127.0.0.1:11434';
+  }
+
+  async pullModelWithCli(modelName, timeoutMs = 3600000) {
+    return new Promise((resolve, reject) => {
+      const env = {
+        ...process.env,
+        OLLAMA_HOST: this.getOllamaHostForEnv()
+      };
+
+      const child = spawn('ollama', ['pull', modelName], { env });
+      let timedOut = false;
+      let timeoutRef = null;
+
+      if (timeoutMs > 0) {
+        timeoutRef = setTimeout(() => {
+          timedOut = true;
+          child.kill('SIGTERM');
+          setTimeout(() => {
+            child.kill('SIGKILL');
+          }, 2000);
+        }, timeoutMs);
+      }
+
+      child.stdout?.on('data', (chunk) => {
+        this.addCommandOutputToOperationLogs('model', chunk.toString(), 'stdout');
+      });
+
+      child.stderr?.on('data', (chunk) => {
+        this.addCommandOutputToOperationLogs('model', chunk.toString(), 'stderr');
+      });
+
+      child.once('error', (error) => {
+        if (timeoutRef) {
+          clearTimeout(timeoutRef);
+        }
+        reject(error);
+      });
+
+      child.once('close', (code, signal) => {
+        if (timeoutRef) {
+          clearTimeout(timeoutRef);
+        }
+
+        if (timedOut) {
+          reject(new Error(`ollama pull timed out after ${timeoutMs}ms`));
+          return;
+        }
+
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        reject(new Error(`ollama pull exited with code ${code}${signal ? ` (${signal})` : ''}`));
+      });
+    });
   }
 
   /**
@@ -113,15 +337,19 @@ class OllamaService {
       }
 
       // Get version
-      try {
-        const { stdout } = await execAsync('ollama --version', { timeout: 5000 });
-        const version = stdout.trim().replace('ollama version is ', '').replace('ollama version ', '');
-        console.log(`Ollama is installed, version: ${version}`);
-        return { isInstalled: true, version };
-      } catch (error) {
-        console.error('Error getting Ollama version:', error);
-        return { isInstalled: true, version: 'unknown' };
+      const versionCommands = ['ollama --version', 'ollama version'];
+      for (const command of versionCommands) {
+        try {
+          const { stdout, stderr } = await execAsync(command, { timeout: 5000 });
+          const version = this.extractVersionFromOutput(stdout, stderr);
+          console.log(`Ollama is installed, version: ${version}`);
+          return { isInstalled: true, version };
+        } catch (error) {
+          console.error(`Error getting Ollama version with "${command}":`, error.message || error);
+        }
       }
+
+      return { isInstalled: true, version: 'unknown' };
     } catch (error) {
       console.error('Error checking Ollama installation:', error);
       throw error;
@@ -152,6 +380,8 @@ class OllamaService {
       console.log('Starting Ollama installation...');
 
       const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
+      this.addOperationLog('install', 'Starting Ollama installation');
       config.serviceStatus = 'installing';
       await config.save();
 
@@ -202,6 +432,7 @@ Please contact your system administrator for assistance.`;
         const config = await OllamaConfig.getConfig();
         config.serviceStatus = 'error';
         await config.setError(errorMessage);
+        this.addOperationLog('install', errorMessage);
 
         throw new Error(errorMessage);
       }
@@ -220,6 +451,8 @@ Please contact your system administrator for assistance.`;
         timeout: 300000 // 5 minutes timeout
       });
 
+      this.addCommandOutputToOperationLogs('install', stdout, 'stdout');
+      this.addCommandOutputToOperationLogs('install', stderr, 'stderr');
       console.log('Ollama installation output:', stdout);
       if (stderr) {
         console.log('Ollama installation stderr:', stderr);
@@ -238,11 +471,13 @@ Please contact your system administrator for assistance.`;
 
       // Update config
       await config.updateInstallation(installStatus.version, true);
+      this.addOperationLog('install', `Installation completed successfully at version ${installStatus.version}`);
 
       console.log('Ollama installation completed successfully');
       return { success: true, version: installStatus.version };
     } catch (error) {
       console.error('Error installing Ollama:', error);
+      this.addOperationLog('install', `Installation failed: ${error.message}`);
 
       const config = await OllamaConfig.getConfig();
       config.serviceStatus = 'error';
@@ -257,12 +492,11 @@ Please contact your system administrator for assistance.`;
    */
   async startService() {
     const config = await OllamaConfig.getConfig();
-    if (config.configuration?.apiUrl) {
-      this.apiUrl = config.configuration.apiUrl;
-    }
+    this.syncApiUrl(config);
 
     try {
       console.log('Starting Ollama service...');
+      this.addOperationLog('service', `Starting Ollama service (api: ${this.apiUrl})`);
 
       const status = await this.checkServiceStatus();
       if (status.running) {
@@ -280,6 +514,7 @@ Please contact your system administrator for assistance.`;
               timestamp: new Date()
             };
             await config.save();
+            this.addOperationLog('service', `Failed to stop external Ollama process: ${stopResult.message}`);
             throw new Error(stopResult.message);
           }
           await this.delay(1000);
@@ -295,7 +530,7 @@ Please contact your system administrator for assistance.`;
 
       const childEnv = {
         ...process.env,
-        OLLAMA_HOST: '127.0.0.1'
+        OLLAMA_HOST: this.getOllamaHostForEnv()
       };
 
       const child = spawn('ollama', ['serve'], {
@@ -329,9 +564,11 @@ Please contact your system administrator for assistance.`;
       }
 
       console.log('Ollama service started successfully');
+      this.addOperationLog('service', `Ollama service started (pid: ${childPid})`);
       return { success: true, message: 'Service started' };
     } catch (error) {
       console.error('Error starting Ollama service:', error);
+      this.addOperationLog('service', `Failed to start Ollama service: ${error.message}`);
       config.servicePid = null;
       config.serviceOwner = null;
       config.serviceStatus = 'error';
@@ -346,12 +583,11 @@ Please contact your system administrator for assistance.`;
    */
   async stopService() {
     const config = await OllamaConfig.getConfig();
-    if (config.configuration?.apiUrl) {
-      this.apiUrl = config.configuration.apiUrl;
-    }
+    this.syncApiUrl(config);
 
     try {
       console.log('Stopping Ollama service...');
+      this.addOperationLog('service', `Stopping Ollama service (api: ${this.apiUrl})`);
 
       const candidates = [];
       const currentUser = this.getCurrentUser();
@@ -377,6 +613,7 @@ Please contact your system administrator for assistance.`;
           const external = processes[0];
           const message = `Ollama service is managed by user "${external.user}". Attempting to stop via system service...`;
           console.warn(message);
+          this.addOperationLog('service', message);
           const stopResult = await this.stopSystemService();
           if (!stopResult.success) {
             config.serviceStatus = 'running_external';
@@ -384,15 +621,16 @@ Please contact your system administrator for assistance.`;
             config.serviceOwner = external.user;
             await config.setError(stopResult.message);
             await config.save();
+            this.addOperationLog('service', `Unable to stop external service: ${stopResult.message}`);
             return { success: false, message: stopResult.message };
           }
           await this.delay(1000);
-          config.servicePid = null;
-          config.serviceOwner = null;
-          config.serviceStatus = 'stopped';
-          config.lastError = null;
-          await config.save();
-          return { success: true, message: 'Service stopped via system service' };
+          return this.finalizeStoppedState(config, 'Service stopped via system service');
+        }
+
+        const status = await this.checkServiceStatus();
+        if (status.running) {
+          return this.finalizeStoppedState(config, 'Service stopped');
         }
 
         config.serviceStatus = 'stopped';
@@ -400,6 +638,7 @@ Please contact your system administrator for assistance.`;
         config.serviceOwner = null;
         config.lastError = null;
         await config.save();
+        this.addOperationLog('service', 'Service was not running');
         return { success: true, message: 'Service was not running' };
       }
 
@@ -411,30 +650,22 @@ Please contact your system administrator for assistance.`;
             config.serviceOwner = candidate.owner || config.serviceOwner || 'external';
             await config.setError(stopResult.message);
             await config.save();
+            this.addOperationLog('service', `Unable to stop external service: ${stopResult.message}`);
             return { success: false, message: stopResult.message };
           }
           await this.delay(1000);
-          config.servicePid = null;
-          config.serviceOwner = null;
-          config.serviceStatus = 'stopped';
-          config.lastError = null;
-          await config.save();
-          return { success: true, message: 'Service stopped via system service' };
+          return this.finalizeStoppedState(config, 'Service stopped via system service');
         }
 
         const result = await this.terminateManagedProcess(candidate.pid);
         if (result.success) {
-          config.servicePid = null;
-          config.serviceOwner = null;
-          config.serviceStatus = 'stopped';
-          config.lastError = null;
-          await config.save();
           console.log('Ollama service stopped');
-          return { success: true, message: 'Service stopped' };
+          return this.finalizeStoppedState(config, 'Service stopped');
         }
 
         if (result.reason === 'permission') {
           console.warn('Unable to terminate managed process due to insufficient permissions. Escalating to privileged stop.');
+          this.addOperationLog('service', 'Managed process stop required elevated privileges. Escalating.');
           break;
         }
 
@@ -444,14 +675,16 @@ Please contact your system administrator for assistance.`;
       }
 
       const pkillResult = await this.stopServiceWithPkill();
-      config.servicePid = null;
-      config.serviceOwner = null;
-      config.serviceStatus = pkillResult.success ? 'stopped' : config.serviceStatus;
-      config.lastError = pkillResult.success ? null : config.lastError;
+      if (pkillResult.success) {
+        return this.finalizeStoppedState(config, pkillResult.message || 'Service stopped');
+      }
+
+      await config.setError(pkillResult.message || 'Failed to stop Ollama service');
       await config.save();
       return pkillResult;
     } catch (error) {
       console.error('Error stopping Ollama service:', error);
+      this.addOperationLog('service', `Stop service failed: ${error.message}`);
       await config.setError(`Stop service failed: ${error.message}`);
       config.servicePid = null;
       config.serviceOwner = null;
@@ -464,6 +697,7 @@ Please contact your system administrator for assistance.`;
     try {
       await execAsync('pkill -f "ollama serve"');
       console.log('Ollama service stopped using pkill');
+      this.addOperationLog('service', 'Stopped Ollama with pkill');
       return { success: true, message: 'Service stopped' };
     } catch (error) {
       if (error.code === 1) {
@@ -477,6 +711,7 @@ Please contact your system administrator for assistance.`;
         try {
           await execAsync('sudo -n pkill -f "ollama serve"');
           console.log('Ollama service stopped via sudo');
+          this.addOperationLog('service', 'Stopped Ollama with sudo pkill');
           return { success: true, message: 'Service stopped with elevated privileges' };
         } catch (sudoError) {
           const sudoOutput = `${sudoError.stderr || ''}${sudoError.stdout || ''}`.toLowerCase();
@@ -488,12 +723,14 @@ Please contact your system administrator for assistance.`;
           if (sudoOutput.includes('command not found')) {
             const message = 'Unable to stop Ollama service: sudo command not available. Please stop the service manually or install sudo.';
             console.error(message);
+            this.addOperationLog('service', message);
             throw new Error(message);
           }
 
           if (sudoOutput.includes('a password is required') || sudoOutput.includes('permission denied')) {
             const message = 'Insufficient privileges to stop the Ollama service. Please run "sudo pkill -f \\"ollama serve\\"" manually, add this service to sudoers, or stop the system-level Ollama service (e.g., "sudo systemctl stop ollama").';
             console.error(message);
+            this.addOperationLog('service', message);
             throw new Error(message);
           }
 
@@ -515,6 +752,46 @@ Please contact your system administrator for assistance.`;
       await this.delay(delayMs);
     }
     return false;
+  }
+
+  async waitForServiceStopped(retries = 12, delayMs = 500) {
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+      const status = await this.checkServiceStatus();
+      const processes = await this.listOllamaProcesses();
+      if (!status.running && processes.length === 0) {
+        return true;
+      }
+      await this.delay(delayMs);
+    }
+    return false;
+  }
+
+  async finalizeStoppedState(config, successMessage) {
+    const stopped = await this.waitForServiceStopped();
+    if (!stopped) {
+      const processes = await this.listOllamaProcesses();
+      const processInfo = processes[0] || null;
+      const owner = processInfo?.user || config.serviceOwner || 'another user';
+      const failureMessage =
+        `Stop command completed but Ollama is still running as "${owner}". ` +
+        'Stop the system service manually (for example, "sudo systemctl stop ollama") or grant HomeBrain permission to manage it.';
+
+      config.serviceStatus = 'running_external';
+      config.servicePid = processInfo?.pid || null;
+      config.serviceOwner = owner;
+      await config.setError(failureMessage);
+      await config.save();
+      this.addOperationLog('service', failureMessage);
+      return { success: false, message: failureMessage };
+    }
+
+    config.servicePid = null;
+    config.serviceOwner = null;
+    config.serviceStatus = 'stopped';
+    config.lastError = null;
+    await config.save();
+    this.addOperationLog('service', successMessage);
+    return { success: true, message: successMessage };
   }
 
   async findOwnedOllamaProcess() {
@@ -643,9 +920,17 @@ Please contact your system administrator for assistance.`;
 
     if (currentUser === 'root') {
       commands.push('systemctl stop ollama');
+      commands.push('service ollama stop');
+      if (process.platform === 'darwin') {
+        commands.push('launchctl stop com.ollama.ollama');
+      }
     }
 
     commands.push('sudo -n systemctl stop ollama');
+    commands.push('sudo -n service ollama stop');
+    if (process.platform === 'darwin') {
+      commands.push('sudo -n launchctl stop com.ollama.ollama');
+    }
     commands.push('sudo -n pkill -f "ollama serve"');
 
     let lastError = null;
@@ -654,6 +939,7 @@ Please contact your system administrator for assistance.`;
       try {
         await execAsync(command);
         console.log(`Executed command: ${command}`);
+        this.addOperationLog('service', `Executed stop command: ${command}`);
         return { success: true, message: `Service stopped using "${command}"` };
       } catch (error) {
         lastError = error;
@@ -663,6 +949,7 @@ Please contact your system administrator for assistance.`;
           return { success: true, message: 'Service was not running' };
         }
         if (output.includes('password') || output.includes('permission denied')) {
+          this.addOperationLog('service', `Permission denied while executing "${command}"`);
           return {
             success: false,
             message:
@@ -672,6 +959,11 @@ Please contact your system administrator for assistance.`;
         if (output.includes('command not found')) {
           continue;
         }
+
+        this.addOperationLog(
+          'service',
+          `Stop command failed (${command}): ${(error && error.message) || 'Unknown error'}`
+        );
       }
     }
 
@@ -690,10 +982,16 @@ Please contact your system administrator for assistance.`;
       console.log('Checking for Ollama updates...');
 
       const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
+      this.addOperationLog('update', 'Checking for Ollama updates');
 
       // Get current version
       const installStatus = await this.checkInstallation();
       if (!installStatus.isInstalled) {
+        config.updateAvailable = false;
+        config.latestVersion = null;
+        config.lastUpdateCheck = new Date();
+        await config.save();
         return { updateAvailable: false, currentVersion: null, latestVersion: null };
       }
 
@@ -703,16 +1001,19 @@ Please contact your system administrator for assistance.`;
           timeout: 10000
         });
 
-        const latestVersion = response.data.tag_name.replace('v', '');
-        const currentVersion = installStatus.version.replace('v', '');
-
-        const updateAvailable = latestVersion !== currentVersion;
+        const latestVersion = normalizeVersionString(response.data.tag_name) || response.data.tag_name;
+        const currentVersion = normalizeVersionString(installStatus.version) || installStatus.version;
+        const updateAvailable = this.isUpdateAvailable(currentVersion, latestVersion);
 
         // Update config
         config.updateAvailable = updateAvailable;
         config.latestVersion = latestVersion;
         config.lastUpdateCheck = new Date();
         await config.save();
+        this.addOperationLog(
+          'update',
+          `Update check result - current: ${currentVersion}, latest: ${latestVersion}, available: ${updateAvailable}`
+        );
 
         console.log(`Update check complete. Current: ${currentVersion}, Latest: ${latestVersion}, Update available: ${updateAvailable}`);
 
@@ -723,9 +1024,14 @@ Please contact your system administrator for assistance.`;
         };
       } catch (error) {
         console.error('Error fetching latest version from GitHub:', error);
+        config.updateAvailable = false;
+        config.latestVersion = config.latestVersion || 'unknown';
+        config.lastUpdateCheck = new Date();
+        await config.save();
+        this.addOperationLog('update', `Update check failed: ${error.message}`);
         return {
           updateAvailable: false,
-          currentVersion: installStatus.version,
+          currentVersion: normalizeVersionString(installStatus.version) || installStatus.version,
           latestVersion: 'unknown',
           error: 'Could not check for updates'
         };
@@ -740,12 +1046,20 @@ Please contact your system administrator for assistance.`;
    * Update Ollama to latest version
    */
   async update() {
+    let serviceWasRunning = false;
+    let serviceStoppedForUpdate = false;
+
     try {
       console.log('Starting Ollama update...');
 
       const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
+      this.addOperationLog('update', 'Starting Ollama update');
       config.serviceStatus = 'installing';
       await config.save();
+
+      const preUpdateStatus = await this.checkInstallation();
+      const previousVersion = normalizeVersionString(preUpdateStatus.version) || preUpdateStatus.version;
 
       // Check current user
       let currentUser = 'unknown';
@@ -786,8 +1100,22 @@ Please contact your system administrator for assistance.`;
         const config = await OllamaConfig.getConfig();
         config.serviceStatus = 'error';
         await config.setError(errorMessage);
+        this.addOperationLog('update', errorMessage);
 
         throw new Error(errorMessage);
+      }
+
+      const currentServiceStatus = await this.checkServiceStatus();
+      const runningProcesses = await this.listOllamaProcesses();
+      serviceWasRunning = Boolean(currentServiceStatus.running || runningProcesses.length);
+
+      if (serviceWasRunning) {
+        this.addOperationLog('update', 'Stopping Ollama service before updating');
+        const stopResult = await this.stopService();
+        if (!stopResult.success) {
+          throw new Error(`Unable to stop Ollama service before update: ${stopResult.message}`);
+        }
+        serviceStoppedForUpdate = true;
       }
 
       // Prepare update command
@@ -798,32 +1126,78 @@ Please contact your system administrator for assistance.`;
       } else {
         console.log('Running Ollama update script as root...');
       }
+      this.addOperationLog('update', `Running update command (${hasSudo ? 'sudo' : 'root'})`);
 
       const { stdout, stderr } = await execAsync(updateCommand, {
         maxBuffer: 10 * 1024 * 1024,
         timeout: 300000
       });
 
+      this.addCommandOutputToOperationLogs('update', stdout, 'stdout');
+      this.addCommandOutputToOperationLogs('update', stderr, 'stderr');
       console.log('Ollama update output:', stdout);
       if (stderr) {
         console.log('Ollama update stderr:', stderr);
       }
 
-      // Restart service
-      await this.stopService();
-      await this.startService();
-
       // Verify update
       const installStatus = await this.checkInstallation();
+      if (!installStatus.isInstalled) {
+        throw new Error('Ollama update failed - binary not found after update');
+      }
+
+      const installedVersion = normalizeVersionString(installStatus.version) || installStatus.version;
+      const comparisonWithPrevious = compareVersionStrings(installedVersion, previousVersion);
+      if (comparisonWithPrevious !== null && comparisonWithPrevious < 0) {
+        throw new Error(
+          `Installed version ${installStatus.version} is older than pre-update version ${preUpdateStatus.version}`
+        );
+      }
+
+      if (serviceWasRunning) {
+        this.addOperationLog('update', 'Restarting Ollama service after update');
+        await this.startService();
+        serviceStoppedForUpdate = false;
+      }
+
       await config.updateInstallation(installStatus.version, true);
 
-      config.updateAvailable = false;
+      const updateCheck = await this.checkForUpdates();
+      const latestVersion = normalizeVersionString(updateCheck.latestVersion) || updateCheck.latestVersion;
+      const comparisonWithLatest = compareVersionStrings(installedVersion, latestVersion);
+
+      if (comparisonWithLatest !== null && comparisonWithLatest < 0) {
+        throw new Error(
+          `Update script completed but installed version ${installStatus.version} is still behind latest ${updateCheck.latestVersion}`
+        );
+      }
+
+      config.updateAvailable = Boolean(updateCheck.updateAvailable);
+      config.latestVersion = updateCheck.latestVersion || config.latestVersion;
+      config.lastUpdateCheck = new Date();
+      config.lastError = null;
       await config.save();
+      this.addOperationLog('update', `Ollama update completed successfully at version ${installStatus.version}`);
 
       console.log('Ollama update completed successfully');
-      return { success: true, version: installStatus.version };
+      return {
+        success: true,
+        version: installStatus.version,
+        updateAvailable: config.updateAvailable,
+        latestVersion: config.latestVersion
+      };
     } catch (error) {
       console.error('Error updating Ollama:', error);
+      this.addOperationLog('update', `Update failed: ${error.message}`);
+
+      if (serviceStoppedForUpdate) {
+        try {
+          await this.startService();
+          this.addOperationLog('update', 'Service restarted after update failure');
+        } catch (restartError) {
+          this.addOperationLog('update', `Failed to restart service after update error: ${restartError.message}`);
+        }
+      }
 
       const config = await OllamaConfig.getConfig();
       config.serviceStatus = 'error';
@@ -839,6 +1213,8 @@ Please contact your system administrator for assistance.`;
   async listModels() {
     try {
       console.log('Fetching installed Ollama models...');
+      const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
 
       const response = await axios.get(`${this.apiUrl}/api/tags`, { timeout: 10000 });
 
@@ -860,7 +1236,6 @@ Please contact your system administrator for assistance.`;
       }));
 
       // Update config
-      const config = await OllamaConfig.getConfig();
       await config.updateModels(transformedModels);
 
       return transformedModels;
@@ -879,19 +1254,61 @@ Please contact your system administrator for assistance.`;
   async pullModel(modelName) {
     try {
       console.log(`Starting download of model: ${modelName}`);
+      this.addOperationLog('model', `Starting model pull for ${modelName}`);
 
-      // Use ollama CLI to pull model
-      const pullCommand = `ollama pull ${modelName}`;
+      const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
 
-      const { stdout, stderr } = await execAsync(pullCommand, {
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 1800000 // 30 minutes timeout for large models
-      });
+      const serviceStatus = await this.checkServiceStatus();
+      if (!serviceStatus.running) {
+        this.addOperationLog('model', 'Ollama service is not running. Attempting to start before model pull.');
+        await this.startService();
+      }
 
+      let usedCliFallback = false;
+      let statusMessage = 'Pull completed';
+
+      try {
+        const response = await axios.post(
+          `${this.apiUrl}/api/pull`,
+          {
+            model: modelName,
+            stream: false
+          },
+          {
+            timeout: 3600000 // 60 minutes timeout for large models
+          }
+        );
+
+        statusMessage = response.data?.status || statusMessage;
+      } catch (apiError) {
+        const apiDetail =
+          apiError?.response?.data?.error ||
+          apiError?.response?.data?.message ||
+          apiError.message;
+
+        const shouldFallbackToCli =
+          apiError?.response?.status === 404 ||
+          apiError?.response?.status === 405 ||
+          /unknown field|not found|unsupported/i.test(String(apiDetail || ''));
+
+        if (!shouldFallbackToCli) {
+          throw apiError;
+        }
+
+        usedCliFallback = true;
+        this.addOperationLog(
+          'model',
+          `Ollama API pull unavailable (${apiDetail}). Falling back to CLI pull.`
+        );
+        await this.pullModelWithCli(modelName);
+        statusMessage = 'Pull completed via CLI fallback';
+      }
+
+      this.addOperationLog('model', `${modelName}: ${statusMessage}`);
       console.log(`Model ${modelName} downloaded successfully`);
-      console.log('Pull output:', stdout);
-      if (stderr) {
-        console.log('Pull stderr:', stderr);
+      if (usedCliFallback) {
+        console.log(`Model ${modelName} was pulled using CLI fallback`);
       }
 
       // Refresh model list
@@ -900,6 +1317,16 @@ Please contact your system administrator for assistance.`;
       return { success: true, message: `Model ${modelName} downloaded successfully` };
     } catch (error) {
       console.error(`Error pulling model ${modelName}:`, error);
+      const detail =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error.message;
+      this.addOperationLog('model', `Failed to pull ${modelName}: ${detail}`);
+
+      if (error?.response?.data?.error) {
+        throw new Error(`Failed to download model: ${error.response.data.error}`);
+      }
+
       throw new Error(`Failed to download model: ${error.message}`);
     }
   }
@@ -959,6 +1386,7 @@ Please contact your system administrator for assistance.`;
       console.log(`Sending chat request to model: ${modelName}`);
 
       const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
 
       const requestBody = {
         model: modelName,
@@ -1010,6 +1438,8 @@ Please contact your system administrator for assistance.`;
   async generate(modelName, prompt) {
     try {
       console.log(`Generating text with model: ${modelName}`);
+      const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
 
       const response = await axios.post(
         `${this.apiUrl}/api/generate`,
@@ -1079,6 +1509,7 @@ Please contact your system administrator for assistance.`;
       console.log('Getting Ollama full status...');
 
       const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
       console.log('Got config from database');
 
       const installStatus = await Promise.race([
@@ -1134,6 +1565,16 @@ Please contact your system administrator for assistance.`;
       } else {
         config.serviceStatus = 'not_installed';
       }
+
+      if (installStatus.isInstalled) {
+        const currentVersion = normalizeVersionString(installStatus.version) || installStatus.version;
+        const latestVersion = normalizeVersionString(config.latestVersion) || config.latestVersion;
+        const comparison = compareVersionStrings(currentVersion, latestVersion);
+        if (comparison !== null && comparison >= 0 && config.updateAvailable) {
+          config.updateAvailable = false;
+        }
+      }
+
       await config.save();
 
       return {
@@ -1188,6 +1629,25 @@ Please contact your system administrator for assistance.`;
       : DEFAULT_LOG_LINES;
 
     const logAttempts = [];
+    const operationLines = this.getOperationLogLines(maxLines);
+
+    const combineWithOperationLogs = (payload) => {
+      if (!operationLines.length) {
+        return payload;
+      }
+
+      const baseLines = Array.isArray(payload.lines) ? payload.lines : [];
+      const combinedLines = [...baseLines, ...operationLines].slice(-maxLines);
+
+      return {
+        ...payload,
+        source: payload.source ? `${payload.source} + homebrain:operations` : 'homebrain:operations',
+        sourceType: payload.sourceType ? `${payload.sourceType}+operation` : 'operation',
+        lines: combinedLines,
+        lineCount: combinedLines.length,
+        truncated: payload.truncated || combinedLines.length >= maxLines
+      };
+    };
 
     if (await commandExists('journalctl')) {
       const units = ['ollama', 'ollama.service'];
@@ -1203,13 +1663,13 @@ Please contact your system administrator for assistance.`;
             .filter(line => line.length > 0);
 
           if (lines.length) {
-            return {
+            return combineWithOperationLogs({
               source: `journalctl:${unit}`,
               sourceType: 'journalctl',
               lines: lines.slice(-maxLines),
               lineCount: Math.min(lines.length, maxLines),
               truncated: lines.length >= maxLines
-            };
+            });
           }
 
           logAttempts.push({ type: 'journalctl', target: unit, message: 'No output' });
@@ -1235,13 +1695,13 @@ Please contact your system administrator for assistance.`;
 
         const lines = await readLastLines(filePath, maxLines);
         if (lines.length) {
-          return {
+          return combineWithOperationLogs({
             source: filePath,
             sourceType: 'file',
             lines,
             lineCount: lines.length,
             truncated: lines.length >= maxLines
-          };
+          });
         }
 
         logAttempts.push({ type: 'file', target: filePath, message: 'No content' });
@@ -1255,6 +1715,17 @@ Please contact your system administrator for assistance.`;
     }
 
     console.warn('OllamaService: No service logs available', logAttempts);
+
+    if (operationLines.length) {
+      return {
+        source: 'homebrain:operations',
+        sourceType: 'operation',
+        lines: operationLines,
+        lineCount: operationLines.length,
+        truncated: operationLines.length >= maxLines,
+        message: 'Showing HomeBrain operation logs (service logs unavailable).'
+      };
+    }
 
     return {
       source: null,
