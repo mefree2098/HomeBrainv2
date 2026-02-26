@@ -1095,15 +1095,22 @@ export function Settings() {
     setRunningSthmDiagnostics(true)
     try {
       const response = await getSmartThingsSthmDiagnostics()
-      if (response.success && response.diagnostics) {
+      if (response.diagnostics) {
         setSthmDiagnostics(response.diagnostics)
         if (response.diagnostics.integration) {
           setSmartthingsStatus(response.diagnostics.integration)
         }
-        toast({
-          title: "STHM Diagnostics Complete",
-          description: "Latest SmartThings bridge diagnostics have been loaded below."
-        })
+        if (response.success) {
+          toast({
+            title: "STHM Diagnostics Complete",
+            description: "Latest SmartThings bridge diagnostics have been loaded below."
+          })
+        } else {
+          toast({
+            title: "STHM Diagnostics Partial",
+            description: response.message || "Diagnostics completed with warnings."
+          })
+        }
       } else {
         throw new Error("Unexpected diagnostics response")
       }

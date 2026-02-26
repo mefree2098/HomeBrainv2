@@ -475,9 +475,13 @@ router.get('/sthm/diagnostics', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('SmartThings Routes: Error running STHM diagnostics:', error.message);
-    res.status(400).json({
+    res.status(200).json({
       success: false,
-      message: error.message
+      diagnostics: {
+        generatedAt: new Date().toISOString(),
+        error: error.message
+      },
+      message: error.message || 'Failed to run STHM diagnostics'
     });
   }
 });

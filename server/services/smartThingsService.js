@@ -42,6 +42,31 @@ class SmartThingsService {
     }
   }
 
+  async withTimeout(taskPromise, timeoutMs = 4000, label = 'operation') {
+    const boundedTimeoutMs = Math.max(500, Math.min(Number(timeoutMs) || 4000, 15000));
+    let timer = null;
+
+    try {
+      return await Promise.race([
+        taskPromise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const timeoutError = new Error(`${label} timed out after ${boundedTimeoutMs}ms`);
+            timeoutError.code = 'TIMEOUT';
+            reject(timeoutError);
+          }, boundedTimeoutMs);
+          if (typeof timer.unref === 'function') {
+            timer.unref();
+          }
+        })
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
   resolveSmartThingsEndpoint(href) {
     if (!href || typeof href !== 'string') {
       return null;
@@ -1466,7 +1491,7 @@ class SmartThingsService {
     const connectedDevices = Array.isArray(integration?.connectedDevices) ? integration.connectedDevices : [];
     const switchStatuses = {};
 
-    for (const entry of switchEntries) {
+    await Promise.all(switchEntries.map(async (entry) => {
       const status = {
         label: entry.label,
         deviceId: entry.deviceId || '',
@@ -1481,7 +1506,11 @@ class SmartThingsService {
         status.deviceLabel = mappedDevice?.label || mappedDevice?.name || '';
 
         try {
-          const deviceStatus = await this.getDeviceStatus(entry.deviceId);
+          const deviceStatus = await this.withTimeout(
+            this.getDeviceStatus(entry.deviceId),
+            3500,
+            `device status lookup for ${entry.label}`
+          );
           const extracted = this.extractSwitchValueFromStatus(deviceStatus);
           status.switchState = extracted.normalized || 'unknown';
         } catch (error) {
@@ -1490,18 +1519,27 @@ class SmartThingsService {
       }
 
       switchStatuses[entry.key] = status;
-    }
+    }));
 
     let resolvedState = null;
     let resolvedStateSource = 'unknown';
     let resolvedStateError = '';
 
     try {
-      const state = await this.getSecurityArmState(config.locationId || undefined);
+      const state = await this.withTimeout(
+        this.getSecurityArmState(config.locationId || undefined),
+        4500,
+        'security arm state lookup'
+      );
       resolvedState = state?.armState || null;
       resolvedStateSource = state?.source || 'unknown';
     } catch (error) {
       resolvedStateError = error.message;
+      const cachedArmState = integration?.sthm?.lastArmState || null;
+      if (cachedArmState) {
+        resolvedState = cachedArmState;
+        resolvedStateSource = 'cached';
+      }
     }
 
     return {
