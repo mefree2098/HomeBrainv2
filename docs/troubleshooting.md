@@ -51,7 +51,7 @@ Important:
 - The 2413S PLM RJ45 jack is serial, not Ethernet networking.
 - A direct Jetson Ethernet NIC -> PLM cable will not work.
 
-Use one of these endpoint formats in `Settings -> Integrations`:
+Use one of these endpoint formats on the Integrations page:
 - Local serial: `/dev/ttyUSB0`
 - Serial-over-TCP bridge: `tcp://<bridge-host>:<port>`
 
@@ -153,7 +153,7 @@ sudo systemctl restart homebrain
 ### SmartThings integration fails
 
 Check:
-1. OAuth app is configured (`Client ID` + `Client Secret`) in `Settings -> Integrations`.
+1. OAuth app is configured (`Client ID` + `Client Secret`) on the Integrations page.
 2. SmartThings account is connected (not just configured).
 3. Hub has internet connectivity.
 
@@ -171,7 +171,7 @@ Check:
 3. No firewall/VLAN rule is blocking UDP discovery or local hub WebSocket access.
 
 Recovery steps in UI:
-1. Open `Settings -> Integrations -> Logitech Harmony Hub Integration`.
+1. Open the `Logitech Harmony Hub Integration` card on the Integrations page.
 2. Add hub IPs manually (if discovery is blocked).
 3. Click `Discover Hubs`.
 4. Click `Sync Activities to Devices`.

@@ -25,11 +25,11 @@ Recommended initial setup:
 
 ## 3. Integrations
 
-Open `Settings -> Integrations`.
+Open `Integrations` in the sidebar (or `Settings -> Integrations`).
 
 ### SmartThings
 
-1. Enter `SmartThings Client ID` and `SmartThings Client Secret` in `Settings -> Integrations`.
+1. Enter `SmartThings Client ID` and `SmartThings Client Secret` in the Integrations page.
 2. Click `Configure OAuth`.
 3. Click `Connect SmartThings` and complete SmartThings authorization.
 4. Test connection and sync devices.
@@ -38,7 +38,7 @@ Open `Settings -> Integrations`.
 
 The 2413S PLM RJ45 jack is a serial interface, not Ethernet networking.
 
-Use one of these supported endpoint formats in `Settings -> Integrations -> INSTEON PLM Endpoint`:
+Use one of these supported endpoint formats in `INSTEON PLM Endpoint` on the Integrations page:
 
 1. Direct local serial:
 `/dev/ttyUSB0`
@@ -54,7 +54,7 @@ Recommended setup for "Ethernet cable" operation:
 
 ### Logitech Harmony Hub
 
-Open `Settings -> Integrations -> Logitech Harmony Hub Integration`.
+Open the `Logitech Harmony Hub Integration` card on the Integrations page.
 
 1. (Optional) Add known hub IPs/hosts in `Configured Harmony Hub IPs/Hosts`.
 2. Click `Discover Hubs` to find hubs on your LAN.
