@@ -29,10 +29,10 @@ Open `Settings -> Integrations`.
 
 ### SmartThings
 
-1. Create a SmartThings Personal Access Token.
-2. Paste token in HomeBrain integration settings.
-3. Test connection.
-4. Sync devices.
+1. Enter `SmartThings Client ID` and `SmartThings Client Secret` in `Settings -> Integrations`.
+2. Click `Configure OAuth`.
+3. Click `Connect SmartThings` and complete SmartThings authorization.
+4. Test connection and sync devices.
 
 ### INSTEON
 
@@ -51,6 +51,19 @@ Recommended setup for "Ethernet cable" operation:
 2. Jetson -> same network (built-in NIC or USB Ethernet adapter).
 3. Set endpoint to `tcp://...` in HomeBrain settings.
 4. Test connection from the INSTEON page.
+
+### Logitech Harmony Hub
+
+Open `Settings -> Integrations -> Logitech Harmony Hub Integration`.
+
+1. (Optional) Add known hub IPs/hosts in `Configured Harmony Hub IPs/Hosts`.
+2. Click `Discover Hubs` to find hubs on your LAN.
+3. Click `Sync Activities to Devices` to create Harmony Hub activity devices in HomeBrain.
+4. Use those devices in automations and workflows.
+
+Behavior notes:
+- Harmony Hub activity devices support `turn_on`, `turn_off`, and `toggle`.
+- `turn_on` starts that activity, `turn_off` powers the hub activity off.
 
 ## 4. User Profiles (Voices + Personalities)
 

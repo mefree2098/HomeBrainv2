@@ -689,7 +689,7 @@ export function VoiceDevices() {
             : null
 
           return (
-            <Card key={device._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+            <Card key={device._id} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -724,13 +724,13 @@ export function VoiceDevices() {
                     </div>
                     <Progress 
                       value={device.batteryLevel} 
-                      className={`h-2 ${device.batteryLevel < 20 ? 'bg-red-100' : 'bg-green-100'}`}
+                      className={`h-2 ${device.batteryLevel < 20 ? 'bg-red-100 dark:bg-red-900/40' : 'bg-green-100 dark:bg-green-900/30'}`}
                     />
                   </div>
                 )}
 
                 {device.audioStreamActive && (
-                  <div className="flex items-center gap-2 rounded-md bg-blue-50 px-2 py-1 text-xs text-blue-700">
+                  <div className="flex items-center gap-2 rounded-md bg-blue-50 dark:bg-blue-950/30 px-2 py-1 text-xs text-blue-700 dark:text-blue-300">
                     <Activity className="h-3 w-3 animate-pulse" />
                     <span>Streaming audio</span>
                     {streamElapsed && (
@@ -1030,7 +1030,7 @@ export function VoiceDevices() {
       </div>
 
       {devices.length === 0 && (
-        <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+        <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Mic className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Voice Devices Found</h3>

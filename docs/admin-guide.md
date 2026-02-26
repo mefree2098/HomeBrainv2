@@ -53,6 +53,10 @@ Recommended pattern:
 - Open the visual builder to fine-tune trigger/action details.
 - Test with `Run Now`.
 
+Harmony note:
+- Harmony Hub activity devices appear as switch-type devices and support `turn_on`, `turn_off`, and `toggle`.
+- Prefer explicit `turn_on`/`turn_off` in scheduled workflows for predictable AV behavior.
+
 ### 5. Manage Wake Words
 
 Open `Settings -> Voice & Audio -> Wake Word Models`.
@@ -95,7 +99,7 @@ sudo chmod 0440 /etc/sudoers.d/homebrain-deploy
    - `server/data`
    - `server/public/wake-words`
 2. Run one full remote fleet version verification.
-3. Confirm SmartThings/INSTEON integrations are still healthy.
+3. Confirm SmartThings, INSTEON, and Logitech Harmony Hub integrations are still healthy.
 4. Review `Platform Deploy` status for last successful update.
 5. Review top error event types in `Operations`.
 

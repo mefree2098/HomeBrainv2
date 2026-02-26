@@ -96,6 +96,28 @@ router.post('/sync/insteon', async (req, res) => {
   }
 });
 
+// Description: Force re-sync all devices from Harmony
+// Endpoint: POST /api/maintenance/sync/harmony
+// Request: {}
+// Response: { success: boolean, message: string, hubsFound: number, created: number, updated: number, removed: number }
+router.post('/sync/harmony', async (req, res) => {
+  try {
+    console.log('MaintenanceRoutes: POST /sync/harmony - Force syncing Harmony devices');
+
+    const result = await maintenanceService.forceHarmonySync();
+
+    console.log('MaintenanceRoutes: Successfully synced Harmony devices');
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error syncing Harmony devices:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to sync Harmony devices'
+    });
+  }
+});
+
 // Description: Clear all SmartThings devices from local database
 // Endpoint: DELETE /api/maintenance/devices/smartthings
 // Request: {}
@@ -136,6 +158,28 @@ router.delete('/devices/insteon', async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to clear INSTEON devices'
+    });
+  }
+});
+
+// Description: Clear all Harmony devices from local database
+// Endpoint: DELETE /api/maintenance/devices/harmony
+// Request: {}
+// Response: { success: boolean, message: string, deletedCount: number }
+router.delete('/devices/harmony', async (req, res) => {
+  try {
+    console.log('MaintenanceRoutes: DELETE /devices/harmony - Clearing Harmony devices');
+
+    const result = await maintenanceService.clearHarmonyDevices();
+
+    console.log('MaintenanceRoutes: Successfully cleared Harmony devices');
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error clearing Harmony devices:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to clear Harmony devices'
     });
   }
 });

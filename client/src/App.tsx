@@ -25,8 +25,8 @@ const WhisperManagement = lazy(() => import("./pages/WhisperManagement"))
 
 function LoadingScreen() {
   return (
-    <div className="flex h-screen items-center justify-center">
-      <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+    <div className="flex h-screen items-center justify-center bg-background">
+      <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-primary" />
     </div>
   )
 }
@@ -40,7 +40,7 @@ const withLayout = (content: ReactNode) => (
 function App() {
   return (
   <AuthProvider>
-    <ThemeProvider defaultTheme="light" storageKey="ui-theme">
+    <ThemeProvider defaultTheme="system" storageKey="ui-theme">
       <Router>
         <Suspense fallback={<LoadingScreen />}>
           <Routes>

@@ -153,8 +153,8 @@ sudo systemctl restart homebrain
 ### SmartThings integration fails
 
 Check:
-1. Token still valid.
-2. Required permissions were granted when creating token.
+1. OAuth app is configured (`Client ID` + `Client Secret`) in `Settings -> Integrations`.
+2. SmartThings account is connected (not just configured).
 3. Hub has internet connectivity.
 
 Test connectivity from hub:
@@ -162,6 +162,19 @@ Test connectivity from hub:
 ```bash
 curl -I https://api.smartthings.com/v1/devices
 ```
+
+### Logitech Harmony Hubs are not discovered or won’t sync
+
+Check:
+1. Hubs are on the same LAN/subnet as HomeBrain, or manually listed in `Configured Harmony Hub IPs/Hosts`.
+2. Harmony app has XMPP/local control enabled if required by your hub firmware.
+3. No firewall/VLAN rule is blocking UDP discovery or local hub WebSocket access.
+
+Recovery steps in UI:
+1. Open `Settings -> Integrations -> Logitech Harmony Hub Integration`.
+2. Add hub IPs manually (if discovery is blocked).
+3. Click `Discover Hubs`.
+4. Click `Sync Activities to Devices`.
 
 ## Still Stuck?
 

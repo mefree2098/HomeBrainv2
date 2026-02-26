@@ -16,7 +16,7 @@ export const getSettings = async () => {
 
 // Description: Update application settings
 // Endpoint: PUT /api/settings
-// Request: { location?: string, timezone?: string, wakeWordSensitivity?: number, voiceVolume?: number, microphoneSensitivity?: number, enableVoiceConfirmation?: boolean, enableNotifications?: boolean, insteonPort?: string, smartthingsToken?: string, smartthingsClientId?: string, smartthingsClientSecret?: string, smartthingsRedirectUri?: string, smartthingsUseOAuth?: boolean, elevenlabsApiKey?: string, enableSecurityMode?: boolean }
+// Request: { location?: string, timezone?: string, wakeWordSensitivity?: number, voiceVolume?: number, microphoneSensitivity?: number, enableVoiceConfirmation?: boolean, enableNotifications?: boolean, insteonPort?: string, smartthingsToken?: string, smartthingsClientId?: string, smartthingsClientSecret?: string, smartthingsRedirectUri?: string, smartthingsUseOAuth?: boolean, harmonyHubAddresses?: string, elevenlabsApiKey?: string, enableSecurityMode?: boolean }
 // Response: { success: boolean, message: string, settings: { location?: string, timezone?: string, wakeWordSensitivity?: number, voiceVolume?: number, microphoneSensitivity?: number, enableVoiceConfirmation?: boolean, enableNotifications?: boolean, insteonPort?: string, smartthingsToken?: string, smartthingsClientId?: string, smartthingsClientSecret?: string, smartthingsRedirectUri?: string, smartthingsUseOAuth?: boolean, elevenlabsApiKey?: string, enableSecurityMode?: boolean } }
 export const updateSettings = async (settings: {
   location?: string;
@@ -32,6 +32,7 @@ export const updateSettings = async (settings: {
   smartthingsClientSecret?: string;
   smartthingsRedirectUri?: string;
   smartthingsUseOAuth?: boolean;
+  harmonyHubAddresses?: string;
   elevenlabsApiKey?: string;
   enableSecurityMode?: boolean;
   llmProvider?: string;

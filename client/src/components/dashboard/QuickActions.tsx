@@ -44,7 +44,7 @@ export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onTogg
   const sceneIsPending = (sceneId: string) => pendingSceneIds?.has(sceneId)
 
   return (
-    <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+    <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Play className="h-5 w-5 text-blue-600" />
@@ -83,7 +83,7 @@ export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onTogg
             ))}
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 bg-white/60 py-8 text-center text-sm text-muted-foreground">
+          <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 bg-white/60 dark:bg-slate-900/50 py-8 text-center text-sm text-muted-foreground">
             <Heart className="h-5 w-5 text-muted-foreground" />
             <p className="max-w-xs">
               {canModifyFavorites

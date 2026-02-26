@@ -73,7 +73,7 @@ export function VoiceCommandPanel() {
   }
 
   return (
-    <Card className="w-80 bg-white/95 backdrop-blur-sm border-0 shadow-xl">
+    <Card className="w-80 bg-white/95 dark:bg-slate-900/80 backdrop-blur-sm border border-border/50 shadow-xl">
       <CardContent className="p-4 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-sm">Natural Language Commands</h3>

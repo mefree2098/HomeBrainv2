@@ -48,7 +48,7 @@ export function Sidebar() {
   })
 
   return (
-    <div className="fixed left-0 top-16 z-40 h-[calc(100vh-4rem)] w-64 border-r bg-white/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/60 dark:bg-gray-900/80 dark:supports-[backdrop-filter]:bg-gray-900/60">
+    <div className="fixed left-0 top-16 z-40 h-[calc(100vh-4rem)] w-64 border-r bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75">
       <div className="flex h-full flex-col">
         <nav className="flex-1 space-y-2 p-4">
           {visibleNavigation.map((item) => {

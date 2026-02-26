@@ -73,7 +73,7 @@ export function Header() {
   }
 
   return (
-    <header className="fixed top-0 z-50 w-full border-b bg-white/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/60 dark:bg-gray-900/80 dark:supports-[backdrop-filter]:bg-gray-900/60">
+    <header className="fixed top-0 z-50 w-full border-b bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75">
       <div className="flex h-16 items-center justify-between px-6">
         <div className="flex items-center gap-4">
           <div 
@@ -95,7 +95,7 @@ export function Header() {
             className={`transition-all duration-200 ${
               voiceStatus.listening 
                 ? "bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/25" 
-                : "hover:bg-red-50 hover:text-red-600 hover:border-red-300"
+                : "hover:bg-red-50 hover:text-red-600 hover:border-red-300 dark:hover:bg-red-950/30 dark:hover:text-red-300 dark:hover:border-red-900"
             }`}
           >
             {voiceStatus.listening ? (

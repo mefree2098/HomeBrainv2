@@ -15,6 +15,7 @@ type DeviceLite = {
   name: string;
   type: string;
   room: string;
+  properties?: Record<string, unknown>;
 };
 
 type SceneLite = {
@@ -96,7 +97,11 @@ function buildGraph(triggerType: WorkflowTriggerType, actions: WorkflowAction[])
   return { nodes, edges };
 }
 
-function getDeviceActionChoices(deviceType: string) {
+function getDeviceActionChoices(deviceType: string, source: string = "local") {
+  if ((source || "").toLowerCase() === "harmony") {
+    return ["turn_on", "turn_off", "toggle"];
+  }
+
   switch ((deviceType || "").toLowerCase()) {
     case "light":
       return ["turn_on", "turn_off", "set_brightness", "set_color"];
@@ -106,6 +111,8 @@ function getDeviceActionChoices(deviceType: string) {
       return ["lock", "unlock"];
     case "garage":
       return ["open", "close"];
+    case "switch":
+      return ["turn_on", "turn_off", "toggle"];
     default:
       return ["turn_on", "turn_off"];
   }
@@ -435,7 +442,10 @@ export function WorkflowBuilderDialog({
 
                 {actions.map((action, index) => {
                   const targetDevice = devices.find((device) => device._id === action.target);
-                  const actionChoices = getDeviceActionChoices(targetDevice?.type || "switch");
+                  const actionChoices = getDeviceActionChoices(
+                    targetDevice?.type || "switch",
+                    ((targetDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
+                  );
                   const actionValue = String(action.parameters?.action || actionChoices[0]);
 
                   return (
@@ -491,7 +501,10 @@ export function WorkflowBuilderDialog({
                                 value={String(action.target || "")}
                                 onValueChange={(value) => {
                                   const updatedDevice = devices.find((device) => device._id === value);
-                                  const choices = getDeviceActionChoices(updatedDevice?.type || "switch");
+                                  const choices = getDeviceActionChoices(
+                                    updatedDevice?.type || "switch",
+                                    ((updatedDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
+                                  );
                                   updateAction(index, {
                                     target: value,
                                     parameters: {
@@ -643,7 +656,7 @@ export function WorkflowBuilderDialog({
               </CardContent>
             </Card>
 
-            <div className="rounded-md border bg-blue-50/70 p-3 text-xs text-blue-900">
+            <div className="rounded-md border bg-blue-50/70 dark:bg-blue-900/20 p-3 text-xs text-blue-900 dark:text-blue-100">
               Tip: once saved, this workflow can be triggered by voice or chat, including commands like
               {" "}
               <span className="font-semibold">"run {name || "this workflow"}"</span>.

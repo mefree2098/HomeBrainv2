@@ -755,12 +755,23 @@ async function buildDeviceContext() {
         devicesByRoom[device.room] = [];
       }
 
+      const source = (device?.properties?.source || 'local').toString().toLowerCase();
       const deviceInfo = {
         id: device._id.toString(),
         name: device.name,
         type: device.type,
+        source,
+        hubIp: device?.properties?.harmonyHubIp || null,
+        activityId: device?.properties?.harmonyActivityId || null,
+        activityLabel: device?.properties?.harmonyActivityLabel || null,
         capabilities: []
       };
+
+      if (source === 'harmony') {
+        deviceInfo.capabilities = ['turn_on', 'turn_off', 'toggle'];
+        devicesByRoom[device.room].push(deviceInfo);
+        return;
+      }
 
       // Add capabilities based on device type
       switch (device.type) {
@@ -775,7 +786,7 @@ async function buildDeviceContext() {
           deviceInfo.capabilities = ['lock', 'unlock'];
           break;
         case 'switch':
-          deviceInfo.capabilities = ['turn_on', 'turn_off'];
+          deviceInfo.capabilities = ['turn_on', 'turn_off', 'toggle'];
           break;
         case 'garage':
           deviceInfo.capabilities = ['open', 'close'];
@@ -1253,10 +1264,12 @@ IMPORTANT RULES:
 1. ALWAYS return at least one action when the user is asking to control something. Simple requests (e.g., "turn on the vault light") must become a manual trigger with one device_control action.
 2. Default the trigger to {"type": "manual", "conditions": {}} when no schedule or condition is provided.
 3. ONLY use device IDs from the provided device list and scene IDs from the provided scene list. Never invent IDs or placeholders.
-4. Match each action to the device's allowed capabilities (e.g., lights support turn_on/turn_off/set_brightness).
+4. Match each action to the device's allowed capabilities and source restrictions.
 5. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
 6. Use intent-driven categories (choose from "security", "comfort", "energy", "convenience", "custom") and pick a sensible priority between 1-10 (default 5).
 7. Never output any prefix/suffix text. Return ONLY the JSON object.
+8. For devices with Source:harmony, only use turn_on, turn_off, or toggle. Do not use set_brightness, set_color, set_temperature, lock/unlock, or open/close on Harmony Hub activity devices.
+9. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
 
 AVAILABLE DEVICES:
 ${deviceList}
@@ -1303,7 +1316,8 @@ DEVICE ACTION COMPATIBILITY:
 - light: turn_on, turn_off, set_brightness, set_color
 - thermostat: turn_on, turn_off, set_temperature
 - lock: lock, unlock
-- switch: turn_on, turn_off
+- switch: turn_on, turn_off, toggle
+- harmony hub activity device (Source:harmony): turn_on, turn_off, toggle (activity start/stop only)
 - garage: open, close
 - sensor: (read-only, cannot be controlled)
 
@@ -1333,7 +1347,11 @@ function formatDeviceList(devicesByRoom = {}) {
       const actions = Array.isArray(device.capabilities) && device.capabilities.length
         ? device.capabilities.join(', ')
         : 'None';
-      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Actions: ${actions})`;
+      const source = device.source || 'local';
+      const harmonyDetails = source === 'harmony'
+        ? `, Hub: ${device.hubIp || 'unknown'}, Activity: ${device.activityLabel || device.activityId || 'unknown'}`
+        : '';
+      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Source: ${source}, Actions: ${actions}${harmonyDetails})`;
     }).join('\n');
 
     return `Room: ${room}\n${deviceLines}`;

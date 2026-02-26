@@ -704,7 +704,7 @@ export function Workflows() {
               )}
 
               {workflow.lastError?.message ? (
-                <div className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700">
+                <div className="rounded-md border border-red-300 bg-red-50 dark:bg-red-900/20 p-2 text-xs text-red-700 dark:text-red-300">
                   Last error: {workflow.lastError.message}
                 </div>
               ) : null}

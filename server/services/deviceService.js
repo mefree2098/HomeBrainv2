@@ -1,6 +1,7 @@
 const Device = require('../models/Device');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
+const harmonyService = require('./harmonyService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 class DeviceService {
@@ -10,6 +11,11 @@ class DeviceService {
     this.smartThingsSyncPromise = null;
     this.lastSmartThingsSyncAt = 0;
     this.smartThingsSyncCooldownMs = Number(process.env.SMARTTHINGS_DEVICE_REFRESH_MS || 5 * 60 * 1000);
+    this.harmonyPresence = null;
+    this.harmonyPresenceCheckedAt = 0;
+    this.harmonySyncPromise = null;
+    this.lastHarmonySyncAt = 0;
+    this.harmonySyncCooldownMs = Number(process.env.HARMONY_DEVICE_REFRESH_MS || 30 * 1000);
   }
 
   /**
@@ -21,7 +27,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Fetching all devices with filters:', filters);
 
-      await this.ensureSmartThingsState();
+      await this.ensureIntegrationState();
 
       const query = {};
       if (filters.room) query.room = filters.room;
@@ -49,7 +55,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Fetching device by ID:', deviceId);
 
-      await this.ensureSmartThingsState();
+      await this.ensureIntegrationState();
 
       const device = await Device.findById(deviceId);
       if (!device) {
@@ -208,7 +214,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Controlling device:', deviceId, 'action:', action, 'value:', value);
 
-      const device = await Device.findById(deviceId);
+      let device = await Device.findById(deviceId);
       if (!device) {
         throw new Error('Device not found');
       }
@@ -220,9 +226,20 @@ class DeviceService {
       }
 
       const isSmartThings = this.isSmartThingsDevice(device);
+      const isHarmony = this.isHarmonyDevice(device);
 
       if (isSmartThings) {
         await this.ensureSmartThingsState({ immediate: true });
+      }
+      if (isHarmony) {
+        await this.ensureHarmonyState({ immediate: true });
+      }
+
+      if (isHarmony && normalizedAction === 'toggle') {
+        const refreshedDevice = await Device.findById(deviceId);
+        if (refreshedDevice) {
+          device = refreshedDevice;
+        }
       }
 
       if (!device.isOnline) {
@@ -231,6 +248,12 @@ class DeviceService {
           if (!refreshedOnline) {
             const smartThingsId = device?.properties?.smartThingsDeviceId || 'unknown-id';
             console.warn(`DeviceService: SmartThings device ${smartThingsId} still reports offline; attempting command anyway`);
+          }
+        } else if (isHarmony) {
+          const refreshedOnline = await this.refreshHarmonyOnlineStatus(device);
+          if (!refreshedOnline) {
+            const harmonyHubIp = device?.properties?.harmonyHubIp || 'unknown-hub';
+            console.warn(`DeviceService: Harmony activity on hub ${harmonyHubIp} still reports offline; attempting command anyway`);
           }
         } else {
           throw new Error('Device is offline and cannot be controlled');
@@ -391,6 +414,22 @@ class DeviceService {
         if (updateData.isOnline === undefined) {
           updateData.isOnline = true;
         }
+      } else if (isHarmony) {
+        await this.controlHarmonyDevice(device, normalizedAction, commandValue, updateData);
+
+        optimisticPayload = buildOptimisticPayload();
+        if (optimisticPayload.length > 0) {
+          deviceUpdateEmitter.emit('devices:update', optimisticPayload);
+        }
+
+        const remoteUpdate = await this.pollHarmonyState(device, expectedStatus);
+        if (remoteUpdate) {
+          Object.assign(updateData, remoteUpdate);
+        }
+
+        if (updateData.isOnline === undefined) {
+          updateData.isOnline = true;
+        }
       } else {
         optimisticPayload = buildOptimisticPayload();
         if (optimisticPayload.length > 0) {
@@ -419,6 +458,7 @@ class DeviceService {
       if (error.message === 'Device not found' ||
           error.message.includes('offline') ||
           error.message.includes('only available') ||
+          error.message.includes('support only') ||
           error.message.includes('must be') ||
           error.message.includes('Unknown action')) {
         throw error;
@@ -437,6 +477,13 @@ class DeviceService {
   isSmartThingsDevice(device) {
     const source = (device?.properties?.source || '').toString().toLowerCase();
     return source === 'smartthings' && !!device?.properties?.smartThingsDeviceId;
+  }
+
+  isHarmonyDevice(device) {
+    const source = (device?.properties?.source || '').toString().toLowerCase();
+    return source === 'harmony' &&
+      !!device?.properties?.harmonyHubIp &&
+      !!device?.properties?.harmonyActivityId;
   }
 
   normalizeHexColor(color) {
@@ -487,6 +534,89 @@ class DeviceService {
       saturation: Math.round(saturation * 100),
       level: Math.round(value * 100)
     };
+  }
+
+  async refreshHarmonyOnlineStatus(device) {
+    const harmonyHubIp = device?.properties?.harmonyHubIp;
+    if (!harmonyHubIp) {
+      return device.isOnline;
+    }
+
+    try {
+      await harmonyService.syncActivityStates({ hubIps: [harmonyHubIp], force: true });
+      const refreshed = await Device.findById(device._id).lean();
+      if (!refreshed) {
+        return device.isOnline;
+      }
+
+      device.isOnline = refreshed.isOnline;
+      device.status = refreshed.status;
+      device.lastSeen = refreshed.lastSeen || device.lastSeen;
+
+      return refreshed.isOnline;
+    } catch (error) {
+      console.warn(`DeviceService: Unable to refresh Harmony hub ${harmonyHubIp} status: ${error.message}`);
+      return device.isOnline;
+    }
+  }
+
+  async controlHarmonyDevice(device, normalizedAction, commandValue, updateData) {
+    const harmonyHubIp = device?.properties?.harmonyHubIp;
+    const harmonyActivityId = device?.properties?.harmonyActivityId;
+    if (!harmonyHubIp || !harmonyActivityId) {
+      throw new Error('Harmony hub/activity is not configured for this device');
+    }
+
+    switch (normalizedAction) {
+      case 'toggle':
+      case 'turnon':
+        if (normalizedAction === 'turnon' || commandValue) {
+          await harmonyService.startActivity(harmonyHubIp, harmonyActivityId.toString());
+        } else {
+          await harmonyService.turnOffHub(harmonyHubIp);
+        }
+        break;
+
+      case 'turnoff':
+        await harmonyService.turnOffHub(harmonyHubIp);
+        break;
+
+      default:
+        throw new Error('Harmony activity devices support only turn_on, turn_off, and toggle actions');
+    }
+
+    updateData.isOnline = true;
+    updateData.lastSeen = new Date();
+  }
+
+  async pollHarmonyState(device, expectedStatus) {
+    const harmonyHubIp = device?.properties?.harmonyHubIp;
+    if (!harmonyHubIp) {
+      return null;
+    }
+
+    try {
+      await harmonyService.syncActivityStates({ hubIps: [harmonyHubIp], force: true });
+      const refreshed = await Device.findById(device._id).lean();
+      if (!refreshed) {
+        return null;
+      }
+
+      const updates = {
+        status: !!refreshed.status,
+        isOnline: refreshed.isOnline !== false
+      };
+      if (expectedStatus !== undefined && updates.status !== expectedStatus) {
+        // Keep returning remote hub state even when it differs from optimistic status.
+      }
+      if (refreshed.lastSeen) {
+        updates.lastSeen = new Date(refreshed.lastSeen);
+      }
+      return updates;
+    } catch (error) {
+      console.warn(`DeviceService: Unable to fetch Harmony state for hub ${harmonyHubIp}: ${error.message}`);
+      return null;
+    }
   }
 
   async refreshSmartThingsOnlineStatus(device) {
@@ -748,7 +878,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Fetching devices grouped by room');
 
-      await this.ensureSmartThingsState();
+      await this.ensureIntegrationState();
 
       const devices = await Device.find().sort({ room: 1, name: 1 });
       
@@ -784,7 +914,7 @@ class DeviceService {
     try {
       console.log('DeviceService: Fetching device statistics');
 
-      await this.ensureSmartThingsState();
+      await this.ensureIntegrationState();
 
       const totalDevices = await Device.countDocuments();
       const onlineDevices = await Device.countDocuments({ isOnline: true });
@@ -816,6 +946,57 @@ class DeviceService {
       console.error('DeviceService: Error fetching device statistics:', error.message);
       console.error(error.stack);
       throw new Error('Failed to fetch device statistics');
+    }
+  }
+
+  async ensureIntegrationState({ immediate = false } = {}) {
+    await Promise.all([
+      this.ensureSmartThingsState({ immediate }),
+      this.ensureHarmonyState({ immediate })
+    ]);
+  }
+
+  async ensureHarmonyState({ immediate = false } = {}) {
+    const hasHarmony = await this.detectHarmonyPresence();
+    if (!hasHarmony) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (this.harmonySyncPromise) {
+      try {
+        await this.harmonySyncPromise;
+      } catch (error) {
+        console.warn('DeviceService: Harmony state refresh in progress failed:', error.message);
+      }
+      if (!immediate && now - this.lastHarmonySyncAt < this.harmonySyncCooldownMs) {
+        return;
+      }
+    } else if (!immediate && now - this.lastHarmonySyncAt < this.harmonySyncCooldownMs) {
+      return;
+    }
+
+    this.harmonySyncPromise = (async () => {
+      let succeeded = false;
+      try {
+        await harmonyService.syncActivityStates({ force: immediate });
+        succeeded = true;
+      } catch (error) {
+        console.warn('DeviceService: Harmony state refresh failed:', error.message);
+        throw error;
+      } finally {
+        if (succeeded) {
+          this.lastHarmonySyncAt = Date.now();
+        }
+        this.harmonySyncPromise = null;
+      }
+    })();
+
+    try {
+      await this.harmonySyncPromise;
+    } catch (error) {
+      // already logged above
     }
   }
 
@@ -897,6 +1078,27 @@ class DeviceService {
     }
 
     return this.smartThingsPresence;
+  }
+
+  async detectHarmonyPresence() {
+    const now = Date.now();
+    if (this.harmonyPresence !== null && (now - this.harmonyPresenceCheckedAt) < 60000) {
+      return this.harmonyPresence;
+    }
+
+    try {
+      this.harmonyPresence = await Device.exists({
+        'properties.source': 'harmony',
+        'properties.harmonyHubIp': { $exists: true }
+      });
+    } catch (error) {
+      console.warn('DeviceService: Failed to detect Harmony devices:', error.message);
+      this.harmonyPresence = false;
+    } finally {
+      this.harmonyPresenceCheckedAt = now;
+    }
+
+    return this.harmonyPresence;
   }
 }
 

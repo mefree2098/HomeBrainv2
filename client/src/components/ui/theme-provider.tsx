@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useContext, useEffect, useMemo, useState } from "react"
 
 type Theme = "dark" | "light" | "system"
+type ResolvedTheme = "dark" | "light"
 
 type ThemeProviderProps = {
   children: React.ReactNode
@@ -10,11 +11,13 @@ type ThemeProviderProps = {
 
 type ThemeProviderState = {
   theme: Theme
+  resolvedTheme: ResolvedTheme
   setTheme: (theme: Theme) => void
 }
 
 const initialState: ThemeProviderState = {
   theme: "system",
+  resolvedTheme: "light",
   setTheme: () => null,
 }
 
@@ -26,35 +29,53 @@ export function ThemeProvider({
   storageKey = "vite-ui-theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
-  )
+  const [theme, setThemeState] = useState<Theme>(() => {
+    const storedTheme = localStorage.getItem(storageKey) as Theme | null
+    return storedTheme || defaultTheme
+  })
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("light")
 
   useEffect(() => {
     const root = window.document.documentElement
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)")
 
-    root.classList.remove("light", "dark")
+    const applyTheme = () => {
+      const effectiveTheme: ResolvedTheme =
+        theme === "system" ? (mediaQuery.matches ? "dark" : "light") : theme
 
-    if (theme === "system") {
-      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-        .matches
-        ? "dark"
-        : "light"
+      root.classList.remove("light", "dark")
+      root.classList.add(effectiveTheme)
+      setResolvedTheme(effectiveTheme)
+    }
 
-      root.classList.add(systemTheme)
+    applyTheme()
+
+    if (theme !== "system") {
       return
     }
 
-    root.classList.add(theme)
+    const handleSystemChange = () => applyTheme()
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener("change", handleSystemChange)
+      return () => mediaQuery.removeEventListener("change", handleSystemChange)
+    }
+
+    mediaQuery.addListener(handleSystemChange)
+    return () => mediaQuery.removeListener(handleSystemChange)
   }, [theme])
 
-  const value = {
-    theme,
-    setTheme: (theme: Theme) => {
-      localStorage.setItem(storageKey, theme)
-      setTheme(theme)
-    },
-  }
+  const value = useMemo(
+    () => ({
+      theme,
+      resolvedTheme,
+      setTheme: (nextTheme: Theme) => {
+        localStorage.setItem(storageKey, nextTheme)
+        setThemeState(nextTheme)
+      },
+    }),
+    [resolvedTheme, storageKey, theme]
+  )
 
   return (
     <ThemeProviderContext.Provider {...props} value={value}>

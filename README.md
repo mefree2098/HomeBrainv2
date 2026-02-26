@@ -3,7 +3,7 @@
 HomeBrain is a local-first AI home automation platform designed to run on a Jetson hub and connect room listeners (Raspberry Pi devices) across your home.
 
 It combines:
-- Smart home control (SmartThings and INSTEON)
+- Smart home control (SmartThings, INSTEON, and Logitech Harmony Hub)
 - Voice profiles (for example, Anna and Henry)
 - Wake-word training with OpenWakeWord
 - Local/on-device STT with Whisper (or cloud STT)
@@ -150,6 +150,7 @@ You can build workflows three ways:
 2. `AI Generate`: describe the routine in plain language and click `Generate Workflow`.
 3. `Chat/Voice Command`: send commands like:
    - `"create a workflow that turns off all lights at 11 PM"`
+   - `"create a workflow that starts the living room movie activity at 7 PM"`
    - `"run bedtime workflow"`
    - `"disable weekday morning workflow"`
 
@@ -158,6 +159,19 @@ What this gives you:
 - Manual run-from-UI controls
 - Voice/chat workflow create + control
 - Linked execution history through the automation engine
+
+## Logitech Harmony Hub Integration
+
+Open `Settings -> Integrations -> Logitech Harmony Hub Integration`.
+
+1. (Optional) Enter known hub IPs/hosts in `Configured Harmony Hub IPs/Hosts`.
+2. Click `Discover Hubs`.
+3. Click `Sync Activities to Devices`.
+4. Use the generated Harmony Hub activity devices in automations and workflows just like other devices.
+
+Notes:
+- Harmony Hub activity devices support `turn_on`, `turn_off`, and `toggle`.
+- HomeBrain keeps activity state refreshed so manual Harmony remote changes are reflected in device status.
 
 ## Hub Deploy From UI (Pull Latest GitHub + Restart)
 

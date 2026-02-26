@@ -87,7 +87,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
   }
 
   return (
-    <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+    <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <div className="flex items-center gap-2">
           <div className={`p-2 rounded-full ${getStatusColor(device.status, device.type)} text-white`}>

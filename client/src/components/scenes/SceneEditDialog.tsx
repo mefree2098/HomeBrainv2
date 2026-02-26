@@ -151,7 +151,7 @@ export function SceneEditDialog({ open, onOpenChange, scene, devices, onSave }: 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-white max-w-3xl max-h-[90vh] overflow-y-auto" aria-describedby="scene-edit-description">
+      <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60 max-w-3xl max-h-[90vh] overflow-y-auto" aria-describedby="scene-edit-description">
         <DialogHeader>
           <DialogTitle>Edit Scene</DialogTitle>
           <DialogDescription id="scene-edit-description">
@@ -303,7 +303,7 @@ export function SceneEditDialog({ open, onOpenChange, scene, devices, onSave }: 
                         size="icon"
                         variant="ghost"
                         onClick={() => handleRemoveDevice(index)}
-                        className="mt-7 hover:bg-red-50 hover:text-red-600"
+                        className="mt-7 hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

@@ -58,6 +58,20 @@ export const forceInsteonSync = async () => {
   }
 };
 
+// Description: Force re-sync all devices from Harmony
+// Endpoint: POST /api/maintenance/sync/harmony
+// Request: {}
+// Response: { success: boolean, message: string, hubsFound: number, created: number, updated: number, removed: number }
+export const forceHarmonySync = async () => {
+  try {
+    const response = await api.post('/api/maintenance/sync/harmony');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error?.response?.data?.message || error.message);
+  }
+};
+
 // Description: Clear all SmartThings devices from local database
 // Endpoint: DELETE /api/maintenance/devices/smartthings
 // Request: {}
@@ -83,6 +97,20 @@ export const clearInsteonDevices = async () => {
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Clear all Harmony devices from local database
+// Endpoint: DELETE /api/maintenance/devices/harmony
+// Request: {}
+// Response: { success: boolean, message: string, deletedCount: number }
+export const clearHarmonyDevices = async () => {
+  try {
+    const response = await api.delete('/api/maintenance/devices/harmony');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error?.response?.data?.message || error.message);
   }
 };
 

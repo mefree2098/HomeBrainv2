@@ -88,6 +88,10 @@ const SettingsSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  harmonyHubAddresses: {
+    type: String,
+    default: ''
+  },
   elevenlabsApiKey: {
     type: String,
     default: ''

@@ -31,7 +31,12 @@ class VoiceCommandService {
     this.CONTEXT_TTL_MS = 15_000;
   }
 
-  getDeviceCapabilities(type) {
+  getDeviceCapabilities(type, source = 'local') {
+    const normalizedSource = (source || 'local').toLowerCase();
+    if (normalizedSource === 'harmony') {
+      return ['turn_on', 'turn_off', 'toggle'];
+    }
+
     switch ((type || '').toLowerCase()) {
       case 'light':
         return ['turn_on', 'turn_off', 'set_brightness', 'set_color'];
@@ -67,7 +72,7 @@ class VoiceCommandService {
         room: device.room,
         type: device.type,
         source: (device?.properties?.source || 'local').toString().toLowerCase(),
-        capabilities: this.getDeviceCapabilities(device.type),
+        capabilities: this.getDeviceCapabilities(device.type, (device?.properties?.source || 'local').toString()),
         properties: device.properties || {}
       };
       deviceMap.set(normalized.id, { ...device, normalized });
@@ -167,6 +172,7 @@ DECISION RULES
 5. If the request is a general question or not about controlling devices, set intent to "query", leave "actions" empty, and provide the direct answer in "response". Only use "followUpQuestion" when clarification is required.
 6. Never return empty "actions" for "device_control" intents.
 7. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.") or informative for queries.
+8. If a selected device has Source:harmony, only use turn_on, turn_off, or toggle. Treat it as a Harmony Hub activity target (start/stop), not a dimmable light or thermostat.
 
 Return ONLY the JSON object with no commentary.`; 
   }
