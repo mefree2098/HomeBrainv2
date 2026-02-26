@@ -1,5 +1,72 @@
 const mongoose = require('mongoose');
 
+const HarmonyKnownHubSchema = new mongoose.Schema({
+  ip: {
+    type: String,
+    required: true,
+    trim: true,
+    lowercase: true
+  },
+  friendlyName: {
+    type: String,
+    default: ''
+  },
+  firstDiscoveredAt: {
+    type: Date,
+    default: null
+  },
+  lastDiscoveredAt: {
+    type: Date,
+    default: null
+  },
+  lastSeenAt: {
+    type: Date,
+    default: null
+  },
+  lastSnapshotAt: {
+    type: Date,
+    default: null
+  },
+  lastKnownActivityId: {
+    type: String,
+    default: null
+  },
+  lastKnownActivityLabel: {
+    type: String,
+    default: null
+  },
+  lastDeviceSyncAt: {
+    type: Date,
+    default: null
+  },
+  lastDeviceSyncStatus: {
+    type: String,
+    enum: ['unknown', 'success', 'failed'],
+    default: 'unknown'
+  },
+  lastDeviceSyncError: {
+    type: String,
+    default: ''
+  },
+  lastActivitySyncAt: {
+    type: Date,
+    default: null
+  },
+  lastActivitySyncStatus: {
+    type: String,
+    enum: ['unknown', 'success', 'failed'],
+    default: 'unknown'
+  },
+  lastActivitySyncError: {
+    type: String,
+    default: ''
+  },
+  lastUpdatedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
 const SettingsSchema = new mongoose.Schema({
   // General Settings
   location: {
@@ -91,6 +158,10 @@ const SettingsSchema = new mongoose.Schema({
   harmonyHubAddresses: {
     type: String,
     default: ''
+  },
+  harmonyKnownHubs: {
+    type: [HarmonyKnownHubSchema],
+    default: []
   },
   elevenlabsApiKey: {
     type: String,
@@ -228,6 +299,7 @@ SettingsSchema.methods.toSanitized = function() {
   if (sanitized.anthropicApiKey) {
     sanitized.anthropicApiKey = sanitized.anthropicApiKey.replace(/.(?=.{4})/g, '*');
   }
+  delete sanitized.harmonyKnownHubs;
   delete sanitized.voiceRegion;
   delete sanitized.autoDiscoveryEnabled;
   

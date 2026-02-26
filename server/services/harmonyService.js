@@ -68,6 +68,37 @@ function normalizeCommandName(value) {
   return (value || '').toString().trim().toLowerCase();
 }
 
+function toDateOrNull(value) {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date;
+}
+
+function mergeHubSources(...sources) {
+  const ordered = ['configured', 'remembered', 'discovered'];
+  const parts = new Set();
+
+  sources.forEach((source) => {
+    (source || '').toString().split('+').forEach((part) => {
+      const normalized = part.trim().toLowerCase();
+      if (ordered.includes(normalized)) {
+        parts.add(normalized);
+      }
+    });
+  });
+
+  if (parts.size === 0) {
+    return 'unknown';
+  }
+
+  return ordered.filter((part) => parts.has(part)).join('+');
+}
+
 class HarmonyService {
   constructor() {
     this.discoveryCache = [];
@@ -95,6 +126,295 @@ class HarmonyService {
     return toUniqueHostList(parts);
   }
 
+  createKnownHubRecord(ip) {
+    return {
+      ip,
+      friendlyName: '',
+      firstDiscoveredAt: null,
+      lastDiscoveredAt: null,
+      lastSeenAt: null,
+      lastSnapshotAt: null,
+      lastKnownActivityId: null,
+      lastKnownActivityLabel: null,
+      lastDeviceSyncAt: null,
+      lastDeviceSyncStatus: 'unknown',
+      lastDeviceSyncError: '',
+      lastActivitySyncAt: null,
+      lastActivitySyncStatus: 'unknown',
+      lastActivitySyncError: '',
+      lastUpdatedAt: null
+    };
+  }
+
+  normalizeKnownHubRegistry(rawHubs = []) {
+    const map = new Map();
+
+    (Array.isArray(rawHubs) ? rawHubs : []).forEach((raw) => {
+      const ip = normalizeHost(raw?.ip);
+      if (!ip) {
+        return;
+      }
+
+      const existing = map.get(ip) || this.createKnownHubRecord(ip);
+      const next = {
+        ...existing,
+        ip
+      };
+
+      const friendlyName = (raw?.friendlyName || existing.friendlyName || '').toString().trim();
+      if (friendlyName) {
+        next.friendlyName = friendlyName;
+      }
+
+      next.firstDiscoveredAt = toDateOrNull(raw?.firstDiscoveredAt) || existing.firstDiscoveredAt;
+      next.lastDiscoveredAt = toDateOrNull(raw?.lastDiscoveredAt) || existing.lastDiscoveredAt;
+      next.lastSeenAt = toDateOrNull(raw?.lastSeenAt) || existing.lastSeenAt;
+      next.lastSnapshotAt = toDateOrNull(raw?.lastSnapshotAt) || existing.lastSnapshotAt;
+
+      if (raw?.lastKnownActivityId !== undefined && raw?.lastKnownActivityId !== null) {
+        next.lastKnownActivityId = raw.lastKnownActivityId.toString();
+      } else if (existing.lastKnownActivityId) {
+        next.lastKnownActivityId = existing.lastKnownActivityId;
+      }
+
+      if (raw?.lastKnownActivityLabel !== undefined && raw?.lastKnownActivityLabel !== null) {
+        const label = raw.lastKnownActivityLabel.toString().trim();
+        next.lastKnownActivityLabel = label || null;
+      } else if (existing.lastKnownActivityLabel) {
+        next.lastKnownActivityLabel = existing.lastKnownActivityLabel;
+      }
+
+      const deviceSyncStatus = (raw?.lastDeviceSyncStatus || existing.lastDeviceSyncStatus || 'unknown').toString();
+      next.lastDeviceSyncStatus = ['unknown', 'success', 'failed'].includes(deviceSyncStatus)
+        ? deviceSyncStatus
+        : 'unknown';
+      next.lastDeviceSyncAt = toDateOrNull(raw?.lastDeviceSyncAt) || existing.lastDeviceSyncAt;
+      next.lastDeviceSyncError = (raw?.lastDeviceSyncError ?? existing.lastDeviceSyncError ?? '').toString();
+
+      const activitySyncStatus = (raw?.lastActivitySyncStatus || existing.lastActivitySyncStatus || 'unknown').toString();
+      next.lastActivitySyncStatus = ['unknown', 'success', 'failed'].includes(activitySyncStatus)
+        ? activitySyncStatus
+        : 'unknown';
+      next.lastActivitySyncAt = toDateOrNull(raw?.lastActivitySyncAt) || existing.lastActivitySyncAt;
+      next.lastActivitySyncError = (raw?.lastActivitySyncError ?? existing.lastActivitySyncError ?? '').toString();
+      next.lastUpdatedAt = toDateOrNull(raw?.lastUpdatedAt) || existing.lastUpdatedAt;
+
+      map.set(ip, next);
+    });
+
+    return Array.from(map.values()).sort((left, right) => {
+      const leftName = (left.friendlyName || left.ip || '').toString().toLowerCase();
+      const rightName = (right.friendlyName || right.ip || '').toString().toLowerCase();
+      return leftName.localeCompare(rightName);
+    });
+  }
+
+  async getKnownHubRegistry() {
+    const settings = await Settings.getSettings();
+    const knownHubs = this.normalizeKnownHubRegistry(settings?.harmonyKnownHubs || []);
+
+    knownHubs.forEach((hub) => {
+      if (!hub.friendlyName) {
+        return;
+      }
+      const metadata = this.hubMetadata.get(hub.ip) || {};
+      this.hubMetadata.set(hub.ip, {
+        ip: hub.ip,
+        friendlyName: hub.friendlyName,
+        remoteId: metadata.remoteId || null,
+        uuid: metadata.uuid || null,
+        lastSeen: metadata.lastSeen || (hub.lastSeenAt ? new Date(hub.lastSeenAt).getTime() : null)
+      });
+    });
+
+    return knownHubs;
+  }
+
+  async mergeKnownHubs(updates = []) {
+    const relevantUpdates = Array.isArray(updates) ? updates : [];
+    if (!relevantUpdates.length) {
+      return [];
+    }
+
+    const settings = await Settings.getSettings();
+    const current = this.normalizeKnownHubRegistry(settings?.harmonyKnownHubs || []);
+    const map = new Map(current.map((hub) => [hub.ip, { ...hub }]));
+    const now = new Date();
+
+    relevantUpdates.forEach((update) => {
+      const ip = normalizeHost(update?.ip);
+      if (!ip) {
+        return;
+      }
+
+      const existing = map.get(ip) || this.createKnownHubRecord(ip);
+      const next = {
+        ...existing,
+        ip
+      };
+
+      const friendlyName = (update?.friendlyName || '').toString().trim();
+      if (friendlyName) {
+        next.friendlyName = friendlyName;
+      }
+
+      const isDiscovered = update?.discovered === true;
+      if (isDiscovered && !next.firstDiscoveredAt) {
+        next.firstDiscoveredAt = toDateOrNull(update?.firstDiscoveredAt) || now;
+      }
+      if (isDiscovered) {
+        next.lastDiscoveredAt = toDateOrNull(update?.lastDiscoveredAt || update?.lastSeenAt) || now;
+      }
+
+      const lastSeenAt = toDateOrNull(update?.lastSeenAt);
+      if (lastSeenAt) {
+        next.lastSeenAt = lastSeenAt;
+      }
+
+      const lastSnapshotAt = toDateOrNull(update?.lastSnapshotAt);
+      if (lastSnapshotAt) {
+        next.lastSnapshotAt = lastSnapshotAt;
+      }
+
+      if (update?.lastKnownActivityId !== undefined) {
+        next.lastKnownActivityId = update.lastKnownActivityId == null ? null : update.lastKnownActivityId.toString();
+      }
+      if (update?.lastKnownActivityLabel !== undefined) {
+        const label = update.lastKnownActivityLabel == null ? '' : update.lastKnownActivityLabel.toString();
+        next.lastKnownActivityLabel = label.trim() || null;
+      }
+
+      if (update?.lastDeviceSyncStatus !== undefined) {
+        const status = (update.lastDeviceSyncStatus || '').toString().toLowerCase();
+        if (['unknown', 'success', 'failed'].includes(status)) {
+          next.lastDeviceSyncStatus = status;
+        }
+      }
+      const lastDeviceSyncAt = toDateOrNull(update?.lastDeviceSyncAt);
+      if (lastDeviceSyncAt) {
+        next.lastDeviceSyncAt = lastDeviceSyncAt;
+      }
+      if (update?.lastDeviceSyncError !== undefined) {
+        next.lastDeviceSyncError = (update.lastDeviceSyncError || '').toString();
+      } else if (next.lastDeviceSyncStatus === 'success') {
+        next.lastDeviceSyncError = '';
+      }
+
+      if (update?.lastActivitySyncStatus !== undefined) {
+        const status = (update.lastActivitySyncStatus || '').toString().toLowerCase();
+        if (['unknown', 'success', 'failed'].includes(status)) {
+          next.lastActivitySyncStatus = status;
+        }
+      }
+      const lastActivitySyncAt = toDateOrNull(update?.lastActivitySyncAt);
+      if (lastActivitySyncAt) {
+        next.lastActivitySyncAt = lastActivitySyncAt;
+      }
+      if (update?.lastActivitySyncError !== undefined) {
+        next.lastActivitySyncError = (update.lastActivitySyncError || '').toString();
+      } else if (next.lastActivitySyncStatus === 'success') {
+        next.lastActivitySyncError = '';
+      }
+
+      next.lastUpdatedAt = now;
+      map.set(ip, next);
+
+      if (next.friendlyName) {
+        const metadata = this.hubMetadata.get(ip) || {};
+        this.hubMetadata.set(ip, {
+          ip,
+          friendlyName: next.friendlyName,
+          remoteId: metadata.remoteId || null,
+          uuid: metadata.uuid || null,
+          lastSeen: next.lastSeenAt ? new Date(next.lastSeenAt).getTime() : (metadata.lastSeen || null)
+        });
+      }
+    });
+
+    settings.harmonyKnownHubs = Array.from(map.values()).sort((left, right) => {
+      const leftName = (left.friendlyName || left.ip || '').toString().toLowerCase();
+      const rightName = (right.friendlyName || right.ip || '').toString().toLowerCase();
+      return leftName.localeCompare(rightName);
+    });
+    await settings.save();
+    return settings.harmonyKnownHubs;
+  }
+
+  async getHubDeviceStatsMap(hubIps = []) {
+    const normalizedIps = toUniqueHostList(hubIps);
+    const map = new Map(normalizedIps.map((ip) => [ip, {
+      trackedActivityDevices: 0,
+      onlineActivityDevices: 0,
+      activeActivityDevices: 0,
+      lastActivityDeviceSeenAt: null,
+      lastActivityDeviceUpdatedAt: null
+    }]));
+
+    if (!normalizedIps.length) {
+      return map;
+    }
+
+    const grouped = await Device.aggregate([
+      {
+        $match: {
+          'properties.source': 'harmony',
+          'properties.harmonyHubIp': { $in: normalizedIps }
+        }
+      },
+      {
+        $group: {
+          _id: '$properties.harmonyHubIp',
+          trackedActivityDevices: { $sum: 1 },
+          onlineActivityDevices: {
+            $sum: {
+              $cond: [{ $eq: ['$isOnline', true] }, 1, 0]
+            }
+          },
+          activeActivityDevices: {
+            $sum: {
+              $cond: [{ $eq: ['$status', true] }, 1, 0]
+            }
+          },
+          lastActivityDeviceSeenAt: { $max: '$lastSeen' },
+          lastActivityDeviceUpdatedAt: { $max: '$updatedAt' }
+        }
+      }
+    ]);
+
+    grouped.forEach((entry) => {
+      const ip = normalizeHost(entry?._id);
+      if (!ip) {
+        return;
+      }
+      map.set(ip, {
+        trackedActivityDevices: Number(entry?.trackedActivityDevices || 0),
+        onlineActivityDevices: Number(entry?.onlineActivityDevices || 0),
+        activeActivityDevices: Number(entry?.activeActivityDevices || 0),
+        lastActivityDeviceSeenAt: toDateOrNull(entry?.lastActivityDeviceSeenAt),
+        lastActivityDeviceUpdatedAt: toDateOrNull(entry?.lastActivityDeviceUpdatedAt)
+      });
+    });
+
+    return map;
+  }
+
+  async getActivityLabelForHub(hubIp, activityId) {
+    const normalizedHubIp = normalizeHost(hubIp);
+    const normalizedActivityId = activityId != null ? activityId.toString() : null;
+    if (!normalizedHubIp || !normalizedActivityId || normalizedActivityId === '-1') {
+      return normalizedActivityId === '-1' ? 'Off' : null;
+    }
+
+    const device = await Device.findOne({
+      'properties.source': 'harmony',
+      'properties.harmonyHubIp': normalizedHubIp,
+      'properties.harmonyActivityId': normalizedActivityId
+    }).select('properties.harmonyActivityLabel name');
+
+    const label = device?.properties?.harmonyActivityLabel || device?.name || null;
+    return label ? label.toString() : null;
+  }
+
   async getConfiguredHubAddresses() {
     const settings = await Settings.getSettings();
     const fromSettings = this.parseConfiguredHubAddresses(settings?.harmonyHubAddresses || '');
@@ -115,16 +435,30 @@ class HarmonyService {
       return this.discoveryCache.map((hub) => ({ ...hub }));
     }
 
-    const configuredHosts = await this.getConfiguredHubAddresses();
+    const [configuredHosts, knownHubs] = await Promise.all([
+      this.getConfiguredHubAddresses(),
+      this.getKnownHubRegistry()
+    ]);
     const hubMap = new Map();
 
+    knownHubs.forEach((hub) => {
+      hubMap.set(hub.ip, {
+        ip: hub.ip,
+        friendlyName: (hub.friendlyName || this.hubMetadata.get(hub.ip)?.friendlyName || '').toString().trim(),
+        discovered: false,
+        source: 'remembered',
+        lastSeen: toDateOrNull(hub.lastSeenAt || hub.lastDiscoveredAt)
+      });
+    });
+
     configuredHosts.forEach((host) => {
+      const existing = hubMap.get(host) || {};
       hubMap.set(host, {
         ip: host,
-        friendlyName: this.hubMetadata.get(host)?.friendlyName || '',
-        discovered: false,
-        source: 'configured',
-        lastSeen: null
+        friendlyName: (existing.friendlyName || this.hubMetadata.get(host)?.friendlyName || '').toString().trim(),
+        discovered: Boolean(existing.discovered),
+        source: mergeHubSources(existing.source, 'configured'),
+        lastSeen: existing.lastSeen || null
       });
     });
 
@@ -147,13 +481,15 @@ class HarmonyService {
       const friendlyName = (hub?.friendlyName || existing.friendlyName || '').toString().trim();
       const lastSeen = hub?.lastSeen ? new Date(hub.lastSeen) : new Date();
 
+      const source = mergeHubSources(existing.source, 'discovered');
+
       hubMap.set(ip, {
         ip,
         friendlyName,
         uuid: hub?.uuid || existing.uuid || null,
         remoteId: hub?.fullHubInfo?.remoteId || existing.remoteId || null,
         discovered: true,
-        source: existing.source === 'configured' ? 'configured+discovered' : 'discovered',
+        source,
         lastSeen
       });
 
@@ -196,6 +532,15 @@ class HarmonyService {
 
     this.discoveryCache = discovered;
     this.discoveryCacheAt = Date.now();
+
+    await this.mergeKnownHubs(discovered.map((hub) => ({
+      ip: hub.ip,
+      friendlyName: hub.friendlyName,
+      discovered: Boolean(hub.discovered),
+      lastSeenAt: hub.lastSeen || null,
+      lastDiscoveredAt: hub.discovered ? (hub.lastSeen || new Date()) : null
+    })));
+
     return discovered.map((hub) => ({ ...hub }));
   }
 
@@ -293,7 +638,11 @@ class HarmonyService {
       const activities = this.normalizeActivities(config);
       const devices = this.normalizeDevices(config);
       const currentActivity = currentActivityId != null ? currentActivityId.toString() : '-1';
+      const currentActivityLabel = currentActivity === '-1'
+        ? 'Off'
+        : (activities.find((activity) => activity.id === currentActivity)?.label || null);
       const friendlyName = this.inferFriendlyName(normalizedHubIp, config);
+      const now = new Date();
 
       const metadata = this.hubMetadata.get(normalizedHubIp) || {};
       this.hubMetadata.set(normalizedHubIp, {
@@ -304,11 +653,25 @@ class HarmonyService {
         lastSeen: Date.now()
       });
 
+      if (options.persist !== false) {
+        await this.mergeKnownHubs([{
+          ip: normalizedHubIp,
+          friendlyName,
+          lastSeenAt: now,
+          lastSnapshotAt: now,
+          lastKnownActivityId: currentActivity,
+          lastKnownActivityLabel: currentActivityLabel
+        }]);
+      }
+
       return {
         ip: normalizedHubIp,
         friendlyName,
         remoteId: client.remoteId || metadata.remoteId || null,
         currentActivityId: currentActivity,
+        currentActivityLabel,
+        lastSeen: now,
+        lastSnapshotAt: now,
         isOff: currentActivity === '-1',
         activities: activities.filter((activity) => !activity.isOff),
         rawActivities: activities,
@@ -329,14 +692,50 @@ class HarmonyService {
     const discover = options.discover !== false;
     const includeCommands = options.includeCommands !== false;
 
-    const candidates = discover
-      ? await this.discoverHubs({ timeoutMs, force: false })
-      : (await this.getConfiguredHubAddresses()).map((host) => ({ ip: host }));
+    const [knownHubs, baseCandidates] = await Promise.all([
+      this.getKnownHubRegistry(),
+      discover
+        ? this.discoverHubs({ timeoutMs, force: false })
+        : this.getConfiguredHubAddresses().then((hosts) => hosts.map((host) => ({
+          ip: host,
+          source: 'configured'
+        })))
+    ]);
 
+    const knownHubMap = new Map(knownHubs.map((hub) => [hub.ip, hub]));
+    const candidateMap = new Map();
+
+    knownHubs.forEach((hub) => {
+      candidateMap.set(hub.ip, {
+        ip: hub.ip,
+        friendlyName: (hub.friendlyName || this.hubMetadata.get(hub.ip)?.friendlyName || '').toString().trim(),
+        source: 'remembered',
+        discovered: false,
+        lastSeen: toDateOrNull(hub.lastSeenAt || hub.lastDiscoveredAt)
+      });
+    });
+
+    baseCandidates.forEach((candidate) => {
+      const ip = normalizeHost(candidate?.ip);
+      if (!ip) {
+        return;
+      }
+      const existing = candidateMap.get(ip) || {};
+      candidateMap.set(ip, {
+        ...existing,
+        ip,
+        friendlyName: (candidate?.friendlyName || existing.friendlyName || this.hubMetadata.get(ip)?.friendlyName || '').toString().trim(),
+        source: mergeHubSources(existing.source, candidate?.source || (discover ? 'discovered' : 'configured')),
+        discovered: Boolean(existing.discovered || candidate?.discovered),
+        lastSeen: toDateOrNull(candidate?.lastSeen || existing.lastSeen)
+      });
+    });
+
+    const candidates = Array.from(candidateMap.values());
     const hubs = await Promise.all(
       candidates.map(async (candidate) => {
         try {
-          const snapshot = await this.getHubSnapshot(candidate.ip, { includeCommands });
+          const snapshot = await this.getHubSnapshot(candidate.ip, { includeCommands, persist: false });
           return {
             success: true,
             source: candidate.source || 'unknown',
@@ -348,13 +747,71 @@ class HarmonyService {
             source: candidate.source || 'unknown',
             ip: candidate.ip,
             friendlyName: candidate.friendlyName || `Harmony Hub ${candidate.ip}`,
+            lastSeen: candidate.lastSeen || null,
             error: error.message
           };
         }
       })
     );
 
-    return hubs.sort((left, right) => {
+    const statsMap = await this.getHubDeviceStatsMap(candidates.map((candidate) => candidate.ip));
+    const registryUpdates = [];
+
+    const hydrated = hubs.map((hub) => {
+      const known = knownHubMap.get(hub.ip) || null;
+      const stats = statsMap.get(hub.ip) || {
+        trackedActivityDevices: 0,
+        onlineActivityDevices: 0,
+        activeActivityDevices: 0,
+        lastActivityDeviceSeenAt: null,
+        lastActivityDeviceUpdatedAt: null
+      };
+
+      const friendlyName = (hub.friendlyName || known?.friendlyName || `Harmony Hub ${hub.ip}`).toString();
+      const currentActivityId = hub.currentActivityId != null
+        ? hub.currentActivityId.toString()
+        : (known?.lastKnownActivityId || null);
+      const currentActivityLabel = hub.currentActivityLabel ||
+        known?.lastKnownActivityLabel ||
+        (currentActivityId === '-1' ? 'Off' : null);
+
+      registryUpdates.push({
+        ip: hub.ip,
+        friendlyName,
+        discovered: hub.success === true,
+        lastSeenAt: hub.lastSeen || null,
+        lastSnapshotAt: hub.success ? (hub.lastSnapshotAt || new Date()) : null,
+        lastKnownActivityId: hub.success ? currentActivityId : undefined,
+        lastKnownActivityLabel: hub.success ? currentActivityLabel : undefined
+      });
+
+      return {
+        ...hub,
+        friendlyName,
+        currentActivityId,
+        currentActivityLabel,
+        trackedActivityDevices: stats.trackedActivityDevices,
+        onlineActivityDevices: stats.onlineActivityDevices,
+        activeActivityDevices: stats.activeActivityDevices,
+        lastActivityDeviceSeenAt: stats.lastActivityDeviceSeenAt,
+        lastActivityDeviceUpdatedAt: stats.lastActivityDeviceUpdatedAt,
+        firstDiscoveredAt: known?.firstDiscoveredAt || null,
+        lastDiscoveredAt: known?.lastDiscoveredAt || null,
+        lastSeenAt: hub.lastSeen || known?.lastSeenAt || null,
+        lastSnapshotAt: hub.lastSnapshotAt || known?.lastSnapshotAt || null,
+        lastDeviceSyncAt: known?.lastDeviceSyncAt || null,
+        lastDeviceSyncStatus: known?.lastDeviceSyncStatus || 'unknown',
+        lastDeviceSyncError: known?.lastDeviceSyncError || '',
+        lastActivitySyncAt: known?.lastActivitySyncAt || null,
+        lastActivitySyncStatus: known?.lastActivitySyncStatus || 'unknown',
+        lastActivitySyncError: known?.lastActivitySyncError || '',
+        remembered: Boolean(known)
+      };
+    });
+
+    await this.mergeKnownHubs(registryUpdates);
+
+    return hydrated.sort((left, right) => {
       const leftName = (left.friendlyName || left.ip || '').toString().toLowerCase();
       const rightName = (right.friendlyName || right.ip || '').toString().toLowerCase();
       return leftName.localeCompare(rightName);
@@ -363,9 +820,10 @@ class HarmonyService {
 
   async getStatus(options = {}) {
     const timeoutMs = Number(options.timeoutMs || DEFAULT_DISCOVERY_TIMEOUT_MS);
-    const [configuredHubAddresses, discoveredHubs, trackedDevices, onlineDevices] = await Promise.all([
+    const [configuredHubAddresses, discoveredHubs, knownHubs, trackedDevices, onlineDevices] = await Promise.all([
       this.getConfiguredHubAddresses(),
       this.discoverHubs({ timeoutMs, force: false }),
+      this.getKnownHubRegistry(),
       Device.countDocuments({ 'properties.source': 'harmony' }),
       Device.countDocuments({ 'properties.source': 'harmony', isOnline: true })
     ]);
@@ -373,7 +831,8 @@ class HarmonyService {
     return {
       configuredHubAddresses,
       discoveredHubs,
-      discoveredCount: discoveredHubs.length,
+      discoveredCount: discoveredHubs.filter((hub) => hub.discovered).length,
+      knownHubCount: knownHubs.length,
       trackedDevices,
       onlineDevices
     };
@@ -446,6 +905,8 @@ class HarmonyService {
     this.syncPromise = (async () => {
       const timeoutMs = Number(options.timeoutMs || DEFAULT_DISCOVERY_TIMEOUT_MS);
       const discovered = await this.discoverHubs({ timeoutMs, force: true });
+      const syncAt = new Date();
+      const registryUpdates = [];
 
       const summary = {
         success: true,
@@ -506,6 +967,19 @@ class HarmonyService {
             activityCount: snapshot.activities.length,
             success: true
           });
+
+          registryUpdates.push({
+            ip: snapshot.ip,
+            friendlyName: snapshot.friendlyName,
+            discovered: true,
+            lastSeenAt: snapshot.lastSeen || syncAt,
+            lastSnapshotAt: snapshot.lastSnapshotAt || syncAt,
+            lastKnownActivityId: snapshot.currentActivityId,
+            lastKnownActivityLabel: snapshot.currentActivityLabel,
+            lastDeviceSyncAt: syncAt,
+            lastDeviceSyncStatus: 'success',
+            lastDeviceSyncError: ''
+          });
         } catch (error) {
           summary.hubsFailed += 1;
           const offlineCount = await this.markHubDevicesOffline(hub.ip);
@@ -516,9 +990,18 @@ class HarmonyService {
             success: false,
             error: error.message
           });
+
+          registryUpdates.push({
+            ip: hub.ip,
+            friendlyName: hub.friendlyName || `Harmony Hub ${hub.ip}`,
+            lastDeviceSyncAt: syncAt,
+            lastDeviceSyncStatus: 'failed',
+            lastDeviceSyncError: error.message || 'Sync failed'
+          });
         }
       }
 
+      await this.mergeKnownHubs(registryUpdates);
       await this.syncActivityStates();
 
       return summary;
@@ -586,10 +1069,18 @@ class HarmonyService {
       if (Array.isArray(options.hubIps) && options.hubIps.length > 0) {
         hubIps = toUniqueHostList(options.hubIps);
       } else {
-        const rawIps = await Device.distinct('properties.harmonyHubIp', {
-          'properties.source': 'harmony'
-        });
-        hubIps = toUniqueHostList(rawIps);
+        const [rawIps, configuredHosts, knownHubs] = await Promise.all([
+          Device.distinct('properties.harmonyHubIp', {
+            'properties.source': 'harmony'
+          }),
+          this.getConfiguredHubAddresses(),
+          this.getKnownHubRegistry()
+        ]);
+        hubIps = toUniqueHostList([
+          ...rawIps,
+          ...configuredHosts,
+          ...knownHubs.map((hub) => hub.ip)
+        ]);
       }
 
       const summary = {
@@ -599,17 +1090,33 @@ class HarmonyService {
         failed: 0,
         details: []
       };
+      const syncAt = new Date();
+      const registryUpdates = [];
 
       for (const hubIp of hubIps) {
         try {
           const currentActivityId = await this.withClient(hubIp, (client) => client.getCurrentActivity());
           const stateResult = await this.updateHubActivityState(hubIp, currentActivityId, true);
+          const normalizedCurrentActivityId = currentActivityId != null ? currentActivityId.toString() : '-1';
+          const activityLabel = await this.getActivityLabelForHub(hubIp, normalizedCurrentActivityId);
+
           summary.refreshed += 1;
           summary.details.push({
             hubIp,
-            currentActivityId: currentActivityId.toString(),
+            currentActivityId: normalizedCurrentActivityId,
             updatedDevices: stateResult.updated,
             success: true
+          });
+
+          registryUpdates.push({
+            ip: hubIp,
+            discovered: true,
+            lastSeenAt: syncAt,
+            lastKnownActivityId: normalizedCurrentActivityId,
+            lastKnownActivityLabel: activityLabel,
+            lastActivitySyncAt: syncAt,
+            lastActivitySyncStatus: 'success',
+            lastActivitySyncError: ''
           });
         } catch (error) {
           summary.failed += 1;
@@ -619,9 +1126,17 @@ class HarmonyService {
             success: false,
             error: error.message
           });
+
+          registryUpdates.push({
+            ip: hubIp,
+            lastActivitySyncAt: syncAt,
+            lastActivitySyncStatus: 'failed',
+            lastActivitySyncError: error.message || 'Activity state sync failed'
+          });
         }
       }
 
+      await this.mergeKnownHubs(registryUpdates);
       return summary;
     })();
 
@@ -642,6 +1157,16 @@ class HarmonyService {
 
     await this.withClient(normalizedHubIp, (client) => client.startActivity(normalizedActivityId));
     await this.updateHubActivityState(normalizedHubIp, normalizedActivityId, true);
+    await this.mergeKnownHubs([{
+      ip: normalizedHubIp,
+      discovered: true,
+      lastSeenAt: new Date(),
+      lastKnownActivityId: normalizedActivityId,
+      lastKnownActivityLabel: await this.getActivityLabelForHub(normalizedHubIp, normalizedActivityId),
+      lastActivitySyncAt: new Date(),
+      lastActivitySyncStatus: 'success',
+      lastActivitySyncError: ''
+    }]);
 
     void eventStreamService.publishSafe({
       type: 'harmony.activity.start',
@@ -669,6 +1194,16 @@ class HarmonyService {
 
     await this.withClient(normalizedHubIp, (client) => client.turnOff());
     await this.updateHubActivityState(normalizedHubIp, '-1', true);
+    await this.mergeKnownHubs([{
+      ip: normalizedHubIp,
+      discovered: true,
+      lastSeenAt: new Date(),
+      lastKnownActivityId: '-1',
+      lastKnownActivityLabel: 'Off',
+      lastActivitySyncAt: new Date(),
+      lastActivitySyncStatus: 'success',
+      lastActivitySyncError: ''
+    }]);
 
     void eventStreamService.publishSafe({
       type: 'harmony.activity.stop',

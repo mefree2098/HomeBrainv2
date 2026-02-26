@@ -1488,6 +1488,19 @@ export function Settings() {
     return icons[provider] || <Brain className="h-4 w-4" />;
   };
 
+  const formatHarmonyTimestamp = (value: string | Date | null | undefined) => {
+    if (!value) {
+      return "Never";
+    }
+
+    const parsed = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return "Unknown";
+    }
+
+    return parsed.toLocaleString();
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -1811,7 +1824,7 @@ export function Settings() {
                         {loadingHarmonyStatus
                           ? "Checking Harmony Hub status..."
                           : harmonyStatus
-                            ? `${harmonyStatus.discoveredCount ?? 0} hubs discovered, ${harmonyStatus.trackedDevices ?? 0} Harmony Hub activity devices tracked`
+                            ? `${harmonyStatus.knownHubCount ?? harmonyStatus.discoveredCount ?? 0} hubs known, ${harmonyStatus.discoveredCount ?? 0} currently discovered, ${harmonyStatus.trackedDevices ?? 0} Harmony Hub activity devices tracked`
                             : "Status unavailable"}
                       </p>
                     </div>
@@ -1922,7 +1935,29 @@ export function Settings() {
                                 {hub.ip}
                                 {hub.success === false
                                   ? ` • ${hub.error || "Unavailable"}`
-                                  : ` • Current activity: ${hub.currentActivityId === "-1" ? "Off" : hub.currentActivityId}`}
+                                  : ` • Current activity: ${hub.currentActivityLabel || (hub.currentActivityId === "-1" ? "Off" : hub.currentActivityId || "Unknown")}`}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Activity devices: {hub.trackedActivityDevices ?? 0} tracked, {hub.onlineActivityDevices ?? 0} online, {hub.activeActivityDevices ?? 0} active
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Device sync: {(hub.lastDeviceSyncStatus || "unknown").toString().toUpperCase()} • {formatHarmonyTimestamp(hub.lastDeviceSyncAt)}
+                              </p>
+                              {hub.lastDeviceSyncStatus === "failed" && hub.lastDeviceSyncError && (
+                                <p className="text-xs text-red-600 dark:text-red-400">
+                                  Device sync error: {hub.lastDeviceSyncError}
+                                </p>
+                              )}
+                              <p className="text-xs text-muted-foreground">
+                                Activity state sync: {(hub.lastActivitySyncStatus || "unknown").toString().toUpperCase()} • {formatHarmonyTimestamp(hub.lastActivitySyncAt)}
+                              </p>
+                              {hub.lastActivitySyncStatus === "failed" && hub.lastActivitySyncError && (
+                                <p className="text-xs text-red-600 dark:text-red-400">
+                                  State sync error: {hub.lastActivitySyncError}
+                                </p>
+                              )}
+                              <p className="text-xs text-muted-foreground">
+                                Last seen: {formatHarmonyTimestamp(hub.lastSeenAt || hub.lastSeen)}
                               </p>
                             </div>
                             {hub.success !== false && (
@@ -1961,7 +1996,7 @@ export function Settings() {
                     </div>
                   ) : (
                     <p className="text-xs text-muted-foreground">
-                      No hub details loaded yet. Use “Discover Hubs” or “Refresh Hub Details”.
+                      No Harmony Hub records yet. Use “Discover Hubs” to add and persist hubs here.
                     </p>
                   )}
                 </div>

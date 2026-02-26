@@ -172,6 +172,7 @@ Open `Settings -> Integrations`, then use the `Logitech Harmony Hub Integration`
 Notes:
 - Harmony Hub activity devices support `turn_on`, `turn_off`, and `toggle`.
 - HomeBrain keeps activity state refreshed so manual Harmony remote changes are reflected in device status.
+- Once a hub is discovered, HomeBrain keeps it listed in `Settings -> Integrations` with activity-device sync and state-sync status history.
 
 ## Hub Deploy From UI (Pull Latest GitHub + Restart)
 
