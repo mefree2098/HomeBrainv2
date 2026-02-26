@@ -61,6 +61,14 @@ import {
   getSmartThingsSthmDiagnostics
 } from "@/api/smartThings"
 import {
+  getEcobeeStatus,
+  configureEcobeeOAuth,
+  getEcobeeAuthUrl,
+  testEcobeeConnection,
+  disconnectEcobee,
+  getEcobeeDevices
+} from "@/api/ecobee"
+import {
   clearAllFakeData,
   injectFakeData,
   forceSmartThingsSync,
@@ -100,6 +108,16 @@ export function Settings() {
   const [disconnectingSmartThings, setDisconnectingSmartThings] = useState(false)
   const [smartThingsDevices, setSmartThingsDevices] = useState<any[]>([])
   const [loadingSmartThingsDevices, setLoadingSmartThingsDevices] = useState(false)
+  const [ecobeeStatus, setEcobeeStatus] = useState<any>(null)
+  const [ecobeeDevices, setEcobeeDevices] = useState<any[]>([])
+  const [configuringEcobee, setConfiguringEcobee] = useState(false)
+  const [testingEcobee, setTestingEcobee] = useState(false)
+  const [disconnectingEcobee, setDisconnectingEcobee] = useState(false)
+  const [loadingEcobeeDevices, setLoadingEcobeeDevices] = useState(false)
+  const [ecobeeConfig, setEcobeeConfig] = useState({
+    clientId: "",
+    redirectUri: ""
+  })
   const [harmonyStatus, setHarmonyStatus] = useState<any>(null)
   const [harmonyHubs, setHarmonyHubs] = useState<any[]>([])
   const [loadingHarmonyStatus, setLoadingHarmonyStatus] = useState(false)
@@ -245,6 +263,46 @@ export function Settings() {
     }
   }
 
+  const fetchEcobeeDevices = async (options: { showToast?: boolean; forceRefresh?: boolean; integration?: any } = {}) => {
+    const { showToast = false, forceRefresh = false, integration } = options
+    const activeIntegration = integration ?? ecobeeStatus
+
+    if (!activeIntegration?.isConnected) {
+      setEcobeeDevices([])
+      return
+    }
+
+    setLoadingEcobeeDevices(true)
+    try {
+      const response = await getEcobeeDevices({ refresh: forceRefresh })
+      if (response.success && Array.isArray(response.devices)) {
+        const devices = response.devices.slice()
+        setEcobeeDevices(devices)
+        if (showToast) {
+          const thermostatCount = devices.filter((device: any) => device?.type === "thermostat").length
+          const sensorCount = devices.filter((device: any) => device?.type === "sensor").length
+          toast({
+            title: "Ecobee devices refreshed",
+            description: `Loaded ${thermostatCount} thermostat${thermostatCount === 1 ? "" : "s"} and ${sensorCount} sensor${sensorCount === 1 ? "" : "s"}.`
+          })
+        }
+      } else {
+        throw new Error("Unexpected response from Ecobee device list")
+      }
+    } catch (error: any) {
+      console.error("Failed to load Ecobee devices:", error)
+      if (showToast) {
+        toast({
+          title: "Failed to refresh Ecobee devices",
+          description: error?.response?.data?.message || error?.message || "Unable to load devices from Ecobee",
+          variant: "destructive"
+        })
+      }
+    } finally {
+      setLoadingEcobeeDevices(false)
+    }
+  }
+
   const localWhisperModels = ["tiny", "base", "small", "small.en", "medium"]
   const openaiSttModels = ["gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe-latest"]
   const openaiLlmModelPresets = [
@@ -288,6 +346,8 @@ export function Settings() {
   const lastSthmCommandState = smartthingsStatus?.sthm?.lastCommandRequestedState
   const lastSthmCommandError = smartthingsStatus?.sthm?.lastCommandError
   const lastSthmCommandDeviceId = smartthingsStatus?.sthm?.lastCommandDeviceId
+  const ecobeeThermostatCount = ecobeeDevices.filter((device: any) => device?.type === "thermostat").length
+  const ecobeeSensorCount = ecobeeDevices.filter((device: any) => device?.type === "sensor").length
   const disarmSelectValue = sthmConfig.disarmDeviceId || STHM_NOT_CONFIGURED
   const armStaySelectValue = sthmConfig.armStayDeviceId || STHM_NOT_CONFIGURED
   const armAwaySelectValue = sthmConfig.armAwayDeviceId || STHM_NOT_CONFIGURED
@@ -333,6 +393,7 @@ export function Settings() {
 
     loadSettings();
     loadSmartThingsStatus();
+    loadEcobeeStatus();
     loadHarmonyStatus();
     loadHarmonyHubs({ includeCommands: false });
     loadLLMPriorityList();
@@ -409,6 +470,42 @@ export function Settings() {
       // Don't show error toast for status loading as it's not critical
     }
   };
+
+  const loadEcobeeStatus = async () => {
+    try {
+      console.log('Loading Ecobee integration status...')
+      const response = await getEcobeeStatus()
+
+      if (response.success && response.integration) {
+        const integration = response.integration
+        setEcobeeStatus(integration)
+        setEcobeeConfig({
+          clientId: integration.clientId || "",
+          redirectUri: integration.redirectUri || ""
+        })
+
+        if (integration.isConnected) {
+          fetchEcobeeDevices({
+            integration,
+            forceRefresh: false,
+            showToast: false
+          })
+        } else {
+          setEcobeeDevices([])
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load Ecobee status:', error)
+      setEcobeeStatus({
+        isConfigured: false,
+        isConnected: false,
+        clientId: '',
+        redirectUri: '',
+        connectedDevices: []
+      })
+      setEcobeeDevices([])
+    }
+  }
 
   const loadHarmonyStatus = async () => {
     setLoadingHarmonyStatus(true)
@@ -595,7 +692,9 @@ export function Settings() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const smartthingsResult = urlParams.get('smartthings');
+    const ecobeeResult = urlParams.get('ecobee');
     const message = urlParams.get('message');
+    let handledOAuthCallback = false
 
     if (smartthingsResult === 'success') {
       toast({
@@ -604,16 +703,34 @@ export function Settings() {
       });
       // Reload status and settings after successful OAuth
       loadSmartThingsStatus();
-      // Clear URL parameters
-      window.history.replaceState({}, document.title, window.location.pathname);
+      handledOAuthCallback = true
     } else if (smartthingsResult === 'error') {
       toast({
         title: "SmartThings Connection Failed",
         description: message || "Failed to connect SmartThings integration",
         variant: "destructive"
       });
-      // Clear URL parameters
-      window.history.replaceState({}, document.title, window.location.pathname);
+      handledOAuthCallback = true
+    }
+
+    if (ecobeeResult === 'success') {
+      toast({
+        title: "Ecobee Connected",
+        description: "Ecobee integration has been successfully configured!"
+      })
+      loadEcobeeStatus()
+      handledOAuthCallback = true
+    } else if (ecobeeResult === 'error') {
+      toast({
+        title: "Ecobee Connection Failed",
+        description: message || "Failed to connect Ecobee integration",
+        variant: "destructive"
+      })
+      handledOAuthCallback = true
+    }
+
+    if (handledOAuthCallback) {
+      window.history.replaceState({}, document.title, window.location.pathname)
     }
   }, [toast]);
 
@@ -1005,6 +1122,118 @@ export function Settings() {
     })
   }
 
+  const handleConfigureEcobee = async () => {
+    const clientId = ecobeeConfig.clientId?.trim()
+    const redirectUri = ecobeeConfig.redirectUri?.trim()
+
+    if (!clientId) {
+      toast({
+        title: "Error",
+        description: "Ecobee App Key is required for OAuth configuration.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setConfiguringEcobee(true)
+    try {
+      const response = await configureEcobeeOAuth({
+        clientId,
+        redirectUri: redirectUri || undefined
+      })
+
+      if (response.success) {
+        toast({
+          title: "Configuration Saved",
+          description: "Ecobee OAuth configuration has been saved. You can now connect your Ecobee account."
+        })
+        loadEcobeeStatus()
+      }
+    } catch (error: any) {
+      console.error('Ecobee OAuth configuration failed:', error)
+      toast({
+        title: "Configuration Failed",
+        description: error?.message || "Failed to configure Ecobee OAuth",
+        variant: "destructive"
+      })
+    } finally {
+      setConfiguringEcobee(false)
+    }
+  }
+
+  const handleConnectEcobee = async () => {
+    try {
+      const response = await getEcobeeAuthUrl()
+      if (response.success && response.authUrl) {
+        window.location.href = response.authUrl
+      }
+    } catch (error: any) {
+      console.error('Failed to get Ecobee authorization URL:', error)
+      toast({
+        title: "Connection Failed",
+        description: error?.message || "Failed to get Ecobee authorization URL. Configure OAuth first.",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleTestEcobee = async () => {
+    setTestingEcobee(true)
+    try {
+      const response = await testEcobeeConnection()
+      if (response.success) {
+        toast({
+          title: "Connection Successful",
+          description: `Ecobee connection is working! Found ${response.thermostatCount || 0} thermostat${response.thermostatCount === 1 ? "" : "s"}.`
+        })
+        await Promise.all([
+          loadEcobeeStatus(),
+          fetchEcobeeDevices({ showToast: false, forceRefresh: true })
+        ])
+      }
+    } catch (error: any) {
+      console.error('Ecobee connection test failed:', error)
+      toast({
+        title: "Connection Failed",
+        description: error?.message || "Failed to connect to Ecobee API",
+        variant: "destructive"
+      })
+    } finally {
+      setTestingEcobee(false)
+    }
+  }
+
+  const handleDisconnectEcobee = async () => {
+    setDisconnectingEcobee(true)
+    try {
+      const response = await disconnectEcobee()
+      if (response.success) {
+        toast({
+          title: "Disconnected",
+          description: "Ecobee integration has been disconnected successfully."
+        })
+        setEcobeeDevices([])
+        loadEcobeeStatus()
+      }
+    } catch (error: any) {
+      console.error('Ecobee disconnection failed:', error)
+      toast({
+        title: "Disconnection Failed",
+        description: error?.message || "Failed to disconnect Ecobee integration",
+        variant: "destructive"
+      })
+    } finally {
+      setDisconnectingEcobee(false)
+    }
+  }
+
+  const handleRefreshEcobeeDevices = async () => {
+    await fetchEcobeeDevices({
+      showToast: true,
+      forceRefresh: true
+    })
+  }
+
   const handleSaveSthmConfig = async () => {
     if (!smartthingsStatus?.isConnected) {
       toast({
@@ -1149,6 +1378,30 @@ export function Settings() {
       return "Not configured";
     }
   };
+
+  const getEcobeeStatusIcon = () => {
+    if (!ecobeeStatus) return <AlertCircle className="h-4 w-4 text-gray-500" />
+
+    if (ecobeeStatus.isConnected) {
+      return <CheckCircle className="h-4 w-4 text-green-600" />
+    } else if (ecobeeStatus.isConfigured) {
+      return <AlertCircle className="h-4 w-4 text-yellow-600" />
+    }
+
+    return <XCircle className="h-4 w-4 text-red-600" />
+  }
+
+  const getEcobeeStatusText = () => {
+    if (!ecobeeStatus) return "Loading..."
+
+    if (ecobeeStatus.isConnected) {
+      return "Connected and authenticated"
+    } else if (ecobeeStatus.isConfigured) {
+      return "Configured but not connected"
+    }
+
+    return "Not configured"
+  }
 
   // Maintenance handler functions
   const handleClearFakeData = async () => {
@@ -2516,6 +2769,166 @@ export function Settings() {
             </div>
           </CardContent>
         </Card>
+
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Home className="h-5 w-5 text-orange-600" />
+                  Ecobee Integration
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center gap-2 p-3 bg-orange-50/50 dark:bg-orange-950/20 rounded-lg border">
+                  {getEcobeeStatusIcon()}
+                  <div>
+                    <p className="font-medium text-sm">Ecobee Integration Status</p>
+                    <p className="text-xs text-muted-foreground">{getEcobeeStatusText()}</p>
+                    {ecobeeStatus?.isConnected && (
+                      <p className="text-xs text-green-600">
+                        {ecobeeThermostatCount} thermostat{ecobeeThermostatCount === 1 ? "" : "s"} and {ecobeeSensorCount} sensor{ecobeeSensorCount === 1 ? "" : "s"} synced
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-4">
+                  <div>
+                    <label className="text-sm font-medium">Ecobee App Key</label>
+                    <Input
+                      value={ecobeeConfig.clientId}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setEcobeeConfig((prev) => ({ ...prev, clientId: event.target.value }))
+                      }
+                      placeholder="Enter Ecobee App Key"
+                      className="mt-1"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      App Key from your Ecobee developer application.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">Redirect URI (Optional)</label>
+                    <Input
+                      value={ecobeeConfig.redirectUri}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setEcobeeConfig((prev) => ({ ...prev, redirectUri: event.target.value }))
+                      }
+                      placeholder="https://yourdomain.com/api/ecobee/callback"
+                      className="mt-1"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Custom redirect URI (defaults to current domain + /api/ecobee/callback).
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2 flex-wrap">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleConfigureEcobee}
+                      disabled={configuringEcobee || !ecobeeConfig.clientId.trim()}
+                    >
+                      {configuringEcobee ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Configuring...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="h-4 w-4 mr-2" />
+                          Configure OAuth
+                        </>
+                      )}
+                    </Button>
+
+                    {ecobeeStatus?.isConfigured && !ecobeeStatus?.isConnected && (
+                      <Button
+                        type="button"
+                        variant="default"
+                        size="sm"
+                        onClick={handleConnectEcobee}
+                        className="bg-green-600 hover:bg-green-700"
+                      >
+                        <ExternalLink className="h-4 w-4 mr-2" />
+                        Connect Ecobee
+                      </Button>
+                    )}
+
+                    {ecobeeStatus?.isConnected && (
+                      <>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleTestEcobee}
+                          disabled={testingEcobee}
+                        >
+                          {testingEcobee ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                              Testing...
+                            </>
+                          ) : (
+                            <>
+                              <TestTube className="h-4 w-4 mr-2" />
+                              Test Connection
+                            </>
+                          )}
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleRefreshEcobeeDevices}
+                          disabled={loadingEcobeeDevices}
+                        >
+                          {loadingEcobeeDevices ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                              Refreshing...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2" />
+                              Refresh Devices
+                            </>
+                          )}
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={handleDisconnectEcobee}
+                          disabled={disconnectingEcobee}
+                        >
+                          {disconnectingEcobee ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                              Disconnecting...
+                            </>
+                          ) : (
+                            <>
+                              <XCircle className="h-4 w-4 mr-2" />
+                              Disconnect
+                            </>
+                          )}
+                        </Button>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                    <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                      <strong>OAuth Setup Required:</strong> Create an Ecobee developer application, enter the App Key above, configure the redirect URI to this server callback, then connect your account.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>

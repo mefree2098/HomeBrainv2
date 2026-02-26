@@ -15,6 +15,7 @@ const settingsRoutes = require("./routes/settingsRoutes");
 const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const smartThingsWebhookRoutes = require("./routes/smartThingsWebhookRoutes");
+const ecobeeRoutes = require("./routes/ecobeeRoutes");
 const harmonyRoutes = require("./routes/harmonyRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const platformDeployRoutes = require("./routes/platformDeployRoutes");
@@ -40,6 +41,7 @@ const wakeWordTrainingService = require("./services/wakeWordTrainingService");
 const voiceAcknowledgmentService = require("./services/voiceAcknowledgmentService");
 const whisperService = require("./services/whisperService");
 const smartThingsService = require("./services/smartThingsService");
+const ecobeeService = require("./services/ecobeeService");
 const automationSchedulerService = require("./services/automationSchedulerService");
 const { connectDB } = require("./config/database");
 const cors = require("cors");
@@ -241,7 +243,9 @@ app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
 const smartThingsWebhookPath = normalizeWebhookPath(process.env.SMARTTHINGS_WEBHOOK_PATH, SMARTTHINGS_WEBHOOK_DEFAULT_PATH);
 app.use(smartThingsWebhookPath, smartThingsWebhookRoutes);
-  app.use('/api/smartthings', smartThingsRoutes);
+app.use('/api/smartthings', smartThingsRoutes);
+// Ecobee Routes
+app.use('/api/ecobee', ecobeeRoutes);
 // Harmony Routes
 app.use('/api/harmony', harmonyRoutes);
 // Maintenance Routes
@@ -500,6 +504,14 @@ async function gracefulShutdown(signal) {
       }
     } catch (error) {
       console.error('Error stopping SmartThings subscription task:', error.message);
+    }
+
+    try {
+      if (typeof ecobeeService.stopDeviceStatusSync === 'function') {
+        ecobeeService.stopDeviceStatusSync();
+      }
+    } catch (error) {
+      console.error('Error stopping Ecobee status sync task:', error.message);
     }
 
     await closeServer(challengeServer, 'ACME challenge server');
