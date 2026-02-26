@@ -66,26 +66,38 @@ struct AppShellView: View {
 
     @EnvironmentObject private var session: SessionStore
     @State private var selection: AppSection? = .dashboard
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     private var visibleSections: [AppSection] {
         AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
     }
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selection) {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            List {
                 Section("HomeBrain") {
                     ForEach(visibleSections) { section in
-                        Label(section.title, systemImage: section.icon)
-                            .tag(Optional(section))
+                        Button {
+                            selection = section
+                        } label: {
+                            Label(section.title, systemImage: section.icon)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(
+                            selection == section
+                            ? Color.accentColor.opacity(0.15)
+                            : Color.clear
+                        )
                     }
                 }
             }
+            .listStyle(.sidebar)
             .navigationTitle("HomeBrain")
         } detail: {
-            if let selection {
-                sectionView(selection)
-                    .navigationTitle(selection.title)
+            if let current = selection ?? visibleSections.first {
+                sectionView(current)
+                    .id(current)
+                    .navigationTitle(current.title)
                     .navigationBarTitleDisplayMode(.inline)
             } else {
                 EmptyStateView(
@@ -108,6 +120,12 @@ struct AppShellView: View {
                     session.logout()
                 }
             }
+        }
+        .onAppear {
+            syncSelectionWithVisibleSections()
+        }
+        .onChange(of: session.currentUser?.role) { _, _ in
+            syncSelectionWithVisibleSections()
         }
     }
 
@@ -141,5 +159,12 @@ struct AppShellView: View {
         case .ssl:
             SSLView()
         }
+    }
+
+    private func syncSelectionWithVisibleSections() {
+        if let current = selection, visibleSections.contains(current) {
+            return
+        }
+        selection = visibleSections.first
     }
 }
