@@ -141,7 +141,7 @@ export function VoiceSelector({
             }}
           >
             <div
-              className="sticky top-0 z-10 bg-white border-b p-2"
+              className="sticky top-0 z-10 bg-white dark:bg-slate-900 border-b p-2"
               onPointerMove={(e) => e.stopPropagation()}
               onPointerLeave={(e) => e.stopPropagation()}
             >

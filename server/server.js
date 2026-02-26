@@ -15,6 +15,7 @@ const settingsRoutes = require("./routes/settingsRoutes");
 const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const smartThingsWebhookRoutes = require("./routes/smartThingsWebhookRoutes");
+const harmonyRoutes = require("./routes/harmonyRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const platformDeployRoutes = require("./routes/platformDeployRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
@@ -239,6 +240,8 @@ app.use('/api/security-alarm', securityAlarmRoutes);
 const smartThingsWebhookPath = normalizeWebhookPath(process.env.SMARTTHINGS_WEBHOOK_PATH, SMARTTHINGS_WEBHOOK_DEFAULT_PATH);
 app.use(smartThingsWebhookPath, smartThingsWebhookRoutes);
   app.use('/api/smartthings', smartThingsRoutes);
+// Harmony Routes
+app.use('/api/harmony', harmonyRoutes);
 // Maintenance Routes
 app.use('/api/maintenance', maintenanceRoutes);
 // Platform Deploy Routes

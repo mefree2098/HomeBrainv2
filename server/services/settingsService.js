@@ -33,6 +33,7 @@ class SettingsService {
         'location', 'timezone', 'wakeWordSensitivity', 'voiceVolume',
         'microphoneSensitivity', 'enableVoiceConfirmation', 'enableNotifications',
         'insteonPort', 'smartthingsToken', 'elevenlabsApiKey', 'elevenlabsDefaultVoiceId',
+        'harmonyHubAddresses',
         'sttProvider', 'sttModel', 'sttLanguage', 'enableSecurityMode',
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',

@@ -34,7 +34,8 @@ import {
   FileDown,
   Activity,
   HardDrive,
-  Wrench
+  Wrench,
+  Tv
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
@@ -63,14 +64,25 @@ import {
   injectFakeData,
   forceSmartThingsSync,
   forceInsteonSync,
+  forceHarmonySync,
   clearSmartThingsDevices,
   clearInsteonDevices,
+  clearHarmonyDevices,
   resetSettingsToDefaults,
   clearSmartThingsIntegration,
   clearVoiceCommandHistory,
   performHealthCheck,
   exportConfiguration
 } from "@/api/maintenance"
+import {
+  getHarmonyStatus,
+  discoverHarmonyHubs,
+  getHarmonyHubs,
+  syncHarmonyDevices,
+  syncHarmonyState,
+  startHarmonyActivity,
+  turnOffHarmonyHub
+} from "@/api/harmony"
 import { useNavigate } from "react-router-dom"
 
 export function Settings() {
@@ -87,6 +99,13 @@ export function Settings() {
   const [disconnectingSmartThings, setDisconnectingSmartThings] = useState(false)
   const [smartThingsDevices, setSmartThingsDevices] = useState<any[]>([])
   const [loadingSmartThingsDevices, setLoadingSmartThingsDevices] = useState(false)
+  const [harmonyStatus, setHarmonyStatus] = useState<any>(null)
+  const [harmonyHubs, setHarmonyHubs] = useState<any[]>([])
+  const [loadingHarmonyStatus, setLoadingHarmonyStatus] = useState(false)
+  const [loadingHarmonyHubs, setLoadingHarmonyHubs] = useState(false)
+  const [discoveringHarmony, setDiscoveringHarmony] = useState(false)
+  const [syncingHarmonyState, setSyncingHarmonyState] = useState(false)
+  const [harmonyQuickActionKey, setHarmonyQuickActionKey] = useState("")
   const [savingSthmConfig, setSavingSthmConfig] = useState(false)
   const [sthmConfig, setSthmConfig] = useState<{
     armAwayDeviceId: string;
@@ -105,8 +124,10 @@ export function Settings() {
   const [injectingFakeData, setInjectingFakeData] = useState(false)
   const [syncingSmartThings, setSyncingSmartThings] = useState(false)
   const [syncingInsteon, setSyncingInsteon] = useState(false)
+  const [syncingHarmony, setSyncingHarmony] = useState(false)
   const [clearingSTDevices, setClearingSTDevices] = useState(false)
   const [clearingInsteonDevices, setClearingInsteonDevices] = useState(false)
+  const [clearingHarmonyDevices, setClearingHarmonyDevices] = useState(false)
   const [resettingSettings, setResettingSettings] = useState(false)
   const [clearingSTIntegration, setClearingSTIntegration] = useState(false)
   const [clearingVoiceHistory, setClearingVoiceHistory] = useState(false)
@@ -132,6 +153,7 @@ export function Settings() {
       smartthingsClientId: "",
       smartthingsClientSecret: "",
       smartthingsRedirectUri: "",
+      harmonyHubAddresses: "",
       elevenlabsApiKey: "",
       llmProvider: "openai",
       openaiApiKey: "",
@@ -302,6 +324,8 @@ export function Settings() {
 
     loadSettings();
     loadSmartThingsStatus();
+    loadHarmonyStatus();
+    loadHarmonyHubs({ includeCommands: false });
     loadLLMPriorityList();
   }, [setValue, toast]);
 
@@ -376,6 +400,187 @@ export function Settings() {
       // Don't show error toast for status loading as it's not critical
     }
   };
+
+  const loadHarmonyStatus = async () => {
+    setLoadingHarmonyStatus(true)
+    try {
+      const response = await getHarmonyStatus(5000)
+      if (response.success) {
+        setHarmonyStatus(response)
+      }
+    } catch (error) {
+      console.error('Failed to load Harmony status:', error)
+      setHarmonyStatus(null)
+    } finally {
+      setLoadingHarmonyStatus(false)
+    }
+  }
+
+  const loadHarmonyHubs = async (options: { includeCommands?: boolean; showToast?: boolean } = {}) => {
+    const { includeCommands = false, showToast = false } = options
+    setLoadingHarmonyHubs(true)
+    try {
+      const response = await getHarmonyHubs({ includeCommands, timeoutMs: 5000 })
+      if (response.success) {
+        const hubs = Array.isArray(response.hubs) ? response.hubs : []
+        setHarmonyHubs(hubs)
+        if (showToast) {
+          toast({
+            title: "Harmony Hub list refreshed",
+            description: `Loaded ${hubs.length} hub${hubs.length === 1 ? "" : "s"}.`
+          })
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load Harmony hubs:', error)
+      if (showToast) {
+        toast({
+          title: "Failed to load Harmony hubs",
+          description: error.message || "Unable to fetch Harmony hub details.",
+          variant: "destructive"
+        })
+      }
+    } finally {
+      setLoadingHarmonyHubs(false)
+    }
+  }
+
+  const handleDiscoverHarmony = async () => {
+    setDiscoveringHarmony(true)
+    try {
+      const response = await discoverHarmonyHubs(5000)
+      if (response.success) {
+        const hubs = Array.isArray(response.hubs) ? response.hubs : []
+        setHarmonyHubs(hubs)
+        toast({
+          title: "Harmony Hub discovery complete",
+          description: `Discovered ${response.count ?? hubs.length} hub${(response.count ?? hubs.length) === 1 ? "" : "s"}.`
+        })
+      }
+      await Promise.all([
+        loadHarmonyStatus(),
+        loadHarmonyHubs({ includeCommands: false })
+      ])
+    } catch (error) {
+      console.error('Harmony discovery failed:', error)
+      toast({
+        title: "Harmony discovery failed",
+        description: error.message || "Unable to discover Harmony hubs on your network.",
+        variant: "destructive"
+      })
+    } finally {
+      setDiscoveringHarmony(false)
+    }
+  }
+
+  const handleSyncHarmonyState = async () => {
+    setSyncingHarmonyState(true)
+    try {
+      const hubIps = harmonyHubs
+        .map((hub: any) => hub?.ip)
+        .filter((hubIp: string | undefined) => typeof hubIp === "string" && hubIp.length > 0)
+      const response = await syncHarmonyState(hubIps.length > 0 ? hubIps : undefined)
+      if (response.success) {
+        toast({
+          title: "Harmony Hub state refreshed",
+          description: `Refreshed ${response.refreshed ?? 0} hub${(response.refreshed ?? 0) === 1 ? "" : "s"}.`
+        })
+      }
+      await Promise.all([
+        loadHarmonyStatus(),
+        loadHarmonyHubs({ includeCommands: false })
+      ])
+    } catch (error) {
+      console.error('Harmony state sync failed:', error)
+      toast({
+        title: "Harmony state sync failed",
+        description: error.message || "Unable to refresh Harmony hub activity state.",
+        variant: "destructive"
+      })
+    } finally {
+      setSyncingHarmonyState(false)
+    }
+  }
+
+  const handleSyncHarmonyDevices = async () => {
+    setSyncingHarmony(true)
+    try {
+      const response = await syncHarmonyDevices(6000)
+      if (response.success) {
+        toast({
+          title: "Harmony Hub activity devices synced",
+          description: `${response.created ?? 0} created, ${response.updated ?? 0} updated, ${response.removed ?? 0} removed.`
+        })
+      }
+      await Promise.all([
+        loadHarmonyStatus(),
+        loadHarmonyHubs({ includeCommands: false })
+      ])
+    } catch (error) {
+      console.error('Harmony Hub device sync failed:', error)
+      toast({
+        title: "Harmony Hub sync failed",
+        description: error.message || "Unable to sync Harmony Hub activities into activity devices.",
+        variant: "destructive"
+      })
+    } finally {
+      setSyncingHarmony(false)
+    }
+  }
+
+  const handleHarmonyQuickActivityStart = async (hubIp: string, activityId: string) => {
+    const key = `${hubIp}:${activityId}`
+    setHarmonyQuickActionKey(key)
+    try {
+      const response = await startHarmonyActivity(hubIp, activityId)
+      if (response.success) {
+        toast({
+          title: "Harmony activity started",
+          description: `Started activity ${activityId} on ${hubIp}.`
+        })
+      }
+      await Promise.all([
+        loadHarmonyStatus(),
+        loadHarmonyHubs({ includeCommands: false })
+      ])
+    } catch (error) {
+      console.error('Failed to start Harmony activity:', error)
+      toast({
+        title: "Failed to start activity",
+        description: error.message || "Unable to start Harmony activity.",
+        variant: "destructive"
+      })
+    } finally {
+      setHarmonyQuickActionKey("")
+    }
+  }
+
+  const handleHarmonyQuickOff = async (hubIp: string) => {
+    const key = `${hubIp}:off`
+    setHarmonyQuickActionKey(key)
+    try {
+      const response = await turnOffHarmonyHub(hubIp)
+      if (response.success) {
+        toast({
+          title: "Harmony hub turned off",
+          description: `Powered off active activity on ${hubIp}.`
+        })
+      }
+      await Promise.all([
+        loadHarmonyStatus(),
+        loadHarmonyHubs({ includeCommands: false })
+      ])
+    } catch (error) {
+      console.error('Failed to turn off Harmony hub:', error)
+      toast({
+        title: "Failed to turn off hub",
+        description: error.message || "Unable to power off Harmony activity.",
+        variant: "destructive"
+      })
+    } finally {
+      setHarmonyQuickActionKey("")
+    }
+  }
 
   // Handle OAuth callback from URL parameters
   useEffect(() => {
@@ -989,6 +1194,34 @@ export function Settings() {
     }
   };
 
+  const handleSyncHarmonyMaintenance = async () => {
+    setSyncingHarmony(true);
+    try {
+      console.log('Syncing Harmony Hub activity devices...');
+      const response = await forceHarmonySync();
+
+      if (response.success) {
+        toast({
+          title: "Sync Complete",
+          description: response.message || `Harmony Hub sync complete (${response.created ?? 0} created, ${response.updated ?? 0} updated)`
+        });
+      }
+      await Promise.all([
+        loadHarmonyStatus(),
+        loadHarmonyHubs({ includeCommands: false })
+      ]);
+    } catch (error) {
+      console.error('Harmony Hub sync failed:', error);
+      toast({
+        title: "Sync Failed",
+        description: error.message || "Failed to sync Harmony Hub activity devices",
+        variant: "destructive"
+      });
+    } finally {
+      setSyncingHarmony(false);
+    }
+  };
+
   const handleClearSTDevices = async () => {
     setClearingSTDevices(true);
     try {
@@ -1034,6 +1267,34 @@ export function Settings() {
       });
     } finally {
       setClearingInsteonDevices(false);
+    }
+  };
+
+  const handleClearHarmonyDevices = async () => {
+    setClearingHarmonyDevices(true);
+    try {
+      console.log('Clearing Harmony Hub activity devices...');
+      const response = await clearHarmonyDevices();
+
+      if (response.success) {
+        toast({
+          title: "Devices Cleared",
+          description: `Successfully cleared ${response.deletedCount} Harmony Hub activity devices`
+        });
+      }
+      await Promise.all([
+        loadHarmonyStatus(),
+        loadHarmonyHubs({ includeCommands: false })
+      ]);
+    } catch (error) {
+      console.error('Clear Harmony Hub activity devices failed:', error);
+      toast({
+        title: "Clear Failed",
+        description: error.message || "Failed to clear Harmony Hub activity devices",
+        variant: "destructive"
+      });
+    } finally {
+      setClearingHarmonyDevices(false);
     }
   };
 
@@ -1242,7 +1503,7 @@ export function Settings() {
 
       <form onSubmit={handleSubmit(handleSaveSettings)}>
         <Tabs defaultValue="general" className="space-y-6">
-          <TabsList className="bg-white/80 backdrop-blur-sm">
+          <TabsList className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="voice">Voice & Audio</TabsTrigger>
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
@@ -1251,7 +1512,7 @@ export function Settings() {
           </TabsList>
 
           <TabsContent value="general" className="space-y-6">
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Home className="h-5 w-5 text-blue-600" />
@@ -1289,7 +1550,7 @@ export function Settings() {
               </CardContent>
             </Card>
 
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Smartphone className="h-5 w-5 text-green-600" />
@@ -1320,7 +1581,7 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="voice" className="space-y-6">
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Mic className="h-5 w-5 text-blue-600" />
@@ -1366,7 +1627,7 @@ export function Settings() {
               </CardContent>
             </Card>
 
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Cpu className="h-5 w-5 text-indigo-600" />
@@ -1492,7 +1753,7 @@ export function Settings() {
 
             <WakeWordManager />
 
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Volume2 className="h-5 w-5 text-purple-600" />
@@ -1522,7 +1783,7 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="integrations" className="space-y-6">
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Wifi className="h-5 w-5 text-blue-600" />
@@ -1541,8 +1802,171 @@ export function Settings() {
                     Local serial path (for example /dev/ttyUSB0) or TCP serial bridge (for example tcp://host:9761)
                   </p>
                 </div>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 dark:border-emerald-900/60 dark:bg-emerald-900/10 p-4 space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Tv className="h-4 w-4 text-emerald-700" />
+                    <div>
+                      <p className="font-medium text-sm">Logitech Harmony Hub Integration</p>
+                      <p className="text-xs text-muted-foreground">
+                        {loadingHarmonyStatus
+                          ? "Checking Harmony Hub status..."
+                          : harmonyStatus
+                            ? `${harmonyStatus.discoveredCount ?? 0} hubs discovered, ${harmonyStatus.trackedDevices ?? 0} Harmony Hub activity devices tracked`
+                            : "Status unavailable"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">Configured Harmony Hub IPs/Hosts (optional)</label>
+                    <Input
+                      {...register("harmonyHubAddresses")}
+                      placeholder="192.168.1.20, 192.168.1.21"
+                      className="mt-1"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Comma-separated hub addresses to include during sync, useful when discovery is blocked by VLANs/firewalls.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2 flex-wrap">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleDiscoverHarmony}
+                      disabled={discoveringHarmony}
+                    >
+                      {discoveringHarmony ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Discovering...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Discover Hubs
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => loadHarmonyHubs({ includeCommands: false, showToast: true })}
+                      disabled={loadingHarmonyHubs}
+                    >
+                      {loadingHarmonyHubs ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Loading...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Refresh Hub Details
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSyncHarmonyDevices}
+                      disabled={syncingHarmony}
+                    >
+                      {syncingHarmony ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <Database className="h-4 w-4 mr-2" />
+                          Sync Activities to Devices
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSyncHarmonyState}
+                      disabled={syncingHarmonyState}
+                    >
+                      {syncingHarmonyState ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Refreshing...
+                        </>
+                      ) : (
+                        <>
+                          <Activity className="h-4 w-4 mr-2" />
+                          Refresh Activity State
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {harmonyHubs.length > 0 ? (
+                    <div className="space-y-2">
+                      {harmonyHubs.map((hub: any) => (
+                        <div key={hub.ip} className="rounded border bg-white/70 dark:bg-slate-900/40 p-3">
+                          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                            <div>
+                              <p className="text-sm font-medium">{hub.friendlyName || hub.ip}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {hub.ip}
+                                {hub.success === false
+                                  ? ` • ${hub.error || "Unavailable"}`
+                                  : ` • Current activity: ${hub.currentActivityId === "-1" ? "Off" : hub.currentActivityId}`}
+                              </p>
+                            </div>
+                            {hub.success !== false && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleHarmonyQuickOff(hub.ip)}
+                                disabled={harmonyQuickActionKey === `${hub.ip}:off`}
+                              >
+                                {harmonyQuickActionKey === `${hub.ip}:off` ? "Turning off..." : "Turn Off"}
+                              </Button>
+                            )}
+                          </div>
+                          {hub.success !== false && Array.isArray(hub.activities) && hub.activities.length > 0 && (
+                            <div className="mt-2 flex gap-2 flex-wrap">
+                              {hub.activities.slice(0, 4).map((activity: any) => {
+                                const key = `${hub.ip}:${activity.id}`
+                                return (
+                                  <Button
+                                    key={key}
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => handleHarmonyQuickActivityStart(hub.ip, activity.id)}
+                                    disabled={harmonyQuickActionKey === key}
+                                  >
+                                    {harmonyQuickActionKey === key ? "Starting..." : activity.label}
+                                  </Button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No hub details loaded yet. Use “Discover Hubs” or “Refresh Hub Details”.
+                    </p>
+                  )}
+                </div>
                 <div className="space-y-4">
-                  <div className="flex items-center gap-2 p-3 bg-blue-50/50 rounded-lg border">
+                  <div className="flex items-center gap-2 p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg border">
                     {getSmartThingsStatusIcon()}
                     <div>
                       <p className="font-medium text-sm">SmartThings Integration Status</p>
@@ -1902,7 +2326,7 @@ export function Settings() {
           </CardContent>
         </Card>
 
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Key className="h-5 w-5 text-green-600" />
@@ -1946,7 +2370,7 @@ export function Settings() {
               </CardContent>
             </Card>
 
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Brain className="h-5 w-5 text-purple-600" />
@@ -1972,10 +2396,10 @@ export function Settings() {
                 </div>
 
                 {/* OpenAI Settings */}
-                <div className="space-y-4 p-4 border rounded-lg bg-blue-50/50">
+                <div className="space-y-4 p-4 border rounded-lg bg-blue-50/50 dark:bg-blue-950/20">
                   <div className="flex items-center gap-2">
                     <Cpu className="h-4 w-4 text-blue-600" />
-                    <h4 className="font-medium text-blue-900">OpenAI Configuration</h4>
+                    <h4 className="font-medium text-blue-900 dark:text-blue-100">OpenAI Configuration</h4>
                   </div>
                   
                   <div>
@@ -2037,10 +2461,10 @@ export function Settings() {
                 </div>
 
                 {/* Anthropic Settings */}
-                <div className="space-y-4 p-4 border rounded-lg bg-orange-50/50">
+                <div className="space-y-4 p-4 border rounded-lg bg-orange-50/50 dark:bg-orange-950/20">
                   <div className="flex items-center gap-2">
                     <Cpu className="h-4 w-4 text-orange-600" />
-                    <h4 className="font-medium text-orange-900">Anthropic Configuration</h4>
+                    <h4 className="font-medium text-orange-900 dark:text-orange-100">Anthropic Configuration</h4>
                   </div>
                   
                   <div>
@@ -2094,10 +2518,10 @@ export function Settings() {
                 </div>
 
                 {/* Local LLM Settings */}
-                <div className="space-y-4 p-4 border rounded-lg bg-green-50/50">
+                <div className="space-y-4 p-4 border rounded-lg bg-green-50/50 dark:bg-green-950/20">
                   <div className="flex items-center gap-2">
                     <Server className="h-4 w-4 text-green-600" />
-                    <h4 className="font-medium text-green-900">Local LLM Configuration</h4>
+                    <h4 className="font-medium text-green-900 dark:text-green-100">Local LLM Configuration</h4>
                   </div>
                   
                   <div>
@@ -2148,7 +2572,7 @@ export function Settings() {
               </CardContent>
             </Card>
 
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <List className="h-5 w-5 text-indigo-600" />
@@ -2242,7 +2666,7 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="security" className="space-y-6">
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Shield className="h-5 w-5 text-red-600" />
@@ -2271,7 +2695,7 @@ export function Settings() {
 
           <TabsContent value="maintenance" className="space-y-6">
             {/* Data Management Section */}
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Database className="h-5 w-5 text-blue-600" />
@@ -2338,7 +2762,7 @@ export function Settings() {
             </Card>
 
             {/* Device Integration Management */}
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <RefreshCw className="h-5 w-5 text-green-600" />
@@ -2415,6 +2839,54 @@ export function Settings() {
                   </div>
                 </div>
 
+                {/* Harmony Operations */}
+                <div className="space-y-4">
+                  <h4 className="font-medium text-emerald-600">Harmony Hub Operations</h4>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSyncHarmonyMaintenance}
+                      disabled={syncingHarmony}
+                      className="w-full"
+                    >
+                      {syncingHarmony ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Force Sync
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleClearHarmonyDevices}
+                      disabled={clearingHarmonyDevices}
+                      className="w-full"
+                    >
+                      {clearingHarmonyDevices ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Clearing...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Clear Harmony Activity Devices
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
                 {/* INSTEON Operations */}
                 <div className="space-y-4">
                   <h4 className="font-medium text-purple-600">INSTEON Operations</h4>
@@ -2466,7 +2938,7 @@ export function Settings() {
             </Card>
 
             {/* System Maintenance */}
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Wrench className="h-5 w-5 text-orange-600" />
@@ -2533,7 +3005,7 @@ export function Settings() {
             </Card>
 
             {/* System Diagnostics */}
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Activity className="h-5 w-5 text-red-600" />
@@ -2599,7 +3071,7 @@ export function Settings() {
 
                 {/* Health Data Display */}
                 {healthData && (
-                  <div className="mt-4 p-4 bg-gray-50 rounded-lg border">
+                  <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900/30 rounded-lg border">
                     <h5 className="font-medium mb-3">System Health Status</h5>
                     <div className="grid gap-4 md:grid-cols-2">
                       <div>
@@ -2620,6 +3092,7 @@ export function Settings() {
                           <li>Offline Devices: {healthData.devices?.offline || 0}</li>
                           <li>Voice System: {healthData.voiceSystem?.online || 0}/{healthData.voiceSystem?.devices || 0} online</li>
                           <li>SmartThings: {healthData.integrations?.smartthings?.connected ? 'Connected' : 'Disconnected'}</li>
+                          <li>Harmony: {healthData.integrations?.harmony?.trackedDevices || 0} tracked activity devices</li>
                         </ul>
                       </div>
                     </div>

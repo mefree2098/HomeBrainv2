@@ -251,7 +251,7 @@ export function Devices() {
       </div>
 
       {/* Filters */}
-      <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+      <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
         <CardContent className="p-4">
           <div className="flex gap-4 items-center">
             <div className="relative flex-1">
@@ -281,7 +281,7 @@ export function Devices() {
       </Card>
 
       <Tabs defaultValue="all" className="space-y-4">
-        <TabsList className="bg-white/80 backdrop-blur-sm">
+        <TabsList className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50">
           <TabsTrigger value="all">All Devices</TabsTrigger>
           <TabsTrigger value="rooms">By Room</TabsTrigger>
         </TabsList>
@@ -294,7 +294,7 @@ export function Devices() {
                 const isPendingFavorite = pendingDeviceIds.has(device._id)
 
                 return (
-                  <Card key={device._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+                  <Card key={device._id} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                       <div className="flex items-center gap-2">
                         <div className={`p-2 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
@@ -349,7 +349,7 @@ export function Devices() {
               })}
             </div>
           ) : (
-            <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardContent className="p-0">
                 <div className="divide-y">
                   {filteredDevices.map((device) => {
@@ -357,7 +357,7 @@ export function Devices() {
                     const isPendingFavorite = pendingDeviceIds.has(device._id)
 
                     return (
-                      <div key={device._id} className="p-4 flex items-center justify-between hover:bg-gray-50/50 transition-colors">
+                      <div key={device._id} className="p-4 flex items-center justify-between hover:bg-gray-50/50 dark:hover:bg-slate-800/60 transition-colors">
                         <div className="flex items-center gap-4">
                           <div className={`p-2 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
                             {getDeviceIcon(device.type)}
@@ -410,7 +410,7 @@ export function Devices() {
 
         <TabsContent value="rooms" className="space-y-6">
           {roomDevices.map((room) => (
-            <Card key={room.name} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+            <Card key={room.name} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Home className="h-5 w-5 text-blue-600" />
@@ -427,7 +427,7 @@ export function Devices() {
                       const isPendingFavorite = pendingDeviceIds.has(device._id)
 
                       return (
-                        <div key={device._id} className="p-4 rounded-lg border bg-white/50 hover:bg-white/80 transition-colors">
+                        <div key={device._id} className="p-4 rounded-lg border bg-white/50 dark:bg-slate-900/40 hover:bg-white/80 dark:hover:bg-slate-900/70 transition-colors">
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-2">
                               <div className={`p-1.5 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>

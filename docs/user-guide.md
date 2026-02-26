@@ -11,6 +11,7 @@ This guide is for household users who only need to use the system, not administe
 Examples:
 - "Anna, turn on the kitchen lights."
 - "Henry, set movie night scene."
+- "Anna, start the living room movie activity on Harmony Hub."
 - "Anna, what devices are still on?"
 - "Anna, run bedtime workflow."
 - "Henry, disable vacation workflow."
@@ -24,6 +25,7 @@ If your admin created workflows, you can control them by voice:
 
 You can also ask HomeBrain to create one in chat/command UI:
 - "create a workflow that locks doors at 10 PM"
+- "create a workflow that starts the family room TV activity at 7 PM"
 
 ## What to Expect
 

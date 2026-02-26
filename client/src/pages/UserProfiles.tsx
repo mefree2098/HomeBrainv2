@@ -215,7 +215,7 @@ export function UserProfiles() {
               Create Profile
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-white max-w-2xl" aria-describedby="create-profile-description">
+          <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60 max-w-2xl" aria-describedby="create-profile-description">
             <DialogHeader>
               <DialogTitle>Create User Profile</DialogTitle>
               <p id="create-profile-description" className="text-sm text-muted-foreground">
@@ -279,7 +279,7 @@ export function UserProfiles() {
 
         {/* Edit Profile Dialog */}
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-          <DialogContent className="bg-white max-w-2xl" aria-describedby="edit-profile-description">
+          <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60 max-w-2xl" aria-describedby="edit-profile-description">
             <DialogHeader>
               <DialogTitle>Edit User Profile</DialogTitle>
               <p id="edit-profile-description" className="text-sm text-muted-foreground">
@@ -402,7 +402,7 @@ export function UserProfiles() {
       {/* Profiles Grid */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {profiles.map((profile) => (
-          <Card key={profile._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+          <Card key={profile._id} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -491,7 +491,7 @@ export function UserProfiles() {
       </div>
 
       {profiles.length === 0 && (
-        <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+        <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Users className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No User Profiles</h3>

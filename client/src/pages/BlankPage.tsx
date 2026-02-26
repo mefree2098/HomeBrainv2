@@ -8,7 +8,7 @@ export function BlankPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-blue-900 dark:to-purple-900 flex items-center justify-center p-6">
-      <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-xl max-w-md w-full">
+      <Card className="bg-white/80 dark:bg-slate-900/75 backdrop-blur-sm border border-border/50 shadow-xl max-w-md w-full">
         <CardContent className="flex flex-col items-center justify-center py-12 text-center">
           <div className="p-4 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 text-white mb-6">
             <Home className="h-8 w-8" />

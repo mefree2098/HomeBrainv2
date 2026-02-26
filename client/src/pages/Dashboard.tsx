@@ -295,7 +295,7 @@ export function Dashboard() {
         ))}
       </div>
     ) : (
-      <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+      <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
         <CardHeader>
           <CardTitle className="text-lg">No Favorite Devices Yet</CardTitle>
           <CardDescription>

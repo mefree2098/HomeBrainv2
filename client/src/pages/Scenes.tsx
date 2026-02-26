@@ -251,7 +251,7 @@ export function Scenes() {
                 Natural Language
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-white" aria-describedby="natural-language-scene-description">
+            <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60" aria-describedby="natural-language-scene-description">
               <DialogHeader>
                 <DialogTitle>Create Scene with Natural Language</DialogTitle>
                 <DialogDescription id="natural-language-scene-description">
@@ -267,7 +267,7 @@ export function Scenes() {
                     className="mt-1 min-h-[100px]"
                   />
                 </div>
-                <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded">
+                <div className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950/30 p-3 rounded">
                   <p className="font-medium mb-2">Examples:</p>
                   <ul className="space-y-1">
                     <li>• "Create a romantic dinner scene with bedroom lights at 50% and soft music"</li>
@@ -304,7 +304,7 @@ export function Scenes() {
                 Create Scene
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-white" aria-describedby="create-scene-description">
+            <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60" aria-describedby="create-scene-description">
               <DialogHeader>
                 <DialogTitle>Create New Scene</DialogTitle>
                 <DialogDescription id="create-scene-description">
@@ -395,7 +395,7 @@ export function Scenes() {
           const isPendingFavorite = pendingSceneIds.has(scene._id)
 
           return (
-            <Card key={scene._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 overflow-hidden">
+            <Card key={scene._id} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 overflow-hidden">
               <div className={`h-2 bg-gradient-to-r ${getSceneGradient(scene.name)}`} />
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
@@ -448,7 +448,7 @@ export function Scenes() {
                     size="icon"
                     variant="outline"
                     onClick={() => handleEditScene(scene)}
-                    className="hover:bg-blue-50"
+                    className="hover:bg-blue-50 dark:hover:bg-blue-950/20"
                   >
                     <Edit className="h-4 w-4" />
                   </Button>
@@ -456,7 +456,7 @@ export function Scenes() {
                     size="icon"
                     variant="outline"
                     onClick={() => handleDeleteScene(scene._id, scene.name)}
-                    className="hover:bg-red-50 hover:text-red-600"
+                    className="hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -481,7 +481,7 @@ export function Scenes() {
       />
 
       {scenes.length === 0 && (
-        <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+        <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Palette className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Scenes Created</h3>

@@ -15,6 +15,7 @@ interface Device {
   name: string
   type: string
   room: string
+  properties?: Record<string, any>
 }
 
 interface Scene {
@@ -161,7 +162,13 @@ export function AutomationEditDialog({ open, onOpenChange, automation, devices, 
     return acc
   }, {} as Record<string, Device[]>)
 
-  const getDeviceActionOptions = (deviceType: string) => {
+  const getDeviceActionOptions = (device: Device) => {
+    const source = (device?.properties?.source || '').toString().toLowerCase()
+    if (source === 'harmony') {
+      return ['turn_on', 'turn_off', 'toggle']
+    }
+
+    const deviceType = (device?.type || '').toLowerCase()
     switch (deviceType) {
       case 'light':
         return ['turn_on', 'turn_off', 'set_brightness']
@@ -171,6 +178,8 @@ export function AutomationEditDialog({ open, onOpenChange, automation, devices, 
         return ['lock', 'unlock']
       case 'garage':
         return ['open', 'close']
+      case 'switch':
+        return ['turn_on', 'turn_off', 'toggle']
       default:
         return ['turn_on', 'turn_off']
     }
@@ -178,7 +187,7 @@ export function AutomationEditDialog({ open, onOpenChange, automation, devices, 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-white max-w-4xl max-h-[90vh] overflow-y-auto" aria-describedby="automation-edit-description">
+      <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60 max-w-4xl max-h-[90vh] overflow-y-auto" aria-describedby="automation-edit-description">
         <DialogHeader>
           <DialogTitle>Edit Automation</DialogTitle>
           <DialogDescription id="automation-edit-description">
@@ -474,7 +483,7 @@ export function AutomationEditDialog({ open, onOpenChange, automation, devices, 
                           {action.target && (() => {
                             const device = getDeviceById(action.target)
                             if (!device) return null
-                            const actionOptions = getDeviceActionOptions(device.type)
+                            const actionOptions = getDeviceActionOptions(device)
 
                             return (
                               <>
@@ -580,7 +589,7 @@ export function AutomationEditDialog({ open, onOpenChange, automation, devices, 
                       size="icon"
                       variant="ghost"
                       onClick={() => handleRemoveAction(index)}
-                      className="mt-7 hover:bg-red-50 hover:text-red-600"
+                      className="mt-7 hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

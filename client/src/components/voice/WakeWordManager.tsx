@@ -451,7 +451,7 @@ export function WakeWordManager() {
         return <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/30">Error</Badge>;
       case "queued":
       case "pending":
-        return <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-200">Queued</Badge>;
+        return <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700">Queued</Badge>;
       case "generating":
       case "training":
       case "exporting":
@@ -602,7 +602,7 @@ export function WakeWordManager() {
         </Dialog>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="rounded-lg border border-dashed bg-white/60 p-4">
+        <div className="rounded-lg border border-dashed bg-white/60 dark:bg-slate-900/50 p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="font-semibold">Synthetic Voices</p>
@@ -708,7 +708,7 @@ export function WakeWordManager() {
                 return (
                   <div
                     key={voice.id}
-                    className="flex flex-col gap-3 rounded-md border border-border/60 bg-white/70 p-3 shadow-sm md:flex-row md:items-center md:justify-between"
+                    className="flex flex-col gap-3 rounded-md border border-border/60 bg-white/70 dark:bg-slate-900/45 p-3 shadow-sm md:flex-row md:items-center md:justify-between"
                   >
                     <div className="space-y-2">
                       <div>

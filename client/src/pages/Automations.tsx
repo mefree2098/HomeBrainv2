@@ -304,7 +304,7 @@ export function Automations() {
               Create Automation
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-white" aria-describedby="create-automation-description">
+          <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60" aria-describedby="create-automation-description">
             <DialogHeader>
               <DialogTitle>Create Automation with Natural Language</DialogTitle>
               <DialogDescription id="create-automation-description">
@@ -320,7 +320,7 @@ export function Automations() {
                   className="mt-1 min-h-[100px]"
                 />
               </div>
-              <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded">
+              <div className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950/30 p-3 rounded">
                 <p className="font-medium mb-2">Examples:</p>
                 <ul className="space-y-1">
                   <li>• "Turn on porch light when motion is detected after sunset"</li>
@@ -417,7 +417,7 @@ export function Automations() {
       {/* Automations List */}
       <div className="space-y-4">
         {automations.filter((automation) => automation && automation._id).map((automation: Automation) => (
-          <Card key={automation._id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-all duration-300">
+          <Card key={automation._id} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -469,7 +469,7 @@ export function Automations() {
                       size="sm"
                       variant="outline"
                       onClick={() => handleEditAutomation(automation)}
-                      className="flex items-center gap-2 hover:bg-blue-50"
+                      className="flex items-center gap-2 hover:bg-blue-50 dark:hover:bg-blue-950/20"
                     >
                       <Edit className="h-4 w-4" />
                       Edit
@@ -478,7 +478,7 @@ export function Automations() {
                       size="sm"
                       variant="outline"
                       onClick={() => handleDeleteAutomation(automation._id, automation.name)}
-                      className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600"
+                      className="flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
                     >
                       <Trash2 className="h-4 w-4" />
                       Delete
@@ -501,7 +501,7 @@ export function Automations() {
       </div>
 
       {automations.length === 0 && (
-        <Card className="bg-white/80 backdrop-blur-sm border-0 shadow-lg">
+        <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Zap className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Automations Created</h3>
@@ -531,7 +531,7 @@ export function Automations() {
 
       {/* History Dialog */}
       <Dialog open={isHistoryDialogOpen} onOpenChange={setIsHistoryDialogOpen}>
-        <DialogContent className="bg-white max-w-3xl max-h-[80vh] overflow-y-auto" aria-describedby="automation-history-description">
+        <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60 max-w-3xl max-h-[80vh] overflow-y-auto" aria-describedby="automation-history-description">
           <DialogHeader>
             <DialogTitle>Automation Execution History</DialogTitle>
             <DialogDescription id="automation-history-description">

@@ -8,7 +8,7 @@ const SecurityAlarm = require('../models/SecurityAlarm');
 const Settings = require('../models/Settings');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
-const deviceService = require('./deviceService');
+const harmonyService = require('./harmonyService');
 
 class MaintenanceService {
   constructor() {
@@ -783,6 +783,27 @@ class MaintenanceService {
   }
 
   /**
+   * Force re-sync all Harmony activity devices
+   * @returns {Promise<Object>} Result of the operation
+   */
+  async forceHarmonySync() {
+    console.log('MaintenanceService: Starting Harmony force sync');
+
+    try {
+      const result = await harmonyService.syncDevices({ timeoutMs: 6000 });
+      return {
+        success: true,
+        message: `Harmony sync complete (${result.created} created, ${result.updated} updated, ${result.removed} removed)`,
+        ...result
+      };
+    } catch (error) {
+      console.error('MaintenanceService: Error during Harmony sync:', error.message);
+      console.error(error.stack);
+      throw new Error('Failed to sync Harmony devices');
+    }
+  }
+
+  /**
    * Clear all INSTEON devices from local database
    * @returns {Promise<Object>} Result of the operation
    */
@@ -808,6 +829,32 @@ class MaintenanceService {
       console.error('MaintenanceService: Error clearing INSTEON devices:', error.message);
       console.error(error.stack);
       throw new Error('Failed to clear INSTEON devices');
+    }
+  }
+
+  /**
+   * Clear all Harmony devices from local database
+   * @returns {Promise<Object>} Result of the operation
+   */
+  async clearHarmonyDevices() {
+    console.log('MaintenanceService: Starting Harmony device cleanup');
+
+    try {
+      const result = await Device.deleteMany({
+        'properties.source': 'harmony'
+      });
+
+      console.log(`MaintenanceService: Cleared ${result.deletedCount} Harmony devices`);
+
+      return {
+        success: true,
+        message: `Successfully cleared ${result.deletedCount} Harmony devices`,
+        deletedCount: result.deletedCount
+      };
+    } catch (error) {
+      console.error('MaintenanceService: Error clearing Harmony devices:', error.message);
+      console.error(error.stack);
+      throw new Error('Failed to clear Harmony devices');
     }
   }
 
@@ -892,7 +939,10 @@ class MaintenanceService {
       const health = {
         database: { connected: true, collections: {} },
         devices: { total: 0, online: 0, offline: 0 },
-        integrations: { smartthings: { configured: false, connected: false } },
+        integrations: {
+          smartthings: { configured: false, connected: false },
+          harmony: { configuredHubs: 0, trackedDevices: 0, onlineDevices: 0 }
+        },
         voiceSystem: { devices: 0, online: 0, listening: 0 }
       };
 
@@ -916,6 +966,19 @@ class MaintenanceService {
       } catch (error) {
         console.log('MaintenanceService: SmartThings integration not configured');
       }
+
+      try {
+        const settings = await Settings.getSettings();
+        const configuredHubs = harmonyService.parseConfiguredHubAddresses(settings?.harmonyHubAddresses || '');
+        health.integrations.harmony.configuredHubs = configuredHubs.length;
+      } catch (error) {
+        console.log('MaintenanceService: Unable to read configured Harmony hubs');
+      }
+      health.integrations.harmony.trackedDevices = await Device.countDocuments({ 'properties.source': 'harmony' });
+      health.integrations.harmony.onlineDevices = await Device.countDocuments({
+        'properties.source': 'harmony',
+        isOnline: true
+      });
 
       // Check voice system
       health.voiceSystem.devices = await VoiceDevice.countDocuments();
