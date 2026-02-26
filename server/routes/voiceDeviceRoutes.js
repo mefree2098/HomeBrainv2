@@ -122,6 +122,10 @@ router.post(['/browser/transcribe', '/browser/transcribe/'], requireUser(), asyn
       language: typeof language === 'string' ? language : 'en'
     });
 
+    console.log(
+      `POST /api/voice/browser/transcribe - Success provider=${stt?.provider || 'unknown'} model=${stt?.model || 'unknown'} chars=${typeof stt?.text === 'string' ? stt.text.length : 0}`
+    );
+
     return res.status(200).json({
       success: true,
       stt

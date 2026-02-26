@@ -65,6 +65,7 @@ struct AppShellView: View {
     }
 
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selection: AppSection? = .dashboard
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
@@ -73,6 +74,73 @@ struct AppShellView: View {
     }
 
     var body: some View {
+        Group {
+            if horizontalSizeClass == .compact {
+                compactShell
+            } else {
+                regularShell
+            }
+        }
+        .onAppear {
+            syncSelectionWithVisibleSections()
+        }
+        .onChange(of: session.currentUser?.role) { _, _ in
+            syncSelectionWithVisibleSections()
+        }
+    }
+
+    private var compactShell: some View {
+        NavigationStack {
+            detailContent
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack(spacing: 12) {
+                Menu {
+                    if let user = session.currentUser {
+                        Section("Signed In") {
+                            Text("\(user.name) (\(user.role))")
+                        }
+                    }
+
+                    Section("Sections") {
+                        ForEach(visibleSections) { section in
+                            Button {
+                                selection = section
+                            } label: {
+                                Label {
+                                    Text(section.title)
+                                } icon: {
+                                    if selection == section {
+                                        Image(systemName: "checkmark")
+                                    } else {
+                                        Image(systemName: section.icon)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Sections", systemImage: "square.grid.2x2")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    session.logout()
+                } label: {
+                    Label("Logout", systemImage: "rectangle.portrait.and.arrow.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            .background(.ultraThinMaterial)
+        }
+    }
+
+    private var regularShell: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             List {
                 Section("HomeBrain") {
@@ -94,17 +162,7 @@ struct AppShellView: View {
             .listStyle(.sidebar)
             .navigationTitle("HomeBrain")
         } detail: {
-            if let current = selection ?? visibleSections.first {
-                sectionView(current)
-                    .id(current)
-                    .navigationTitle(current.title)
-                    .navigationBarTitleDisplayMode(.inline)
-            } else {
-                EmptyStateView(
-                    title: "Select a section",
-                    subtitle: "Use the left sidebar to open a HomeBrain module."
-                )
-            }
+            detailContent
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -121,11 +179,20 @@ struct AppShellView: View {
                 }
             }
         }
-        .onAppear {
-            syncSelectionWithVisibleSections()
-        }
-        .onChange(of: session.currentUser?.role) { _, _ in
-            syncSelectionWithVisibleSections()
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        if let current = selection ?? visibleSections.first {
+            sectionView(current)
+                .id(current)
+                .navigationTitle(current.title)
+                .navigationBarTitleDisplayMode(.inline)
+        } else {
+            EmptyStateView(
+                title: "Select a section",
+                subtitle: "Use the left sidebar to open a HomeBrain module."
+            )
         }
     }
 

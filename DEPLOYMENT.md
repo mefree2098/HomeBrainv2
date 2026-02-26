@@ -143,8 +143,13 @@ echo "<JETSON_USER> ALL=(ALL) NOPASSWD:/usr/bin/systemctl,/bin/systemctl" | \
 sudo chmod 0440 /etc/sudoers.d/homebrain-deploy
 ```
 
-Optional: customize restart command with environment variable.
-This is useful if you only run one service (`homebrain`) and do not have `homebrain-discovery`.
+Optional: add extra pre-restart commands for Platform Deploy.
+Platform Deploy now always runs a core restart sequence with `homebrain` restarted last:
+
+`sudo systemctl daemon-reload || true; sudo systemctl restart homebrain-discovery || true; sudo systemctl restart homebrain`
+
+Use `HOMEBRAIN_DEPLOY_RESTART_CMD` only for additional commands before that core restart sequence.
+Do not put `systemctl restart homebrain` inside `HOMEBRAIN_DEPLOY_RESTART_CMD`.
 
 ```bash
 sudo systemctl edit homebrain
@@ -154,7 +159,14 @@ Add:
 
 ```ini
 [Service]
-Environment=HOMEBRAIN_DEPLOY_RESTART_CMD=sudo systemctl restart homebrain
+Environment=HOMEBRAIN_DEPLOY_RESTART_CMD=sudo systemctl restart some-extra-service || true
+```
+
+Advanced: replace the entire core restart sequence:
+
+```ini
+[Service]
+Environment=HOMEBRAIN_DEPLOY_CORE_RESTART_CMD=sudo systemctl daemon-reload || true; sudo systemctl restart homebrain
 ```
 
 Apply:
