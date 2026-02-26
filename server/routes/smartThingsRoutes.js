@@ -463,22 +463,50 @@ router.post('/sthm/configure', auth, async (req, res) => {
 // Request: {}
 // Response: { success: boolean, diagnostics: Object }
 router.get('/sthm/diagnostics', auth, async (req, res) => {
+  const startedAt = Date.now();
   try {
     console.log('SmartThings Routes: Running STHM diagnostics');
+    const includeDeepProbe = ['1', 'true', 'yes'].includes(String(req.query.deep || '').toLowerCase());
 
-    const diagnostics = await smartThingsService.getSthmDiagnostics();
+    const diagnostics = await Promise.race([
+      smartThingsService.getSthmDiagnostics({
+        includeDeepProbe,
+        switchProbeTimeoutMs: 2000,
+        deepProbeTimeoutMs: 2000
+      }),
+      new Promise((_, reject) => {
+        const timeoutError = new Error('STHM diagnostics timed out');
+        timeoutError.code = 'TIMEOUT';
+        setTimeout(() => reject(timeoutError), 4500);
+      })
+    ]);
 
-    console.log('SmartThings Routes: STHM diagnostics completed');
+    console.log('SmartThings Routes: STHM diagnostics completed', {
+      tookMs: Date.now() - startedAt,
+      includeDeepProbe
+    });
     res.json({
       success: true,
       diagnostics
     });
   } catch (error) {
     console.error('SmartThings Routes: Error running STHM diagnostics:', error.message);
+
+    let integration = null;
+    try {
+      integration = await SmartThingsIntegration.getIntegration();
+    } catch (integrationError) {
+      console.error('SmartThings Routes: Unable to load integration for diagnostics fallback:', integrationError.message);
+    }
+
+    const fallbackIntegration = integration?.toSanitized ? integration.toSanitized() : integration;
     res.status(200).json({
       success: false,
       diagnostics: {
         generatedAt: new Date().toISOString(),
+        integration: fallbackIntegration || null,
+        fallback: true,
+        tookMs: Date.now() - startedAt,
         error: error.message
       },
       message: error.message || 'Failed to run STHM diagnostics'
