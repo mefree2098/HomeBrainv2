@@ -62,6 +62,7 @@ class SpeechService {
     this.cachedSettingsTimestamp = 0;
     this.cachedProviderConfig = null;
     this.openAiClient = null;
+    this.modelResponseFormatCache = new Map();
   }
 
   async getProviderConfig() {
@@ -137,6 +138,107 @@ class SpeechService {
     return Math.max(0, Math.min(1, sum / confidences.length));
   }
 
+  normalizeModelName(model) {
+    if (typeof model !== 'string') {
+      return '';
+    }
+    return model.trim().toLowerCase();
+  }
+
+  getPreferredOpenAiResponseFormat(model) {
+    const normalizedModel = this.normalizeModelName(model);
+    const cachedFormat = this.modelResponseFormatCache.get(normalizedModel);
+    if (cachedFormat) {
+      return cachedFormat;
+    }
+
+    // Newer GPT-4o transcription variants reject verbose_json and support json/text.
+    if (normalizedModel.includes('gpt-4o') && normalizedModel.includes('transcribe')) {
+      return 'json';
+    }
+
+    // Whisper-family models commonly support verbose_json segments.
+    return 'verbose_json';
+  }
+
+  extractTranscriptionText(response) {
+    if (!response) {
+      return '';
+    }
+    if (typeof response === 'string') {
+      return response.trim();
+    }
+    if (typeof response.text === 'string') {
+      return response.text.trim();
+    }
+    return '';
+  }
+
+  parseOpenAiResponseFormatError(error) {
+    const message = (error?.message || '').toLowerCase();
+    if (!message.includes('response_format')) {
+      return null;
+    }
+
+    if (message.includes("use 'json' or 'text'")) {
+      return ['json', 'text'];
+    }
+    if (message.includes("use 'json'")) {
+      return ['json'];
+    }
+    if (message.includes("use 'text'")) {
+      return ['text'];
+    }
+    return ['json', 'text'];
+  }
+
+  async createOpenAiTranscription({ client, file, model, language, temperature = 0 }) {
+    const normalizedModel = this.normalizeModelName(model || 'gpt-4o-mini-transcribe');
+    const preferredFormat = this.getPreferredOpenAiResponseFormat(model);
+    const attemptedFormats = new Set([preferredFormat]);
+    const fallbackFormats = preferredFormat === 'verbose_json'
+      ? ['json', 'text']
+      : ['text', 'verbose_json'];
+
+    const tryFormat = async (responseFormat) => {
+      const payload = {
+        file,
+        model: model || 'gpt-4o-mini-transcribe',
+        response_format: responseFormat,
+        language,
+        temperature
+      };
+      return client.audio.transcriptions.create(payload);
+    };
+
+    try {
+      const response = await tryFormat(preferredFormat);
+      this.modelResponseFormatCache.set(normalizedModel, preferredFormat);
+      return response;
+    } catch (error) {
+      const suggestedFormats = this.parseOpenAiResponseFormatError(error);
+      if (!suggestedFormats) {
+        throw error;
+      }
+
+      const orderedFormats = [...suggestedFormats, ...fallbackFormats].filter((format) => !attemptedFormats.has(format));
+      for (const format of orderedFormats) {
+        attemptedFormats.add(format);
+        try {
+          const retryResponse = await tryFormat(format);
+          this.modelResponseFormatCache.set(normalizedModel, format);
+          return retryResponse;
+        } catch (retryError) {
+          if (!this.parseOpenAiResponseFormatError(retryError)) {
+            throw retryError;
+          }
+        }
+      }
+
+      throw error;
+    }
+  }
+
   async transcribe({ audioBuffer, sampleRate = 16000, channels = 1, format = 'S16LE', language }) {
     if (!audioBuffer || !audioBuffer.length) {
       throw new Error('No audio data provided for transcription');
@@ -203,16 +305,16 @@ class SpeechService {
     });
 
     const startedAt = Date.now();
-    const response = await client.audio.transcriptions.create({
+    const response = await this.createOpenAiTranscription({
+      client,
       file,
       model: model || 'gpt-4o-mini-transcribe',
-      response_format: 'verbose_json',
       language,
       temperature: 0
     });
     const durationMs = Date.now() - startedAt;
 
-    const text = (response?.text || '').trim();
+    const text = this.extractTranscriptionText(response);
     const segments = Array.isArray(response?.segments) ? response.segments : [];
 
     return {
@@ -237,16 +339,16 @@ class SpeechService {
     });
 
     const startedAt = Date.now();
-    const response = await client.audio.transcriptions.create({
+    const response = await this.createOpenAiTranscription({
+      client,
       file,
       model: model || 'gpt-4o-mini-transcribe',
-      response_format: 'verbose_json',
       language,
       temperature: 0
     });
     const durationMs = Date.now() - startedAt;
 
-    const text = (response?.text || '').trim();
+    const text = this.extractTranscriptionText(response);
     const segments = Array.isArray(response?.segments) ? response.segments : [];
 
     return {
