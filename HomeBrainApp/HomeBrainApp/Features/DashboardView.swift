@@ -372,7 +372,7 @@ struct DashboardView: View {
         let statusText = isThermostat ? mode.uppercased() : (device.status ? "On" : "Off")
         let statusEnabled = isThermostat ? mode != "off" : device.status
 
-        return HBPanel {
+        let card = HBPanel {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     Image(systemName: iconForDevice(device.type))
@@ -435,14 +435,10 @@ struct DashboardView: View {
                 }
             }
         }
-        .frame(width: featuredCardWidth(for: device))
-    }
-
-    private func featuredCardWidth(for device: DeviceItem) -> CGFloat {
         if device.type == "thermostat" {
-            return isCompact ? 340 : 620
+            return AnyView(card)
         }
-        return isCompact ? 260 : 300
+        return AnyView(card.frame(width: isCompact ? 260 : 300))
     }
 
     private func favoriteButton(for device: DeviceItem) -> some View {

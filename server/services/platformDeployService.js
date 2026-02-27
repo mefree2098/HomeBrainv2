@@ -732,11 +732,9 @@ class PlatformDeployService {
         await runNpmStep('Run server tests', ['test', '--prefix', 'server']);
       }
 
-      if (this.autoCleanClientDist) {
-        await runCustomStep('Clean client dist artifacts', async () => {
-          await this.cleanupClientDistArtifacts({ jobId });
-        });
-      }
+      // Do not clean client/dist after build.
+      // This server serves client/dist directly at runtime, so post-build cleanup would
+      // revert freshly built assets and can leave the UI running stale code.
 
       const repoAfter = await this.getRepoStatus();
       await this.updateJob(jobId, {
