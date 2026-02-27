@@ -1045,10 +1045,17 @@ class SmartThingsService {
     let changed = false;
 
     const capabilities = this.collectSmartThingsCapabilities(apiDevice);
+    const categories = this.collectSmartThingsCategories(apiDevice);
     const statusRoot = this.extractStatusRoot(apiDevice);
-    const detectedType = existingDevice.type || this.mapSmartThingsType(capabilities, apiDevice);
+    const mappedType = this.mapSmartThingsType(capabilities, apiDevice);
+    const detectedType = mappedType || existingDevice.type;
     if (!detectedType) {
       return null;
+    }
+
+    if (mappedType && mappedType !== existingDevice.type) {
+      updates.type = mappedType;
+      changed = true;
     }
 
     let isOnline = (apiDevice.healthState?.state || '').toUpperCase() === 'ONLINE';
@@ -1108,6 +1115,42 @@ class SmartThingsService {
       changed = true;
     }
 
+    const normalizedCapabilities = Array.from(capabilities).sort();
+    const currentCapabilities = Array.isArray(existingDevice?.properties?.smartThingsCapabilities)
+      ? [...existingDevice.properties.smartThingsCapabilities].sort()
+      : [];
+    if (JSON.stringify(currentCapabilities) !== JSON.stringify(normalizedCapabilities)) {
+      updates['properties.smartThingsCapabilities'] = normalizedCapabilities;
+      changed = true;
+    }
+
+    const normalizedCategories = Array.from(categories).sort();
+    const currentCategories = Array.isArray(existingDevice?.properties?.smartThingsCategories)
+      ? [...existingDevice.properties.smartThingsCategories].sort()
+      : [];
+    if (JSON.stringify(currentCategories) !== JSON.stringify(normalizedCategories)) {
+      updates['properties.smartThingsCategories'] = normalizedCategories;
+      changed = true;
+    }
+
+    const upstreamProvider = this.detectSmartThingsUpstream(apiDevice) || null;
+    if ((existingDevice?.properties?.smartThingsUpstream || null) !== upstreamProvider) {
+      updates['properties.smartThingsUpstream'] = upstreamProvider;
+      changed = true;
+    }
+
+    const manufacturer = apiDevice?.manufacturerName || apiDevice?.manufacturer || null;
+    if ((existingDevice?.properties?.smartThingsManufacturer || null) !== manufacturer) {
+      updates['properties.smartThingsManufacturer'] = manufacturer;
+      changed = true;
+    }
+
+    const isThermostat = detectedType === 'thermostat';
+    if (Boolean(existingDevice?.properties?.isThermostat) !== isThermostat) {
+      updates['properties.isThermostat'] = isThermostat;
+      changed = true;
+    }
+
     const preferredName = (apiDevice.label || apiDevice.name || '').trim();
     if (preferredName && preferredName !== existingDevice.name) {
       updates.name = preferredName;
@@ -1141,8 +1184,9 @@ class SmartThingsService {
     return capabilities;
   }
 
-  mapSmartThingsType(capabilities, device) {
+  collectSmartThingsCategories(device) {
     const categories = new Set();
+
     (device.components || []).forEach((component) => {
       (component.categories || []).forEach((category) => {
         if (category?.name) {
@@ -1151,7 +1195,46 @@ class SmartThingsService {
       });
     });
 
-    if (capabilities.has('thermostatMode') || capabilities.has('thermostatCoolingSetpoint') || capabilities.has('thermostatHeatingSetpoint') || categories.has('thermostat')) {
+    return categories;
+  }
+
+  detectSmartThingsUpstream(device) {
+    const haystack = [
+      device?.manufacturerName,
+      device?.manufacturer,
+      device?.deviceTypeName,
+      device?.presentationId,
+      device?.name,
+      device?.label
+    ]
+      .filter((value) => typeof value === 'string' && value.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+
+    if (!haystack) {
+      return '';
+    }
+
+    if (haystack.includes('ecobee')) {
+      return 'ecobee';
+    }
+
+    return '';
+  }
+
+  mapSmartThingsType(capabilities, device) {
+    const categories = this.collectSmartThingsCategories(device);
+
+    if (
+      capabilities.has('thermostat') ||
+      capabilities.has('thermostatMode') ||
+      capabilities.has('thermostatOperatingState') ||
+      capabilities.has('thermostatSetpoint') ||
+      capabilities.has('thermostatCoolingSetpoint') ||
+      capabilities.has('thermostatHeatingSetpoint') ||
+      capabilities.has('thermostatFanMode') ||
+      categories.has('thermostat')
+    ) {
       return 'thermostat';
     }
 

@@ -433,6 +433,8 @@ class MaintenanceService {
     const roomName = await this.resolveSmartThingsRoom(device) || 'SmartThings';
     const brand = device.manufacturerName || device.manufacturer || 'SmartThings';
     const model = device.deviceTypeName || device.presentationId || 'SmartThings Device';
+    const categories = this.collectSmartThingsCategories(device);
+    const upstreamProvider = this.detectSmartThingsUpstream(device);
 
     const lastSeen = device.healthState?.lastUpdatedDate ? new Date(device.healthState.lastUpdatedDate) : new Date();
 
@@ -453,9 +455,13 @@ class MaintenanceService {
         smartThingsLocationId: device.locationId || null,
         smartThingsRoomId: device.roomId || null,
         smartThingsCapabilities: Array.from(capabilities),
+        smartThingsCategories: Array.from(categories),
         smartThingsHealthState: device.healthState || null,
         smartThingsPresentationId: device.presentationId || null,
-        smartThingsDeviceTypeName: device.deviceTypeName || null
+        smartThingsDeviceTypeName: device.deviceTypeName || null,
+        smartThingsManufacturer: device.manufacturerName || device.manufacturer || null,
+        smartThingsUpstream: upstreamProvider || null,
+        isThermostat: type === 'thermostat'
       },
       brand,
       model,
@@ -478,8 +484,9 @@ class MaintenanceService {
     return capabilities;
   }
 
-  mapSmartThingsType(capabilities, device) {
+  collectSmartThingsCategories(device) {
     const categories = new Set();
+
     (device.components || []).forEach((component) => {
       (component.categories || []).forEach((category) => {
         if (category?.name) {
@@ -488,7 +495,46 @@ class MaintenanceService {
       });
     });
 
-    if (capabilities.has('thermostatMode') || capabilities.has('thermostatCoolingSetpoint') || capabilities.has('thermostatHeatingSetpoint') || categories.has('thermostat')) {
+    return categories;
+  }
+
+  detectSmartThingsUpstream(device) {
+    const haystack = [
+      device?.manufacturerName,
+      device?.manufacturer,
+      device?.deviceTypeName,
+      device?.presentationId,
+      device?.name,
+      device?.label
+    ]
+      .filter((value) => typeof value === 'string' && value.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+
+    if (!haystack) {
+      return '';
+    }
+
+    if (haystack.includes('ecobee')) {
+      return 'ecobee';
+    }
+
+    return '';
+  }
+
+  mapSmartThingsType(capabilities, device) {
+    const categories = this.collectSmartThingsCategories(device);
+
+    if (
+      capabilities.has('thermostat') ||
+      capabilities.has('thermostatMode') ||
+      capabilities.has('thermostatOperatingState') ||
+      capabilities.has('thermostatSetpoint') ||
+      capabilities.has('thermostatCoolingSetpoint') ||
+      capabilities.has('thermostatHeatingSetpoint') ||
+      capabilities.has('thermostatFanMode') ||
+      categories.has('thermostat')
+    ) {
       return 'thermostat';
     }
 
