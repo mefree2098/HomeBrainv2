@@ -888,6 +888,18 @@ class BrowserVoiceAssistant {
     }
 
     if (!wakeMatch && !this.awaitingCommand) {
+      if (this.useServerSttFallback) {
+        const normalizedFallbackCommand = this.normalizeFallbackDirectCommand(transcript);
+        if (this.isLikelyDirectCommand(normalizedFallbackCommand)) {
+          if (normalizedFallbackCommand !== transcript.trim()) {
+            this.updateStatus({}, `fallback normalized command: "${normalizedFallbackCommand}"`);
+          }
+          this.updateStatus({}, `fallback direct command heuristic matched: "${normalizedFallbackCommand}"`);
+          await this.executeCommand(normalizedFallbackCommand, "browser-fallback", confidence);
+          return;
+        }
+      }
+
       if (this.useServerSttFallback && this.isLikelyDirectCommand(transcript)) {
         this.updateStatus({}, `fallback direct command heuristic matched: "${transcript}"`);
         await this.executeCommand(transcript, "browser-fallback", confidence);
@@ -1164,10 +1176,46 @@ class BrowserVoiceAssistant {
       return true;
     }
 
+    // Handle clipped fallback phrases like "on vault light switch" / "off kitchen lights".
+    const clippedOnOffPattern = /^(on|off)\b/;
+    const hasDeviceLikeTarget = /\b(light|lights|switch|lamp|fan|scene|alarm|security|lock|door|garage|thermostat|vault|spotlight)\b/;
+    if (clippedOnOffPattern.test(normalized) && hasDeviceLikeTarget.test(normalized)) {
+      return true;
+    }
+
     // Handle conversational preambles while still requiring an actionable command verb.
     const conversationalPattern = /^(please|can you|could you|would you|hey|anna|henry|computer)\b/;
-    const hasActionVerb = /\b(turn on|turn off|set|dim|brighten|open|close|lock|unlock|arm|disarm|activate|run|start|stop|enable|disable)\b/.test(normalized);
+    const hasActionVerb = /\b(turn on|turn off|set|dim|brighten|open|close|lock|unlock|arm|disarm|activate|run|start|stop|enable|disable|on|off)\b/.test(normalized);
     return conversationalPattern.test(normalized) && hasActionVerb;
+  }
+
+  private normalizeFallbackDirectCommand(transcript: string): string {
+    const original = (transcript || "").trim();
+    if (!original) {
+      return "";
+    }
+
+    const normalized = this.normalizeWakeWord(original);
+    if (!normalized) {
+      return original;
+    }
+
+    const strippedPrefix = normalized
+      .replace(/^(please|can you|could you|would you|hey|anna|henry|computer)\s+/, "")
+      .trim();
+
+    if (!strippedPrefix) {
+      return original;
+    }
+
+    if (/^(on|off)\b/.test(strippedPrefix)) {
+      const hasDeviceLikeTarget = /\b(light|lights|switch|lamp|fan|scene|alarm|security|lock|door|garage|thermostat|vault|spotlight)\b/;
+      if (hasDeviceLikeTarget.test(strippedPrefix)) {
+        return `turn ${strippedPrefix}`.trim();
+      }
+    }
+
+    return strippedPrefix;
   }
 
   private async playResponse(text: string, wakeWord: string): Promise<void> {
