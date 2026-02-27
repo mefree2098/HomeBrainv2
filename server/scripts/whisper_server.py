@@ -113,12 +113,14 @@ class CommandLoop:
             self.pending.put(payload)
         self.pending.put({"action": "shutdown", "id": "stdin-closed"})
 
-    def _emit_error(self, payload: dict, message: str) -> None:
+    def _emit_error(self, payload: dict, message: str, details: str | None = None) -> None:
         response = {
             "id": payload.get("id"),
             "success": False,
             "error": message
         }
+        if details:
+            response["details"] = details
         if "action" in payload:
             response["action"] = payload["action"]
         emit(response)
@@ -234,9 +236,14 @@ class CommandLoop:
                 }
             }
             emit(response)
-        except Exception:  # pragma: no cover - runtime logging
-            log(traceback.format_exc())
-            self._emit_error(payload, "Transcription failed")
+        except Exception as exc:  # pragma: no cover - runtime logging
+            traceback_text = traceback.format_exc()
+            log(traceback_text)
+            exc_label = f"{type(exc).__name__}: {exc}".strip()
+            if exc_label.endswith(":"):
+                exc_label = exc_label[:-1].strip()
+            message = f"Transcription failed ({exc_label})" if exc_label else "Transcription failed"
+            self._emit_error(payload, message, details=traceback_text[-4000:])
 
     def _handle_status(self, payload: dict) -> None:
         response = {

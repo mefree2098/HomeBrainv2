@@ -169,8 +169,14 @@ class WhisperRuntime {
     clearTimeout(entry.timeout);
     this.pending.delete(id);
 
-    if (payload.success === false) entry.reject(new Error(payload.error || 'Whisper transcription failed'));
-    else entry.resolve(payload);
+    if (payload.success === false) {
+      if (payload.details) {
+        this._pushLog(`Whisper runtime error details:\n${String(payload.details)}`);
+      }
+      entry.reject(new Error(payload.error || 'Whisper transcription failed'));
+    } else {
+      entry.resolve(payload);
+    }
   }
 
   _pushLog(line) {
