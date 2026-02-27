@@ -56,6 +56,125 @@ struct HBPanel<Content: View>: View {
     }
 }
 
+struct HBSectionHeader: View {
+    let title: String
+    let subtitle: String
+    let buttonTitle: String?
+    let buttonIcon: String?
+    let buttonAction: (() -> Void)?
+
+    init(
+        title: String,
+        subtitle: String = "",
+        buttonTitle: String? = nil,
+        buttonIcon: String? = nil,
+        buttonAction: (() -> Void)? = nil
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.buttonTitle = buttonTitle
+        self.buttonIcon = buttonIcon
+        self.buttonAction = buttonAction
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+
+            Spacer()
+
+            if let buttonTitle, let buttonAction {
+                Button(action: buttonAction) {
+                    Label(buttonTitle, systemImage: buttonIcon ?? "plus")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            LinearGradient(
+                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        )
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+struct HBCardRow<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(HBPalette.panel.opacity(0.9))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(HBPalette.panelStroke, lineWidth: 1)
+            )
+    }
+}
+
+struct HBPanelGroupBoxStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 10) {
+                configuration.label
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                configuration.content
+            }
+        }
+    }
+}
+
+struct HBFormStyleModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
+            .listRowBackground(Color.black.opacity(0.28))
+    }
+}
+
+extension View {
+    func hbFormStyle() -> some View {
+        modifier(HBFormStyleModifier())
+    }
+
+    func hbPanelTextField() -> some View {
+        self
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
+            )
+            .foregroundStyle(HBPalette.textPrimary)
+    }
+}
+
 struct LoadingView: View {
     let title: String
 

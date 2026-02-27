@@ -278,11 +278,13 @@ class DeviceService {
 
       const updateData = { lastSeen: new Date() };
       let commandValue = value;
+      const supportsBrightnessControl = this.supportsBrightnessControl(device);
+      const supportsColorControl = this.supportsColorControl(device);
 
       switch (normalizedAction) {
         case 'toggle':
           updateData.status = !device.status;
-          if (device.type === 'light' && updateData.status === false) {
+          if (supportsBrightnessControl && updateData.status === false) {
             updateData.brightness = 0;
           }
           commandValue = updateData.status;
@@ -290,7 +292,7 @@ class DeviceService {
 
         case 'turnon':
           updateData.status = true;
-          if (device.type === 'light' && (device.brightness == null || device.brightness === 0)) {
+          if (supportsBrightnessControl && (device.brightness == null || device.brightness === 0)) {
             updateData.brightness = 75; // Default brightness
           }
           commandValue = updateData.status;
@@ -298,15 +300,15 @@ class DeviceService {
 
         case 'turnoff':
           updateData.status = false;
-          if (device.type === 'light') {
+          if (supportsBrightnessControl) {
             updateData.brightness = 0;
           }
           commandValue = updateData.status;
           break;
 
         case 'setbrightness': {
-          if (device.type !== 'light') {
-            throw new Error('Brightness control is only available for lights');
+          if (!supportsBrightnessControl) {
+            throw new Error('Brightness control is only available for dimmable lights or switches');
           }
           const numericBrightness = Number(value);
           if (!Number.isFinite(numericBrightness) || numericBrightness < 0 || numericBrightness > 100) {
@@ -320,8 +322,8 @@ class DeviceService {
         }
 
         case 'setcolor': {
-          if (device.type !== 'light') {
-            throw new Error('Color control is only available for lights');
+          if (!supportsColorControl) {
+            throw new Error('Color control is only available for color-capable lights or switches');
           }
           if (!value || typeof value !== 'string') {
             throw new Error('Color value must be a valid hex color string');
@@ -504,6 +506,7 @@ class DeviceService {
       if (error.message === 'Device not found' ||
           error.message.includes('offline') ||
           error.message.includes('only available') ||
+          error.message.includes('not supported') ||
           error.message.includes('support only') ||
           error.message.includes('must be') ||
           error.message.includes('Unknown action')) {
@@ -518,6 +521,116 @@ class DeviceService {
       return '';
     }
     return action.toString().toLowerCase().replace(/[^a-z]/g, '');
+  }
+
+  normalizeSmartThingsValue(value) {
+    if (!value) {
+      return '';
+    }
+
+    if (typeof value === 'string') {
+      return value.trim();
+    }
+
+    if (typeof value === 'object') {
+      const candidate = value.id || value.capabilityId || value.name;
+      if (typeof candidate === 'string') {
+        return candidate.trim();
+      }
+    }
+
+    return '';
+  }
+
+  getSmartThingsCapabilitySet(device) {
+    const capabilities = [
+      ...(Array.isArray(device?.properties?.smartThingsCapabilities)
+        ? device.properties.smartThingsCapabilities
+        : []),
+      ...(Array.isArray(device?.properties?.smartthingsCapabilities)
+        ? device.properties.smartthingsCapabilities
+        : [])
+    ]
+      .map((entry) => this.normalizeSmartThingsValue(entry))
+      .filter((entry) => entry.length > 0);
+
+    return new Set(capabilities);
+  }
+
+  getSmartThingsCategorySet(device) {
+    const categories = [
+      ...(Array.isArray(device?.properties?.smartThingsCategories)
+        ? device.properties.smartThingsCategories
+        : []),
+      ...(Array.isArray(device?.properties?.smartthingsCategories)
+        ? device.properties.smartthingsCategories
+        : [])
+    ]
+      .map((entry) => this.normalizeSmartThingsValue(entry))
+      .filter((entry) => entry.length > 0)
+      .map((entry) => entry.toLowerCase());
+
+    return new Set(categories);
+  }
+
+  looksLikeSmartThingsDimmer(device) {
+    const descriptor = [
+      device?.properties?.smartThingsDeviceTypeName,
+      device?.properties?.smartThingsPresentationId,
+      device?.name
+    ]
+      .filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+
+    return /\bdimmer\b/.test(descriptor);
+  }
+
+  supportsBrightnessControl(device) {
+    if (!device) {
+      return false;
+    }
+
+    if (device.type === 'light') {
+      return true;
+    }
+
+    if (this.isSmartThingsDevice(device)) {
+      const capabilities = this.getSmartThingsCapabilitySet(device);
+      if (capabilities.has('switchLevel') || capabilities.has('colorControl')) {
+        return true;
+      }
+
+      if (device.type === 'switch') {
+        const categories = this.getSmartThingsCategorySet(device);
+        if (categories.has('light') || this.looksLikeSmartThingsDimmer(device)) {
+          return true;
+        }
+      }
+    }
+
+    return Boolean(device?.properties?.supportsBrightness);
+  }
+
+  supportsColorControl(device) {
+    if (!device) {
+      return false;
+    }
+
+    if (this.isSmartThingsDevice(device)) {
+      const capabilities = this.getSmartThingsCapabilitySet(device);
+      if (capabilities.has('colorControl')) {
+        return true;
+      }
+
+      return Boolean(device?.properties?.supportsColor && this.supportsBrightnessControl(device));
+    }
+
+    if (device.type === 'light') {
+      return true;
+    }
+
+    return Boolean(device?.properties?.supportsColor);
   }
 
   normalizeThermostatMode(mode) {
@@ -566,7 +679,8 @@ class DeviceService {
 
   isSmartThingsDevice(device) {
     const source = (device?.properties?.source || '').toString().toLowerCase();
-    return source === 'smartthings' && !!device?.properties?.smartThingsDeviceId;
+    return (source === 'smartthings' || !!device?.properties?.smartThingsDeviceId)
+      && !!device?.properties?.smartThingsDeviceId;
   }
 
   isHarmonyDevice(device) {
@@ -897,11 +1011,8 @@ class DeviceService {
       throw new Error('SmartThings device ID is not configured for this device');
     }
 
-    const capabilities = new Set(
-      Array.isArray(device?.properties?.smartThingsCapabilities)
-        ? device.properties.smartThingsCapabilities
-        : []
-    );
+    const capabilities = this.getSmartThingsCapabilitySet(device);
+    const hasDeclaredCapabilities = capabilities.size > 0;
     const isThermostat = device.type === 'thermostat';
     const thermostatModeCapability = capabilities.has('thermostatMode')
       ? 'thermostatMode'
@@ -966,10 +1077,16 @@ class DeviceService {
         break;
 
       case 'setbrightness':
+        if (hasDeclaredCapabilities && !capabilities.has('switchLevel')) {
+          throw new Error('Brightness control is not supported for this SmartThings device');
+        }
         await smartThingsService.setDeviceLevel(smartThingsId, commandValue);
         break;
 
       case 'setcolor': {
+        if (hasDeclaredCapabilities && !capabilities.has('colorControl')) {
+          throw new Error('Color control is not supported for this SmartThings device');
+        }
         const colorPayload = this.hexToSmartThingsColor(commandValue);
         if (!colorPayload) {
           throw new Error('Color value must be a valid hex color string');

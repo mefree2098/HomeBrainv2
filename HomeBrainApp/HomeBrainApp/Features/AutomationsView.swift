@@ -23,58 +23,62 @@ struct AutomationsView: View {
     private let actionTypes = ["notification", "device_control", "scene_activate", "delay"]
 
     var body: some View {
-        Group {
-            if isLoading {
-                LoadingView(title: "Loading automations...")
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if let errorMessage {
-                            InlineErrorView(message: errorMessage) {
-                                Task { await loadAutomations() }
-                            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if isLoading {
+                    LoadingView(title: "Loading automations...")
+                } else {
+                    HBSectionHeader(
+                        title: "Automations",
+                        subtitle: "Smart triggers and actions",
+                        buttonTitle: "New Automation",
+                        buttonIcon: "plus"
+                    ) {
+                        showCreateSheet = true
+                    }
+
+                    if let errorMessage {
+                        InlineErrorView(message: errorMessage) {
+                            Task { await loadAutomations() }
                         }
+                    }
 
-                        metricsSection
+                    metricsSection
 
-                        GroupBox("Create from Text") {
-                            VStack(alignment: .leading, spacing: 10) {
-                                TextField("e.g. Turn all outdoor lights on at sunset", text: $naturalLanguageText)
-                                    .textFieldStyle(.roundedBorder)
+                    GroupBox("Create from Text") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            TextField("e.g. Turn all outdoor lights on at sunset", text: $naturalLanguageText)
+                                .hbPanelTextField()
 
-                                Button("Generate Automation") {
-                                    Task { await createFromText() }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(naturalLanguageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            Button("Generate Automation") {
+                                Task { await createFromText() }
                             }
-                            .padding(.top, 4)
+                            .buttonStyle(.borderedProminent)
+                            .tint(HBPalette.accentBlue)
+                            .disabled(naturalLanguageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
+                        .padding(.top, 4)
+                    }
 
-                        if automations.isEmpty {
-                            EmptyStateView(title: "No automations", subtitle: "Create one manually or from natural language.")
-                        } else {
-                            ForEach(automations) { automation in
+                    if automations.isEmpty {
+                        EmptyStateView(title: "No automations", subtitle: "Create one manually or from natural language.")
+                    } else {
+                        ForEach(automations) { automation in
+                            HBCardRow {
                                 automationRow(automation)
                             }
                         }
                     }
-                    .padding()
-                }
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("New Automation") {
-                            showCreateSheet = true
-                        }
-                    }
-                }
-                .sheet(isPresented: $showCreateSheet) {
-                    createSheet
-                }
-                .refreshable {
-                    await loadAutomations()
                 }
             }
+        }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
+        .padding()
+        .sheet(isPresented: $showCreateSheet) {
+            createSheet
+        }
+        .refreshable {
+            await loadAutomations()
         }
         .task {
             await loadAutomations()
@@ -98,10 +102,11 @@ struct AutomationsView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(automation.name)
-                        .font(.headline)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
                     Text(automation.details)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HBPalette.textSecondary)
                         .lineLimit(2)
                 }
 
@@ -119,15 +124,15 @@ struct AutomationsView: View {
             HStack {
                 Text("Category: \(automation.category)")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
                 Spacer()
                 Text("Priority \(automation.priority)")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
                 Spacer()
                 Text("Runs \(automation.executionCount)")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
             }
 
             HStack {
@@ -142,9 +147,6 @@ struct AutomationsView: View {
                 .buttonStyle(.bordered)
             }
         }
-        .padding()
-        .background(Color.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var createSheet: some View {
@@ -168,7 +170,9 @@ struct AutomationsView: View {
                 TextField("Target (device/scene id if needed)", text: $target)
                 TextField("Action value (optional)", text: $actionValue)
             }
+            .hbFormStyle()
             .navigationTitle("Create Automation")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {

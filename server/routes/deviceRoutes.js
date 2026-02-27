@@ -238,6 +238,7 @@ router.post('/control', async (req, res) => {
                        error.message.includes('Device ID and action are required') ||
                        error.message.includes('offline') ||
                        error.message.includes('only available') ||
+                       error.message.includes('not supported') ||
                        error.message.includes('must be') ||
                        error.message.includes('Unknown action') ? 400 : 500;
     res.status(statusCode).json({
@@ -281,6 +282,7 @@ router.post('/:id/control', async (req, res) => {
                        error.message.includes('Action is required') ||
                        error.message.includes('offline') ||
                        error.message.includes('only available') ||
+                       error.message.includes('not supported') ||
                        error.message.includes('must be') ||
                        error.message.includes('Unknown action') ? 400 : 500;
     res.status(statusCode).json({

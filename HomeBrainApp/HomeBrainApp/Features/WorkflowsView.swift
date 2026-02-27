@@ -23,58 +23,62 @@ struct WorkflowsView: View {
     private let actionTypes = ["notification", "device_control", "scene_activate", "delay"]
 
     var body: some View {
-        Group {
-            if isLoading {
-                LoadingView(title: "Loading workflows...")
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if let errorMessage {
-                            InlineErrorView(message: errorMessage) {
-                                Task { await loadWorkflows() }
-                            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if isLoading {
+                    LoadingView(title: "Loading workflows...")
+                } else {
+                    HBSectionHeader(
+                        title: "Workflows",
+                        subtitle: "Orchestrate multi-step home routines",
+                        buttonTitle: "New Workflow",
+                        buttonIcon: "plus"
+                    ) {
+                        showCreateSheet = true
+                    }
+
+                    if let errorMessage {
+                        InlineErrorView(message: errorMessage) {
+                            Task { await loadWorkflows() }
                         }
+                    }
 
-                        metricsSection
+                    metricsSection
 
-                        GroupBox("Create from Text") {
-                            VStack(alignment: .leading, spacing: 10) {
-                                TextField("e.g. Start movie scene every day at 7 PM", text: $naturalLanguageText)
-                                    .textFieldStyle(.roundedBorder)
+                    GroupBox("Create from Text") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            TextField("e.g. Start movie scene every day at 7 PM", text: $naturalLanguageText)
+                                .hbPanelTextField()
 
-                                Button("Generate Workflow") {
-                                    Task { await createFromText() }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(naturalLanguageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            Button("Generate Workflow") {
+                                Task { await createFromText() }
                             }
-                            .padding(.top, 4)
+                            .buttonStyle(.borderedProminent)
+                            .tint(HBPalette.accentBlue)
+                            .disabled(naturalLanguageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
+                        .padding(.top, 4)
+                    }
 
-                        if workflows.isEmpty {
-                            EmptyStateView(title: "No workflows", subtitle: "Create one manually or from natural language.")
-                        } else {
-                            ForEach(workflows) { workflow in
+                    if workflows.isEmpty {
+                        EmptyStateView(title: "No workflows", subtitle: "Create one manually or from natural language.")
+                    } else {
+                        ForEach(workflows) { workflow in
+                            HBCardRow {
                                 workflowRow(workflow)
                             }
                         }
                     }
-                    .padding()
-                }
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("New Workflow") {
-                            showCreateSheet = true
-                        }
-                    }
-                }
-                .sheet(isPresented: $showCreateSheet) {
-                    createSheet
-                }
-                .refreshable {
-                    await loadWorkflows()
                 }
             }
+        }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
+        .padding()
+        .sheet(isPresented: $showCreateSheet) {
+            createSheet
+        }
+        .refreshable {
+            await loadWorkflows()
         }
         .task {
             await loadWorkflows()
@@ -98,10 +102,11 @@ struct WorkflowsView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(workflow.name)
-                        .font(.headline)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
                     Text(workflow.details)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HBPalette.textSecondary)
                         .lineLimit(2)
                 }
 
@@ -119,15 +124,15 @@ struct WorkflowsView: View {
             HStack {
                 Text("Category: \(workflow.category)")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
                 Spacer()
                 Text("Priority \(workflow.priority)")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
                 Spacer()
                 Text("Runs \(workflow.executionCount)")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
             }
 
             HStack {
@@ -142,9 +147,6 @@ struct WorkflowsView: View {
                 .buttonStyle(.bordered)
             }
         }
-        .padding()
-        .background(Color.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var createSheet: some View {
@@ -168,7 +170,9 @@ struct WorkflowsView: View {
                 TextField("Target (device/scene id if needed)", text: $target)
                 TextField("Action value (optional)", text: $actionValue)
             }
+            .hbFormStyle()
             .navigationTitle("Create Workflow")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {

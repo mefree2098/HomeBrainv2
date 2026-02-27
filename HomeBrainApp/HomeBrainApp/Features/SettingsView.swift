@@ -43,10 +43,15 @@ struct SettingsView: View {
     private let sttProviders = ["openai", "local"]
 
     var body: some View {
-        Group {
+        VStack(spacing: 12) {
             if isLoading {
                 LoadingView(title: "Loading settings...")
             } else {
+                HBSectionHeader(
+                    title: "Settings",
+                    subtitle: "Platform configuration and integration keys"
+                )
+
                 Form {
                     if let errorMessage {
                         Section {
@@ -60,7 +65,7 @@ struct SettingsView: View {
                         Section {
                             Text(infoMessage)
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(HBPalette.textSecondary)
                         }
                     }
 
@@ -89,7 +94,7 @@ struct SettingsView: View {
                             Text("Wake Word Sensitivity")
                             Spacer()
                             Text(String(format: "%.2f", wakeWordSensitivity))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(HBPalette.textSecondary)
                         }
                         Slider(value: $wakeWordSensitivity, in: 0.1...1)
 
@@ -97,7 +102,7 @@ struct SettingsView: View {
                             Text("Voice Volume")
                             Spacer()
                             Text(String(format: "%.2f", voiceVolume))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(HBPalette.textSecondary)
                         }
                         Slider(value: $voiceVolume, in: 0.1...1)
 
@@ -105,7 +110,7 @@ struct SettingsView: View {
                             Text("Mic Sensitivity")
                             Spacer()
                             Text(String(format: "%.2f", microphoneSensitivity))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(HBPalette.textSecondary)
                         }
                         Slider(value: $microphoneSensitivity, in: 0.1...1)
 
@@ -188,6 +193,7 @@ struct SettingsView: View {
                             Task { await saveSettings() }
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(HBPalette.accentBlue)
 
                         Button("Refresh Settings") {
                             Task { await loadSettings() }
@@ -195,11 +201,13 @@ struct SettingsView: View {
                         .buttonStyle(.bordered)
                     }
                 }
+                .hbFormStyle()
                 .refreshable {
                     await loadSettings()
                 }
             }
         }
+        .padding()
         .task {
             await loadSettings()
         }

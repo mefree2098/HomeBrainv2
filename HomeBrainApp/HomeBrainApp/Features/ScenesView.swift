@@ -19,51 +19,63 @@ struct ScenesView: View {
     private let categories = ["comfort", "security", "entertainment", "energy", "custom"]
 
     var body: some View {
-        Group {
+        VStack(spacing: 12) {
             if isLoading {
                 LoadingView(title: "Loading scenes...")
             } else {
-                VStack(spacing: 12) {
-                    if let errorMessage {
-                        InlineErrorView(message: errorMessage) {
-                            Task { await loadScenes() }
-                        }
-                    }
+                HBSectionHeader(
+                    title: "Scenes",
+                    subtitle: "Create and activate scene presets",
+                    buttonTitle: "New Scene",
+                    buttonIcon: "plus"
+                ) {
+                    showCreateSheet = true
+                }
 
-                    if scenes.isEmpty {
-                        EmptyStateView(title: "No scenes", subtitle: "Create a scene to start grouping device actions.")
-                    } else {
-                        List {
-                            ForEach(scenes) { scene in
+                HStack {
+                    Button("AI Scene") {
+                        showNaturalLanguageSheet = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(HBPalette.accentBlue)
+
+                    Spacer()
+                }
+
+                if let errorMessage {
+                    InlineErrorView(message: errorMessage) {
+                        Task { await loadScenes() }
+                    }
+                }
+
+                if scenes.isEmpty {
+                    EmptyStateView(title: "No scenes", subtitle: "Create a scene to start grouping device actions.")
+                } else {
+                    List {
+                        ForEach(scenes) { scene in
+                            HBCardRow {
                                 sceneRow(scene)
                             }
-                            .onDelete(perform: delete)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                         }
-                        .listStyle(.plain)
+                        .onDelete(perform: delete)
                     }
-                }
-                .padding()
-                .toolbar {
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        Button("AI Scene") {
-                            showNaturalLanguageSheet = true
-                        }
-
-                        Button("New Scene") {
-                            showCreateSheet = true
-                        }
-                    }
-                }
-                .sheet(isPresented: $showCreateSheet) {
-                    createSceneSheet
-                }
-                .sheet(isPresented: $showNaturalLanguageSheet) {
-                    naturalLanguageSheet
-                }
-                .refreshable {
-                    await loadScenes()
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
                 }
             }
+        }
+        .padding()
+        .sheet(isPresented: $showCreateSheet) {
+            createSceneSheet
+        }
+        .sheet(isPresented: $showNaturalLanguageSheet) {
+            naturalLanguageSheet
+        }
+        .refreshable {
+            await loadScenes()
         }
         .task {
             await loadScenes()
@@ -75,7 +87,8 @@ struct ScenesView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(scene.name)
-                        .font(.headline)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
                     if scene.active {
                         Text("ACTIVE")
                             .font(.caption2)
@@ -88,12 +101,12 @@ struct ScenesView: View {
 
                 Text(scene.details)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
                     .lineLimit(1)
 
                 Text("\(scene.category.capitalized) · activated \(scene.activationCount)x")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
             }
 
             Spacer()
@@ -117,7 +130,9 @@ struct ScenesView: View {
                     }
                 }
             }
+            .hbFormStyle()
             .navigationTitle("Create Scene")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -142,7 +157,9 @@ struct ScenesView: View {
                         .frame(minHeight: 140)
                 }
             }
+            .hbFormStyle()
             .navigationTitle("AI Scene Builder")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {

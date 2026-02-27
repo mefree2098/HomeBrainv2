@@ -24,6 +24,11 @@ struct OllamaView: View {
                 if isLoading {
                     LoadingView(title: "Loading Ollama status...")
                 } else {
+                    HBSectionHeader(
+                        title: "Ollama / LLM",
+                        subtitle: "Model lifecycle, prompts, and logs"
+                    )
+
                     if let errorMessage {
                         InlineErrorView(message: errorMessage) {
                             Task { await loadOllamaData() }
@@ -31,13 +36,12 @@ struct OllamaView: View {
                     }
 
                     if !infoMessage.isEmpty {
-                        Text(infoMessage)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(Color.blue.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        HBPanel {
+                            Text(infoMessage)
+                                .font(.subheadline)
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
 
                     statusCard
@@ -49,6 +53,7 @@ struct OllamaView: View {
             }
             .padding()
         }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh") {

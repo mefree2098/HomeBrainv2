@@ -26,20 +26,29 @@ struct DevicesView: View {
     }
 
     var body: some View {
-        Group {
+        VStack(spacing: 12) {
             if isLoading {
                 LoadingView(title: "Loading devices...")
             } else {
-                VStack(spacing: 12) {
-                    if let errorMessage {
-                        InlineErrorView(message: errorMessage) {
-                            Task { await loadDevices() }
-                        }
-                    }
+                HBSectionHeader(
+                    title: "Devices",
+                    subtitle: "Manage smart devices and quick controls",
+                    buttonTitle: "Add Device",
+                    buttonIcon: "plus"
+                ) {
+                    showCreateSheet = true
+                }
 
+                if let errorMessage {
+                    InlineErrorView(message: errorMessage) {
+                        Task { await loadDevices() }
+                    }
+                }
+
+                HBPanel {
                     HStack {
                         TextField("Search devices", text: $searchText)
-                            .textFieldStyle(.roundedBorder)
+                            .hbPanelTextField()
 
                         Picker("Type", selection: $typeFilter) {
                             ForEach(availableTypes, id: \.self) { type in
@@ -47,38 +56,38 @@ struct DevicesView: View {
                             }
                         }
                         .pickerStyle(.menu)
+                        .tint(HBPalette.accentBlue)
                     }
+                }
 
-                    if filteredDevices.isEmpty {
-                        EmptyStateView(
-                            title: "No devices match",
-                            subtitle: "Adjust filters or create a new device."
-                        )
-                    } else {
-                        List {
-                            ForEach(filteredDevices) { device in
+                if filteredDevices.isEmpty {
+                    EmptyStateView(
+                        title: "No devices match",
+                        subtitle: "Adjust filters or create a new device."
+                    )
+                } else {
+                    List {
+                        ForEach(filteredDevices) { device in
+                            HBCardRow {
                                 deviceRow(device)
                             }
-                            .onDelete(perform: delete)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                         }
-                        .listStyle(.plain)
+                        .onDelete(perform: delete)
                     }
-                }
-                .padding()
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("Add Device") {
-                            showCreateSheet = true
-                        }
-                    }
-                }
-                .sheet(isPresented: $showCreateSheet) {
-                    createDeviceSheet
-                }
-                .refreshable {
-                    await loadDevices()
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
                 }
             }
+        }
+        .padding()
+        .sheet(isPresented: $showCreateSheet) {
+            createDeviceSheet
+        }
+        .refreshable {
+            await loadDevices()
         }
         .task {
             await loadDevices()
@@ -89,10 +98,11 @@ struct DevicesView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.name)
-                    .font(.headline)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
                 Text("\(device.room) · \(device.type)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
                 Text(device.isOnline ? "Online" : "Offline")
                     .font(.caption2)
                     .foregroundStyle(device.isOnline ? .green : .red)
@@ -120,7 +130,9 @@ struct DevicesView: View {
                     }
                 }
             }
+            .hbFormStyle()
             .navigationTitle("New Device")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
