@@ -257,6 +257,8 @@ class WhisperService {
   constructor() {
     this.runtime = null;
     this.initializing = null;
+    this.noCudnnRepairPromise = null;
+    this.noCudnnRepairAttemptedAt = 0;
   }
 
   static _staticResolveCudaHome() {
@@ -356,6 +358,25 @@ class WhisperService {
     return (os.platform() === 'linux' && os.arch() === 'arm64' && fs.existsSync('/etc/nv_tegra_release'));
   }
 
+  _isFalsyFlag(value) {
+    return ['0', 'false', 'off', 'no'].includes(String(value ?? '').trim().toLowerCase());
+  }
+
+  _isTruthyFlag(value) {
+    return ['1', 'true', 'on', 'yes'].includes(String(value ?? '').trim().toLowerCase());
+  }
+
+  _requestedWithCudnn() {
+    return !this._isFalsyFlag(process.env.WHISPER_CT2_WITH_CUDNN ?? '1');
+  }
+
+  _shouldAutoDisableCudnnOnFailure() {
+    if (this._isFalsyFlag(process.env.WHISPER_AUTO_DISABLE_CUDNN_ON_FAILURE ?? '1')) {
+      return false;
+    }
+    return this._isJetson();
+  }
+
   _hasCudaSupport() {
     if (process.env.WHISPER_DISABLE_CUDA === '1') return false;
     if (this._isJetson()) return true;
@@ -376,6 +397,21 @@ class WhisperService {
     const hasCuda = this._hasCudaSupport();
     const candidates = [];
     const add = (v) => { if (v && !candidates.includes(v)) candidates.push(v); };
+
+    if (normalized === 'cpu') {
+      add('cpu');
+      return candidates;
+    }
+
+    if (normalized === 'cuda') {
+      if (hasCuda) {
+        add('cuda');
+      } else {
+        console.warn('Whisper Service: CUDA requested but no CUDA support detected; using CPU.');
+        add('cpu');
+      }
+      return candidates;
+    }
 
     if (normalized === 'auto' || normalized === 'default') {
       if (hasCuda) add('cuda');
@@ -438,7 +474,7 @@ class WhisperService {
     }
   }
 
-  async _buildCTranslate2FromSource() {
+  async _buildCTranslate2FromSource({ withCudnn = true } = {}) {
     const ensureTool = async (name, command, args, installHint) => {
       try { await this._runCommand(command, args, { cwd: process.cwd() }); }
       catch { throw new Error(`${name} is required to build CTranslate2 but is not available. Install it (e.g., ${installHint}).`); }
@@ -462,11 +498,13 @@ class WhisperService {
       ? '/usr/local'
       : path.join(os.homedir(), '.local', 'ctranslate2');
 
+    console.log(`Whisper Service: Building CTranslate2 with CUDA backend (cuDNN ${withCudnn ? 'enabled' : 'disabled'})`);
+
     const cmakeArgs = [
       '-G','Ninja','..',
       '-DCMAKE_BUILD_TYPE=Release',
       '-DWITH_CUDA=ON',
-      '-DWITH_CUDNN=ON',
+      `-DWITH_CUDNN=${withCudnn ? 'ON' : 'OFF'}`,
       `-DCMAKE_CUDA_ARCHITECTURES=${this._getCudaArch() || '87'}`,
       '-DOPENMP_RUNTIME=COMP',
       '-DWITH_MKL=OFF',
@@ -576,6 +614,7 @@ class WhisperService {
 
     const cwd = process.cwd();
     const hasCuda = this._hasCudaSupport();
+    const requestedWithCudnn = this._requestedWithCudnn();
     let attemptedCudaInstall = false;
     let cudaInstallSucceeded = false;
     let cudaReady = false;
@@ -608,10 +647,12 @@ class WhisperService {
       if (hasCuda) {
         attemptedCudaInstall = true;
         if (this._isJetson()) {
-          console.log('Whisper Service: Detected Jetson platform, building CTranslate2 from source with CUDA.');
+          console.log(
+            `Whisper Service: Detected Jetson platform, building CTranslate2 from source with CUDA (cuDNN ${requestedWithCudnn ? 'enabled' : 'disabled'}).`
+          );
           try {
             await pipUninstall('Remove existing ctranslate2', ['ctranslate2']);
-            await this._buildCTranslate2FromSource();
+            await this._buildCTranslate2FromSource({ withCudnn: requestedWithCudnn });
             cudaInstallSucceeded = true;
           } catch (error) {
             console.error('Whisper Service: Failed to build CTranslate2 with CUDA support:', error.message);
@@ -647,6 +688,7 @@ class WhisperService {
 
       finalInstalled = await this._detectDependencies();
       config.serviceStatus = finalInstalled ? 'stopped' : 'error';
+      config.buildWithCudnn = (hasCuda && cudaInstallSucceeded) ? requestedWithCudnn : null;
       if (!finalInstalled) {
         config.lastError = {
           message: 'Whisper dependencies failed to install. Check server logs for details.',
@@ -662,6 +704,7 @@ class WhisperService {
       config.serviceOwner = null;
       config.activeDevice = null;
       config.activeComputeType = null;
+      config.buildWithCudnn = null;
       config.lastError = {
         message: error.message || 'Failed to install Whisper dependencies',
         timestamp: new Date()
@@ -671,14 +714,30 @@ class WhisperService {
     }
 
     const suffix = attemptedCudaInstall
-      ? (cudaInstallSucceeded ? (cudaReady ? ' (CUDA ready)' : ' (CUDA installed but runtime not ready, CPU fallback)') : (cpuFallbackInstalled ? ' (CUDA install failed, CPU fallback)' : ' (CUDA install failed)'))
+      ? (cudaInstallSucceeded ? (cudaReady ? ` (CUDA ready, cuDNN ${requestedWithCudnn ? 'enabled' : 'disabled'})` : ' (CUDA installed but runtime not ready, CPU fallback)') : (cpuFallbackInstalled ? ' (CUDA install failed, CPU fallback)' : ' (CUDA install failed)'))
       : '';
 
     return { success: finalInstalled, message: `faster-whisper installed ${finalInstalled ? 'successfully' : 'with issues'}${suffix}` };
   }
 
   async _ensureInstalled() {
-    const config = await this._getConfig();
+    let config = await this._getConfig();
+    const requiresCudaBuildSync = this._isJetson() && this._hasCudaSupport();
+    const requestedWithCudnn = this._requestedWithCudnn();
+    const buildMismatch = requiresCudaBuildSync && typeof config.buildWithCudnn === 'boolean'
+      && config.buildWithCudnn !== requestedWithCudnn;
+
+    if (buildMismatch) {
+      const mismatchMessage = `Whisper Service: build mismatch detected (installed cuDNN ${config.buildWithCudnn ? 'enabled' : 'disabled'}, requested ${requestedWithCudnn ? 'enabled' : 'disabled'}).`;
+      if (this._isTruthyFlag(process.env.WHISPER_AUTO_REPAIR_BUILD ?? '1')) {
+        console.warn(`${mismatchMessage} Rebuilding dependencies to match requested configuration.`);
+        await this.installDependencies();
+        config = await this._getConfig();
+      } else {
+        throw new Error(`${mismatchMessage} Re-run Whisper dependency install.`);
+      }
+    }
+
     if (!config.isInstalled) {
       const detected = await this._detectDependencies();
       if (!detected) throw new Error('Whisper dependencies are not installed yet');
@@ -739,6 +798,12 @@ class WhisperService {
         } catch (error) {
           startError = error;
           console.warn(`Whisper Service: failed to start with device=${device} computeType=${computeType}:`, error.message);
+          const startupLogs = runtime?.logBuffer?.slice(-40).join('\n');
+          if (startupLogs && startupLogs.trim()) {
+            console.warn(
+              `Whisper Service: startup logs for device=${device} computeType=${computeType}:\n${startupLogs}`
+            );
+          }
           try { await runtime.stop('SIGKILL'); } catch (stopError) { console.warn('Whisper Service: error while stopping failed runtime:', stopError.message); }
           this.runtime = null;
         }
@@ -784,6 +849,7 @@ class WhisperService {
       activeModel: config.activeModel,
       activeDevice: config.activeDevice || runtimeStatus.device || null,
       activeComputeType: config.activeComputeType || runtimeStatus.computeType || null,
+      buildWithCudnn: typeof config.buildWithCudnn === 'boolean' ? config.buildWithCudnn : null,
       installedModels: config.installedModels,
       availableModels: AVAILABLE_MODELS,
       modelDirectory: config.modelDirectory,
@@ -1002,6 +1068,75 @@ class WhisperService {
     }
   }
 
+  _isCudnnExecutionFailure(error, logs = '') {
+    const combined = `${error?.message || ''}\n${logs || ''}`.toLowerCase();
+    return combined.includes('cudnn_status_execution_failed')
+      || combined.includes('cudnn_status_not_supported')
+      || combined.includes('cudnn failed');
+  }
+
+  async _startNoCudnnRepair(config) {
+    if (this.noCudnnRepairPromise) {
+      return this.noCudnnRepairPromise;
+    }
+
+    this.noCudnnRepairPromise = (async () => {
+      process.env.WHISPER_CT2_WITH_CUDNN = '0';
+      console.warn('Whisper Service: starting automatic Jetson repair (rebuild CTranslate2 with cuDNN disabled for CUDA path).');
+
+      const installResult = await this.installDependencies();
+      if (!installResult?.success) {
+        throw new Error(installResult?.message || 'No-cuDNN rebuild failed');
+      }
+
+      const preferredCompute = process.env.WHISPER_COMPUTE_TYPE || 'int8_float16';
+      await this.restartService(config.activeModel, {
+        devicePreference: 'cuda',
+        computePreference: preferredCompute
+      });
+      console.warn(`Whisper Service: automatic Jetson repair completed; CUDA runtime restarted (computeType=${preferredCompute}).`);
+      return true;
+    })();
+
+    try {
+      return await this.noCudnnRepairPromise;
+    } finally {
+      this.noCudnnRepairPromise = null;
+    }
+  }
+
+  async _tryNoCudnnJetsonRepair({ error, recentLogs, config, transcribeOnce }) {
+    if (!this._shouldAutoDisableCudnnOnFailure()) {
+      return null;
+    }
+    if (!this._isCudnnExecutionFailure(error, recentLogs)) {
+      return null;
+    }
+    const now = Date.now();
+    const cooldownMs = Number.parseInt(String(process.env.WHISPER_NO_CUDNN_REPAIR_COOLDOWN_MS || '600000'), 10);
+    if (!this.noCudnnRepairPromise
+      && Number.isFinite(cooldownMs)
+      && cooldownMs > 0
+      && (now - (this.noCudnnRepairAttemptedAt || 0)) < cooldownMs) {
+      return null;
+    }
+
+    this.noCudnnRepairAttemptedAt = now;
+    try {
+      await this._startNoCudnnRepair(config);
+      const retry = await transcribeOnce();
+      retry.fallback = {
+        from: 'cuda',
+        to: 'cuda',
+        reason: 'auto_rebuild_without_cudnn'
+      };
+      return retry;
+    } catch (repairError) {
+      console.warn(`Whisper Service: automatic Jetson no-cuDNN repair failed: ${repairError.message}`);
+      return null;
+    }
+  }
+
   async _tryCudaRecovery({ config, transcribeOnce, currentComputeType = null }) {
     if (process.env.WHISPER_CUDA_RECOVERY === '0') {
       return null;
@@ -1041,6 +1176,16 @@ class WhisperService {
 
     const currentComputeType = this.runtime?.computeType || config.activeComputeType || null;
     this._logCudaFailure(error, recentLogs);
+
+    const repaired = await this._tryNoCudnnJetsonRepair({
+      error,
+      recentLogs,
+      config,
+      transcribeOnce
+    });
+    if (repaired) {
+      return repaired;
+    }
 
     const recovered = await this._tryCudaRecovery({
       config,

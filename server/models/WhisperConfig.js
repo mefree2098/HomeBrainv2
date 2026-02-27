@@ -69,6 +69,10 @@ const whisperConfigSchema = new mongoose.Schema(
       type: String,
       default: null
     },
+    buildWithCudnn: {
+      type: Boolean,
+      default: null
+    },
     activeModel: {
       type: String,
       default: 'small'
