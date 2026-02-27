@@ -17,6 +17,8 @@ struct DashboardView: View {
     @State private var favoriteDeviceIds: Set<String> = []
     @State private var favoritesProfileId: String?
     @State private var pendingFavoriteDeviceIds: Set<String> = []
+    @State private var thermostatTemperatureDrafts: [String: Double] = [:]
+    @State private var pendingControlDeviceIds: Set<String> = []
 
     @State private var commandText = ""
     @State private var commandResponse = ""
@@ -237,7 +239,7 @@ struct DashboardView: View {
     }
 
     private var securityPanel: some View {
-        HBPanel {
+        return HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Label("Security Alarm", systemImage: "shield")
@@ -365,7 +367,12 @@ struct DashboardView: View {
     }
 
     private func featuredDeviceCard(_ device: DeviceItem) -> some View {
-        HBPanel {
+        let isThermostat = device.type == "thermostat"
+        let mode = thermostatMode(for: device)
+        let statusText = isThermostat ? mode.uppercased() : (device.status ? "On" : "Off")
+        let statusEnabled = isThermostat ? mode != "off" : device.status
+
+        return HBPanel {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     Image(systemName: iconForDevice(device.type))
@@ -379,12 +386,12 @@ struct DashboardView: View {
                     HStack(spacing: 8) {
                         favoriteButton(for: device)
 
-                        Text(device.status ? "On" : "Off")
+                        Text(statusText)
                             .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(device.status ? Color.black.opacity(0.7) : HBPalette.textPrimary)
+                            .foregroundStyle(statusEnabled ? Color.black.opacity(0.7) : HBPalette.textPrimary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
-                            .background(device.status ? Color.white.opacity(0.9) : Color.white.opacity(0.12), in: Capsule())
+                            .background(statusEnabled ? Color.white.opacity(0.9) : Color.white.opacity(0.12), in: Capsule())
                     }
                 }
 
@@ -398,32 +405,44 @@ struct DashboardView: View {
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
-                if let temperature = device.temperature {
-                    HStack {
-                        Text("Temperature")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                        Spacer()
-                        Text("\(Int(temperature))°F")
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
+                if isThermostat {
+                    featuredThermostatControls(for: device)
+                } else {
+                    if let temperature = device.temperature {
+                        HStack {
+                            Text("Temperature")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                            Spacer()
+                            Text("\(Int(temperature))°F")
+                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
+                        }
                     }
-                }
 
-                Button(device.status ? "Turn Off" : "Turn On") {
-                    Task { await toggleDevice(device) }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(device.status ? Color.red.opacity(0.9) : HBPalette.accentBlue)
-                .frame(maxWidth: .infinity)
+                    Button(device.status ? "Turn Off" : "Turn On") {
+                        Task { await toggleDevice(device) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(device.status ? Color.red.opacity(0.9) : HBPalette.accentBlue)
+                    .frame(maxWidth: .infinity)
+                    .disabled(pendingControlDeviceIds.contains(device.id))
 
-                Text("Say: \"Hey Anna, \(device.status ? "turn off" : "turn on") \(device.name)\"")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-                    .lineLimit(2)
+                    Text("Say: \"Hey Anna, \(device.status ? "turn off" : "turn on") \(device.name)\"")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .lineLimit(2)
+                }
             }
         }
-        .frame(width: isCompact ? 260 : 300)
+        .frame(width: featuredCardWidth(for: device))
+    }
+
+    private func featuredCardWidth(for device: DeviceItem) -> CGFloat {
+        if device.type == "thermostat" {
+            return isCompact ? 340 : 620
+        }
+        return isCompact ? 260 : 300
     }
 
     private func favoriteButton(for device: DeviceItem) -> some View {
@@ -450,6 +469,140 @@ struct DashboardView: View {
         .buttonStyle(.plain)
         .disabled(isPending)
         .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
+    }
+
+    private func featuredThermostatControls(for device: DeviceItem) -> some View {
+        let pending = pendingControlDeviceIds.contains(device.id)
+        let mode = thermostatMode(for: device)
+        let onMode = thermostatOnMode(for: device)
+        let targetTemp = Int(currentThermostatSetpoint(for: device).rounded())
+        let currentTemp = device.temperature.map { Int($0.rounded()) }
+        let isOff = mode == "off"
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Button {
+                let nextMode = isOff ? onMode : "off"
+                Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
+            } label: {
+                Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(isOff ? Color.black.opacity(0.68) : Color.white.opacity(0.88))
+            .foregroundStyle(isOff ? Color.white : Color.black.opacity(0.82))
+            .disabled(pending)
+
+            thermostatSetpointPanel(
+                device: device,
+                mode: mode,
+                targetTemp: targetTemp,
+                currentTemp: currentTemp,
+                pending: pending
+            )
+
+            Text("Say: \"Hey Anna, set \(device.name) to \(targetTemp) degrees\"")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .lineLimit(2)
+        }
+    }
+
+    private func thermostatSetpointPanel(
+        device: DeviceItem,
+        mode: String,
+        targetTemp: Int,
+        currentTemp: Int?,
+        pending: Bool
+    ) -> some View {
+        VStack(spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("SETPOINT")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .tracking(1.2)
+                        .foregroundStyle(HBPalette.textSecondary)
+                    Text("\(targetTemp)°F")
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                Spacer(minLength: 12)
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("CURRENT")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .tracking(1.2)
+                        .foregroundStyle(HBPalette.textSecondary)
+                    Text(currentTemp.map { "\($0)°F" } ?? "--")
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+            }
+
+            Slider(
+                value: Binding(
+                    get: { currentThermostatSetpoint(for: device) },
+                    set: { thermostatTemperatureDrafts[device.id] = clampThermostatTemperature($0) }
+                ),
+                in: 55...90,
+                step: 1,
+                onEditingChanged: { editing in
+                    guard !editing else { return }
+                    let next = Int(currentThermostatSetpoint(for: device).rounded())
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_temperature", value: next) }
+                }
+            )
+            .tint(Color.white.opacity(0.95))
+            .disabled(pending)
+
+            HStack(spacing: 8) {
+                ForEach(["auto", "cool", "heat", "off"], id: \.self) { thermostatMode in
+                    thermostatModeChip(
+                        device: device,
+                        mode: thermostatMode,
+                        activeMode: mode,
+                        pending: pending
+                    )
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(red: 0.09, green: 0.15, blue: 0.37).opacity(0.66), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(HBPalette.accentBlue.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    private func thermostatModeChip(
+        device: DeviceItem,
+        mode: String,
+        activeMode: String,
+        pending: Bool
+    ) -> some View {
+        let active = activeMode == mode
+
+        return Button(mode.uppercased()) {
+            Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: mode) }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 14, weight: .bold, design: .rounded))
+        .foregroundStyle(active ? Color.black.opacity(0.86) : HBPalette.textPrimary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(active ? Color.white.opacity(0.9) : Color.black.opacity(0.62))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(active ? Color.clear : Color.white.opacity(0.14), lineWidth: 1)
+        )
+        .disabled(pending)
     }
 
     private var voiceCommandPanel: some View {
@@ -580,24 +733,176 @@ struct DashboardView: View {
     }
 
     private func toggleDevice(_ device: DeviceItem) async {
+        await handleDeviceControl(
+            deviceId: device.id,
+            action: device.status ? "turn_off" : "turn_on"
+        )
+    }
+
+    private func handleDeviceControl(deviceId: String, action: String, value: Any? = nil) async {
+        pendingControlDeviceIds.insert(deviceId)
+        defer {
+            pendingControlDeviceIds.remove(deviceId)
+        }
+
         do {
-            let action = device.status ? "turn_off" : "turn_on"
-            let payload: [String: Any] = [
-                "deviceId": device.id,
+            var payload: [String: Any] = [
+                "deviceId": deviceId,
                 "action": action
             ]
-            let response = try await session.apiClient.post("/api/devices/control", body: payload)
-            let object = JSON.object(response)
-            let data = JSON.object(object["data"])
-            let updatedObject = JSON.object(data["device"])
-            let updated = DeviceItem.from(updatedObject)
+            if let value {
+                payload["value"] = value
+            }
 
-            if let index = devices.firstIndex(where: { $0.id == updated.id }) {
-                devices[index] = updated
+            let response = try await session.apiClient.post("/api/devices/control", body: payload)
+            let root = JSON.object(response)
+            let data = JSON.object(root["data"])
+            let updatedObject = JSON.object(data["device"])
+
+            if !updatedObject.isEmpty {
+                let updated = DeviceItem.from(updatedObject)
+                upsertDevice(updated)
+            } else {
+                applyControlLocally(deviceId: deviceId, action: action, value: value)
+            }
+
+            if action == "set_temperature" {
+                thermostatTemperatureDrafts.removeValue(forKey: deviceId)
             }
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func applyControlLocally(deviceId: String, action: String, value: Any?) {
+        guard let index = devices.firstIndex(where: { $0.id == deviceId }) else {
+            return
+        }
+
+        var updated = devices[index]
+
+        switch action {
+        case "turn_on":
+            updated.status = true
+
+        case "turn_off":
+            updated.status = false
+
+        case "set_temperature":
+            if let target = numberValue(from: value) {
+                updated.targetTemperature = clampThermostatTemperature(target)
+                updated.status = true
+            }
+
+        case "set_mode":
+            if let mode = normalizeThermostatMode(value) {
+                updated.status = mode != "off"
+                updated.properties["hvacMode"] = mode
+                updated.properties["smartThingsThermostatMode"] = mode
+                if mode != "off" {
+                    updated.properties["smartThingsLastActiveThermostatMode"] = mode
+                }
+            }
+
+        default:
+            break
+        }
+
+        devices[index] = updated
+    }
+
+    private func upsertDevice(_ updated: DeviceItem) {
+        if let index = devices.firstIndex(where: { $0.id == updated.id }) {
+            devices[index] = updated
+        } else {
+            devices.append(updated)
+        }
+        devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func numberValue(from value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String, let parsed = Double(value) { return parsed }
+        return nil
+    }
+
+    private func normalizeThermostatMode(_ value: Any?) -> String? {
+        guard let value else { return nil }
+        let raw = String(describing: value)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+
+        switch raw {
+        case "auto":
+            return "auto"
+        case "cool":
+            return "cool"
+        case "heat", "auxheatonly", "emergencyheat":
+            return "heat"
+        case "off":
+            return "off"
+        default:
+            return nil
+        }
+    }
+
+    private func thermostatMode(for device: DeviceItem) -> String {
+        let candidates: [Any?] = [
+            device.properties["smartThingsThermostatMode"],
+            device.properties["ecobeeHvacMode"],
+            device.properties["hvacMode"]
+        ]
+
+        for candidate in candidates {
+            if let normalized = normalizeThermostatMode(candidate) {
+                return normalized
+            }
+        }
+
+        return "auto"
+    }
+
+    private func thermostatOnMode(for device: DeviceItem) -> String {
+        let mode = thermostatMode(for: device)
+        if mode != "off" {
+            return mode
+        }
+
+        if let fallback = normalizeThermostatMode(
+            device.properties["smartThingsLastActiveThermostatMode"]
+                ?? device.properties["ecobeeLastActiveHvacMode"]
+        ) {
+            return fallback
+        }
+
+        return "auto"
+    }
+
+    private func thermostatTargetTemperature(for device: DeviceItem) -> Int {
+        if let target = device.targetTemperature {
+            return Int(clampThermostatTemperature(target))
+        }
+        if let current = device.temperature {
+            return Int(clampThermostatTemperature(current))
+        }
+        return 68
+    }
+
+    private func clampThermostatTemperature(_ value: Double) -> Double {
+        let clamped = min(90, max(55, value))
+        return clamped.rounded()
+    }
+
+    private func currentThermostatSetpoint(for device: DeviceItem) -> Double {
+        if let draft = thermostatTemperatureDrafts[device.id] {
+            return clampThermostatTemperature(draft)
+        }
+        return Double(thermostatTargetTemperature(for: device))
     }
 
     private func applyFavoriteContext(_ context: FavoriteDeviceContext) {

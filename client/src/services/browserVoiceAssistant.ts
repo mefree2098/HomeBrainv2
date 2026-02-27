@@ -15,6 +15,7 @@ const MIN_FALLBACK_CLIP_BYTES = 64;
 const MAX_AUDIO_B64_LENGTH = 500000;
 const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
 const WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX = 2;
+const BROWSER_VOICE_BUILD_TAG = "2026-02-27-fallback-query-v2";
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;
@@ -164,7 +165,7 @@ class BrowserVoiceAssistant {
       mode: "starting",
       engine: "browser_speech",
       error: null
-    }, "enable requested");
+    }, `enable requested (build=${BROWSER_VOICE_BUILD_TAG})`);
 
     this.isStopping = false;
     this.useServerSttFallback = false;

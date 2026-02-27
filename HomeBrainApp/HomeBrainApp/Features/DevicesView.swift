@@ -57,6 +57,14 @@ struct DevicesView: View {
         }
     }
 
+    private var thermostatDevices: [DeviceItem] {
+        filteredDevices.filter { $0.type == "thermostat" }
+    }
+
+    private var nonThermostatDevices: [DeviceItem] {
+        filteredDevices.filter { $0.type != "thermostat" }
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             if isLoading {
@@ -87,9 +95,19 @@ struct DevicesView: View {
                                 subtitle: "Adjust filters or create a new device."
                             )
                         } else {
-                            LazyVGrid(columns: gridColumns, spacing: 12) {
-                                ForEach(filteredDevices) { device in
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(thermostatDevices) { device in
                                     deviceCard(device)
+                                        .frame(maxWidth: isCompact ? .infinity : 720, alignment: .leading)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+
+                                if !nonThermostatDevices.isEmpty {
+                                    LazyVGrid(columns: gridColumns, spacing: 12) {
+                                        ForEach(nonThermostatDevices) { device in
+                                            deviceCard(device)
+                                        }
+                                    }
                                 }
                             }
                         }
