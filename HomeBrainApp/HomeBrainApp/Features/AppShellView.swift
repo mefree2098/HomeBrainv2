@@ -66,118 +66,265 @@ struct AppShellView: View {
 
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     @State private var selection: AppSection? = .dashboard
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var isVoiceMuted = true
+    @State private var activeDevicesSummary = "--/--"
+
+    private var isCompact: Bool { horizontalSizeClass == .compact }
 
     private var visibleSections: [AppSection] {
         AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
     }
 
     var body: some View {
-        Group {
-            if horizontalSizeClass == .compact {
+        ZStack {
+            HBPageBackground()
+                .ignoresSafeArea()
+
+            if isCompact {
                 compactShell
             } else {
                 regularShell
             }
         }
+        .tint(HBPalette.accentBlue)
+        .preferredColorScheme(.dark)
         .onAppear {
             syncSelectionWithVisibleSections()
         }
         .onChange(of: session.currentUser?.role) { _, _ in
             syncSelectionWithVisibleSections()
         }
-    }
-
-    private var compactShell: some View {
-        NavigationStack {
-            detailContent
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 12) {
-                Menu {
-                    if let user = session.currentUser {
-                        Section("Signed In") {
-                            Text("\(user.name) (\(user.role))")
-                        }
-                    }
-
-                    Section("Sections") {
-                        ForEach(visibleSections) { section in
-                            Button {
-                                selection = section
-                            } label: {
-                                Label {
-                                    Text(section.title)
-                                } icon: {
-                                    if selection == section {
-                                        Image(systemName: "checkmark")
-                                    } else {
-                                        Image(systemName: section.icon)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } label: {
-                    Label("Sections", systemImage: "square.grid.2x2")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button {
-                    session.logout()
-                } label: {
-                    Label("Logout", systemImage: "rectangle.portrait.and.arrow.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding(.horizontal)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
-            .background(.ultraThinMaterial)
+        .task(id: session.currentUser?.id ?? "guest") {
+            await refreshHeaderSummary()
         }
     }
 
     private var regularShell: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            List {
-                Section("HomeBrain") {
-                    ForEach(visibleSections) { section in
-                        Button {
-                            selection = section
-                        } label: {
-                            Label(section.title, systemImage: section.icon)
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(
-                            selection == section
-                            ? Color.accentColor.opacity(0.15)
-                            : Color.clear
-                        )
+        VStack(spacing: 0) {
+            topBar
+
+            HStack(spacing: 0) {
+                sidebar
+                detailStack
+            }
+        }
+    }
+
+    private var compactShell: some View {
+        VStack(spacing: 0) {
+            topBar
+            detailStack
+        }
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            if isCompact {
+                sectionsMenuButton
+            }
+
+            Text("Home Brain")
+                .font(.system(size: isCompact ? 18 : 32, weight: .bold, design: .rounded))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Text(isCompact ? activeDevicesSummary : "\(activeDevicesSummary) devices active")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.85))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.92), in: Capsule())
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Button {
+                isVoiceMuted.toggle()
+            } label: {
+                Group {
+                    if isCompact {
+                        Label("", systemImage: isVoiceMuted ? "mic.slash" : "mic")
+                            .labelStyle(.iconOnly)
+                    } else {
+                        Label(isVoiceMuted ? "Voice Off" : "Voice On", systemImage: isVoiceMuted ? "mic.slash" : "mic")
+                            .labelStyle(.titleAndIcon)
                     }
                 }
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+                .padding(.horizontal, isCompact ? 10 : 14)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
-            .listStyle(.sidebar)
-            .navigationTitle("HomeBrain")
-        } detail: {
-            detailContent
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                if let user = session.currentUser {
-                    Text("\(user.name) (\(user.role))")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+
+            if !isCompact {
+                chromeIconButton(systemImage: "sun.max")
+                chromeIconButton(systemImage: "gearshape") {
+                    selection = .settings
                 }
             }
 
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Logout") {
-                    session.logout()
+            chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
+                session.logout()
+            }
+        }
+        .padding(.horizontal, isCompact ? 12 : 16)
+        .padding(.vertical, 12)
+        .background(HBPalette.chrome.opacity(0.98))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+        }
+    }
+
+    private var sectionsMenuButton: some View {
+        Menu {
+            if let user = session.currentUser {
+                Section("Signed In") {
+                    Text("\(user.name) (\(user.role))")
                 }
             }
+
+            Section("Sections") {
+                ForEach(visibleSections) { section in
+                    Button {
+                        selection = section
+                    } label: {
+                        if selection == section {
+                            Label(section.title, systemImage: "checkmark")
+                        } else {
+                            Label(section.title, systemImage: section.icon)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(HBPalette.textPrimary)
+                .frame(width: 36, height: 36)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+
+    private func chromeIconButton(systemImage: String, action: @escaping () -> Void = {}) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(HBPalette.textSecondary)
+                .frame(width: 36, height: 36)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(visibleSections) { section in
+                Button {
+                    selection = section
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: section.icon)
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 18)
+
+                        Text(section.title)
+                            .font(.system(size: 24, weight: .semibold, design: .rounded))
+
+                        Spacer()
+
+                        if selection == section {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(selection == section ? HBPalette.textPrimary : HBPalette.textSecondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(
+                                selection == section
+                                ? LinearGradient(
+                                    colors: [HBPalette.accentBlue.opacity(0.95), HBPalette.accentPurple.opacity(0.95)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                                : LinearGradient(
+                                    colors: [Color.white.opacity(0.03), Color.white.opacity(0.0)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(selection == section ? Color.clear : Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+
+            HBPanel {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Voice Commands Active")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                    Text("Say \"Hey Anna\" or \"Henry\" to control your home")
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 12)
+        .frame(width: 245)
+        .background(
+            LinearGradient(
+                colors: [HBPalette.sidebar.opacity(0.98), HBPalette.chrome.opacity(0.96)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1)
+        }
+    }
+
+    private var detailStack: some View {
+        NavigationStack {
+            detailContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(isCompact ? 12 : 16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            LinearGradient(
+                colors: [HBPalette.pageTop.opacity(0.72), HBPalette.pageMid.opacity(0.62), HBPalette.pageBottom.opacity(0.55)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.07))
+                .frame(height: 1)
         }
     }
 
@@ -233,5 +380,18 @@ struct AppShellView: View {
             return
         }
         selection = visibleSections.first
+    }
+
+    private func refreshHeaderSummary() async {
+        do {
+            let response = try await session.apiClient.get("/api/devices")
+            let root = JSON.object(response)
+            let data = JSON.object(root["data"])
+            let devices = JSON.array(data["devices"]).map(DeviceItem.from)
+            let active = devices.filter { $0.status }.count
+            activeDevicesSummary = "\(active)/\(devices.count)"
+        } catch {
+            activeDevicesSummary = "--/--"
+        }
     }
 }

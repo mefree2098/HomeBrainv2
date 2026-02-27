@@ -429,6 +429,9 @@ class MaintenanceService {
     const brightness = this.mapSmartThingsBrightness(capabilities, statusRoot);
     const temperature = this.mapSmartThingsTemperature(statusRoot);
     const targetTemperature = this.mapSmartThingsTargetTemperature(statusRoot);
+    const thermostatMode = type === 'thermostat'
+      ? this.mapSmartThingsThermostatMode(statusRoot)
+      : undefined;
 
     const roomName = await this.resolveSmartThingsRoom(device) || 'SmartThings';
     const brand = device.manufacturerName || device.manufacturer || 'SmartThings';
@@ -461,7 +464,14 @@ class MaintenanceService {
         smartThingsDeviceTypeName: device.deviceTypeName || null,
         smartThingsManufacturer: device.manufacturerName || device.manufacturer || null,
         smartThingsUpstream: upstreamProvider || null,
-        isThermostat: type === 'thermostat'
+        isThermostat: type === 'thermostat',
+        ...(thermostatMode ? {
+          hvacMode: thermostatMode,
+          smartThingsThermostatMode: thermostatMode
+        } : {}),
+        ...(thermostatMode && thermostatMode !== 'off' ? {
+          smartThingsLastActiveThermostatMode: thermostatMode
+        } : {})
       },
       brand,
       model,
@@ -746,6 +756,39 @@ class MaintenanceService {
 
     const numeric = Number(preferred);
     return Number.isNaN(numeric) ? undefined : numeric;
+  }
+
+  mapSmartThingsThermostatMode(statusRoot) {
+    const value = this.getStatusValue(statusRoot, [
+      ['thermostatMode', 'thermostatMode', 'value'],
+      ['thermostatMode', 'thermostatMode'],
+      ['thermostatMode', 'value'],
+      ['thermostatMode']
+    ]);
+
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]/g, '');
+
+    if (normalized === 'auto') {
+      return 'auto';
+    }
+    if (normalized === 'cool') {
+      return 'cool';
+    }
+    if (normalized === 'heat' || normalized === 'auxheatonly' || normalized === 'emergencyheat') {
+      return 'heat';
+    }
+    if (normalized === 'off') {
+      return 'off';
+    }
+
+    return undefined;
   }
 
   async resolveSmartThingsRoom(device) {

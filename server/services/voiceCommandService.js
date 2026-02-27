@@ -15,8 +15,13 @@ const ACTION_MAP = {
   toggle: 'toggle',
   set_brightness: 'setBrightness',
   setbrightness: 'setBrightness',
+  fade: 'setBrightness',
   set_color: 'setColor',
   setcolor: 'setColor',
+  set_colour: 'setColor',
+  setcolour: 'setColor',
+  color: 'setColor',
+  colour: 'setColor',
   set_temperature: 'setTemperature',
   settemperature: 'setTemperature',
   lock: 'lock',
@@ -25,21 +30,58 @@ const ACTION_MAP = {
   close: 'close'
 };
 
+const COLOR_NAME_TO_HEX = Object.freeze({
+  red: '#ff0000',
+  blue: '#0000ff',
+  green: '#00ff00',
+  yellow: '#ffff00',
+  orange: '#ffa500',
+  purple: '#800080',
+  pink: '#ff69b4',
+  white: '#ffffff',
+  'warm white': '#ffd6aa',
+  'cool white': '#f5faff',
+  'soft white': '#fff1d6',
+  daylight: '#f8fbff',
+  cyan: '#00ffff',
+  magenta: '#ff00ff',
+  teal: '#008080',
+  indigo: '#4b0082',
+  violet: '#8f00ff',
+  amber: '#ffbf00',
+  gold: '#ffd700',
+  gray: '#808080',
+  grey: '#808080'
+});
+
+const COLOR_NAME_ENTRIES = Object.entries(COLOR_NAME_TO_HEX).sort((a, b) => b[0].length - a[0].length);
+
 class VoiceCommandService {
   constructor() {
     this.lastContextCache = { updatedAt: 0, data: null };
     this.CONTEXT_TTL_MS = 15_000;
   }
 
-  getDeviceCapabilities(type, source = 'local') {
+  getDeviceCapabilities(type, source = 'local', properties = {}) {
     const normalizedSource = (source || 'local').toLowerCase();
     if (normalizedSource === 'harmony') {
       return ['turn_on', 'turn_off', 'toggle'];
     }
 
     switch ((type || '').toLowerCase()) {
-      case 'light':
-        return ['turn_on', 'turn_off', 'set_brightness', 'set_color'];
+      case 'light': {
+        const smartThingsCapabilities = Array.isArray(properties?.smartThingsCapabilities)
+          ? properties.smartThingsCapabilities
+          : [];
+        const supportsColor = normalizedSource === 'smartthings'
+          ? smartThingsCapabilities.includes('colorControl')
+          : normalizedSource !== 'insteon';
+        const capabilities = ['turn_on', 'turn_off', 'set_brightness'];
+        if (supportsColor) {
+          capabilities.push('set_color');
+        }
+        return capabilities;
+      }
       case 'switch':
         return ['turn_on', 'turn_off', 'toggle'];
       case 'thermostat':
@@ -72,7 +114,11 @@ class VoiceCommandService {
         room: device.room,
         type: device.type,
         source: (device?.properties?.source || 'local').toString().toLowerCase(),
-        capabilities: this.getDeviceCapabilities(device.type, (device?.properties?.source || 'local').toString()),
+        capabilities: this.getDeviceCapabilities(
+          device.type,
+          (device?.properties?.source || 'local').toString(),
+          device?.properties || {}
+        ),
         properties: device.properties || {}
       };
       deviceMap.set(normalized.id, { ...device, normalized });
@@ -167,7 +213,7 @@ OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
 DECISION RULES
 1. ALWAYS return at least one action when the user wants something controlled. Map the request to the closest matching device using name + room context. Prefer devices in ${primaryRoom} unless the user clearly specifies another room.
 2. ONLY use deviceId / sceneId values from the lists above. Do not invent IDs. If two devices match equally, pick the most specific (exact name match beats fuzzy match).
-3. For brightness actions return percentages (0-100). For temperature, use whole-number Fahrenheit unless the user specifies another scale.
+3. For brightness actions return percentages (0-100). For color actions return a hex color string (for example "#ff0000"). For temperature, use whole-number Fahrenheit unless the user specifies another scale.
 4. Use "workflow_create" when the user asks to create/schedule a routine or workflow. Use "workflow_control" when the user asks to run/enable/disable an existing workflow. Immediate commands like "turn on the vault light" must stay "device_control".
 5. If the request is a general question or not about controlling devices, set intent to "query", leave "actions" empty, and provide the direct answer in "response". Only use "followUpQuestion" when clarification is required.
 6. Never return empty "actions" for "device_control" intents.
@@ -233,6 +279,72 @@ Return ONLY the JSON object with no commentary.`;
     return null;
   }
 
+  normalizeHexColor(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    const hex = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      return hex.toLowerCase();
+    }
+
+    return '';
+  }
+
+  normalizeColorValue(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+
+    const directHex = this.normalizeHexColor(value);
+    if (directHex) {
+      return directHex;
+    }
+
+    const normalizedName = value
+      .trim()
+      .toLowerCase()
+      .replace(/[_-]/g, ' ')
+      .replace(/\s+/g, ' ');
+
+    if (!normalizedName) {
+      return '';
+    }
+
+    if (COLOR_NAME_TO_HEX[normalizedName]) {
+      return COLOR_NAME_TO_HEX[normalizedName];
+    }
+
+    return '';
+  }
+
+  extractColor(commandText) {
+    if (!commandText || typeof commandText !== 'string') {
+      return '';
+    }
+
+    const directHexMatch = commandText.match(/#([0-9a-fA-F]{6})\b/);
+    if (directHexMatch) {
+      return `#${directHexMatch[1].toLowerCase()}`;
+    }
+
+    const text = commandText.toLowerCase();
+    for (const [colorName, hex] of COLOR_NAME_ENTRIES) {
+      const pattern = new RegExp(`\\b${colorName.replace(/\s+/g, '\\s+')}\\b`, 'i');
+      if (pattern.test(text)) {
+        return hex;
+      }
+    }
+
+    return '';
+  }
+
   fallbackInterpretation(commandText, context, room) {
     const text = commandText.toLowerCase();
     const actions = [];
@@ -243,6 +355,8 @@ Return ONLY the JSON object with no commentary.`;
     }
 
     const value = this.extractNumber(commandText);
+    const colorValue = this.extractColor(commandText);
+    const capabilities = new Set(Array.isArray(device.capabilities) ? device.capabilities : []);
 
     const actionCandidates = [];
     if (text.includes('turn on') || text.includes('switch on') || text.includes('power on')) {
@@ -254,8 +368,23 @@ Return ONLY the JSON object with no commentary.`;
     if (text.includes('toggle')) {
       actionCandidates.push('toggle');
     }
-    if (text.includes('dim') || text.includes('brightness') || text.includes('bright')) {
+    if (
+      text.includes('dim') ||
+      text.includes('brightness') ||
+      text.includes('bright') ||
+      text.includes('fade')
+    ) {
       actionCandidates.push('set_brightness');
+    }
+    if (
+      text.includes('color') ||
+      text.includes('colour') ||
+      text.includes('hue') ||
+      text.includes('tint') ||
+      text.includes('rgb') ||
+      !!colorValue
+    ) {
+      actionCandidates.push('set_color');
     }
     if (text.includes('temperature') || text.includes('degrees') || text.includes('heat') || text.includes('cool')) {
       actionCandidates.push('set_temperature');
@@ -276,11 +405,42 @@ Return ONLY the JSON object with no commentary.`;
       return null;
     }
 
+    const selectedAction = actionCandidates.find((candidate) => capabilities.has(candidate));
+    if (!selectedAction) {
+      return null;
+    }
+
+    let resolvedValue = value != null ? value : undefined;
+    if (selectedAction === 'set_brightness') {
+      const loweredText = text;
+      if (resolvedValue == null) {
+        if (/\b(dim|dimmer|lower|fade\s*down|fade\s*out)\b/.test(loweredText)) {
+          resolvedValue = 30;
+        } else if (/\b(brighten|brighter|raise|fade\s*up|fade\s*in)\b/.test(loweredText)) {
+          resolvedValue = 80;
+        } else if (text.includes('turn on') || text.includes('switch on')) {
+          resolvedValue = 100;
+        }
+      }
+
+      if (resolvedValue != null) {
+        resolvedValue = Math.max(0, Math.min(100, Math.round(Number(resolvedValue))));
+      }
+    }
+
+    if (selectedAction === 'set_color') {
+      const normalizedColor = this.normalizeColorValue(colorValue || String(commandText || ''));
+      if (!normalizedColor) {
+        return null;
+      }
+      resolvedValue = normalizedColor;
+    }
+
     actions.push({
       type: 'device_control',
       deviceId: device.id,
-      action: actionCandidates[0],
-      value: value != null ? value : undefined,
+      action: selectedAction,
+      value: resolvedValue,
       room: room || device.room
     });
 
@@ -289,7 +449,7 @@ Return ONLY the JSON object with no commentary.`;
       confidence: 0.55,
       normalizedCommand: commandText,
       actions,
-      response: `Okay, ${actionCandidates[0].replace('_', ' ')} ${device.name}.`,
+      response: `Okay, ${selectedAction.replace('_', ' ')} ${device.name}.`,
       followUpQuestion: null,
       usedFallback: true
     };
@@ -337,7 +497,7 @@ Return ONLY the JSON object with no commentary.`;
       return false;
     }
 
-    const directActionPattern = /\b(turn|switch)\s+(on|off)\b|\b(dim|brighten)\b|\bset\s+(?:the\s+)?(?:brightness|temperature)\b|\b(lock|unlock)\b|\b(open|close)\b|\bactivate\s+\w+/;
+    const directActionPattern = /\b(turn|switch)\s+(on|off)\b|\b(dim|brighten|fade)\b|\bset\s+(?:the\s+)?(?:brightness|temperature|color|colour)\b|\b(color|colour)\b|\b(red|blue|green|yellow|orange|purple|pink|white|cyan|magenta|teal|amber|violet)\b|\b(lock|unlock)\b|\b(open|close)\b|\bactivate\s+\w+/;
 
     return directActionPattern.test(normalized);
   }
@@ -414,10 +574,14 @@ Return ONLY the JSON object with no commentary.`;
         return Math.round(numeric);
       }
     }
-    if (name === 'set_color' || name === 'setcolor') {
+    if (name === 'set_color' || name === 'setcolor' || name === 'set_colour' || name === 'setcolour' || name === 'color' || name === 'colour') {
       if (typeof action.value === 'string') {
-        return action.value.trim();
+        const normalizedColor = this.normalizeColorValue(action.value);
+        if (normalizedColor) {
+          return normalizedColor;
+        }
       }
+      return undefined;
     }
     if (name === 'turn_on' && action.value != null && device?.type === 'light') {
       const numeric = Number(action.value);
@@ -486,6 +650,11 @@ Return ONLY the JSON object with no commentary.`;
       case 'set_brightness':
       case 'setbrightness': {
         const brightness = value != null ? value : 100;
+        await insteonService.setBrightness(deviceRecord._id.toString(), brightness);
+        break;
+      }
+      case 'fade': {
+        const brightness = value != null ? value : 50;
         await insteonService.setBrightness(deviceRecord._id.toString(), brightness);
         break;
       }
