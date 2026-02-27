@@ -39,7 +39,7 @@ struct DeviceItem: Identifiable {
     static func from(_ object: [String: Any]) -> DeviceItem {
         let properties = JSON.object(object["properties"])
 
-        DeviceItem(
+        return DeviceItem(
             id: JSON.id(object),
             name: JSON.string(object, "name", fallback: "Unnamed Device"),
             type: JSON.string(object, "type", fallback: "unknown"),
