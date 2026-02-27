@@ -891,18 +891,26 @@ class BrowserVoiceAssistant {
       if (this.useServerSttFallback) {
         const normalizedFallbackCommand = this.normalizeFallbackDirectCommand(transcript);
         if (this.isLikelyDirectCommand(normalizedFallbackCommand)) {
+          const fallbackWakeWord = this.resolveFallbackWakeWord(transcript);
           if (normalizedFallbackCommand !== transcript.trim()) {
             this.updateStatus({}, `fallback normalized command: "${normalizedFallbackCommand}"`);
           }
-          this.updateStatus({}, `fallback direct command heuristic matched: "${normalizedFallbackCommand}"`);
-          await this.executeCommand(normalizedFallbackCommand, "browser-fallback", confidence);
+          this.updateStatus(
+            {},
+            `fallback direct command heuristic matched: "${normalizedFallbackCommand}" (wake=${fallbackWakeWord})`
+          );
+          await this.executeCommand(normalizedFallbackCommand, fallbackWakeWord, confidence);
           return;
         }
       }
 
       if (this.useServerSttFallback && this.isLikelyDirectCommand(transcript)) {
-        this.updateStatus({}, `fallback direct command heuristic matched: "${transcript}"`);
-        await this.executeCommand(transcript, "browser-fallback", confidence);
+        const fallbackWakeWord = this.resolveFallbackWakeWord(transcript);
+        this.updateStatus(
+          {},
+          `fallback direct command heuristic matched: "${transcript}" (wake=${fallbackWakeWord})`
+        );
+        await this.executeCommand(transcript, fallbackWakeWord, confidence);
         return;
       }
       this.updateStatus({}, `no wake word matched for: "${transcript}"`);
@@ -1216,6 +1224,47 @@ class BrowserVoiceAssistant {
     }
 
     return strippedPrefix;
+  }
+
+  private resolveFallbackWakeWord(transcript: string): string {
+    const match = this.matchWakeWord(transcript);
+    if (match?.wakeWord) {
+      return match.wakeWord;
+    }
+
+    const normalized = this.normalizeWakeWord(transcript);
+    if (/\banna\b/.test(normalized)) {
+      return "anna";
+    }
+    if (/\bhenry\b/.test(normalized)) {
+      return "henry";
+    }
+    if (/\bhome brain\b/.test(normalized)) {
+      return "home brain";
+    }
+    if (/\bcomputer\b/.test(normalized)) {
+      return "computer";
+    }
+
+    if (typeof this.status.pendingWakeWord === "string" && this.status.pendingWakeWord.trim()) {
+      return this.status.pendingWakeWord.trim();
+    }
+
+    // Prefer Anna as the default browser fallback voice persona when no wake-word can be recovered.
+    if (this.wakeWords.includes("anna")) {
+      return "anna";
+    }
+    if (this.wakeWords.includes("hey anna")) {
+      return "hey anna";
+    }
+    if (this.wakeWords.includes("henry")) {
+      return "henry";
+    }
+    if (this.wakeWords.includes("hey henry")) {
+      return "hey henry";
+    }
+
+    return "browser-fallback";
   }
 
   private async playResponse(text: string, wakeWord: string): Promise<void> {
