@@ -629,6 +629,71 @@ Return ONLY the JSON object with no commentary.`;
     return false;
   }
 
+  isLikelyQuestionRequest(commandText) {
+    const text = (commandText || '').toLowerCase().trim();
+    if (!text) {
+      return false;
+    }
+
+    if (/\?$/.test(text)) {
+      return true;
+    }
+
+    return /^(what|who|when|where|why|how|which|is|are|can|could|would|do|does|did|tell me|explain|define|summarize)\b/.test(text);
+  }
+
+  isLikelyControlPhrase(commandText) {
+    const text = (commandText || '').toLowerCase().trim();
+    if (!text) {
+      return false;
+    }
+
+    const directActionPattern = /\b(turn|switch|set|dim|brighten|open|close|lock|unlock|arm|disarm|activate|deactivate|run|start|stop|enable|disable|toggle)\b/;
+    if (directActionPattern.test(text)) {
+      return true;
+    }
+
+    const hasDeviceTarget = /\b(light|lights|switch|lamp|fan|scene|alarm|security|lock|door|garage|thermostat|vault|spotlight)\b/.test(text);
+    const hasOnOffWord = /\b(on|off)\b/.test(text);
+    if (hasDeviceTarget && hasOnOffWord) {
+      return true;
+    }
+
+    const securityModePattern = /\b(arm away|arm stay|armed away|armed stay|disarm(ed)?)\b/;
+    if (securityModePattern.test(text)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  hasControlIntentActions(interpretation) {
+    const intent = (interpretation?.intent || '').toLowerCase();
+    if (['device_control', 'scene_activate', 'workflow_control', 'automation_create', 'workflow_create'].includes(intent)) {
+      return true;
+    }
+
+    const actions = Array.isArray(interpretation?.actions) ? interpretation.actions : [];
+    return actions.some((action) => {
+      const type = (action?.type || '').toLowerCase();
+      return ['device_control', 'scene_activate', 'workflow_control', 'automation_create', 'workflow_create'].includes(type);
+    });
+  }
+
+  shouldRejectUnsafeControlInterpretation(commandText, interpretation) {
+    if (!this.hasControlIntentActions(interpretation)) {
+      return false;
+    }
+
+    if (this.isLikelyControlPhrase(commandText)) {
+      return false;
+    }
+
+    // Never execute device/scene/workflow actions for question-like or conversational
+    // chatter when no explicit control language is present.
+    return true;
+  }
+
   normalizeActionValue(action, device) {
     const name = (action?.action || '').toLowerCase();
     if (name === 'set_brightness' || name === 'setbrightness') {
@@ -1106,6 +1171,22 @@ Return ONLY the JSON object with no commentary.`;
       } else {
         interpretation = null;
       }
+    }
+
+    if (interpretation && this.shouldRejectUnsafeControlInterpretation(commandText, interpretation)) {
+      const isQuestion = this.isLikelyQuestionRequest(commandText);
+      console.log('VoiceCommandService: Rejected unsafe control interpretation for non-actionable utterance.');
+      interpretation = {
+        intent: isQuestion ? 'query' : 'unknown',
+        confidence: 0.35,
+        normalizedCommand: commandText,
+        actions: [],
+        response: isQuestion
+          ? "I heard your question, but I need a bit more detail to answer it accurately."
+          : "I heard that, but it did not sound like a home-control command. Try saying \"turn on Vault Light Switch\".",
+        followUpQuestion: isQuestion ? null : 'What would you like me to control?',
+        usedFallback: true
+      };
     }
 
     const hasActions = Array.isArray(interpretation?.actions) && interpretation.actions.length > 0;
