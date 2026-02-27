@@ -30,11 +30,15 @@ struct DeviceItem: Identifiable {
     var status: Bool
     var isOnline: Bool
     var brightness: Double
+    var color: String
     var temperature: Double?
     var targetTemperature: Double?
+    var properties: [String: Any]
     var lastSeen: String
 
     static func from(_ object: [String: Any]) -> DeviceItem {
+        let properties = JSON.object(object["properties"])
+
         DeviceItem(
             id: JSON.id(object),
             name: JSON.string(object, "name", fallback: "Unnamed Device"),
@@ -43,10 +47,39 @@ struct DeviceItem: Identifiable {
             status: JSON.bool(object, "status"),
             isOnline: JSON.bool(object, "isOnline", fallback: true),
             brightness: JSON.double(object, "brightness"),
-            temperature: object["temperature"] as? Double,
-            targetTemperature: object["targetTemperature"] as? Double,
+            color: normalizedHexColor(object["color"]),
+            temperature: optionalDouble(object["temperature"]),
+            targetTemperature: optionalDouble(object["targetTemperature"]),
+            properties: properties,
             lastSeen: JSON.displayDate(from: object["lastSeen"])
         )
+    }
+
+    private static func optionalDouble(_ value: Any?) -> Double? {
+        if let raw = value as? Double {
+            return raw
+        }
+        if let raw = value as? NSNumber {
+            return raw.doubleValue
+        }
+        if let raw = value as? String, let parsed = Double(raw) {
+            return parsed
+        }
+        return nil
+    }
+
+    private static func normalizedHexColor(_ value: Any?) -> String {
+        guard let raw = value as? String else {
+            return "#ffffff"
+        }
+
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
+              regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil else {
+            return "#ffffff"
+        }
+
+        return trimmed.lowercased()
     }
 }
 
