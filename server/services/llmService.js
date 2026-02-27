@@ -32,6 +32,7 @@ const JSON_ONLY_SYSTEM_PROMPT = 'You are the HomeBrain automation intelligence. 
 const DEFAULT_OLLAMA_FORMAT = 'json';
 const DEFAULT_OPENAI_MODEL = 'gpt-5.2-codex';
 const OPENAI_MAX_OUTPUT_TOKENS = 1024;
+const DEFAULT_LOCAL_TIMEOUT_MS = 30000;
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -192,7 +193,6 @@ function normalizeModelVariants(modelName) {
   if (lower.includes('-')) {
     const colonVariant = trimmed.replace(/-/g, ':');
     addVariant(colonVariant);
-    colonVariantAdded = colonVariantAdded || colonVariant.includes(':');
 
     const dashMatch = lower.match(/^(.+?)-(\d+[a-z0-9]*)$/i);
     if (dashMatch) {
@@ -323,6 +323,75 @@ async function buildLocalOllamaOptions() {
   }
 }
 
+function normalizeModelNameForComparison(modelName) {
+  if (!modelName || typeof modelName !== 'string') {
+    return '';
+  }
+
+  const trimmed = modelName.trim().toLowerCase();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (!trimmed.includes(':')) {
+    return `${trimmed}:latest`;
+  }
+
+  return trimmed;
+}
+
+function mergeLocalOllamaRequestOptions(baseOptions, overrides = {}) {
+  const merged = {
+    ...baseOptions,
+    ...(overrides && typeof overrides === 'object' ? overrides : {})
+  };
+
+  Object.keys(merged).forEach((key) => {
+    if (merged[key] === null || merged[key] === undefined) {
+      delete merged[key];
+    }
+  });
+
+  return merged;
+}
+
+async function getLocalModelRuntimeInfo(baseUrl, requestedModel) {
+  try {
+    const response = await axios.get(`${baseUrl}/api/ps`, { timeout: 1500 });
+    const models = Array.isArray(response.data?.models) ? response.data.models : [];
+    if (!models.length) {
+      return null;
+    }
+
+    const normalizedRequested = normalizeModelNameForComparison(requestedModel);
+    const matched = models.find((entry) => {
+      const name = normalizeModelNameForComparison(entry?.name || entry?.model || '');
+      if (!name) {
+        return false;
+      }
+      return name === normalizedRequested || name.startsWith(`${normalizedRequested.split(':')[0]}:`);
+    }) || models[0];
+
+    const sizeBytes = Number(matched?.size);
+    const sizeVramBytes = Number(matched?.size_vram);
+    const hasSize = Number.isFinite(sizeBytes) && sizeBytes > 0;
+    const hasVram = Number.isFinite(sizeVramBytes) && sizeVramBytes > 0;
+    const gpuPercent = hasSize && hasVram
+      ? Math.max(0, Math.min(100, Math.round((sizeVramBytes / sizeBytes) * 100)))
+      : 0;
+
+    return {
+      model: matched?.name || matched?.model || requestedModel || null,
+      sizeBytes: hasSize ? sizeBytes : null,
+      sizeVramBytes: hasVram ? sizeVramBytes : 0,
+      gpuPercent,
+      processor: hasVram ? `${gpuPercent}% GPU` : 'CPU'
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 async function sendRequestToOpenAI(model, message, apiKey = null) {
   // Use provided API key or fall back to environment variable
   const openaiClient = apiKey ? new OpenAI({ apiKey }) : openai;
@@ -439,12 +508,19 @@ async function sendRequestToAnthropic(model, message, apiKey = null) {
   }
 }
 
-async function sendRequestToLocalLLM(endpoint, model, message) {
+async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {}) {
   if (!endpoint || endpoint.trim() === '') {
     throw new Error('Local LLM endpoint not configured');
   }
 
-  const requestOptions = await buildLocalOllamaOptions();
+  const baseRequestOptions = await buildLocalOllamaOptions();
+  const requestOptions = mergeLocalOllamaRequestOptions(baseRequestOptions, requestConfig.ollamaOptions);
+  const requestTimeoutMs = sanitizeNumeric(requestConfig.timeoutMs, {
+    min: 3000,
+    max: 60000,
+    fallback: DEFAULT_LOCAL_TIMEOUT_MS
+  });
+  const returnMetadata = requestConfig.returnMetadata === true;
 
   let testUrl = endpoint.trim();
   if (!testUrl.startsWith('http://') && !testUrl.startsWith('https://')) {
@@ -492,9 +568,24 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
     console.log(`LLM Service: Attempting local provider with model "${candidateModel}" at ${testUrl}`);
 
     try {
-      const responseText = await attemptLocalModelRequest(testUrl, candidateModel, message, requestOptions);
+      const responseText = await attemptLocalModelRequest(
+        testUrl,
+        candidateModel,
+        message,
+        requestOptions,
+        requestTimeoutMs
+      );
       if (responseText !== undefined && responseText !== null) {
-        return responseText;
+        if (!returnMetadata) {
+          return responseText;
+        }
+
+        const runtime = await getLocalModelRuntimeInfo(testUrl, candidateModel);
+        return {
+          response: responseText,
+          resolvedModel: candidateModel,
+          runtime
+        };
       }
     } catch (error) {
       lastError = error;
@@ -518,7 +609,7 @@ async function sendRequestToLocalLLM(endpoint, model, message) {
   throw new Error('Local LLM request failed: no models responded successfully.');
 }
 
-async function attemptLocalModelRequest(baseUrl, modelName, message, requestOptions) {
+async function attemptLocalModelRequest(baseUrl, modelName, message, requestOptions, requestTimeoutMs = DEFAULT_LOCAL_TIMEOUT_MS) {
   const headers = { 'Content-Type': 'application/json' };
   let lastError = null;
 
@@ -531,11 +622,6 @@ async function attemptLocalModelRequest(baseUrl, modelName, message, requestOpti
   const promptWithInstruction = `${systemInstruction}\n\n${message}`;
 
   const sanitizedOptions = { ...requestOptions };
-  Object.keys(sanitizedOptions).forEach((key) => {
-    if (sanitizedOptions[key] === null || sanitizedOptions[key] === undefined) {
-      delete sanitizedOptions[key];
-    }
-  });
 
   const chatPayload = {
     model: baseModel,
@@ -548,7 +634,7 @@ async function attemptLocalModelRequest(baseUrl, modelName, message, requestOpti
   try {
     console.log(`LLM Service: Sending request to ${baseUrl}/api/chat`);
     const chatResponse = await axios.post(`${baseUrl}/api/chat`, chatPayload, {
-      timeout: 30000,
+      timeout: requestTimeoutMs,
       headers
     });
 
@@ -580,7 +666,7 @@ async function attemptLocalModelRequest(baseUrl, modelName, message, requestOpti
       options: sanitizedOptions,
       stream: false
     }, {
-      timeout: 30000,
+      timeout: requestTimeoutMs,
       headers
     });
 
@@ -623,7 +709,7 @@ async function sendLLMRequest(provider, model, message) {
  * @param {Array<string>} priorityList - Optional custom priority list. If not provided, uses settings
  * @returns {Promise<string>} - The LLM response
  */
-async function sendLLMRequestWithFallback(message, priorityList = null) {
+async function sendLLMRequestWithFallback(message, priorityList = null, requestConfig = {}) {
   console.log('LLM Service: Sending request with fallback mechanism');
 
   // Get settings to retrieve priority list and API keys
@@ -653,7 +739,7 @@ async function sendLLMRequestWithFallback(message, priorityList = null) {
             continue;
           }
 
-          const response = await sendRequestToLocalLLM(endpoint, model, message);
+          const response = await sendRequestToLocalLLM(endpoint, model, message, requestConfig);
           console.log(`LLM Service: Successfully received response from ${provider}`);
           return response;
 
@@ -704,7 +790,7 @@ async function sendLLMRequestWithFallback(message, priorityList = null) {
   throw new Error(`All LLM providers failed. Errors: ${errorSummary}`);
 }
 
-async function sendLLMRequestWithFallbackDetailed(message, priorityList = null) {
+async function sendLLMRequestWithFallbackDetailed(message, priorityList = null, requestConfig = {}) {
   console.log('LLM Service: Sending request with fallback mechanism (detailed response)');
 
   const settings = await Settings.getSettings();
@@ -727,10 +813,16 @@ async function sendLLMRequestWithFallbackDetailed(message, priorityList = null) 
             continue;
           }
 
+          const localResult = await sendRequestToLocalLLM(endpoint, model, message, {
+            ...requestConfig,
+            returnMetadata: true
+          });
+
           return {
-            response: await sendRequestToLocalLLM(endpoint, model, message),
+            response: localResult?.response ?? localResult,
             provider: 'local',
-            model
+            model: localResult?.resolvedModel || model,
+            runtime: localResult?.runtime || null
           };
 
         case 'openai':

@@ -56,6 +56,15 @@ const COLOR_NAME_TO_HEX = Object.freeze({
 
 const COLOR_NAME_ENTRIES = Object.entries(COLOR_NAME_TO_HEX).sort((a, b) => b[0].length - a[0].length);
 const LOCAL_FIRST_PROVIDER_PRIORITY = ['local', 'openai', 'anthropic'];
+const VOICE_LLM_REQUEST_CONFIG = Object.freeze({
+  // Keep voice interpretation fast and deterministic.
+  timeoutMs: 12000,
+  ollamaOptions: {
+    num_ctx: 1024,
+    num_predict: 128,
+    temperature: 0
+  }
+});
 
 class VoiceCommandService {
   constructor() {
@@ -1066,8 +1075,12 @@ RULES
 
     const startedAt = Date.now();
     try {
-      const firstAttempt = await sendLLMRequestWithFallbackDetailed(prompt, providerPriorityOverride);
-      let { response, provider, model } = firstAttempt;
+      const firstAttempt = await sendLLMRequestWithFallbackDetailed(
+        prompt,
+        providerPriorityOverride,
+        VOICE_LLM_REQUEST_CONFIG
+      );
+      let { response, provider, model, runtime = null } = firstAttempt;
       let parsed = this.parseLlmResponse(response);
 
       if (!parsed) {
@@ -1080,6 +1093,7 @@ RULES
             response = cloudAttempt.response;
             provider = cloudAttempt.provider;
             model = cloudAttempt.model;
+            runtime = cloudAttempt.runtime || null;
             parsed = this.parseLlmResponse(response);
             console.log(`VoiceCommandService: Second LLM attempt with ${provider || 'unknown'} ${parsed ? 'succeeded' : 'still failed'}.`);
           } catch (fallbackError) {
@@ -1096,6 +1110,7 @@ RULES
           llm: {
             provider,
             model,
+            runtime,
             prompt,
             rawResponse: response,
             processingTimeMs
@@ -1111,6 +1126,7 @@ RULES
         llm: {
           provider,
           model,
+          runtime,
           prompt,
           rawResponse: response,
           processingTimeMs
@@ -1123,6 +1139,7 @@ RULES
         llm: {
           provider: null,
           model: null,
+          runtime: null,
           prompt,
           rawResponse: null,
           processingTimeMs: Date.now() - startedAt,
@@ -1147,6 +1164,7 @@ RULES
     let llm = {
       provider: null,
       model: null,
+      runtime: null,
       prompt: null,
       rawResponse: null,
       processingTimeMs: 0
@@ -1162,6 +1180,7 @@ RULES
         llm = {
           provider: 'heuristic',
           model: 'rule-based',
+          runtime: null,
           prompt: null,
           rawResponse: null,
           processingTimeMs: 0

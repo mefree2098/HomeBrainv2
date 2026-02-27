@@ -4,6 +4,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const OllamaConfig = require('../models/OllamaConfig');
+const Settings = require('../models/Settings');
 const os = require('os');
 
 const execAsync = promisify(exec);
@@ -2063,6 +2064,15 @@ class OllamaService {
 
       const config = await OllamaConfig.getConfig();
       await config.setActiveModel(modelName);
+
+      // Keep voice-command local model preference aligned with the activated Ollama model.
+      try {
+        const settings = await Settings.getSettings();
+        settings.localLlmModel = modelName;
+        await settings.save();
+      } catch (settingsError) {
+        console.warn(`OllamaService: Failed to sync Settings.localLlmModel to ${modelName}: ${settingsError.message}`);
+      }
 
       console.log(`Active model set to ${modelName}`);
       return { success: true, activeModel: modelName };

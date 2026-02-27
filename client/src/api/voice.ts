@@ -41,6 +41,13 @@ export interface VoiceCommandResult {
   llm?: {
     provider?: string | null;
     model?: string | null;
+    runtime?: {
+      model?: string | null;
+      sizeBytes?: number | null;
+      sizeVramBytes?: number | null;
+      gpuPercent?: number | null;
+      processor?: string | null;
+    } | null;
     prompt?: string;
     rawResponse?: string | null;
     processingTimeMs?: number;

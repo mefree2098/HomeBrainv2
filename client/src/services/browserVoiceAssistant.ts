@@ -1163,9 +1163,21 @@ class BrowserVoiceAssistant {
         }
       });
 
+      const llmProvider = result?.llm?.provider || "unknown";
+      const llmModel = result?.llm?.model || "unknown";
+      const llmMs = typeof result?.llm?.processingTimeMs === "number"
+        ? result.llm.processingTimeMs
+        : null;
+      const llmRuntime = result?.llm?.runtime?.processor || null;
+      const llmRuntimeModel = result?.llm?.runtime?.model || null;
+      const fallbackLabel = result?.usedFallback ? "yes" : "no";
+      const llmTimingLabel = llmMs !== null ? ` llmMs=${llmMs}` : "";
+      const llmRuntimeLabel = llmRuntime ? ` runtime=${llmRuntime}` : "";
+      const llmRuntimeModelLabel = llmRuntimeModel ? ` runtimeModel=${llmRuntimeModel}` : "";
+
       this.updateStatus({
         lastResponse: result?.responseText || null
-      }, "command processed by server");
+      }, `command processed by server provider=${llmProvider} model=${llmModel}${llmTimingLabel}${llmRuntimeLabel}${llmRuntimeModelLabel} fallback=${fallbackLabel}`);
 
       await wakeAckPlaybackPromise;
 
