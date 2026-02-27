@@ -36,11 +36,12 @@ export const getOllamaLogs = async (lines?: number) => {
 
 // Description: Install Ollama
 // Endpoint: POST /api/ollama/install
-// Request: {}
+// Request: { sudoPassword?: string }
 // Response: { success: boolean, version: string }
-export const installOllama = async () => {
+export const installOllama = async (sudoPassword?: string) => {
   try {
-    const response = await api.post('/api/ollama/install');
+    const payload = sudoPassword ? { sudoPassword } : {};
+    const response = await api.post('/api/ollama/install', payload);
     return response.data;
   } catch (error: any) {
     console.error(error);
@@ -92,11 +93,12 @@ export const checkOllamaUpdates = async () => {
 
 // Description: Update Ollama to latest version
 // Endpoint: POST /api/ollama/update
-// Request: {}
+// Request: { sudoPassword?: string }
 // Response: { success: boolean, version: string }
-export const updateOllama = async () => {
+export const updateOllama = async (sudoPassword?: string) => {
   try {
-    const response = await api.post('/api/ollama/update');
+    const payload = sudoPassword ? { sudoPassword } : {};
+    const response = await api.post('/api/ollama/update', payload);
     return response.data;
   } catch (error: any) {
     console.error(error);

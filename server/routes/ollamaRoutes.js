@@ -91,13 +91,14 @@ router.get('/logs', auth, async (req, res) => {
 
 // Description: Install Ollama
 // Endpoint: POST /api/ollama/install
-// Request: {}
+// Request: { sudoPassword?: string }
 // Response: { success: boolean, version: string }
 router.post('/install', auth, async (req, res) => {
   try {
     console.log('POST /api/ollama/install - Starting Ollama installation');
 
-    const result = await ollamaService.install();
+    const sudoPassword = typeof req.body?.sudoPassword === 'string' ? req.body.sudoPassword : null;
+    const result = await ollamaService.install({ sudoPassword });
 
     res.status(200).json(result);
   } catch (error) {
@@ -159,13 +160,14 @@ router.get('/updates/check', auth, async (req, res) => {
 
 // Description: Update Ollama to latest version
 // Endpoint: POST /api/ollama/update
-// Request: {}
+// Request: { sudoPassword?: string }
 // Response: { success: boolean, version: string }
 router.post('/update', auth, async (req, res) => {
   try {
     console.log('POST /api/ollama/update - Updating Ollama');
 
-    const result = await ollamaService.update();
+    const sudoPassword = typeof req.body?.sudoPassword === 'string' ? req.body.sudoPassword : null;
+    const result = await ollamaService.update({ sudoPassword });
 
     res.status(200).json(result);
   } catch (error) {
