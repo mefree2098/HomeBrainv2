@@ -187,9 +187,9 @@ class BrowserVoiceAssistant {
     this.clearFallbackWakeTranscriptHistory();
 
     try {
+      await this.ensureOnDeviceSpeechIfSupported();
       await this.ensureMicrophoneAccess();
       await this.refreshVoiceConfiguration();
-      await this.ensureOnDeviceSpeechIfSupported();
       this.ensureRecognition();
       this.startRecognition();
     } catch (error) {
@@ -469,6 +469,13 @@ class BrowserVoiceAssistant {
       this.updateStatus({}, `on-device speech pack install failed for ${this.recognitionLang}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
+      if (message.includes("Requires handling a user gesture")) {
+        this.updateStatus(
+          {},
+          `on-device speech install needs a direct click gesture; continuing with default recognition path`
+        );
+        return;
+      }
       this.updateStatus({}, `on-device speech init failed, using default recognition path: ${message}`);
     }
   }
