@@ -4,7 +4,7 @@ import { textToSpeechElevenLabs, playAudioBlob } from "@/api/elevenLabs";
 import { getSettings } from "@/api/settings";
 
 const DEFAULT_WAKE_WORDS = ["anna", "hey anna", "henry", "hey henry", "home brain", "computer"];
-const WAIT_FOR_COMMAND_TIMEOUT_MS = 12000;
+const WAIT_FOR_COMMAND_TIMEOUT_MS = 22000;
 const NETWORK_ERROR_WINDOW_MS = 15000;
 const NETWORK_ERROR_THRESHOLD = 6;
 const FALLBACK_CAPTURE_INTERVAL_MS = 2500;
@@ -15,7 +15,7 @@ const MIN_FALLBACK_CLIP_BYTES = 64;
 const MAX_AUDIO_B64_LENGTH = 500000;
 const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
 const WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX = 2;
-const BROWSER_VOICE_BUILD_TAG = "2026-02-27-fallback-query-v2";
+const BROWSER_VOICE_BUILD_TAG = "2026-02-27-fallback-query-v3";
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;
@@ -646,6 +646,10 @@ class BrowserVoiceAssistant {
       return;
     }
 
+    if (this.awaitingCommand) {
+      this.refreshWaitForCommandTimeout("fallback capture start");
+    }
+
     this.fallbackCaptureInFlight = true;
     try {
       const clip = await this.captureFallbackAudioClip(durationMs);
@@ -702,6 +706,10 @@ class BrowserVoiceAssistant {
         mimeType: clip.type || "audio/webm",
         language: "en"
       });
+
+      if (this.awaitingCommand) {
+        this.refreshWaitForCommandTimeout("fallback transcription result");
+      }
 
       if (stt?.provider || stt?.model) {
         this.updateStatus(
@@ -987,7 +995,6 @@ class BrowserVoiceAssistant {
 
   private waitForCommand(wakeWord: string): void {
     this.awaitingCommand = true;
-    this.clearWaitForCommandTimer();
 
     this.updateStatus({
       mode: "waiting_command",
@@ -996,13 +1003,7 @@ class BrowserVoiceAssistant {
       error: null
     }, `wake word detected: ${wakeWord}`);
 
-    this.waitForCommandTimer = setTimeout(() => {
-      this.awaitingCommand = false;
-      this.updateStatus({
-        mode: this.status.enabled ? "listening" : "off",
-        pendingWakeWord: null
-      }, "command wait timeout");
-    }, WAIT_FOR_COMMAND_TIMEOUT_MS);
+    this.refreshWaitForCommandTimeout("wake-word detected");
 
     if (this.useServerSttFallback) {
       this.requestImmediateFallbackCapture(
@@ -1543,6 +1544,25 @@ class BrowserVoiceAssistant {
     }
     clearTimeout(this.waitForCommandTimer);
     this.waitForCommandTimer = null;
+  }
+
+  private refreshWaitForCommandTimeout(reason?: string): void {
+    if (!this.awaitingCommand) {
+      return;
+    }
+
+    this.clearWaitForCommandTimer();
+    this.waitForCommandTimer = setTimeout(() => {
+      this.awaitingCommand = false;
+      this.updateStatus({
+        mode: this.status.enabled ? "listening" : "off",
+        pendingWakeWord: null
+      }, "command wait timeout");
+    }, WAIT_FOR_COMMAND_TIMEOUT_MS);
+
+    if (reason) {
+      this.updateStatus({}, `command wait timeout refreshed (${reason})`);
+    }
   }
 
   private clearRestartTimer(): void {

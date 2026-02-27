@@ -35,7 +35,14 @@ struct DashboardView: View {
     }
 
     private var metricColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: isCompact ? 170 : 190), spacing: 12)]
+        [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    }
+
+    private var featuredDeviceColumns: [GridItem] {
+        if isCompact {
+            return [GridItem(.flexible(), spacing: 12)]
+        }
+        return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     }
 
     private var featuredDevices: [DeviceItem] {
@@ -128,13 +135,12 @@ struct DashboardView: View {
                                     )
                                 }
                             } else {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 12) {
-                                        ForEach(featuredDevices) { device in
-                                            featuredDeviceCard(device)
-                                        }
+                                LazyVGrid(columns: featuredDeviceColumns, spacing: 12) {
+                                    ForEach(featuredDevices) { device in
+                                        featuredDeviceCard(device)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .gridCellColumns(featuredGridSpan(for: device))
                                     }
-                                    .padding(.vertical, 2)
                                 }
                             }
 
@@ -372,7 +378,7 @@ struct DashboardView: View {
         let statusText = isThermostat ? mode.uppercased() : (device.status ? "On" : "Off")
         let statusEnabled = isThermostat ? mode != "off" : device.status
 
-        let card = HBPanel {
+        return HBPanel {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     Image(systemName: iconForDevice(device.type))
@@ -435,10 +441,10 @@ struct DashboardView: View {
                 }
             }
         }
-        if device.type == "thermostat" {
-            return AnyView(card)
-        }
-        return AnyView(card.frame(width: isCompact ? 260 : 300))
+    }
+
+    private func featuredGridSpan(for device: DeviceItem) -> Int {
+        (!isCompact && device.type == "thermostat") ? 2 : 1
     }
 
     private func favoriteButton(for device: DeviceItem) -> some View {
