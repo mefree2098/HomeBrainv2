@@ -294,6 +294,9 @@ if (fs.existsSync(clientDistPath)) {
     }
 
     const indexFilePath = path.join(clientDistPath, 'index.html');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(indexFilePath, (error) => {
       if (error) {
         next(error);

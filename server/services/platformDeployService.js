@@ -67,7 +67,9 @@ class PlatformDeployService {
     this.latestJobRefPath = path.join(this.dataDir, 'latest-job.txt');
     this.initialized = false;
     this.startDeployInProgress = false;
-    this.autoCleanClientDist = process.env.HOMEBRAIN_DEPLOY_AUTOCLEAN_CLIENT_DIST !== 'false';
+    // Cleaning client/dist can roll back freshly built frontend bundles on systems
+    // that serve dist directly. Keep this opt-in only.
+    this.autoCleanClientDist = process.env.HOMEBRAIN_DEPLOY_AUTOCLEAN_CLIENT_DIST === 'true';
     this.restartOllamaOnDeploy = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA !== 'false';
     this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD
       || 'sudo systemctl restart ollama';
