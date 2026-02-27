@@ -27,6 +27,11 @@ struct PlatformDeployView: View {
                 if isLoading {
                     LoadingView(title: "Loading deploy status...")
                 } else {
+                    HBSectionHeader(
+                        title: "Platform Deploy",
+                        subtitle: "Release controls and post-deploy checks"
+                    )
+
                     if let errorMessage {
                         InlineErrorView(message: errorMessage) {
                             Task { await loadDeployData() }
@@ -34,13 +39,12 @@ struct PlatformDeployView: View {
                     }
 
                     if !infoMessage.isEmpty {
-                        Text(infoMessage)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(Color.blue.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        HBPanel {
+                            Text(infoMessage)
+                                .font(.subheadline)
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
 
                     repoStatusCard
@@ -51,6 +55,7 @@ struct PlatformDeployView: View {
             }
             .padding()
         }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh") {

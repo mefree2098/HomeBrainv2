@@ -62,28 +62,99 @@ class VoiceCommandService {
     this.CONTEXT_TTL_MS = 15_000;
   }
 
+  normalizeSmartThingsValue(value) {
+    if (!value) {
+      return '';
+    }
+
+    if (typeof value === 'string') {
+      return value.trim();
+    }
+
+    if (typeof value === 'object') {
+      const candidate = value.id || value.capabilityId || value.name;
+      if (typeof candidate === 'string') {
+        return candidate.trim();
+      }
+    }
+
+    return '';
+  }
+
+  getSmartThingsCapabilitySet(properties = {}) {
+    const capabilities = [
+      ...(Array.isArray(properties?.smartThingsCapabilities) ? properties.smartThingsCapabilities : []),
+      ...(Array.isArray(properties?.smartthingsCapabilities) ? properties.smartthingsCapabilities : [])
+    ]
+      .map((entry) => this.normalizeSmartThingsValue(entry))
+      .filter((entry) => entry.length > 0);
+
+    return new Set(capabilities);
+  }
+
+  getSmartThingsCategorySet(properties = {}) {
+    const categories = [
+      ...(Array.isArray(properties?.smartThingsCategories) ? properties.smartThingsCategories : []),
+      ...(Array.isArray(properties?.smartthingsCategories) ? properties.smartthingsCategories : [])
+    ]
+      .map((entry) => this.normalizeSmartThingsValue(entry))
+      .filter((entry) => entry.length > 0)
+      .map((entry) => entry.toLowerCase());
+
+    return new Set(categories);
+  }
+
+  looksLikeSmartThingsDimmer(properties = {}) {
+    const descriptor = [
+      properties?.smartThingsDeviceTypeName,
+      properties?.smartThingsPresentationId
+    ]
+      .filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+
+    return /\bdimmer\b/.test(descriptor);
+  }
+
   getDeviceCapabilities(type, source = 'local', properties = {}) {
     const normalizedSource = (source || 'local').toLowerCase();
+    const isSmartThings = normalizedSource === 'smartthings' || Boolean(properties?.smartThingsDeviceId);
+    const smartThingsCapabilities = this.getSmartThingsCapabilitySet(properties);
+    const smartThingsCategories = this.getSmartThingsCategorySet(properties);
+    const supportsBrightness = isSmartThings
+      ? (
+        smartThingsCapabilities.has('switchLevel') ||
+        smartThingsCapabilities.has('colorControl') ||
+        smartThingsCategories.has('light') ||
+        this.looksLikeSmartThingsDimmer(properties)
+      )
+      : Boolean(properties?.supportsBrightness);
+    const supportsColor = isSmartThings
+      ? smartThingsCapabilities.has('colorControl')
+      : Boolean(properties?.supportsColor);
+
     if (normalizedSource === 'harmony') {
       return ['turn_on', 'turn_off', 'toggle'];
     }
 
     switch ((type || '').toLowerCase()) {
       case 'light': {
-        const smartThingsCapabilities = Array.isArray(properties?.smartThingsCapabilities)
-          ? properties.smartThingsCapabilities
-          : [];
-        const supportsColor = normalizedSource === 'smartthings'
-          ? smartThingsCapabilities.includes('colorControl')
-          : normalizedSource !== 'insteon';
         const capabilities = ['turn_on', 'turn_off', 'set_brightness'];
+        if (supportsColor || (!isSmartThings && normalizedSource !== 'insteon')) {
+          capabilities.push('set_color');
+        }
+        return capabilities;
+      }
+      case 'switch': {
+        const capabilities = ['turn_on', 'turn_off', 'toggle'];
+        if (supportsBrightness) {
+          capabilities.push('set_brightness');
+        }
         if (supportsColor) {
           capabilities.push('set_color');
         }
         return capabilities;
       }
-      case 'switch':
-        return ['turn_on', 'turn_off', 'toggle'];
       case 'thermostat':
         return ['turn_on', 'turn_off', 'set_temperature'];
       case 'lock':

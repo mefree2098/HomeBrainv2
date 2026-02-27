@@ -18,60 +18,75 @@ struct AuthView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Server") {
-                    TextField("HomeBrain server URL", text: $serverURL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
+            ZStack {
+                HBPageBackground()
+                    .ignoresSafeArea()
 
-                    Button("Save Server URL") {
-                        session.updateServerURL(serverURL)
-                    }
-                }
+                VStack(spacing: 14) {
+                    HBSectionHeader(
+                        title: "HomeBrain iOS",
+                        subtitle: "Secure sign in to your HomeBrain hub"
+                    )
 
-                Section {
-                    Picker("Mode", selection: $mode) {
-                        ForEach(Mode.allCases) { value in
-                            Text(value.rawValue).tag(value)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+                    Form {
+                        Section("Server") {
+                            TextField("HomeBrain server URL", text: $serverURL)
+                                .keyboardType(.URL)
+                                .textInputAutocapitalization(.never)
+                                .disableAutocorrection(true)
 
-                    TextField("Email", text: $email)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                        .keyboardType(.emailAddress)
-
-                    SecureField("Password", text: $password)
-
-                    if mode == .register {
-                        SecureField("Confirm password", text: $confirmPassword)
-                    }
-
-                    Button {
-                        submit()
-                    } label: {
-                        if session.isProcessingAuth {
-                            HStack {
-                                ProgressView()
-                                Text(mode == .login ? "Signing In..." : "Creating Account...")
+                            Button("Save Server URL") {
+                                session.updateServerURL(serverURL)
                             }
-                        } else {
-                            Text(mode == .login ? "Sign In" : "Create Account")
+                        }
+
+                        Section {
+                            Picker("Mode", selection: $mode) {
+                                ForEach(Mode.allCases) { value in
+                                    Text(value.rawValue).tag(value)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+
+                            TextField("Email", text: $email)
+                                .textInputAutocapitalization(.never)
+                                .disableAutocorrection(true)
+                                .keyboardType(.emailAddress)
+
+                            SecureField("Password", text: $password)
+
+                            if mode == .register {
+                                SecureField("Confirm password", text: $confirmPassword)
+                            }
+
+                            Button {
+                                submit()
+                            } label: {
+                                if session.isProcessingAuth {
+                                    HStack {
+                                        ProgressView()
+                                        Text(mode == .login ? "Signing In..." : "Creating Account...")
+                                    }
+                                } else {
+                                    Text(mode == .login ? "Sign In" : "Create Account")
+                                }
+                            }
+                            .disabled(session.isProcessingAuth || email.isEmpty || password.isEmpty || serverURL.isEmpty)
+                            .buttonStyle(.borderedProminent)
+                            .tint(HBPalette.accentBlue)
+                        }
+
+                        if let authError = session.authError, !authError.isEmpty {
+                            Section {
+                                InlineErrorView(message: authError, retry: nil)
+                            }
                         }
                     }
-                    .disabled(session.isProcessingAuth || email.isEmpty || password.isEmpty || serverURL.isEmpty)
-                    .buttonStyle(.borderedProminent)
+                    .hbFormStyle()
                 }
-
-                if let authError = session.authError, !authError.isEmpty {
-                    Section {
-                        InlineErrorView(message: authError, retry: nil)
-                    }
-                }
+                .padding()
             }
-            .navigationTitle("HomeBrain iOS")
+            .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 if serverURL.isEmpty {
                     serverURL = session.serverURLString

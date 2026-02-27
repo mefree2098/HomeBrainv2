@@ -19,7 +19,10 @@ import {
   PowerOff,
   Heart,
   Minus,
-  Plus
+  Plus,
+  Loader2,
+  CheckCircle2,
+  AlertCircle
 } from "lucide-react"
 import { getDevices, getDevicesByRoom, controlDevice } from "@/api/devices"
 import { useToast } from "@/hooks/useToast"
@@ -127,16 +130,106 @@ const getLightColor = (device: any): string => {
   return normalizeHexColor(device?.color)
 }
 
-const isSmartBulbWithColor = (device: any): boolean => {
+const normalizeSmartThingsValue = (value: unknown): string => {
+  if (!value) {
+    return ''
+  }
+
+  if (typeof value === 'string') {
+    return value.trim()
+  }
+
+  if (typeof value === 'object') {
+    const candidate = (value as any).id || (value as any).capabilityId || (value as any).name
+    if (typeof candidate === 'string') {
+      return candidate.trim()
+    }
+  }
+
+  return ''
+}
+
+const getSmartThingsCapabilities = (device: any): string[] => {
+  const rawCapabilities = [
+    ...(Array.isArray(device?.properties?.smartThingsCapabilities) ? device.properties.smartThingsCapabilities : []),
+    ...(Array.isArray(device?.properties?.smartthingsCapabilities) ? device.properties.smartthingsCapabilities : [])
+  ]
+
+  return Array.from(new Set(rawCapabilities
+    .map(normalizeSmartThingsValue)
+    .filter((capability) => capability.length > 0)))
+}
+
+const hasSmartThingsCapability = (device: any, capability: string): boolean => {
+  return getSmartThingsCapabilities(device).includes(capability)
+}
+
+const getSmartThingsCategories = (device: any): string[] => {
+  const rawCategories = [
+    ...(Array.isArray(device?.properties?.smartThingsCategories) ? device.properties.smartThingsCategories : []),
+    ...(Array.isArray(device?.properties?.smartthingsCategories) ? device.properties.smartthingsCategories : [])
+  ]
+
+  return Array.from(new Set(rawCategories
+    .map(normalizeSmartThingsValue)
+    .filter((category) => category.length > 0)
+    .map((category) => category.toLowerCase())))
+}
+
+const hasSmartThingsCategory = (device: any, category: string): boolean => {
+  return getSmartThingsCategories(device).includes(category.toLowerCase())
+}
+
+const isSmartThingsBackedDevice = (device: any): boolean => {
   const source = (device?.properties?.source || '').toString().toLowerCase()
-  if (source !== 'smartthings') {
+  return source === 'smartthings' || Boolean(device?.properties?.smartThingsDeviceId)
+}
+
+const looksLikeSmartThingsDimmer = (device: any): boolean => {
+  const descriptor = [
+    device?.properties?.smartThingsDeviceTypeName,
+    device?.properties?.smartThingsPresentationId,
+    device?.name
+  ]
+    .filter((value) => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase()
+
+  return /\bdimmer\b/.test(descriptor)
+}
+
+const supportsLightFade = (device: any): boolean => {
+  if (!device) {
+    return false
+  }
+
+  if (device.type === 'light') {
     return true
   }
 
-  const capabilities = Array.isArray(device?.properties?.smartThingsCapabilities)
-    ? device.properties.smartThingsCapabilities
-    : []
-  return capabilities.includes('colorControl')
+  if (isSmartThingsBackedDevice(device)) {
+    if (hasSmartThingsCapability(device, 'switchLevel') || hasSmartThingsCapability(device, 'colorControl')) {
+      return true
+    }
+
+    if (device.type === 'switch' && (hasSmartThingsCategory(device, 'light') || looksLikeSmartThingsDimmer(device))) {
+      return true
+    }
+  }
+
+  return Boolean(device?.properties?.supportsBrightness)
+}
+
+const supportsLightColor = (device: any): boolean => {
+  if (isSmartThingsBackedDevice(device)) {
+    if (hasSmartThingsCapability(device, 'colorControl')) {
+      return true
+    }
+
+    return Boolean(device?.properties?.supportsColor && supportsLightFade(device))
+  }
+
+  return Boolean(device?.properties?.supportsColor)
 }
 
 export function Devices() {
@@ -149,6 +242,8 @@ export function Devices() {
   const [viewMode, setViewMode] = useState("grid")
   const [lightBrightnessDrafts, setLightBrightnessDrafts] = useState<Record<string, number>>({})
   const [lightColorDrafts, setLightColorDrafts] = useState<Record<string, string>>({})
+  const [pendingControls, setPendingControls] = useState<Record<string, boolean>>({})
+  const [controlFeedback, setControlFeedback] = useState<Record<string, 'success' | 'error'>>({})
   const {
     favoriteDeviceIds,
     toggleDeviceFavorite,
@@ -253,7 +348,184 @@ export function Devices() {
 
   useDeviceRealtime(applyIncomingDevices)
 
+  const refreshDevicesSnapshot = useCallback(async () => {
+    const allDevices = await getDevices()
+    const deviceList = Array.isArray(allDevices?.devices) ? allDevices.devices : []
+    setDevices(deviceList)
+    setRoomDevices(buildRoomsFromDevices(deviceList))
+  }, [buildRoomsFromDevices])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshDevicesSnapshot().catch((error) => {
+        console.warn('Device polling refresh failed:', error)
+      })
+    }, 6000)
+
+    return () => clearInterval(interval)
+  }, [refreshDevicesSnapshot])
+
+  const setControlFeedbackForDevice = useCallback((deviceId: string, status: 'success' | 'error') => {
+    setControlFeedback(prev => ({ ...prev, [deviceId]: status }))
+    setTimeout(() => {
+      setControlFeedback(prev => {
+        if (prev[deviceId] !== status) {
+          return prev
+        }
+        const next = { ...prev }
+        delete next[deviceId]
+        return next
+      })
+    }, 1800)
+  }, [])
+
+  const applyControlOptimistically = useCallback((deviceId: string, action: string, value?: number | string) => {
+    const normalizedMode = normalizeThermostatMode(value)
+    const applyToDevice = (device: any) => {
+      if (!device || device._id !== deviceId) {
+        return device
+      }
+
+      if (action === 'turn_on') {
+        return { ...device, status: true }
+      }
+
+      if (action === 'turn_off') {
+        return { ...device, status: false }
+      }
+
+      if (action === 'set_temperature') {
+        const target = Number(value)
+        if (Number.isFinite(target)) {
+          return { ...device, status: true, targetTemperature: target }
+        }
+        return device
+      }
+
+      if (action === 'set_brightness') {
+        const brightness = clampBrightness(Number(value))
+        return { ...device, status: brightness > 0, brightness }
+      }
+
+      if (action === 'set_color') {
+        const color = normalizeHexColor(value)
+        return {
+          ...device,
+          status: true,
+          color
+        }
+      }
+
+      if (action === 'set_mode' && normalizedMode) {
+        return {
+          ...device,
+          status: normalizedMode !== 'off',
+          properties: {
+            ...(device?.properties || {}),
+            hvacMode: normalizedMode,
+            smartThingsThermostatMode: normalizedMode,
+            ...(normalizedMode !== 'off'
+              ? { smartThingsLastActiveThermostatMode: normalizedMode }
+              : {})
+          }
+        }
+      }
+
+      return device
+    }
+
+    setDevices(prev => prev.map((device: any) => applyToDevice(device)))
+    setRoomDevices(prev => prev.map((room: any) => ({
+      ...room,
+      devices: Array.isArray(room.devices)
+        ? room.devices.map((roomDevice: any) => applyToDevice(roomDevice))
+        : room.devices
+    })))
+  }, [])
+
+  const normalizeServerDeviceForAction = useCallback((updatedDevice: any, action: string, value?: number | string) => {
+    if (!updatedDevice || typeof updatedDevice !== 'object') {
+      return updatedDevice
+    }
+
+    const normalized = { ...updatedDevice }
+
+    if (action === 'turn_on') {
+      normalized.status = true
+    } else if (action === 'turn_off') {
+      normalized.status = false
+    } else if (action === 'set_brightness') {
+      const brightness = clampBrightness(Number(value))
+      normalized.status = brightness > 0
+      normalized.brightness = brightness
+    } else if (action === 'set_color') {
+      normalized.status = true
+      normalized.color = normalizeHexColor(value)
+    } else if (action === 'set_temperature') {
+      const target = Number(value)
+      if (Number.isFinite(target)) {
+        normalized.status = true
+        normalized.targetTemperature = target
+      }
+    } else if (action === 'set_mode') {
+      const mode = normalizeThermostatMode(value)
+      if (mode) {
+        normalized.status = mode !== 'off'
+        normalized.properties = {
+          ...(updatedDevice?.properties || {}),
+          hvacMode: mode,
+          smartThingsThermostatMode: mode,
+          ...(mode !== 'off' ? { smartThingsLastActiveThermostatMode: mode } : {})
+        }
+      }
+    }
+
+    return normalized
+  }, [])
+
+  const renderControlFeedback = (device: any) => {
+    const pending = !!pendingControls[device._id]
+    const feedback = controlFeedback[device._id]
+
+    if (pending) {
+      return (
+        <div className="flex items-center gap-1 text-xs text-blue-500">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Sending command...
+        </div>
+      )
+    }
+
+    if (feedback === 'success') {
+      return (
+        <div className="flex items-center gap-1 text-xs text-emerald-500">
+          <CheckCircle2 className="h-3 w-3" />
+          Command sent
+        </div>
+      )
+    }
+
+    if (feedback === 'error') {
+      return (
+        <div className="flex items-center gap-1 text-xs text-red-500">
+          <AlertCircle className="h-3 w-3" />
+          Command failed
+        </div>
+      )
+    }
+
+    return null
+  }
+
   const handleDeviceControl = async (deviceId: string, action: string, value?: number | string) => {
+    setPendingControls(prev => ({ ...prev, [deviceId]: true }))
+    setControlFeedback(prev => {
+      const next = { ...prev }
+      delete next[deviceId]
+      return next
+    })
+    applyControlOptimistically(deviceId, action, value)
+
     try {
       console.log('Controlling device:', { deviceId, action, value })
       const payload: { deviceId: string; action: string; value?: number | string } = { deviceId, action }
@@ -261,140 +533,75 @@ export function Devices() {
         payload.value = value
       }
       const controlResult = await controlDevice(payload)
-      const updatedDevice = controlResult?.device
-
-      toast({
-        title: "Device Controlled",
-        description: "Device action completed successfully"
-      })
+      const updatedDevice = normalizeServerDeviceForAction(controlResult?.device, action, value)
 
       if (updatedDevice && updatedDevice._id) {
-        if (action === 'set_brightness') {
-          setLightBrightnessDrafts(prev => {
-            const next = { ...prev }
-            delete next[deviceId]
-            return next
-          })
-        }
-        if (action === 'set_color') {
-          setLightColorDrafts(prev => {
-            const next = { ...prev }
-            delete next[deviceId]
-            return next
-          })
-        }
-
-        setDevices(prev => prev.map(device => 
-          device._id === updatedDevice._id 
+        setDevices(prev => prev.map((device: any) =>
+          device._id === updatedDevice._id
             ? { ...device, ...updatedDevice }
             : device
         ))
 
-        setRoomDevices(prev => prev.map(room => ({
+        setRoomDevices(prev => prev.map((room: any) => ({
           ...room,
           devices: Array.isArray(room.devices)
-            ? room.devices.map(roomDevice => 
+            ? room.devices.map((roomDevice: any) =>
                 roomDevice._id === updatedDevice._id
                   ? { ...roomDevice, ...updatedDevice }
                   : roomDevice
               )
             : room.devices
         })))
-      } else {
-        const normalizedMode = normalizeThermostatMode(value)
-        const applyFallbackState = (device: any) => {
-          if (device._id !== deviceId) {
-            return device
-          }
-
-          if (action === 'turn_on') {
-            return { ...device, status: true }
-          }
-
-          if (action === 'turn_off') {
-            return { ...device, status: false }
-          }
-
-          if (action === 'set_temperature') {
-            const target = Number(value)
-            if (Number.isFinite(target)) {
-              return { ...device, status: true, targetTemperature: target }
-            }
-            return device
-          }
-
-          if (action === 'set_brightness') {
-            const brightness = clampBrightness(Number(value))
-            return { ...device, status: brightness > 0, brightness }
-          }
-
-          if (action === 'set_color') {
-            const color = normalizeHexColor(value)
-            return {
-              ...device,
-              status: true,
-              color
-            }
-          }
-
-          if (action === 'set_mode' && normalizedMode) {
-            return {
-              ...device,
-              status: normalizedMode !== 'off',
-              properties: {
-                ...(device?.properties || {}),
-                hvacMode: normalizedMode,
-                smartThingsThermostatMode: normalizedMode,
-                ...(normalizedMode !== 'off'
-                  ? { smartThingsLastActiveThermostatMode: normalizedMode }
-                  : {})
-              }
-            }
-          }
-
-          return device
-        }
-
-        setDevices(prev => prev.map(device => 
-          applyFallbackState(device)
-        ))
-
-        setRoomDevices(prev => prev.map(room => ({
-          ...room,
-          devices: Array.isArray(room.devices)
-            ? room.devices.map(roomDevice => 
-                applyFallbackState(roomDevice)
-              )
-            : room.devices
-        })))
-
-        if (action === 'set_brightness') {
-          setLightBrightnessDrafts(prev => {
-            const next = { ...prev }
-            delete next[deviceId]
-            return next
-          })
-        }
-        if (action === 'set_color') {
-          setLightColorDrafts(prev => {
-            const next = { ...prev }
-            delete next[deviceId]
-            return next
-          })
-        }
       }
+
+      if (action === 'set_brightness') {
+        setLightBrightnessDrafts(prev => {
+          const next = { ...prev }
+          delete next[deviceId]
+          return next
+        })
+      }
+      if (action === 'set_color') {
+        setLightColorDrafts(prev => {
+          const next = { ...prev }
+          delete next[deviceId]
+          return next
+        })
+      }
+
+      setControlFeedbackForDevice(deviceId, 'success')
+      setTimeout(() => {
+        refreshDevicesSnapshot().catch((error) => console.warn('Post-control refresh failed:', error))
+      }, 1200)
+      setTimeout(() => {
+        refreshDevicesSnapshot().catch((error) => console.warn('Post-control refresh failed:', error))
+      }, 3800)
     } catch (error) {
       console.error('Failed to control device:', error)
+      setControlFeedbackForDevice(deviceId, 'error')
+      setTimeout(() => {
+        refreshDevicesSnapshot().catch((refreshError) => console.warn('Refresh after failed control failed:', refreshError))
+      }, 1000)
       toast({
         title: "Error",
         description: "Failed to control device",
         variant: "destructive"
       })
+    } finally {
+      setPendingControls(prev => {
+        const next = { ...prev }
+        delete next[deviceId]
+        return next
+      })
     }
   }
 
-  const getDeviceIcon = (type: string) => {
-    switch (type) {
+  const getDeviceIcon = (device: any) => {
+    if (supportsLightFade(device)) {
+      return <Lightbulb className="h-5 w-5" />
+    }
+
+    switch (device.type) {
       case 'light':
         return <Lightbulb className="h-5 w-5" />
       case 'lock':
@@ -412,6 +619,7 @@ export function Devices() {
     const targetTemperature = getThermostatTargetTemperature(device)
     const currentTemperature = Number(device?.temperature)
     const isModeOff = currentMode === 'off'
+    const isPending = !!pendingControls[device._id]
 
     return (
       <div className="space-y-3">
@@ -429,6 +637,7 @@ export function Devices() {
             variant="outline"
             size="icon"
             className={compact ? "h-8 w-8" : "h-9 w-9"}
+            disabled={isPending}
           >
             <Minus className={compact ? "h-3 w-3" : "h-4 w-4"} />
           </Button>
@@ -437,12 +646,14 @@ export function Devices() {
             variant="outline"
             size="icon"
             className={compact ? "h-8 w-8" : "h-9 w-9"}
+            disabled={isPending}
           >
             <Plus className={compact ? "h-3 w-3" : "h-4 w-4"} />
           </Button>
           <Select
             value={currentMode}
             onValueChange={(mode) => handleDeviceControl(device._id, 'set_mode', mode)}
+            disabled={isPending}
           >
             <SelectTrigger className="h-9">
               <SelectValue />
@@ -462,6 +673,7 @@ export function Devices() {
           variant={isModeOff ? "outline" : "default"}
           className="w-full"
           size={compact ? "sm" : "default"}
+          disabled={isPending}
         >
           {isModeOff ? (
             <>
@@ -484,8 +696,9 @@ export function Devices() {
     const brightness = typeof draftBrightness === 'number'
       ? clampBrightness(draftBrightness)
       : getLightBrightness(device)
-    const supportsColor = isSmartBulbWithColor(device)
+    const supportsColor = supportsLightColor(device)
     const color = lightColorDrafts[device._id] || getLightColor(device)
+    const isPending = !!pendingControls[device._id]
 
     return (
       <div className="space-y-3">
@@ -509,6 +722,7 @@ export function Devices() {
           max={100}
           step={1}
           className="w-full"
+          disabled={isPending}
         />
 
         <div className="grid grid-cols-2 gap-2">
@@ -516,6 +730,7 @@ export function Devices() {
             onClick={() => handleDeviceControl(device._id, 'set_brightness', clampBrightness(brightness - 10))}
             variant="outline"
             size={compact ? "sm" : "default"}
+            disabled={isPending}
           >
             Fade Down
           </Button>
@@ -523,6 +738,7 @@ export function Devices() {
             onClick={() => handleDeviceControl(device._id, 'set_brightness', clampBrightness(brightness + 10))}
             variant="outline"
             size={compact ? "sm" : "default"}
+            disabled={isPending}
           >
             Fade Up
           </Button>
@@ -543,12 +759,14 @@ export function Devices() {
                   setLightColorDrafts(prev => ({ ...prev, [device._id]: nextColor }))
                 }}
                 className="h-9 w-14 cursor-pointer p-1"
+                disabled={isPending}
               />
               <Button
                 onClick={() => handleDeviceControl(device._id, 'set_color', color)}
                 variant="outline"
                 className="flex-1"
                 size={compact ? "sm" : "default"}
+                disabled={isPending}
               >
                 Apply Color
               </Button>
@@ -561,6 +779,7 @@ export function Devices() {
           variant={device.status ? "default" : "outline"}
           className="w-full"
           size={compact ? "sm" : "default"}
+          disabled={isPending}
         >
           {device.status ? (
             <>
@@ -581,7 +800,11 @@ export function Devices() {
   const filteredDevices = devices.filter(device => {
     const matchesSearch = device.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          device.room.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesType = filterType === "all" || device.type === filterType
+    const matchesType =
+      filterType === "all" ||
+      (filterType === "light"
+        ? supportsLightFade(device)
+        : device.type === filterType)
     return matchesSearch && matchesType
   })
 
@@ -671,7 +894,7 @@ export function Devices() {
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                       <div className="flex items-center gap-2">
                         <div className={`p-2 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
-                          {getDeviceIcon(device.type)}
+                          {getDeviceIcon(device)}
                         </div>
                         <div>
                           <CardTitle className="text-sm font-medium">{device.name}</CardTitle>
@@ -699,7 +922,7 @@ export function Devices() {
                     <CardContent className="space-y-3">
                       {device.type === 'thermostat' ? (
                         renderThermostatControls(device)
-                      ) : device.type === 'light' ? (
+                      ) : supportsLightFade(device) ? (
                         renderLightControls(device)
                       ) : (
                         <Button
@@ -707,6 +930,7 @@ export function Devices() {
                           variant={device.status ? "default" : "outline"}
                           className="w-full"
                           size="sm"
+                          disabled={!!pendingControls[device._id]}
                         >
                           {device.status ? (
                             <>
@@ -721,10 +945,11 @@ export function Devices() {
                           )}
                         </Button>
                       )}
+                      {renderControlFeedback(device)}
                       <div className="text-xs text-muted-foreground">
                         {device.type === 'thermostat'
                           ? `Voice: "Hey Anna, set ${device.name} to ${getThermostatTargetTemperature(device)} degrees"`
-                          : device.type === 'light'
+                          : supportsLightFade(device)
                             ? `Voice: "Hey Anna, fade ${device.name} to 30 percent" or "set ${device.name} to blue"`
                           : `Voice: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
                       </div>
@@ -745,7 +970,7 @@ export function Devices() {
                       <div key={device._id} className="p-4 flex items-center justify-between hover:bg-gray-50/50 dark:hover:bg-slate-800/60 transition-colors">
                         <div className="flex items-center gap-4">
                           <div className={`p-2 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
-                            {getDeviceIcon(device.type)}
+                            {getDeviceIcon(device)}
                           </div>
                           <div>
                             <h3 className="font-medium">{device.name}</h3>
@@ -785,6 +1010,7 @@ export function Devices() {
                               ? (getThermostatMode(device) !== 'off' ? "default" : "outline")
                               : (device.status ? "default" : "outline")}
                             size="sm"
+                            disabled={!!pendingControls[device._id]}
                           >
                             {(device.type === 'thermostat' ? getThermostatMode(device) !== 'off' : device.status) ? (
                               <>
@@ -798,6 +1024,7 @@ export function Devices() {
                               </>
                             )}
                           </Button>
+                          {renderControlFeedback(device)}
                         </div>
                       </div>
                     )
@@ -831,7 +1058,7 @@ export function Devices() {
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-2">
                               <div className={`p-1.5 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
-                                {getDeviceIcon(device.type)}
+                                {getDeviceIcon(device)}
                               </div>
                               <span className="font-medium text-sm">{device.name}</span>
                             </div>
@@ -855,7 +1082,7 @@ export function Devices() {
                           </div>
                           {device.type === 'thermostat' ? (
                             renderThermostatControls(device, true)
-                          ) : device.type === 'light' ? (
+                          ) : supportsLightFade(device) ? (
                             renderLightControls(device, true)
                           ) : (
                             <Button
@@ -863,6 +1090,7 @@ export function Devices() {
                               variant={device.status ? "default" : "outline"}
                               className="w-full"
                               size="sm"
+                              disabled={!!pendingControls[device._id]}
                             >
                               {device.status ? (
                                 <>
@@ -877,6 +1105,7 @@ export function Devices() {
                               )}
                             </Button>
                           )}
+                          {renderControlFeedback(device)}
                         </div>
                       )
                     })}

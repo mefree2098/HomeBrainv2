@@ -19,6 +19,11 @@ struct OperationsView: View {
                 if isLoading {
                     LoadingView(title: "Loading operations data...")
                 } else {
+                    HBSectionHeader(
+                        title: "Operations",
+                        subtitle: "Live events and system health telemetry"
+                    )
+
                     if let errorMessage {
                         InlineErrorView(message: errorMessage) {
                             Task { await loadOperations() }
@@ -34,34 +39,33 @@ struct OperationsView: View {
                         } else {
                             VStack(spacing: 10) {
                                 ForEach(events) { event in
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        HStack {
-                                            Text(event.type)
-                                                .font(.headline)
-                                            Spacer()
-                                            Text(event.severity.uppercased())
+                                    HBCardRow {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            HStack {
+                                                Text(event.type)
+                                                    .font(.headline)
+                                                    .foregroundStyle(HBPalette.textPrimary)
+                                                Spacer()
+                                                Text(event.severity.uppercased())
+                                                    .font(.caption2)
+                                                    .padding(.horizontal, 8)
+                                                    .padding(.vertical, 3)
+                                                    .background(severityColor(event.severity).opacity(0.2))
+                                                    .clipShape(Capsule())
+                                            }
+
+                                            Text("\(event.source) · #\(event.sequence) · \(event.createdAt)")
                                                 .font(.caption2)
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 3)
-                                                .background(severityColor(event.severity).opacity(0.2))
-                                                .clipShape(Capsule())
-                                        }
+                                                .foregroundStyle(HBPalette.textSecondary)
 
-                                        Text("\(event.source) · #\(event.sequence) · \(event.createdAt)")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-
-                                        if !event.payloadSummary.isEmpty {
-                                            Text(event.payloadSummary)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(4)
+                                            if !event.payloadSummary.isEmpty {
+                                                Text(event.payloadSummary)
+                                                    .font(.caption)
+                                                    .foregroundStyle(HBPalette.textSecondary)
+                                                    .lineLimit(4)
+                                            }
                                         }
                                     }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding()
-                                    .background(Color.secondary.opacity(0.08))
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 }
                             }
                             .padding(.top, 4)
@@ -71,6 +75,7 @@ struct OperationsView: View {
             }
             .padding()
         }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh") {

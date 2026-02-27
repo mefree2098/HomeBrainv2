@@ -31,6 +31,11 @@ struct SSLView: View {
                 if isLoading {
                     LoadingView(title: "Loading SSL status...")
                 } else {
+                    HBSectionHeader(
+                        title: "SSL Certificates",
+                        subtitle: "Certificate lifecycle and HTTPS configuration"
+                    )
+
                     if let errorMessage {
                         InlineErrorView(message: errorMessage) {
                             Task { await loadSSLData() }
@@ -38,13 +43,12 @@ struct SSLView: View {
                     }
 
                     if !infoMessage.isEmpty {
-                        Text(infoMessage)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(Color.blue.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        HBPanel {
+                            Text(infoMessage)
+                                .font(.subheadline)
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
 
                     statusCard
@@ -56,6 +60,7 @@ struct SSLView: View {
             }
             .padding()
         }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh") {
@@ -93,10 +98,11 @@ struct SSLView: View {
                     ForEach(certificates) { certificate in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(certificate.domain)
-                                .font(.headline)
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
                             Text("\(certificate.provider) · \(certificate.status) · expires \(certificate.expiryDate)")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(HBPalette.textSecondary)
 
                             HStack {
                                 actionButton("Activate") {
@@ -118,8 +124,14 @@ struct SSLView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding()
-                        .background(Color.secondary.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(HBPalette.panel.opacity(0.9))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(HBPalette.panelStroke, lineWidth: 1)
+                        )
                     }
                 }
                 .padding(.top, 4)
@@ -131,9 +143,9 @@ struct SSLView: View {
         GroupBox("Generate CSR") {
             VStack(alignment: .leading, spacing: 10) {
                 TextField("Domain (commonName)", text: $csrDomain)
-                    .textFieldStyle(.roundedBorder)
+                    .hbPanelTextField()
                 TextField("Email (optional)", text: $csrEmail)
-                    .textFieldStyle(.roundedBorder)
+                    .hbPanelTextField()
 
                 actionButton("Generate CSR") {
                     var payload: [String: Any] = ["commonName": csrDomain]
@@ -157,7 +169,7 @@ struct SSLView: View {
         GroupBox("Upload Certificate") {
             VStack(alignment: .leading, spacing: 10) {
                 TextField("Domain", text: $uploadDomain)
-                    .textFieldStyle(.roundedBorder)
+                    .hbPanelTextField()
 
                 TextEditor(text: $uploadCertificate)
                     .frame(minHeight: 100)
@@ -208,9 +220,9 @@ struct SSLView: View {
         GroupBox("Let's Encrypt") {
             VStack(alignment: .leading, spacing: 10) {
                 TextField("Domain", text: $letsEncryptDomain)
-                    .textFieldStyle(.roundedBorder)
+                    .hbPanelTextField()
                 TextField("Email", text: $letsEncryptEmail)
-                    .textFieldStyle(.roundedBorder)
+                    .hbPanelTextField()
                 Toggle("Use staging", isOn: $letsEncryptStaging)
 
                 actionButton("Request Certificate") {

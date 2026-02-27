@@ -20,6 +20,11 @@ struct WhisperView: View {
                 if isLoading {
                     LoadingView(title: "Loading Whisper status...")
                 } else {
+                    HBSectionHeader(
+                        title: "Whisper STT",
+                        subtitle: "Speech model controls and diagnostics"
+                    )
+
                     if let errorMessage {
                         InlineErrorView(message: errorMessage) {
                             Task { await loadWhisperData() }
@@ -27,13 +32,12 @@ struct WhisperView: View {
                     }
 
                     if !infoMessage.isEmpty {
-                        Text(infoMessage)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(Color.blue.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        HBPanel {
+                            Text(infoMessage)
+                                .font(.subheadline)
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
 
                     statusCard
@@ -43,6 +47,7 @@ struct WhisperView: View {
             }
             .padding()
         }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh") {
@@ -99,7 +104,7 @@ struct WhisperView: View {
                 if !installed.isEmpty {
                     Text("Installed Models: \(installed.compactMap { JSON.optionalString($0, "name") }.joined(separator: ", "))")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HBPalette.textSecondary)
                 }
             }
             .padding(.top, 4)

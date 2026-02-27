@@ -22,46 +22,52 @@ struct UserProfilesView: View {
     private let personalities = ["friendly", "professional", "casual", "formal", "humorous", "neutral"]
 
     var body: some View {
-        Group {
+        VStack(spacing: 12) {
             if isLoading {
                 LoadingView(title: "Loading profiles...")
             } else {
-                VStack(spacing: 12) {
-                    if let errorMessage {
-                        InlineErrorView(message: errorMessage) {
-                            Task { await loadProfiles() }
-                        }
-                    }
+                HBSectionHeader(
+                    title: "User Profiles",
+                    subtitle: "Wake words and voice personas",
+                    buttonTitle: "New Profile",
+                    buttonIcon: "plus"
+                ) {
+                    resetForm()
+                    editingProfile = nil
+                    showCreateSheet = true
+                }
 
-                    if profiles.isEmpty {
-                        EmptyStateView(title: "No user profiles", subtitle: "Create profiles for wake words and voice personas.")
-                    } else {
-                        List {
-                            ForEach(profiles) { profile in
+                if let errorMessage {
+                    InlineErrorView(message: errorMessage) {
+                        Task { await loadProfiles() }
+                    }
+                }
+
+                if profiles.isEmpty {
+                    EmptyStateView(title: "No user profiles", subtitle: "Create profiles for wake words and voice personas.")
+                } else {
+                    List {
+                        ForEach(profiles) { profile in
+                            HBCardRow {
                                 profileRow(profile)
                             }
-                            .onDelete(perform: delete)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                         }
-                        .listStyle(.plain)
+                        .onDelete(perform: delete)
                     }
-                }
-                .padding()
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("New Profile") {
-                            resetForm()
-                            editingProfile = nil
-                            showCreateSheet = true
-                        }
-                    }
-                }
-                .sheet(isPresented: $showCreateSheet) {
-                    profileSheet
-                }
-                .refreshable {
-                    await loadProfiles()
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
                 }
             }
+        }
+        .padding()
+        .sheet(isPresented: $showCreateSheet) {
+            profileSheet
+        }
+        .refreshable {
+            await loadProfiles()
         }
         .task {
             await loadProfiles()
@@ -73,13 +79,14 @@ struct UserProfilesView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(profile.name)
-                        .font(.headline)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
                     Text("Wake words: \(profile.wakeWords.joined(separator: ", "))")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HBPalette.textSecondary)
                     Text("Voice: \(profile.voiceName)")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HBPalette.textSecondary)
                 }
 
                 Spacer()
@@ -105,9 +112,6 @@ struct UserProfilesView: View {
                 .buttonStyle(.bordered)
             }
         }
-        .padding()
-        .background(Color.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var profileSheet: some View {
@@ -139,7 +143,9 @@ struct UserProfilesView: View {
                         .frame(minHeight: 120)
                 }
             }
+            .hbFormStyle()
             .navigationTitle(editingProfile == nil ? "Create Profile" : "Edit Profile")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {

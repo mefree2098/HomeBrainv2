@@ -26,56 +26,58 @@ struct VoiceDevicesView: View {
     private let registerTypes = ["hub", "speaker", "display", "mobile", "microphone"]
 
     var body: some View {
-        Group {
-            if isLoading {
-                LoadingView(title: "Loading voice devices...")
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if let errorMessage {
-                            InlineErrorView(message: errorMessage) {
-                                Task { await loadVoiceData() }
-                            }
-                        }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if isLoading {
+                    LoadingView(title: "Loading voice devices...")
+                } else {
+                    HBSectionHeader(
+                        title: "Voice Devices",
+                        subtitle: "Manage room listeners and fleet updates",
+                        buttonTitle: "Register",
+                        buttonIcon: "plus"
+                    ) {
+                        showRegisterSheet = true
+                    }
 
-                        if !infoMessage.isEmpty {
+                    if let errorMessage {
+                        InlineErrorView(message: errorMessage) {
+                            Task { await loadVoiceData() }
+                        }
+                    }
+
+                    if !infoMessage.isEmpty {
+                        HBPanel {
                             Text(infoMessage)
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding()
-                                .background(Color.blue.opacity(0.08))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
+                    }
 
-                        statusCards
-                        voiceCommandPanel
-                        remoteUpdatePanel
+                    statusCards
+                    voiceCommandPanel
+                    remoteUpdatePanel
 
-                        if voiceDevices.isEmpty {
-                            EmptyStateView(title: "No voice devices", subtitle: "Register a remote listener from this page.")
-                        } else {
-                            ForEach(voiceDevices) { device in
+                    if voiceDevices.isEmpty {
+                        EmptyStateView(title: "No voice devices", subtitle: "Register a remote listener from this page.")
+                    } else {
+                        ForEach(voiceDevices) { device in
+                            HBCardRow {
                                 deviceRow(device)
                             }
                         }
                     }
-                    .padding()
-                }
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("Register") {
-                            showRegisterSheet = true
-                        }
-                    }
-                }
-                .sheet(isPresented: $showRegisterSheet) {
-                    registerSheet
-                }
-                .refreshable {
-                    await loadVoiceData()
                 }
             }
+        }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
+        .padding()
+        .sheet(isPresented: $showRegisterSheet) {
+            registerSheet
+        }
+        .refreshable {
+            await loadVoiceData()
         }
         .task {
             await loadVoiceData()
@@ -121,12 +123,13 @@ struct VoiceDevicesView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Current package: \(JSON.string(packageInfo, "version", fallback: "N/A"))")
                     .font(.subheadline)
+                    .foregroundStyle(HBPalette.textPrimary)
                 Text("Up-to-date: \(JSON.int(updateStats, "upToDate")) · Outdated: \(JSON.int(updateStats, "outdated"))")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
                 Text("Fleet latest: \(JSON.string(fleetSummary, "latestVersion", fallback: "Unknown"))")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(HBPalette.textSecondary)
 
                 HStack {
                     Button("Generate Package") {
@@ -154,13 +157,14 @@ struct VoiceDevicesView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(device.name)
-                        .font(.headline)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
                     Text("\(device.room) · \(device.deviceType)")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HBPalette.textSecondary)
                     Text("Firmware: \(device.firmwareVersion)")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HBPalette.textSecondary)
                 }
 
                 Spacer()
@@ -182,8 +186,8 @@ struct VoiceDevicesView: View {
             }
 
             HStack {
-                TextField("TTS text", text: $ttsText)
-                    .textFieldStyle(.roundedBorder)
+                    TextField("TTS text", text: $ttsText)
+                        .hbPanelTextField()
             }
 
             HStack {
@@ -205,9 +209,6 @@ struct VoiceDevicesView: View {
                 Spacer()
             }
         }
-        .padding()
-        .background(Color.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var registerSheet: some View {
@@ -222,7 +223,9 @@ struct VoiceDevicesView: View {
                     }
                 }
             }
+            .hbFormStyle()
             .navigationTitle("Register Voice Device")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showRegisterSheet = false }
