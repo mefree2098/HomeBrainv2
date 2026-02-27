@@ -18,6 +18,7 @@ import {
   startPlatformDeploy
 } from "@/api/platformDeploy";
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Rocket, RotateCcw, ShieldAlert } from "lucide-react";
+import { AxiosError } from "axios";
 
 const FALLBACK_PRESETS: DeployPreset[] = [
   {
@@ -67,6 +68,18 @@ type DeployOptionState = {
 };
 
 const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error && typeof error === "object") {
+    const axiosError = error as AxiosError<{ message?: string; repoStatus?: { blockingDirtyEntries?: string[] } }>;
+    const responseMessage = axiosError.response?.data?.message;
+    if (typeof responseMessage === "string" && responseMessage.trim().length > 0) {
+      const blockingDirtyEntries = axiosError.response?.data?.repoStatus?.blockingDirtyEntries || [];
+      if (blockingDirtyEntries.length > 0) {
+        return `${responseMessage} (${blockingDirtyEntries[0]})`;
+      }
+      return responseMessage;
+    }
+  }
+
   if (error instanceof Error && error.message) {
     return error.message;
   }

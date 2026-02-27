@@ -377,6 +377,28 @@ class PlatformDeployService {
     };
   }
 
+  normalizeStatusEntryPath(entry = '') {
+    const raw = String(entry || '').trim();
+    if (!raw) {
+      return '';
+    }
+
+    const withoutPrefix = raw.replace(/^[A-Z? !]{1,2}\s+/, '').trim();
+    if (withoutPrefix.includes(' -> ')) {
+      const parts = withoutPrefix.split(' -> ');
+      return (parts[parts.length - 1] || '').trim();
+    }
+    return withoutPrefix;
+  }
+
+  isIgnorableDirtyEntry(entry = '') {
+    const filePath = this.normalizeStatusEntryPath(entry);
+    if (!filePath) {
+      return false;
+    }
+    return filePath.startsWith('client/dist/');
+  }
+
   async writeLatestJobRef(jobId) {
     await this.initialize();
     await fsp.writeFile(this.latestJobRefPath, `${jobId}\n`, 'utf8');
@@ -601,13 +623,38 @@ class PlatformDeployService {
       }
 
       const resolvedOptions = this.resolveDeployOptions(options);
-      const repoStatus = await this.getRepoStatus();
+      let repoStatus = await this.getRepoStatus();
+      if ((repoStatus.dirtyEntries || []).some((entry) => this.isIgnorableDirtyEntry(entry))) {
+        // Normalize generated frontend artifacts up front so deploy start/pull
+        // is not blocked by hashed client/dist churn.
+        await this.cleanupClientDistArtifacts().catch(() => {});
+        repoStatus = await this.getRepoStatus();
+      }
       const allowDirty = resolvedOptions.allowDirty === true;
       if (repoStatus.dirty && !allowDirty) {
-        const error = new Error('Repository has uncommitted changes. Commit/stash first or enable allowDirty.');
-        error.code = 'REPO_DIRTY';
-        error.repoStatus = repoStatus;
-        throw error;
+        const blockingDirtyEntries = (repoStatus.dirtyEntries || []).filter(
+          (entry) => !this.isIgnorableDirtyEntry(entry)
+        );
+
+        if (blockingDirtyEntries.length === 0 && (repoStatus.dirtyEntries || []).length > 0) {
+          // Dist-only dirtiness is common after client builds; normalize and re-check.
+          await this.cleanupClientDistArtifacts().catch(() => {});
+          repoStatus = await this.getRepoStatus();
+        }
+
+        const blockingAfterCleanup = (repoStatus.dirtyEntries || []).filter(
+          (entry) => !this.isIgnorableDirtyEntry(entry)
+        );
+
+        if (blockingAfterCleanup.length > 0) {
+          const error = new Error('Repository has uncommitted non-dist changes. Commit/stash first or enable allowDirty.');
+          error.code = 'REPO_DIRTY';
+          error.repoStatus = {
+            ...repoStatus,
+            blockingDirtyEntries: blockingAfterCleanup
+          };
+          throw error;
+        }
       }
 
       const job = {
@@ -715,6 +762,10 @@ class PlatformDeployService {
     };
 
     try {
+      await runCustomStep('Normalize client dist artifacts', async () => {
+        await this.cleanupClientDistArtifacts({ jobId });
+      });
+
       await runStep('Fetch latest refs', 'git', this.getSafeGitArgs(['fetch', '--all', '--prune']));
       await runStep('Pull latest changes', 'git', this.getSafeGitArgs(['pull', '--ff-only']));
 

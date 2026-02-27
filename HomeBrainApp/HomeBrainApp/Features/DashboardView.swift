@@ -38,7 +38,7 @@ struct DashboardView: View {
         [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     }
 
-    private var featuredDeviceColumns: [GridItem] {
+    private var featuredHalfColumns: [GridItem] {
         if isCompact {
             return [GridItem(.flexible(), spacing: 12)]
         }
@@ -49,6 +49,14 @@ struct DashboardView: View {
         devices
             .filter { favoriteDeviceIds.contains($0.id) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var featuredFullWidthDevices: [DeviceItem] {
+        featuredDevices.filter { $0.type == "thermostat" }
+    }
+
+    private var featuredHalfWidthDevices: [DeviceItem] {
+        featuredDevices.filter { $0.type != "thermostat" }
     }
 
     private var quickScenes: [SceneItem] {
@@ -135,11 +143,19 @@ struct DashboardView: View {
                                     )
                                 }
                             } else {
-                                LazyVGrid(columns: featuredDeviceColumns, spacing: 12) {
-                                    ForEach(featuredDevices) { device in
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ForEach(featuredFullWidthDevices) { device in
                                         featuredDeviceCard(device)
                                             .frame(maxWidth: .infinity, alignment: .leading)
-                                            .gridCellColumns(featuredGridSpan(for: device))
+                                    }
+
+                                    if !featuredHalfWidthDevices.isEmpty {
+                                        LazyVGrid(columns: featuredHalfColumns, spacing: 12) {
+                                            ForEach(featuredHalfWidthDevices) { device in
+                                                featuredDeviceCard(device)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -441,10 +457,6 @@ struct DashboardView: View {
                 }
             }
         }
-    }
-
-    private func featuredGridSpan(for device: DeviceItem) -> Int {
-        (!isCompact && device.type == "thermostat") ? 2 : 1
     }
 
     private func favoriteButton(for device: DeviceItem) -> some View {
