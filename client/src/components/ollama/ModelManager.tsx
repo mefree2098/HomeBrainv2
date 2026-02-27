@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -47,6 +47,15 @@ interface AvailableModel {
   description: string;
   size: string;
   parameterSize: string;
+  parameterSizes?: string[];
+  capabilities?: string[];
+  pullCount?: string | null;
+  pullCountValue?: number | null;
+  updated?: string | null;
+  updatedDaysAgo?: number | null;
+  nanoFit?: boolean;
+  smallestParameterB?: number | null;
+  libraryUrl?: string;
 }
 
 interface ModelManagerProps {
@@ -60,6 +69,10 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
   const [loading, setLoading] = useState(true);
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCapabilities, setSelectedCapabilities] = useState<string[]>([]);
+  const [nanoFitOnly, setNanoFitOnly] = useState(false);
+  const [sortMode, setSortMode] = useState<'popular' | 'newest' | 'name'>('popular');
   const { toast } = useToast();
 
   useEffect(() => {
@@ -167,6 +180,81 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
   };
 
+  const capabilityOptions = useMemo(() => {
+    const values = new Set<string>();
+    for (const model of availableModels) {
+      for (const capability of (model.capabilities || [])) {
+        values.add(capability);
+      }
+    }
+    return Array.from(values).sort((left, right) => left.localeCompare(right));
+  }, [availableModels]);
+
+  const toggleCapability = (capability: string) => {
+    setSelectedCapabilities((current) => (
+      current.includes(capability)
+        ? current.filter((item) => item !== capability)
+        : [...current, capability]
+    ));
+  };
+
+  const filteredAvailableModels = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    const filtered = availableModels.filter((model) => {
+      if (normalizedQuery) {
+        const searchable = [
+          model.name,
+          model.description,
+          model.parameterSize,
+          ...(model.capabilities || [])
+        ].join(' ').toLowerCase();
+        if (!searchable.includes(normalizedQuery)) {
+          return false;
+        }
+      }
+
+      if (nanoFitOnly && !model.nanoFit) {
+        return false;
+      }
+
+      if (selectedCapabilities.length) {
+        const modelCaps = model.capabilities || [];
+        for (const selected of selectedCapabilities) {
+          if (!modelCaps.includes(selected)) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    });
+
+    filtered.sort((left, right) => {
+      if (sortMode === 'name') {
+        return left.name.localeCompare(right.name);
+      }
+
+      if (sortMode === 'newest') {
+        const leftAge = typeof left.updatedDaysAgo === 'number' ? left.updatedDaysAgo : Number.POSITIVE_INFINITY;
+        const rightAge = typeof right.updatedDaysAgo === 'number' ? right.updatedDaysAgo : Number.POSITIVE_INFINITY;
+        if (leftAge !== rightAge) {
+          return leftAge - rightAge;
+        }
+        return left.name.localeCompare(right.name);
+      }
+
+      const leftPulls = typeof left.pullCountValue === 'number' ? left.pullCountValue : -1;
+      const rightPulls = typeof right.pullCountValue === 'number' ? right.pullCountValue : -1;
+      if (leftPulls !== rightPulls) {
+        return rightPulls - leftPulls;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
+    return filtered;
+  }, [availableModels, nanoFitOnly, searchQuery, selectedCapabilities, sortMode]);
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -187,28 +275,97 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
             <DialogHeader>
               <DialogTitle>Available Models</DialogTitle>
               <DialogDescription>
-                Select a model to download. Larger models provide better quality but require more resources.
+                Live Ollama catalog. Use search + filters to find models quickly.
               </DialogDescription>
             </DialogHeader>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search models (e.g. phi4-mini, qwen, vision)"
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              />
+              <select
+                value={sortMode}
+                onChange={(event) => setSortMode(event.target.value as 'popular' | 'newest' | 'name')}
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="popular">Sort: Popular</option>
+                <option value="newest">Sort: Newest</option>
+                <option value="name">Sort: Name</option>
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={nanoFitOnly ? 'default' : 'outline'}
+                onClick={() => setNanoFitOnly((current) => !current)}
+              >
+                Nano fit (estimated)
+              </Button>
+              {capabilityOptions.map((capability) => (
+                <Button
+                  key={capability}
+                  type="button"
+                  size="sm"
+                  variant={selectedCapabilities.includes(capability) ? 'default' : 'outline'}
+                  onClick={() => toggleCapability(capability)}
+                  className="capitalize"
+                >
+                  {capability}
+                </Button>
+              ))}
+              {(searchQuery || nanoFitOnly || selectedCapabilities.length > 0) && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setNanoFitOnly(false);
+                    setSelectedCapabilities([]);
+                  }}
+                >
+                  Clear filters
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Nano fit is an estimate based on smallest listed parameter size (&lt;= 8B).
+            </p>
             <div className="overflow-auto max-h-[60vh]">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Name</TableHead>
                     <TableHead>Description</TableHead>
-                    <TableHead>Size</TableHead>
+                    <TableHead>Sizes</TableHead>
+                    <TableHead>Meta</TableHead>
                     <TableHead className="text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {availableModels.map(model => {
+                  {filteredAvailableModels.map(model => {
                     const isInstalled = installedModels.some(m => m.name === model.name);
                     const isDownloading = downloadingModel === model.name;
 
                     return (
                       <TableRow key={model.name}>
                         <TableCell className="font-medium">
-                          {model.name}
+                          {model.libraryUrl ? (
+                            <a
+                              href={model.libraryUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="hover:underline"
+                            >
+                              {model.name}
+                            </a>
+                          ) : (
+                            model.name
+                          )}
                           {model.parameterSize && (
                             <Badge variant="outline" className="ml-2">
                               {model.parameterSize}
@@ -216,7 +373,22 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                           )}
                         </TableCell>
                         <TableCell className="text-sm">{model.description}</TableCell>
-                        <TableCell>{model.size}</TableCell>
+                        <TableCell>{model.parameterSize || model.size || 'N/A'}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap items-center gap-1">
+                            {model.nanoFit && (
+                              <Badge className="bg-emerald-600">Nano fit</Badge>
+                            )}
+                            {(model.capabilities || []).map((capability) => (
+                              <Badge key={`${model.name}-${capability}`} variant="outline" className="capitalize">
+                                {capability}
+                              </Badge>
+                            ))}
+                            {model.pullCount && (
+                              <Badge variant="outline">{model.pullCount} pulls</Badge>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-right">
                           {isInstalled ? (
                             <Button
@@ -247,6 +419,13 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                       </TableRow>
                     );
                   })}
+                  {filteredAvailableModels.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
+                        No models matched your search/filters.
+                      </TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </div>

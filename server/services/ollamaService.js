@@ -16,6 +16,128 @@ const LOG_LINE_SPLIT_REGEX = /\r?\n/;
 const MAX_OPERATION_LOG_LINES = 4000;
 const VERSION_REGEX = /v?(\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.-]+)?)/i;
 const MAX_MANIFEST_SCAN_FILES = 5000;
+const OLLAMA_LIBRARY_BASE_URL = 'https://ollama.com';
+const OLLAMA_SEARCH_MAX_PAGES = 100;
+const OLLAMA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const OLLAMA_SEARCH_TIMEOUT_MS = 12000;
+const OLLAMA_CAPABILITY_ALLOWLIST = new Set(['vision', 'tools', 'thinking', 'embedding', 'cloud']);
+
+function decodeHtmlEntities(text = '') {
+  return String(text)
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number.parseInt(code, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(Number.parseInt(code, 16)))
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+function stripTags(text = '') {
+  return decodeHtmlEntities(String(text).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' '));
+}
+
+function parseHumanNumber(value = '') {
+  const normalized = String(value).trim().toUpperCase().replace(/,/g, '');
+  const match = normalized.match(/^([0-9]+(?:\.[0-9]+)?)([KMB])?$/);
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number.parseFloat(match[1]);
+  const suffix = match[2] || '';
+  if (!Number.isFinite(amount)) {
+    return null;
+  }
+
+  if (suffix === 'B') {
+    return amount * 1_000_000_000;
+  }
+  if (suffix === 'M') {
+    return amount * 1_000_000;
+  }
+  if (suffix === 'K') {
+    return amount * 1_000;
+  }
+  return amount;
+}
+
+function parseParameterTokenToBillions(token = '') {
+  const normalized = String(token).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const moeMatch = normalized.match(/^([0-9]+(?:\.[0-9]+)?)x([0-9]+(?:\.[0-9]+)?)b$/);
+  if (moeMatch) {
+    const experts = Number.parseFloat(moeMatch[1]);
+    const perExpert = Number.parseFloat(moeMatch[2]);
+    if (Number.isFinite(experts) && Number.isFinite(perExpert)) {
+      return experts * perExpert;
+    }
+  }
+
+  const billionsMatch = normalized.match(/^([0-9]+(?:\.[0-9]+)?)b$/);
+  if (billionsMatch) {
+    const value = Number.parseFloat(billionsMatch[1]);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  const millionsMatch = normalized.match(/^([0-9]+(?:\.[0-9]+)?)m$/);
+  if (millionsMatch) {
+    const value = Number.parseFloat(millionsMatch[1]);
+    return Number.isFinite(value) ? value / 1000 : null;
+  }
+
+  return null;
+}
+
+function parseRelativeAgeToDays(value = '') {
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === 'today') {
+    return 0;
+  }
+  if (normalized === 'yesterday') {
+    return 1;
+  }
+
+  const match = normalized.match(/^([0-9]+)\s+(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s+ago$/);
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(amount)) {
+    return null;
+  }
+
+  const unit = match[2];
+  if (unit.startsWith('minute')) {
+    return amount / (60 * 24);
+  }
+  if (unit.startsWith('hour')) {
+    return amount / 24;
+  }
+  if (unit.startsWith('day')) {
+    return amount;
+  }
+  if (unit.startsWith('week')) {
+    return amount * 7;
+  }
+  if (unit.startsWith('month')) {
+    return amount * 30;
+  }
+  if (unit.startsWith('year')) {
+    return amount * 365;
+  }
+  return null;
+}
 
 async function commandExists(command) {
   try {
@@ -280,10 +402,78 @@ function compareVersionStrings(leftVersion, rightVersion) {
   return left.preRelease.localeCompare(right.preRelease, undefined, { numeric: true, sensitivity: 'base' });
 }
 
+function parseOllamaSearchResponse(html = '') {
+  const models = [];
+  const modelBlocks = String(html).match(/<li x-test-model[\s\S]*?<\/li>/g) || [];
+
+  for (const block of modelBlocks) {
+    const hrefMatch = block.match(/<a href="(\/library\/[^"]+)"/);
+    const titleMatch = block.match(/x-test-search-response-title>([\s\S]*?)<\/span>/);
+    const descriptionMatch = block.match(/<p class="max-w-lg[^"]*">([\s\S]*?)<\/p>/);
+    const sizeMatches = [...block.matchAll(/x-test-size[^>]*>([\s\S]*?)<\/span>/g)];
+    const capabilityMatches = [...block.matchAll(/x-test-capability[^>]*>([\s\S]*?)<\/span>/g)];
+    const pullMatch = block.match(/x-test-pull-count>([\s\S]*?)<\/span>/);
+    const tagCountMatch = block.match(/x-test-tag-count>([\s\S]*?)<\/span>/);
+    const updatedMatch = block.match(/x-test-updated>([\s\S]*?)<\/span>/);
+
+    const nameFromHref = hrefMatch?.[1]
+      ? hrefMatch[1].replace('/library/', '').trim()
+      : '';
+    const name = stripTags(titleMatch?.[1] || nameFromHref);
+    if (!name) {
+      continue;
+    }
+
+    const parameterSizes = sizeMatches
+      .map((match) => stripTags(match?.[1] || ''))
+      .filter(Boolean);
+    const capabilities = capabilityMatches
+      .map((match) => stripTags(match?.[1] || '').toLowerCase())
+      .filter(Boolean);
+    const pullCount = stripTags(pullMatch?.[1] || '');
+    const tagCount = stripTags(tagCountMatch?.[1] || '');
+    const updated = stripTags(updatedMatch?.[1] || '');
+    const description = stripTags(descriptionMatch?.[1] || '');
+    const parameterValues = parameterSizes
+      .map(parseParameterTokenToBillions)
+      .filter((value) => Number.isFinite(value));
+    const smallestParameterB = parameterValues.length
+      ? Math.min(...parameterValues)
+      : null;
+
+    models.push({
+      name,
+      description,
+      parameterSizes,
+      parameterSize: parameterSizes.join(', '),
+      capabilities,
+      pullCount: pullCount || null,
+      pullCountValue: parseHumanNumber(pullCount),
+      tagCount: tagCount || null,
+      tagCountValue: Number.isFinite(Number.parseInt(tagCount, 10)) ? Number.parseInt(tagCount, 10) : null,
+      updated: updated || null,
+      updatedDaysAgo: parseRelativeAgeToDays(updated),
+      smallestParameterB,
+      nanoFit: Number.isFinite(smallestParameterB) ? smallestParameterB <= 8 : false,
+      size: parameterSizes.join(', '),
+      libraryUrl: hrefMatch?.[1] ? `${OLLAMA_LIBRARY_BASE_URL}${hrefMatch[1]}` : `${OLLAMA_LIBRARY_BASE_URL}/library/${name}`
+    });
+  }
+
+  const nextPageMatch = String(html).match(/hx-get="\/search\?page=([0-9]+)[^"]*"/);
+  const nextPage = nextPageMatch?.[1] ? Number.parseInt(nextPageMatch[1], 10) : null;
+
+  return {
+    models,
+    nextPage: Number.isFinite(nextPage) ? nextPage : null
+  };
+}
+
 class OllamaService {
   constructor() {
     this.apiUrl = 'http://localhost:11434';
     this.operationLogs = [];
+    this.availableModelsCache = new Map();
   }
 
   syncApiUrl(config) {
@@ -2105,22 +2295,155 @@ class OllamaService {
   /**
    * Get available models to download
    */
-  async getAvailableModels() {
-    // Popular models list - in production, this could be fetched from Ollama library
+  getFallbackAvailableModels() {
     return [
-      { name: 'llama3.2:latest', description: 'Meta Llama 3.2 - Latest version', size: '2.0 GB', parameterSize: '3B' },
-      { name: 'llama3.2:1b', description: 'Meta Llama 3.2 1B', size: '1.3 GB', parameterSize: '1B' },
-      { name: 'llama3.1:8b', description: 'Meta Llama 3.1 8B', size: '4.7 GB', parameterSize: '8B' },
-      { name: 'llama3.1:70b', description: 'Meta Llama 3.1 70B', size: '40 GB', parameterSize: '70B' },
-      { name: 'mistral:latest', description: 'Mistral 7B - Latest version', size: '4.1 GB', parameterSize: '7B' },
-      { name: 'mixtral:latest', description: 'Mixtral 8x7B MoE', size: '26 GB', parameterSize: '8x7B' },
-      { name: 'phi3:latest', description: 'Microsoft Phi-3', size: '2.3 GB', parameterSize: '3.8B' },
-      { name: 'gemma2:2b', description: 'Google Gemma 2 2B', size: '1.6 GB', parameterSize: '2B' },
-      { name: 'gemma2:9b', description: 'Google Gemma 2 9B', size: '5.5 GB', parameterSize: '9B' },
-      { name: 'qwen2.5:latest', description: 'Qwen 2.5 - Latest', size: '4.7 GB', parameterSize: '7B' },
-      { name: 'codellama:latest', description: 'Code Llama for coding', size: '3.8 GB', parameterSize: '7B' },
-      { name: 'deepseek-coder:latest', description: 'DeepSeek Coder', size: '3.8 GB', parameterSize: '6.7B' },
+      { name: 'llama3.2:latest', description: 'Meta Llama 3.2 - Latest version', size: '3b', parameterSize: '3b', parameterSizes: ['3b'], capabilities: [], nanoFit: true, smallestParameterB: 3 },
+      { name: 'llama3.2:1b', description: 'Meta Llama 3.2 1B', size: '1b', parameterSize: '1b', parameterSizes: ['1b'], capabilities: [], nanoFit: true, smallestParameterB: 1 },
+      { name: 'qwen2.5:latest', description: 'Qwen 2.5 - Latest', size: '7b', parameterSize: '7b', parameterSizes: ['7b'], capabilities: [], nanoFit: true, smallestParameterB: 7 },
+      { name: 'phi4-mini:latest', description: 'Microsoft Phi-4 Mini', size: '3.8b', parameterSize: '3.8b', parameterSizes: ['3.8b'], capabilities: ['tools'], nanoFit: true, smallestParameterB: 3.8 },
+      { name: 'mistral:latest', description: 'Mistral 7B - Latest version', size: '7b', parameterSize: '7b', parameterSizes: ['7b'], capabilities: [], nanoFit: true, smallestParameterB: 7 },
+      { name: 'codellama:latest', description: 'Code Llama for coding', size: '7b', parameterSize: '7b', parameterSizes: ['7b'], capabilities: [], nanoFit: true, smallestParameterB: 7 },
+      { name: 'gemma2:2b', description: 'Google Gemma 2 2B', size: '2b', parameterSize: '2b', parameterSizes: ['2b'], capabilities: [], nanoFit: true, smallestParameterB: 2 },
+      { name: 'phi3:latest', description: 'Microsoft Phi-3', size: '3.8b', parameterSize: '3.8b', parameterSizes: ['3.8b'], capabilities: [], nanoFit: true, smallestParameterB: 3.8 },
+      { name: 'llama3.1:8b', description: 'Meta Llama 3.1 8B', size: '8b', parameterSize: '8b', parameterSizes: ['8b'], capabilities: [], nanoFit: true, smallestParameterB: 8 },
+      { name: 'gemma2:9b', description: 'Google Gemma 2 9B', size: '9b', parameterSize: '9b', parameterSizes: ['9b'], capabilities: [], nanoFit: false, smallestParameterB: 9 },
+      { name: 'deepseek-coder:latest', description: 'DeepSeek Coder', size: '6.7b', parameterSize: '6.7b', parameterSizes: ['6.7b'], capabilities: [], nanoFit: true, smallestParameterB: 6.7 },
+      { name: 'mixtral:latest', description: 'Mixtral 8x7B MoE', size: '8x7b', parameterSize: '8x7b', parameterSizes: ['8x7b'], capabilities: [], nanoFit: false, smallestParameterB: 56 },
+      { name: 'llama3.1:70b', description: 'Meta Llama 3.1 70B', size: '70b', parameterSize: '70b', parameterSizes: ['70b'], capabilities: [], nanoFit: false, smallestParameterB: 70 },
     ];
+  }
+
+  buildAvailableModelsCacheKey({ query = '', capabilities = [], sort = 'popular', maxPages = OLLAMA_SEARCH_MAX_PAGES }) {
+    return JSON.stringify({
+      query: query.trim().toLowerCase(),
+      capabilities: [...new Set(capabilities.map((item) => String(item).trim().toLowerCase()).filter(Boolean))].sort(),
+      sort: sort === 'newest' ? 'newest' : 'popular',
+      maxPages
+    });
+  }
+
+  async fetchAvailableModelsFromOllamaSearch({ query = '', capabilities = [], sort = 'popular', maxPages = OLLAMA_SEARCH_MAX_PAGES }) {
+    const modelMap = new Map();
+    let page = 1;
+    let pagesFetched = 0;
+
+    while (pagesFetched < maxPages) {
+      const params = new URLSearchParams();
+      if (query) {
+        params.set('q', query);
+      }
+      if (page > 1) {
+        params.set('page', String(page));
+      }
+      if (sort === 'newest') {
+        params.set('o', 'newest');
+      }
+      for (const capability of capabilities) {
+        params.append('c', capability);
+      }
+
+      const url = `${OLLAMA_LIBRARY_BASE_URL}/search${params.toString() ? `?${params.toString()}` : ''}`;
+      const response = await axios.get(url, {
+        timeout: OLLAMA_SEARCH_TIMEOUT_MS,
+        responseType: 'text',
+        headers: {
+          'HX-Request': 'true',
+          Accept: 'text/html',
+          'User-Agent': 'HomeBrain-OllamaCatalog/1.0'
+        }
+      });
+
+      const { models, nextPage } = parseOllamaSearchResponse(response.data || '');
+      for (const model of models) {
+        const existing = modelMap.get(model.name);
+        if (!existing) {
+          modelMap.set(model.name, model);
+          continue;
+        }
+
+        const mergedSizes = [...new Set([...(existing.parameterSizes || []), ...(model.parameterSizes || [])])];
+        const mergedCapabilities = [...new Set([...(existing.capabilities || []), ...(model.capabilities || [])])];
+        const existingSmallest = Number.isFinite(existing.smallestParameterB) ? existing.smallestParameterB : null;
+        const modelSmallest = Number.isFinite(model.smallestParameterB) ? model.smallestParameterB : null;
+        const smallestParameterB = existingSmallest === null
+          ? modelSmallest
+          : modelSmallest === null
+            ? existingSmallest
+            : Math.min(existingSmallest, modelSmallest);
+
+        modelMap.set(model.name, {
+          ...existing,
+          ...model,
+          parameterSizes: mergedSizes,
+          parameterSize: mergedSizes.join(', '),
+          capabilities: mergedCapabilities,
+          smallestParameterB,
+          nanoFit: Number.isFinite(smallestParameterB) ? smallestParameterB <= 8 : false,
+          pullCountValue: Number.isFinite(existing.pullCountValue) && Number.isFinite(model.pullCountValue)
+            ? Math.max(existing.pullCountValue, model.pullCountValue)
+            : (Number.isFinite(existing.pullCountValue) ? existing.pullCountValue : model.pullCountValue),
+          tagCountValue: Number.isFinite(existing.tagCountValue) && Number.isFinite(model.tagCountValue)
+            ? Math.max(existing.tagCountValue, model.tagCountValue)
+            : (Number.isFinite(existing.tagCountValue) ? existing.tagCountValue : model.tagCountValue),
+          updatedDaysAgo: Number.isFinite(existing.updatedDaysAgo) && Number.isFinite(model.updatedDaysAgo)
+            ? Math.min(existing.updatedDaysAgo, model.updatedDaysAgo)
+            : (Number.isFinite(existing.updatedDaysAgo) ? existing.updatedDaysAgo : model.updatedDaysAgo),
+          size: mergedSizes.join(', ')
+        });
+      }
+
+      pagesFetched += 1;
+      if (!nextPage || nextPage <= page) {
+        break;
+      }
+      page = nextPage;
+    }
+
+    return Array.from(modelMap.values());
+  }
+
+  async getAvailableModels(options = {}) {
+    const query = typeof options.query === 'string' ? options.query.trim() : '';
+    const sort = options.sort === 'newest' ? 'newest' : 'popular';
+    const maxPagesRaw = Number.parseInt(String(options.maxPages || ''), 10);
+    const maxPages = Number.isFinite(maxPagesRaw)
+      ? Math.min(Math.max(maxPagesRaw, 1), OLLAMA_SEARCH_MAX_PAGES)
+      : OLLAMA_SEARCH_MAX_PAGES;
+    const capabilities = Array.isArray(options.capabilities)
+      ? options.capabilities
+        .map((item) => String(item).trim().toLowerCase())
+        .filter((item) => OLLAMA_CAPABILITY_ALLOWLIST.has(item))
+      : [];
+
+    const cacheKey = this.buildAvailableModelsCacheKey({
+      query,
+      capabilities,
+      sort,
+      maxPages
+    });
+    const cached = this.availableModelsCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp) < OLLAMA_SEARCH_CACHE_TTL_MS) {
+      return cached.models;
+    }
+
+    try {
+      const models = await this.fetchAvailableModelsFromOllamaSearch({
+        query,
+        capabilities,
+        sort,
+        maxPages
+      });
+
+      const finalModels = models.length ? models : this.getFallbackAvailableModels();
+      this.availableModelsCache.set(cacheKey, {
+        timestamp: Date.now(),
+        models: finalModels
+      });
+      return finalModels;
+    } catch (error) {
+      this.addOperationLog('model', `Falling back to static model list: ${error.message}`);
+      return this.getFallbackAvailableModels();
+    }
   }
 
   /**

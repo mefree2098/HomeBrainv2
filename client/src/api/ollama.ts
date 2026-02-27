@@ -122,11 +122,18 @@ export const getInstalledModels = async () => {
 
 // Description: Get available models for download
 // Endpoint: GET /api/ollama/models/available
-// Request: {}
-// Response: { models: Array<{ name: string, description: string, size: string, parameterSize: string }> }
-export const getAvailableModels = async () => {
+// Request: { q?: string, c?: string[], o?: "popular"|"newest", maxPages?: number }
+// Response: { models: Array<{ name: string, description: string, size: string, parameterSize: string, capabilities?: string[], nanoFit?: boolean }> }
+export const getAvailableModels = async (params?: {
+  q?: string;
+  c?: string[];
+  o?: 'popular' | 'newest';
+  maxPages?: number;
+}) => {
   try {
-    const response = await api.get('/api/ollama/models/available');
+    const response = await api.get('/api/ollama/models/available', {
+      params,
+    });
     return response.data;
   } catch (error: any) {
     console.error(error);

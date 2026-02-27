@@ -195,13 +195,24 @@ router.get('/models', auth, async (req, res) => {
 
 // Description: Get available models for download
 // Endpoint: GET /api/ollama/models/available
-// Request: {}
-// Response: { models: Array<{ name: string, description: string, size: string, parameterSize: string }> }
+// Request: { q?: string, c?: string|string[], o?: "popular"|"newest", maxPages?: number }
+// Response: { models: Array<{ name: string, description: string, size: string, parameterSize: string, capabilities?: string[], nanoFit?: boolean }> }
 router.get('/models/available', auth, async (req, res) => {
   try {
     console.log('GET /api/ollama/models/available - Fetching available models');
 
-    const models = await ollamaService.getAvailableModels();
+    const query = typeof req.query?.q === 'string' ? req.query.q : '';
+    const sort = req.query?.o === 'newest' ? 'newest' : 'popular';
+    const maxPages = req.query?.maxPages ? Number.parseInt(req.query.maxPages, 10) : undefined;
+    const capabilities = Array.isArray(req.query?.c)
+      ? req.query.c
+      : (typeof req.query?.c === 'string' && req.query.c.trim().length > 0 ? [req.query.c] : []);
+    const models = await ollamaService.getAvailableModels({
+      query,
+      sort,
+      capabilities,
+      maxPages
+    });
 
     res.status(200).json({ models });
   } catch (error) {
