@@ -400,7 +400,10 @@ class SpeechService {
       const startedAt = Date.now();
       const response = await whisperService.transcribeFile({
         filePath,
-        language
+        language,
+        // Browser fallback clips are short and often begin/end mid-utterance;
+        // disabling VAD here prevents Whisper from dropping usable speech.
+        vadFilter: false
       });
       const durationMs = Date.now() - startedAt;
 

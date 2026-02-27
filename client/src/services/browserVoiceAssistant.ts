@@ -4,11 +4,13 @@ import { textToSpeechElevenLabs, playAudioBlob } from "@/api/elevenLabs";
 import { getSettings } from "@/api/settings";
 
 const DEFAULT_WAKE_WORDS = ["anna", "hey anna", "henry", "hey henry", "home brain", "computer"];
-const WAIT_FOR_COMMAND_TIMEOUT_MS = 8000;
+const WAIT_FOR_COMMAND_TIMEOUT_MS = 12000;
 const NETWORK_ERROR_WINDOW_MS = 15000;
 const NETWORK_ERROR_THRESHOLD = 6;
 const FALLBACK_CAPTURE_INTERVAL_MS = 2500;
 const FALLBACK_CAPTURE_DURATION_MS = 1600;
+const FALLBACK_COMMAND_CAPTURE_DURATION_MS = 2400;
+const FALLBACK_IMMEDIATE_RETRY_DELAY_MS = 120;
 const MIN_FALLBACK_CLIP_BYTES = 64;
 const MAX_AUDIO_B64_LENGTH = 500000;
 const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
@@ -87,6 +89,7 @@ class BrowserVoiceAssistant {
   private waitForCommandTimer: ReturnType<typeof setTimeout> | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private fallbackLoopTimer: ReturnType<typeof setInterval> | null = null;
+  private fallbackImmediateCaptureTimer: ReturnType<typeof setTimeout> | null = null;
   private isStopping = false;
   private resumeRecognitionAfterStop = false;
   private isProcessing = false;
@@ -582,101 +585,166 @@ class BrowserVoiceAssistant {
       return;
     }
 
-    const runCapture = async () => {
-      if (!this.status.enabled || !this.useServerSttFallback || this.fallbackCaptureInFlight) {
-        return;
-      }
-
-      if (Date.now() < this.playbackMutedUntil) {
-        return;
-      }
-
-      this.fallbackCaptureInFlight = true;
-      try {
-        const clip = await this.captureFallbackAudioClip(FALLBACK_CAPTURE_DURATION_MS);
-        if (!clip) {
-          this.fallbackNoChunkCount += 1;
-          if (this.fallbackNoChunkCount === 1 || this.fallbackNoChunkCount % 5 === 0) {
-            this.updateStatus({}, `fallback clip empty (no chunks) count=${this.fallbackNoChunkCount}`);
-          }
-          return;
-        }
-
-        this.fallbackNoChunkCount = 0;
-
-        if (clip.size < MIN_FALLBACK_CLIP_BYTES) {
-          this.fallbackSmallClipCount += 1;
-          if (this.fallbackSmallClipCount === 1 || this.fallbackSmallClipCount % 5 === 0) {
-            this.updateStatus({}, `fallback clip too small size=${clip.size}B count=${this.fallbackSmallClipCount}`);
-          }
-          return;
-        }
-
-        this.fallbackSmallClipCount = 0;
-        this.updateStatus({}, `fallback clip captured size=${clip.size}B mime=${clip.type || "unknown"}`);
-
-        const audioBase64 = await this.blobToBase64(clip);
-        if (!audioBase64 || audioBase64.length > MAX_AUDIO_B64_LENGTH) {
-          this.updateStatus({}, "fallback clip skipped (empty or too large)");
-          return;
-        }
-
-        const stt = await transcribeBrowserAudio({
-          audioBase64,
-          mimeType: clip.type || "audio/webm",
-          language: "en"
-        });
-
-        if (stt?.provider || stt?.model) {
-          this.updateStatus(
-            {},
-            `server-stt result provider=${stt?.provider || "unknown"} model=${stt?.model || "unknown"}`
-          );
-        }
-
-        const transcript = (stt?.text || "").trim();
-        if (!transcript) {
-          this.updateStatus({}, "server-stt returned empty transcript");
-          return;
-        }
-
-        this.updateStatus({
-          lastTranscript: transcript
-        }, `server-stt transcript: "${transcript}"`);
-
-        await this.processTranscript(
-          transcript,
-          typeof stt?.confidence === "number" ? stt.confidence : null
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Server STT fallback capture failed";
-        this.updateStatus({}, `server-stt fallback error: ${message}`);
-        if (
-          message.includes('HTTP 404') ||
-          message.toLowerCase().includes('page not found')
-        ) {
-          this.updateStatus({
-            mode: "error",
-            error: "Server route /api/voice/browser/transcribe is unavailable. Deploy/restart backend.",
-          }, "server-stt endpoint missing on backend");
-        }
-      } finally {
-        this.fallbackCaptureInFlight = false;
-      }
-    };
-
-    void runCapture();
+    void this.captureAndProcessFallbackClip(FALLBACK_CAPTURE_DURATION_MS);
     this.fallbackLoopTimer = setInterval(() => {
-      void runCapture();
+      void this.captureAndProcessFallbackClip(FALLBACK_CAPTURE_DURATION_MS);
     }, FALLBACK_CAPTURE_INTERVAL_MS);
   }
 
   private stopFallbackLoop(): void {
     if (!this.fallbackLoopTimer) {
+      this.clearImmediateFallbackCapture();
       return;
     }
     clearInterval(this.fallbackLoopTimer);
     this.fallbackLoopTimer = null;
+    this.clearImmediateFallbackCapture();
+  }
+
+  private clearImmediateFallbackCapture(): void {
+    if (!this.fallbackImmediateCaptureTimer) {
+      return;
+    }
+    clearTimeout(this.fallbackImmediateCaptureTimer);
+    this.fallbackImmediateCaptureTimer = null;
+  }
+
+  private requestImmediateFallbackCapture(durationMs: number, reason: string, delayMs = 0): void {
+    if (!this.status.enabled || !this.useServerSttFallback) {
+      return;
+    }
+
+    this.clearImmediateFallbackCapture();
+    this.fallbackImmediateCaptureTimer = setTimeout(() => {
+      this.fallbackImmediateCaptureTimer = null;
+
+      if (!this.status.enabled || !this.useServerSttFallback) {
+        return;
+      }
+
+      if (this.fallbackCaptureInFlight) {
+        this.requestImmediateFallbackCapture(
+          durationMs,
+          reason,
+          FALLBACK_IMMEDIATE_RETRY_DELAY_MS
+        );
+        return;
+      }
+
+      this.updateStatus({}, `fallback immediate capture (${reason})`);
+      void this.captureAndProcessFallbackClip(durationMs);
+    }, Math.max(0, delayMs));
+  }
+
+  private async captureAndProcessFallbackClip(durationMs: number): Promise<void> {
+    if (!this.status.enabled || !this.useServerSttFallback || this.fallbackCaptureInFlight) {
+      return;
+    }
+
+    if (Date.now() < this.playbackMutedUntil) {
+      return;
+    }
+
+    this.fallbackCaptureInFlight = true;
+    try {
+      const clip = await this.captureFallbackAudioClip(durationMs);
+      if (!clip) {
+        this.fallbackNoChunkCount += 1;
+        if (this.fallbackNoChunkCount === 1 || this.fallbackNoChunkCount % 5 === 0) {
+          this.updateStatus({}, `fallback clip empty (no chunks) count=${this.fallbackNoChunkCount}`);
+        }
+        if (this.awaitingCommand) {
+          this.requestImmediateFallbackCapture(
+            FALLBACK_COMMAND_CAPTURE_DURATION_MS,
+            "awaiting command (no chunks)",
+            FALLBACK_IMMEDIATE_RETRY_DELAY_MS
+          );
+        }
+        return;
+      }
+
+      this.fallbackNoChunkCount = 0;
+
+      if (clip.size < MIN_FALLBACK_CLIP_BYTES) {
+        this.fallbackSmallClipCount += 1;
+        if (this.fallbackSmallClipCount === 1 || this.fallbackSmallClipCount % 5 === 0) {
+          this.updateStatus({}, `fallback clip too small size=${clip.size}B count=${this.fallbackSmallClipCount}`);
+        }
+        if (this.awaitingCommand) {
+          this.requestImmediateFallbackCapture(
+            FALLBACK_COMMAND_CAPTURE_DURATION_MS,
+            "awaiting command (small clip)",
+            FALLBACK_IMMEDIATE_RETRY_DELAY_MS
+          );
+        }
+        return;
+      }
+
+      this.fallbackSmallClipCount = 0;
+      this.updateStatus({}, `fallback clip captured size=${clip.size}B mime=${clip.type || "unknown"}`);
+
+      const audioBase64 = await this.blobToBase64(clip);
+      if (!audioBase64 || audioBase64.length > MAX_AUDIO_B64_LENGTH) {
+        this.updateStatus({}, "fallback clip skipped (empty or too large)");
+        if (this.awaitingCommand) {
+          this.requestImmediateFallbackCapture(
+            FALLBACK_COMMAND_CAPTURE_DURATION_MS,
+            "awaiting command (clip skipped)",
+            FALLBACK_IMMEDIATE_RETRY_DELAY_MS
+          );
+        }
+        return;
+      }
+
+      const stt = await transcribeBrowserAudio({
+        audioBase64,
+        mimeType: clip.type || "audio/webm",
+        language: "en"
+      });
+
+      if (stt?.provider || stt?.model) {
+        this.updateStatus(
+          {},
+          `server-stt result provider=${stt?.provider || "unknown"} model=${stt?.model || "unknown"}`
+        );
+      }
+
+      const transcript = (stt?.text || "").trim();
+      if (!transcript) {
+        this.updateStatus({}, "server-stt returned empty transcript");
+        if (this.awaitingCommand) {
+          this.requestImmediateFallbackCapture(
+            FALLBACK_COMMAND_CAPTURE_DURATION_MS,
+            "awaiting command (empty transcript)",
+            FALLBACK_IMMEDIATE_RETRY_DELAY_MS
+          );
+        }
+        return;
+      }
+
+      this.updateStatus({
+        lastTranscript: transcript
+      }, `server-stt transcript: "${transcript}"`);
+
+      await this.processTranscript(
+        transcript,
+        typeof stt?.confidence === "number" ? stt.confidence : null
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Server STT fallback capture failed";
+      this.updateStatus({}, `server-stt fallback error: ${message}`);
+      if (
+        message.includes('HTTP 404') ||
+        message.toLowerCase().includes('page not found')
+      ) {
+        this.updateStatus({
+          mode: "error",
+          error: "Server route /api/voice/browser/transcribe is unavailable. Deploy/restart backend.",
+        }, "server-stt endpoint missing on backend");
+      }
+    } finally {
+      this.fallbackCaptureInFlight = false;
+    }
   }
 
   private async captureFallbackAudioClip(durationMs: number): Promise<Blob | null> {
@@ -877,6 +945,14 @@ class BrowserVoiceAssistant {
         pendingWakeWord: null
       }, "command wait timeout");
     }, WAIT_FOR_COMMAND_TIMEOUT_MS);
+
+    if (this.useServerSttFallback) {
+      this.requestImmediateFallbackCapture(
+        FALLBACK_COMMAND_CAPTURE_DURATION_MS,
+        "wake-word follow-up",
+        20
+      );
+    }
   }
 
   private async executeCommand(commandText: string, wakeWord: string, confidence: number | null): Promise<void> {
