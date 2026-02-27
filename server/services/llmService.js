@@ -515,6 +515,7 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
 
   const baseRequestOptions = await buildLocalOllamaOptions();
   const requestOptions = mergeLocalOllamaRequestOptions(baseRequestOptions, requestConfig.ollamaOptions);
+  const requestFormat = requestConfig.ollamaFormat || DEFAULT_OLLAMA_FORMAT;
   const requestTimeoutMs = sanitizeNumeric(requestConfig.timeoutMs, {
     min: 3000,
     max: 60000,
@@ -573,7 +574,8 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
         candidateModel,
         message,
         requestOptions,
-        requestTimeoutMs
+        requestTimeoutMs,
+        requestFormat
       );
       if (responseText !== undefined && responseText !== null) {
         if (!returnMetadata) {
@@ -609,7 +611,14 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
   throw new Error('Local LLM request failed: no models responded successfully.');
 }
 
-async function attemptLocalModelRequest(baseUrl, modelName, message, requestOptions, requestTimeoutMs = DEFAULT_LOCAL_TIMEOUT_MS) {
+async function attemptLocalModelRequest(
+  baseUrl,
+  modelName,
+  message,
+  requestOptions,
+  requestTimeoutMs = DEFAULT_LOCAL_TIMEOUT_MS,
+  requestFormat = DEFAULT_OLLAMA_FORMAT
+) {
   const headers = { 'Content-Type': 'application/json' };
   let lastError = null;
 
@@ -625,7 +634,7 @@ async function attemptLocalModelRequest(baseUrl, modelName, message, requestOpti
 
   const chatPayload = {
     model: baseModel,
-    format: DEFAULT_OLLAMA_FORMAT,
+    format: requestFormat,
     messages: chatMessages,
     options: sanitizedOptions,
     stream: false
@@ -662,7 +671,7 @@ async function attemptLocalModelRequest(baseUrl, modelName, message, requestOpti
     const generateResponse = await axios.post(`${baseUrl}/api/generate`, {
       model: baseModel,
       prompt: promptWithInstruction,
-      format: DEFAULT_OLLAMA_FORMAT,
+      format: requestFormat,
       options: sanitizedOptions,
       stream: false
     }, {
