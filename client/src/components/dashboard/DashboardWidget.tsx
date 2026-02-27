@@ -9,7 +9,10 @@ import {
   Home,
   Power,
   PowerOff,
-  Heart
+  Heart,
+  Flame,
+  Snowflake,
+  Zap
 } from "lucide-react"
 import { useEffect, useState } from "react"
 
@@ -21,28 +24,94 @@ interface Device {
   status: boolean
   brightness?: number
   temperature?: number
+  targetTemperature?: number
+  properties?: Record<string, any>
 }
 
 interface DashboardWidgetProps {
   device: Device
-  onControl: (deviceId: string, action: string, value?: number) => void
+  onControl: (deviceId: string, action: string, value?: number | string) => void
   isFavorite: boolean
   onToggleFavorite: (deviceId: string, nextValue: boolean) => void
   canToggleFavorite: boolean
   isFavoritePending?: boolean
 }
 
+const THERMOSTAT_MODES = ["auto", "cool", "heat", "off"] as const
+
+const normalizeThermostatMode = (value: unknown): string => {
+  if (typeof value !== "string") {
+    return ""
+  }
+
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]/g, "")
+
+  if (normalized === "auto") {
+    return "auto"
+  }
+  if (normalized === "cool") {
+    return "cool"
+  }
+  if (normalized === "heat" || normalized === "auxheatonly" || normalized === "emergencyheat") {
+    return "heat"
+  }
+  if (normalized === "off") {
+    return "off"
+  }
+
+  return ""
+}
+
+const getThermostatMode = (device: Device): string => {
+  const candidates = [
+    device?.properties?.smartThingsThermostatMode,
+    device?.properties?.ecobeeHvacMode,
+    device?.properties?.hvacMode
+  ]
+
+  for (const candidate of candidates) {
+    const normalized = normalizeThermostatMode(candidate)
+    if (normalized) {
+      return normalized
+    }
+  }
+
+  return device.status ? "auto" : "off"
+}
+
+const getPreferredOnMode = (device: Device): string => {
+  const current = getThermostatMode(device)
+  if (current !== "off") {
+    return current
+  }
+
+  const fallback = normalizeThermostatMode(
+    device?.properties?.smartThingsLastActiveThermostatMode ||
+    device?.properties?.ecobeeLastActiveHvacMode
+  )
+
+  return fallback || "auto"
+}
+
 export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorite, canToggleFavorite, isFavoritePending = false }: DashboardWidgetProps) {
   const [brightness, setBrightness] = useState(device.brightness || 0)
-  const [temperature, setTemperature] = useState(device.temperature || 70)
+  const [temperature, setTemperature] = useState(Math.round(device.targetTemperature ?? device.temperature ?? 70))
+  const [thermostatMode, setThermostatMode] = useState(getThermostatMode(device))
 
   useEffect(() => {
     setBrightness(device.brightness ?? 0)
   }, [device.brightness])
 
   useEffect(() => {
-    setTemperature(device.temperature ?? 70)
-  }, [device.temperature])
+    setTemperature(Math.round(device.targetTemperature ?? device.temperature ?? 70))
+  }, [device.targetTemperature, device.temperature])
+
+  useEffect(() => {
+    setThermostatMode(getThermostatMode(device))
+  }, [device.status, device.properties?.smartThingsThermostatMode, device.properties?.ecobeeHvacMode, device.properties?.hvacMode])
 
   const getDeviceIcon = (type: string) => {
     switch (type) {
@@ -72,8 +141,14 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
   }
 
   const handleToggle = () => {
-    const action = device.status ? 'turn_off' : 'turn_on'
-    onControl(device._id, action)
+    if (device.type === "thermostat") {
+      const mode = thermostatMode === "off" ? getPreferredOnMode(device) : "off"
+      setThermostatMode(mode)
+      onControl(device._id, "set_mode", mode)
+      return
+    }
+
+    onControl(device._id, device.status ? "turn_off" : "turn_on")
   }
 
   const handleBrightnessChange = (value: number[]) => {
@@ -82,8 +157,47 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
   }
 
   const handleTemperatureChange = (value: number[]) => {
-    setTemperature(value[0])
-    onControl(device._id, 'set_temperature', value[0])
+    setTemperature(Math.round(value[0]))
+  }
+
+  const handleTemperatureCommit = (value: number[]) => {
+    const next = Math.round(value[0])
+    setTemperature(next)
+    onControl(device._id, "set_temperature", next)
+  }
+
+  const handleThermostatModeChange = (mode: typeof THERMOSTAT_MODES[number]) => {
+    setThermostatMode(mode)
+    onControl(device._id, "set_mode", mode)
+  }
+
+  const getModeLabel = (mode: typeof THERMOSTAT_MODES[number]) => {
+    switch (mode) {
+      case "auto":
+        return "Auto"
+      case "cool":
+        return "Cool"
+      case "heat":
+        return "Heat"
+      case "off":
+        return "Off"
+      default:
+        return mode
+    }
+  }
+
+  const getModeIcon = (mode: typeof THERMOSTAT_MODES[number]) => {
+    switch (mode) {
+      case "cool":
+        return <Snowflake className="h-3 w-3" />
+      case "heat":
+        return <Flame className="h-3 w-3" />
+      case "auto":
+        return <Zap className="h-3 w-3" />
+      case "off":
+      default:
+        return <PowerOff className="h-3 w-3" />
+    }
   }
 
   return (
@@ -113,7 +227,9 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
             <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
           </Button>
           <Badge variant={device.status ? "default" : "secondary"}>
-            {device.status ? "On" : "Off"}
+            {device.type === "thermostat"
+              ? thermostatMode.toUpperCase()
+              : (device.status ? "On" : "Off")}
           </Badge>
         </div>
       </CardHeader>
@@ -154,24 +270,52 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
         )}
 
         {device.type === 'thermostat' && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span>Temperature</span>
-              <span>{temperature}°F</span>
+          <div className="space-y-3 rounded-lg border border-blue-200/60 dark:border-blue-500/30 bg-blue-50/40 dark:bg-blue-950/25 p-3">
+            <div className="flex items-end justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Setpoint</p>
+                <p className="text-2xl font-semibold leading-tight">{temperature}°F</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Current</p>
+                <p className="text-sm font-medium">
+                  {Number.isFinite(device.temperature) ? `${Math.round(device.temperature as number)}°F` : "--"}
+                </p>
+              </div>
             </div>
             <Slider
               value={[temperature]}
               onValueChange={handleTemperatureChange}
-              min={60}
-              max={85}
+              onValueCommit={handleTemperatureCommit}
+              min={55}
+              max={90}
               step={1}
               className="w-full"
             />
+            <div className="grid grid-cols-4 gap-1.5">
+              {THERMOSTAT_MODES.map((mode) => {
+                const active = thermostatMode === mode
+                return (
+                  <Button
+                    key={mode}
+                    variant={active ? "default" : "outline"}
+                    size="sm"
+                    className={`h-8 px-2 text-xs ${active ? "" : "bg-background/80"}`}
+                    onClick={() => handleThermostatModeChange(mode)}
+                  >
+                    {getModeIcon(mode)}
+                    <span className="ml-1">{getModeLabel(mode)}</span>
+                  </Button>
+                )
+              })}
+            </div>
           </div>
         )}
 
         <div className="text-xs text-muted-foreground">
-          Say: "Hey Anna, turn {device.status ? 'off' : 'on'} {device.name}"
+          {device.type === "thermostat"
+            ? `Say: "Hey Anna, set ${device.name} to cool and 72 degrees"`
+            : `Say: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
         </div>
       </CardContent>
     </Card>

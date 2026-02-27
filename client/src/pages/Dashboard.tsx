@@ -114,10 +114,14 @@ export function Dashboard() {
     fetchDashboardData()
   }, [toast])
 
-  const handleDeviceControl = async (deviceId: string, action: string) => {
+  const handleDeviceControl = async (deviceId: string, action: string, value?: number | string) => {
     try {
-      console.log('Controlling device from dashboard:', { deviceId, action })
-      const controlResult = await controlDevice({ deviceId, action })
+      console.log('Controlling device from dashboard:', { deviceId, action, value })
+      const payload: { deviceId: string; action: string; value?: number | string } = { deviceId, action }
+      if (value !== undefined) {
+        payload.value = value
+      }
+      const controlResult = await controlDevice(payload)
       const updatedDevice = controlResult?.device
 
       toast({
@@ -132,12 +136,46 @@ export function Dashboard() {
             : device
         ))
       } else {
-        // Fallback to flipping the expected state if updated device payload missing
-        setDevices(prev => prev.map(device => 
-          device._id === deviceId 
-            ? { ...device, status: action === 'turn_on' }
-            : device
-        ))
+        setDevices(prev => prev.map(device => {
+          if (device._id !== deviceId) {
+            return device
+          }
+
+          if (action === 'turn_on') {
+            return { ...device, status: true }
+          }
+          if (action === 'turn_off') {
+            return { ...device, status: false }
+          }
+          if (action === 'set_temperature') {
+            const nextTemp = Number(value)
+            if (Number.isFinite(nextTemp)) {
+              return { ...device, status: true, targetTemperature: Math.round(nextTemp) }
+            }
+            return device
+          }
+          if (action === 'set_mode' && typeof value === 'string') {
+            const nextMode = value.toLowerCase()
+            return {
+              ...device,
+              status: nextMode !== 'off',
+              properties: {
+                ...(device?.properties || {}),
+                hvacMode: nextMode,
+                smartThingsThermostatMode: nextMode,
+                ...(nextMode !== 'off' ? { smartThingsLastActiveThermostatMode: nextMode } : {})
+              }
+            }
+          }
+          if (action === 'set_brightness') {
+            const nextBrightness = Number(value)
+            if (Number.isFinite(nextBrightness)) {
+              return { ...device, brightness: Math.round(nextBrightness), status: nextBrightness > 0 }
+            }
+          }
+
+          return device
+        }))
       }
     } catch (error) {
       console.error('Failed to control device:', error)
