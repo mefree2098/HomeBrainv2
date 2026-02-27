@@ -55,7 +55,50 @@ const COLOR_NAME_TO_HEX = Object.freeze({
 });
 
 const COLOR_NAME_ENTRIES = Object.entries(COLOR_NAME_TO_HEX).sort((a, b) => b[0].length - a[0].length);
-const LOCAL_FIRST_PROVIDER_PRIORITY = ['local', 'openai', 'anthropic'];
+const LOCAL_FIRST_PROVIDER_PRIORITY = ['local'];
+const VOICE_COMMAND_ALLOW_CLOUD_FALLBACK = process.env.VOICE_COMMAND_ALLOW_CLOUD_FALLBACK === 'true';
+const VOICE_COMMAND_JSON_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: {
+    intent: { type: 'string' },
+    confidence: { type: 'number' },
+    normalizedCommand: { type: 'string' },
+    actions: {
+      type: 'array',
+      items: { type: 'object' }
+    },
+    response: { type: 'string' },
+    followUpQuestion: {
+      anyOf: [
+        { type: 'string' },
+        { type: 'null' }
+      ]
+    }
+  },
+  required: ['intent', 'confidence', 'normalizedCommand', 'actions', 'response', 'followUpQuestion'],
+  additionalProperties: true
+});
+const VOICE_QUERY_JSON_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: {
+    intent: { type: 'string', enum: ['query'] },
+    confidence: { type: 'number' },
+    normalizedCommand: { type: 'string' },
+    actions: {
+      type: 'array',
+      maxItems: 0
+    },
+    response: { type: 'string' },
+    followUpQuestion: {
+      anyOf: [
+        { type: 'string' },
+        { type: 'null' }
+      ]
+    }
+  },
+  required: ['intent', 'confidence', 'normalizedCommand', 'actions', 'response', 'followUpQuestion'],
+  additionalProperties: true
+});
 const VOICE_LLM_REQUEST_CONFIG = Object.freeze({
   // Keep voice interpretation fast and deterministic.
   timeoutMs: 12000,
@@ -331,7 +374,9 @@ OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
 RULES
 1. This request is conversational/informational. Do not produce control actions.
 2. Keep the response concise and voice-friendly.
-3. Return ONLY one JSON object and nothing else.`;
+3. Put the spoken answer in the "response" field only.
+4. Start output with "{" and end with "}".
+5. Return ONLY one JSON object and nothing else.`;
   }
 
   parseLlmResponse(rawResponse) {
@@ -340,14 +385,50 @@ RULES
     }
     const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
+      const preview = typeof rawResponse === 'string' ? rawResponse.slice(0, 220).replace(/\s+/g, ' ') : '';
+      if (preview) {
+        console.warn(`VoiceCommandService: LLM response missing JSON object. Preview="${preview}"`);
+      }
       return null;
     }
     try {
       return JSON.parse(jsonMatch[0]);
     } catch (error) {
-      console.warn('VoiceCommandService: Failed to parse LLM JSON response:', error.message);
+      const preview = typeof rawResponse === 'string' ? rawResponse.slice(0, 220).replace(/\s+/g, ' ') : '';
+      console.warn(`VoiceCommandService: Failed to parse LLM JSON response: ${error.message}${preview ? ` | Preview="${preview}"` : ''}`);
       return null;
     }
+  }
+
+  parseLocalPlainTextQueryResponse(commandText, rawResponse, queryOnlyRequest) {
+    if (!queryOnlyRequest || typeof rawResponse !== 'string') {
+      return null;
+    }
+
+    let text = rawResponse.trim();
+    if (!text) {
+      return null;
+    }
+
+    // If the model wrapped the answer in markdown fences, strip them.
+    text = text
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/```$/i, '')
+      .trim();
+
+    if (!text) {
+      return null;
+    }
+
+    return {
+      intent: 'query',
+      confidence: 0.55,
+      normalizedCommand: commandText,
+      actions: [],
+      response: text,
+      followUpQuestion: null,
+      usedFallback: true
+    };
   }
 
   findBestDevice(commandText, devices) {
@@ -1072,13 +1153,17 @@ RULES
       });
 
     const providerPriorityOverride = LOCAL_FIRST_PROVIDER_PRIORITY;
+    const llmRequestConfig = {
+      ...VOICE_LLM_REQUEST_CONFIG,
+      ollamaFormat: queryOnlyRequest ? VOICE_QUERY_JSON_SCHEMA : VOICE_COMMAND_JSON_SCHEMA
+    };
 
     const startedAt = Date.now();
     try {
       const firstAttempt = await sendLLMRequestWithFallbackDetailed(
         prompt,
         providerPriorityOverride,
-        VOICE_LLM_REQUEST_CONFIG
+        llmRequestConfig
       );
       let { response, provider, model, runtime = null } = firstAttempt;
       let parsed = this.parseLlmResponse(response);
@@ -1086,18 +1171,35 @@ RULES
       if (!parsed) {
         console.warn(`VoiceCommandService: First LLM (provider=${provider || 'unknown'}) failed to return valid JSON.`);
         const providerKey = (provider || '').toLowerCase();
+
         if (providerKey === 'local') {
-          const cloudProviders = ['openai', 'anthropic'];
-          try {
-            const cloudAttempt = await sendLLMRequestWithFallbackDetailed(prompt, cloudProviders);
-            response = cloudAttempt.response;
-            provider = cloudAttempt.provider;
-            model = cloudAttempt.model;
-            runtime = cloudAttempt.runtime || null;
-            parsed = this.parseLlmResponse(response);
-            console.log(`VoiceCommandService: Second LLM attempt with ${provider || 'unknown'} ${parsed ? 'succeeded' : 'still failed'}.`);
-          } catch (fallbackError) {
-            console.warn('VoiceCommandService: Cloud fallback attempt failed:', fallbackError.message);
+          const localPlainTextInterpretation = this.parseLocalPlainTextQueryResponse(
+            commandText,
+            response,
+            queryOnlyRequest
+          );
+          if (localPlainTextInterpretation) {
+            parsed = localPlainTextInterpretation;
+            console.log('VoiceCommandService: Accepted plain-text local query response without cloud fallback.');
+          }
+        }
+
+        if (providerKey === 'local') {
+          if (VOICE_COMMAND_ALLOW_CLOUD_FALLBACK && !parsed) {
+            const cloudProviders = ['openai', 'anthropic'];
+            try {
+              const cloudAttempt = await sendLLMRequestWithFallbackDetailed(prompt, cloudProviders);
+              response = cloudAttempt.response;
+              provider = cloudAttempt.provider;
+              model = cloudAttempt.model;
+              runtime = cloudAttempt.runtime || null;
+              parsed = this.parseLlmResponse(response);
+              console.log(`VoiceCommandService: Second LLM attempt with ${provider || 'unknown'} ${parsed ? 'succeeded' : 'still failed'}.`);
+            } catch (fallbackError) {
+              console.warn('VoiceCommandService: Cloud fallback attempt failed:', fallbackError.message);
+            }
+          } else if (!parsed) {
+            console.log('VoiceCommandService: Cloud fallback disabled (VOICE_COMMAND_ALLOW_CLOUD_FALLBACK != true).');
           }
         }
       }
