@@ -61,6 +61,51 @@ export interface BrowserTranscriptionResult {
   segments?: Array<Record<string, unknown>>;
 }
 
+const coerceBrowserTranscriptionPayload = (parsed: any): BrowserTranscriptionResult | null => {
+  if (!parsed || typeof parsed !== 'object') {
+    return null;
+  }
+
+  // Preferred/current contract.
+  if (parsed.stt && typeof parsed.stt === 'object') {
+    const stt = parsed.stt;
+    return {
+      provider: String(stt.provider || 'unknown'),
+      model: String(stt.model || 'unknown'),
+      text: typeof stt.text === 'string' ? stt.text : '',
+      language: stt.language ?? null,
+      confidence: typeof stt.confidence === 'number' ? stt.confidence : null,
+      processingTimeMs: typeof stt.processingTimeMs === 'number' ? stt.processingTimeMs : null,
+      duration: typeof stt.duration === 'number' ? stt.duration : null,
+      segments: Array.isArray(stt.segments) ? stt.segments : []
+    };
+  }
+
+  // Legacy/alternate contracts.
+  const candidate = parsed.transcription || parsed.result || parsed.data || parsed;
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+
+  const candidateText = typeof candidate.text === 'string'
+    ? candidate.text
+    : (typeof candidate.transcript === 'string' ? candidate.transcript : '');
+  if (!candidateText && typeof candidate.provider === 'undefined' && typeof candidate.model === 'undefined') {
+    return null;
+  }
+
+  return {
+    provider: String(candidate.provider || 'unknown'),
+    model: String(candidate.model || 'unknown'),
+    text: candidateText || '',
+    language: candidate.language ?? null,
+    confidence: typeof candidate.confidence === 'number' ? candidate.confidence : null,
+    processingTimeMs: typeof candidate.processingTimeMs === 'number' ? candidate.processingTimeMs : null,
+    duration: typeof candidate.duration === 'number' ? candidate.duration : null,
+    segments: Array.isArray(candidate.segments) ? candidate.segments : []
+  };
+};
+
 // Description: Interpret a voice command through the full pipeline
 // Endpoint: POST /api/voice/commands/interpret
 // Request: { commandText: string, room?: string, wakeWord?: string, deviceId?: string }
@@ -118,11 +163,13 @@ export const transcribeBrowserAudio = async (payload: {
       throw new Error(serverMessage || `HTTP ${response.status} from ${path}: ${snippet || response.statusText}`);
     }
 
-    if (!parsed?.stt) {
-      throw new Error(`Missing STT payload from ${path}`);
+    const sttPayload = coerceBrowserTranscriptionPayload(parsed);
+    if (!sttPayload) {
+      const snippet = typeof raw === 'string' ? raw.trim().slice(0, 220) : '';
+      throw new Error(`Missing STT payload from ${path}${snippet ? `: ${snippet}` : ''}`);
     }
 
-    return parsed.stt as BrowserTranscriptionResult;
+    return sttPayload;
   };
 
   try {

@@ -14,6 +14,7 @@ struct DevicesView: View {
 
     @State private var lightBrightnessDrafts: [String: Double] = [:]
     @State private var lightColorDrafts: [String: String] = [:]
+    @State private var thermostatTemperatureDrafts: [String: Double] = [:]
     @State private var pendingControls: Set<String> = []
     @State private var controlFeedback: [String: ControlFeedback] = [:]
 
@@ -194,12 +195,29 @@ struct DevicesView: View {
         let backgroundColor = device.status ? Color.white.opacity(0.9) : Color.white.opacity(0.14)
         let foregroundColor = device.status ? Color.black.opacity(0.75) : HBPalette.textPrimary
 
-        return Text(text)
-            .font(.system(size: 13, weight: .bold, design: .rounded))
-            .foregroundStyle(foregroundColor)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(backgroundColor, in: Capsule())
+        return Group {
+            if device.type == "thermostat" {
+                HStack(spacing: 8) {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.red.opacity(0.95))
+
+                    Text(text)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(foregroundColor)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(backgroundColor, in: Capsule())
+                }
+            } else {
+                Text(text)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(foregroundColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(backgroundColor, in: Capsule())
+            }
+        }
     }
 
     private func defaultPowerControl(for device: DeviceItem) -> some View {
@@ -224,64 +242,11 @@ struct DevicesView: View {
         let pending = pendingControls.contains(device.id)
         let mode = thermostatMode(for: device)
         let onMode = thermostatOnMode(for: device)
-        let targetTemp = thermostatTargetTemperature(for: device)
+        let targetTemp = Int(currentThermostatSetpoint(for: device).rounded())
         let currentTemp = device.temperature.map { Int($0.rounded()) }
         let isOff = mode == "off"
 
-        return VStack(spacing: 10) {
-            HStack {
-                Text("Setpoint")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-                Spacer()
-                Text("\(targetTemp)°\(currentTemp.map { " • \($0)°" } ?? "")")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
-            }
-
-            HStack(spacing: 8) {
-                Button {
-                    let next = max(-50, targetTemp - 1)
-                    Task { await handleDeviceControl(deviceId: device.id, action: "set_temperature", value: next) }
-                } label: {
-                    Label("Down", systemImage: "minus")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(HBPalette.accentBlue)
-                .disabled(pending)
-
-                Button {
-                    let next = min(150, targetTemp + 1)
-                    Task { await handleDeviceControl(deviceId: device.id, action: "set_temperature", value: next) }
-                } label: {
-                    Label("Up", systemImage: "plus")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(HBPalette.accentBlue)
-                .disabled(pending)
-
-                Menu {
-                    ForEach(thermostatModes, id: \.self) { thermostatMode in
-                        Button(thermostatMode.capitalized) {
-                            Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: thermostatMode) }
-                        }
-                    }
-                } label: {
-                    Label(mode.capitalized, systemImage: "thermometer.medium")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                        )
-                }
-                .disabled(pending)
-            }
-
+        return VStack(alignment: .leading, spacing: 12) {
             Button {
                 let nextMode = isOff ? onMode : "off"
                 Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
@@ -293,7 +258,113 @@ struct DevicesView: View {
             .tint(isOff ? Color.black.opacity(0.68) : Color.white.opacity(0.88))
             .foregroundStyle(isOff ? Color.white : Color.black.opacity(0.82))
             .disabled(pending)
+
+            thermostatSetpointPanel(
+                device: device,
+                mode: mode,
+                targetTemp: targetTemp,
+                currentTemp: currentTemp,
+                pending: pending
+            )
         }
+    }
+
+    private func thermostatSetpointPanel(
+        device: DeviceItem,
+        mode: String,
+        targetTemp: Int,
+        currentTemp: Int?,
+        pending: Bool
+    ) -> some View {
+        VStack(spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("SETPOINT")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .tracking(1.2)
+                        .foregroundStyle(HBPalette.textSecondary)
+                    Text("\(targetTemp)°F")
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                Spacer(minLength: 12)
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("CURRENT")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .tracking(1.2)
+                        .foregroundStyle(HBPalette.textSecondary)
+                    Text(currentTemp.map { "\($0)°F" } ?? "--")
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+            }
+
+            Slider(
+                value: Binding(
+                    get: { currentThermostatSetpoint(for: device) },
+                    set: { thermostatTemperatureDrafts[device.id] = clampThermostatTemperature($0) }
+                ),
+                in: 55...90,
+                step: 1,
+                onEditingChanged: { editing in
+                    guard !editing else { return }
+                    let next = Int(currentThermostatSetpoint(for: device).rounded())
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_temperature", value: next) }
+                }
+            )
+            .tint(Color.white.opacity(0.95))
+            .disabled(pending)
+
+            HStack(spacing: 8) {
+                ForEach(thermostatModes, id: \.self) { thermostatMode in
+                    thermostatModeChip(
+                        device: device,
+                        mode: thermostatMode,
+                        activeMode: mode,
+                        pending: pending
+                    )
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(red: 0.09, green: 0.15, blue: 0.37).opacity(0.66), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(HBPalette.accentBlue.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    private func thermostatModeChip(
+        device: DeviceItem,
+        mode: String,
+        activeMode: String,
+        pending: Bool
+    ) -> some View {
+        let active = activeMode == mode
+
+        return Button(mode.uppercased()) {
+            Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: mode) }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 14, weight: .bold, design: .rounded))
+        .foregroundStyle(active ? Color.black.opacity(0.86) : HBPalette.textPrimary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(active ? Color.white.opacity(0.9) : Color.black.opacity(0.62))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(active ? Color.clear : Color.white.opacity(0.14), lineWidth: 1)
+        )
+        .disabled(pending)
     }
 
     private func lightControls(for device: DeviceItem) -> some View {
@@ -509,6 +580,8 @@ struct DevicesView: View {
                 lightBrightnessDrafts.removeValue(forKey: deviceId)
             } else if action == "set_color" {
                 lightColorDrafts.removeValue(forKey: deviceId)
+            } else if action == "set_temperature" {
+                thermostatTemperatureDrafts.removeValue(forKey: deviceId)
             }
 
             setControlFeedback(deviceId: deviceId, status: .success)
@@ -566,8 +639,10 @@ struct DevicesView: View {
 
         case "set_temperature":
             if let target = numberValue(from: value) {
-                updated.targetTemperature = target
+                let clamped = clampThermostatTemperature(target)
+                updated.targetTemperature = clamped
                 updated.status = true
+                thermostatTemperatureDrafts[deviceId] = clamped
             }
 
         case "set_mode":
@@ -770,12 +845,24 @@ struct DevicesView: View {
 
     private func thermostatTargetTemperature(for device: DeviceItem) -> Int {
         if let target = device.targetTemperature {
-            return Int(target.rounded())
+            return Int(clampThermostatTemperature(target))
         }
         if let current = device.temperature {
-            return Int(current.rounded())
+            return Int(clampThermostatTemperature(current))
         }
-        return 72
+        return 68
+    }
+
+    private func clampThermostatTemperature(_ value: Double) -> Double {
+        let clamped = min(90, max(55, value))
+        return clamped.rounded()
+    }
+
+    private func currentThermostatSetpoint(for device: DeviceItem) -> Double {
+        if let draft = thermostatTemperatureDrafts[device.id] {
+            return clampThermostatTemperature(draft)
+        }
+        return Double(thermostatTargetTemperature(for: device))
     }
 
     private func normalizedSmartThingsValue(_ value: Any) -> String {
