@@ -1,7 +1,9 @@
 import SwiftUI
+import UIKit
 
 struct DevicesView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var devices: [DeviceItem] = []
     @State private var isLoading = true
@@ -10,17 +12,43 @@ struct DevicesView: View {
     @State private var searchText = ""
     @State private var typeFilter = "all"
 
+    @State private var lightBrightnessDrafts: [String: Double] = [:]
+    @State private var lightColorDrafts: [String: String] = [:]
+    @State private var pendingControls: Set<String> = []
+    @State private var controlFeedback: [String: ControlFeedback] = [:]
+
     @State private var showCreateSheet = false
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
 
     private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "switch", "camera"]
+    private let thermostatModes = ["auto", "cool", "heat", "off"]
+
+    private enum ControlFeedback: Equatable {
+        case success
+        case failure
+    }
+
+    private var isCompact: Bool { horizontalSizeClass == .compact }
+
+    private var gridColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: isCompact ? 300 : 340), spacing: 12)]
+    }
 
     private var filteredDevices: [DeviceItem] {
         devices.filter { device in
-            let matchesSearch = searchText.isEmpty || device.name.localizedCaseInsensitiveContains(searchText) || device.room.localizedCaseInsensitiveContains(searchText)
-            let matchesType = typeFilter == "all" || device.type == typeFilter
+            let matchesSearch = searchText.isEmpty
+                || device.name.localizedCaseInsensitiveContains(searchText)
+                || device.room.localizedCaseInsensitiveContains(searchText)
+            let matchesType: Bool
+            if typeFilter == "all" {
+                matchesType = true
+            } else if typeFilter == "light" {
+                matchesType = supportsLightFade(device)
+            } else {
+                matchesType = device.type == typeFilter
+            }
             return matchesSearch && matchesType
         }
     }
@@ -30,55 +58,43 @@ struct DevicesView: View {
             if isLoading {
                 LoadingView(title: "Loading devices...")
             } else {
-                HBSectionHeader(
-                    title: "Devices",
-                    subtitle: "Manage smart devices and quick controls",
-                    buttonTitle: "Add Device",
-                    buttonIcon: "plus"
-                ) {
-                    showCreateSheet = true
-                }
+                ScrollView {
+                    VStack(spacing: 12) {
+                        HBSectionHeader(
+                            title: "Devices",
+                            subtitle: "Manage dimming, color, thermostat, and power controls",
+                            buttonTitle: "Add Device",
+                            buttonIcon: "plus"
+                        ) {
+                            showCreateSheet = true
+                        }
 
-                if let errorMessage {
-                    InlineErrorView(message: errorMessage) {
-                        Task { await loadDevices() }
-                    }
-                }
-
-                HBPanel {
-                    HStack {
-                        TextField("Search devices", text: $searchText)
-                            .hbPanelTextField()
-
-                        Picker("Type", selection: $typeFilter) {
-                            ForEach(availableTypes, id: \.self) { type in
-                                Text(type.capitalized).tag(type)
+                        if let errorMessage {
+                            InlineErrorView(message: errorMessage) {
+                                Task { await loadDevices(showLoading: true) }
                             }
                         }
-                        .pickerStyle(.menu)
-                        .tint(HBPalette.accentBlue)
-                    }
-                }
 
-                if filteredDevices.isEmpty {
-                    EmptyStateView(
-                        title: "No devices match",
-                        subtitle: "Adjust filters or create a new device."
-                    )
-                } else {
-                    List {
-                        ForEach(filteredDevices) { device in
-                            HBCardRow {
-                                deviceRow(device)
+                        filterPanel
+
+                        if filteredDevices.isEmpty {
+                            EmptyStateView(
+                                title: "No devices match",
+                                subtitle: "Adjust filters or create a new device."
+                            )
+                        } else {
+                            LazyVGrid(columns: gridColumns, spacing: 12) {
+                                ForEach(filteredDevices) { device in
+                                    deviceCard(device)
+                                }
                             }
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
                         }
-                        .onDelete(perform: delete)
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.clear)
+                    .padding(.bottom, 8)
+                }
+                .scrollIndicators(.hidden)
+                .refreshable {
+                    await loadDevices(showLoading: false)
                 }
             }
         }
@@ -86,36 +102,333 @@ struct DevicesView: View {
         .sheet(isPresented: $showCreateSheet) {
             createDeviceSheet
         }
-        .refreshable {
-            await loadDevices()
-        }
         .task {
-            await loadDevices()
+            await loadDevices(showLoading: true)
         }
     }
 
-    private func deviceRow(_ device: DeviceItem) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(device.name)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
-                Text("\(device.room) · \(device.type)")
-                    .font(.caption)
+    private var filterPanel: some View {
+        HBPanel {
+            VStack(spacing: 10) {
+                TextField("Search devices", text: $searchText)
+                    .hbPanelTextField()
+
+                HStack {
+                    Text("Type")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                    Spacer()
+                    Picker("Type", selection: $typeFilter) {
+                        ForEach(availableTypes, id: \.self) { type in
+                            Text(type.capitalized).tag(type)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(HBPalette.accentBlue)
+                }
+            }
+        }
+    }
+
+    private func deviceCard(_ device: DeviceItem) -> some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: iconName(for: device))
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(device.status ? HBPalette.accentGreen.opacity(0.75) : Color.white.opacity(0.26), in: Circle())
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(device.name)
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .lineLimit(2)
+                        Text(device.room)
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Text(device.isOnline ? "Online" : "Offline")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(device.isOnline ? HBPalette.accentGreen : Color.red.opacity(0.85))
+                    }
+
+                    Spacer(minLength: 0)
+
+                    statusBadge(for: device)
+                }
+
+                if device.type == "thermostat" {
+                    thermostatControls(for: device)
+                } else if supportsLightFade(device) {
+                    lightControls(for: device)
+                } else {
+                    defaultPowerControl(for: device)
+                }
+
+                controlFeedbackView(for: device)
+
+                Text(voiceHint(for: device))
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
-                Text(device.isOnline ? "Online" : "Offline")
-                    .font(.caption2)
-                    .foregroundStyle(device.isOnline ? .green : .red)
+                    .lineLimit(3)
+            }
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                Task { await deleteDevice(device) }
+            } label: {
+                Label("Delete Device", systemImage: "trash")
+            }
+        }
+    }
+
+    private func statusBadge(for device: DeviceItem) -> some View {
+        let text: String
+        if device.type == "thermostat" {
+            text = thermostatMode(for: device).uppercased()
+        } else {
+            text = device.status ? "On" : "Off"
+        }
+
+        let backgroundColor = device.status ? Color.white.opacity(0.9) : Color.white.opacity(0.14)
+        let foregroundColor = device.status ? Color.black.opacity(0.75) : HBPalette.textPrimary
+
+        return Text(text)
+            .font(.system(size: 13, weight: .bold, design: .rounded))
+            .foregroundStyle(foregroundColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(backgroundColor, in: Capsule())
+    }
+
+    private func defaultPowerControl(for device: DeviceItem) -> some View {
+        Button {
+            Task {
+                await handleDeviceControl(
+                    deviceId: device.id,
+                    action: device.status ? "turn_off" : "turn_on"
+                )
+            }
+        } label: {
+            Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(device.status ? Color.white.opacity(0.88) : Color.black.opacity(0.65))
+        .foregroundStyle(device.status ? Color.black.opacity(0.85) : Color.white)
+        .disabled(pendingControls.contains(device.id))
+    }
+
+    private func thermostatControls(for device: DeviceItem) -> some View {
+        let pending = pendingControls.contains(device.id)
+        let mode = thermostatMode(for: device)
+        let onMode = thermostatOnMode(for: device)
+        let targetTemp = thermostatTargetTemperature(for: device)
+        let currentTemp = device.temperature.map { Int($0.rounded()) }
+        let isOff = mode == "off"
+
+        return VStack(spacing: 10) {
+            HStack {
+                Text("Setpoint")
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                Spacer()
+                Text("\(targetTemp)°\(currentTemp.map { " • \($0)°" } ?? "")")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
             }
 
-            Spacer()
+            HStack(spacing: 8) {
+                Button {
+                    let next = max(-50, targetTemp - 1)
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_temperature", value: next) }
+                } label: {
+                    Label("Down", systemImage: "minus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(HBPalette.accentBlue)
+                .disabled(pending)
 
-            Button(device.status ? "Off" : "On") {
-                Task { await toggle(device) }
+                Button {
+                    let next = min(150, targetTemp + 1)
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_temperature", value: next) }
+                } label: {
+                    Label("Up", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(HBPalette.accentBlue)
+                .disabled(pending)
+
+                Menu {
+                    ForEach(thermostatModes, id: \.self) { thermostatMode in
+                        Button(thermostatMode.capitalized) {
+                            Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: thermostatMode) }
+                        }
+                    }
+                } label: {
+                    Label(mode.capitalized, systemImage: "thermometer.medium")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                        )
+                }
+                .disabled(pending)
+            }
+
+            Button {
+                let nextMode = isOff ? onMode : "off"
+                Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
+            } label: {
+                Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(device.status ? .red : .green)
+            .tint(isOff ? Color.black.opacity(0.68) : Color.white.opacity(0.88))
+            .foregroundStyle(isOff ? Color.white : Color.black.opacity(0.82))
+            .disabled(pending)
         }
+    }
+
+    private func lightControls(for device: DeviceItem) -> some View {
+        let pending = pendingControls.contains(device.id)
+        let brightness = currentLightBrightness(for: device)
+        let colorHex = currentLightColor(for: device)
+
+        return VStack(spacing: 10) {
+            HStack {
+                Text("Fade")
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                Spacer()
+                Text("\(Int(brightness.rounded()))%")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+            }
+
+            Slider(
+                value: Binding(
+                    get: { currentLightBrightness(for: device) },
+                    set: { lightBrightnessDrafts[device.id] = clampBrightness($0) }
+                ),
+                in: 0...100,
+                step: 1,
+                onEditingChanged: { editing in
+                    guard !editing else { return }
+                    let level = Int(currentLightBrightness(for: device).rounded())
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_brightness", value: level) }
+                }
+            )
+            .tint(HBPalette.accentBlue)
+            .disabled(pending)
+
+            HStack(spacing: 8) {
+                Button("Fade Down") {
+                    let next = Int(clampBrightness(brightness - 10).rounded())
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_brightness", value: next) }
+                }
+                .buttonStyle(.bordered)
+                .tint(HBPalette.accentBlue)
+                .frame(maxWidth: .infinity)
+                .disabled(pending)
+
+                Button("Fade Up") {
+                    let next = Int(clampBrightness(brightness + 10).rounded())
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_brightness", value: next) }
+                }
+                .buttonStyle(.bordered)
+                .tint(HBPalette.accentBlue)
+                .frame(maxWidth: .infinity)
+                .disabled(pending)
+            }
+
+            if supportsLightColor(device) {
+                VStack(spacing: 8) {
+                    HStack {
+                        Text("Color")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Spacer()
+                        Text(colorHex.uppercased())
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(HBPalette.textPrimary)
+                    }
+
+                    HStack(spacing: 10) {
+                        ColorPicker("", selection: colorBinding(for: device), supportsOpacity: false)
+                            .labelsHidden()
+                            .frame(width: 34, height: 34)
+                            .background(Color.black.opacity(0.38), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                            .disabled(pending)
+
+                        Button("Apply Color") {
+                            Task { await handleDeviceControl(deviceId: device.id, action: "set_color", value: currentLightColor(for: device)) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.black.opacity(0.65))
+                        .frame(maxWidth: .infinity)
+                        .disabled(pending)
+                    }
+                }
+            }
+
+            Button {
+                Task {
+                    await handleDeviceControl(
+                        deviceId: device.id,
+                        action: device.status ? "turn_off" : "turn_on"
+                    )
+                }
+            } label: {
+                Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(device.status ? Color.white.opacity(0.88) : Color.black.opacity(0.65))
+            .foregroundStyle(device.status ? Color.black.opacity(0.85) : Color.white)
+            .disabled(pending)
+        }
+    }
+
+    @ViewBuilder
+    private func controlFeedbackView(for device: DeviceItem) -> some View {
+        if pendingControls.contains(device.id) {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Sending command...")
+            }
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundStyle(HBPalette.accentBlue)
+        } else if controlFeedback[device.id] == .success {
+            Label("Command sent", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.accentGreen)
+        } else if controlFeedback[device.id] == .failure {
+            Label("Command failed", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.red.opacity(0.9))
+        }
+    }
+
+    private func voiceHint(for device: DeviceItem) -> String {
+        if device.type == "thermostat" {
+            return "Voice: \"Hey Anna, set \(device.name) to \(thermostatTargetTemperature(for: device)) degrees\""
+        }
+        if supportsLightFade(device) {
+            return "Voice: \"Hey Anna, fade \(device.name) to 30 percent\" or \"set \(device.name) to blue\""
+        }
+        return "Voice: \"Hey Anna, turn \(device.status ? "off" : "on") \(device.name)\""
     }
 
     private var createDeviceSheet: some View {
@@ -143,14 +456,20 @@ struct DevicesView: View {
                     Button("Create") {
                         Task { await createDevice() }
                     }
-                    .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || newRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || newRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
                 }
             }
         }
     }
 
-    private func loadDevices() async {
-        isLoading = true
+    private func loadDevices(showLoading: Bool) async {
+        if showLoading {
+            isLoading = true
+        }
+
         errorMessage = nil
 
         do {
@@ -166,20 +485,124 @@ struct DevicesView: View {
         isLoading = false
     }
 
-    private func toggle(_ device: DeviceItem) async {
+    private func handleDeviceControl(deviceId: String, action: String, value: Any? = nil) async {
+        pendingControls.insert(deviceId)
+        controlFeedback.removeValue(forKey: deviceId)
+        applyControlOptimistically(deviceId: deviceId, action: action, value: value)
+
         do {
-            let action = device.status ? "turn_off" : "turn_on"
-            let payload: [String: Any] = ["deviceId": device.id, "action": action]
+            var payload: [String: Any] = [
+                "deviceId": deviceId,
+                "action": action
+            ]
+            if let value {
+                payload["value"] = value
+            }
+
             let response = try await session.apiClient.post("/api/devices/control", body: payload)
             let object = JSON.object(response)
             let data = JSON.object(object["data"])
             let updated = DeviceItem.from(JSON.object(data["device"]))
+            upsertDevice(updated)
 
-            if let index = devices.firstIndex(where: { $0.id == updated.id }) {
-                devices[index] = updated
+            if action == "set_brightness" {
+                lightBrightnessDrafts.removeValue(forKey: deviceId)
+            } else if action == "set_color" {
+                lightColorDrafts.removeValue(forKey: deviceId)
+            }
+
+            setControlFeedback(deviceId: deviceId, status: .success)
+
+            Task {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                await loadDevices(showLoading: false)
             }
         } catch {
+            setControlFeedback(deviceId: deviceId, status: .failure)
             errorMessage = error.localizedDescription
+            Task {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                await loadDevices(showLoading: false)
+            }
+        }
+
+        pendingControls.remove(deviceId)
+    }
+
+    private func applyControlOptimistically(deviceId: String, action: String, value: Any?) {
+        guard let index = devices.firstIndex(where: { $0.id == deviceId }) else {
+            return
+        }
+
+        var updated = devices[index]
+
+        switch action {
+        case "turn_on":
+            updated.status = true
+            if supportsLightFade(updated), updated.brightness <= 0 {
+                updated.brightness = 75
+            }
+
+        case "turn_off":
+            updated.status = false
+            if supportsLightFade(updated) {
+                updated.brightness = 0
+            }
+
+        case "set_brightness":
+            if let numeric = numberValue(from: value) {
+                let brightness = clampBrightness(numeric)
+                updated.brightness = brightness
+                updated.status = brightness > 0
+                lightBrightnessDrafts[deviceId] = brightness
+            }
+
+        case "set_color":
+            if let stringValue = value as? String, let normalized = normalizedHexColor(stringValue) {
+                updated.color = normalized
+                updated.status = true
+                lightColorDrafts[deviceId] = normalized
+            }
+
+        case "set_temperature":
+            if let target = numberValue(from: value) {
+                updated.targetTemperature = target
+                updated.status = true
+            }
+
+        case "set_mode":
+            if let mode = normalizeThermostatMode(value) {
+                updated.status = mode != "off"
+                updated.properties["hvacMode"] = mode
+                updated.properties["smartThingsThermostatMode"] = mode
+                if mode != "off" {
+                    updated.properties["smartThingsLastActiveThermostatMode"] = mode
+                }
+            }
+
+        default:
+            break
+        }
+
+        devices[index] = updated
+    }
+
+    private func upsertDevice(_ updated: DeviceItem) {
+        if let index = devices.firstIndex(where: { $0.id == updated.id }) {
+            devices[index] = updated
+        } else {
+            devices.append(updated)
+        }
+        devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func setControlFeedback(deviceId: String, status: ControlFeedback) {
+        controlFeedback[deviceId] = status
+        Task {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            if controlFeedback[deviceId] == status {
+                controlFeedback.removeValue(forKey: deviceId)
+            }
         }
     }
 
@@ -209,18 +632,309 @@ struct DevicesView: View {
         }
     }
 
-    private func delete(at offsets: IndexSet) {
-        let items = offsets.map { filteredDevices[$0] }
+    private func deleteDevice(_ device: DeviceItem) async {
+        do {
+            _ = try await session.apiClient.delete("/api/devices/\(device.id)")
+            devices.removeAll { $0.id == device.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 
-        Task {
-            for item in items {
-                do {
-                    _ = try await session.apiClient.delete("/api/devices/\(item.id)")
-                    devices.removeAll { $0.id == item.id }
-                } catch {
-                    errorMessage = error.localizedDescription
+    private func iconName(for device: DeviceItem) -> String {
+        if supportsLightFade(device) {
+            return "lightbulb.max"
+        }
+
+        switch device.type {
+        case "light":
+            return "lightbulb"
+        case "lock":
+            return "lock"
+        case "thermostat":
+            return "thermometer"
+        case "garage":
+            return "door.garage.closed"
+        case "camera":
+            return "camera"
+        case "sensor":
+            return "sensor.tag.radiowaves.forward"
+        default:
+            return "switch.2"
+        }
+    }
+
+    private func numberValue(from value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String, let parsed = Double(value) { return parsed }
+        return nil
+    }
+
+    private func normalizedHexColor(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
+              regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil else {
+            return nil
+        }
+        return trimmed.lowercased()
+    }
+
+    private func clampBrightness(_ value: Double) -> Double {
+        let clamped = min(100, max(0, value))
+        return clamped.rounded()
+    }
+
+    private func currentLightBrightness(for device: DeviceItem) -> Double {
+        if let draft = lightBrightnessDrafts[device.id] {
+            return clampBrightness(draft)
+        }
+        return clampBrightness(device.brightness)
+    }
+
+    private func currentLightColor(for device: DeviceItem) -> String {
+        if let draft = lightColorDrafts[device.id], let normalized = normalizedHexColor(draft) {
+            return normalized
+        }
+        if let normalized = normalizedHexColor(device.color) {
+            return normalized
+        }
+        return "#ffffff"
+    }
+
+    private func colorBinding(for device: DeviceItem) -> Binding<Color> {
+        Binding {
+            Color(hex: currentLightColor(for: device)) ?? .white
+        } set: { newColor in
+            if let hex = newColor.toHexRGB() {
+                lightColorDrafts[device.id] = hex.lowercased()
+            }
+        }
+    }
+
+    private func normalizeThermostatMode(_ value: Any?) -> String? {
+        guard let value else { return nil }
+        let raw = String(describing: value)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+
+        switch raw {
+        case "auto":
+            return "auto"
+        case "cool":
+            return "cool"
+        case "heat", "auxheatonly", "emergencyheat":
+            return "heat"
+        case "off":
+            return "off"
+        default:
+            return nil
+        }
+    }
+
+    private func thermostatMode(for device: DeviceItem) -> String {
+        let candidates: [Any?] = [
+            device.properties["smartThingsThermostatMode"],
+            device.properties["ecobeeHvacMode"],
+            device.properties["hvacMode"]
+        ]
+
+        for candidate in candidates {
+            if let normalized = normalizeThermostatMode(candidate) {
+                return normalized
+            }
+        }
+
+        return "auto"
+    }
+
+    private func thermostatOnMode(for device: DeviceItem) -> String {
+        let mode = thermostatMode(for: device)
+        if mode != "off" {
+            return mode
+        }
+
+        if let fallback = normalizeThermostatMode(
+            device.properties["smartThingsLastActiveThermostatMode"]
+                ?? device.properties["ecobeeLastActiveHvacMode"]
+        ) {
+            return fallback
+        }
+
+        return "auto"
+    }
+
+    private func thermostatTargetTemperature(for device: DeviceItem) -> Int {
+        if let target = device.targetTemperature {
+            return Int(target.rounded())
+        }
+        if let current = device.temperature {
+            return Int(current.rounded())
+        }
+        return 72
+    }
+
+    private func normalizedSmartThingsValue(_ value: Any) -> String {
+        if let string = value as? String {
+            return string.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let object = value as? [String: Any] {
+            if let id = object["id"] as? String, !id.isEmpty { return id.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if let capabilityId = object["capabilityId"] as? String, !capabilityId.isEmpty { return capabilityId.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if let name = object["name"] as? String, !name.isEmpty { return name.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        return ""
+    }
+
+    private func smartThingsCapabilities(for device: DeviceItem) -> Set<String> {
+        let raw = (device.properties["smartThingsCapabilities"] as? [Any] ?? [])
+            + (device.properties["smartthingsCapabilities"] as? [Any] ?? [])
+
+        return Set(
+            raw
+                .map(normalizedSmartThingsValue)
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private func smartThingsCategories(for device: DeviceItem) -> Set<String> {
+        let raw = (device.properties["smartThingsCategories"] as? [Any] ?? [])
+            + (device.properties["smartthingsCategories"] as? [Any] ?? [])
+
+        return Set(
+            raw
+                .map(normalizedSmartThingsValue)
+                .filter { !$0.isEmpty }
+                .map { $0.lowercased() }
+        )
+    }
+
+    private func looksLikeSmartThingsDimmer(_ device: DeviceItem) -> Bool {
+        let descriptor = [
+            stringValue(device.properties["smartThingsDeviceTypeName"]),
+            stringValue(device.properties["smartThingsPresentationId"]),
+            device.name
+        ]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .lowercased()
+
+        return descriptor.contains("dimmer")
+    }
+
+    private func isSmartThingsBackedDevice(_ device: DeviceItem) -> Bool {
+        let source = stringValue(device.properties["source"]).lowercased()
+        let hasDeviceId = !stringValue(device.properties["smartThingsDeviceId"]).isEmpty
+        return source == "smartthings" || hasDeviceId
+    }
+
+    private func supportsLightFade(_ device: DeviceItem) -> Bool {
+        if device.type == "light" {
+            return true
+        }
+
+        if isSmartThingsBackedDevice(device) {
+            let capabilities = smartThingsCapabilities(for: device)
+            if capabilities.contains("switchLevel") || capabilities.contains("colorControl") {
+                return true
+            }
+
+            if device.type == "switch" {
+                let categories = smartThingsCategories(for: device)
+                if categories.contains("light") || looksLikeSmartThingsDimmer(device) {
+                    return true
                 }
             }
         }
+
+        return boolValue(device.properties["supportsBrightness"])
+    }
+
+    private func supportsLightColor(_ device: DeviceItem) -> Bool {
+        if isSmartThingsBackedDevice(device) {
+            let capabilities = smartThingsCapabilities(for: device)
+            if capabilities.contains("colorControl") {
+                return true
+            }
+            return boolValue(device.properties["supportsColor"]) && supportsLightFade(device)
+        }
+
+        if device.type == "light" {
+            return true
+        }
+
+        return boolValue(device.properties["supportsColor"])
+    }
+
+    private func stringValue(_ value: Any?) -> String {
+        if let value = value as? String {
+            return value
+        }
+        if let value {
+            return String(describing: value)
+        }
+        return ""
+    }
+
+    private func boolValue(_ value: Any?) -> Bool {
+        if let value = value as? Bool {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.boolValue
+        }
+        if let value = value as? String {
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1", "yes", "on":
+                return true
+            case "false", "0", "no", "off":
+                return false
+            default:
+                return false
+            }
+        }
+        return false
+    }
+}
+
+private extension Color {
+    init?(hex: String) {
+        let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("#"), trimmed.count == 7 else {
+            return nil
+        }
+
+        let hexValue = String(trimmed.dropFirst())
+        guard let intValue = Int(hexValue, radix: 16) else {
+            return nil
+        }
+
+        let red = Double((intValue >> 16) & 0xFF) / 255.0
+        let green = Double((intValue >> 8) & 0xFF) / 255.0
+        let blue = Double(intValue & 0xFF) / 255.0
+        self.init(red: red, green: green, blue: blue)
+    }
+
+    func toHexRGB() -> String? {
+        let uiColor = UIColor(self)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return nil
+        }
+
+        return String(
+            format: "#%02X%02X%02X",
+            Int(red * 255.0),
+            Int(green * 255.0),
+            Int(blue * 255.0)
+        )
     }
 }

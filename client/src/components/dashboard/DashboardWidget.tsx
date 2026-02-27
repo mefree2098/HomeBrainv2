@@ -9,10 +9,7 @@ import {
   Home,
   Power,
   PowerOff,
-  Heart,
-  Flame,
-  Snowflake,
-  Zap
+  Heart
 } from "lucide-react"
 import { useEffect, useState } from "react"
 
@@ -186,20 +183,6 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
     }
   }
 
-  const getModeIcon = (mode: typeof THERMOSTAT_MODES[number]) => {
-    switch (mode) {
-      case "cool":
-        return <Snowflake className="h-3 w-3" />
-      case "heat":
-        return <Flame className="h-3 w-3" />
-      case "auto":
-        return <Zap className="h-3 w-3" />
-      case "off":
-      default:
-        return <PowerOff className="h-3 w-3" />
-    }
-  }
-
   return (
     <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -292,7 +275,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
               step={1}
               className="w-full"
             />
-            <div className="grid grid-cols-4 gap-1.5">
+            <div className="grid grid-cols-4 gap-2">
               {THERMOSTAT_MODES.map((mode) => {
                 const active = thermostatMode === mode
                 return (
@@ -300,11 +283,10 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
                     key={mode}
                     variant={active ? "default" : "outline"}
                     size="sm"
-                    className={`h-8 px-2 text-xs ${active ? "" : "bg-background/80"}`}
+                    className={`h-9 w-full px-0 text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap ${active ? "" : "bg-background/80"}`}
                     onClick={() => handleThermostatModeChange(mode)}
                   >
-                    {getModeIcon(mode)}
-                    <span className="ml-1">{getModeLabel(mode)}</span>
+                    {getModeLabel(mode)}
                   </Button>
                 )
               })}
@@ -314,7 +296,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
 
         <div className="text-xs text-muted-foreground">
           {device.type === "thermostat"
-            ? `Say: "Hey Anna, set ${device.name} to cool and 72 degrees"`
+            ? `Say: "Hey Anna, set ${device.name} to ${thermostatMode} and ${temperature} degrees"`
             : `Say: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
         </div>
       </CardContent>
