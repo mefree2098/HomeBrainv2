@@ -184,8 +184,8 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
   }
 
   return (
-    <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+    <Card className={`bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 ${device.type === "thermostat" ? "col-span-2 xl:col-span-2" : ""}`}>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 px-5 pt-5">
         <div className="flex items-center gap-2">
           <div className={`p-2 rounded-full ${getStatusColor(device.status, device.type)} text-white`}>
             {getDeviceIcon(device.type)}
@@ -216,7 +216,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-5 pb-5">
         <Button
           onClick={handleToggle}
           variant={device.status ? "default" : "outline"}
@@ -275,7 +275,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
               step={1}
               className="w-full"
             />
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {THERMOSTAT_MODES.map((mode) => {
                 const active = thermostatMode === mode
                 return (
