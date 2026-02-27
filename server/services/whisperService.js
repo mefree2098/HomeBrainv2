@@ -721,6 +721,7 @@ class WhisperService {
           config.activeComputeType = resolvedCompute;
           config.lastError = null;
           await config.save();
+          console.log(`Whisper Service: started runtime device=${resolvedDevice} computeType=${resolvedCompute} model=${targetModel}`);
 
           return {
             success: true,
@@ -857,26 +858,7 @@ class WhisperService {
     try {
       return await transcribeOnce();
     } catch (error) {
-      const recentLogs = this._getRecentRuntimeLogs(40);
-      const isCudaFailure = this.runtime?.device === 'cuda' && this._isCudaExecutionFailure(error, recentLogs);
-      if (!isCudaFailure) {
-        throw error;
-      }
-
-      console.warn('Whisper Service: CUDA transcription failed; restarting on CPU float32.');
-      try {
-        await this.restartService(config.activeModel, {
-          devicePreference: 'cpu',
-          computePreference: 'float32'
-        });
-      } catch (restartError) {
-        const message = `Whisper CUDA execution failed and CPU fallback could not start: ${restartError.message}`;
-        throw new Error(message);
-      }
-
-      const retry = await transcribeOnce();
-      retry.fallback = { from: 'cuda', to: 'cpu', reason: 'cudnn_execution_failed' };
-      return retry;
+      return this._handleCudaTranscriptionFailure({ error, config, transcribeOnce });
     } finally {
       fs.promises.unlink(filePath).catch(() => {});
     }
@@ -906,26 +888,7 @@ class WhisperService {
     try {
       return await transcribeOnce();
     } catch (error) {
-      const recentLogs = this._getRecentRuntimeLogs(40);
-      const isCudaFailure = this.runtime?.device === 'cuda' && this._isCudaExecutionFailure(error, recentLogs);
-      if (!isCudaFailure) {
-        throw error;
-      }
-
-      console.warn('Whisper Service: CUDA transcription failed; restarting on CPU float32.');
-      try {
-        await this.restartService(config.activeModel, {
-          devicePreference: 'cpu',
-          computePreference: 'float32'
-        });
-      } catch (restartError) {
-        const message = `Whisper CUDA execution failed and CPU fallback could not start: ${restartError.message}`;
-        throw new Error(message);
-      }
-
-      const retry = await transcribeOnce();
-      retry.fallback = { from: 'cuda', to: 'cpu', reason: 'cudnn_execution_failed' };
-      return retry;
+      return this._handleCudaTranscriptionFailure({ error, config, transcribeOnce });
     }
   }
 
@@ -993,10 +956,126 @@ class WhisperService {
     return this.runtime.logBuffer.slice(-limit).join('\n');
   }
 
+  _normalizeComputeType(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    return value.trim().toLowerCase();
+  }
+
+  _getGpuRecoveryComputeCandidates(currentComputeType = null) {
+    const envValue = process.env.WHISPER_GPU_RECOVERY_COMPUTE_TYPES;
+    const requested = (typeof envValue === 'string' && envValue.trim().length > 0)
+      ? envValue.split(',').map((entry) => this._normalizeComputeType(entry))
+      : ['int8_float16', 'float16', 'float32'];
+    const current = this._normalizeComputeType(currentComputeType);
+    const unique = [];
+    for (const candidate of requested) {
+      if (!candidate || candidate === current || unique.includes(candidate)) {
+        continue;
+      }
+      unique.push(candidate);
+    }
+    return unique;
+  }
+
+  _isCpuFallbackAllowed() {
+    if (process.env.WHISPER_GPU_ONLY === '1') {
+      return false;
+    }
+    if (process.env.WHISPER_ALLOW_CPU_FALLBACK === '0') {
+      return false;
+    }
+    return true;
+  }
+
+  _logCudaFailure(error, recentLogs = '') {
+    console.warn(`Whisper Service: CUDA transcription error: ${error?.message || 'Unknown error'}`);
+    if (recentLogs && recentLogs.trim()) {
+      console.warn(`Whisper Service: CUDA runtime recent logs:\n${recentLogs}`);
+    }
+  }
+
+  async _tryCudaRecovery({ config, transcribeOnce, currentComputeType = null }) {
+    if (process.env.WHISPER_CUDA_RECOVERY === '0') {
+      return null;
+    }
+
+    const recoveryCandidates = this._getGpuRecoveryComputeCandidates(currentComputeType);
+    for (const computeType of recoveryCandidates) {
+      try {
+        console.warn(`Whisper Service: attempting CUDA recovery with computeType=${computeType}.`);
+        await this.restartService(config.activeModel, {
+          devicePreference: 'cuda',
+          computePreference: computeType
+        });
+        const retry = await transcribeOnce();
+        retry.fallback = {
+          from: 'cuda',
+          to: 'cuda',
+          reason: 'cudnn_execution_failed',
+          computeType
+        };
+        console.warn(`Whisper Service: CUDA recovery succeeded with computeType=${computeType}.`);
+        return retry;
+      } catch (recoveryError) {
+        console.warn(`Whisper Service: CUDA recovery failed with computeType=${computeType}: ${recoveryError.message}`);
+      }
+    }
+
+    return null;
+  }
+
+  async _handleCudaTranscriptionFailure({ error, config, transcribeOnce }) {
+    const recentLogs = this._getRecentRuntimeLogs(40);
+    const isCudaFailure = this.runtime?.device === 'cuda' && this._isCudaExecutionFailure(error, recentLogs);
+    if (!isCudaFailure) {
+      throw error;
+    }
+
+    const currentComputeType = this.runtime?.computeType || config.activeComputeType || null;
+    this._logCudaFailure(error, recentLogs);
+
+    const recovered = await this._tryCudaRecovery({
+      config,
+      transcribeOnce,
+      currentComputeType
+    });
+    if (recovered) {
+      return recovered;
+    }
+
+    if (!this._isCpuFallbackAllowed()) {
+      throw new Error(`Whisper CUDA execution failed (computeType=${currentComputeType || 'unknown'}) and CPU fallback is disabled.`);
+    }
+
+    console.warn('Whisper Service: CUDA transcription failed; restarting on CPU float32.');
+    try {
+      await this.restartService(config.activeModel, {
+        devicePreference: 'cpu',
+        computePreference: 'float32'
+      });
+    } catch (restartError) {
+      const message = `Whisper CUDA execution failed and CPU fallback could not start: ${restartError.message}`;
+      throw new Error(message);
+    }
+
+    const retry = await transcribeOnce();
+    retry.fallback = {
+      from: 'cuda',
+      to: 'cpu',
+      reason: 'cudnn_execution_failed',
+      computeType: currentComputeType || undefined
+    };
+    return retry;
+  }
+
   _isCudaExecutionFailure(error, logs = '') {
     const combined = `${error?.message || ''}\n${logs || ''}`.toLowerCase();
     return combined.includes('cudnn_status_execution_failed')
+      || combined.includes('cudnn_status_not_supported')
       || combined.includes('cudnn failed')
+      || combined.includes('cublas')
       || combined.includes('cuda error');
   }
 }
