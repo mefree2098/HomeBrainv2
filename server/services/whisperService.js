@@ -259,6 +259,8 @@ class WhisperService {
     this.initializing = null;
     this.noCudnnRepairPromise = null;
     this.noCudnnRepairAttemptedAt = 0;
+    this.lastAutoInstallFailureAt = 0;
+    this.lastAutoInstallFailureMessage = null;
   }
 
   static _staticResolveCudaHome() {
@@ -377,6 +379,37 @@ class WhisperService {
     return this._isJetson();
   }
 
+  _parsePositiveInt(value, fallback) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+    return fallback;
+  }
+
+  _isGpuOnlyRequested() {
+    if (this._isTruthyFlag(process.env.WHISPER_GPU_ONLY ?? '0')) {
+      return true;
+    }
+    if (this._isFalsyFlag(process.env.WHISPER_ALLOW_CPU_FALLBACK ?? '1')) {
+      return true;
+    }
+    return false;
+  }
+
+  _getAutoInstallRetryCooldownMs() {
+    const defaultMs = this._isJetson() ? 10 * 60 * 1000 : 2 * 60 * 1000;
+    return this._parsePositiveInt(process.env.WHISPER_AUTO_INSTALL_RETRY_COOLDOWN_MS, defaultMs);
+  }
+
+  _getRecentAutoInstallFailureMessage() {
+    const detail = (this.lastAutoInstallFailureMessage || '').trim();
+    if (detail) {
+      return detail;
+    }
+    return 'Whisper dependencies are not installed yet (automatic install failed)';
+  }
+
   _hasCudaSupport() {
     if (process.env.WHISPER_DISABLE_CUDA === '1') return false;
     if (this._isJetson()) return true;
@@ -426,7 +459,16 @@ class WhisperService {
     return candidates;
   }
 
-  _getCudaArch() { return process.env.CT2_CUDA_ARCH || (this._isJetson() ? '87' : null); }
+  _getCudaArch() {
+    const raw = String(process.env.CT2_CUDA_ARCH || (this._isJetson() ? '8.7' : '')).trim();
+    if (!raw) {
+      return null;
+    }
+    if (/^\d{2}$/.test(raw)) {
+      return `${raw[0]}.${raw[1]}`;
+    }
+    return raw;
+  }
 
   _augmentedEnv() {
     const env = { ...process.env };
@@ -485,10 +527,35 @@ class WhisperService {
     await ensureTool('python build module', PYTHON_BIN, ['-m', 'pip', '--version'], 'sudo apt-get install python3-pip');
 
     const sourceRoot = path.join(os.tmpdir(), 'ctranslate2-src');
+    const requestedRef = String(process.env.WHISPER_CT2_GIT_REF || 'v4.7.1').trim();
     console.log(`Whisper Service: Preparing CTranslate2 source in ${sourceRoot}`);
     await fs.promises.rm(sourceRoot, { recursive: true, force: true });
 
-    await this._runCommand('git', ['clone', '--recursive', 'https://github.com/OpenNMT/CTranslate2.git', sourceRoot]);
+    let cloned = false;
+    if (requestedRef) {
+      try {
+        await this._runCommand('git', [
+          'clone',
+          '--recursive',
+          '--depth', '1',
+          '--branch', requestedRef,
+          '--single-branch',
+          'https://github.com/OpenNMT/CTranslate2.git',
+          sourceRoot
+        ]);
+        cloned = true;
+        console.log(`Whisper Service: Cloned CTranslate2 ref=${requestedRef}`);
+      } catch (error) {
+        console.warn(
+          `Whisper Service: failed to clone CTranslate2 ref=${requestedRef} (${error.message}); falling back to default branch.`
+        );
+      }
+    }
+
+    if (!cloned) {
+      await this._runCommand('git', ['clone', '--recursive', 'https://github.com/OpenNMT/CTranslate2.git', sourceRoot]);
+      console.log('Whisper Service: Cloned CTranslate2 default branch.');
+    }
 
     const buildDir = path.join(sourceRoot, 'build');
     await fs.promises.mkdir(buildDir, { recursive: true });
@@ -505,19 +572,24 @@ class WhisperService {
       '-DCMAKE_BUILD_TYPE=Release',
       '-DWITH_CUDA=ON',
       `-DWITH_CUDNN=${withCudnn ? 'ON' : 'OFF'}`,
-      `-DCMAKE_CUDA_ARCHITECTURES=${this._getCudaArch() || '87'}`,
+      `-DCUDA_ARCH_LIST=${this._getCudaArch() || 'Auto'}`,
       '-DOPENMP_RUNTIME=COMP',
+      '-DCUDA_DYNAMIC_LOADING=ON',
+      '-DWITH_FLASH_ATTN=OFF',
       '-DWITH_MKL=OFF',
       '-DWITH_DNNL=OFF',
       '-DWITH_OPENBLAS=ON',
-      '-DBUILD_CTRANSLATE2_CLI=OFF',
+      '-DBUILD_CLI=OFF',
       `-DCMAKE_INSTALL_PREFIX=${installPrefix}`,
     ];
 
     console.log('Whisper Service: Configuring CTranslate2 (cmake)');
     await this._runCommand('cmake', cmakeArgs, { cwd: buildDir, env: buildEnv });
 
-    const jobs = Math.max(1, Array.isArray(os.cpus()) ? os.cpus().length : 4).toString();
+    const defaultJobs = this._isJetson()
+      ? 2
+      : Math.max(1, Array.isArray(os.cpus()) ? os.cpus().length : 4);
+    const jobs = this._parsePositiveInt(process.env.WHISPER_CT2_BUILD_JOBS, defaultJobs).toString();
     console.log(`Whisper Service: Building CTranslate2 (ninja -j${jobs})`);
     await this._runCommand('ninja', ['-j', jobs], { cwd: buildDir, env: buildEnv });
 
@@ -614,15 +686,29 @@ class WhisperService {
 
     const cwd = process.cwd();
     const hasCuda = this._hasCudaSupport();
+    const enforceGpuOnly = hasCuda && this._isGpuOnlyRequested();
     const requestedWithCudnn = this._requestedWithCudnn();
     let attemptedCudaInstall = false;
     let cudaInstallSucceeded = false;
     let cudaReady = false;
     let cpuFallbackInstalled = false;
     let finalInstalled = false;
+    const installFailures = [];
 
     const maxLogLength = 2000;
     const trimOutput = (text) => text.length > maxLogLength ? `${text.slice(0, maxLogLength)}...` : text;
+    const recordInstallFailure = (message, error = null) => {
+      const detail = String(message || '').trim();
+      if (detail) {
+        installFailures.push(detail);
+      }
+      if (error?.stdout?.trim()) {
+        console.error(`Whisper Service: install failure stdout:\n${trimOutput(error.stdout.trim())}`);
+      }
+      if (error?.stderr?.trim()) {
+        console.error(`Whisper Service: install failure stderr:\n${trimOutput(error.stderr.trim())}`);
+      }
+    };
 
     try {
       const runPip = async (label, args, options = {}) => {
@@ -656,8 +742,7 @@ class WhisperService {
             cudaInstallSucceeded = true;
           } catch (error) {
             console.error('Whisper Service: Failed to build CTranslate2 with CUDA support:', error.message);
-            if (error.stdout?.trim()) console.error(`Whisper Service: build stdout:\n${trimOutput(error.stdout.trim())}`);
-            if (error.stderr?.trim()) console.error(`Whisper Service: build stderr:\n${trimOutput(error.stderr.trim())}`);
+            recordInstallFailure(`CUDA source build failed: ${error.message}`, error);
           }
         } else {
           try {
@@ -666,16 +751,24 @@ class WhisperService {
             cudaInstallSucceeded = true;
           } catch (error) {
             console.warn(`Whisper Service: CUDA-enabled CTranslate2 wheel install failed (${error.message})`);
+            recordInstallFailure(`CUDA wheel install failed: ${error.message}`, error);
           }
         }
       }
 
       if (!cudaInstallSucceeded) {
-        try {
-          await pipInstall('Install CPU ctranslate2 wheel', ['--only-binary=:all:', '--no-cache-dir', 'ctranslate2>=4.4,<5']);
-          cpuFallbackInstalled = true;
-        } catch (error) {
-          console.warn(`Whisper Service: CPU CTranslate2 wheel install failed (${error.message})`);
+        if (enforceGpuOnly) {
+          const reason = 'GPU-only mode is enabled; skipping CPU ctranslate2 fallback install.';
+          console.warn(`Whisper Service: ${reason}`);
+          recordInstallFailure(reason);
+        } else {
+          try {
+            await pipInstall('Install CPU ctranslate2 wheel', ['--only-binary=:all:', '--no-cache-dir', 'ctranslate2>=4.4,<5']);
+            cpuFallbackInstalled = true;
+          } catch (error) {
+            console.warn(`Whisper Service: CPU CTranslate2 wheel install failed (${error.message})`);
+            recordInstallFailure(`CPU ctranslate2 install failed: ${error.message}`, error);
+          }
         }
       }
 
@@ -683,22 +776,37 @@ class WhisperService {
 
       if (cudaInstallSucceeded) {
         cudaReady = await this._verifyCudaRuntime();
-        if (!cudaReady) console.warn('Whisper Service: CUDA installed but runtime not ready; using CPU.');
+        if (!cudaReady) {
+          const reason = enforceGpuOnly
+            ? 'CUDA installed but runtime verification failed (GPU-only mode).'
+            : 'CUDA installed but runtime not ready; using CPU.';
+          console.warn(`Whisper Service: ${reason}`);
+          recordInstallFailure(reason);
+        }
       }
 
       finalInstalled = await this._detectDependencies();
       config.serviceStatus = finalInstalled ? 'stopped' : 'error';
       config.buildWithCudnn = (hasCuda && cudaInstallSucceeded) ? requestedWithCudnn : null;
       if (!finalInstalled) {
+        const failureSummary = installFailures.length > 0
+          ? installFailures.join(' | ')
+          : 'Whisper dependencies failed to install. Check server logs for details.';
+        this.lastAutoInstallFailureAt = Date.now();
+        this.lastAutoInstallFailureMessage = failureSummary;
         config.lastError = {
-          message: 'Whisper dependencies failed to install. Check server logs for details.',
+          message: failureSummary,
           timestamp: new Date()
         };
       } else {
+        this.lastAutoInstallFailureAt = 0;
+        this.lastAutoInstallFailureMessage = null;
         config.lastError = null;
       }
       await config.save();
     } catch (error) {
+      this.lastAutoInstallFailureAt = Date.now();
+      this.lastAutoInstallFailureMessage = error.message || 'Failed to install Whisper dependencies';
       config.serviceStatus = 'error';
       config.servicePid = null;
       config.serviceOwner = null;
@@ -745,6 +853,17 @@ class WhisperService {
           throw new Error('Whisper dependencies are not installed yet');
         }
 
+        if (!this.initializing && this.lastAutoInstallFailureAt > 0) {
+          const cooldownMs = this._getAutoInstallRetryCooldownMs();
+          const elapsedMs = Date.now() - this.lastAutoInstallFailureAt;
+          if (elapsedMs >= 0 && elapsedMs < cooldownMs) {
+            const retryInSeconds = Math.max(1, Math.ceil((cooldownMs - elapsedMs) / 1000));
+            throw new Error(
+              `${this._getRecentAutoInstallFailureMessage()} (automatic retry cooldown active, retry in ${retryInSeconds}s)`
+            );
+          }
+        }
+
         if (!this.initializing) {
           console.warn('Whisper Service: dependencies missing; running installDependencies() automatically.');
           this.initializing = this.installDependencies();
@@ -752,14 +871,25 @@ class WhisperService {
 
         try {
           await this.initializing;
+        } catch (error) {
+          this.lastAutoInstallFailureAt = Date.now();
+          this.lastAutoInstallFailureMessage = error.message || this._getRecentAutoInstallFailureMessage();
+          throw error;
         } finally {
           this.initializing = null;
         }
 
         const detectedAfterInstall = await this._detectDependencies();
         if (!detectedAfterInstall) {
-          throw new Error('Whisper dependencies are not installed yet (automatic install failed)');
+          config = await this._getConfig();
+          const reason = config?.lastError?.message || this._getRecentAutoInstallFailureMessage();
+          this.lastAutoInstallFailureAt = Date.now();
+          this.lastAutoInstallFailureMessage = reason;
+          throw new Error(reason);
         }
+
+        this.lastAutoInstallFailureAt = 0;
+        this.lastAutoInstallFailureMessage = null;
       }
     }
   }
