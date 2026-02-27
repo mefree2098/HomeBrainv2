@@ -369,7 +369,9 @@ class WhisperService {
   }
 
   _requestedWithCudnn() {
-    return !this._isFalsyFlag(process.env.WHISPER_CT2_WITH_CUDNN ?? '1');
+    // Upstream CTranslate2 (>=4.6.3) switched to CUDA-native Conv1d and
+    // made cuDNN optional/default-off to avoid runtime compatibility issues.
+    return !this._isFalsyFlag(process.env.WHISPER_CT2_WITH_CUDNN ?? '0');
   }
 
   _shouldAutoDisableCudnnOnFailure() {
