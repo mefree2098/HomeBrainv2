@@ -101,7 +101,7 @@ const VOICE_QUERY_JSON_SCHEMA = Object.freeze({
 });
 const VOICE_LLM_REQUEST_CONFIG = Object.freeze({
   // Keep voice interpretation fast and deterministic.
-  timeoutMs: 12000,
+  timeoutMs: 7000,
   ollamaOptions: {
     num_ctx: 1024,
     num_predict: 128,
@@ -433,6 +433,54 @@ RULES
     };
   }
 
+  shouldAttemptQueryRescue(errorMessage) {
+    const text = String(errorMessage || '').toLowerCase();
+    if (!text) {
+      return true;
+    }
+
+    const hardFailurePatterns = [
+      'timeout',
+      'timed out',
+      'econnrefused',
+      'connection refused',
+      'not running',
+      'connection reset',
+      'socket hang up'
+    ];
+
+    return !hardFailurePatterns.some((pattern) => text.includes(pattern));
+  }
+
+  buildQueryFallbackInterpretation(commandText) {
+    const text = (commandText || '').toLowerCase().trim();
+    if (!text) {
+      return null;
+    }
+
+    if (/\b(joke|funny|riddle)\b/.test(text)) {
+      return {
+        intent: 'query',
+        confidence: 0.45,
+        normalizedCommand: commandText,
+        actions: [],
+        response: "Here's one: Why don't scientists trust atoms? Because they make up everything.",
+        followUpQuestion: null,
+        usedFallback: true
+      };
+    }
+
+    return {
+      intent: 'query',
+      confidence: 0.35,
+      normalizedCommand: commandText,
+      actions: [],
+      response: "I couldn't process that fast enough locally. Please try that again.",
+      followUpQuestion: null,
+      usedFallback: true
+    };
+  }
+
   findBestDevice(commandText, devices) {
     const text = commandText.toLowerCase();
     let best = null;
@@ -759,6 +807,18 @@ RULES
     }
 
     if (/\?$/.test(text)) {
+      return true;
+    }
+
+    if (/^(tell|give|say)\s+me\b/.test(text)) {
+      return true;
+    }
+
+    if (/^me\s+/.test(text) && /\b(joke|riddle|story|fact)\b/.test(text)) {
+      return true;
+    }
+
+    if (/\b(joke|riddle|story|fun fact|fact)\b/.test(text)) {
       return true;
     }
 
@@ -1238,8 +1298,9 @@ RULES
       };
     } catch (error) {
       console.warn('VoiceCommandService: LLM interpretation failed:', error.message);
+      const errorMessage = error?.message || '';
 
-      if (queryOnlyRequest) {
+      if (queryOnlyRequest && this.shouldAttemptQueryRescue(errorMessage)) {
         try {
           const plainPrompt = `You are HomeBrain's local voice assistant. Answer the user request in one short spoken sentence with no JSON and no markdown.\n\nUser request: "${commandText}"`;
           const plainAttempt = await sendLLMRequestWithFallbackDetailed(
@@ -1272,6 +1333,24 @@ RULES
           }
         } catch (queryRescueError) {
           console.warn('VoiceCommandService: Query rescue attempt failed:', queryRescueError.message);
+        }
+      }
+
+      if (queryOnlyRequest) {
+        const fallbackInterpretation = this.buildQueryFallbackInterpretation(commandText);
+        if (fallbackInterpretation) {
+          return {
+            interpretation: fallbackInterpretation,
+            llm: {
+              provider: 'local',
+              model: null,
+              runtime: null,
+              prompt,
+              rawResponse: null,
+              processingTimeMs: Date.now() - startedAt,
+              error: errorMessage || 'local query fallback'
+            }
+          };
         }
       }
 
