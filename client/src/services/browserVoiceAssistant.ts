@@ -1,4 +1,4 @@
-import { interpretVoiceCommand, transcribeBrowserAudio } from "@/api/voice";
+import { fetchBrowserWakeAcknowledgmentAudio, interpretVoiceCommand, transcribeBrowserAudio } from "@/api/voice";
 import { getUserProfiles } from "@/api/profiles";
 import { textToSpeechElevenLabs, playAudioBlob } from "@/api/elevenLabs";
 import { getSettings } from "@/api/settings";
@@ -996,6 +996,7 @@ class BrowserVoiceAssistant {
     }, `processing command: "${sanitizedCommand}"`);
 
     try {
+      const wakeAckPlaybackPromise = this.playWakeAcknowledgment(wakeWord);
       const result = await interpretVoiceCommand({
         commandText: sanitizedCommand,
         room: null,
@@ -1011,6 +1012,8 @@ class BrowserVoiceAssistant {
       this.updateStatus({
         lastResponse: result?.responseText || null
       }, "command processed by server");
+
+      await wakeAckPlaybackPromise;
 
       if (result?.responseText) {
         await this.playResponse(result.responseText, wakeWord);
@@ -1224,6 +1227,37 @@ class BrowserVoiceAssistant {
     }
 
     return strippedPrefix;
+  }
+
+  private async playWakeAcknowledgment(wakeWord: string): Promise<void> {
+    const resolvedWakeWord = (wakeWord || "").trim();
+    if (!resolvedWakeWord || resolvedWakeWord === "browser-fallback") {
+      return;
+    }
+
+    try {
+      this.playbackMutedUntil = Date.now() + 1400;
+      await this.pauseRecognitionForPlayback();
+      this.updateStatus({}, `playing wake acknowledgment (wake=${resolvedWakeWord})`);
+
+      const audioBlob = await fetchBrowserWakeAcknowledgmentAudio({
+        wakeWord: resolvedWakeWord
+      });
+
+      if (!audioBlob || audioBlob.size === 0) {
+        this.updateStatus({}, "wake acknowledgment unavailable");
+        return;
+      }
+
+      await playAudioBlob(audioBlob);
+      this.updateStatus({}, "wake acknowledgment playback completed");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wake acknowledgment playback failed.";
+      this.updateStatus({}, `wake acknowledgment skipped: ${message}`);
+    } finally {
+      this.playbackMutedUntil = Date.now() + 700;
+      this.resumeRecognitionAfterPlayback();
+    }
   }
 
   private resolveFallbackWakeWord(transcript: string): string {

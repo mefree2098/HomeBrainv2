@@ -1109,8 +1109,17 @@ Return ONLY the JSON object with no commentary.`;
     }
 
     const hasActions = Array.isArray(interpretation?.actions) && interpretation.actions.length > 0;
+    const allowNoActionResponse = Boolean(
+      interpretation
+      && !hasActions
+      && (
+        (typeof interpretation.intent === 'string' && interpretation.intent.toLowerCase() === 'query')
+        || (typeof interpretation.response === 'string' && interpretation.response.trim().length > 0)
+        || (typeof interpretation.followUpQuestion === 'string' && interpretation.followUpQuestion.trim().length > 0)
+      )
+    );
 
-    if (!interpretation || !hasActions) {
+    if (!interpretation || (!hasActions && !allowNoActionResponse)) {
       interpretation = this.fallbackInterpretation(commandText, context, room);
     }
 
@@ -1135,7 +1144,14 @@ Return ONLY the JSON object with no commentary.`;
       };
     }
 
-    const execution = await this.executeActions(interpretation.actions || [], context, room);
+    const hasExecutableActions = Array.isArray(interpretation.actions) && interpretation.actions.length > 0;
+    const execution = hasExecutableActions
+      ? await this.executeActions(interpretation.actions || [], context, room)
+      : {
+        status: 'success',
+        results: [],
+        entities: {}
+      };
     const responseText = this.buildResponseText(interpretation, execution);
 
     return {

@@ -1,8 +1,12 @@
 const express = require('express');
+const fs = require('fs');
 const router = express.Router();
 const voiceDeviceService = require('../services/voiceDeviceService');
 const voiceCommandService = require('../services/voiceCommandService');
 const speechService = require('../services/speechService');
+const Settings = require('../models/Settings');
+const elevenLabsService = require('../services/elevenLabsService');
+const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 const { requireUser } = require('./middlewares/auth');
 const voiceWs = require('../websocket/voiceWebSocket');
 const VoiceDevice = require('../models/VoiceDevice');
@@ -135,6 +139,76 @@ router.post(['/browser/transcribe', '/browser/transcribe/'], requireUser(), asyn
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to transcribe browser audio'
+    });
+  }
+});
+
+/**
+ * @route POST /api/voice/browser/acknowledgment
+ * @desc Fetch a wake-word acknowledgment clip for browser voice UX (prefers pre-generated cache)
+ * @access Private
+ */
+router.post(['/browser/acknowledgment', '/browser/acknowledgment/'], requireUser(), async (req, res) => {
+  const wakeWord = typeof req.body?.wakeWord === 'string' && req.body.wakeWord.trim()
+    ? req.body.wakeWord.trim()
+    : 'anna';
+
+  let fallbackVoiceId = 'default';
+  try {
+    const settings = await Settings.getSettings();
+    const configuredVoiceId = settings?.elevenlabsDefaultVoiceId;
+    if (typeof configuredVoiceId === 'string' && configuredVoiceId.trim().length > 0) {
+      fallbackVoiceId = configuredVoiceId.trim();
+    }
+  } catch (_error) {
+    // Keep default fallback voice when settings are unavailable.
+  }
+
+  try {
+    const acknowledgment = await voiceAcknowledgmentService.getRandomAcknowledgment(wakeWord, fallbackVoiceId);
+    if (!acknowledgment?.text || !acknowledgment?.voiceId || acknowledgment.voiceId === 'default') {
+      return res.status(204).end();
+    }
+
+    const cachedAudioPath = await voiceAcknowledgmentService.findCachedAudio(
+      acknowledgment.voiceId,
+      acknowledgment.text
+    );
+    if (cachedAudioPath) {
+      const stat = await fs.promises.stat(cachedAudioPath);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', stat.size);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Acknowledgment-Source', 'cache');
+      res.setHeader('X-Acknowledgment-Voice', acknowledgment.voiceId);
+      const stream = fs.createReadStream(cachedAudioPath);
+      stream.on('error', (streamError) => {
+        console.error('POST /api/voice/browser/acknowledgment - Stream error:', streamError.message);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: 'Failed to stream cached acknowledgment'
+          });
+          return;
+        }
+        res.end();
+      });
+      stream.pipe(res);
+      return;
+    }
+
+    const audioBuffer = await elevenLabsService.textToSpeech(acknowledgment.text, acknowledgment.voiceId);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioBuffer.length);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Acknowledgment-Source', 'tts');
+    res.setHeader('X-Acknowledgment-Voice', acknowledgment.voiceId);
+    return res.status(200).send(audioBuffer);
+  } catch (error) {
+    console.error('POST /api/voice/browser/acknowledgment - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get browser acknowledgment audio'
     });
   }
 });

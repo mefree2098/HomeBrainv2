@@ -195,6 +195,55 @@ export const transcribeBrowserAudio = async (payload: {
   }
 };
 
+// Description: Fetch browser wake acknowledgment audio from server cache/TTS
+// Endpoint: POST /api/voice/browser/acknowledgment
+// Request: { wakeWord?: string }
+// Response: audio/mpeg blob (or 204 when unavailable)
+export const fetchBrowserWakeAcknowledgmentAudio = async (payload: {
+  wakeWord?: string;
+}): Promise<Blob | null> => {
+  const token = localStorage.getItem('accessToken');
+  const response = await fetch('/api/voice/browser/acknowledgment', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify(payload || {})
+  });
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '');
+    let message = '';
+    if (raw && raw.trim()) {
+      try {
+        const parsed = JSONbig.parse(raw);
+        message = parsed?.message || parsed?.error || '';
+      } catch (_error) {
+        message = raw.trim().slice(0, 200);
+      }
+    }
+    throw new Error(message || `HTTP ${response.status} from /api/voice/browser/acknowledgment`);
+  }
+
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  const blob = await response.blob();
+  if (!blob || blob.size === 0) {
+    return null;
+  }
+
+  if (contentType.includes('audio/')) {
+    return blob;
+  }
+
+  const raw = await blob.text().catch(() => '');
+  throw new Error(raw || 'Unexpected non-audio acknowledgment payload');
+};
+
 // Description: Get voice system status
 // Endpoint: GET /api/voice/status
 // Request: {}
