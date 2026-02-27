@@ -1,17 +1,82 @@
 import SwiftUI
 
+enum HBPalette {
+    static let pageTop = Color(red: 0.09, green: 0.16, blue: 0.43)
+    static let pageMid = Color(red: 0.14, green: 0.21, blue: 0.57)
+    static let pageBottom = Color(red: 0.25, green: 0.11, blue: 0.51)
+
+    static let chrome = Color(red: 0.03, green: 0.05, blue: 0.12)
+    static let sidebar = Color(red: 0.02, green: 0.04, blue: 0.10)
+    static let panel = Color(red: 0.09, green: 0.14, blue: 0.31).opacity(0.9)
+    static let panelStroke = Color.white.opacity(0.12)
+    static let textPrimary = Color.white.opacity(0.96)
+    static let textSecondary = Color.white.opacity(0.72)
+
+    static let accentBlue = Color(red: 0.21, green: 0.53, blue: 1.0)
+    static let accentPurple = Color(red: 0.56, green: 0.27, blue: 1.0)
+    static let accentGreen = Color(red: 0.08, green: 0.82, blue: 0.53)
+    static let accentOrange = Color(red: 1.0, green: 0.53, blue: 0.13)
+}
+
+struct HBPageBackground: View {
+    var body: some View {
+        LinearGradient(
+            colors: [HBPalette.pageTop, HBPalette.pageMid, HBPalette.pageBottom],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay(
+            LinearGradient(
+                colors: [Color.black.opacity(0.15), Color.clear, Color.black.opacity(0.25)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+}
+
+struct HBPanel<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(HBPalette.panel)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(HBPalette.panelStroke, lineWidth: 1)
+            )
+    }
+}
+
 struct LoadingView: View {
     let title: String
 
     var body: some View {
         HStack(spacing: 12) {
             ProgressView()
+                .tint(HBPalette.accentBlue)
             Text(title)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(HBPalette.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(HBPalette.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(HBPalette.panelStroke, lineWidth: 1)
+        )
     }
 }
 
@@ -23,18 +88,24 @@ struct InlineErrorView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(message)
                 .font(.subheadline)
-                .foregroundStyle(.red)
+                .foregroundStyle(Color(red: 1.0, green: 0.63, blue: 0.63))
 
             if let retry {
                 Button("Retry", action: retry)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
             }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.red.opacity(0.16))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.red.opacity(0.35), lineWidth: 1)
+        )
     }
 }
 
@@ -48,18 +119,24 @@ struct MetricCard: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(HBPalette.textSecondary)
             Text(value)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(tint)
             Text(subtitle)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(HBPalette.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(tint.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(HBPalette.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(tint.opacity(0.6), lineWidth: 1)
+        )
     }
 }
 
@@ -71,11 +148,22 @@ struct EmptyStateView: View {
         VStack(spacing: 8) {
             Text(title)
                 .font(.headline)
+                .foregroundStyle(HBPalette.textPrimary)
             Text(subtitle)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(HBPalette.textSecondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(HBPalette.panel.opacity(0.65))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(HBPalette.panelStroke, lineWidth: 1)
+        )
     }
 }

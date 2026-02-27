@@ -1096,6 +1096,27 @@ class SmartThingsService {
       changed = true;
     }
 
+    const thermostatModeValue = detectedType === 'thermostat'
+      ? this.mapSmartThingsThermostatMode(statusRoot)
+      : undefined;
+    if (thermostatModeValue) {
+      if ((existingDevice?.properties?.smartThingsThermostatMode || null) !== thermostatModeValue) {
+        updates['properties.smartThingsThermostatMode'] = thermostatModeValue;
+        changed = true;
+      }
+      if ((existingDevice?.properties?.hvacMode || null) !== thermostatModeValue) {
+        updates['properties.hvacMode'] = thermostatModeValue;
+        changed = true;
+      }
+      if (
+        thermostatModeValue !== 'off' &&
+        (existingDevice?.properties?.smartThingsLastActiveThermostatMode || null) !== thermostatModeValue
+      ) {
+        updates['properties.smartThingsLastActiveThermostatMode'] = thermostatModeValue;
+        changed = true;
+      }
+    }
+
     if (isOnline !== existingDevice.isOnline) {
       updates.isOnline = isOnline;
       changed = true;
@@ -1452,6 +1473,39 @@ class SmartThingsService {
     }
 
     return numeric;
+  }
+
+  mapSmartThingsThermostatMode(statusRoot) {
+    const value = this.getStatusValue(statusRoot, [
+      ['thermostatMode', 'thermostatMode', 'value'],
+      ['thermostatMode', 'thermostatMode'],
+      ['thermostatMode', 'value'],
+      ['thermostatMode']
+    ]);
+
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]/g, '');
+
+    if (normalized === 'auto') {
+      return 'auto';
+    }
+    if (normalized === 'cool') {
+      return 'cool';
+    }
+    if (normalized === 'heat' || normalized === 'auxheatonly' || normalized === 'emergencyheat') {
+      return 'heat';
+    }
+    if (normalized === 'off') {
+      return 'off';
+    }
+
+    return undefined;
   }
 
   async getRoomName(locationId, roomId) {

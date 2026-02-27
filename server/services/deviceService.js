@@ -349,6 +349,20 @@ class DeviceService {
           break;
         }
 
+        case 'setmode': {
+          if (device.type !== 'thermostat') {
+            throw new Error('Thermostat mode control is only available for thermostats');
+          }
+          const normalizedMode = this.normalizeThermostatMode(value);
+          if (!normalizedMode) {
+            throw new Error('Thermostat mode must be one of auto, cool, heat, or off');
+          }
+          updateData.status = normalizedMode !== 'off';
+          updateData['properties.hvacMode'] = normalizedMode;
+          commandValue = normalizedMode;
+          break;
+        }
+
         case 'lock':
           if (device.type !== 'lock') {
             throw new Error('Lock control is only available for locks');
@@ -504,6 +518,50 @@ class DeviceService {
       return '';
     }
     return action.toString().toLowerCase().replace(/[^a-z]/g, '');
+  }
+
+  normalizeThermostatMode(mode) {
+    if (mode === undefined || mode === null) {
+      return '';
+    }
+
+    const normalized = mode
+      .toString()
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]/g, '');
+
+    switch (normalized) {
+      case 'auto':
+        return 'auto';
+      case 'cool':
+        return 'cool';
+      case 'heat':
+      case 'auxheatonly':
+      case 'emergencyheat':
+        return 'heat';
+      case 'off':
+        return 'off';
+      default:
+        return '';
+    }
+  }
+
+  resolveSmartThingsActiveMode(device) {
+    const candidates = [
+      device?.properties?.smartThingsLastActiveThermostatMode,
+      device?.properties?.smartThingsThermostatMode,
+      device?.properties?.hvacMode
+    ];
+
+    for (const candidate of candidates) {
+      const normalized = this.normalizeThermostatMode(candidate);
+      if (normalized && normalized !== 'off') {
+        return normalized;
+      }
+    }
+
+    return 'auto';
   }
 
   isSmartThingsDevice(device) {
@@ -762,9 +820,14 @@ class DeviceService {
           const mode = this.resolveEcobeeActiveMode(device);
           await ecobeeService.setHvacMode(thermostatIdentifier, mode);
           updateData.status = true;
+          updateData['properties.hvacMode'] = mode;
+          updateData['properties.ecobeeHvacMode'] = mode;
+          updateData['properties.ecobeeLastActiveHvacMode'] = mode;
         } else {
           await ecobeeService.setHvacMode(thermostatIdentifier, 'off');
           updateData.status = false;
+          updateData['properties.hvacMode'] = 'off';
+          updateData['properties.ecobeeHvacMode'] = 'off';
         }
         break;
       }
@@ -773,12 +836,17 @@ class DeviceService {
         const mode = this.resolveEcobeeActiveMode(device);
         await ecobeeService.setHvacMode(thermostatIdentifier, mode);
         updateData.status = true;
+        updateData['properties.hvacMode'] = mode;
+        updateData['properties.ecobeeHvacMode'] = mode;
+        updateData['properties.ecobeeLastActiveHvacMode'] = mode;
         break;
       }
 
       case 'turnoff':
         await ecobeeService.setHvacMode(thermostatIdentifier, 'off');
         updateData.status = false;
+        updateData['properties.hvacMode'] = 'off';
+        updateData['properties.ecobeeHvacMode'] = 'off';
         break;
 
       case 'settemperature': {
@@ -790,6 +858,9 @@ class DeviceService {
         const currentMode = (device?.properties?.ecobeeHvacMode || '').toString().trim().toLowerCase();
         if (currentMode === 'off') {
           await ecobeeService.setHvacMode(thermostatIdentifier, mode);
+          updateData['properties.hvacMode'] = mode;
+          updateData['properties.ecobeeHvacMode'] = mode;
+          updateData['properties.ecobeeLastActiveHvacMode'] = mode;
         }
         await ecobeeService.setTemperatureHold(thermostatIdentifier, target, mode);
         updateData.targetTemperature = target;
@@ -797,8 +868,23 @@ class DeviceService {
         break;
       }
 
+      case 'setmode': {
+        const mode = this.normalizeThermostatMode(commandValue);
+        if (!mode) {
+          throw new Error('Thermostat mode must be one of auto, cool, heat, or off');
+        }
+        await ecobeeService.setHvacMode(thermostatIdentifier, mode);
+        updateData.status = mode !== 'off';
+        updateData['properties.hvacMode'] = mode;
+        updateData['properties.ecobeeHvacMode'] = mode;
+        if (mode !== 'off') {
+          updateData['properties.ecobeeLastActiveHvacMode'] = mode;
+        }
+        break;
+      }
+
       default:
-        throw new Error('Ecobee thermostats support only turn_on, turn_off, toggle, and set_temperature actions');
+        throw new Error('Ecobee thermostats support only turn_on, turn_off, toggle, set_temperature, and set_mode actions');
     }
 
     updateData.isOnline = true;
@@ -816,10 +902,29 @@ class DeviceService {
         ? device.properties.smartThingsCapabilities
         : []
     );
+    const isThermostat = device.type === 'thermostat';
+    const thermostatModeCapability = capabilities.has('thermostatMode')
+      ? 'thermostatMode'
+      : (capabilities.has('thermostat') ? 'thermostat' : '');
+    const supportsThermostatMode = thermostatModeCapability.length > 0;
 
     switch (normalizedAction) {
       case 'toggle':
-        if (commandValue) {
+        if (isThermostat && supportsThermostatMode) {
+          const mode = commandValue ? this.resolveSmartThingsActiveMode(device) : 'off';
+          await smartThingsService.sendDeviceCommand(smartThingsId, [{
+            component: 'main',
+            capability: thermostatModeCapability,
+            command: 'setThermostatMode',
+            arguments: [mode]
+          }]);
+          updateData.status = mode !== 'off';
+          updateData['properties.hvacMode'] = mode;
+          updateData['properties.smartThingsThermostatMode'] = mode;
+          if (mode !== 'off') {
+            updateData['properties.smartThingsLastActiveThermostatMode'] = mode;
+          }
+        } else if (commandValue) {
           await smartThingsService.turnDeviceOn(smartThingsId);
         } else {
           await smartThingsService.turnDeviceOff(smartThingsId);
@@ -827,11 +932,37 @@ class DeviceService {
         break;
 
       case 'turnon':
-        await smartThingsService.turnDeviceOn(smartThingsId);
+        if (isThermostat && supportsThermostatMode) {
+          const mode = this.resolveSmartThingsActiveMode(device);
+          await smartThingsService.sendDeviceCommand(smartThingsId, [{
+            component: 'main',
+            capability: thermostatModeCapability,
+            command: 'setThermostatMode',
+            arguments: [mode]
+          }]);
+          updateData.status = true;
+          updateData['properties.hvacMode'] = mode;
+          updateData['properties.smartThingsThermostatMode'] = mode;
+          updateData['properties.smartThingsLastActiveThermostatMode'] = mode;
+        } else {
+          await smartThingsService.turnDeviceOn(smartThingsId);
+        }
         break;
 
       case 'turnoff':
-        await smartThingsService.turnDeviceOff(smartThingsId);
+        if (isThermostat && supportsThermostatMode) {
+          await smartThingsService.sendDeviceCommand(smartThingsId, [{
+            component: 'main',
+            capability: thermostatModeCapability,
+            command: 'setThermostatMode',
+            arguments: ['off']
+          }]);
+          updateData.status = false;
+          updateData['properties.hvacMode'] = 'off';
+          updateData['properties.smartThingsThermostatMode'] = 'off';
+        } else {
+          await smartThingsService.turnDeviceOff(smartThingsId);
+        }
         break;
 
       case 'setbrightness':
@@ -887,6 +1018,31 @@ class DeviceService {
           });
         }
         await smartThingsService.sendDeviceCommand(smartThingsId, commands);
+        break;
+      }
+
+      case 'setmode': {
+        if (!isThermostat || !supportsThermostatMode) {
+          throw new Error('Thermostat mode control is not supported for this SmartThings device');
+        }
+
+        const mode = this.normalizeThermostatMode(commandValue);
+        if (!mode) {
+          throw new Error('Thermostat mode must be one of auto, cool, heat, or off');
+        }
+
+        await smartThingsService.sendDeviceCommand(smartThingsId, [{
+          component: 'main',
+          capability: thermostatModeCapability,
+          command: 'setThermostatMode',
+          arguments: [mode]
+        }]);
+        updateData.status = mode !== 'off';
+        updateData['properties.hvacMode'] = mode;
+        updateData['properties.smartThingsThermostatMode'] = mode;
+        if (mode !== 'off') {
+          updateData['properties.smartThingsLastActiveThermostatMode'] = mode;
+        }
         break;
       }
 

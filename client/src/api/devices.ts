@@ -32,9 +32,9 @@ export const getDevices = async (filters?: { room?: string; type?: string; statu
 
 // Description: Control a device
 // Endpoint: POST /api/devices/control
-// Request: { deviceId: string, action: string, value?: number }
+// Request: { deviceId: string, action: string, value?: number | string }
 // Response: { success: boolean, data: { device: Device } }
-export const controlDevice = async (data: { deviceId: string; action: string; value?: number }) => {
+export const controlDevice = async (data: { deviceId: string; action: string; value?: number | string }) => {
   try {
     console.log('Controlling device:', data);
     const response = await api.post('/api/devices/control', data);
