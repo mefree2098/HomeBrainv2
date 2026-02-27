@@ -1,4 +1,5 @@
 import api from './api';
+import JSONbig from 'json-bigint';
 
 // Enhanced request cache to aggressively prevent duplicate API calls
 const requestCache = new Map<string, { data: any; timestamp: number; promise?: Promise<any> }>();
