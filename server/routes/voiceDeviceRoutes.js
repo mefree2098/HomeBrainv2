@@ -255,6 +255,20 @@ router.post('/commands/interpret', requireUser(), async (req, res) => {
       stt: stt || null
     });
 
+    const llmProvider = result?.llm?.provider || 'unknown';
+    const llmModel = result?.llm?.model || 'unknown';
+    const llmMs = typeof result?.llm?.processingTimeMs === 'number' ? result.llm.processingTimeMs : null;
+    const runtimeLabel = result?.llm?.runtime?.processor
+      ? ` runtime=${result.llm.runtime.processor}`
+      : '';
+    const runtimeModelLabel = result?.llm?.runtime?.model
+      ? ` runtimeModel=${result.llm.runtime.model}`
+      : '';
+    const llmTimingLabel = llmMs !== null ? ` llmMs=${llmMs}` : '';
+    console.log(
+      `POST /api/voice/commands/interpret - Success provider=${llmProvider} model=${llmModel}${llmTimingLabel}${runtimeLabel}${runtimeModelLabel} fallback=${result?.usedFallback ? 'yes' : 'no'}`
+    );
+
     void eventStreamService.publishSafe({
       type: 'voice.command_processed',
       source: 'voice',
