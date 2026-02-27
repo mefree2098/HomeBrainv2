@@ -630,7 +630,8 @@ class WhisperService {
         'setuptools>=70',
         'wheel>=0.44',
         'build>=1.2',
-        'pybind11>=2.12',
+        // CTranslate2 v4.7.1 pyproject.toml pins this exact build dependency.
+        'pybind11==2.11.1',
         'packaging>=24.1', // <-- fixes canonicalize_version strip_trailing_zero
       ],
       { cwd: pythonDir, env: buildEnv }

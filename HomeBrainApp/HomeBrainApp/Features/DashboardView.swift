@@ -3,6 +3,7 @@ import SwiftUI
 struct DashboardView: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -25,6 +26,9 @@ struct DashboardView: View {
     @State private var isSendingCommand = false
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
+    private var isCompactHeight: Bool { verticalSizeClass == .compact }
+    private var useLandscapeCompactLayout: Bool { isCompact && isCompactHeight }
+    private var supportsTwoColumnCards: Bool { !isCompact || useLandscapeCompactLayout }
 
     private var onlineDevices: Int {
         devices.filter { $0.status }.count
@@ -35,11 +39,14 @@ struct DashboardView: View {
     }
 
     private var metricColumns: [GridItem] {
-        [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+        if useLandscapeCompactLayout {
+            return Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+        }
+        return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     }
 
     private var featuredHalfColumns: [GridItem] {
-        if isCompact {
+        if !supportsTwoColumnCards {
             return [GridItem(.flexible(), spacing: 12)]
         }
         return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
@@ -60,7 +67,7 @@ struct DashboardView: View {
     }
 
     private var quickScenes: [SceneItem] {
-        Array(scenes.prefix(isCompact ? 3 : 5))
+        Array(scenes.prefix(useLandscapeCompactLayout ? 4 : (isCompact ? 3 : 5)))
     }
 
     var body: some View {
@@ -77,7 +84,7 @@ struct DashboardView: View {
                         .padding()
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 12 : 16) {
                             if let errorMessage {
                                 InlineErrorView(message: errorMessage) {
                                     Task { await loadDashboard() }
@@ -121,13 +128,13 @@ struct DashboardView: View {
                                 )
                             }
 
-                            if isCompact {
-                                VStack(spacing: 12) {
+                            if supportsTwoColumnCards {
+                                HStack(alignment: .top, spacing: 12) {
                                     securityPanel
                                     quickScenePanel
                                 }
                             } else {
-                                HStack(alignment: .top, spacing: 12) {
+                                VStack(spacing: 12) {
                                     securityPanel
                                     quickScenePanel
                                 }
@@ -185,7 +192,13 @@ struct DashboardView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Welcome Home")
-                    .font(.system(size: isCompact ? 38 : 48, weight: .bold, design: .rounded))
+                    .font(
+                        .system(
+                            size: useLandscapeCompactLayout ? 24 : (isCompact ? 38 : 48),
+                            weight: .bold,
+                            design: .rounded
+                        )
+                    )
                     .foregroundStyle(
                         LinearGradient(
                             colors: [HBPalette.accentBlue, HBPalette.accentPurple],
@@ -194,7 +207,7 @@ struct DashboardView: View {
                         )
                     )
                 Text("Control your smart home with voice commands or touch")
-                    .font(.system(size: 19, weight: .medium, design: .rounded))
+                    .font(.system(size: useLandscapeCompactLayout ? 14 : 19, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
@@ -204,10 +217,10 @@ struct DashboardView: View {
                 selectionHaptic()
             } label: {
                 Label("Voice Commands", systemImage: "message")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .font(.system(size: useLandscapeCompactLayout ? 15 : 17, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, useLandscapeCompactLayout ? 12 : 14)
+                    .padding(.vertical, useLandscapeCompactLayout ? 8 : 10)
                     .background(
                         LinearGradient(
                             colors: [HBPalette.accentGreen, HBPalette.accentBlue],
@@ -232,7 +245,7 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .font(.system(size: useLandscapeCompactLayout ? 14 : 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(HBPalette.textPrimary)
                 Spacer()
                 Image(systemName: icon)
@@ -240,12 +253,12 @@ struct DashboardView: View {
                     .foregroundStyle(accent)
             }
             Text(value)
-                .font(.system(size: 38, weight: .bold, design: .rounded))
+                .font(.system(size: useLandscapeCompactLayout ? 30 : 38, weight: .bold, design: .rounded))
                 .foregroundStyle(accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
             Text(subtitle)
-                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .font(.system(size: useLandscapeCompactLayout ? 13 : 15, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -265,7 +278,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Label("Security Alarm", systemImage: "shield")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     Spacer()
@@ -335,7 +348,7 @@ struct DashboardView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 Label("Quick Scene Actions", systemImage: "play")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 if quickScenes.isEmpty {
@@ -419,11 +432,11 @@ struct DashboardView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(device.name)
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .font(.system(size: useLandscapeCompactLayout ? 20 : 22, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(2)
                     Text(device.room)
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .font(.system(size: useLandscapeCompactLayout ? 13 : 15, weight: .medium, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -536,7 +549,7 @@ struct DashboardView: View {
                         .tracking(1.2)
                         .foregroundStyle(HBPalette.textSecondary)
                     Text("\(targetTemp)°F")
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .font(.system(size: useLandscapeCompactLayout ? 40 : 48, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
@@ -550,7 +563,7 @@ struct DashboardView: View {
                         .tracking(1.2)
                         .foregroundStyle(HBPalette.textSecondary)
                     Text(currentTemp.map { "\($0)°F" } ?? "--")
-                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .font(.system(size: useLandscapeCompactLayout ? 30 : 36, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -607,7 +620,7 @@ struct DashboardView: View {
         .font(.system(size: 14, weight: .bold, design: .rounded))
         .foregroundStyle(active ? Color.black.opacity(0.86) : HBPalette.textPrimary)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 11)
+        .padding(.vertical, useLandscapeCompactLayout ? 9 : 11)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(active ? Color.white.opacity(0.9) : Color.black.opacity(0.62))
@@ -623,15 +636,15 @@ struct DashboardView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 Label("Voice Command", systemImage: "waveform")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.system(size: useLandscapeCompactLayout ? 19 : 22, weight: .bold, design: .rounded))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 TextField("Type a natural language command", text: $commandText)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 17, weight: .medium, design: .rounded))
+                    .font(.system(size: useLandscapeCompactLayout ? 15 : 17, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textPrimary)
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, useLandscapeCompactLayout ? 10 : 12)
                     .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
