@@ -148,6 +148,44 @@ class SecurityAlarmService {
   }
 
   /**
+   * Dismiss an active triggered alarm
+   * @param {string} userId - User ID dismissing the triggered alarm
+   * @returns {Promise<Object>} Updated alarm system
+   */
+  async dismissAlarm(userId) {
+    try {
+      console.log('SecurityAlarmService: Dismissing triggered alarm');
+
+      const alarm = await SecurityAlarm.getMainAlarm();
+      if (alarm.alarmState !== 'triggered') {
+        throw new Error('Alarm is not currently triggered');
+      }
+
+      // Best-effort SmartThings clear by forcing Disarmed state.
+      const isSthmConfigured = await this.isSmartThingsConfiguredForSthm();
+      if (isSthmConfigured) {
+        try {
+          await smartThingsService.setSecurityArmState('Disarmed');
+          console.log('SecurityAlarmService: SmartThings dismiss/disarm command sent successfully');
+        } catch (smartThingsError) {
+          console.warn(
+            'SecurityAlarmService: SmartThings dismiss command failed, continuing with local dismiss:',
+            smartThingsError.message
+          );
+        }
+      }
+
+      await alarm.disarm(userId || 'system:dismiss');
+
+      console.log('SecurityAlarmService: Successfully dismissed triggered alarm');
+      return alarm;
+    } catch (error) {
+      console.error('SecurityAlarmService: Error dismissing triggered alarm:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get alarm status
    * @returns {Promise<Object>} Alarm status information
    */

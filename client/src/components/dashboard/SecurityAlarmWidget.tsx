@@ -16,6 +16,7 @@ import {
   getSecurityStatus, 
   armSecuritySystem, 
   disarmSecuritySystem,
+  dismissTriggeredAlarm,
   syncSecurityWithSmartThings 
 } from "@/api/security"
 import { useToast } from "@/hooks/useToast"
@@ -29,6 +30,7 @@ export function SecurityAlarmWidget() {
   const [loading, setLoading] = useState(true)
   const [arming, setArming] = useState(false)
   const [disarming, setDisarming] = useState(false)
+  const [dismissing, setDismissing] = useState(false)
   const [syncing, setSyncing] = useState(false)
 
   const fetchAlarmStatus = async () => {
@@ -167,6 +169,31 @@ export function SecurityAlarmWidget() {
       }
     } finally {
       setSyncing(false)
+    }
+  }
+
+  const handleDismiss = async () => {
+    setDismissing(true)
+    try {
+      if (DEBUG_MODE) console.log('Dismissing triggered alarm')
+      const response = await dismissTriggeredAlarm()
+
+      if (response.success) {
+        toast({
+          title: "Alarm Dismissed",
+          description: "Triggered alarm has been dismissed"
+        })
+        await fetchAlarmStatus()
+      }
+    } catch (error) {
+      console.error('Failed to dismiss triggered alarm:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to dismiss triggered alarm",
+        variant: "destructive"
+      })
+    } finally {
+      setDismissing(false)
     }
   }
 
@@ -335,20 +362,37 @@ export function SecurityAlarmWidget() {
             </div>
           ) : (
             alarmStatus && (alarmStatus.alarmState === 'armedStay' || alarmStatus.alarmState === 'armedAway' || alarmStatus.alarmState === 'triggered') && (
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={handleDisarm}
-                disabled={disarming}
-                className="w-full flex items-center gap-1"
-              >
-                {disarming ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <ShieldX className="h-3 w-3" />
-                )}
-                Disarm
-              </Button>
+              alarmStatus.alarmState === 'triggered' ? (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleDismiss}
+                  disabled={dismissing}
+                  className="w-full flex items-center gap-1"
+                >
+                  {dismissing ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <AlertTriangle className="h-3 w-3" />
+                  )}
+                  Dismiss Alarm
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleDisarm}
+                  disabled={disarming}
+                  className="w-full flex items-center gap-1"
+                >
+                  {disarming ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ShieldX className="h-3 w-3" />
+                  )}
+                  Disarm
+                </Button>
+              )
             )
           )}
 
