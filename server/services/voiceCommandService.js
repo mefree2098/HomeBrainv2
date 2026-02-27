@@ -343,6 +343,8 @@ DECISION RULES
 6. Never return empty "actions" for "device_control" intents.
 7. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.") or informative for queries.
 8. If a selected device has Source:harmony, only use turn_on, turn_off, or toggle. Treat it as a Harmony Hub activity target (start/stop), not a dimmable light or thermostat.
+9. Return JSON only. Do not use markdown code fences.
+10. Put any conversational text only in the "response" field.
 
 Return ONLY the JSON object with no commentary.`; 
   }
@@ -1236,6 +1238,43 @@ RULES
       };
     } catch (error) {
       console.warn('VoiceCommandService: LLM interpretation failed:', error.message);
+
+      if (queryOnlyRequest) {
+        try {
+          const plainPrompt = `You are HomeBrain's local voice assistant. Answer the user request in one short spoken sentence with no JSON and no markdown.\n\nUser request: "${commandText}"`;
+          const plainAttempt = await sendLLMRequestWithFallbackDetailed(
+            plainPrompt,
+            LOCAL_FIRST_PROVIDER_PRIORITY,
+            {
+              ...VOICE_LLM_REQUEST_CONFIG,
+              // Do not require structured output in rescue mode.
+              ollamaFormat: undefined
+            }
+          );
+          const plainInterpretation = this.parseLocalPlainTextQueryResponse(
+            commandText,
+            plainAttempt?.response,
+            true
+          );
+
+          if (plainInterpretation) {
+            return {
+              interpretation: plainInterpretation,
+              llm: {
+                provider: plainAttempt?.provider || 'local',
+                model: plainAttempt?.model || null,
+                runtime: plainAttempt?.runtime || null,
+                prompt: plainPrompt,
+                rawResponse: plainAttempt?.response || null,
+                processingTimeMs: Date.now() - startedAt
+              }
+            };
+          }
+        } catch (queryRescueError) {
+          console.warn('VoiceCommandService: Query rescue attempt failed:', queryRescueError.message);
+        }
+      }
+
       return {
         interpretation: null,
         llm: {

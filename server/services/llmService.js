@@ -221,6 +221,33 @@ function buildLocalModelCandidates(preferredModel) {
   return candidates;
 }
 
+function extractOllamaErrorMessage(error) {
+  return (
+    error?.response?.data?.error ||
+    error?.response?.data?.message ||
+    error?.message ||
+    ''
+  ).toString();
+}
+
+function isSchemaFormatCompatibilityError(error) {
+  const message = extractOllamaErrorMessage(error).toLowerCase();
+  if (!message) {
+    return false;
+  }
+
+  return (
+    message.includes('format') &&
+    (
+      message.includes('invalid') ||
+      message.includes('unsupported') ||
+      message.includes('schema') ||
+      message.includes('cannot unmarshal') ||
+      message.includes('json: cannot')
+    )
+  );
+}
+
 async function getOllamaInstalledModels(baseUrl) {
   try {
     const cacheEntry = ollamaModelCache.get(baseUrl);
@@ -569,14 +596,37 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
     console.log(`LLM Service: Attempting local provider with model "${candidateModel}" at ${testUrl}`);
 
     try {
-      const responseText = await attemptLocalModelRequest(
-        testUrl,
-        candidateModel,
-        message,
-        requestOptions,
-        requestTimeoutMs,
-        requestFormat
-      );
+      let responseText = null;
+
+      try {
+        responseText = await attemptLocalModelRequest(
+          testUrl,
+          candidateModel,
+          message,
+          requestOptions,
+          requestTimeoutMs,
+          requestFormat
+        );
+      } catch (formatError) {
+        if (
+          requestFormat &&
+          typeof requestFormat === 'object' &&
+          isSchemaFormatCompatibilityError(formatError)
+        ) {
+          console.warn(`LLM Service: Schema format rejected by Ollama for "${candidateModel}", retrying with plain JSON mode.`);
+          responseText = await attemptLocalModelRequest(
+            testUrl,
+            candidateModel,
+            message,
+            requestOptions,
+            requestTimeoutMs,
+            DEFAULT_OLLAMA_FORMAT
+          );
+        } else {
+          throw formatError;
+        }
+      }
+
       if (responseText !== undefined && responseText !== null) {
         if (!returnMetadata) {
           return responseText;
@@ -592,7 +642,7 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
     } catch (error) {
       lastError = error;
       const status = error.response?.status;
-      const errorMessage = error.response?.data?.error || error.message;
+      const errorMessage = extractOllamaErrorMessage(error);
 
       if (status === 404 || (errorMessage && errorMessage.toLowerCase().includes('not found'))) {
         console.warn(`LLM Service: Local model "${candidateModel}" not available (${errorMessage}). Trying next candidate.`);
