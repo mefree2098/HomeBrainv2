@@ -1170,14 +1170,16 @@ class BrowserVoiceAssistant {
         : null;
       const llmRuntime = result?.llm?.runtime?.processor || null;
       const llmRuntimeModel = result?.llm?.runtime?.model || null;
+      const llmError = typeof result?.llm?.error === "string" ? result.llm.error : null;
       const fallbackLabel = result?.usedFallback ? "yes" : "no";
       const llmTimingLabel = llmMs !== null ? ` llmMs=${llmMs}` : "";
       const llmRuntimeLabel = llmRuntime ? ` runtime=${llmRuntime}` : "";
       const llmRuntimeModelLabel = llmRuntimeModel ? ` runtimeModel=${llmRuntimeModel}` : "";
+      const llmErrorLabel = llmError ? ` llmError=${llmError.slice(0, 120)}` : "";
 
       this.updateStatus({
         lastResponse: result?.responseText || null
-      }, `command processed by server provider=${llmProvider} model=${llmModel}${llmTimingLabel}${llmRuntimeLabel}${llmRuntimeModelLabel} fallback=${fallbackLabel}`);
+      }, `command processed by server provider=${llmProvider} model=${llmModel}${llmTimingLabel}${llmRuntimeLabel}${llmRuntimeModelLabel}${llmErrorLabel} fallback=${fallbackLabel}`);
 
       await wakeAckPlaybackPromise;
 
