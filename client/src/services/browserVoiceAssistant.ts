@@ -117,6 +117,7 @@ class BrowserVoiceAssistant {
   private fallbackWakeTranscriptHistory: Array<{ text: string; timestamp: number }> = [];
   private onDeviceSpeechReady = false;
   private readonly recognitionLang = "en-US";
+  private pendingResumeAfterProcessing = false;
   private readonly maxTraceEntries = 80;
 
   private status: BrowserVoiceStatus = {
@@ -1138,6 +1139,7 @@ class BrowserVoiceAssistant {
     this.clearFallbackWakeTranscriptHistory();
     this.clearWaitForCommandTimer();
     this.isProcessing = true;
+    this.pendingResumeAfterProcessing = false;
 
     this.updateStatus({
       mode: "processing",
@@ -1177,6 +1179,10 @@ class BrowserVoiceAssistant {
       }, `command failed: ${message}`);
     } finally {
       this.isProcessing = false;
+      if (this.pendingResumeAfterProcessing) {
+        this.pendingResumeAfterProcessing = false;
+        this.resumeRecognitionAfterPlayback();
+      }
       this.updateStatus({
         mode: this.status.enabled ? "listening" : "off"
       }, "processing complete");
@@ -1679,6 +1685,11 @@ class BrowserVoiceAssistant {
 
   private resumeRecognitionAfterPlayback(): void {
     if (!this.status.enabled || !this.recognition || this.useServerSttFallback) {
+      return;
+    }
+
+    if (this.isProcessing) {
+      this.pendingResumeAfterProcessing = true;
       return;
     }
 

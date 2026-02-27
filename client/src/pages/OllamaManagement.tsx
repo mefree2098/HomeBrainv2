@@ -185,6 +185,28 @@ export default function OllamaManagement() {
     }
   };
 
+  const shouldPromptForSudoPassword = (message?: string) => {
+    const normalized = (message || '').toLowerCase();
+    return normalized.includes('requires sudo privileges')
+      || normalized.includes('cannot use sudo non-interactively')
+      || normalized.includes('without sudo access');
+  };
+
+  const promptForSudoPassword = () => {
+    const value = window.prompt(
+      'Enter your sudo password to continue. HomeBrain sends it once to the server process and does not store it.'
+    );
+    if (value === null) {
+      return null;
+    }
+
+    if (!value.trim()) {
+      return null;
+    }
+
+    return value;
+  };
+
   const handleInstall = async () => {
     setActionLoading('install');
     toast({
@@ -200,11 +222,36 @@ export default function OllamaManagement() {
       });
       await loadStatus();
     } catch (error: any) {
+      const errorMessage = error?.message || 'Failed to install Ollama';
       console.error('Error installing Ollama:', error);
+
+      if (shouldPromptForSudoPassword(errorMessage)) {
+        const sudoPassword = promptForSudoPassword();
+        if (sudoPassword) {
+          try {
+            await installOllama(sudoPassword);
+            toast({
+              title: 'Success',
+              description: 'Ollama installed successfully',
+            });
+            await loadStatus();
+            return;
+          } catch (retryError: any) {
+            const retryMessage = retryError?.message || 'Failed to install Ollama';
+            toast({
+              variant: 'destructive',
+              title: 'Installation Failed',
+              description: retryMessage,
+            });
+            return;
+          }
+        }
+      }
+
       toast({
         variant: 'destructive',
         title: 'Installation Failed',
-        description: error.message || 'Failed to install Ollama',
+        description: errorMessage,
       });
     } finally {
       if (activeTab === 'logs') {
@@ -319,11 +366,36 @@ export default function OllamaManagement() {
       });
       await loadStatus();
     } catch (error: any) {
+      const errorMessage = error?.message || 'Failed to update Ollama';
       console.error('Error updating Ollama:', error);
+
+      if (shouldPromptForSudoPassword(errorMessage)) {
+        const sudoPassword = promptForSudoPassword();
+        if (sudoPassword) {
+          try {
+            const result = await updateOllama(sudoPassword);
+            toast({
+              title: 'Success',
+              description: `Ollama updated successfully${result?.version ? ` to ${result.version}` : ''}`,
+            });
+            await loadStatus();
+            return;
+          } catch (retryError: any) {
+            const retryMessage = retryError?.message || 'Failed to update Ollama';
+            toast({
+              variant: 'destructive',
+              title: 'Update Failed',
+              description: retryMessage,
+            });
+            return;
+          }
+        }
+      }
+
       toast({
         variant: 'destructive',
         title: 'Update Failed',
-        description: error.message || 'Failed to update Ollama',
+        description: errorMessage,
       });
     } finally {
       if (activeTab === 'logs') {

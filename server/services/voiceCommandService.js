@@ -55,6 +55,7 @@ const COLOR_NAME_TO_HEX = Object.freeze({
 });
 
 const COLOR_NAME_ENTRIES = Object.entries(COLOR_NAME_TO_HEX).sort((a, b) => b[0].length - a[0].length);
+const LOCAL_FIRST_PROVIDER_PRIORITY = ['local', 'openai', 'anthropic'];
 
 class VoiceCommandService {
   constructor() {
@@ -292,6 +293,36 @@ DECISION RULES
 8. If a selected device has Source:harmony, only use turn_on, turn_off, or toggle. Treat it as a Harmony Hub activity target (start/stop), not a dimmable light or thermostat.
 
 Return ONLY the JSON object with no commentary.`; 
+  }
+
+  buildQueryPrompt(commandText, { room, wakeWord }) {
+    const primaryRoom = room || 'unknown';
+    const wakeWordLabel = wakeWord || 'unknown';
+
+    return `
+You are HomeBrain's fast conversational voice assistant.
+
+IMPORTANT CONTEXT
+- Room where the command was heard: ${primaryRoom}
+- Wake word that activated the assistant: ${wakeWordLabel}
+
+USER REQUEST
+"${commandText}"
+
+OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
+{
+  "intent": "query",
+  "confidence": 0.0-1.0,
+  "normalizedCommand": "Short paraphrase of the request",
+  "actions": [],
+  "response": "Short, spoken-style answer (1-2 sentences max)",
+  "followUpQuestion": null
+}
+
+RULES
+1. This request is conversational/informational. Do not produce control actions.
+2. Keep the response concise and voice-friendly.
+3. Return ONLY one JSON object and nothing else.`;
   }
 
   parseLlmResponse(rawResponse) {
@@ -1018,16 +1049,24 @@ Return ONLY the JSON object with no commentary.`;
   }
 
   async interpretCommand(commandText, context, room, wakeWord) {
-    const prompt = this.buildPrompt(commandText, {
-      devices: context.devices,
-      scenes: context.scenes,
-      room,
-      wakeWord
-    });
+    const queryOnlyRequest = this.isLikelyQuestionRequest(commandText)
+      && !this.isLikelyControlPhrase(commandText)
+      && !this.isLikelyAutomationRequest(commandText);
+
+    const prompt = queryOnlyRequest
+      ? this.buildQueryPrompt(commandText, { room, wakeWord })
+      : this.buildPrompt(commandText, {
+        devices: context.devices,
+        scenes: context.scenes,
+        room,
+        wakeWord
+      });
+
+    const providerPriorityOverride = LOCAL_FIRST_PROVIDER_PRIORITY;
 
     const startedAt = Date.now();
     try {
-      const firstAttempt = await sendLLMRequestWithFallbackDetailed(prompt);
+      const firstAttempt = await sendLLMRequestWithFallbackDetailed(prompt, providerPriorityOverride);
       let { response, provider, model } = firstAttempt;
       let parsed = this.parseLlmResponse(response);
 
