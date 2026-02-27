@@ -25,7 +25,8 @@ struct AuthView: View {
                 VStack(spacing: 14) {
                     HBSectionHeader(
                         title: "HomeBrain iOS",
-                        subtitle: "Secure sign in to your HomeBrain hub"
+                        subtitle: "Secure sign in to your HomeBrain hub",
+                        showBrandIcon: true
                     )
 
                     Form {

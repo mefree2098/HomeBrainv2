@@ -65,6 +65,7 @@ struct HBPanel<Content: View>: View {
 struct HBSectionHeader: View {
     let title: String
     let subtitle: String
+    let showBrandIcon: Bool
     let buttonTitle: String?
     let buttonIcon: String?
     let buttonAction: (() -> Void)?
@@ -78,12 +79,14 @@ struct HBSectionHeader: View {
     init(
         title: String,
         subtitle: String = "",
+        showBrandIcon: Bool = false,
         buttonTitle: String? = nil,
         buttonIcon: String? = nil,
         buttonAction: (() -> Void)? = nil
     ) {
         self.title = title
         self.subtitle = subtitle
+        self.showBrandIcon = showBrandIcon
         self.buttonTitle = buttonTitle
         self.buttonIcon = buttonIcon
         self.buttonAction = buttonAction
@@ -92,9 +95,19 @@ struct HBSectionHeader: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: compactLandscape ? 24 : 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
+                HStack(spacing: 10) {
+                    if showBrandIcon {
+                        Image("HomeBrainBrandIcon")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: compactLandscape ? 24 : 28, height: compactLandscape ? 24 : 28)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+
+                    Text(title)
+                        .font(.system(size: compactLandscape ? 24 : 32, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                }
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.system(size: compactLandscape ? 14 : 16, weight: .medium, design: .rounded))

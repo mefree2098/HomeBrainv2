@@ -5,6 +5,18 @@ import Speech
 
 @MainActor
 final class VoiceAssistantManager: ObservableObject {
+    private struct WakeMatch {
+        enum MatchType {
+            case exact
+            case fuzzy
+        }
+
+        let wakeWord: String
+        let command: String
+        let type: MatchType
+        let score: Double?
+    }
+
     @Published private(set) var isEnabled = false
     @Published private(set) var isListening = false
     @Published private(set) var isProcessing = false
@@ -39,13 +51,17 @@ final class VoiceAssistantManager: ObservableObject {
         "home brain",
         "computer"
     ]
-    private static let waitForCommandSeconds: TimeInterval = 8
+    private static let waitForCommandSeconds: TimeInterval = 22
+    private static let wakeWordFuzzyMinScore: Double = 0.72
+    private static let wakeWordFuzzyMaxStartTokenIndex = 2
+    private static let voiceBuildTag = "2026-02-27-ios-speech-v2"
 
     private weak var sessionStore: SessionStore?
 
     private let audioEngine = AVAudioEngine()
     private let speechSynth = AVSpeechSynthesizer()
     private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private var wakeAcknowledgmentPlayer: AVAudioPlayer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var waitTask: Task<Void, Never>?
@@ -171,7 +187,8 @@ final class VoiceAssistantManager: ObservableObject {
         do {
             let response = try await sessionStore.apiClient.get("/api/profiles")
             let object = JSON.object(response)
-            let profiles = JSON.array(object["profiles"])
+            let data = JSON.object(object["data"])
+            let profiles = JSON.array(object["profiles"]) + JSON.array(data["profiles"])
 
             var wakeWordSet = Set(Self.defaultWakeWords)
             for profile in profiles {
@@ -329,6 +346,10 @@ final class VoiceAssistantManager: ObservableObject {
 
         lastWakeWord = wakeMatch.wakeWord
 
+        if wakeMatch.type == .fuzzy, let score = wakeMatch.score {
+            statusText = "Wake word matched (\(Int((score * 100).rounded()))%). Listening..."
+        }
+
         if wakeMatch.command.isEmpty {
             beginAwaitingCommand(for: wakeMatch.wakeWord)
         } else {
@@ -394,20 +415,29 @@ final class VoiceAssistantManager: ObservableObject {
         errorMessage = nil
         lastCommand = cleanedCommand
 
+        let wakeAcknowledgmentTask = Task { [weak self] in
+            await self?.playWakeAcknowledgment(for: wakeWord)
+        }
+
         do {
             let payload: [String: Any] = [
                 "commandText": cleanedCommand,
                 "wakeWord": wakeWord,
                 "stt": [
-                    "provider": "ios-speech",
-                    "model": "apple.sfspeechrecognizer",
-                    "text": transcript
+                    "provider": "ios-web-speech",
+                    "model": "SFSpeechRecognizer",
+                    "text": transcript,
+                    "locale": "en-US",
+                    "captureMode": "live-stream",
+                    "buildTag": Self.voiceBuildTag
                 ]
             ]
 
             let response = try await sessionStore.apiClient.post("/api/voice/commands/interpret", body: payload)
             let object = JSON.object(response)
             let responseText = JSON.string(object, "responseText", fallback: JSON.string(object, "message", fallback: "Command processed."))
+
+            await wakeAcknowledgmentTask.value
 
             lastResponse = responseText
             statusText = "Voice command completed."
@@ -416,6 +446,7 @@ final class VoiceAssistantManager: ObservableObject {
                 speak(responseText)
             }
         } catch {
+            await wakeAcknowledgmentTask.value
             errorMessage = error.localizedDescription
             statusText = "Voice command failed."
         }
@@ -423,17 +454,72 @@ final class VoiceAssistantManager: ObservableObject {
         isProcessing = false
     }
 
-    private func matchWakeWord(in normalizedTranscript: String) -> (wakeWord: String, command: String)? {
+    private func matchWakeWord(in normalizedTranscript: String) -> WakeMatch? {
+        let transcriptTokens = normalizedTranscript.split(separator: " ").map(String.init)
+        guard !transcriptTokens.isEmpty else { return nil }
+
         for wakeWord in configuredWakeWords {
             let normalizedWakeWord = normalizePhrase(wakeWord)
             guard !normalizedWakeWord.isEmpty else { continue }
+            let wakeTokens = normalizedWakeWord.split(separator: " ").map(String.init)
+            guard !wakeTokens.isEmpty, wakeTokens.count <= transcriptTokens.count else { continue }
 
-            if let range = normalizedTranscript.range(of: normalizedWakeWord) {
-                let commandStart = range.upperBound
-                let trailing = String(normalizedTranscript[commandStart...])
-                let command = trailing.trimmingCharacters(in: CharacterSet(charactersIn: " ,.:;-"))
-                return (wakeWord: normalizedWakeWord, command: command)
+            for startIndex in 0...(transcriptTokens.count - wakeTokens.count) {
+                let candidate = Array(transcriptTokens[startIndex..<(startIndex + wakeTokens.count)])
+                guard candidate == wakeTokens else { continue }
+
+                let commandTokens = transcriptTokens.dropFirst(startIndex + wakeTokens.count)
+                let command = commandTokens.joined(separator: " ")
+                return WakeMatch(wakeWord: normalizedWakeWord, command: command, type: .exact, score: nil)
             }
+        }
+
+        var bestFuzzyMatch: (wakeWord: String, score: Double, startIndex: Int, tokenLength: Int)?
+
+        for wakeWord in configuredWakeWords {
+            let normalizedWakeWord = normalizePhrase(wakeWord)
+            let wakeTokens = normalizedWakeWord.split(separator: " ").map(String.init)
+            guard !wakeTokens.isEmpty else { continue }
+
+            let candidateWindowSizes = Array(Set([
+                max(1, wakeTokens.count - 1),
+                wakeTokens.count,
+                wakeTokens.count + 1
+            ])).sorted()
+
+            for windowSize in candidateWindowSizes {
+                guard windowSize <= transcriptTokens.count else { continue }
+
+                for startIndex in 0...(transcriptTokens.count - windowSize) {
+                    if startIndex > Self.wakeWordFuzzyMaxStartTokenIndex {
+                        break
+                    }
+
+                    let candidatePhrase = transcriptTokens[startIndex..<(startIndex + windowSize)].joined(separator: " ")
+                    let score = similarity(normalizedWakeWord, candidatePhrase)
+                    guard score >= Self.wakeWordFuzzyMinScore else { continue }
+
+                    if bestFuzzyMatch == nil || score > (bestFuzzyMatch?.score ?? 0) {
+                        bestFuzzyMatch = (
+                            wakeWord: normalizedWakeWord,
+                            score: score,
+                            startIndex: startIndex,
+                            tokenLength: windowSize
+                        )
+                    }
+                }
+            }
+        }
+
+        if let bestFuzzyMatch {
+            let commandTokens = transcriptTokens.dropFirst(bestFuzzyMatch.startIndex + bestFuzzyMatch.tokenLength)
+            let command = commandTokens.joined(separator: " ")
+            return WakeMatch(
+                wakeWord: bestFuzzyMatch.wakeWord,
+                command: command,
+                type: .fuzzy,
+                score: bestFuzzyMatch.score
+            )
         }
 
         return nil
@@ -444,6 +530,106 @@ final class VoiceAssistantManager: ObservableObject {
         let replaced = lowercase.replacingOccurrences(of: #"[^a-z0-9\s]"#, with: " ", options: .regularExpression)
         let compact = replaced.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         return compact.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func similarity(_ a: String, _ b: String) -> Double {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        if a == b { return 1 }
+
+        let distance = levenshteinDistance(a, b)
+        let scale = max(a.count, b.count)
+        guard scale > 0 else { return 0 }
+        return max(0, 1 - (Double(distance) / Double(scale)))
+    }
+
+    private func levenshteinDistance(_ a: String, _ b: String) -> Int {
+        let left = Array(a)
+        let right = Array(b)
+
+        let rows = left.count + 1
+        let cols = right.count + 1
+        var matrix = Array(repeating: Array(repeating: 0, count: cols), count: rows)
+
+        for row in 0..<rows {
+            matrix[row][0] = row
+        }
+        for col in 0..<cols {
+            matrix[0][col] = col
+        }
+
+        if left.isEmpty { return right.count }
+        if right.isEmpty { return left.count }
+
+        for row in 1..<rows {
+            for col in 1..<cols {
+                let substitutionCost = left[row - 1] == right[col - 1] ? 0 : 1
+                matrix[row][col] = min(
+                    matrix[row - 1][col] + 1,
+                    matrix[row][col - 1] + 1,
+                    matrix[row - 1][col - 1] + substitutionCost
+                )
+            }
+        }
+
+        return matrix[rows - 1][cols - 1]
+    }
+
+    private func playWakeAcknowledgment(for wakeWord: String) async {
+        let trimmedWakeWord = wakeWord.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedWakeWord.isEmpty else { return }
+        guard let request = makeWakeAcknowledgmentRequest(wakeWord: trimmedWakeWord) else { return }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { return }
+
+            if httpResponse.statusCode == 204 {
+                return
+            }
+
+            guard (200..<300).contains(httpResponse.statusCode), !data.isEmpty else { return }
+
+            let contentType = (httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+            guard contentType.contains("audio/") else { return }
+
+            do {
+                let player = try AVAudioPlayer(data: data)
+                wakeAcknowledgmentPlayer = player
+                player.prepareToPlay()
+                if player.play() {
+                    suppressTranscriptUntil = Date().addingTimeInterval(min(3.5, max(1.4, player.duration + 0.6)))
+                    try? await Task.sleep(nanoseconds: UInt64(max(0.2, player.duration) * 1_000_000_000))
+                }
+                player.stop()
+                wakeAcknowledgmentPlayer = nil
+            } catch {
+                wakeAcknowledgmentPlayer = nil
+            }
+        } catch {
+            // Wake acknowledgment is optional; command flow should continue.
+        }
+    }
+
+    private func makeWakeAcknowledgmentRequest(wakeWord: String) -> URLRequest? {
+        guard let sessionStore else { return nil }
+        let trimmedBase = sessionStore.serverURLString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(trimmedBase)/api/voice/browser/acknowledgment") else {
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        if let accessToken = sessionStore.accessToken {
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+
+        let payload: [String: String] = ["wakeWord": wakeWord]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
+        return request
     }
 
     private func speak(_ text: String) {

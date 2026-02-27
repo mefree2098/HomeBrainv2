@@ -179,11 +179,18 @@ export function Header() {
     <header className="fixed top-0 z-50 w-full border-b bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75">
       <div className="flex h-16 items-center justify-between px-6">
         <div className="flex items-center gap-4">
-          <div 
-            className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent cursor-pointer hover:scale-105 transition-transform"
+          <div
+            className="flex items-center gap-2 cursor-pointer hover:scale-105 transition-transform"
             onClick={() => navigate("/")}
           >
-            Home Brain
+            <img
+              src="/homebrain-brand-64.png"
+              alt="Home Brain"
+              className="h-8 w-8 rounded-md object-cover"
+            />
+            <div className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+              Home Brain
+            </div>
           </div>
           <Badge variant="default" className={homeDeviceStats.loaded ? "" : "animate-pulse"}>
             {homeDeviceStats.loaded
