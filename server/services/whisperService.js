@@ -740,7 +740,27 @@ class WhisperService {
 
     if (!config.isInstalled) {
       const detected = await this._detectDependencies();
-      if (!detected) throw new Error('Whisper dependencies are not installed yet');
+      if (!detected) {
+        if (!this._isTruthyFlag(process.env.WHISPER_AUTO_INSTALL_ON_DEMAND ?? '1')) {
+          throw new Error('Whisper dependencies are not installed yet');
+        }
+
+        if (!this.initializing) {
+          console.warn('Whisper Service: dependencies missing; running installDependencies() automatically.');
+          this.initializing = this.installDependencies();
+        }
+
+        try {
+          await this.initializing;
+        } finally {
+          this.initializing = null;
+        }
+
+        const detectedAfterInstall = await this._detectDependencies();
+        if (!detectedAfterInstall) {
+          throw new Error('Whisper dependencies are not installed yet (automatic install failed)');
+        }
+      }
     }
   }
 
