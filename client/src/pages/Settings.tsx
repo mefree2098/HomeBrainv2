@@ -93,6 +93,7 @@ import {
   turnOffHarmonyHub
 } from "@/api/harmony"
 import { useNavigate } from "react-router-dom"
+import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
 
 export function Settings() {
   const { toast } = useToast()
@@ -1822,11 +1823,12 @@ export function Settings() {
 
       <form onSubmit={handleSubmit(handleSaveSettings)}>
         <Tabs defaultValue="general" className="space-y-6">
-          <TabsList className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50">
+          <TabsList className="h-auto flex-wrap gap-1 bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 p-1">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="voice">Voice & Audio</TabsTrigger>
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
+            <TabsTrigger value="resources">System Resources</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           </TabsList>
 
@@ -3295,6 +3297,10 @@ export function Settings() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="resources" className="space-y-6">
+            <SettingsResourceUtilizationTab />
           </TabsContent>
 
           <TabsContent value="maintenance" className="space-y-6">

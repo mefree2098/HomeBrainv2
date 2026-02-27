@@ -15,6 +15,7 @@ import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/useToast"
 import { getDeviceStats } from "@/api/devices"
 import { browserVoiceAssistant, type BrowserVoiceStatus } from "@/services/browserVoiceAssistant"
+import { HeaderResourceUtilizationStrip } from "@/components/system/SystemResourceUtilization"
 
 export function Header() {
   const { logout } = useAuth()
@@ -189,6 +190,7 @@ export function Header() {
               ? `${homeDeviceStats.active}/${homeDeviceStats.total} devices active`
               : "Loading devices..."}
           </Badge>
+          <HeaderResourceUtilizationStrip />
         </div>
         
         <div className="flex items-center gap-4">

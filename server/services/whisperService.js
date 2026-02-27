@@ -589,15 +589,25 @@ class WhisperService {
     await this._runCommand('cmake', cmakeArgs, { cwd: buildDir, env: buildEnv });
 
     const defaultJobs = this._isJetson()
-      ? 2
+      ? 1
       : Math.max(1, Array.isArray(os.cpus()) ? os.cpus().length : 4);
     const jobs = this._parsePositiveInt(process.env.WHISPER_CT2_BUILD_JOBS, defaultJobs).toString();
     console.log(`Whisper Service: Building CTranslate2 (ninja -j${jobs})`);
-    await this._runCommand('ninja', ['-j', jobs], { cwd: buildDir, env: buildEnv });
+    await this._runCommand('ninja', ['-j', jobs], {
+      cwd: buildDir,
+      env: buildEnv,
+      streamOutput: true,
+      streamPrefix: 'Whisper Service [ct2/ninja]'
+    });
 
     // Install the C++ library/headers to installPrefix (no sudo required)
     console.log('Whisper Service: Installing CTranslate2 C++ artifacts');
-    await this._runCommand('ninja', ['install'], { cwd: buildDir, env: buildEnv });
+    await this._runCommand('ninja', ['install'], {
+      cwd: buildDir,
+      env: buildEnv,
+      streamOutput: true,
+      streamPrefix: 'Whisper Service [ct2/install]'
+    });
 
     // Make sure the runtime can find the new lib if it’s under ~/.local/ctranslate2
     try {
@@ -655,7 +665,12 @@ class WhisperService {
     await this._runCommand(
       PYTHON_BIN,
       ['-m', 'build', '--wheel', '--no-isolation'],
-      { cwd: pythonDir, env: wheelEnv }
+      {
+        cwd: pythonDir,
+        env: wheelEnv,
+        streamOutput: true,
+        streamPrefix: 'Whisper Service [ct2/wheel]'
+      }
     );
 
     const distDir = path.join(pythonDir, 'dist');
@@ -1139,12 +1154,32 @@ class WhisperService {
   }
 
   async _runCommand(command, args, options = {}) {
+    const { streamOutput = false, streamPrefix = '', ...spawnOptions } = options;
+    const emitLine = (line, isError = false) => {
+      const text = String(line || '').trim();
+      if (!text) return;
+      const prefix = streamPrefix ? `${streamPrefix} ` : '';
+      if (isError) console.warn(`${prefix}${text}`);
+      else console.log(`${prefix}${text}`);
+    };
+
+    const emitChunk = (chunk, isError = false) => {
+      const text = chunk.toString();
+      text.split(/\r?\n/).forEach((line) => emitLine(line, isError));
+    };
+
     return new Promise((resolve, reject) => {
-      const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(command, args, { ...spawnOptions, stdio: ['ignore', 'pipe', 'pipe'] });
       const stdout = [];
       const stderr = [];
-      child.stdout.on('data', (d) => stdout.push(d.toString()));
-      child.stderr.on('data', (d) => stderr.push(d.toString()));
+      child.stdout.on('data', (d) => {
+        stdout.push(d.toString());
+        if (streamOutput) emitChunk(d, false);
+      });
+      child.stderr.on('data', (d) => {
+        stderr.push(d.toString());
+        if (streamOutput) emitChunk(d, true);
+      });
       child.on('error', (error) => reject(formatSpawnError(command, args, error)));
       child.on('close', (code) => {
         if (code === 0) resolve({ stdout: stdout.join(''), stderr: stderr.join('') });
