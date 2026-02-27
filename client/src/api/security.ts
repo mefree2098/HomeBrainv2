@@ -56,6 +56,20 @@ export const disarmSecuritySystem = async () => {
   }
 };
 
+// Description: Dismiss an active triggered alarm
+// Endpoint: POST /api/security-alarm/dismiss
+// Request: {}
+// Response: { success: boolean, message: string, alarm: { _id: string, alarmState: string } }
+export const dismissTriggeredAlarm = async () => {
+  try {
+    const response = await api.post('/api/security-alarm/dismiss');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
 // Description: Add a security zone
 // Endpoint: POST /api/security-alarm/zones
 // Request: { name: string, deviceId: string, deviceType: string, enabled?: boolean, bypassable?: boolean }

@@ -136,6 +136,37 @@ router.post('/disarm', auth, async (req, res) => {
 });
 
 /**
+ * POST /api/security-alarm/dismiss
+ * Dismiss an active triggered alarm
+ */
+router.post('/dismiss', auth, async (req, res) => {
+  try {
+    console.log('POST /api/security-alarm/dismiss - Dismissing triggered alarm');
+
+    const userId = req.user?.id || req.user?._id;
+    console.log('User ID:', userId);
+
+    const alarm = await securityAlarmService.dismissAlarm(userId);
+
+    console.log('Successfully dismissed triggered alarm');
+    res.status(200).json({
+      success: true,
+      message: 'Triggered alarm dismissed',
+      alarm
+    });
+  } catch (error) {
+    console.error('Error in POST /api/security-alarm/dismiss:', error.message);
+    console.error('Full error:', error);
+    const statusCode = error.message === 'Alarm is not currently triggered' ? 409 : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to dismiss triggered alarm',
+      error: error.message
+    });
+  }
+});
+
+/**
  * POST /api/security-alarm/zones
  * Add a security zone
  */
