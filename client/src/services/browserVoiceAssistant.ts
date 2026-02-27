@@ -8,7 +8,7 @@ const WAIT_FOR_COMMAND_TIMEOUT_MS = 12000;
 const NETWORK_ERROR_WINDOW_MS = 15000;
 const NETWORK_ERROR_THRESHOLD = 6;
 const FALLBACK_CAPTURE_INTERVAL_MS = 2500;
-const FALLBACK_CAPTURE_DURATION_MS = 1600;
+const FALLBACK_CAPTURE_DURATION_MS = 2200;
 const FALLBACK_COMMAND_CAPTURE_DURATION_MS = 2400;
 const FALLBACK_IMMEDIATE_RETRY_DELAY_MS = 120;
 const MIN_FALLBACK_CLIP_BYTES = 64;
@@ -902,6 +902,25 @@ class BrowserVoiceAssistant {
           await this.executeCommand(normalizedFallbackCommand, fallbackWakeWord, confidence);
           return;
         }
+
+        const normalizedFallbackQuery = this.normalizeFallbackDirectCommand(transcript);
+        if (this.isLikelyDirectQuery(normalizedFallbackQuery)) {
+          const fallbackWakeWord = this.resolveFallbackWakeWord(transcript);
+          if (this.isLikelyIncompleteUtterance(normalizedFallbackQuery)) {
+            this.updateStatus(
+              {},
+              `fallback query fragment detected; waiting for continuation: "${normalizedFallbackQuery}"`
+            );
+            this.waitForCommand(fallbackWakeWord);
+            return;
+          }
+          this.updateStatus(
+            {},
+            `fallback direct query heuristic matched: "${normalizedFallbackQuery}" (wake=${fallbackWakeWord})`
+          );
+          await this.executeCommand(normalizedFallbackQuery, fallbackWakeWord, confidence);
+          return;
+        }
       }
 
       if (this.useServerSttFallback && this.isLikelyDirectCommand(transcript)) {
@@ -929,8 +948,26 @@ class BrowserVoiceAssistant {
         return;
       }
 
-      this.updateStatus({}, `captured command after wake word: "${transcript}"`);
-      await this.executeCommand(transcript, this.status.pendingWakeWord || "browser", confidence);
+      const normalizedAwaitingTranscript = this.useServerSttFallback
+        ? this.normalizeFallbackDirectCommand(transcript)
+        : transcript;
+
+      if (this.useServerSttFallback && this.isLikelyDiscardableFiller(normalizedAwaitingTranscript)) {
+        this.updateStatus({}, `ignoring filler while awaiting command: "${normalizedAwaitingTranscript}"`);
+        this.requestImmediateFallbackCapture(
+          FALLBACK_COMMAND_CAPTURE_DURATION_MS,
+          "awaiting command (ignored filler)",
+          FALLBACK_IMMEDIATE_RETRY_DELAY_MS
+        );
+        return;
+      }
+
+      this.updateStatus({}, `captured command after wake word: "${normalizedAwaitingTranscript}"`);
+      await this.executeCommand(
+        normalizedAwaitingTranscript,
+        this.status.pendingWakeWord || "browser",
+        confidence
+      );
       return;
     }
 
@@ -1198,6 +1235,68 @@ class BrowserVoiceAssistant {
     const conversationalPattern = /^(please|can you|could you|would you|hey|anna|henry|computer)\b/;
     const hasActionVerb = /\b(turn on|turn off|set|dim|brighten|open|close|lock|unlock|arm|disarm|activate|run|start|stop|enable|disable|on|off)\b/.test(normalized);
     return conversationalPattern.test(normalized) && hasActionVerb;
+  }
+
+  private isLikelyDirectQuery(transcript: string): boolean {
+    const normalized = this.normalizeWakeWord(transcript);
+    if (!normalized) {
+      return false;
+    }
+
+    if (/[?]/.test(transcript)) {
+      return true;
+    }
+
+    const questionLeadPattern = /^(what|who|when|where|why|how|which)\b/;
+    if (questionLeadPattern.test(normalized)) {
+      return true;
+    }
+
+    const conversationalQuestionPattern = /^(what s|what is|who is|tell me|explain|define|summarize|can you tell me|do you know)\b/;
+    return conversationalQuestionPattern.test(normalized);
+  }
+
+  private isLikelyIncompleteUtterance(transcript: string): boolean {
+    const raw = (transcript || "").trim();
+    if (!raw) {
+      return true;
+    }
+
+    if (raw.endsWith("...")) {
+      return true;
+    }
+
+    const normalized = this.normalizeWakeWord(raw);
+    if (!normalized) {
+      return true;
+    }
+
+    const trailingConnectorPattern = /\b(the|a|an|of|to|for|in|on|at|with|about|from|is|are|was|were|can|could|would|should|if|that|this)\b$/;
+    return trailingConnectorPattern.test(normalized);
+  }
+
+  private isLikelyDiscardableFiller(transcript: string): boolean {
+    const normalized = this.normalizeWakeWord(transcript);
+    if (!normalized) {
+      return true;
+    }
+
+    const fillerPhrases = new Set([
+      "thank you",
+      "thanks",
+      "ok",
+      "okay",
+      "got it",
+      "never mind",
+      "nevermind",
+      "cancel",
+      "stop"
+    ]);
+    if (fillerPhrases.has(normalized)) {
+      return true;
+    }
+
+    return /^(uh|um|hmm|mm)$/.test(normalized);
   }
 
   private normalizeFallbackDirectCommand(transcript: string): string {

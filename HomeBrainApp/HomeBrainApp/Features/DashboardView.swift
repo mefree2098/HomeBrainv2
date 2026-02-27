@@ -14,6 +14,9 @@ struct DashboardView: View {
     @State private var securityZonesTotal = 0
     @State private var securityZonesActive = 0
     @State private var systemStatus = "Online"
+    @State private var favoriteDeviceIds: Set<String> = []
+    @State private var favoritesProfileId: String?
+    @State private var pendingFavoriteDeviceIds: Set<String> = []
 
     @State private var commandText = ""
     @State private var commandResponse = ""
@@ -34,7 +37,9 @@ struct DashboardView: View {
     }
 
     private var featuredDevices: [DeviceItem] {
-        Array(devices.prefix(isCompact ? 6 : 10))
+        devices
+            .filter { favoriteDeviceIds.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var quickScenes: [SceneItem] {
@@ -114,8 +119,10 @@ struct DashboardView: View {
                             if featuredDevices.isEmpty {
                                 HBPanel {
                                     EmptyStateView(
-                                        title: "No devices yet",
-                                        subtitle: "Add devices in the Devices section to control them from the dashboard."
+                                        title: "No favorite devices yet",
+                                        subtitle: favoritesProfileId == nil
+                                            ? "Create or activate a user profile, then favorite devices to pin them to dashboard."
+                                            : "Favorite your go-to devices from the Devices screen to pin them here."
                                     )
                                 }
                             } else {
@@ -369,12 +376,16 @@ struct DashboardView: View {
 
                     Spacer()
 
-                    Text(device.status ? "On" : "Off")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(device.status ? Color.black.opacity(0.7) : HBPalette.textPrimary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(device.status ? Color.white.opacity(0.9) : Color.white.opacity(0.12), in: Capsule())
+                    HStack(spacing: 8) {
+                        favoriteButton(for: device)
+
+                        Text(device.status ? "On" : "Off")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(device.status ? Color.black.opacity(0.7) : HBPalette.textPrimary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(device.status ? Color.white.opacity(0.9) : Color.white.opacity(0.12), in: Capsule())
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -413,6 +424,32 @@ struct DashboardView: View {
             }
         }
         .frame(width: isCompact ? 260 : 300)
+    }
+
+    private func favoriteButton(for device: DeviceItem) -> some View {
+        let isFavorite = favoriteDeviceIds.contains(device.id)
+        let isPending = pendingFavoriteDeviceIds.contains(device.id)
+
+        return Button {
+            Task { await toggleDeviceFavorite(device) }
+        } label: {
+            if isPending {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 22, height: 22)
+                    .padding(4)
+            } else {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(isFavorite ? Color.red.opacity(0.95) : HBPalette.textSecondary)
+                    .frame(width: 22, height: 22)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isPending)
+        .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
     }
 
     private var voiceCommandPanel: some View {
@@ -502,11 +539,13 @@ struct DashboardView: View {
             async let scenesTask = session.apiClient.get("/api/scenes")
             async let voiceTask = session.apiClient.get("/api/voice/devices")
             async let securityTask = session.apiClient.get("/api/security-alarm/status")
+            async let profilesTask = session.apiClient.get("/api/profiles")
 
             let devicesResponse = try await devicesTask
             let scenesResponse = try await scenesTask
             let voiceResponse = try await voiceTask
             let securityResponse = try await securityTask
+            let favoritesContext = (try? await profilesTask).map(FavoritesSupport.deviceContext(fromProfilesPayload:)) ?? .empty
 
             let devicesObject = JSON.object(devicesResponse)
             let devicesData = JSON.object(devicesObject["data"])
@@ -532,6 +571,7 @@ struct DashboardView: View {
             securityZonesActive = activeZones
             securityZonesTotal = totalZones
             systemStatus = alarmState.lowercased() == "error" ? "Degraded" : "Online"
+            applyFavoriteContext(favoritesContext)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -554,6 +594,89 @@ struct DashboardView: View {
 
             if let index = devices.firstIndex(where: { $0.id == updated.id }) {
                 devices[index] = updated
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyFavoriteContext(_ context: FavoriteDeviceContext) {
+        favoritesProfileId = context.profileId
+        favoriteDeviceIds = context.favoriteDeviceIds
+    }
+
+    private func applyFavoriteContext(
+        fromToggleResponse response: Any,
+        fallbackProfileId: String,
+        toggledDeviceId: String,
+        shouldFavorite: Bool
+    ) {
+        let root = JSON.object(response)
+        let data = JSON.object(root["data"])
+        let payloadProfile = JSON.object(data["profile"])
+        let rootProfile = JSON.object(root["profile"])
+
+        if !payloadProfile.isEmpty {
+            let context = FavoritesSupport.deviceContext(fromProfileObject: payloadProfile)
+            favoritesProfileId = context.profileId ?? fallbackProfileId
+            favoriteDeviceIds = context.favoriteDeviceIds
+            return
+        }
+
+        if !rootProfile.isEmpty {
+            let context = FavoritesSupport.deviceContext(fromProfileObject: rootProfile)
+            favoritesProfileId = context.profileId ?? fallbackProfileId
+            favoriteDeviceIds = context.favoriteDeviceIds
+            return
+        }
+
+        favoritesProfileId = fallbackProfileId
+        if shouldFavorite {
+            favoriteDeviceIds.insert(toggledDeviceId)
+        } else {
+            favoriteDeviceIds.remove(toggledDeviceId)
+        }
+    }
+
+    private func toggleDeviceFavorite(_ device: DeviceItem) async {
+        guard let profileId = favoritesProfileId, !profileId.isEmpty else {
+            errorMessage = "Create or activate a user profile to manage favorite devices."
+            return
+        }
+
+        if pendingFavoriteDeviceIds.contains(device.id) {
+            return
+        }
+
+        let shouldFavorite = !favoriteDeviceIds.contains(device.id)
+        pendingFavoriteDeviceIds.insert(device.id)
+
+        defer {
+            pendingFavoriteDeviceIds.remove(device.id)
+        }
+
+        do {
+            if shouldFavorite {
+                let response = try await session.apiClient.post(
+                    "/api/profiles/\(profileId)/favorites/devices",
+                    body: ["deviceId": device.id]
+                )
+                applyFavoriteContext(
+                    fromToggleResponse: response,
+                    fallbackProfileId: profileId,
+                    toggledDeviceId: device.id,
+                    shouldFavorite: shouldFavorite
+                )
+            } else {
+                let response = try await session.apiClient.delete(
+                    "/api/profiles/\(profileId)/favorites/devices/\(device.id)"
+                )
+                applyFavoriteContext(
+                    fromToggleResponse: response,
+                    fallbackProfileId: profileId,
+                    toggledDeviceId: device.id,
+                    shouldFavorite: shouldFavorite
+                )
             }
         } catch {
             errorMessage = error.localizedDescription
