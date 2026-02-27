@@ -101,7 +101,8 @@ router.post(['/browser/transcribe', '/browser/transcribe/'], requireUser(), asyn
   const {
     audioBase64,
     mimeType = 'audio/webm',
-    language = 'en'
+    language = 'en',
+    profile = null
   } = req.body || {};
 
   if (typeof audioBase64 !== 'string' || audioBase64.trim().length === 0) {
@@ -123,11 +124,19 @@ router.post(['/browser/transcribe', '/browser/transcribe/'], requireUser(), asyn
     const stt = await speechService.transcribeMediaBuffer({
       audioBuffer,
       mimeType: typeof mimeType === 'string' ? mimeType : 'audio/webm',
-      language: typeof language === 'string' ? language : 'en'
+      language: typeof language === 'string' ? language : 'en',
+      profile: typeof profile === 'string' ? profile : null
     });
 
     console.log(
-      `POST /api/voice/browser/transcribe - Success provider=${stt?.provider || 'unknown'} model=${stt?.model || 'unknown'} chars=${typeof stt?.text === 'string' ? stt.text.length : 0}`
+      'POST /api/voice/browser/transcribe - Success '
+      + `provider=${stt?.provider || 'unknown'} `
+      + `model=${stt?.model || 'unknown'} `
+      + `device=${stt?.device || 'unknown'} `
+      + `computeType=${stt?.computeType || 'unknown'} `
+      + `beamSize=${typeof stt?.beamSize === 'number' ? stt.beamSize : 'unknown'} `
+      + `tookMs=${typeof stt?.processingTimeMs === 'number' ? Math.round(stt.processingTimeMs) : 'unknown'} `
+      + `chars=${typeof stt?.text === 'string' ? stt.text.length : 0}`
     );
 
     return res.status(200).json({

@@ -274,20 +274,25 @@ class SpeechService {
     }
   }
 
-  async transcribeMediaBuffer({ audioBuffer, mimeType = 'audio/webm', language, model }) {
+  async transcribeMediaBuffer({ audioBuffer, mimeType = 'audio/webm', language, model, profile = null }) {
     if (!audioBuffer || !audioBuffer.length) {
       throw new Error('No audio data provided for transcription');
     }
 
     const providerConfig = await this.getProviderConfig();
     const sttLanguage = language || providerConfig.language || 'en';
+    const normalizedProfile = typeof profile === 'string' ? profile.trim().toLowerCase() : '';
+    const realtimeProfile = normalizedProfile === 'realtime';
     if (providerConfig.provider === 'whisper_local') {
-      const resolvedModel = model || providerConfig.model || 'small';
+      const resolvedModel = realtimeProfile
+        ? (model || process.env.BROWSER_STT_MODEL || providerConfig.model || 'small')
+        : (model || providerConfig.model || 'small');
       return this.transcribeMediaWithWhisperLocal({
         audioBuffer,
         mimeType,
         language: sttLanguage,
-        model: resolvedModel
+        model: resolvedModel,
+        realtimeProfile
       });
     }
 
@@ -370,7 +375,7 @@ class SpeechService {
     };
   }
 
-  async transcribeMediaWithWhisperLocal({ audioBuffer, mimeType, language, model }) {
+  async transcribeMediaWithWhisperLocal({ audioBuffer, mimeType, language, model, realtimeProfile = false }) {
     const normalizedMimeType = normalizeMimeType(mimeType);
     const extension = extensionForMimeType(normalizedMimeType);
     const tempDir = path.join(os.tmpdir(), 'homebrain-whisper-media');
@@ -398,12 +403,20 @@ class SpeechService {
 
     try {
       const startedAt = Date.now();
+      const beamSizeRaw = realtimeProfile
+        ? (process.env.BROWSER_STT_BEAM_SIZE ?? '1')
+        : (process.env.STT_BEAM_SIZE ?? '5');
+      const parsedBeamSize = Number.parseInt(String(beamSizeRaw), 10);
+      const beamSize = Number.isFinite(parsedBeamSize) && parsedBeamSize > 0
+        ? Math.min(parsedBeamSize, 10)
+        : (realtimeProfile ? 1 : 5);
       const response = await whisperService.transcribeFile({
         filePath,
         language,
         // Browser fallback clips are short and often begin/end mid-utterance;
         // disabling VAD here prevents Whisper from dropping usable speech.
-        vadFilter: false
+        vadFilter: false,
+        beamSize
       });
       const durationMs = Date.now() - startedAt;
 
@@ -418,6 +431,7 @@ class SpeechService {
         model: response?.model || activeModel,
         device: response?.device || status?.activeDevice || null,
         computeType: response?.computeType || null,
+        beamSize,
         text: (response?.text || '').trim(),
         language: response?.language || language,
         duration: null,
@@ -455,11 +469,17 @@ class SpeechService {
     }
 
     const startedAt = Date.now();
+    const beamSizeRaw = process.env.STT_BEAM_SIZE ?? '5';
+    const parsedBeamSize = Number.parseInt(String(beamSizeRaw), 10);
+    const beamSize = Number.isFinite(parsedBeamSize) && parsedBeamSize > 0
+      ? Math.min(parsedBeamSize, 10)
+      : 5;
     const response = await whisperService.transcribe({
       audioBuffer,
       sampleRate,
       channels,
-      language
+      language,
+      beamSize
     });
     const durationMs = Date.now() - startedAt;
 
@@ -475,6 +495,7 @@ class SpeechService {
       model: response?.model || activeModel,
       device: response?.device || status?.activeDevice || null,
       computeType: response?.computeType || null,
+      beamSize,
       text: (response?.text || '').trim(),
       language: response?.language || language,
       duration: null,

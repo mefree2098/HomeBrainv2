@@ -58,6 +58,9 @@ export interface BrowserTranscriptionResult {
   language?: string | null;
   confidence?: number | null;
   processingTimeMs?: number | null;
+  device?: string | null;
+  computeType?: string | null;
+  beamSize?: number | null;
   duration?: number | null;
   segments?: Array<Record<string, unknown>>;
 }
@@ -77,6 +80,9 @@ const coerceBrowserTranscriptionPayload = (parsed: any): BrowserTranscriptionRes
       language: stt.language ?? null,
       confidence: typeof stt.confidence === 'number' ? stt.confidence : null,
       processingTimeMs: typeof stt.processingTimeMs === 'number' ? stt.processingTimeMs : null,
+      device: typeof stt.device === 'string' ? stt.device : null,
+      computeType: typeof stt.computeType === 'string' ? stt.computeType : null,
+      beamSize: typeof stt.beamSize === 'number' ? stt.beamSize : null,
       duration: typeof stt.duration === 'number' ? stt.duration : null,
       segments: Array.isArray(stt.segments) ? stt.segments : []
     };
@@ -102,6 +108,9 @@ const coerceBrowserTranscriptionPayload = (parsed: any): BrowserTranscriptionRes
     language: candidate.language ?? null,
     confidence: typeof candidate.confidence === 'number' ? candidate.confidence : null,
     processingTimeMs: typeof candidate.processingTimeMs === 'number' ? candidate.processingTimeMs : null,
+    device: typeof candidate.device === 'string' ? candidate.device : null,
+    computeType: typeof candidate.computeType === 'string' ? candidate.computeType : null,
+    beamSize: typeof candidate.beamSize === 'number' ? candidate.beamSize : null,
     duration: typeof candidate.duration === 'number' ? candidate.duration : null,
     segments: Array.isArray(candidate.segments) ? candidate.segments : []
   };
@@ -136,6 +145,7 @@ export const transcribeBrowserAudio = async (payload: {
   audioBase64: string;
   mimeType?: string;
   language?: string;
+  profile?: "realtime" | "default";
 }): Promise<BrowserTranscriptionResult> => {
   const attempt = async (path: string) => {
     const token = localStorage.getItem('accessToken');

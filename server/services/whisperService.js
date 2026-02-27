@@ -187,9 +187,21 @@ class WhisperRuntime {
     catch { this.child.kill(signal); }
   }
 
-  async transcribe({ file, language, vadFilter = true }) {
+  async transcribe({ file, language, vadFilter = true, beamSize = null }) {
     if (!this.child) throw new Error('Whisper runtime is not running');
-    return this._send({ action: 'transcribe', id: crypto.randomUUID(), file, language, vad_filter: Boolean(vadFilter) }, 60_000)
+    const parsedBeamSize = Number.parseInt(String(beamSize ?? ''), 10);
+    const effectiveBeamSize = Number.isFinite(parsedBeamSize) && parsedBeamSize > 0
+      ? Math.min(parsedBeamSize, 10)
+      : null;
+
+    return this._send({
+      action: 'transcribe',
+      id: crypto.randomUUID(),
+      file,
+      language,
+      vad_filter: Boolean(vadFilter),
+      ...(effectiveBeamSize ? { beam_size: effectiveBeamSize } : {})
+    }, 60_000)
       .then((payload) => {
         const info = payload?.info || {};
         if (info.compute_type) this.computeType = info.compute_type;
@@ -821,7 +833,7 @@ class WhisperService {
     return { success: true, message: `Active Whisper model set to ${modelName}` };
   }
 
-  async transcribe({ audioBuffer, sampleRate = 16000, channels = 1, language = 'en' }) {
+  async transcribe({ audioBuffer, sampleRate = 16000, channels = 1, language = 'en', beamSize = null }) {
     await this._ensureInstalled();
     const config = await this._getConfig();
     if (!this.runtime) {
@@ -838,7 +850,8 @@ class WhisperService {
       filePath,
       language,
       config,
-      vadFilter: true
+      vadFilter: true,
+      beamSize
     });
 
     try {
@@ -869,7 +882,7 @@ class WhisperService {
     }
   }
 
-  async transcribeFile({ filePath, language = 'en', vadFilter = true }) {
+  async transcribeFile({ filePath, language = 'en', vadFilter = true, beamSize = null }) {
     await this._ensureInstalled();
     const config = await this._getConfig();
     if (!this.runtime) {
@@ -886,7 +899,8 @@ class WhisperService {
       filePath: resolvedPath,
       language,
       config,
-      vadFilter
+      vadFilter,
+      beamSize
     });
 
     try {
@@ -915,12 +929,13 @@ class WhisperService {
     }
   }
 
-  async _transcribeRuntimeFile({ filePath, language, config, vadFilter = true }) {
+  async _transcribeRuntimeFile({ filePath, language, config, vadFilter = true, beamSize = null }) {
     const started = Date.now();
     const result = await this.runtime.transcribe({
       file: filePath,
       language: language === 'auto' ? null : language,
-      vadFilter
+      vadFilter,
+      beamSize
     });
     const duration = Date.now() - started;
     return {

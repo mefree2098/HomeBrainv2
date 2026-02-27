@@ -7,15 +7,15 @@ const DEFAULT_WAKE_WORDS = ["anna", "hey anna", "henry", "hey henry", "home brai
 const WAIT_FOR_COMMAND_TIMEOUT_MS = 22000;
 const NETWORK_ERROR_WINDOW_MS = 15000;
 const NETWORK_ERROR_THRESHOLD = 6;
-const FALLBACK_CAPTURE_INTERVAL_MS = 2500;
-const FALLBACK_CAPTURE_DURATION_MS = 2200;
-const FALLBACK_COMMAND_CAPTURE_DURATION_MS = 2400;
+const FALLBACK_CAPTURE_INTERVAL_MS = 1800;
+const FALLBACK_CAPTURE_DURATION_MS = 1400;
+const FALLBACK_COMMAND_CAPTURE_DURATION_MS = 1800;
 const FALLBACK_IMMEDIATE_RETRY_DELAY_MS = 120;
 const MIN_FALLBACK_CLIP_BYTES = 64;
 const MAX_AUDIO_B64_LENGTH = 500000;
 const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
 const WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX = 2;
-const BROWSER_VOICE_BUILD_TAG = "2026-02-27-fallback-query-v3";
+const BROWSER_VOICE_BUILD_TAG = "2026-02-27-lowlatency-v1";
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;
@@ -704,7 +704,8 @@ class BrowserVoiceAssistant {
       const stt = await transcribeBrowserAudio({
         audioBase64,
         mimeType: clip.type || "audio/webm",
-        language: "en"
+        language: "en",
+        profile: "realtime"
       });
 
       if (this.awaitingCommand) {
@@ -712,9 +713,16 @@ class BrowserVoiceAssistant {
       }
 
       if (stt?.provider || stt?.model) {
+        const timingLabel = typeof stt?.processingTimeMs === "number"
+          ? ` tookMs=${Math.round(stt.processingTimeMs)}`
+          : "";
+        const runtimeLabel = stt?.device || stt?.computeType
+          ? ` device=${stt?.device || "unknown"} compute=${stt?.computeType || "unknown"}`
+          : "";
+        const beamLabel = typeof stt?.beamSize === "number" ? ` beam=${stt.beamSize}` : "";
         this.updateStatus(
           {},
-          `server-stt result provider=${stt?.provider || "unknown"} model=${stt?.model || "unknown"}`
+          `server-stt result provider=${stt?.provider || "unknown"} model=${stt?.model || "unknown"}${runtimeLabel}${beamLabel}${timingLabel}`
         );
       }
 
@@ -1283,11 +1291,19 @@ class BrowserVoiceAssistant {
       return true;
     }
 
+    if (this.isLikelyDirectCommand(normalized) || this.isLikelyDirectQuery(normalized)) {
+      return false;
+    }
+
     const fillerPhrases = new Set([
       "thank you",
       "thanks",
+      "thanks for watching",
+      "thank you for watching",
       "ok",
       "okay",
+      "alright",
+      "all right",
       "got it",
       "never mind",
       "nevermind",
@@ -1295,6 +1311,14 @@ class BrowserVoiceAssistant {
       "stop"
     ]);
     if (fillerPhrases.has(normalized)) {
+      return true;
+    }
+
+    if (/^thank(s| you)(\s+for\s+.*)?$/.test(normalized)) {
+      return true;
+    }
+
+    if (/^(bye|goodbye|see you|of course|sure)$/.test(normalized)) {
       return true;
     }
 
