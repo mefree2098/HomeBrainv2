@@ -9,6 +9,7 @@ const NETWORK_ERROR_WINDOW_MS = 15000;
 const NETWORK_ERROR_THRESHOLD = 6;
 const FALLBACK_CAPTURE_INTERVAL_MS = 2500;
 const FALLBACK_CAPTURE_DURATION_MS = 1600;
+const MIN_FALLBACK_CLIP_BYTES = 64;
 const MAX_AUDIO_B64_LENGTH = 500000;
 
 type BrowserSpeechRecognitionEvent = {
@@ -96,6 +97,8 @@ class BrowserVoiceAssistant {
   private mediaStream: MediaStream | null = null;
   private recentNetworkErrors: number[] = [];
   private playbackMutedUntil = 0;
+  private fallbackNoChunkCount = 0;
+  private fallbackSmallClipCount = 0;
   private readonly maxTraceEntries = 80;
 
   private status: BrowserVoiceStatus = {
@@ -548,6 +551,8 @@ class BrowserVoiceAssistant {
 
     this.useServerSttFallback = true;
     this.awaitingCommand = false;
+    this.fallbackNoChunkCount = 0;
+    this.fallbackSmallClipCount = 0;
     this.clearWaitForCommandTimer();
     this.clearRestartTimer();
     this.isStopping = true;
@@ -587,9 +592,26 @@ class BrowserVoiceAssistant {
       this.fallbackCaptureInFlight = true;
       try {
         const clip = await this.captureFallbackAudioClip(FALLBACK_CAPTURE_DURATION_MS);
-        if (!clip || clip.size < 600) {
+        if (!clip) {
+          this.fallbackNoChunkCount += 1;
+          if (this.fallbackNoChunkCount === 1 || this.fallbackNoChunkCount % 5 === 0) {
+            this.updateStatus({}, `fallback clip empty (no chunks) count=${this.fallbackNoChunkCount}`);
+          }
           return;
         }
+
+        this.fallbackNoChunkCount = 0;
+
+        if (clip.size < MIN_FALLBACK_CLIP_BYTES) {
+          this.fallbackSmallClipCount += 1;
+          if (this.fallbackSmallClipCount === 1 || this.fallbackSmallClipCount % 5 === 0) {
+            this.updateStatus({}, `fallback clip too small size=${clip.size}B count=${this.fallbackSmallClipCount}`);
+          }
+          return;
+        }
+
+        this.fallbackSmallClipCount = 0;
+        this.updateStatus({}, `fallback clip captured size=${clip.size}B mime=${clip.type || "unknown"}`);
 
         const audioBase64 = await this.blobToBase64(clip);
         if (!audioBase64 || audioBase64.length > MAX_AUDIO_B64_LENGTH) {
@@ -612,6 +634,7 @@ class BrowserVoiceAssistant {
 
         const transcript = (stt?.text || "").trim();
         if (!transcript) {
+          this.updateStatus({}, "server-stt returned empty transcript");
           return;
         }
 
@@ -666,7 +689,9 @@ class BrowserVoiceAssistant {
     const preferredMimeTypes = [
       "audio/webm;codecs=opus",
       "audio/webm",
-      "audio/ogg;codecs=opus"
+      "audio/ogg;codecs=opus",
+      "audio/mp4",
+      "audio/m4a"
     ];
 
     const selectedMimeType = preferredMimeTypes.find((mimeType) => {
@@ -708,9 +733,14 @@ class BrowserVoiceAssistant {
         resolve(new Blob(chunks, { type: recorder.mimeType || selectedMimeType || "audio/webm" }));
       };
 
-      recorder.start();
+      recorder.start(250);
       setTimeout(() => {
         if (recorder.state !== "inactive") {
+          try {
+            recorder.requestData();
+          } catch (_error) {
+            // Ignore requestData errors and proceed with stop.
+          }
           recorder.stop();
         }
       }, durationMs);

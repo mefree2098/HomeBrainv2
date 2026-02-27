@@ -22,9 +22,26 @@ final class SessionStore: ObservableObject {
     private let accessTokenKey = "homebrain.accessToken"
     private let refreshTokenKey = "homebrain.refreshToken"
     private let currentUserKey = "homebrain.currentUser"
+    private static let defaultServerURL = "https://freestonefamily.com"
 
     init() {
-        self.serverURLString = defaults.string(forKey: serverURLKey) ?? "http://127.0.0.1:3000"
+        let storedServerURL = defaults.string(forKey: serverURLKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let legacyLocalURLs: Set<String> = [
+            "http://127.0.0.1:3000",
+            "http://localhost:3000",
+            "https://127.0.0.1:3000",
+            "https://localhost:3000"
+        ]
+        let resolvedServerURL: String
+        if let storedServerURL, !storedServerURL.isEmpty, !legacyLocalURLs.contains(storedServerURL) {
+            resolvedServerURL = storedServerURL
+        } else {
+            resolvedServerURL = Self.defaultServerURL
+            defaults.set(resolvedServerURL, forKey: serverURLKey)
+        }
+
+        self.serverURLString = resolvedServerURL
         self.accessToken = defaults.string(forKey: accessTokenKey)
         self.refreshToken = defaults.string(forKey: refreshTokenKey)
 

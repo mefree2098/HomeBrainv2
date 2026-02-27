@@ -68,8 +68,8 @@ struct AppShellView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var selection: AppSection? = .dashboard
-    @State private var isVoiceMuted = true
     @State private var activeDevicesSummary = "--/--"
+    @StateObject private var voiceAssistant = VoiceAssistantManager()
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
@@ -92,9 +92,17 @@ struct AppShellView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             syncSelectionWithVisibleSections()
+            voiceAssistant.bind(sessionStore: session)
         }
         .onChange(of: session.currentUser?.role) { _, _ in
             syncSelectionWithVisibleSections()
+        }
+        .onChange(of: session.isAuthenticated) { _, isAuthenticated in
+            if !isAuthenticated {
+                voiceAssistant.stop()
+            } else {
+                voiceAssistant.bind(sessionStore: session)
+            }
         }
         .task(id: session.currentUser?.id ?? "guest") {
             await refreshHeaderSummary()
@@ -148,14 +156,19 @@ struct AppShellView: View {
             Spacer(minLength: 8)
 
             Button {
-                isVoiceMuted.toggle()
+                Task { await voiceAssistant.toggle() }
             } label: {
                 Group {
                     if isCompact {
-                        Label("", systemImage: isVoiceMuted ? "mic.slash" : "mic")
+                        Label("", systemImage: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash")
                             .labelStyle(.iconOnly)
                     } else {
-                        Label(isVoiceMuted ? "Voice Off" : "Voice On", systemImage: isVoiceMuted ? "mic.slash" : "mic")
+                        Label(
+                            voiceAssistant.isEnabled
+                            ? (voiceAssistant.isProcessing ? "Processing..." : "Voice On")
+                            : "Voice Off",
+                            systemImage: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash"
+                        )
                             .labelStyle(.titleAndIcon)
                     }
                 }
@@ -281,12 +294,29 @@ struct AppShellView: View {
 
             HBPanel {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Voice Commands Active")
+                    Text(voiceAssistant.isEnabled ? "Voice Commands Active" : "Voice Commands Off")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(HBPalette.textPrimary)
-                    Text("Say \"Hey Anna\" or \"Henry\" to control your home")
+                    Text(voiceAssistant.statusText)
                         .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(HBPalette.textSecondary)
+                        .foregroundStyle(voiceAssistant.errorMessage == nil ? HBPalette.textSecondary : Color.red.opacity(0.9))
+                        .lineLimit(2)
+                    if let pending = voiceAssistant.pendingWakeWord {
+                        Text("Wake word detected: \"\(pending)\"")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.accentBlue)
+                    } else {
+                        Text("Wake words: \(voiceAssistant.wakeWordsSummary)")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .lineLimit(2)
+                    }
+                    if let response = voiceAssistant.lastResponse, !response.isEmpty {
+                        Text(response)
+                            .font(.system(size: 11, weight: .regular, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .lineLimit(2)
+                    }
                 }
             }
         }

@@ -85,7 +85,7 @@ struct DashboardView: View {
                                     title: "Scenes",
                                     value: "\(scenes.count)",
                                     subtitle: "Available scenes",
-                                    icon: "play.triangle",
+                                    icon: "play.fill",
                                     colors: [Color(red: 0.20, green: 0.08, blue: 0.33), Color(red: 0.14, green: 0.06, blue: 0.25)],
                                     accent: Color(red: 0.73, green: 0.55, blue: 1.0)
                                 )
