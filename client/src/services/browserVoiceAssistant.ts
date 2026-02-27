@@ -11,6 +11,8 @@ const FALLBACK_CAPTURE_INTERVAL_MS = 2500;
 const FALLBACK_CAPTURE_DURATION_MS = 1600;
 const MIN_FALLBACK_CLIP_BYTES = 64;
 const MAX_AUDIO_B64_LENGTH = 500000;
+const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
+const WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX = 2;
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;
@@ -813,7 +815,16 @@ class BrowserVoiceAssistant {
     }
 
     const wakeMatch = this.matchWakeWord(transcript);
+    if (wakeMatch?.matchType === "fuzzy") {
+      this.updateStatus({}, `fuzzy wake match (${wakeMatch.wakeWord}) score=${(wakeMatch.score ?? 0).toFixed(2)}`);
+    }
+
     if (!wakeMatch && !this.awaitingCommand) {
+      if (this.useServerSttFallback && this.isLikelyDirectCommand(transcript)) {
+        this.updateStatus({}, `fallback direct command heuristic matched: "${transcript}"`);
+        await this.executeCommand(transcript, "browser-fallback", confidence);
+        return;
+      }
       this.updateStatus({}, `no wake word matched for: "${transcript}"`);
     }
 
@@ -921,7 +932,9 @@ class BrowserVoiceAssistant {
     }
   }
 
-  private matchWakeWord(transcript: string): { wakeWord: string; commandText: string } | null {
+  private matchWakeWord(
+    transcript: string
+  ): { wakeWord: string; commandText: string; matchType: "exact" | "fuzzy"; score?: number } | null {
     for (const wakeWord of this.wakeWords) {
       const pattern = this.buildWakeWordPattern(wakeWord);
       const match = pattern.exec(transcript);
@@ -936,7 +949,68 @@ class BrowserVoiceAssistant {
 
       return {
         wakeWord,
-        commandText
+        commandText,
+        matchType: "exact"
+      };
+    }
+
+    const normalizedTranscript = this.normalizeWakeWord(transcript);
+    const transcriptTokens = normalizedTranscript.split(/\s+/).filter(Boolean);
+    if (!transcriptTokens.length) {
+      return null;
+    }
+
+    let bestMatch:
+      | { wakeWord: string; score: number; startIndex: number; tokenLength: number }
+      | null = null;
+
+    for (const wakeWord of this.wakeWords) {
+      const wakeTokens = this.normalizeWakeWord(wakeWord).split(/\s+/).filter(Boolean);
+      if (!wakeTokens.length) {
+        continue;
+      }
+
+      const candidateWindowSizes = Array.from(new Set([
+        Math.max(1, wakeTokens.length - 1),
+        wakeTokens.length,
+        wakeTokens.length + 1
+      ]));
+
+      for (const windowSize of candidateWindowSizes) {
+        if (windowSize > transcriptTokens.length) {
+          continue;
+        }
+
+        for (let startIndex = 0; startIndex <= transcriptTokens.length - windowSize; startIndex += 1) {
+          if (startIndex > WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX) {
+            break;
+          }
+
+          const candidatePhrase = transcriptTokens.slice(startIndex, startIndex + windowSize).join(" ");
+          const score = this.calculateSimilarity(this.normalizeWakeWord(wakeWord), candidatePhrase);
+          if (score < WAKE_WORD_FUZZY_MIN_SCORE) {
+            continue;
+          }
+
+          if (!bestMatch || score > bestMatch.score) {
+            bestMatch = {
+              wakeWord,
+              score,
+              startIndex,
+              tokenLength: windowSize
+            };
+          }
+        }
+      }
+    }
+
+    if (bestMatch) {
+      const commandTokens = transcriptTokens.slice(bestMatch.startIndex + bestMatch.tokenLength);
+      return {
+        wakeWord: bestMatch.wakeWord,
+        commandText: commandTokens.join(" ").trim(),
+        matchType: "fuzzy",
+        score: bestMatch.score
       };
     }
 
@@ -958,6 +1032,66 @@ class BrowserVoiceAssistant {
       .replace(/[^a-z0-9\s]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  private calculateSimilarity(a: string, b: string): number {
+    if (!a || !b) {
+      return 0;
+    }
+    if (a === b) {
+      return 1;
+    }
+
+    const distance = this.levenshteinDistance(a, b);
+    const scale = Math.max(a.length, b.length);
+    if (scale === 0) {
+      return 0;
+    }
+    return Math.max(0, 1 - (distance / scale));
+  }
+
+  private levenshteinDistance(a: string, b: string): number {
+    const rows = a.length + 1;
+    const cols = b.length + 1;
+    const matrix: number[][] = Array.from({ length: rows }, () => Array<number>(cols).fill(0));
+
+    for (let i = 0; i < rows; i += 1) {
+      matrix[i][0] = i;
+    }
+    for (let j = 0; j < cols; j += 1) {
+      matrix[0][j] = j;
+    }
+
+    for (let i = 1; i < rows; i += 1) {
+      for (let j = 1; j < cols; j += 1) {
+        const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j] + 1, // deletion
+          matrix[i][j - 1] + 1, // insertion
+          matrix[i - 1][j - 1] + substitutionCost // substitution
+        );
+      }
+    }
+
+    return matrix[rows - 1][cols - 1];
+  }
+
+  private isLikelyDirectCommand(transcript: string): boolean {
+    const normalized = this.normalizeWakeWord(transcript);
+    if (!normalized) {
+      return false;
+    }
+
+    // In fallback mode only, allow direct imperative commands when wake-word STT is imperfect.
+    const directPattern = /^(turn|switch|set|dim|brighten|open|close|lock|unlock|arm|disarm|activate|deactivate|run|start|stop|enable|disable)\b/;
+    if (directPattern.test(normalized)) {
+      return true;
+    }
+
+    // Handle conversational preambles while still requiring an actionable command verb.
+    const conversationalPattern = /^(please|can you|could you|would you|hey|anna|henry|computer)\b/;
+    const hasActionVerb = /\b(turn on|turn off|set|dim|brighten|open|close|lock|unlock|arm|disarm|activate|run|start|stop|enable|disable)\b/.test(normalized);
+    return conversationalPattern.test(normalized) && hasActionVerb;
   }
 
   private async playResponse(text: string, wakeWord: string): Promise<void> {
