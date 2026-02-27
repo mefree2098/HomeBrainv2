@@ -187,9 +187,9 @@ class WhisperRuntime {
     catch { this.child.kill(signal); }
   }
 
-  async transcribe({ file, language }) {
+  async transcribe({ file, language, vadFilter = true }) {
     if (!this.child) throw new Error('Whisper runtime is not running');
-    return this._send({ action: 'transcribe', id: crypto.randomUUID(), file, language, vad_filter: true }, 60_000)
+    return this._send({ action: 'transcribe', id: crypto.randomUUID(), file, language, vad_filter: Boolean(vadFilter) }, 60_000)
       .then((payload) => {
         const info = payload?.info || {};
         if (info.compute_type) this.computeType = info.compute_type;
@@ -834,7 +834,12 @@ class WhisperService {
     const filePath = path.join(tmpDir, filename);
     await fs.promises.writeFile(filePath, wavBuffer);
 
-    const transcribeOnce = async () => this._transcribeRuntimeFile({ filePath, language, config });
+    const transcribeOnce = async () => this._transcribeRuntimeFile({
+      filePath,
+      language,
+      config,
+      vadFilter: true
+    });
 
     try {
       return await transcribeOnce();
@@ -864,7 +869,7 @@ class WhisperService {
     }
   }
 
-  async transcribeFile({ filePath, language = 'en' }) {
+  async transcribeFile({ filePath, language = 'en', vadFilter = true }) {
     await this._ensureInstalled();
     const config = await this._getConfig();
     if (!this.runtime) {
@@ -880,7 +885,8 @@ class WhisperService {
     const transcribeOnce = async () => this._transcribeRuntimeFile({
       filePath: resolvedPath,
       language,
-      config
+      config,
+      vadFilter
     });
 
     try {
@@ -909,11 +915,12 @@ class WhisperService {
     }
   }
 
-  async _transcribeRuntimeFile({ filePath, language, config }) {
+  async _transcribeRuntimeFile({ filePath, language, config, vadFilter = true }) {
     const started = Date.now();
     const result = await this.runtime.transcribe({
       file: filePath,
-      language: language === 'auto' ? null : language
+      language: language === 'auto' ? null : language,
+      vadFilter
     });
     const duration = Date.now() - started;
     return {
