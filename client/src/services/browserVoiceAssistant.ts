@@ -7,7 +7,7 @@ const DEFAULT_WAKE_WORDS = ["anna", "hey anna", "henry", "hey henry", "home brai
 const WAIT_FOR_COMMAND_TIMEOUT_MS = 22000;
 const NETWORK_ERROR_WINDOW_MS = 15000;
 const NETWORK_ERROR_THRESHOLD = 6;
-const FALLBACK_CAPTURE_INTERVAL_MS = 1800;
+const FALLBACK_CAPTURE_INTERVAL_MS = 250;
 const FALLBACK_CAPTURE_DURATION_MS = 1400;
 const FALLBACK_COMMAND_CAPTURE_DURATION_MS = 1800;
 const FALLBACK_IMMEDIATE_RETRY_DELAY_MS = 120;
@@ -15,7 +15,9 @@ const MIN_FALLBACK_CLIP_BYTES = 64;
 const MAX_AUDIO_B64_LENGTH = 500000;
 const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
 const WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX = 2;
-const BROWSER_VOICE_BUILD_TAG = "2026-02-27-lowlatency-v1";
+const FALLBACK_WAKE_STITCH_WINDOW_MS = 5200;
+const FALLBACK_WAKE_STITCH_MAX_PARTS = 4;
+const BROWSER_VOICE_BUILD_TAG = "2026-02-27-lowlatency-v2";
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;
@@ -37,6 +39,7 @@ type BrowserSpeechRecognition = {
   interimResults: boolean;
   lang: string;
   maxAlternatives: number;
+  processLocally?: boolean;
   onstart: null | (() => void);
   onend: null | (() => void);
   onerror: null | ((event: BrowserSpeechRecognitionErrorEvent) => void);
@@ -45,7 +48,13 @@ type BrowserSpeechRecognition = {
   stop: () => void;
 };
 
-type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+type BrowserSpeechRecognitionAvailability = "available" | "unavailable" | "downloadable" | "downloading";
+
+type BrowserSpeechRecognitionConstructor = {
+  new (): BrowserSpeechRecognition;
+  available?: (options: { langs: string[]; processLocally?: boolean }) => Promise<BrowserSpeechRecognitionAvailability>;
+  install?: (options: { langs: string[]; processLocally?: boolean }) => Promise<boolean>;
+};
 
 type VoiceProfile = {
   wakeWords: string[];
@@ -105,6 +114,9 @@ class BrowserVoiceAssistant {
   private playbackMutedUntil = 0;
   private fallbackNoChunkCount = 0;
   private fallbackSmallClipCount = 0;
+  private fallbackWakeTranscriptHistory: Array<{ text: string; timestamp: number }> = [];
+  private onDeviceSpeechReady = false;
+  private readonly recognitionLang = "en-US";
   private readonly maxTraceEntries = 80;
 
   private status: BrowserVoiceStatus = {
@@ -172,10 +184,12 @@ class BrowserVoiceAssistant {
     this.recentNetworkErrors = [];
     this.playbackMutedUntil = 0;
     this.stopFallbackLoop();
+    this.clearFallbackWakeTranscriptHistory();
 
     try {
       await this.ensureMicrophoneAccess();
       await this.refreshVoiceConfiguration();
+      await this.ensureOnDeviceSpeechIfSupported();
       this.ensureRecognition();
       this.startRecognition();
     } catch (error) {
@@ -200,6 +214,7 @@ class BrowserVoiceAssistant {
     this.useServerSttFallback = false;
     this.recentNetworkErrors = [];
     this.playbackMutedUntil = 0;
+    this.clearFallbackWakeTranscriptHistory();
     this.clearWaitForCommandTimer();
     this.clearRestartTimer();
     this.stopFallbackLoop();
@@ -360,8 +375,13 @@ class BrowserVoiceAssistant {
     // Edge/Chromium tends to produce more reliable final results with non-continuous sessions.
     recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.lang = "en-US";
+    recognition.lang = this.recognitionLang;
     recognition.maxAlternatives = 1;
+
+    if (this.onDeviceSpeechReady && "processLocally" in recognition) {
+      recognition.processLocally = true;
+      this.updateStatus({}, `speech recognition configured for on-device mode (${this.recognitionLang})`);
+    }
 
     recognition.onstart = () => {
       if (!this.status.enabled) {
@@ -390,6 +410,67 @@ class BrowserVoiceAssistant {
 
     this.recognition = recognition;
     this.updateStatus({}, "speech recognition engine initialized");
+  }
+
+  private async ensureOnDeviceSpeechIfSupported(): Promise<void> {
+    this.onDeviceSpeechReady = false;
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const win = window as Window & {
+      SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+      webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    };
+
+    const RecognitionCtor = win.SpeechRecognition || win.webkitSpeechRecognition;
+    if (!RecognitionCtor) {
+      return;
+    }
+
+    const hasOnDeviceStatics = typeof RecognitionCtor.available === "function"
+      && typeof RecognitionCtor.install === "function";
+
+    if (!hasOnDeviceStatics) {
+      this.updateStatus({}, "on-device Web Speech API unavailable; cloud service may be required");
+      return;
+    }
+
+    try {
+      const availability = await RecognitionCtor.available?.({
+        langs: [this.recognitionLang],
+        processLocally: true
+      });
+
+      if (!availability || availability === "unavailable") {
+        this.updateStatus({}, `on-device speech unavailable for ${this.recognitionLang}`);
+        return;
+      }
+
+      if (availability === "available") {
+        this.onDeviceSpeechReady = true;
+        this.updateStatus({}, `on-device speech ready for ${this.recognitionLang}`);
+        return;
+      }
+
+      this.updateStatus({}, `on-device speech pack ${availability}; installing ${this.recognitionLang}`);
+      const installed = await RecognitionCtor.install?.({
+        langs: [this.recognitionLang],
+        processLocally: true
+      });
+
+      if (installed) {
+        this.onDeviceSpeechReady = true;
+        this.updateStatus({}, `on-device speech pack installed for ${this.recognitionLang}`);
+        return;
+      }
+
+      this.updateStatus({}, `on-device speech pack install failed for ${this.recognitionLang}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      this.updateStatus({}, `on-device speech init failed, using default recognition path: ${message}`);
+    }
   }
 
   private startRecognition(): void {
@@ -559,6 +640,7 @@ class BrowserVoiceAssistant {
     this.awaitingCommand = false;
     this.fallbackNoChunkCount = 0;
     this.fallbackSmallClipCount = 0;
+    this.clearFallbackWakeTranscriptHistory();
     this.clearWaitForCommandTimer();
     this.clearRestartTimer();
     this.isStopping = true;
@@ -899,7 +981,21 @@ class BrowserVoiceAssistant {
       return;
     }
 
-    const wakeMatch = this.matchWakeWord(transcript);
+    let wakeMatch = this.matchWakeWord(transcript);
+    if (!wakeMatch && this.useServerSttFallback && !this.awaitingCommand) {
+      const stitchedTranscript = this.getStitchedFallbackTranscript(transcript);
+      if (stitchedTranscript && stitchedTranscript !== transcript) {
+        const stitchedWakeMatch = this.matchWakeWord(stitchedTranscript);
+        if (stitchedWakeMatch) {
+          wakeMatch = stitchedWakeMatch;
+          this.updateStatus(
+            {},
+            `stitched wake-word match (${stitchedWakeMatch.wakeWord}) from "${stitchedTranscript}"`
+          );
+        }
+      }
+    }
+
     if (wakeMatch?.matchType === "fuzzy") {
       this.updateStatus({}, `fuzzy wake match (${wakeMatch.wakeWord}) score=${(wakeMatch.score ?? 0).toFixed(2)}`);
     }
@@ -1003,6 +1099,7 @@ class BrowserVoiceAssistant {
 
   private waitForCommand(wakeWord: string): void {
     this.awaitingCommand = true;
+    this.clearFallbackWakeTranscriptHistory();
 
     this.updateStatus({
       mode: "waiting_command",
@@ -1031,6 +1128,7 @@ class BrowserVoiceAssistant {
     }
 
     this.awaitingCommand = false;
+    this.clearFallbackWakeTranscriptHistory();
     this.clearWaitForCommandTimer();
     this.isProcessing = true;
 
@@ -1170,6 +1268,32 @@ class BrowserVoiceAssistant {
       .join("[\\s,!.?-]+");
 
     return new RegExp(`\\b${fragments}\\b`, "i");
+  }
+
+  private clearFallbackWakeTranscriptHistory(): void {
+    this.fallbackWakeTranscriptHistory = [];
+  }
+
+  private getStitchedFallbackTranscript(transcript: string): string {
+    const candidate = (transcript || "").trim();
+    if (!candidate) {
+      return "";
+    }
+
+    const now = Date.now();
+    this.fallbackWakeTranscriptHistory = [
+      ...this.fallbackWakeTranscriptHistory,
+      { text: candidate, timestamp: now }
+    ]
+      .filter((item) => now - item.timestamp <= FALLBACK_WAKE_STITCH_WINDOW_MS)
+      .slice(-FALLBACK_WAKE_STITCH_MAX_PARTS);
+
+    return this.fallbackWakeTranscriptHistory
+      .map((item) => item.text.trim())
+      .filter((item) => item.length > 0)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private normalizeWakeWord(value: string): string {

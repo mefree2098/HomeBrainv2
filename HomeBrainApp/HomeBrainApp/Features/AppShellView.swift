@@ -1,6 +1,23 @@
 import SwiftUI
 
 struct AppShellView: View {
+    private struct ResourceStripMetric: Identifiable {
+        enum Key: String {
+            case cpu
+            case gpu
+            case ram
+            case disk
+        }
+
+        let key: Key
+        let shortLabel: String
+        let icon: String
+        let percent: Double
+        let available: Bool
+
+        var id: String { key.rawValue }
+    }
+
     enum AppSection: String, CaseIterable, Identifiable {
         case dashboard
         case devices
@@ -66,12 +83,19 @@ struct AppShellView: View {
 
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var selection: AppSection? = .dashboard
     @State private var activeDevicesSummary = "--/--"
     @StateObject private var voiceAssistant = VoiceAssistantManager()
+    @State private var resourceStripMetrics: [ResourceStripMetric] = defaultResourceStripMetrics()
+    @State private var resourceStripLoading = true
+    @State private var resourceStripRefreshing = false
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
+    private var isCompactHeight: Bool { verticalSizeClass == .compact }
+    private var shellPadding: CGFloat { isCompactHeight ? 8 : (isCompact ? 12 : 16) }
+    private var chromeButtonSide: CGFloat { isCompactHeight ? 32 : 36 }
 
     private var visibleSections: [AppSection] {
         AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
@@ -107,6 +131,15 @@ struct AppShellView: View {
         .task(id: session.currentUser?.id ?? "guest") {
             await refreshHeaderSummary()
         }
+        .task(id: session.isAuthenticated) {
+            if session.isAuthenticated {
+                await runResourceStripLoop()
+            } else {
+                resourceStripMetrics = Self.defaultResourceStripMetrics()
+                resourceStripLoading = false
+                resourceStripRefreshing = false
+            }
+        }
     }
 
     private var regularShell: some View {
@@ -128,13 +161,19 @@ struct AppShellView: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: isCompactHeight ? 8 : 10) {
             if isCompact {
                 sectionsMenuButton
             }
 
             Text("Home Brain")
-                .font(.system(size: isCompact ? 18 : 32, weight: .bold, design: .rounded))
+                .font(
+                    .system(
+                        size: isCompactHeight ? 16 : (isCompact ? 18 : 32),
+                        weight: .bold,
+                        design: .rounded
+                    )
+                )
                 .foregroundStyle(
                     LinearGradient(
                         colors: [HBPalette.accentBlue, HBPalette.accentPurple],
@@ -144,14 +183,21 @@ struct AppShellView: View {
                 )
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+                .layoutPriority(1)
 
             Text(isCompact ? activeDevicesSummary : "\(activeDevicesSummary) devices active")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: isCompactHeight ? 12 : 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.black.opacity(0.85))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(.horizontal, isCompactHeight ? 10 : 12)
+                .padding(.vertical, isCompactHeight ? 5 : 6)
                 .background(Color.white.opacity(0.92), in: Capsule())
                 .lineLimit(1)
+                .layoutPriority(1)
+
+            if !isCompact {
+                resourceUtilizationStrip
+                    .layoutPriority(0)
+            }
 
             Spacer(minLength: 8)
 
@@ -172,10 +218,10 @@ struct AppShellView: View {
                             .labelStyle(.titleAndIcon)
                     }
                 }
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(.system(size: isCompactHeight ? 13 : 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(HBPalette.textPrimary)
-                .padding(.horizontal, isCompact ? 10 : 14)
-                .padding(.vertical, 8)
+                .padding(.horizontal, isCompactHeight ? 9 : (isCompact ? 10 : 14))
+                .padding(.vertical, isCompactHeight ? 7 : 8)
                 .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -192,13 +238,103 @@ struct AppShellView: View {
             }
         }
         .padding(.horizontal, isCompact ? 12 : 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, isCompactHeight ? 8 : 12)
         .background(HBPalette.chrome.opacity(0.98))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.white.opacity(0.08))
                 .frame(height: 1)
         }
+    }
+
+    private var resourceUtilizationStrip: some View {
+        let noGPU = resourceStripMetrics.filter { $0.key != .gpu }
+        let minimal = resourceStripMetrics.filter { $0.key == .cpu || $0.key == .ram }
+
+        return ViewThatFits(in: .horizontal) {
+            resourceUtilizationStripContent(metrics: resourceStripMetrics)
+            resourceUtilizationStripContent(metrics: noGPU)
+            resourceUtilizationStripContent(metrics: minimal)
+        }
+    }
+
+    private func resourceUtilizationStripContent(metrics: [ResourceStripMetric]) -> some View {
+        HStack(spacing: 6) {
+            ForEach(metrics) { metric in
+                resourceMetricChip(metric)
+            }
+
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color.green.opacity((resourceStripLoading || resourceStripRefreshing) ? 0.6 : 0.95))
+                    .frame(width: 6, height: 6)
+                Text("Live")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+            .padding(.horizontal, 3)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+
+    private func resourceMetricChip(_ metric: ResourceStripMetric) -> some View {
+        let barColors = resourceBarGradient(for: metric.percent)
+        let percentLabel = metric.available ? "\(Int(metric.percent.rounded()))%" : "N/A"
+
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 2) {
+                Text(metric.shortLabel)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+
+                Spacer(minLength: 2)
+
+                Image(systemName: metric.icon)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Color.white.opacity(0.18))
+
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: barColors,
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(
+                            width: geometry.size.width * CGFloat(metric.available ? metric.percent / 100 : 0)
+                        )
+                }
+            }
+            .frame(height: 5)
+
+            HStack {
+                Spacer(minLength: 0)
+                Text(percentLabel)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(metric.available ? resourceValueColor(for: metric.percent) : HBPalette.textSecondary)
+            }
+        }
+        .frame(width: 58)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private var sectionsMenuButton: some View {
@@ -226,7 +362,7 @@ struct AppShellView: View {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
-                .frame(width: 36, height: 36)
+                .frame(width: chromeButtonSide, height: chromeButtonSide)
                 .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
@@ -236,7 +372,7 @@ struct AppShellView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(HBPalette.textSecondary)
-                .frame(width: 36, height: 36)
+                .frame(width: chromeButtonSide, height: chromeButtonSide)
                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -341,8 +477,9 @@ struct AppShellView: View {
         NavigationStack {
             detailContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(isCompact ? 12 : 16)
+                .padding(shellPadding)
         }
+        .toolbar(.hidden, for: .navigationBar)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             LinearGradient(
@@ -363,8 +500,6 @@ struct AppShellView: View {
         if let current = selection ?? visibleSections.first {
             sectionView(current)
                 .id(current)
-                .navigationTitle(current.title)
-                .navigationBarTitleDisplayMode(.inline)
         } else {
             EmptyStateView(
                 title: "Select a section",
@@ -423,5 +558,91 @@ struct AppShellView: View {
         } catch {
             activeDevicesSummary = "--/--"
         }
+    }
+
+    private func runResourceStripLoop() async {
+        await refreshResourceStrip(initialLoad: true)
+
+        while !Task.isCancelled && session.isAuthenticated {
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled && session.isAuthenticated else {
+                break
+            }
+            await refreshResourceStrip(initialLoad: false)
+        }
+    }
+
+    private func refreshResourceStrip(initialLoad: Bool) async {
+        if initialLoad {
+            resourceStripLoading = true
+        } else {
+            resourceStripRefreshing = true
+        }
+
+        defer {
+            resourceStripLoading = false
+            resourceStripRefreshing = false
+        }
+
+        do {
+            let response = try await session.apiClient.get("/api/resources/utilization")
+            applyResourceSnapshot(response)
+        } catch {
+            // Keep last known values visible if refresh fails.
+        }
+    }
+
+    private func applyResourceSnapshot(_ payload: Any) {
+        let root = JSON.object(payload)
+        let cpu = JSON.object(root["cpu"])
+        let gpu = JSON.object(root["gpu"])
+        let memory = JSON.object(root["memory"])
+        let disk = JSON.object(root["disk"])
+
+        let cpuPercent = normalizedResourcePercent(JSON.double(cpu, "usagePercent"))
+        let gpuAvailable = JSON.bool(gpu, "available")
+        let gpuPercent = normalizedResourcePercent(JSON.double(gpu, "usagePercent"))
+        let memoryPercent = normalizedResourcePercent(JSON.double(memory, "usagePercent"))
+        let diskPercent = normalizedResourcePercent(JSON.double(disk, "usagePercent"))
+
+        resourceStripMetrics = [
+            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: cpuPercent, available: true),
+            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: gpuPercent, available: gpuAvailable),
+            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: memoryPercent, available: true),
+            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: diskPercent, available: true)
+        ]
+    }
+
+    private func normalizedResourcePercent(_ value: Double) -> Double {
+        min(100, max(0, value))
+    }
+
+    private func resourceValueColor(for percent: Double) -> Color {
+        if percent >= 90 {
+            return Color.red.opacity(0.92)
+        }
+        if percent >= 70 {
+            return HBPalette.accentOrange
+        }
+        return HBPalette.accentGreen
+    }
+
+    private func resourceBarGradient(for percent: Double) -> [Color] {
+        if percent >= 90 {
+            return [Color.red.opacity(0.9), Color.orange.opacity(0.9)]
+        }
+        if percent >= 70 {
+            return [HBPalette.accentOrange.opacity(0.95), Color.yellow.opacity(0.9)]
+        }
+        return [HBPalette.accentGreen.opacity(0.95), HBPalette.accentBlue.opacity(0.9)]
+    }
+
+    private static func defaultResourceStripMetrics() -> [ResourceStripMetric] {
+        [
+            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: 0, available: true),
+            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: 0, available: false),
+            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: 0, available: true),
+            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: 0, available: true)
+        ]
     }
 }

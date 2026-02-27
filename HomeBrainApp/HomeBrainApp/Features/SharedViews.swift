@@ -37,6 +37,12 @@ struct HBPageBackground: View {
 
 struct HBPanel<Content: View>: View {
     let content: Content
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var compactLandscape: Bool {
+        horizontalSizeClass == .compact && verticalSizeClass == .compact
+    }
 
     init(@ViewBuilder content: () -> Content) {
         self.content = content()
@@ -44,7 +50,7 @@ struct HBPanel<Content: View>: View {
 
     var body: some View {
         content
-            .padding()
+            .padding(compactLandscape ? 12 : 16)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(HBPalette.panel)
@@ -62,6 +68,12 @@ struct HBSectionHeader: View {
     let buttonTitle: String?
     let buttonIcon: String?
     let buttonAction: (() -> Void)?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var compactLandscape: Bool {
+        horizontalSizeClass == .compact && verticalSizeClass == .compact
+    }
 
     init(
         title: String,
@@ -81,11 +93,11 @@ struct HBSectionHeader: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .font(.system(size: compactLandscape ? 24 : 32, weight: .bold, design: .rounded))
                     .foregroundStyle(HBPalette.textPrimary)
                 if !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                        .font(.system(size: compactLandscape ? 14 : 16, weight: .medium, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             }
@@ -95,9 +107,9 @@ struct HBSectionHeader: View {
             if let buttonTitle, let buttonAction {
                 Button(action: buttonAction) {
                     Label(buttonTitle, systemImage: buttonIcon ?? "plus")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                        .font(.system(size: compactLandscape ? 13 : 15, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, compactLandscape ? 10 : 12)
+                        .padding(.vertical, compactLandscape ? 7 : 8)
                         .background(
                             LinearGradient(
                                 colors: [HBPalette.accentBlue, HBPalette.accentPurple],
