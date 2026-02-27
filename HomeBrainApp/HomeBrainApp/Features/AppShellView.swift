@@ -94,6 +94,7 @@ struct AppShellView: View {
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
+    private var topBarHeight: CGFloat { isCompactHeight ? 52 : (isCompact ? 56 : 72) }
     private var shellPadding: CGFloat { isCompactHeight ? 8 : (isCompact ? 12 : 16) }
     private var chromeButtonSide: CGFloat { isCompactHeight ? 32 : 36 }
 
@@ -102,16 +103,30 @@ struct AppShellView: View {
     }
 
     var body: some View {
-        ZStack {
-            HBPageBackground()
-                .ignoresSafeArea()
+        GeometryReader { proxy in
+            let topInset = proxy.safeAreaInsets.top
 
-            if isCompact {
-                compactShell
-            } else {
-                regularShell
+            ZStack(alignment: .top) {
+                HBPageBackground()
+                    .ignoresSafeArea()
+
+                Group {
+                    if isCompact {
+                        compactShell
+                    } else {
+                        regularShell
+                    }
+                }
+                .padding(.top, topInset + topBarHeight)
+
+                topBar
+                    .padding(.top, topInset)
+                    .frame(height: topBarHeight + topInset, alignment: .bottom)
+                    .frame(maxWidth: .infinity, alignment: .bottom)
+                    .zIndex(2)
             }
         }
+        .ignoresSafeArea(edges: .top)
         .tint(HBPalette.accentBlue)
         .preferredColorScheme(.dark)
         .onAppear {
@@ -143,21 +158,14 @@ struct AppShellView: View {
     }
 
     private var regularShell: some View {
-        VStack(spacing: 0) {
-            topBar
-
-            HStack(spacing: 0) {
-                sidebar
-                detailStack
-            }
+        HStack(spacing: 0) {
+            sidebar
+            detailStack
         }
     }
 
     private var compactShell: some View {
-        VStack(spacing: 0) {
-            topBar
-            detailStack
-        }
+        detailStack
     }
 
     private var topBar: some View {
@@ -166,24 +174,32 @@ struct AppShellView: View {
                 sectionsMenuButton
             }
 
-            Text("Home Brain")
-                .font(
-                    .system(
-                        size: isCompactHeight ? 16 : (isCompact ? 18 : 32),
-                        weight: .bold,
-                        design: .rounded
+            HStack(spacing: 8) {
+                Image("HomeBrainBrandIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: isCompactHeight ? 22 : (isCompact ? 24 : 30), height: isCompactHeight ? 22 : (isCompact ? 24 : 30))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                Text("Home Brain")
+                    .font(
+                        .system(
+                            size: isCompactHeight ? 16 : (isCompact ? 18 : 32),
+                            weight: .bold,
+                            design: .rounded
+                        )
                     )
-                )
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                        startPoint: .leading,
-                        endPoint: .trailing
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
                     )
-                )
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .layoutPriority(1)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .layoutPriority(1)
 
             Text(isCompact ? activeDevicesSummary : "\(activeDevicesSummary) devices active")
                 .font(.system(size: isCompactHeight ? 12 : 14, weight: .semibold, design: .rounded))
@@ -194,10 +210,8 @@ struct AppShellView: View {
                 .lineLimit(1)
                 .layoutPriority(1)
 
-            if !isCompact {
-                resourceUtilizationStrip
-                    .layoutPriority(0)
-            }
+            resourceUtilizationStrip
+                .layoutPriority(2)
 
             Spacer(minLength: 8)
 
@@ -251,31 +265,40 @@ struct AppShellView: View {
         let noGPU = resourceStripMetrics.filter { $0.key != .gpu }
         let minimal = resourceStripMetrics.filter { $0.key == .cpu || $0.key == .ram }
 
-        return ViewThatFits(in: .horizontal) {
-            resourceUtilizationStripContent(metrics: resourceStripMetrics)
-            resourceUtilizationStripContent(metrics: noGPU)
-            resourceUtilizationStripContent(metrics: minimal)
+        return Group {
+            if isCompact {
+                resourceUtilizationStripContent(metrics: minimal, compact: true)
+                    .frame(maxWidth: 150)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    resourceUtilizationStripContent(metrics: resourceStripMetrics)
+                    resourceUtilizationStripContent(metrics: noGPU)
+                    resourceUtilizationStripContent(metrics: minimal)
+                }
+            }
         }
     }
 
-    private func resourceUtilizationStripContent(metrics: [ResourceStripMetric]) -> some View {
+    private func resourceUtilizationStripContent(metrics: [ResourceStripMetric], compact: Bool = false) -> some View {
         HStack(spacing: 6) {
             ForEach(metrics) { metric in
-                resourceMetricChip(metric)
+                resourceMetricChip(metric, compact: compact)
             }
 
             HStack(spacing: 4) {
                 Circle()
                     .fill(Color.green.opacity((resourceStripLoading || resourceStripRefreshing) ? 0.6 : 0.95))
-                    .frame(width: 6, height: 6)
-                Text("Live")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
+                    .frame(width: compact ? 5 : 6, height: compact ? 5 : 6)
+                if !compact {
+                    Text("Live")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
             }
             .padding(.horizontal, 3)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 5)
+        .padding(.horizontal, compact ? 4 : 6)
+        .padding(.vertical, compact ? 4 : 5)
         .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -283,20 +306,20 @@ struct AppShellView: View {
         )
     }
 
-    private func resourceMetricChip(_ metric: ResourceStripMetric) -> some View {
+    private func resourceMetricChip(_ metric: ResourceStripMetric, compact: Bool = false) -> some View {
         let barColors = resourceBarGradient(for: metric.percent)
         let percentLabel = metric.available ? "\(Int(metric.percent.rounded()))%" : "N/A"
 
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 2) {
                 Text(metric.shortLabel)
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .font(.system(size: compact ? 8 : 9, weight: .bold, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
 
                 Spacer(minLength: 2)
 
                 Image(systemName: metric.icon)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: compact ? 8 : 9, weight: .bold))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
@@ -323,13 +346,13 @@ struct AppShellView: View {
             HStack {
                 Spacer(minLength: 0)
                 Text(percentLabel)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(size: compact ? 9 : 10, weight: .bold, design: .rounded))
                     .foregroundStyle(metric.available ? resourceValueColor(for: metric.percent) : HBPalette.textSecondary)
             }
         }
-        .frame(width: 58)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 4)
+        .frame(width: compact ? 50 : 58)
+        .padding(.horizontal, compact ? 4 : 5)
+        .padding(.vertical, compact ? 3 : 4)
         .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -380,6 +403,9 @@ struct AppShellView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Color.clear
+                .frame(height: isCompactHeight ? 8 : 12)
+
             ForEach(visibleSections) { section in
                 Button {
                     selection = section
