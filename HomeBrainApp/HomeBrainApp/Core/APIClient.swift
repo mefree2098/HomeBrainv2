@@ -119,6 +119,9 @@ final class APIClient {
         guard (200..<300).contains(statusCode) else {
             let message = parseErrorMessage(from: payload)
             if statusCode == 401 || statusCode == 403 {
+                if authorized {
+                    sessionStore.expireAuthentication()
+                }
                 throw APIError.unauthorized
             }
             throw APIError.server(statusCode: statusCode, message: message)
