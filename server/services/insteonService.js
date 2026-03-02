@@ -1,9 +1,18 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const Insteon = require('home-controller').Insteon;
 const Device = require('../models/Device');
 const Settings = require('../models/Settings');
 
 const DEFAULT_INSTEON_SERIAL_PORT = '/dev/ttyUSB0';
 const DEFAULT_INSTEON_TCP_PORT = 9761;
+const INSTEON_SERIAL_BY_ID_DIR = '/dev/serial/by-id';
+const INSTEON_SERIAL_OPTIONS = Object.freeze({
+  baudRate: 19200,
+  dataBits: 8,
+  parity: 'none',
+  stopBits: 1
+});
 
 /**
  * Insteon PLM Service
@@ -19,7 +28,277 @@ class InsteonService {
     this.maxConnectionAttempts = 3;
     this.connectionTransport = null;
     this.connectionTarget = null;
+    this.lastConnectionError = null;
+    this._runtimeListenersAttached = false;
+    this._runtimeErrorListener = null;
+    this._runtimeCloseListener = null;
+    this._serialPortModule = undefined;
     console.log('InsteonService: Initialized');
+  }
+
+  _loadSerialPortModule() {
+    if (this._serialPortModule !== undefined) {
+      return this._serialPortModule;
+    }
+
+    try {
+      this._serialPortModule = require('serialport');
+    } catch (error) {
+      this._serialPortModule = null;
+    }
+
+    return this._serialPortModule;
+  }
+
+  _attachRuntimeListeners() {
+    if (!this.hub || this._runtimeListenersAttached) {
+      return;
+    }
+
+    this._runtimeErrorListener = (error) => {
+      const err = error instanceof Error ? error : new Error(String(error || 'Unknown runtime error'));
+      this.lastConnectionError = err.message;
+      console.error(`InsteonService: Runtime PLM error on ${this.connectionTarget || 'unknown target'}: ${err.message}`);
+    };
+
+    this._runtimeCloseListener = (hadError) => {
+      console.warn(`InsteonService: PLM connection closed${hadError ? ' after error' : ''}`);
+      this.isConnected = false;
+      this.hub = null;
+      this.connectionTransport = null;
+      this.connectionTarget = null;
+      this._runtimeListenersAttached = false;
+      this._runtimeCloseListener = null;
+      this._runtimeErrorListener = null;
+    };
+
+    this.hub.on('error', this._runtimeErrorListener);
+    this.hub.on('close', this._runtimeCloseListener);
+
+    this._runtimeListenersAttached = true;
+  }
+
+  _detachRuntimeListeners() {
+    if (!this.hub || !this._runtimeListenersAttached) {
+      this._runtimeListenersAttached = false;
+      return;
+    }
+
+    if (this._runtimeCloseListener) {
+      this.hub.removeListener('close', this._runtimeCloseListener);
+    }
+    if (this._runtimeErrorListener) {
+      this.hub.removeListener('error', this._runtimeErrorListener);
+    }
+
+    this._runtimeCloseListener = null;
+    this._runtimeErrorListener = null;
+    this._runtimeListenersAttached = false;
+  }
+
+  _normalizeSerialPath(serialPath) {
+    if (typeof serialPath !== 'string') {
+      return serialPath;
+    }
+
+    const trimmed = serialPath.trim();
+    if (!trimmed) {
+      return trimmed;
+    }
+
+    if (/^serial:\/\//i.test(trimmed)) {
+      return trimmed.replace(/^serial:\/\//i, '');
+    }
+
+    return trimmed;
+  }
+
+  async _getSerialByIdEntries() {
+    try {
+      const fileNames = await fs.promises.readdir(INSTEON_SERIAL_BY_ID_DIR);
+      const entries = [];
+
+      for (const fileName of fileNames) {
+        const symlinkPath = path.join(INSTEON_SERIAL_BY_ID_DIR, fileName);
+        let resolvedPath = symlinkPath;
+
+        try {
+          resolvedPath = await fs.promises.realpath(symlinkPath);
+        } catch (error) {
+          // Keep symlink path when realpath resolution fails.
+        }
+
+        entries.push({
+          symlinkPath,
+          resolvedPath
+        });
+      }
+
+      return entries;
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(`InsteonService: Unable to inspect ${INSTEON_SERIAL_BY_ID_DIR}: ${error.message}`);
+      }
+      return [];
+    }
+  }
+
+  _isLikelyInsteonPort(port) {
+    const fingerprint = [
+      port.path,
+      port.stablePath,
+      port.manufacturer,
+      port.friendlyName,
+      port.vendorId,
+      port.productId,
+      port.pnpId
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    return /(insteon|smarthome|powerlinc|plm|2413u|2413s)/.test(fingerprint);
+  }
+
+  async listLocalSerialPorts() {
+    const SerialPort = this._loadSerialPortModule();
+    let listedPorts = [];
+
+    if (SerialPort && typeof SerialPort.list === 'function') {
+      try {
+        listedPorts = await SerialPort.list();
+      } catch (error) {
+        console.warn(`InsteonService: Failed to enumerate serial ports via serialport.list(): ${error.message}`);
+      }
+    }
+
+    const byIdEntries = await this._getSerialByIdEntries();
+    const byResolvedPath = new Map();
+
+    byIdEntries.forEach((entry) => {
+      const current = byResolvedPath.get(entry.resolvedPath) || [];
+      current.push(entry.symlinkPath);
+      byResolvedPath.set(entry.resolvedPath, current);
+    });
+
+    const portMap = new Map();
+
+    listedPorts.forEach((portInfo) => {
+      const serialPath = typeof portInfo.path === 'string' ? portInfo.path.trim() : '';
+      if (!serialPath) {
+        return;
+      }
+
+      const aliases = byResolvedPath.get(serialPath) || [];
+      const stablePath = aliases.length > 0 ? aliases[0] : null;
+
+      portMap.set(serialPath, {
+        path: serialPath,
+        stablePath,
+        aliases,
+        manufacturer: portInfo.manufacturer || null,
+        friendlyName: portInfo.friendlyName || null,
+        serialNumber: portInfo.serialNumber || null,
+        vendorId: portInfo.vendorId || null,
+        productId: portInfo.productId || null,
+        pnpId: portInfo.pnpId || null
+      });
+    });
+
+    byIdEntries.forEach((entry) => {
+      const canonicalPath = entry.resolvedPath || entry.symlinkPath;
+      const existing = portMap.get(canonicalPath);
+
+      if (existing) {
+        if (!existing.aliases.includes(entry.symlinkPath)) {
+          existing.aliases.push(entry.symlinkPath);
+        }
+        if (!existing.stablePath) {
+          existing.stablePath = entry.symlinkPath;
+        }
+        return;
+      }
+
+      portMap.set(canonicalPath, {
+        path: canonicalPath,
+        stablePath: entry.symlinkPath,
+        aliases: [entry.symlinkPath],
+        manufacturer: null,
+        friendlyName: null,
+        serialNumber: null,
+        vendorId: null,
+        productId: null,
+        pnpId: null
+      });
+    });
+
+    const ports = Array.from(portMap.values()).map((portInfo) => ({
+      ...portInfo,
+      likelyInsteon: this._isLikelyInsteonPort(portInfo)
+    }));
+
+    ports.sort((a, b) => {
+      if (a.likelyInsteon !== b.likelyInsteon) {
+        return a.likelyInsteon ? -1 : 1;
+      }
+      if (Boolean(a.stablePath) !== Boolean(b.stablePath)) {
+        return a.stablePath ? -1 : 1;
+      }
+      return a.path.localeCompare(b.path);
+    });
+
+    return ports;
+  }
+
+  _formatSerialEndpointHints(serialPorts) {
+    if (!Array.isArray(serialPorts) || serialPorts.length === 0) {
+      return 'No local serial ports detected. Verify USB cabling/power and run `ls -l /dev/ttyUSB* /dev/ttyACM* /dev/serial/by-id/* 2>/dev/null`.';
+    }
+
+    const endpoints = serialPorts
+      .slice(0, 6)
+      .map((port) => port.stablePath || port.path);
+
+    return `Detected serial endpoints: ${endpoints.join(', ')}`;
+  }
+
+  async _validateSerialEndpoint(serialPath) {
+    const normalizedPath = this._normalizeSerialPath(serialPath);
+    if (!normalizedPath) {
+      throw new Error('INSTEON serial endpoint is empty. Set a USB serial path like /dev/serial/by-id/... or /dev/ttyUSB0.');
+    }
+
+    const serialPorts = await this.listLocalSerialPorts();
+    const indexedPaths = new Map();
+    serialPorts.forEach((port) => {
+      indexedPaths.set(port.path, port);
+      if (port.stablePath) {
+        indexedPaths.set(port.stablePath, port);
+      }
+      (port.aliases || []).forEach((alias) => indexedPaths.set(alias, port));
+    });
+    const matchedPort = indexedPaths.get(normalizedPath) || null;
+
+    if (normalizedPath.startsWith('/')) {
+      try {
+        await fs.promises.access(normalizedPath, fs.constants.R_OK | fs.constants.W_OK);
+      } catch (error) {
+        const hint = this._formatSerialEndpointHints(serialPorts);
+        if (error.code === 'ENOENT') {
+          throw new Error(`INSTEON serial endpoint "${normalizedPath}" does not exist. ${hint}`);
+        }
+        if (error.code === 'EACCES') {
+          throw new Error(`Cannot access INSTEON serial endpoint "${normalizedPath}" (permission denied). Ensure the HomeBrain service user is in the dialout group. ${hint}`);
+        }
+        throw new Error(`Cannot access INSTEON serial endpoint "${normalizedPath}": ${error.message}. ${hint}`);
+      }
+    }
+
+    return {
+      serialPath: normalizedPath,
+      stablePath: matchedPort ? matchedPort.stablePath : null,
+      matchedPort
+    };
   }
 
   /**
@@ -40,6 +319,7 @@ class InsteonService {
     }
 
     const target = rawTarget.trim();
+    const normalizedSerialTarget = this._normalizeSerialPath(target);
 
     const parsePort = (value) => {
       const port = Number(value);
@@ -52,6 +332,18 @@ class InsteonService {
       const printableHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
       return `tcp://${printableHost}:${port}`;
     };
+
+    if (/^serial:\/\//i.test(target)) {
+      if (!normalizedSerialTarget) {
+        throw new Error('Invalid INSTEON serial endpoint. Use serial:///dev/ttyUSB0 or /dev/ttyUSB0');
+      }
+
+      return {
+        transport: 'serial',
+        serialPath: normalizedSerialTarget,
+        label: normalizedSerialTarget
+      };
+    }
 
     if (/^tcp:\/\//i.test(target)) {
       try {
@@ -86,8 +378,12 @@ class InsteonService {
 
     const firstColon = target.indexOf(':');
     const lastColon = target.lastIndexOf(':');
-    if (firstColon > 0 && firstColon === lastColon && !target.startsWith('/')) {
+    const looksLikePath = target.includes('/') || target.includes('\\');
+    if (firstColon > 0 && firstColon === lastColon && !looksLikePath) {
       const host = target.slice(0, lastColon);
+      if (!host) {
+        throw new Error(`Invalid INSTEON TCP endpoint "${target}". Use tcp://<host>:<port>`);
+      }
       const port = parsePort(target.slice(lastColon + 1));
       return {
         transport: 'tcp',
@@ -99,8 +395,8 @@ class InsteonService {
 
     return {
       transport: 'serial',
-      serialPath: target,
-      label: target
+      serialPath: normalizedSerialTarget,
+      label: normalizedSerialTarget
     };
   }
 
@@ -115,24 +411,42 @@ class InsteonService {
       const settings = await Settings.getSettings();
       const configuredTarget = settings.insteonPort || DEFAULT_INSTEON_SERIAL_PORT;
       const connection = this.resolveConnectionTarget(configuredTarget);
+      let validatedSerial = null;
 
       if (this.isConnected && this.hub) {
-        console.log('InsteonService: Already connected to PLM');
-        return {
-          success: true,
-          message: 'Already connected to Insteon PLM',
-          port: this.connectionTarget || connection.label,
-          transport: this.connectionTransport || connection.transport
-        };
+        const alreadyConnectedToTarget =
+          this.connectionTransport === connection.transport &&
+          this.connectionTarget === connection.label;
+
+        if (alreadyConnectedToTarget) {
+          console.log('InsteonService: Already connected to PLM');
+          return {
+            success: true,
+            message: 'Already connected to Insteon PLM',
+            port: this.connectionTarget || connection.label,
+            transport: this.connectionTransport || connection.transport
+          };
+        }
+
+        console.log(`InsteonService: Endpoint changed (${this.connectionTarget || 'unknown'} -> ${connection.label}), reconnecting`);
+        await this.disconnect();
       }
 
       if (connection.transport === 'tcp') {
         console.log(`InsteonService: Connecting to PLM over TCP at ${connection.label}`);
       } else {
+        validatedSerial = await this._validateSerialEndpoint(connection.serialPath);
+        connection.serialPath = validatedSerial.serialPath;
+        connection.label = validatedSerial.serialPath;
+        if (validatedSerial.stablePath && validatedSerial.serialPath.startsWith('/dev/tty')) {
+          console.log(`InsteonService: Serial port ${validatedSerial.serialPath} also available as stable path ${validatedSerial.stablePath}`);
+        }
         console.log(`InsteonService: Connecting to PLM on serial port ${connection.serialPath}`);
       }
 
       this.hub = new Insteon();
+      this._attachRuntimeListeners();
+      this.lastConnectionError = null;
 
       // Connect with timeout handling
       const connectionPromise = new Promise((resolve, reject) => {
@@ -159,12 +473,16 @@ class InsteonService {
           this.connectionTransport = connection.transport;
           this.connectionTarget = connection.label;
           console.log('InsteonService: Successfully connected to PLM');
-          resolve({
+          const response = {
             success: true,
             message: 'Successfully connected to Insteon PLM',
             port: connection.label,
             transport: connection.transport
-          });
+          };
+          if (validatedSerial && validatedSerial.stablePath) {
+            response.recommendedStablePort = validatedSerial.stablePath;
+          }
+          resolve(response);
         };
 
         const onError = (error) => {
@@ -172,6 +490,7 @@ class InsteonService {
           settled = true;
           cleanup();
           const err = error instanceof Error ? error : new Error(String(error || 'Unknown connection error'));
+          this.lastConnectionError = err.message;
           console.error('InsteonService: Connection error:', err.message);
           reject(err);
         };
@@ -183,7 +502,7 @@ class InsteonService {
           if (connection.transport === 'tcp') {
             this.hub.connect(connection.host, connection.port);
           } else {
-            this.hub.serial(connection.serialPath, {});
+            this.hub.serial(connection.serialPath, { ...INSTEON_SERIAL_OPTIONS });
           }
         } catch (error) {
           onError(error);
@@ -197,6 +516,8 @@ class InsteonService {
       console.error(error.stack);
 
       this.isConnected = false;
+      this.lastConnectionError = error.message;
+      this._detachRuntimeListeners();
       this.hub = null;
       this.connectionTransport = null;
       this.connectionTarget = null;
@@ -213,6 +534,7 @@ class InsteonService {
     console.log('InsteonService: Disconnecting from PLM');
 
     try {
+      this._detachRuntimeListeners();
       if (this.hub && this.hub.close) {
         this.hub.close();
       }
@@ -936,7 +1258,8 @@ class InsteonService {
       deviceCount: this.devices.size,
       connectionAttempts: this.connectionAttempts,
       transport: this.connectionTransport,
-      port: this.connectionTarget
+      port: this.connectionTarget,
+      lastConnectionError: this.lastConnectionError
     };
   }
 }

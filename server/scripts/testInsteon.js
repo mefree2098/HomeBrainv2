@@ -34,8 +34,25 @@ async function testInsteonIntegration() {
   try {
     await connectDatabase();
 
-    // Test 1: Check current status
-    console.log('Test 1: Checking Insteon PLM status');
+    // Test 1: Enumerate local serial ports (USB PLM discovery aid)
+    console.log('Test 1: Enumerating local serial ports');
+    console.log('-'.repeat(60));
+    try {
+      const serialPorts = await insteonService.listLocalSerialPorts();
+      console.log(`✓ Found ${serialPorts.length} serial port candidates`);
+      serialPorts.slice(0, 5).forEach((port, index) => {
+        console.log(`  ${index + 1}. ${port.stablePath || port.path}${port.likelyInsteon ? ' (likely Insteon)' : ''}`);
+      });
+      if (serialPorts.length > 5) {
+        console.log(`  ... and ${serialPorts.length - 5} more`);
+      }
+    } catch (error) {
+      console.error('✗ Failed to enumerate serial ports:', error.message);
+    }
+    console.log();
+
+    // Test 2: Check current status
+    console.log('Test 2: Checking Insteon PLM status');
     console.log('-'.repeat(60));
     try {
       const status = insteonService.getStatus();
@@ -48,8 +65,8 @@ async function testInsteonIntegration() {
     }
     console.log();
 
-    // Test 2: Test connection
-    console.log('Test 2: Testing PLM connection');
+    // Test 3: Test connection
+    console.log('Test 3: Testing PLM connection');
     console.log('-'.repeat(60));
     try {
       const result = await insteonService.testConnection();
@@ -69,8 +86,8 @@ async function testInsteonIntegration() {
     }
     console.log();
 
-    // Test 3: Get linked devices
-    console.log('Test 3: Getting linked devices from PLM');
+    // Test 4: Get linked devices
+    console.log('Test 4: Getting linked devices from PLM');
     console.log('-'.repeat(60));
     try {
       const devices = await insteonService.getAllLinkedDevices();
@@ -86,8 +103,8 @@ async function testInsteonIntegration() {
     }
     console.log();
 
-    // Test 4: Check devices in database
-    console.log('Test 4: Checking Insteon devices in database');
+    // Test 5: Check devices in database
+    console.log('Test 5: Checking Insteon devices in database');
     console.log('-'.repeat(60));
     try {
       const dbDevices = await Device.find({ 'properties.source': 'insteon' });
@@ -104,8 +121,8 @@ async function testInsteonIntegration() {
     }
     console.log();
 
-    // Test 5: Import devices (if none in database)
-    console.log('Test 5: Device import test');
+    // Test 6: Import devices (if none in database)
+    console.log('Test 6: Device import test');
     console.log('-'.repeat(60));
     const dbDeviceCount = await Device.countDocuments({ 'properties.source': 'insteon' });
     if (dbDeviceCount === 0) {
@@ -132,8 +149,8 @@ async function testInsteonIntegration() {
     }
     console.log();
 
-    // Test 6: Device status check (if devices exist)
-    console.log('Test 6: Device status check');
+    // Test 7: Device status check (if devices exist)
+    console.log('Test 7: Device status check');
     console.log('-'.repeat(60));
     const testDevice = await Device.findOne({ 'properties.source': 'insteon' });
     if (testDevice) {
@@ -153,8 +170,8 @@ async function testInsteonIntegration() {
     }
     console.log();
 
-    // Test 7: Settings check
-    console.log('Test 7: Checking Insteon settings');
+    // Test 8: Settings check
+    console.log('Test 8: Checking Insteon settings');
     console.log('-'.repeat(60));
     try {
       const settings = await Settings.getSettings();
@@ -177,6 +194,7 @@ async function testInsteonIntegration() {
     console.log('  GET    /api/insteon/test              - Test connection');
     console.log('  GET    /api/insteon/info              - Get PLM info');
     console.log('  GET    /api/insteon/status            - Get connection status');
+    console.log('  GET    /api/insteon/serial-ports      - List local serial ports');
     console.log('  POST   /api/insteon/connect           - Connect to PLM');
     console.log('  POST   /api/insteon/disconnect        - Disconnect from PLM');
     console.log('  GET    /api/insteon/devices/linked    - Get all linked devices');

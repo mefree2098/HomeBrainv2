@@ -42,6 +42,20 @@ export const getInsteonStatus = async () => {
   }
 };
 
+// Description: List local serial ports available for USB PLM setup
+// Endpoint: GET /api/insteon/serial-ports
+// Request: {}
+// Response: { success: boolean, count: number, ports: Array<object> }
+export const getInsteonSerialPorts = async () => {
+  try {
+    const response = await api.get('/api/insteon/serial-ports');
+    return response.data;
+  } catch (error) {
+    console.error('Get Insteon serial ports error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
 // Description: Connect to Insteon PLM
 // Endpoint: POST /api/insteon/connect
 // Request: {}

@@ -56,9 +56,13 @@ The 2413S PLM RJ45 jack is a serial interface, not Ethernet networking.
 Use one of these supported endpoint formats in `Settings -> Integrations -> INSTEON PLM Endpoint`:
 
 1. Direct local serial:
-`/dev/ttyUSB0`
+`/dev/serial/by-id/usb-...` (recommended) or `/dev/ttyUSB0`
 2. Serial-over-TCP bridge:
 `tcp://<bridge-host>:<port>` (for example `tcp://192.168.1.50:9761`)
+
+USB PLM note:
+- 2413U USB PLMs often enumerate as `/dev/ttyUSB*` or `/dev/ttyACM*`.
+- Prefer `/dev/serial/by-id/...` in HomeBrain settings so the path stays stable across reboots/USB reorder.
 
 Recommended setup for "Ethernet cable" operation:
 

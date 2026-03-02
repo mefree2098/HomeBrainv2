@@ -52,7 +52,7 @@ Important:
 - A direct Jetson Ethernet NIC -> PLM cable will not work.
 
 Use one of these endpoint formats in `Settings -> Integrations`:
-- Local serial: `/dev/ttyUSB0`
+- Local serial: `/dev/serial/by-id/usb-...` (preferred) or `/dev/ttyUSB0`
 - Serial-over-TCP bridge: `tcp://<bridge-host>:<port>`
 
 Checks:
@@ -61,8 +61,14 @@ Checks:
 # HomeBrain status
 curl -s http://127.0.0.1:3000/api/insteon/status
 
+# List serial ports HomeBrain can see
+curl -s http://127.0.0.1:3000/api/insteon/serial-ports
+
 # If using local serial
-ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+ls -l /dev/ttyUSB* /dev/ttyACM* /dev/serial/by-id/* 2>/dev/null
+
+# Confirm service user has serial permissions
+id $(whoami) | tr ' ' '\n' | grep dialout || true
 
 # If using TCP bridge
 nc -vz <bridge-host> <port>
