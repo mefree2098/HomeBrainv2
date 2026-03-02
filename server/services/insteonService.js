@@ -4,6 +4,7 @@ const https = require('node:https');
 const axios = require('axios');
 const Insteon = require('home-controller').Insteon;
 const Device = require('../models/Device');
+const Scene = require('../models/Scene');
 const Settings = require('../models/Settings');
 const Workflow = require('../models/Workflow');
 const workflowService = require('./workflowService');
@@ -951,6 +952,12 @@ class InsteonService {
       const parentId = this._extractXmlAttr(attrs, 'parentId', '');
       const lastRunTime = this._extractXmlTagValue(body, 'lastRunTime', '');
       const lastFinishTime = this._extractXmlTagValue(body, 'lastFinishTime', '');
+      const ifRaw = this._extractISYProgramSection(body, 'if');
+      const thenRaw = this._extractISYProgramSection(body, 'then');
+      const elseRaw = this._extractISYProgramSection(body, 'else');
+      const ifLines = this._extractISYProgramLines(ifRaw);
+      const thenLines = this._extractISYProgramLines(thenRaw);
+      const elseLines = this._extractISYProgramLines(elseRaw);
 
       programs.push({
         id,
@@ -960,11 +967,236 @@ class InsteonService {
         status,
         parentId,
         lastRunTime,
-        lastFinishTime
+        lastFinishTime,
+        ifRaw,
+        thenRaw,
+        elseRaw,
+        ifLines,
+        thenLines,
+        elseLines
       });
     }
 
     return programs;
+  }
+
+  _parseISYNetworkResourcesXml(xml = '') {
+    if (typeof xml !== 'string' || !xml.trim()) {
+      return [];
+    }
+
+    const resources = [];
+    const seen = new Set();
+    const parseHeaderMap = (rawHeaders = '') => {
+      if (typeof rawHeaders !== 'string' || !rawHeaders.trim()) {
+        return {};
+      }
+
+      const headerMap = {};
+      rawHeaders
+        .split(/\r?\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach((line) => {
+          const separator = line.indexOf(':');
+          if (separator <= 0) {
+            return;
+          }
+          const name = line.slice(0, separator).trim();
+          const value = line.slice(separator + 1).trim();
+          if (!name) {
+            return;
+          }
+          headerMap[name] = value;
+        });
+
+      return headerMap;
+    };
+
+    const parseControlInfo = (body = '') => {
+      const controlInfoBody = this._extractXmlTagValue(body, 'ControlInfo', '');
+      const source = controlInfoBody || body;
+
+      const protocol = this._extractXmlTagValue(source, 'protocol', '').toLowerCase();
+      const host = this._extractXmlTagValue(source, 'host', '');
+      const portRaw = this._extractXmlTagValue(source, 'port', '');
+      const portNumeric = Number(portRaw);
+      const method = this._extractXmlTagValue(source, 'method', '');
+      const path = this._extractXmlTagValue(source, 'path',
+        this._extractXmlTagValue(source, 'uri',
+          this._extractXmlTagValue(source, 'resource', '')));
+      const url = this._extractXmlTagValue(source, 'url',
+        this._extractXmlTagValue(source, 'requestUrl',
+          this._extractXmlTagValue(source, 'address', '')));
+      const timeoutRaw = this._extractXmlTagValue(source, 'timeout', '');
+      const timeoutNumeric = Number(timeoutRaw);
+      const payload = this._extractXmlTagValue(source, 'data',
+        this._extractXmlTagValue(source, 'body',
+          this._extractXmlTagValue(source, 'content', '')));
+      const headersRaw = this._extractXmlTagValue(source, 'headers', this._extractXmlTagValue(source, 'header', ''));
+      const headerMap = parseHeaderMap(headersRaw);
+
+      const namedHeaderRegex = /<header\b([^>]*)>([\s\S]*?)<\/header>/gi;
+      let headerMatch;
+      while ((headerMatch = namedHeaderRegex.exec(source)) !== null) {
+        const headerAttrs = headerMatch[1] || '';
+        const headerName = this._extractXmlAttr(headerAttrs, 'name', this._extractXmlAttr(headerAttrs, 'key', '')).trim();
+        if (!headerName) {
+          continue;
+        }
+        headerMap[headerName] = String(headerMatch[2] || '').trim();
+      }
+
+      const controlInfo = {};
+      if (protocol) {
+        controlInfo.protocol = protocol;
+      }
+      if (host) {
+        controlInfo.host = host;
+      }
+      if (Number.isInteger(portNumeric) && portNumeric > 0 && portNumeric <= 65535) {
+        controlInfo.port = portNumeric;
+      }
+      if (method) {
+        controlInfo.method = method;
+      }
+      if (path) {
+        controlInfo.path = path;
+      }
+      if (url) {
+        controlInfo.url = url;
+      }
+      if (Number.isFinite(timeoutNumeric) && timeoutNumeric > 0) {
+        controlInfo.timeout = Math.round(timeoutNumeric);
+      }
+      if (payload) {
+        controlInfo.payload = payload;
+      }
+      if (Object.keys(headerMap).length > 0) {
+        controlInfo.headers = headerMap;
+      }
+
+      return controlInfo;
+    };
+
+    const pushResource = (attrs = '', body = '') => {
+      const idCandidates = [
+        this._extractXmlAttr(attrs, 'id', ''),
+        this._extractXmlAttr(attrs, 'resourceId', ''),
+        this._extractXmlAttr(attrs, 'rid', ''),
+        this._extractXmlTagValue(body, 'id', ''),
+        this._extractXmlTagValue(body, 'resourceId', ''),
+        this._extractXmlTagValue(body, 'rid', ''),
+        this._extractXmlTagValue(body, 'id_20', '')
+      ];
+      const nameCandidates = [
+        this._extractXmlTagValue(body, 'name', ''),
+        this._extractXmlAttr(attrs, 'name', ''),
+        this._extractXmlTagValue(body, 'label', ''),
+        this._extractXmlAttr(attrs, 'label', ''),
+        this._extractXmlTagValue(body, 'title', ''),
+        this._extractXmlAttr(attrs, 'title', ''),
+        this._extractXmlTagValue(body, 'sName', '')
+      ];
+
+      const id = idCandidates.map((candidate) => String(candidate || '').trim()).find(Boolean) || '';
+      const rawName = nameCandidates.map((candidate) => String(candidate || '').trim()).find(Boolean) || '';
+      const name = rawName || (id ? `Resource ${id}` : '');
+      if (!id && !name) {
+        return;
+      }
+
+      const normalizedName = this._normalizeISYLookupKey(name);
+      const dedupeKey = id ? `id:${id}` : `name:${normalizedName}`;
+      if (seen.has(dedupeKey)) {
+        return;
+      }
+      seen.add(dedupeKey);
+
+      const controlInfo = parseControlInfo(body);
+      const enabledRaw = this._extractXmlTagValue(body, 'enabled', this._extractXmlAttr(attrs, 'enabled', 'true'));
+      resources.push({
+        id: id || null,
+        name,
+        enabled: String(enabledRaw || 'true').trim().toLowerCase() !== 'false',
+        method: controlInfo.method || this._extractXmlTagValue(body, 'method', this._extractXmlAttr(attrs, 'method', '')),
+        url: controlInfo.url || this._extractXmlTagValue(body, 'url', this._extractXmlAttr(attrs, 'url', '')),
+        controlInfo
+      });
+    };
+
+    const resourceRegex = /<resource\b([^>]*)>([\s\S]*?)<\/resource>/gi;
+    const netRuleRegex = /<NetRule\b([^>]*)>([\s\S]*?)<\/NetRule>/gi;
+    let match;
+    while ((match = resourceRegex.exec(xml)) !== null) {
+      pushResource(match[1] || '', match[2] || '');
+    }
+    while ((match = netRuleRegex.exec(xml)) !== null) {
+      pushResource(match[1] || '', match[2] || '');
+    }
+
+    const selfClosingRegex = /<resource\b([^>]*)\/>/gi;
+    const selfClosingNetRuleRegex = /<NetRule\b([^>]*)\/>/gi;
+    while ((match = selfClosingRegex.exec(xml)) !== null) {
+      pushResource(match[1] || '', '');
+    }
+    while ((match = selfClosingNetRuleRegex.exec(xml)) !== null) {
+      pushResource(match[1] || '', '');
+    }
+
+    return resources;
+  }
+
+  async _fetchISYNetworkResources(connection) {
+    const paths = [
+      '/rest/networking/resources',
+      '/rest/networking/resources/'
+    ];
+    let lastError = null;
+
+    for (const resourcePath of paths) {
+      try {
+        const resourcesXml = await this._requestISYResource(connection, resourcePath);
+        return this._parseISYNetworkResourcesXml(resourcesXml);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError || new Error('Unable to fetch ISY network resources');
+  }
+
+  _extractISYProgramSection(programBody = '', tagName = '') {
+    if (typeof programBody !== 'string' || !programBody.trim() || typeof tagName !== 'string' || !tagName.trim()) {
+      return '';
+    }
+
+    return this._extractXmlTagValue(programBody, tagName.trim(), '');
+  }
+
+  _extractISYProgramLines(section = '') {
+    if (typeof section !== 'string' || !section.trim()) {
+      return [];
+    }
+
+    const normalized = section
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(li|p|div|tr|td|th)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&amp;/gi, '&')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, '\'');
+
+    return normalized
+      .split(/\r?\n+/)
+      .map((line) => line.replace(/^\s*[-*]\s*/, '').replace(/\s+/g, ' ').trim())
+      .filter((line) => line.length > 0)
+      .filter((line) => !/^-?\s*no actions?/i.test(line))
+      .filter((line) => !/to add one, press ['"]?action['"]?/i.test(line));
   }
 
   _buildTopologyScenesFromISYGroups(groups = []) {
@@ -1043,6 +1275,82 @@ class InsteonService {
     }
   }
 
+  _mergeISYProgramDetail(baseProgram, detailProgram) {
+    if (!detailProgram || typeof detailProgram !== 'object') {
+      return baseProgram;
+    }
+
+    return {
+      ...baseProgram,
+      ifRaw: detailProgram.ifRaw || baseProgram.ifRaw || '',
+      thenRaw: detailProgram.thenRaw || baseProgram.thenRaw || '',
+      elseRaw: detailProgram.elseRaw || baseProgram.elseRaw || '',
+      ifLines: Array.isArray(detailProgram.ifLines) && detailProgram.ifLines.length > 0
+        ? detailProgram.ifLines
+        : (baseProgram.ifLines || []),
+      thenLines: Array.isArray(detailProgram.thenLines) && detailProgram.thenLines.length > 0
+        ? detailProgram.thenLines
+        : (baseProgram.thenLines || []),
+      elseLines: Array.isArray(detailProgram.elseLines) && detailProgram.elseLines.length > 0
+        ? detailProgram.elseLines
+        : (baseProgram.elseLines || [])
+    };
+  }
+
+  async _fetchISYProgramDetail(connection, programId) {
+    if (!programId) {
+      return null;
+    }
+
+    const encodedId = encodeURIComponent(String(programId));
+    const paths = [
+      `/rest/programs/${encodedId}?subfolders=false`,
+      `/rest/programs/${encodedId}?folderContents=false`,
+      `/rest/programs/${encodedId}`
+    ];
+
+    for (const pathCandidate of paths) {
+      try {
+        const detailXml = await this._requestISYResource(connection, pathCandidate);
+        const detailPrograms = this._parseISYProgramsXml(detailXml);
+        if (!Array.isArray(detailPrograms) || detailPrograms.length === 0) {
+          continue;
+        }
+
+        const byId = detailPrograms.find((entry) => String(entry.id || '') === String(programId));
+        return byId || detailPrograms[0];
+      } catch (error) {
+        // Continue to next candidate endpoint.
+      }
+    }
+
+    return null;
+  }
+
+  async _enrichISYProgramsWithDetails(connection, programs = []) {
+    if (!Array.isArray(programs) || programs.length === 0) {
+      return [];
+    }
+
+    const enriched = [];
+    for (const program of programs) {
+      if (!program || !program.id) {
+        enriched.push(program);
+        continue;
+      }
+
+      const detail = await this._fetchISYProgramDetail(connection, program.id);
+      if (!detail) {
+        enriched.push(program);
+        continue;
+      }
+
+      enriched.push(this._mergeISYProgramDetail(program, detail));
+    }
+
+    return enriched;
+  }
+
   async extractISYData(payload = {}) {
     const connection = await this._resolveISYConnection(payload);
     const fetchWithFallback = async (primaryPath, fallbackPath) => {
@@ -1056,13 +1364,18 @@ class InsteonService {
       }
     };
 
-    const [nodesXml, programsXml] = await Promise.all([
+    const [nodesXml, programsXml, networkResources] = await Promise.all([
       fetchWithFallback('/rest/nodes?members=false', '/rest/nodes'),
-      fetchWithFallback('/rest/programs?subfolders=true', '/rest/programs')
+      fetchWithFallback('/rest/programs?subfolders=true', '/rest/programs'),
+      this._fetchISYNetworkResources(connection).catch((error) => {
+        console.warn(`InsteonService: ISY network resource extraction unavailable: ${error.message}`);
+        return [];
+      })
     ]);
 
     const nodeData = this._parseISYNodesXml(nodesXml);
-    const programs = this._parseISYProgramsXml(programsXml);
+    const basePrograms = this._parseISYProgramsXml(programsXml);
+    const programs = await this._enrichISYProgramsWithDetails(connection, basePrograms);
     const deviceIds = nodeData.devices
       .map((device) => device.normalizedAddress)
       .filter(Boolean);
@@ -1081,12 +1394,19 @@ class InsteonService {
       devices: nodeData.devices,
       groups: nodeData.groups,
       programs,
+      networkResources,
       deviceIds: uniqueDeviceIds,
       topologyScenes,
       counts: {
         nodes: nodeData.devices.length,
         groups: nodeData.groups.length,
         programs: programs.length,
+        networkResources: networkResources.length,
+        programsWithLogicBlocks: programs.filter((program) =>
+          (Array.isArray(program.ifLines) && program.ifLines.length > 0)
+          || (Array.isArray(program.thenLines) && program.thenLines.length > 0)
+          || (Array.isArray(program.elseLines) && program.elseLines.length > 0)
+        ).length,
         uniqueDeviceIds: uniqueDeviceIds.length,
         topologyScenes: topologyScenes.length
       }
@@ -1097,9 +1417,1655 @@ class InsteonService {
     return `[ISY_PROGRAM_ID:${programId}]`;
   }
 
+  _isyProgramElseMarker(programId) {
+    return `[ISY_PROGRAM_ID:${programId}][ISY_PROGRAM_PATH:ELSE]`;
+  }
+
+  _escapeRegexLiteral(value = '') {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  _normalizeISYLookupKey(value = '') {
+    return String(value || '')
+      .replace(/['"]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  _extractPotentialInsteonAddress(token = '') {
+    const direct = this._normalizePossibleInsteonAddress(token);
+    if (direct) {
+      return direct;
+    }
+
+    const match = String(token || '').toUpperCase().match(/([0-9A-F]{2})[^0-9A-F]?([0-9A-F]{2})[^0-9A-F]?([0-9A-F]{2})/);
+    if (!match) {
+      return null;
+    }
+    return this._normalizePossibleInsteonAddress(`${match[1]}${match[2]}${match[3]}`);
+  }
+
+  async _buildISYProgramLookup(programs = [], options = {}) {
+    const [devices, scenes] = await Promise.all([
+      Device.find({}).select('_id name type properties').lean(),
+      Scene.find({}).select('_id name deviceActions').lean()
+    ]);
+    const resources = Array.isArray(options.resources) ? options.resources : [];
+
+    const devicesByAddress = new Map();
+    const devicesByName = new Map();
+    const devicesById = new Map();
+    devices.forEach((device) => {
+      if (!device || !device._id) {
+        return;
+      }
+
+      const deviceId = device._id.toString();
+      devicesById.set(deviceId, device);
+
+      const normalizedName = this._normalizeISYLookupKey(device.name || '');
+      if (normalizedName && !devicesByName.has(normalizedName)) {
+        devicesByName.set(normalizedName, device);
+      }
+
+      const rawAddress = device?.properties?.insteonAddress;
+      const normalizedAddress = this._normalizePossibleInsteonAddress(rawAddress);
+      if (normalizedAddress && !devicesByAddress.has(normalizedAddress)) {
+        devicesByAddress.set(normalizedAddress, device);
+      }
+    });
+
+    const scenesByName = new Map();
+    scenes.forEach((scene) => {
+      if (!scene || !scene._id) {
+        return;
+      }
+      const normalizedName = this._normalizeISYLookupKey(scene.name || '');
+      if (normalizedName && !scenesByName.has(normalizedName)) {
+        scenesByName.set(normalizedName, scene);
+      }
+    });
+
+    const programsByName = new Map();
+    const programsById = new Map();
+    (Array.isArray(programs) ? programs : []).forEach((program) => {
+      if (!program || !program.id) {
+        return;
+      }
+      programsById.set(String(program.id), program);
+      const normalizedName = this._normalizeISYLookupKey(program.name || '');
+      if (normalizedName && !programsByName.has(normalizedName)) {
+        programsByName.set(normalizedName, program);
+      }
+    });
+
+    const resourcesByName = new Map();
+    const resourcesById = new Map();
+    resources.forEach((resource) => {
+      if (!resource || typeof resource !== 'object') {
+        return;
+      }
+
+      const id = String(resource.id || '').trim();
+      const name = String(resource.name || '').trim();
+      const normalizedName = this._normalizeISYLookupKey(name);
+
+      if (id && !resourcesById.has(id)) {
+        resourcesById.set(id, resource);
+      }
+      if (id && /^\d+$/.test(id)) {
+        const canonicalNumericId = String(Number(id));
+        if (!resourcesById.has(canonicalNumericId)) {
+          resourcesById.set(canonicalNumericId, resource);
+        }
+      }
+      if (normalizedName && !resourcesByName.has(normalizedName)) {
+        resourcesByName.set(normalizedName, resource);
+      }
+    });
+
+    return {
+      devicesByAddress,
+      devicesByName,
+      devicesById,
+      scenesByName,
+      programsByName,
+      programsById,
+      resourcesByName,
+      resourcesById
+    };
+  }
+
+  _resolveISYProgram(token = '', lookup = {}) {
+    const normalizedToken = this._normalizeISYLookupKey(token);
+    if (!normalizedToken) {
+      return null;
+    }
+
+    if (lookup.programsByName instanceof Map && lookup.programsByName.has(normalizedToken)) {
+      return lookup.programsByName.get(normalizedToken);
+    }
+
+    if (lookup.programsById instanceof Map && lookup.programsById.has(String(token).trim())) {
+      return lookup.programsById.get(String(token).trim());
+    }
+
+    return null;
+  }
+
+  _normalizeISYVariableKey(value = '') {
+    return String(value || '')
+      .trim()
+      .replace(/^\$/, '')
+      .toLowerCase();
+  }
+
+  _parseISYClockValue(token = '') {
+    const trimmed = String(token || '').trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const match = trimmed.match(/^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?$/i);
+    if (!match) {
+      return null;
+    }
+
+    let hour = Number(match[1]);
+    const minute = Number(match[2] || 0);
+    const meridiem = String(match[3] || '').toLowerCase();
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return null;
+    }
+
+    if (meridiem === 'pm' && hour < 12) {
+      hour += 12;
+    } else if (meridiem === 'am' && hour === 12) {
+      hour = 0;
+    }
+
+    const hh = String(hour).padStart(2, '0');
+    const mm = String(minute).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+
+  _parseISYDurationSeconds(token = '') {
+    const normalized = String(token || '').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const regex = /(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?|times?)/ig;
+    let totalSeconds = 0;
+    let matched = false;
+    let match;
+    while ((match = regex.exec(normalized)) !== null) {
+      const amount = Number(match[1]);
+      const unit = String(match[2] || '').toLowerCase();
+      if (!Number.isFinite(amount)) {
+        continue;
+      }
+      matched = true;
+      if (unit.startsWith('hour') || unit.startsWith('hr')) {
+        totalSeconds += amount * 3600;
+      } else if (unit.startsWith('min')) {
+        totalSeconds += amount * 60;
+      } else if (unit.startsWith('sec')) {
+        totalSeconds += amount;
+      }
+    }
+
+    if (matched) {
+      return Math.max(0, Math.round(totalSeconds));
+    }
+
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) {
+      return Math.max(0, Math.round(numeric));
+    }
+
+    return null;
+  }
+
+  _extractISYProgramDays(lines = []) {
+    const joined = Array.isArray(lines) ? lines.join(' ') : String(lines || '');
+    const dayAliases = new Map([
+      ['mon', 'monday'],
+      ['monday', 'monday'],
+      ['tue', 'tuesday'],
+      ['tues', 'tuesday'],
+      ['tuesday', 'tuesday'],
+      ['wed', 'wednesday'],
+      ['wednesday', 'wednesday'],
+      ['thu', 'thursday'],
+      ['thur', 'thursday'],
+      ['thurs', 'thursday'],
+      ['thursday', 'thursday'],
+      ['fri', 'friday'],
+      ['friday', 'friday'],
+      ['sat', 'saturday'],
+      ['saturday', 'saturday'],
+      ['sun', 'sunday'],
+      ['sunday', 'sunday']
+    ]);
+
+    if (/\bon\s+never\b/i.test(joined)) {
+      return [];
+    }
+
+    const dayMatches = joined.match(/\b(mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/gi) || [];
+    return Array.from(new Set(dayMatches
+      .map((day) => dayAliases.get(day.toLowerCase()))
+      .filter(Boolean)));
+  }
+
+  _parseISYVariableValueToken(token = '') {
+    const trimmed = String(token || '').trim();
+    if (!trimmed) {
+      return { kind: 'literal', value: 0 };
+    }
+
+    const randomMatch = trimmed.match(/^random\s+(.+)$/i);
+    if (randomMatch) {
+      return {
+        kind: 'random',
+        max: this._parseISYVariableValueToken(randomMatch[1])
+      };
+    }
+
+    if (/^\$/.test(trimmed)) {
+      return {
+        kind: 'variable',
+        name: this._normalizeISYVariableKey(trimmed)
+      };
+    }
+
+    if (/^(true|false)$/i.test(trimmed)) {
+      return {
+        kind: 'literal',
+        value: trimmed.toLowerCase() === 'true'
+      };
+    }
+
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return {
+        kind: 'literal',
+        value: numeric
+      };
+    }
+
+    return {
+      kind: 'literal',
+      value: trimmed
+    };
+  }
+
+  _resolveISYProgramDevice(token = '', lookup = {}) {
+    const normalizedToken = this._normalizeISYLookupKey(token);
+    const normalizedAddress = this._extractPotentialInsteonAddress(token);
+
+    if (normalizedAddress && lookup.devicesByAddress instanceof Map && lookup.devicesByAddress.has(normalizedAddress)) {
+      return lookup.devicesByAddress.get(normalizedAddress);
+    }
+
+    if (normalizedToken && lookup.devicesByName instanceof Map && lookup.devicesByName.has(normalizedToken)) {
+      return lookup.devicesByName.get(normalizedToken);
+    }
+
+    return null;
+  }
+
+  _resolveISYProgramScene(token = '', lookup = {}) {
+    const normalizedToken = this._normalizeISYLookupKey(token);
+    if (normalizedToken && lookup.scenesByName instanceof Map && lookup.scenesByName.has(normalizedToken)) {
+      return lookup.scenesByName.get(normalizedToken);
+    }
+    return null;
+  }
+
+  _resolveISYNetworkResource(token = '', lookup = {}) {
+    const rawToken = String(token || '').replace(/^['"]|['"]$/g, '').trim();
+    if (!rawToken) {
+      return null;
+    }
+
+    if (lookup.resourcesById instanceof Map) {
+      if (lookup.resourcesById.has(rawToken)) {
+        return lookup.resourcesById.get(rawToken);
+      }
+      if (/^\d+$/.test(rawToken)) {
+        const canonicalNumericId = String(Number(rawToken));
+        if (lookup.resourcesById.has(canonicalNumericId)) {
+          return lookup.resourcesById.get(canonicalNumericId);
+        }
+      }
+    }
+
+    const normalizedToken = this._normalizeISYLookupKey(rawToken);
+    if (normalizedToken && lookup.resourcesByName instanceof Map && lookup.resourcesByName.has(normalizedToken)) {
+      return lookup.resourcesByName.get(normalizedToken);
+    }
+
+    return null;
+  }
+
+  _normalizeHttpMethod(method = 'GET') {
+    const normalized = String(method || '').trim().toUpperCase();
+    if (!normalized) {
+      return 'GET';
+    }
+
+    if (!/^[A-Z]+$/.test(normalized)) {
+      return null;
+    }
+
+    return normalized;
+  }
+
+  _buildHttpUrlFromISYNetworkResource(resource = {}) {
+    const controlInfo = resource?.controlInfo && typeof resource.controlInfo === 'object'
+      ? resource.controlInfo
+      : {};
+
+    const directUrl = String(controlInfo.url || resource.url || '').trim();
+    if (/^https?:\/\//i.test(directUrl)) {
+      return directUrl;
+    }
+
+    const protocolRaw = String(controlInfo.protocol || '').trim().toLowerCase();
+    if (!['http', 'https'].includes(protocolRaw)) {
+      return null;
+    }
+
+    const host = String(controlInfo.host || '').trim();
+    if (!host) {
+      return null;
+    }
+
+    const rawPath = String(controlInfo.path || directUrl || '').trim();
+    const normalizedPath = rawPath
+      ? (rawPath.startsWith('/') ? rawPath : `/${rawPath}`)
+      : '';
+
+    const port = Number(controlInfo.port);
+    const hasPort = Number.isInteger(port)
+      && port > 0
+      && port <= 65535
+      && !((protocolRaw === 'http' && port === 80) || (protocolRaw === 'https' && port === 443));
+
+    return `${protocolRaw}://${host}${hasPort ? `:${port}` : ''}${normalizedPath}`;
+  }
+
+  _parseISYNetworkResourcePayload(rawPayload = '') {
+    if (typeof rawPayload !== 'string') {
+      return rawPayload;
+    }
+
+    const trimmed = rawPayload.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      return trimmed;
+    }
+  }
+
+  _createHttpRequestActionFromISYNetworkResource(resource = {}, statement = '', extra = {}) {
+    const controlInfo = resource?.controlInfo && typeof resource.controlInfo === 'object'
+      ? resource.controlInfo
+      : {};
+    const protocol = String(controlInfo.protocol || '').trim().toLowerCase();
+    if (!['http', 'https'].includes(protocol)) {
+      return null;
+    }
+
+    const url = this._buildHttpUrlFromISYNetworkResource(resource);
+    if (!url) {
+      return null;
+    }
+
+    const method = this._normalizeHttpMethod(controlInfo.method || resource.method || 'GET');
+    if (!method) {
+      return null;
+    }
+
+    const payload = this._parseISYNetworkResourcePayload(controlInfo.payload || '');
+    const timeoutMs = Number(controlInfo.timeout);
+    const parameters = {
+      method,
+      source: 'isy_network_resource',
+      statement,
+      ...(Object.keys(extra).length > 0 ? extra : {}),
+      ...(resource?.id ? { resourceId: String(resource.id) } : {}),
+      ...(resource?.name ? { resourceName: String(resource.name) } : {}),
+      ...(controlInfo.headers && typeof controlInfo.headers === 'object' ? { headers: controlInfo.headers } : {}),
+      ...(Object.prototype.hasOwnProperty.call(controlInfo, 'timeout')
+        && Number.isFinite(timeoutMs)
+        && timeoutMs > 0
+        ? { timeoutMs: Math.round(timeoutMs) }
+        : {})
+    };
+
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && payload !== '') {
+      parameters.body = payload;
+    }
+
+    return {
+      type: 'http_request',
+      target: url,
+      parameters
+    };
+  }
+
+  _parseISYProgramTimeTrigger(lines = []) {
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return null;
+    }
+
+    const joined = lines.join(' ');
+    const match = joined.match(/\btime\s+is\s+(.+?)(?:\bon\b|$)/i);
+    if (!match) {
+      return null;
+    }
+
+    const clock = this._parseISYClockValue(match[1]);
+    if (!clock) {
+      return null;
+    }
+
+    const [hourToken, minuteToken] = clock.split(':');
+    const hour = Number(hourToken);
+    const minute = Number(minuteToken);
+    const days = this._extractISYProgramDays(lines);
+
+    const conditions = {
+      hour,
+      minute
+    };
+    if (days.length > 0) {
+      conditions.days = days;
+    }
+
+    return {
+      type: 'time',
+      conditions
+    };
+  }
+
+  _parseISYProgramDeviceTrigger(lines = [], lookup = {}) {
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return {
+        trigger: null,
+        note: ''
+      };
+    }
+
+    const joined = lines.join(' ');
+    const comparisonMatch = joined.match(/\b(?:status|control)\s+['"]?([^'"]+?)['"]?\s+(?:is\s+)?(above|below|>=|<=|>|<)\s*(-?\d+(?:\.\d+)?)\b/i);
+    if (comparisonMatch) {
+      const deviceToken = comparisonMatch[1];
+      const operatorText = comparisonMatch[2].toLowerCase();
+      const value = Number(comparisonMatch[3]);
+      const device = this._resolveISYProgramDevice(deviceToken, lookup);
+      if (!device || !device._id) {
+        return {
+          trigger: null,
+          note: `Could not resolve IF device "${deviceToken}" for program trigger.`
+        };
+      }
+
+      const property = /\btemp|temperature\b/i.test(joined)
+        ? 'temperature'
+        : (/\bhumid|humidity\b/i.test(joined) ? 'humidity' : 'brightness');
+      const operatorMap = {
+        above: '>',
+        below: '<'
+      };
+
+      return {
+        trigger: {
+          type: 'device_state',
+          conditions: {
+            deviceId: device._id.toString(),
+            property,
+            operator: operatorMap[operatorText] || operatorText,
+            value
+          }
+        },
+        note: ''
+      };
+    }
+
+    const stateMatch = joined.match(/\b(?:status|control)\s+['"]?([^'"]+?)['"]?\s+is\s+(?:switched\s+)?(not\s+)?(on|off|true|false|open|closed|locked|unlocked|\d{1,3}%?)\b/i);
+    if (!stateMatch) {
+      return {
+        trigger: null,
+        note: ''
+      };
+    }
+
+    const deviceToken = stateMatch[1];
+    const negated = Boolean(stateMatch[2]);
+    const stateRaw = String(stateMatch[3] || '').trim().toLowerCase();
+    const device = this._resolveISYProgramDevice(deviceToken, lookup);
+    if (!device || !device._id) {
+      return {
+        trigger: null,
+        note: `Could not resolve IF device "${deviceToken}" for program trigger.`
+      };
+    }
+
+    if (/%$/.test(stateRaw)) {
+      const level = Number(stateRaw.replace('%', ''));
+      if (Number.isFinite(level)) {
+        return {
+          trigger: {
+            type: 'device_state',
+            conditions: {
+              deviceId: device._id.toString(),
+              property: 'brightness',
+              operator: negated ? '!=' : 'eq',
+              value: Math.max(0, Math.min(100, Math.round(level)))
+            }
+          },
+          note: ''
+        };
+      }
+    }
+
+    const isTruthy = ['on', 'true', 'open', 'unlocked'].includes(stateRaw);
+    const isFalsy = ['off', 'false', 'closed', 'locked'].includes(stateRaw);
+    if (!isTruthy && !isFalsy) {
+      return {
+        trigger: null,
+        note: `Unsupported IF state "${stateRaw}" for device "${deviceToken}".`
+      };
+    }
+
+    const stateValue = negated ? !isTruthy : isTruthy;
+    return {
+      trigger: {
+        type: 'device_state',
+        conditions: {
+          deviceId: device._id.toString(),
+          property: 'status',
+          state: stateValue,
+          operator: 'eq',
+          value: stateValue
+        }
+      },
+      note: ''
+    };
+  }
+
+  _translateISYProgramTrigger(program = {}, lookup = {}) {
+    const lines = Array.isArray(program.ifLines) ? program.ifLines : [];
+    const notes = [];
+
+    const timeTrigger = this._parseISYProgramTimeTrigger(lines);
+    if (timeTrigger) {
+      return {
+        trigger: timeTrigger,
+        notes
+      };
+    }
+
+    const deviceTrigger = this._parseISYProgramDeviceTrigger(lines, lookup);
+    if (deviceTrigger.note) {
+      notes.push(deviceTrigger.note);
+    }
+    if (deviceTrigger.trigger) {
+      return {
+        trigger: deviceTrigger.trigger,
+        notes
+      };
+    }
+
+    if (lines.length > 0) {
+      notes.push('IF conditions were not recognized; using manual trigger.');
+    }
+
+    return {
+      trigger: {
+        type: 'manual',
+        conditions: {
+          source: 'isy_program',
+          isyProgramId: program.id
+        }
+      },
+      notes
+    };
+  }
+
+  _buildISYConditionExpressionFromTrigger(trigger = {}) {
+    if (!trigger || typeof trigger !== 'object') {
+      return null;
+    }
+
+    if (trigger.type === 'time') {
+      const conditions = trigger.conditions && typeof trigger.conditions === 'object'
+        ? trigger.conditions
+        : {};
+      const hour = Number(conditions.hour);
+      const minute = Number(conditions.minute);
+      if (!Number.isInteger(hour) || !Number.isInteger(minute)) {
+        return null;
+      }
+      const expression = {
+        kind: 'time_is',
+        hour,
+        minute
+      };
+      if (Array.isArray(conditions.days) && conditions.days.length > 0) {
+        expression.days = conditions.days;
+      }
+      return expression;
+    }
+
+    if (trigger.type === 'device_state' || trigger.type === 'sensor') {
+      const conditions = trigger.conditions && typeof trigger.conditions === 'object'
+        ? trigger.conditions
+        : {};
+      if (!conditions.deviceId) {
+        return null;
+      }
+      return {
+        kind: 'device_state',
+        deviceId: String(conditions.deviceId),
+        property: conditions.property || 'status',
+        operator: conditions.operator || 'eq',
+        value: Object.prototype.hasOwnProperty.call(conditions, 'value') ? conditions.value : conditions.state
+      };
+    }
+
+    if (trigger.type === 'schedule') {
+      const conditions = trigger.conditions && typeof trigger.conditions === 'object'
+        ? trigger.conditions
+        : {};
+      if (conditions.start && conditions.end) {
+        return {
+          kind: 'time_window',
+          start: conditions.start,
+          end: conditions.end,
+          ...(Array.isArray(conditions.days) && conditions.days.length > 0 ? { days: conditions.days } : {})
+        };
+      }
+    }
+
+    return null;
+  }
+
+  _parseISYProgramIfLineExpression(line = '', lookup = {}, options = {}) {
+    const cleanedLine = String(line || '')
+      .replace(/^\s*(and|or)\s+/i, '')
+      .replace(/^\(+\s*/, '')
+      .replace(/\s*\)+$/, '')
+      .trim();
+    if (!cleanedLine) {
+      return null;
+    }
+
+    const allLines = Array.isArray(options.allLines) ? options.allLines : [];
+    const allDays = this._extractISYProgramDays(allLines);
+
+    const fromToMatch = cleanedLine.match(/^from\s+(.+?)\s+to\s+(.+)$/i);
+    if (fromToMatch) {
+      const start = this._parseISYClockValue(fromToMatch[1]);
+      const end = this._parseISYClockValue(fromToMatch[2].replace(/\(.*$/, '').trim());
+      if (start && end) {
+        const expression = {
+          kind: 'time_window',
+          start,
+          end
+        };
+        if (allDays.length > 0) {
+          expression.days = allDays;
+        }
+        return expression;
+      }
+    }
+
+    const fromForMatch = cleanedLine.match(/^from\s+(.+?)\s+for\s+(.+)$/i);
+    if (fromForMatch) {
+      const start = this._parseISYClockValue(fromForMatch[1]);
+      const durationSeconds = this._parseISYDurationSeconds(fromForMatch[2]);
+      if (start && Number.isFinite(durationSeconds) && durationSeconds > 0) {
+        const [startHour, startMinute] = start.split(':').map((value) => Number(value));
+        const totalStart = (startHour * 60) + startMinute;
+        const totalEnd = (totalStart + Math.round(durationSeconds / 60)) % (24 * 60);
+        const endHour = String(Math.floor(totalEnd / 60)).padStart(2, '0');
+        const endMinute = String(totalEnd % 60).padStart(2, '0');
+        const expression = {
+          kind: 'time_window',
+          start,
+          end: `${endHour}:${endMinute}`
+        };
+        if (allDays.length > 0) {
+          expression.days = allDays;
+        }
+        return expression;
+      }
+    }
+
+    const timeTrigger = this._parseISYProgramTimeTrigger([cleanedLine]);
+    if (timeTrigger) {
+      const expression = this._buildISYConditionExpressionFromTrigger(timeTrigger);
+      if (expression && allDays.length > 0 && !Array.isArray(expression.days)) {
+        expression.days = allDays;
+      }
+      return expression;
+    }
+
+    const deviceTrigger = this._parseISYProgramDeviceTrigger([cleanedLine], lookup);
+    if (deviceTrigger && deviceTrigger.trigger) {
+      return this._buildISYConditionExpressionFromTrigger(deviceTrigger.trigger);
+    }
+
+    const programMatch = cleanedLine.match(/^program\s+['"]?(.+?)['"]?\s+is\s+(not\s+)?(true|false)\b/i);
+    if (programMatch) {
+      const programToken = programMatch[1];
+      const isyProgram = this._resolveISYProgram(programToken, lookup);
+      const rawExpected = programMatch[3].toLowerCase() === 'true';
+      const expected = programMatch[2] ? !rawExpected : rawExpected;
+
+      return {
+        kind: 'isy_program_state',
+        isyProgramId: isyProgram?.id || null,
+        programName: isyProgram?.name || programToken,
+        property: 'status',
+        operator: 'eq',
+        value: expected
+      };
+    }
+
+    const variableMatch = cleanedLine.match(/^(?:state|integer)?\s*(?:variable\s+)?\$?([A-Za-z0-9_.:-]+)\s*(is\s+not|is|<=|>=|<|>)\s*(.+)$/i);
+    if (variableMatch) {
+      const variableName = this._normalizeISYVariableKey(variableMatch[1]);
+      const operatorToken = variableMatch[2].toLowerCase().replace(/\s+/g, ' ').trim();
+      const operatorMap = {
+        is: 'eq',
+        'is not': 'neq',
+        '<': '<',
+        '<=': '<=',
+        '>': '>',
+        '>=': '>='
+      };
+      return {
+        kind: 'isy_variable',
+        name: variableName,
+        operator: operatorMap[operatorToken] || 'eq',
+        value: this._parseISYVariableValueToken(variableMatch[3])
+      };
+    }
+
+    if (/^on\s+/i.test(cleanedLine)) {
+      return null;
+    }
+
+    return null;
+  }
+
+  _combineISYBooleanExpressions(operator, left, right) {
+    const op = operator === 'or' ? 'or' : 'and';
+    if (!left) {
+      return right || null;
+    }
+    if (!right) {
+      return left;
+    }
+
+    const conditions = [];
+    if (left.op === op && Array.isArray(left.conditions)) {
+      conditions.push(...left.conditions);
+    } else {
+      conditions.push(left);
+    }
+    if (right.op === op && Array.isArray(right.conditions)) {
+      conditions.push(...right.conditions);
+    } else {
+      conditions.push(right);
+    }
+
+    return {
+      op,
+      conditions
+    };
+  }
+
+  _mergeISYProgramIfLines(lines = []) {
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return [];
+    }
+
+    const merged = [];
+    lines.forEach((rawLine) => {
+      const line = String(rawLine || '').trim();
+      if (!line) {
+        return;
+      }
+
+      const isContinuation = /^(to\b|for\b|on\b)/i.test(line);
+      if (isContinuation && merged.length > 0) {
+        merged[merged.length - 1] = `${merged[merged.length - 1]} ${line}`.replace(/\s+/g, ' ').trim();
+      } else {
+        merged.push(line);
+      }
+    });
+
+    return merged;
+  }
+
+  _tokenizeISYIfLines(lines = [], lookup = {}) {
+    const mergedLines = this._mergeISYProgramIfLines(lines);
+    const tokens = [];
+    let previousWasExpression = false;
+
+    mergedLines.forEach((rawLine) => {
+      let working = String(rawLine || '').trim();
+      if (!working) {
+        return;
+      }
+
+      let operator = null;
+      const opMatch = working.match(/^(and|or)\b/i);
+      if (opMatch) {
+        operator = opMatch[1].toLowerCase();
+        working = working.slice(opMatch[0].length).trim();
+      }
+
+      if (!operator && previousWasExpression) {
+        operator = 'and';
+      }
+      if (operator) {
+        tokens.push({ type: 'op', value: operator });
+      }
+
+      while (working.startsWith('(')) {
+        tokens.push({ type: 'lparen' });
+        working = working.slice(1).trim();
+      }
+
+      let trailingClosers = 0;
+      while (working.endsWith(')')) {
+        trailingClosers += 1;
+        working = working.slice(0, -1).trim();
+      }
+
+      if (working) {
+        const expression = this._parseISYProgramIfLineExpression(working, lookup, {
+          allLines: mergedLines
+        });
+        if (expression) {
+          tokens.push({ type: 'expr', value: expression });
+          previousWasExpression = true;
+        } else {
+          previousWasExpression = false;
+        }
+      }
+
+      for (let i = 0; i < trailingClosers; i += 1) {
+        tokens.push({ type: 'rparen' });
+      }
+    });
+
+    return tokens;
+  }
+
+  _buildISYConditionExpression(program = {}, lookup = {}) {
+    const ifLines = Array.isArray(program.ifLines) ? program.ifLines : [];
+    if (ifLines.length === 0) {
+      return null;
+    }
+
+    const tokens = this._tokenizeISYIfLines(ifLines, lookup);
+    if (tokens.length === 0) {
+      return null;
+    }
+
+    const output = [];
+    const operators = [];
+    const precedence = {
+      or: 1,
+      and: 2
+    };
+
+    tokens.forEach((token) => {
+      if (token.type === 'expr') {
+        output.push(token);
+        return;
+      }
+
+      if (token.type === 'op') {
+        while (operators.length > 0) {
+          const top = operators[operators.length - 1];
+          if (top.type !== 'op') {
+            break;
+          }
+          if (precedence[top.value] >= precedence[token.value]) {
+            output.push(operators.pop());
+          } else {
+            break;
+          }
+        }
+        operators.push(token);
+        return;
+      }
+
+      if (token.type === 'lparen') {
+        operators.push(token);
+        return;
+      }
+
+      if (token.type === 'rparen') {
+        while (operators.length > 0 && operators[operators.length - 1].type !== 'lparen') {
+          output.push(operators.pop());
+        }
+        if (operators.length > 0 && operators[operators.length - 1].type === 'lparen') {
+          operators.pop();
+        }
+      }
+    });
+
+    while (operators.length > 0) {
+      const token = operators.pop();
+      if (token.type === 'op') {
+        output.push(token);
+      }
+    }
+
+    const stack = [];
+    output.forEach((token) => {
+      if (token.type === 'expr') {
+        stack.push(token.value);
+        return;
+      }
+      if (token.type !== 'op') {
+        return;
+      }
+
+      const right = stack.pop();
+      const left = stack.pop();
+      if (!left || !right) {
+        return;
+      }
+      stack.push(this._combineISYBooleanExpressions(token.value, left, right));
+    });
+
+    if (stack.length === 0) {
+      return null;
+    }
+    if (stack.length === 1) {
+      return stack[0];
+    }
+    let combined = stack[0];
+    for (let i = 1; i < stack.length; i += 1) {
+      combined = this._combineISYBooleanExpressions('and', combined, stack[i]);
+    }
+    return combined;
+  }
+
+  _createISYNotificationAction(message, extra = {}) {
+    return {
+      type: 'notification',
+      target: null,
+      parameters: {
+        message,
+        ...extra
+      }
+    };
+  }
+
+  _deriveISYSceneOffActions(scene, lookup = {}) {
+    if (!scene || !Array.isArray(scene.deviceActions) || scene.deviceActions.length === 0) {
+      return [];
+    }
+
+    const derived = [];
+    const seen = new Set();
+    scene.deviceActions.forEach((entry) => {
+      if (!entry || !entry.deviceId) {
+        return;
+      }
+
+      const target = entry.deviceId.toString();
+      const device = lookup.devicesById instanceof Map ? lookup.devicesById.get(target) : null;
+      if (!device) {
+        return;
+      }
+
+      let actionName = null;
+      if (device.type === 'light' || device.type === 'switch') {
+        actionName = 'turn_off';
+      } else if (device.type === 'lock') {
+        actionName = 'lock';
+      } else if (device.type === 'garage') {
+        actionName = 'close';
+      }
+
+      if (!actionName) {
+        return;
+      }
+
+      const key = `${target}:${actionName}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      derived.push({
+        type: 'device_control',
+        target,
+        parameters: {
+          action: actionName
+        }
+      });
+    });
+
+    return derived;
+  }
+
+  _createISYWorkflowControlAction(line = '', lookup = {}) {
+    const runMatch = String(line || '').match(/^run\s+program\s+['"]?(.+?)['"]?\s*(?:\((if|then\s*path|else\s*path)\))?$/i);
+    if (runMatch) {
+      const programToken = runMatch[1];
+      const mode = String(runMatch[2] || 'if').toLowerCase().replace(/\s+/g, '');
+      const targetProgram = this._resolveISYProgram(programToken, lookup);
+      const modeMap = {
+        if: 'run_if',
+        thenpath: 'run_then',
+        elsepath: 'run_else'
+      };
+
+      return {
+        type: 'workflow_control',
+        target: null,
+        parameters: {
+          operation: modeMap[mode] || 'run_if',
+          targetIsyProgramId: targetProgram?.id || null,
+          programName: targetProgram?.name || programToken
+        }
+      };
+    }
+
+    const simpleProgramMatch = String(line || '').match(/^(stop|enable|disable)\s+program\s+['"]?(.+?)['"]?$/i);
+    if (simpleProgramMatch) {
+      const command = simpleProgramMatch[1].toLowerCase();
+      const programToken = simpleProgramMatch[2];
+      const targetProgram = this._resolveISYProgram(programToken, lookup);
+      return {
+        type: 'workflow_control',
+        target: null,
+        parameters: {
+          operation: command,
+          targetIsyProgramId: targetProgram?.id || null,
+          programName: targetProgram?.name || programToken
+        }
+      };
+    }
+
+    const startupMatch = String(line || '').match(/^set\s+program\s+['"]?(.+?)['"]?\s+to\s+(run|not\s+run)\s+at\s+startup$/i);
+    if (startupMatch) {
+      const programToken = startupMatch[1];
+      const targetProgram = this._resolveISYProgram(programToken, lookup);
+      const startupMode = /not\s+run/i.test(startupMatch[2]) ? 'set_not_run_at_startup' : 'set_run_at_startup';
+      return {
+        type: 'workflow_control',
+        target: null,
+        parameters: {
+          operation: startupMode,
+          targetIsyProgramId: targetProgram?.id || null,
+          programName: targetProgram?.name || programToken
+        }
+      };
+    }
+
+    return null;
+  }
+
+  _createISYNetworkResourceAction(line = '', lookup = {}, extra = {}) {
+    const normalized = String(line || '').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const resourceMatch = normalized.match(/^(?:run\s+)?(?:network\s+resource|resource)\s+(.+)$/i);
+    if (!resourceMatch) {
+      return null;
+    }
+
+    const token = String(resourceMatch[1] || '').trim();
+    const quotedToken = token.match(/^['"]([^'"]+)['"]/);
+    const numericToken = quotedToken ? null : token.match(/^#?(\d+)\b/);
+    const lookupToken = quotedToken
+      ? quotedToken[1]
+      : (numericToken ? numericToken[1] : token.replace(/^['"]|['"]$/g, '').trim());
+    const resolved = this._resolveISYNetworkResource(lookupToken, lookup);
+
+    const resourceId = resolved?.id
+      ? String(resolved.id).trim()
+      : (numericToken ? String(numericToken[1]).trim() : null);
+    const resourceName = resolved?.name
+      || (quotedToken ? quotedToken[1].trim() : (!numericToken ? lookupToken : null));
+    const httpRequestAction = this._createHttpRequestActionFromISYNetworkResource(
+      resolved || {},
+      normalized,
+      extra
+    );
+    if (httpRequestAction) {
+      return httpRequestAction;
+    }
+
+    return {
+      type: 'isy_network_resource',
+      target: resourceId || resourceName || null,
+      parameters: {
+        statement: normalized,
+        ...(resourceId ? { resourceId } : {}),
+        ...(resourceName ? { resourceName } : {}),
+        ...extra
+      }
+    };
+  }
+
+  _createISYVariableControlAction(line = '') {
+    const normalized = String(line || '').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const initMatch = normalized.match(/^(?:initialize\s+)?\$?([A-Za-z0-9_.:-]+)\s+init\s+to\s+(.+)$/i);
+    if (initMatch) {
+      return {
+        type: 'variable_control',
+        target: null,
+        parameters: {
+          operation: 'init',
+          variable: this._normalizeISYVariableKey(initMatch[1]),
+          value: this._parseISYVariableValueToken(initMatch[2])
+        }
+      };
+    }
+
+    const calcMatch = normalized.match(/^\$?([A-Za-z0-9_.:-]+)\s*(=|\+=|-=|\*=|\/=|%=|&=|\|=|\^=)\s*(.+)$/i);
+    if (!calcMatch) {
+      return null;
+    }
+
+    const operatorMap = {
+      '=': 'assign',
+      '+=': 'add',
+      '-=': 'subtract',
+      '*=': 'multiply',
+      '/=': 'divide',
+      '%=': 'modulo',
+      '&=': 'bit_and',
+      '|=': 'bit_or',
+      '^=': 'bit_xor'
+    };
+
+    return {
+      type: 'variable_control',
+      target: null,
+      parameters: {
+        operation: operatorMap[calcMatch[2]] || 'assign',
+        variable: this._normalizeISYVariableKey(calcMatch[1]),
+        value: this._parseISYVariableValueToken(calcMatch[3])
+      }
+    };
+  }
+
+  _translateISYProgramActionLines(lines = [], lookup = {}, options = {}) {
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return {
+        actions: [],
+        untranslatedLines: [],
+        translatedCount: 0
+      };
+    }
+
+    const branch = (options.branch || 'then').toString().toLowerCase();
+    const ifExpression = options.ifExpression && typeof options.ifExpression === 'object'
+      ? options.ifExpression
+      : null;
+    const suppressUntranslatedSummary = options.suppressUntranslatedSummary === true;
+    const actions = [];
+    const untranslatedLines = [];
+    let translatedCount = 0;
+
+    const lineItems = lines.map((line) => String(line || '').trim()).filter(Boolean);
+    let index = 0;
+    while (index < lineItems.length) {
+      const line = lineItems[index];
+      if (!line) {
+        index += 1;
+        continue;
+      }
+
+      const repeatEveryMatch = line.match(/^repeat\s+every\s+(.+?)(\s+random)?$/i);
+      const repeatForMatch = repeatEveryMatch ? null : line.match(/^repeat\s+(?:for\s+)?(\d+)\s+times?(?:\s+random)?/i);
+      if (repeatEveryMatch || repeatForMatch) {
+        let nextRepeatIndex = index + 1;
+        while (nextRepeatIndex < lineItems.length && !/^repeat\b/i.test(lineItems[nextRepeatIndex])) {
+          nextRepeatIndex += 1;
+        }
+
+        const blockLines = lineItems.slice(index + 1, nextRepeatIndex);
+        const nested = this._translateISYProgramActionLines(blockLines, lookup, {
+          ...options,
+          suppressUntranslatedSummary: true
+        });
+
+        if (nested.untranslatedLines.length > 0) {
+          untranslatedLines.push(...nested.untranslatedLines);
+        }
+
+        if (repeatEveryMatch) {
+          const intervalSeconds = this._parseISYDurationSeconds(repeatEveryMatch[1]) ?? 0;
+          const continueWhile = ifExpression
+            ? (branch === 'then'
+                ? ifExpression
+                : {
+                    op: 'not',
+                    condition: ifExpression
+                  })
+            : null;
+          actions.push({
+            type: 'repeat',
+            target: null,
+            parameters: {
+              mode: 'every',
+              intervalSeconds,
+              random: Boolean(repeatEveryMatch[2]),
+              actions: nested.actions,
+              continueWhile,
+              maxIterations: 500
+            }
+          });
+          translatedCount += 1 + nested.translatedCount;
+        } else if (repeatForMatch) {
+          actions.push({
+            type: 'repeat',
+            target: null,
+            parameters: {
+              mode: 'for',
+              count: Math.max(0, Math.round(Number(repeatForMatch[1]))),
+              random: /\brandom\b/i.test(line),
+              actions: nested.actions
+            }
+          });
+          translatedCount += 1 + nested.translatedCount;
+        }
+
+        index = nextRepeatIndex;
+        continue;
+      }
+
+      const waitMatch = line.match(/^wait\s+(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)?(\s+random)?/i);
+      if (waitMatch) {
+        const amount = Number(waitMatch[1]);
+        const unit = String(waitMatch[2] || 'seconds').toLowerCase();
+        let seconds = amount;
+        if (unit.startsWith('min')) {
+          seconds = amount * 60;
+        } else if (unit.startsWith('hour') || unit.startsWith('hr')) {
+          seconds = amount * 3600;
+        }
+
+        actions.push({
+          type: 'delay',
+          target: null,
+          parameters: {
+            seconds: Math.max(0, Math.round(seconds)),
+            random: /\brandom\b/i.test(line)
+          }
+        });
+        translatedCount += 1;
+        index += 1;
+        continue;
+      }
+
+      const sceneMatch = line.match(/^set\s+scene\s+['"]?(.+?)['"]?\s+(on|off|query)\b/i);
+      if (sceneMatch) {
+        const sceneToken = sceneMatch[1];
+        const sceneState = String(sceneMatch[2] || '').toLowerCase();
+        const scene = this._resolveISYProgramScene(sceneToken, lookup);
+        if (scene && scene._id) {
+          if (sceneState === 'on') {
+            actions.push({
+              type: 'scene_activate',
+              target: scene._id.toString(),
+              parameters: {}
+            });
+            translatedCount += 1;
+            index += 1;
+            continue;
+          }
+
+          if (sceneState === 'off') {
+            const offActions = this._deriveISYSceneOffActions(scene, lookup);
+            if (offActions.length > 0) {
+              actions.push(...offActions);
+              translatedCount += 1;
+              index += 1;
+              continue;
+            }
+          }
+
+          if (sceneState === 'query') {
+            actions.push(this._createISYNotificationAction(`ISY scene query requested: ${line}`, {
+              isyProgramBranch: branch
+            }));
+            translatedCount += 1;
+            index += 1;
+            continue;
+          }
+        }
+
+        untranslatedLines.push(line);
+        index += 1;
+        continue;
+      }
+
+      const quotedDeviceMatch = line.match(/^set\s+(?!scene\b)(?:device\s+)?['"]([^'"]+)['"]\s+(.+)$/i);
+      const unquotedDeviceMatch = quotedDeviceMatch
+        ? null
+        : line.match(/^set\s+(?!scene\b)(?:device\s+)?([A-Za-z0-9 .:_-]+?)\s+(on|off|fast on|fast off|dim|bright|\d{1,3}%|to\s+\d{1,3}%)(.*)$/i);
+
+      const deviceToken = quotedDeviceMatch ? quotedDeviceMatch[1] : (unquotedDeviceMatch ? unquotedDeviceMatch[1] : null);
+      const trailing = quotedDeviceMatch ? quotedDeviceMatch[2] : (unquotedDeviceMatch ? `${unquotedDeviceMatch[2]}${unquotedDeviceMatch[3] || ''}` : '');
+      if (deviceToken && trailing) {
+        const device = this._resolveISYProgramDevice(deviceToken, lookup);
+        if (!device || !device._id) {
+          untranslatedLines.push(line);
+          index += 1;
+          continue;
+        }
+
+        const trailingLower = String(trailing).trim().toLowerCase();
+        const percentMatch = trailingLower.match(/(?:to\s+)?(\d{1,3})\s*%/);
+        if (percentMatch) {
+          const brightness = Math.max(0, Math.min(100, Number(percentMatch[1])));
+          actions.push({
+            type: 'device_control',
+            target: device._id.toString(),
+            parameters: {
+              action: 'set_brightness',
+              brightness
+            }
+          });
+          translatedCount += 1;
+          index += 1;
+          continue;
+        }
+
+        if (/^(on|fast on)\b/.test(trailingLower)) {
+          actions.push({
+            type: 'device_control',
+            target: device._id.toString(),
+            parameters: {
+              action: 'turn_on'
+            }
+          });
+          translatedCount += 1;
+          index += 1;
+          continue;
+        }
+
+        if (/^(off|fast off)\b/.test(trailingLower)) {
+          actions.push({
+            type: 'device_control',
+            target: device._id.toString(),
+            parameters: {
+              action: 'turn_off'
+            }
+          });
+          translatedCount += 1;
+          index += 1;
+          continue;
+        }
+
+        untranslatedLines.push(line);
+        index += 1;
+        continue;
+      }
+
+      if (/^send\s+notification\b/i.test(line)) {
+        actions.push(this._createISYNotificationAction(line, {
+          isyProgramBranch: branch
+        }));
+        translatedCount += 1;
+        index += 1;
+        continue;
+      }
+
+      const variableAction = this._createISYVariableControlAction(line);
+      if (variableAction) {
+        actions.push(variableAction);
+        translatedCount += 1;
+        index += 1;
+        continue;
+      }
+
+      const workflowControlAction = this._createISYWorkflowControlAction(line, lookup);
+      if (workflowControlAction) {
+        actions.push(workflowControlAction);
+        translatedCount += 1;
+        index += 1;
+        continue;
+      }
+
+      const networkResourceAction = this._createISYNetworkResourceAction(line, lookup, {
+        isyProgramBranch: branch
+      });
+      if (networkResourceAction) {
+        actions.push(networkResourceAction);
+        translatedCount += 1;
+        index += 1;
+        continue;
+      }
+
+      untranslatedLines.push(line);
+      index += 1;
+    }
+
+    if (untranslatedLines.length > 0 && !suppressUntranslatedSummary) {
+      const preview = untranslatedLines.slice(0, 3).join(' | ');
+      actions.push(this._createISYNotificationAction(
+        `Untranslated ISY ${branch.toUpperCase()} statements: ${preview}${untranslatedLines.length > 3 ? ' | ...' : ''}`,
+        {
+          isyProgramBranch: branch,
+          untranslatedCount: untranslatedLines.length
+        }
+      ));
+    }
+
+    return {
+      actions,
+      untranslatedLines,
+      translatedCount
+    };
+  }
+
+  _invertISYProgramTrigger(trigger) {
+    if (!trigger || typeof trigger !== 'object') {
+      return null;
+    }
+    if (!['device_state', 'sensor'].includes(trigger.type)) {
+      return null;
+    }
+
+    const conditions = {
+      ...(trigger.conditions && typeof trigger.conditions === 'object' ? trigger.conditions : {})
+    };
+    const operator = String(conditions.operator || '').toLowerCase();
+    const inverseOperator = {
+      eq: 'neq',
+      '==': '!=',
+      neq: 'eq',
+      '!=': '==',
+      '>': '<=',
+      '>=': '<',
+      '<': '>=',
+      '<=': '>'
+    };
+
+    if (operator && inverseOperator[operator]) {
+      conditions.operator = inverseOperator[operator];
+    } else if (typeof conditions.state === 'boolean') {
+      conditions.state = !conditions.state;
+      if (typeof conditions.value === 'boolean') {
+        conditions.value = !conditions.value;
+      } else {
+        conditions.value = conditions.state;
+      }
+      conditions.operator = 'eq';
+    } else if (typeof conditions.value === 'boolean') {
+      conditions.value = !conditions.value;
+      conditions.operator = 'eq';
+      if (Object.prototype.hasOwnProperty.call(conditions, 'state')) {
+        conditions.state = conditions.value;
+      }
+    } else {
+      return null;
+    }
+
+    return {
+      type: trigger.type,
+      conditions
+    };
+  }
+
+  _buildISYWorkflowDescription(lines = []) {
+    const description = lines
+      .filter((line) => typeof line === 'string' && line.trim())
+      .join('\n')
+      .trim();
+
+    if (description.length <= 790) {
+      return description;
+    }
+    return `${description.slice(0, 787)}...`;
+  }
+
+  _buildISYProgramWorkflowPayloads(program = {}, lookup = {}, options = {}) {
+    const enableWorkflows = options.enableWorkflows === true;
+    const marker = this._isyProgramMarker(program.id);
+    const elseMarker = this._isyProgramElseMarker(program.id);
+    const baseName = `ISY Program ${program.id}: ${program.name || 'Unnamed'}`;
+    const ifExpression = this._buildISYConditionExpression(program, lookup);
+    const triggerTranslation = this._translateISYProgramTrigger(program, lookup);
+    const thenTranslation = this._translateISYProgramActionLines(program.thenLines || [], lookup, {
+      branch: 'then',
+      ifExpression
+    });
+    const elseTranslation = this._translateISYProgramActionLines(program.elseLines || [], lookup, {
+      branch: 'else',
+      ifExpression
+    });
+
+    const mainNotes = [
+      'Imported from ISY program with IF/THEN/ELSE translation.',
+      `Enabled on ISY: ${program.enabled ? 'yes' : 'no'}`,
+      `Run at startup: ${program.runAtStartup ? 'yes' : 'no'}`,
+      `Status: ${program.status ? 'true' : 'false'}`,
+      ifExpression
+        ? 'IF expression parsed and executed with edge-change semantics.'
+        : triggerTranslation.notes.join(' '),
+      thenTranslation.untranslatedLines.length > 0
+        ? `${thenTranslation.untranslatedLines.length} THEN statements could not be translated and were captured as notifications.`
+        : '',
+      program.lastRunTime ? `Last run: ${program.lastRunTime}` : '',
+      program.lastFinishTime ? `Last finish: ${program.lastFinishTime}` : ''
+    ];
+
+    const mainActions = thenTranslation.actions.length > 0
+      ? thenTranslation.actions
+      : [this._createISYNotificationAction(`ISY program "${program.name || program.id}" had no translatable THEN actions`, {
+          isyProgramId: program.id,
+          isyProgramBranch: 'then'
+        })];
+
+    const mainPayload = {
+      name: baseName,
+      description: this._buildISYWorkflowDescription([
+        marker,
+        '[ISY_PROGRAM_PATH:THEN]',
+        `[ISY_PROGRAM_NAME:${program.name || ''}]`,
+        ...mainNotes
+      ]),
+      source: 'import',
+      enabled: enableWorkflows,
+      category: 'custom',
+      priority: 5,
+      cooldown: 0,
+      trigger: triggerTranslation.trigger,
+      isyRunAtStartup: program.runAtStartup === true,
+      actions: mainActions
+    };
+
+    let elsePayload = null;
+    let elseHandledInPrimary = false;
+    if (ifExpression) {
+      const branchedMainActions = [
+        {
+          type: 'condition',
+          target: null,
+          parameters: {
+            evaluator: 'isy_program_if',
+            expression: ifExpression,
+            edge: 'change',
+            stateKey: `isy_program:${program.id}:if`,
+            isyProgramId: program.id,
+            isyProgramName: program.name || '',
+            programStateKey: `isy_program:${program.id}`,
+            onFalseActions: elseTranslation.actions
+          }
+        },
+        ...mainActions
+      ];
+
+      mainPayload.actions = branchedMainActions;
+      mainPayload.trigger = {
+        type: 'schedule',
+        conditions: {
+          cron: '* * * * *'
+        }
+      };
+      elseHandledInPrimary = elseTranslation.actions.length > 0;
+      mainPayload.description = this._buildISYWorkflowDescription([
+        mainPayload.description,
+        'Program executes on IF condition edge changes via schedule polling; ELSE actions are attached to the same workflow.'
+      ]);
+    } else if (elseTranslation.actions.length > 0) {
+      mainPayload.description = this._buildISYWorkflowDescription([
+        mainPayload.description,
+        'ELSE path exists but IF expression could not be parsed for auto-branch execution.'
+      ]);
+    }
+
+    return {
+      marker,
+      elseMarker,
+      baseName,
+      mainPayload,
+      elsePayload,
+      elseHandledInPrimary,
+      translatedActions: thenTranslation.translatedCount + elseTranslation.translatedCount,
+      hasUntranslated: thenTranslation.untranslatedLines.length > 0 || elseTranslation.untranslatedLines.length > 0
+    };
+  }
+
   async importISYProgramsAsWorkflows(programs = [], options = {}) {
     const isDryRun = options.dryRun !== false;
     const enableWorkflows = options.enableWorkflows === true;
+    const programList = Array.isArray(programs) ? programs : [];
+    const lookup = await this._buildISYProgramLookup(programList, {
+      resources: options.resources
+    });
     const results = {
       success: true,
       dryRun: isDryRun,
@@ -1108,90 +3074,150 @@ class InsteonService {
       updated: 0,
       skipped: 0,
       failed: 0,
+      translatedPrograms: 0,
+      placeholderPrograms: 0,
+      elseCreated: 0,
+      elseUpdated: 0,
+      elseSkipped: 0,
       workflows: [],
       errors: []
     };
 
-    for (const program of programs) {
+    for (const program of programList) {
       if (!program || !program.id) {
         continue;
       }
 
       results.processed += 1;
-      const marker = this._isyProgramMarker(program.id);
-      const baseName = `ISY Program ${program.id}: ${program.name || 'Unnamed'}`;
-      const descriptionLines = [
-        marker,
-        'Imported from ISY program metadata.',
-        'Original ISY IF/THEN/ELSE logic is not auto-translated; this is a workflow placeholder.',
-        `Enabled on ISY: ${program.enabled ? 'yes' : 'no'}`,
-        `Run at startup: ${program.runAtStartup ? 'yes' : 'no'}`,
-        `Status: ${program.status ? 'true' : 'false'}`,
-        program.lastRunTime ? `Last run: ${program.lastRunTime}` : '',
-        program.lastFinishTime ? `Last finish: ${program.lastFinishTime}` : ''
-      ].filter(Boolean);
-      const workflowPayload = {
-        name: baseName,
-        description: descriptionLines.join('\n'),
-        source: 'import',
-        enabled: enableWorkflows,
-        category: 'custom',
-        priority: 5,
-        cooldown: 0,
-        trigger: {
-          type: 'manual',
-          conditions: {
-            source: 'isy_program',
-            isyProgramId: program.id
-          }
-        },
-        actions: [
-          {
-            type: 'notification',
-            target: null,
-            parameters: {
-              message: `ISY program "${program.name || program.id}" placeholder executed`,
-              isyProgramId: program.id
-            }
-          }
-        ]
-      };
-
       try {
-        const existing = await Workflow.findOne({
-          description: { $regex: new RegExp(`\\[ISY_PROGRAM_ID:${program.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`) }
+        const translation = this._buildISYProgramWorkflowPayloads(program, lookup, {
+          enableWorkflows
+        });
+        if (translation.translatedActions > 0) {
+          results.translatedPrograms += 1;
+        } else {
+          results.placeholderPrograms += 1;
+        }
+
+        const markerRegex = new RegExp(this._escapeRegexLiteral(translation.marker));
+        const elsePathRegex = new RegExp(this._escapeRegexLiteral('[ISY_PROGRAM_PATH:ELSE]'));
+        const existingMain = await Workflow.findOne({
+          $and: [
+            { description: { $regex: markerRegex } },
+            { description: { $not: elsePathRegex } }
+          ]
         }).lean();
 
         if (isDryRun) {
           results.workflows.push({
             programId: program.id,
-            name: baseName,
-            status: existing ? 'would-update' : 'would-create'
+            path: 'then',
+            name: translation.mainPayload.name,
+            status: existingMain ? 'would-update' : 'would-create'
           });
-          if (existing) {
+          if (existingMain) {
             results.updated += 1;
           } else {
             results.created += 1;
           }
+
+          if (translation.elsePayload) {
+            const existingElse = await Workflow.findOne({
+              description: { $regex: new RegExp(this._escapeRegexLiteral(translation.elseMarker)) }
+            }).lean();
+
+            results.workflows.push({
+              programId: program.id,
+              path: 'else',
+              name: translation.elsePayload.name,
+              status: existingElse ? 'would-update' : 'would-create'
+            });
+
+            if (existingElse) {
+              results.updated += 1;
+            } else {
+              results.created += 1;
+            }
+          } else if (translation.elseHandledInPrimary) {
+            results.workflows.push({
+              programId: program.id,
+              path: 'else',
+              name: translation.mainPayload.name,
+              status: 'embedded-in-primary'
+            });
+          } else {
+            results.elseSkipped += 1;
+          }
           continue;
         }
 
-        if (existing) {
-          const updated = await workflowService.updateWorkflow(existing._id.toString(), workflowPayload);
+        let mainWorkflowId = null;
+        let mainWorkflowName = translation.mainPayload.name;
+        if (existingMain) {
+          const updated = await workflowService.updateWorkflow(existingMain._id.toString(), translation.mainPayload);
           results.updated += 1;
+          mainWorkflowId = updated?._id || existingMain._id;
+          mainWorkflowName = updated?.name || translation.mainPayload.name;
           results.workflows.push({
             programId: program.id,
+            path: 'then',
             workflowId: updated._id,
             name: updated.name,
             status: 'updated'
           });
         } else {
-          const created = await workflowService.createWorkflow(workflowPayload, { source: 'import' });
+          const created = await workflowService.createWorkflow(translation.mainPayload, { source: 'import' });
           results.created += 1;
+          mainWorkflowId = created?._id || null;
+          mainWorkflowName = created?.name || translation.mainPayload.name;
           results.workflows.push({
             programId: program.id,
+            path: 'then',
             workflowId: created._id,
             name: created.name,
+            status: 'created'
+          });
+        }
+
+        if (!translation.elsePayload) {
+          if (translation.elseHandledInPrimary) {
+            results.workflows.push({
+              programId: program.id,
+              path: 'else',
+              workflowId: mainWorkflowId,
+              name: mainWorkflowName,
+              status: 'embedded-in-primary'
+            });
+            continue;
+          }
+          results.elseSkipped += 1;
+          continue;
+        }
+
+        const existingElse = await Workflow.findOne({
+          description: { $regex: new RegExp(this._escapeRegexLiteral(translation.elseMarker)) }
+        }).lean();
+
+        if (existingElse) {
+          const updatedElse = await workflowService.updateWorkflow(existingElse._id.toString(), translation.elsePayload);
+          results.updated += 1;
+          results.elseUpdated += 1;
+          results.workflows.push({
+            programId: program.id,
+            path: 'else',
+            workflowId: updatedElse._id,
+            name: updatedElse.name,
+            status: 'updated'
+          });
+        } else {
+          const createdElse = await workflowService.createWorkflow(translation.elsePayload, { source: 'import' });
+          results.created += 1;
+          results.elseCreated += 1;
+          results.workflows.push({
+            programId: program.id,
+            path: 'else',
+            workflowId: createdElse._id,
+            name: createdElse.name,
             status: 'created'
           });
         }
@@ -1207,6 +3233,62 @@ class InsteonService {
     }
 
     return results;
+  }
+
+  async executeISYNetworkResource(payload = {}) {
+    const request = payload && typeof payload === 'object' ? payload : {};
+    const connection = await this._resolveISYConnection(request);
+
+    let resourceId = request.resourceId ?? request.id ?? request.target ?? '';
+    if (typeof resourceId === 'number' && Number.isFinite(resourceId)) {
+      resourceId = String(Math.trunc(resourceId));
+    } else {
+      resourceId = String(resourceId || '').trim().replace(/^#/, '');
+    }
+
+    let resourceName = String(request.resourceName ?? request.name ?? '').trim();
+    if (!resourceId && resourceName) {
+      const resources = await this._fetchISYNetworkResources(connection);
+      const resourcesByName = new Map();
+      const resourcesById = new Map();
+      resources.forEach((resource) => {
+        if (!resource || typeof resource !== 'object') {
+          return;
+        }
+
+        const id = String(resource.id || '').trim();
+        const normalizedName = this._normalizeISYLookupKey(resource.name || '');
+        if (id && !resourcesById.has(id)) {
+          resourcesById.set(id, resource);
+        }
+        if (normalizedName && !resourcesByName.has(normalizedName)) {
+          resourcesByName.set(normalizedName, resource);
+        }
+      });
+
+      const resolved = this._resolveISYNetworkResource(resourceName, {
+        resourcesByName,
+        resourcesById
+      });
+      if (resolved?.id) {
+        resourceId = String(resolved.id).trim();
+        if (!resourceName && resolved.name) {
+          resourceName = String(resolved.name).trim();
+        }
+      }
+    }
+
+    if (!resourceId) {
+      throw new Error(`Unable to resolve ISY network resource${resourceName ? ` "${resourceName}"` : ''}`);
+    }
+
+    await this._requestISYResource(connection, `/rest/networking/resources/${encodeURIComponent(resourceId)}`);
+    return {
+      success: true,
+      resourceId,
+      resourceName: resourceName || null,
+      message: `Executed ISY network resource${resourceName ? ` "${resourceName}"` : ''} (id ${resourceId})`
+    };
   }
 
   async testISYConnection(payload = {}) {
@@ -1261,6 +3343,7 @@ class InsteonService {
         nodes: extraction.devices.length,
         groups: extraction.groups.length,
         programs: extraction.programs.length,
+        networkResources: extraction.networkResources.length,
         uniqueDeviceIds: extraction.deviceIds.length,
         topologyScenes: extraction.topologyScenes.length
       },
@@ -1280,7 +3363,8 @@ class InsteonService {
       if (options.importPrograms) {
         results.programs = await this.importISYProgramsAsWorkflows(extraction.programs, {
           dryRun: true,
-          enableWorkflows: options.enableProgramWorkflows
+          enableWorkflows: options.enableProgramWorkflows,
+          resources: extraction.networkResources
         });
       }
 
@@ -1348,7 +3432,8 @@ class InsteonService {
       try {
         results.programs = await this.importISYProgramsAsWorkflows(extraction.programs, {
           dryRun: false,
-          enableWorkflows: options.enableProgramWorkflows
+          enableWorkflows: options.enableProgramWorkflows,
+          resources: extraction.networkResources
         });
         if (!results.programs.success) {
           results.success = false;

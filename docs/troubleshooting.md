@@ -124,7 +124,9 @@ If extraction fails:
 3. Try `isyUseHttps=false` only if your ISY is configured for HTTP.
 
 Program import caveat:
-- ISY program IF/THEN/ELSE bodies are not automatically converted into executable HomeBrain actions; import creates workflow placeholders with metadata.
+- ISY program import now executes IF/THEN/ELSE with unified condition edge-change branching in one workflow.
+- ISY `Network Resource` / `Resource` statements are translated into executable steps. HTTP/HTTPS resources run as native HomeBrain `http_request` actions; other protocols run via ISY REST passthrough.
+- If a statement cannot be translated exactly, HomeBrain adds a notification step describing the original ISY line so you can finish that mapping manually.
 
 ### Remote device will not come online
 

@@ -152,8 +152,13 @@ curl -s -X POST http://127.0.0.1:3000/api/insteon/isy/sync \
 ```
 
 Notes:
-- Program import creates workflow placeholders (manual trigger + metadata marker), not full IF/THEN/ELSE logic translation.
+- Program import translates ISY IF/THEN/ELSE into executable HomeBrain workflows with unified condition branching.
+- Variable operations (`=`, `+=`, `-=`, `*=`, `/=`, `%=` and bitwise ops), `Wait`, and `Repeat` actions are translated into runtime-executable workflow actions.
+- Program control actions (`Run/Stop/Enable/Disable`, `Set Program ... Run At Startup`) are translated into executable workflow-control actions.
+- ISY `Network Resource` / `Resource` statements are translated into executable actions. HTTP/HTTPS resources become native HomeBrain `http_request` actions; non-HTTP resources use ISY passthrough execution by id/name.
+- Any statements that still cannot be mapped are preserved as explicit notification steps for manual follow-up.
 - Topology replay uses scene membership/controllers available via ISY REST metadata.
+- Detailed parity matrix: [isy-program-capability-matrix.md](isy-program-capability-matrix.md)
 
 ### Logitech Harmony Hub
 

@@ -1,7 +1,17 @@
 import api from "./api";
 
 export type WorkflowTriggerType = "manual" | "time" | "schedule" | "device_state" | "sensor";
-export type WorkflowActionType = "device_control" | "scene_activate" | "notification" | "delay" | "condition";
+export type WorkflowActionType =
+  | "device_control"
+  | "scene_activate"
+  | "notification"
+  | "delay"
+  | "condition"
+  | "workflow_control"
+  | "variable_control"
+  | "repeat"
+  | "isy_network_resource"
+  | "http_request";
 
 export interface WorkflowTrigger {
   type: WorkflowTriggerType;

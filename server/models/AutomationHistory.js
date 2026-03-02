@@ -8,7 +8,7 @@ const actionResultSchema = new mongoose.Schema({
   actionType: {
     type: String,
     required: true,
-    enum: ['device_control', 'scene_activate', 'notification', 'delay', 'condition']
+    enum: ['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request']
   },
   target: mongoose.Schema.Types.Mixed,
   parameters: mongoose.Schema.Types.Mixed,

@@ -16,7 +16,7 @@ const actionSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['device_control', 'scene_activate', 'notification', 'delay', 'condition'],
+    enum: ['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request'],
   },
   target: {
     type: mongoose.Schema.Types.Mixed, // Can be device ID, scene ID, or other targets
