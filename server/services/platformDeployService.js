@@ -285,6 +285,78 @@ class PlatformDeployService {
       .filter(Boolean);
   }
 
+  getClientDistPath() {
+    return path.join(this.projectRoot, 'client', 'dist');
+  }
+
+  async isPathWritable(targetPath) {
+    try {
+      await fsp.access(targetPath, fs.constants.W_OK);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async ensureWritableClientDist({ jobId = null } = {}) {
+    const log = async (message) => {
+      if (!jobId) return;
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [Ensure client dist permissions] ${message}\n`
+      );
+    };
+
+    const distPath = this.getClientDistPath();
+    if (!fs.existsSync(distPath)) {
+      await log('client/dist does not exist yet; skipping permission check.');
+      return { checked: false, repaired: false, missing: true };
+    }
+
+    const checkTargets = [distPath, path.join(distPath, 'assets')].filter((value) => fs.existsSync(value));
+    const findNonWritable = async () => {
+      const paths = [];
+      for (const target of checkTargets) {
+        if (!(await this.isPathWritable(target))) {
+          paths.push(target);
+        }
+      }
+      return paths;
+    };
+
+    let nonWritablePaths = await findNonWritable();
+    if (nonWritablePaths.length === 0) {
+      return { checked: true, repaired: false, missing: false };
+    }
+
+    const relativePaths = nonWritablePaths.map((target) => path.relative(this.projectRoot, target) || target);
+    await log(`Detected non-writable path(s): ${relativePaths.join(', ')}. Attempting repair.`);
+
+    const repairCommand = 'sudo -n chown -R "$(id -un):$(id -gn)" client/dist && sudo -n chmod -R u+rwX client/dist';
+    try {
+      await this.runCommand('bash', ['-lc', repairCommand], {
+        cwd: this.projectRoot,
+        captureStdout: false
+      });
+    } catch (error) {
+      const manualFix = `sudo chown -R "$(id -un):$(id -gn)" "${distPath}" && sudo chmod -R u+rwX "${distPath}"`;
+      throw new Error(
+        `client/dist is not writable and automatic repair failed. Run this once on the host: ${manualFix}`
+      );
+    }
+
+    nonWritablePaths = await findNonWritable();
+    if (nonWritablePaths.length > 0) {
+      const manualFix = `sudo chown -R "$(id -un):$(id -gn)" "${distPath}" && sudo chmod -R u+rwX "${distPath}"`;
+      throw new Error(
+        `client/dist remains non-writable after repair. Run this once on the host: ${manualFix}`
+      );
+    }
+
+    await log('client/dist permissions repaired.');
+    return { checked: true, repaired: true, missing: false };
+  }
+
   async cleanupClientDistArtifacts({ jobId = null } = {}) {
     const log = async (message) => {
       if (!jobId) return;
@@ -293,6 +365,8 @@ class PlatformDeployService {
         `[${new Date().toISOString()}] [Clean client dist artifacts] ${message}\n`
       );
     };
+
+    await this.ensureWritableClientDist({ jobId });
 
     const changes = await this.getClientDistStatusLines();
     if (changes.length === 0) {
@@ -766,6 +840,10 @@ class PlatformDeployService {
     };
 
     try {
+      await runCustomStep('Ensure client dist permissions', async () => {
+        await this.ensureWritableClientDist({ jobId });
+      });
+
       await runCustomStep('Normalize client dist artifacts', async () => {
         await this.cleanupClientDistArtifacts({ jobId });
       });

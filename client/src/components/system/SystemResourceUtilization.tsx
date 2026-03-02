@@ -175,12 +175,10 @@ function useSystemResourceMetrics(intervalMs: number) {
 
       setError(fetchError instanceof Error ? fetchError.message : "Unable to load system metrics")
     } finally {
-      if (!isMountedRef.current) {
-        return
+      if (isMountedRef.current) {
+        setLoading(false)
+        setRefreshing(false)
       }
-
-      setLoading(false)
-      setRefreshing(false)
     }
   }, [])
 
