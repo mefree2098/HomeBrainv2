@@ -10,7 +10,11 @@ struct AutomationsView: View {
     @State private var errorMessage: String?
 
     @State private var showCreateSheet = false
+    @State private var showHistorySheet = false
     @State private var naturalLanguageText = ""
+    @State private var selectedAutomationForHistory: AutomationItem?
+    @State private var historyEntries: [AutomationHistoryEntry] = []
+    @State private var historyLoading = false
 
     @State private var createName = ""
     @State private var createDescription = ""
@@ -18,9 +22,13 @@ struct AutomationsView: View {
     @State private var actionType = "notification"
     @State private var target = ""
     @State private var actionValue = ""
+    @State private var createCategory = "custom"
+    @State private var createPriority = 5
+    @State private var editingAutomation: AutomationItem?
 
     private let triggerTypes = ["manual", "time", "schedule", "device_state", "sensor"]
     private let actionTypes = ["notification", "device_control", "scene_activate", "delay"]
+    private let categories = ["security", "comfort", "energy", "convenience", "custom"]
 
     var body: some View {
         ScrollView {
@@ -34,6 +42,7 @@ struct AutomationsView: View {
                         buttonTitle: "New Automation",
                         buttonIcon: "plus"
                     ) {
+                        resetAutomationEditor()
                         showCreateSheet = true
                     }
 
@@ -76,6 +85,9 @@ struct AutomationsView: View {
         .padding()
         .sheet(isPresented: $showCreateSheet) {
             createSheet
+        }
+        .sheet(isPresented: $showHistorySheet) {
+            historySheet
         }
         .refreshable {
             await loadAutomations()
@@ -133,11 +145,25 @@ struct AutomationsView: View {
                 Text("Runs \(automation.executionCount)")
                     .font(.caption2)
                     .foregroundStyle(HBPalette.textSecondary)
+                Spacer()
+                Text("Last run \(automation.lastRun)")
+                    .font(.caption2)
+                    .foregroundStyle(HBPalette.textSecondary)
             }
 
-            HStack {
+            HStack(spacing: 10) {
                 Button("Run") {
                     Task { await execute(automation) }
+                }
+                .buttonStyle(.bordered)
+
+                Button("Edit") {
+                    beginEditing(automation)
+                }
+                .buttonStyle(.bordered)
+
+                Button("History") {
+                    Task { await openHistory(for: automation) }
                 }
                 .buttonStyle(.bordered)
 
@@ -167,20 +193,29 @@ struct AutomationsView: View {
                     }
                 }
 
+                Picker("Category", selection: $createCategory) {
+                    ForEach(categories, id: \.self) { category in
+                        Text(category.capitalized).tag(category)
+                    }
+                }
+
+                Stepper("Priority: \(createPriority)", value: $createPriority, in: 1...10)
+
                 TextField("Target (device/scene id if needed)", text: $target)
                 TextField("Action value (optional)", text: $actionValue)
             }
             .hbFormStyle()
-            .navigationTitle("Create Automation")
+            .navigationTitle(editingAutomation == nil ? "Create Automation" : "Edit Automation")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         showCreateSheet = false
+                        resetAutomationEditor()
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
+                    Button(editingAutomation == nil ? "Create" : "Save") {
                         Task { await createManualAutomation() }
                     }
                     .disabled(createName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -233,6 +268,11 @@ struct AutomationsView: View {
     }
 
     private func createManualAutomation() async {
+        if let editingAutomation {
+            await updateAutomation(editingAutomation)
+            return
+        }
+
         do {
             var actionParameters: [String: Any] = [:]
 
@@ -261,8 +301,8 @@ struct AutomationsView: View {
                 "trigger": ["type": triggerType, "conditions": [:]],
                 "actions": [action],
                 "enabled": true,
-                "priority": 5,
-                "category": "custom"
+                "priority": createPriority,
+                "category": createCategory
             ]
 
             let response = try await session.apiClient.post("/api/automations", body: payload)
@@ -277,8 +317,34 @@ struct AutomationsView: View {
             actionType = "notification"
             target = ""
             actionValue = ""
+            createCategory = "custom"
+            createPriority = 5
             showCreateSheet = false
 
+            await loadAutomations()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func updateAutomation(_ automation: AutomationItem) async {
+        do {
+            let payload: [String: Any] = [
+                "name": createName,
+                "description": createDescription,
+                "category": createCategory,
+                "priority": createPriority
+            ]
+
+            let response = try await session.apiClient.put("/api/automations/\(automation.id)", body: payload)
+            let object = JSON.object(response)
+            let updated = AutomationItem.from(JSON.object(object["automation"]))
+            if let index = automations.firstIndex(where: { $0.id == updated.id }) {
+                automations[index] = updated
+            }
+
+            showCreateSheet = false
+            resetAutomationEditor()
             await loadAutomations()
         } catch {
             errorMessage = error.localizedDescription
@@ -315,5 +381,168 @@ struct AutomationsView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func beginEditing(_ automation: AutomationItem) {
+        editingAutomation = automation
+        createName = automation.name
+        createDescription = automation.details
+        createCategory = automation.category
+        createPriority = automation.priority
+        showCreateSheet = true
+    }
+
+    private func resetAutomationEditor() {
+        editingAutomation = nil
+        createName = ""
+        createDescription = ""
+        triggerType = "manual"
+        actionType = "notification"
+        target = ""
+        actionValue = ""
+        createCategory = "custom"
+        createPriority = 5
+    }
+
+    private func openHistory(for automation: AutomationItem) async {
+        selectedAutomationForHistory = automation
+        showHistorySheet = true
+        historyLoading = true
+
+        defer {
+            historyLoading = false
+        }
+
+        do {
+            let response = try await session.apiClient.get(
+                "/api/automations/history/\(automation.id)",
+                query: [URLQueryItem(name: "limit", value: "20")]
+            )
+            let object = JSON.object(response)
+            let entries = JSON.array(object["history"]).map(AutomationHistoryEntry.from)
+            historyEntries = entries
+        } catch {
+            errorMessage = error.localizedDescription
+            historyEntries = []
+        }
+    }
+
+    @ViewBuilder
+    private var historySheet: some View {
+        NavigationStack {
+            List {
+                if historyLoading {
+                    HStack {
+                        Spacer()
+                        ProgressView("Loading history...")
+                        Spacer()
+                    }
+                } else if historyEntries.isEmpty {
+                    Text("No execution history available.")
+                        .foregroundStyle(HBPalette.textSecondary)
+                } else {
+                    ForEach(historyEntries) { entry in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(entry.statusLabel)
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(entry.statusColor.opacity(0.2), in: Capsule())
+                                Spacer()
+                                Text(entry.startedAtLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
+
+                            HStack(spacing: 12) {
+                                Text("Actions \(entry.totalActions)")
+                                    .font(.caption)
+                                Text("Success \(entry.successfulActions)")
+                                    .font(.caption)
+                                Text("Failed \(entry.failedActions)")
+                                    .font(.caption)
+                                if let durationMs = entry.durationMs {
+                                    Text("\(durationMs) ms")
+                                        .font(.caption)
+                                }
+                            }
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                            if !entry.errorMessage.isEmpty {
+                                Text(entry.errorMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+            .navigationTitle(selectedAutomationForHistory.map { "\($0.name) History" } ?? "Execution History")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        showHistorySheet = false
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct AutomationHistoryEntry: Identifiable {
+    let id: String
+    let status: String
+    let startedAtLabel: String
+    let durationMs: Int?
+    let totalActions: Int
+    let successfulActions: Int
+    let failedActions: Int
+    let errorMessage: String
+
+    var statusLabel: String {
+        switch status {
+        case "success":
+            return "Success"
+        case "partial_success":
+            return "Partial"
+        case "failed":
+            return "Failed"
+        default:
+            return status.capitalized
+        }
+    }
+
+    var statusColor: Color {
+        switch status {
+        case "success":
+            return .green
+        case "partial_success":
+            return .orange
+        case "failed":
+            return .red
+        default:
+            return .gray
+        }
+    }
+
+    static func from(_ object: [String: Any]) -> AutomationHistoryEntry {
+        let durationValue: Int?
+        let rawDuration = JSON.int(object, "durationMs", fallback: -1)
+        durationValue = rawDuration >= 0 ? rawDuration : nil
+
+        let errorObject = JSON.object(object["error"])
+        return AutomationHistoryEntry(
+            id: JSON.id(object),
+            status: JSON.string(object, "status", fallback: "unknown"),
+            startedAtLabel: JSON.displayDate(from: object["startedAt"]),
+            durationMs: durationValue,
+            totalActions: JSON.int(object, "totalActions"),
+            successfulActions: JSON.int(object, "successfulActions"),
+            failedActions: JSON.int(object, "failedActions"),
+            errorMessage: JSON.string(errorObject, "message")
+        )
     }
 }

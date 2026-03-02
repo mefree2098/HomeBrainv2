@@ -6,9 +6,14 @@ struct ScenesView: View {
     @State private var scenes: [SceneItem] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
+    @State private var infoMessage: String?
 
     @State private var showCreateSheet = false
     @State private var showNaturalLanguageSheet = false
+    @State private var editingScene: SceneItem?
+    @State private var favoritesProfileId: String?
+    @State private var favoriteSceneIds: Set<String> = []
+    @State private var pendingFavoriteSceneIds: Set<String> = []
 
     @State private var createName = ""
     @State private var createDescription = ""
@@ -29,6 +34,7 @@ struct ScenesView: View {
                     buttonTitle: "New Scene",
                     buttonIcon: "plus"
                 ) {
+                    resetSceneEditor()
                     showCreateSheet = true
                 }
 
@@ -42,10 +48,23 @@ struct ScenesView: View {
                     Spacer()
                 }
 
+                if favoritesProfileId == nil {
+                    Text("Create or activate a user profile to favorite scenes.")
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
                 if let errorMessage {
                     InlineErrorView(message: errorMessage) {
                         Task { await loadScenes() }
                     }
+                }
+
+                if let infoMessage, !infoMessage.isEmpty {
+                    Text(infoMessage)
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .padding(.horizontal, 2)
                 }
 
                 if scenes.isEmpty {
@@ -83,12 +102,20 @@ struct ScenesView: View {
     }
 
     private func sceneRow(_ scene: SceneItem) -> some View {
-        HStack(spacing: 12) {
+        let isFavorite = favoriteSceneIds.contains(scene.id)
+        let isPendingFavorite = pendingFavoriteSceneIds.contains(scene.id)
+
+        return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(scene.name)
                         .font(.system(size: 20, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.textPrimary)
+                    if isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                            .foregroundStyle(Color.yellow)
+                    }
                     if scene.active {
                         Text("ACTIVE")
                             .font(.caption2)
@@ -111,10 +138,23 @@ struct ScenesView: View {
 
             Spacer()
 
-            Button("Activate") {
-                Task { await activate(scene) }
+            VStack(spacing: 8) {
+                Button("Activate") {
+                    Task { await activate(scene) }
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button(isFavorite ? "Unfavorite" : "Favorite") {
+                    Task { await toggleFavorite(scene) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(favoritesProfileId == nil || isPendingFavorite)
+
+                Button("Edit") {
+                    beginEditing(scene)
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -131,16 +171,17 @@ struct ScenesView: View {
                 }
             }
             .hbFormStyle()
-            .navigationTitle("Create Scene")
+            .navigationTitle(editingScene == nil ? "Create Scene" : "Edit Scene")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         showCreateSheet = false
+                        resetSceneEditor()
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
+                    Button(editingScene == nil ? "Create" : "Save") {
                         Task { await createScene() }
                     }
                     .disabled(createName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -181,10 +222,17 @@ struct ScenesView: View {
         errorMessage = nil
 
         do {
-            let response = try await session.apiClient.get("/api/scenes")
+            async let scenesTask = session.apiClient.get("/api/scenes")
+            async let profilesTask = session.apiClient.get("/api/profiles")
+
+            let response = try await scenesTask
             let object = JSON.object(response)
             scenes = JSON.array(object["scenes"]).map(SceneItem.from)
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+            if let profilesPayload = try? await profilesTask {
+                applyFavoriteContext(fromProfilesPayload: profilesPayload)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -204,6 +252,11 @@ struct ScenesView: View {
     }
 
     private func createScene() async {
+        if let editingScene {
+            await updateScene(editingScene)
+            return
+        }
+
         do {
             let payload: [String: Any] = [
                 "name": createName,
@@ -221,6 +274,30 @@ struct ScenesView: View {
             createDescription = ""
             createCategory = "custom"
             showCreateSheet = false
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func updateScene(_ scene: SceneItem) async {
+        do {
+            let payload: [String: Any] = [
+                "name": createName,
+                "description": createDescription,
+                "category": createCategory
+            ]
+
+            let response = try await session.apiClient.put("/api/scenes/\(scene.id)", body: payload)
+            let object = JSON.object(response)
+            let updated = SceneItem.from(JSON.object(object["scene"]))
+
+            if let index = scenes.firstIndex(where: { $0.id == updated.id }) {
+                scenes[index] = updated
+            }
+            scenes.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+            showCreateSheet = false
+            resetSceneEditor()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -254,6 +331,120 @@ struct ScenesView: View {
                     errorMessage = error.localizedDescription
                 }
             }
+        }
+    }
+
+    private func beginEditing(_ scene: SceneItem) {
+        editingScene = scene
+        createName = scene.name
+        createDescription = scene.details
+        createCategory = scene.category
+        showCreateSheet = true
+    }
+
+    private func resetSceneEditor() {
+        editingScene = nil
+        createName = ""
+        createDescription = ""
+        createCategory = "custom"
+    }
+
+    private func toggleFavorite(_ scene: SceneItem) async {
+        guard let profileId = favoritesProfileId, !profileId.isEmpty else {
+            errorMessage = "Create or activate a user profile to manage favorite scenes."
+            return
+        }
+
+        if pendingFavoriteSceneIds.contains(scene.id) {
+            return
+        }
+
+        let shouldFavorite = !favoriteSceneIds.contains(scene.id)
+        pendingFavoriteSceneIds.insert(scene.id)
+
+        defer {
+            pendingFavoriteSceneIds.remove(scene.id)
+        }
+
+        do {
+            if shouldFavorite {
+                let response = try await session.apiClient.post(
+                    "/api/profiles/\(profileId)/favorites/scenes",
+                    body: ["sceneId": scene.id]
+                )
+                applyFavoriteContext(
+                    fromToggleResponse: response,
+                    fallbackProfileId: profileId,
+                    sceneId: scene.id,
+                    shouldFavorite: true
+                )
+                infoMessage = "\"\(scene.name)\" added to favorites."
+            } else {
+                let response = try await session.apiClient.delete(
+                    "/api/profiles/\(profileId)/favorites/scenes/\(scene.id)"
+                )
+                applyFavoriteContext(
+                    fromToggleResponse: response,
+                    fallbackProfileId: profileId,
+                    sceneId: scene.id,
+                    shouldFavorite: false
+                )
+                infoMessage = "\"\(scene.name)\" removed from favorites."
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyFavoriteContext(fromProfilesPayload payload: Any) {
+        let root = JSON.object(payload)
+        let profiles = JSON.array(root["profiles"])
+        guard let preferredProfile = profiles.first(where: { JSON.bool($0, "active", fallback: false) }) ?? profiles.first else {
+            favoritesProfileId = nil
+            favoriteSceneIds = []
+            return
+        }
+        applyFavoriteContext(fromProfileObject: preferredProfile)
+    }
+
+    private func applyFavoriteContext(fromProfileObject profile: [String: Any]) {
+        let favorites = JSON.object(profile["favorites"])
+        favoritesProfileId = FavoritesSupport.optionalProfileID(from: profile)
+        favoriteSceneIds = FavoritesSupport.idSet(from: favorites["scenes"])
+    }
+
+    private func applyFavoriteContext(
+        fromToggleResponse response: Any,
+        fallbackProfileId: String,
+        sceneId: String,
+        shouldFavorite: Bool
+    ) {
+        let root = JSON.object(response)
+        let data = JSON.object(root["data"])
+        let payloadProfile = JSON.object(data["profile"])
+        let rootProfile = JSON.object(root["profile"])
+
+        if !payloadProfile.isEmpty {
+            applyFavoriteContext(fromProfileObject: payloadProfile)
+            if favoritesProfileId == nil {
+                favoritesProfileId = fallbackProfileId
+            }
+            return
+        }
+
+        if !rootProfile.isEmpty {
+            applyFavoriteContext(fromProfileObject: rootProfile)
+            if favoritesProfileId == nil {
+                favoritesProfileId = fallbackProfileId
+            }
+            return
+        }
+
+        favoritesProfileId = fallbackProfileId
+        if shouldFavorite {
+            favoriteSceneIds.insert(sceneId)
+        } else {
+            favoriteSceneIds.remove(sceneId)
         }
     }
 }
