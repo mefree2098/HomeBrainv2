@@ -88,6 +88,7 @@ struct AppShellView: View {
     @State private var selection: AppSection? = .dashboard
     @AppStorage("homebrain.ios.main-menu-collapsed.regular") private var isRegularSidebarCollapsed = false
     @AppStorage("homebrain.ios.main-menu-collapsed.compact") private var isCompactSidebarCollapsed = true
+    @State private var isCompactSidebarVisible = false
     @State private var activeDevicesSummary = "--/--"
     @StateObject private var voiceAssistant = VoiceAssistantManager()
     @State private var resourceStripMetrics: [ResourceStripMetric] = defaultResourceStripMetrics()
@@ -100,6 +101,7 @@ struct AppShellView: View {
     private var shellPadding: CGFloat { isCompactHeight ? 8 : (isCompact ? 12 : 16) }
     private var chromeButtonSide: CGFloat { isCompactHeight ? 32 : 36 }
     private var isSidebarCollapsed: Bool { isCompact ? isCompactSidebarCollapsed : isRegularSidebarCollapsed }
+    private var sidebarWidth: CGFloat { isSidebarCollapsed ? (isCompact ? 76 : 82) : 245 }
 
     private var visibleSections: [AppSection] {
         AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
@@ -149,6 +151,12 @@ struct AppShellView: View {
         .onAppear {
             syncSelectionWithVisibleSections()
             voiceAssistant.bind(sessionStore: session)
+            isCompactSidebarVisible = !isCompact
+        }
+        .onChange(of: horizontalSizeClass) { _, sizeClass in
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isCompactSidebarVisible = sizeClass != .compact
+            }
         }
         .onChange(of: session.currentUser?.role) { _, _ in
             syncSelectionWithVisibleSections()
@@ -176,39 +184,41 @@ struct AppShellView: View {
 
     private var regularShell: some View {
         HStack(spacing: 0) {
-            if !isSidebarCollapsed {
-                sidebar
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
+            sidebar
+                .frame(width: sidebarWidth)
             detailStack
         }
-        .animation(.easeInOut(duration: 0.25), value: isSidebarCollapsed)
+        .animation(.easeInOut(duration: 0.25), value: sidebarWidth)
     }
 
     private var compactShell: some View {
         ZStack(alignment: .leading) {
             detailStack
 
-            if !isSidebarCollapsed {
-                Color.black.opacity(0.42)
+            if isCompactSidebarVisible {
+                Color.black.opacity(isSidebarCollapsed ? 0.30 : 0.42)
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.25)) {
-                            setSidebarCollapsed(true)
+                            isCompactSidebarVisible = false
                         }
                     }
                     .transition(.opacity)
 
                 sidebar
+                    .frame(width: sidebarWidth)
                     .shadow(color: Color.black.opacity(0.35), radius: 20, x: 8, y: 0)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: isSidebarCollapsed)
+        .animation(.easeInOut(duration: 0.25), value: isCompactSidebarVisible)
+        .animation(.easeInOut(duration: 0.25), value: sidebarWidth)
     }
 
     private var topBar: some View {
         HStack(spacing: isCompactHeight ? 8 : 10) {
-            sidebarToggleButton
+            if isCompact {
+                compactMenuButton
+            }
 
             HStack(spacing: 8) {
                 Image("HomeBrainBrandIcon")
@@ -407,51 +417,80 @@ struct AppShellView: View {
         .buttonStyle(.plain)
     }
 
-    private var sidebarToggleButton: some View {
+    private var compactMenuButton: some View {
         Button {
-            toggleSidebarCollapsed()
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isCompactSidebarVisible.toggle()
+            }
         } label: {
-            Image(systemName: isSidebarCollapsed ? "line.3.horizontal" : "xmark")
+            Image(systemName: isCompactSidebarVisible ? "xmark" : "line.3.horizontal")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(HBPalette.textSecondary)
                 .frame(width: chromeButtonSide, height: chromeButtonSide)
                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(isSidebarCollapsed ? "Open main menu" : "Close main menu")
+        .accessibilityLabel(isCompactSidebarVisible ? "Close main menu" : "Open main menu")
     }
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Color.clear
-                .frame(height: isCompactHeight ? 8 : 12)
+            HStack(spacing: 8) {
+                if !isSidebarCollapsed {
+                    Text("Main Menu")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .textCase(.uppercase)
+                        .tracking(0.7)
+                    Spacer()
+                }
+
+                Button {
+                    toggleSidebarCollapsed()
+                } label: {
+                    Image(systemName: isSidebarCollapsed ? "chevron.right" : "chevron.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .frame(width: 30, height: 30)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isSidebarCollapsed ? "Expand main menu" : "Collapse main menu")
+            }
+            .padding(.horizontal, isSidebarCollapsed ? 0 : 4)
+            .padding(.top, isCompactHeight ? 4 : 6)
 
             ForEach(visibleSections) { section in
                 Button {
                     selection = section
                     if isCompact {
                         withAnimation(.easeInOut(duration: 0.25)) {
-                            setSidebarCollapsed(true)
+                            isCompactSidebarVisible = false
                         }
                     }
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: section.icon)
                             .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 18)
+                            .frame(width: 18, height: 18)
 
-                        Text(section.title)
-                            .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        if !isSidebarCollapsed {
+                            Text(section.title)
+                                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        }
 
-                        Spacer()
+                        if !isSidebarCollapsed {
+                            Spacer()
 
-                        if selection == section {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .bold))
+                            if selection == section {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                            }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: isSidebarCollapsed ? .center : .leading)
                     .foregroundStyle(selection == section ? HBPalette.textPrimary : HBPalette.textSecondary)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, isSidebarCollapsed ? 0 : 14)
                     .padding(.vertical, 12)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -475,41 +514,55 @@ struct AppShellView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(section.title)
             }
 
             Spacer()
 
-            HBPanel {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(voiceAssistant.isEnabled ? "Voice Commands Active" : "Voice Commands Off")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
-                    Text(voiceAssistant.statusText)
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(voiceAssistant.errorMessage == nil ? HBPalette.textSecondary : Color.red.opacity(0.9))
-                        .lineLimit(2)
-                    if let pending = voiceAssistant.pendingWakeWord {
-                        Text("Wake word detected: \"\(pending)\"")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.accentBlue)
-                    } else {
-                        Text("Wake words: \(voiceAssistant.wakeWordsSummary)")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                            .lineLimit(2)
+            if isSidebarCollapsed {
+                HBPanel {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Image(systemName: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(voiceAssistant.isEnabled ? HBPalette.accentBlue : HBPalette.textSecondary)
+                        Spacer(minLength: 0)
                     }
-                    if let response = voiceAssistant.lastResponse, !response.isEmpty {
-                        Text(response)
-                            .font(.system(size: 11, weight: .regular, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
+                    .padding(.vertical, 2)
+                }
+            } else {
+                HBPanel {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(voiceAssistant.isEnabled ? "Voice Commands Active" : "Voice Commands Off")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                        Text(voiceAssistant.statusText)
+                            .font(.system(size: 12, weight: .regular, design: .rounded))
+                            .foregroundStyle(voiceAssistant.errorMessage == nil ? HBPalette.textSecondary : Color.red.opacity(0.9))
                             .lineLimit(2)
+                        if let pending = voiceAssistant.pendingWakeWord {
+                            Text("Wake word detected: \"\(pending)\"")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.accentBlue)
+                        } else {
+                            Text("Wake words: \(voiceAssistant.wakeWordsSummary)")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .lineLimit(2)
+                        }
+                        if let response = voiceAssistant.lastResponse, !response.isEmpty {
+                            Text(response)
+                                .font(.system(size: 11, weight: .regular, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .lineLimit(2)
+                        }
                     }
                 }
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, isSidebarCollapsed ? 8 : 10)
         .padding(.vertical, 12)
-        .frame(width: 245)
+        .frame(width: sidebarWidth)
         .background(
             LinearGradient(
                 colors: [HBPalette.sidebar.opacity(0.98), HBPalette.chrome.opacity(0.96)],

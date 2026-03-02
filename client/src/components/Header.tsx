@@ -1,4 +1,4 @@
-import { Bug, Copy, Loader2, Menu, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Settings, LogOut, X } from "lucide-react"
+import { Bug, Copy, Loader2, Menu, Mic, MicOff, Settings, LogOut, X } from "lucide-react"
 import { Button } from "./ui/button"
 import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
@@ -19,11 +19,11 @@ import { HeaderResourceUtilizationStrip } from "@/components/system/SystemResour
 
 interface HeaderProps {
   isMobile?: boolean
-  isSidebarCollapsed?: boolean
-  onToggleSidebar?: () => void
+  isMobileMenuOpen?: boolean
+  onToggleMobileMenu?: () => void
 }
 
-export function Header({ isMobile = false, isSidebarCollapsed = false, onToggleSidebar }: HeaderProps) {
+export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMobileMenu }: HeaderProps) {
   const { logout } = useAuth()
   const navigate = useNavigate()
   const { toast } = useToast()
@@ -185,20 +185,14 @@ export function Header({ isMobile = false, isSidebarCollapsed = false, onToggleS
     <header className="fixed top-0 z-50 w-full border-b bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75">
       <div className="flex h-16 items-center justify-between px-6">
         <div className="flex items-center gap-4">
-          {onToggleSidebar ? (
+          {isMobile && onToggleMobileMenu ? (
             <Button
               variant="ghost"
               size="icon"
-              onClick={onToggleSidebar}
-              title={isSidebarCollapsed ? "Open main menu" : "Close main menu"}
+              onClick={onToggleMobileMenu}
+              title={isMobileMenuOpen ? "Close main menu" : "Open main menu"}
             >
-              {isMobile ? (
-                isSidebarCollapsed ? <Menu className="h-5 w-5" /> : <X className="h-5 w-5" />
-              ) : isSidebarCollapsed ? (
-                <PanelLeftOpen className="h-5 w-5" />
-              ) : (
-                <PanelLeftClose className="h-5 w-5" />
-              )}
+              {isMobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </Button>
           ) : null}
 

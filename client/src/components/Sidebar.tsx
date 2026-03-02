@@ -8,6 +8,8 @@ import {
   Settings,
   Shield,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Brain,
   Cpu,
   Rocket,
@@ -38,10 +40,18 @@ const navigation = [
 interface SidebarProps {
   collapsed?: boolean
   mobile?: boolean
+  open?: boolean
   onNavigate?: () => void
+  onToggleCollapsed?: () => void
 }
 
-export function Sidebar({ collapsed = false, mobile = false, onNavigate }: SidebarProps) {
+export function Sidebar({
+  collapsed = false,
+  mobile = false,
+  open = true,
+  onNavigate,
+  onToggleCollapsed
+}: SidebarProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { currentUser } = useAuth()
@@ -56,13 +66,32 @@ export function Sidebar({ collapsed = false, mobile = false, onNavigate }: Sideb
   return (
     <div
       className={cn(
-        "fixed left-0 top-16 h-[calc(100vh-4rem)] border-r bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75 transition-transform duration-300",
-        mobile ? "z-50 w-[min(20rem,85vw)] shadow-2xl" : "z-40 w-64",
-        collapsed ? "-translate-x-full pointer-events-none" : "translate-x-0"
+        "fixed left-0 top-16 h-[calc(100vh-4rem)] border-r bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75 transition-[width,transform] duration-300",
+        mobile ? "z-50 shadow-2xl" : "z-40",
+        collapsed ? "w-20" : "w-64",
+        mobile ? (open ? "translate-x-0" : "-translate-x-full pointer-events-none") : "translate-x-0"
       )}
     >
       <div className="flex h-full flex-col">
-        <nav className="flex-1 space-y-2 p-4">
+        <div className={cn("border-b p-3", collapsed ? "flex justify-center" : "flex items-center justify-between")}>
+          {!collapsed ? (
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Main Menu
+            </p>
+          ) : null}
+          {onToggleCollapsed ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleCollapsed}
+              title={collapsed ? "Expand main menu" : "Collapse main menu"}
+            >
+              {collapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+            </Button>
+          ) : null}
+        </div>
+
+        <nav className={cn("flex-1 space-y-2", collapsed ? "p-2" : "p-4")}>
           {visibleNavigation.map((item) => {
             const isActive = location.pathname === item.href
             return (
@@ -70,11 +99,13 @@ export function Sidebar({ collapsed = false, mobile = false, onNavigate }: Sideb
                 key={item.name}
                 variant={isActive ? "default" : "ghost"}
                 className={cn(
-                  "w-full justify-start gap-3 transition-all duration-200",
+                  "w-full transition-all duration-200",
+                  collapsed ? "h-11 justify-center px-0" : "justify-start gap-3",
                   isActive 
                     ? "bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25 hover:shadow-xl hover:shadow-blue-500/30" 
                     : "hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-900/20"
                 )}
+                title={collapsed ? item.name : undefined}
                 onClick={() => {
                   console.log(`Navigating to ${item.name}:`, item.href)
                   navigate(item.href)
@@ -82,22 +113,31 @@ export function Sidebar({ collapsed = false, mobile = false, onNavigate }: Sideb
                 }}
               >
                 <item.icon className="h-5 w-5" />
-                {item.name}
-                {isActive && <ChevronRight className="ml-auto h-4 w-4" />}
+                {!collapsed ? item.name : null}
+                {!collapsed && isActive ? <ChevronRight className="ml-auto h-4 w-4" /> : null}
               </Button>
             )
           })}
         </nav>
         
-        <div className="border-t p-4">
-          <div className="rounded-lg bg-gradient-to-r from-blue-500/10 to-purple-600/10 p-3">
-            <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
-              Voice Commands Active
-            </p>
-            <p className="text-xs text-blue-600/80 dark:text-blue-400/80">
-              Say "Hey Anna" or "Henry" to control your home
-            </p>
-          </div>
+        <div className={cn("border-t p-3", collapsed ? "flex justify-center" : "")}>
+          {collapsed ? (
+            <div
+              title="Voice commands active"
+              className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-r from-blue-500/10 to-purple-600/10"
+            >
+              <Mic className="h-4 w-4 text-blue-700 dark:text-blue-300" />
+            </div>
+          ) : (
+            <div className="rounded-lg bg-gradient-to-r from-blue-500/10 to-purple-600/10 p-3">
+              <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                Voice Commands Active
+              </p>
+              <p className="text-xs text-blue-600/80 dark:text-blue-400/80">
+                Say "Hey Anna" or "Henry" to control your home
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
