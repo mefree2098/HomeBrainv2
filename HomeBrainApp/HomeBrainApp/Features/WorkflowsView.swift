@@ -18,9 +18,13 @@ struct WorkflowsView: View {
     @State private var actionType = "notification"
     @State private var target = ""
     @State private var actionValue = ""
+    @State private var createCategory = "custom"
+    @State private var createPriority = 5
+    @State private var editingWorkflow: WorkflowItem?
 
     private let triggerTypes = ["manual", "time", "schedule", "device_state", "sensor"]
     private let actionTypes = ["notification", "device_control", "scene_activate", "delay"]
+    private let categories = ["security", "comfort", "energy", "convenience", "custom"]
 
     var body: some View {
         ScrollView {
@@ -34,6 +38,7 @@ struct WorkflowsView: View {
                         buttonTitle: "New Workflow",
                         buttonIcon: "plus"
                     ) {
+                        resetWorkflowEditor()
                         showCreateSheet = true
                     }
 
@@ -135,9 +140,14 @@ struct WorkflowsView: View {
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
-            HStack {
+            HStack(spacing: 10) {
                 Button("Run") {
                     Task { await execute(workflow) }
+                }
+                .buttonStyle(.bordered)
+
+                Button("Edit") {
+                    beginEditing(workflow)
                 }
                 .buttonStyle(.bordered)
 
@@ -167,20 +177,29 @@ struct WorkflowsView: View {
                     }
                 }
 
+                Picker("Category", selection: $createCategory) {
+                    ForEach(categories, id: \.self) { category in
+                        Text(category.capitalized).tag(category)
+                    }
+                }
+
+                Stepper("Priority: \(createPriority)", value: $createPriority, in: 1...10)
+
                 TextField("Target (device/scene id if needed)", text: $target)
                 TextField("Action value (optional)", text: $actionValue)
             }
             .hbFormStyle()
-            .navigationTitle("Create Workflow")
+            .navigationTitle(editingWorkflow == nil ? "Create Workflow" : "Edit Workflow")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         showCreateSheet = false
+                        resetWorkflowEditor()
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
+                    Button(editingWorkflow == nil ? "Create" : "Save") {
                         Task { await createManualWorkflow() }
                     }
                     .disabled(createName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -233,6 +252,11 @@ struct WorkflowsView: View {
     }
 
     private func createManualWorkflow() async {
+        if let editingWorkflow {
+            await updateWorkflow(editingWorkflow)
+            return
+        }
+
         do {
             var actionParameters: [String: Any] = [:]
 
@@ -260,8 +284,8 @@ struct WorkflowsView: View {
                 "description": createDescription,
                 "source": "manual",
                 "enabled": true,
-                "category": "custom",
-                "priority": 5,
+                "category": createCategory,
+                "priority": createPriority,
                 "cooldown": 0,
                 "trigger": ["type": triggerType, "conditions": [:]],
                 "actions": [action],
@@ -280,8 +304,34 @@ struct WorkflowsView: View {
             actionType = "notification"
             target = ""
             actionValue = ""
+            createCategory = "custom"
+            createPriority = 5
             showCreateSheet = false
 
+            await loadWorkflows()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func updateWorkflow(_ workflow: WorkflowItem) async {
+        do {
+            let payload: [String: Any] = [
+                "name": createName,
+                "description": createDescription,
+                "category": createCategory,
+                "priority": createPriority
+            ]
+
+            let response = try await session.apiClient.put("/api/workflows/\(workflow.id)", body: payload)
+            let object = JSON.object(response)
+            let updated = WorkflowItem.from(JSON.object(object["workflow"]))
+            if let index = workflows.firstIndex(where: { $0.id == updated.id }) {
+                workflows[index] = updated
+            }
+
+            showCreateSheet = false
+            resetWorkflowEditor()
             await loadWorkflows()
         } catch {
             errorMessage = error.localizedDescription
@@ -318,5 +368,26 @@ struct WorkflowsView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func beginEditing(_ workflow: WorkflowItem) {
+        editingWorkflow = workflow
+        createName = workflow.name
+        createDescription = workflow.details
+        createCategory = workflow.category
+        createPriority = workflow.priority
+        showCreateSheet = true
+    }
+
+    private func resetWorkflowEditor() {
+        editingWorkflow = nil
+        createName = ""
+        createDescription = ""
+        triggerType = "manual"
+        actionType = "notification"
+        target = ""
+        actionValue = ""
+        createCategory = "custom"
+        createPriority = 5
     }
 }

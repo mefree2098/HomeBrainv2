@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct UserProfilesView: View {
     @EnvironmentObject private var session: SessionStore
@@ -11,6 +12,8 @@ struct UserProfilesView: View {
 
     @State private var showCreateSheet = false
     @State private var editingProfile: UserProfileItem?
+    @State private var previewPlayer: AVPlayer?
+    @State private var previewingVoiceId: String?
 
     @State private var name = ""
     @State private var wakeWords = ""
@@ -101,6 +104,12 @@ struct UserProfilesView: View {
             }
 
             HStack {
+                Button(previewingVoiceId == profile.voiceId ? "Playing..." : "Preview Voice") {
+                    playVoicePreview(voiceId: profile.voiceId)
+                }
+                .buttonStyle(.bordered)
+                .disabled(previewingVoiceId == profile.voiceId)
+
                 Button("Edit") {
                     startEditing(profile)
                 }
@@ -131,6 +140,12 @@ struct UserProfilesView: View {
 
                     TextField("Or enter custom voice ID", text: $customVoiceId)
                 }
+
+                Button(previewingVoiceId == selectedVoiceValue ? "Playing..." : "Preview Selected Voice") {
+                    playVoicePreview(voiceId: selectedVoiceValue)
+                }
+                .buttonStyle(.bordered)
+                .disabled(selectedVoiceValue.isEmpty || previewingVoiceId == selectedVoiceValue)
 
                 Picker("Personality", selection: $personality) {
                     ForEach(personalities, id: \.self) { value in
@@ -315,5 +330,43 @@ struct UserProfilesView: View {
 
     private func voiceName(for voiceId: String) -> String {
         voices.first(where: { $0.id == voiceId })?.name ?? "Custom Voice"
+    }
+
+    private func playVoicePreview(voiceId: String) {
+        let trimmed = voiceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            errorMessage = "Select a voice before playing a preview."
+            return
+        }
+
+        guard let voice = voices.first(where: { $0.id == trimmed }) else {
+            errorMessage = "Unable to find that voice in the available list."
+            return
+        }
+
+        let preview = voice.previewURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !preview.isEmpty, let url = URL(string: preview) else {
+            errorMessage = "No preview URL is available for \(voice.name)."
+            return
+        }
+
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            // Keep going even if audio session configuration fails.
+        }
+
+        previewPlayer?.pause()
+        previewPlayer = AVPlayer(url: url)
+        previewPlayer?.play()
+        previewingVoiceId = trimmed
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            if previewingVoiceId == trimmed {
+                previewingVoiceId = nil
+            }
+        }
     }
 }
