@@ -770,8 +770,29 @@ class PlatformDeployService {
         await this.cleanupClientDistArtifacts({ jobId });
       });
 
+      const prePullRepoStatus = await this.getRepoStatus();
+      const skipPullForDirtyRepo = Boolean(job.options?.allowDirty) && Boolean(prePullRepoStatus?.dirty);
+
       await runStep('Fetch latest refs', 'git', this.getSafeGitArgs(['fetch', '--all', '--prune']));
-      await runStep('Pull latest changes', 'git', this.getSafeGitArgs(['pull', '--ff-only']));
+
+      if (skipPullForDirtyRepo) {
+        await runCustomStep('Pull latest changes', async () => {
+          const behindCount = Number(prePullRepoStatus?.behind || 0);
+          const dirtyCount = Array.isArray(prePullRepoStatus?.dirtyEntries)
+            ? prePullRepoStatus.dirtyEntries.length
+            : 0;
+          const note = [
+            'Skipping git pull because allowDirty=true and repository has local changes.',
+            `Dirty entries: ${dirtyCount}.`,
+            behindCount > 0
+              ? `Remote is ahead by ${behindCount}; deploying current local checkout without pulling.`
+              : 'Remote is not ahead; deploying current local checkout.'
+          ].join(' ');
+          await this.appendJobLog(jobId, `[${new Date().toISOString()}] [Pull latest changes] ${note}\n`);
+        });
+      } else {
+        await runStep('Pull latest changes', 'git', this.getSafeGitArgs(['pull', '--ff-only']));
+      }
 
       if (job.options.installDependencies) {
         await runNpmStep('Install root dependencies', ['install', '--include=dev', '--no-audit', '--no-fund']);

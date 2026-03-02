@@ -1,370 +1,337 @@
-0) What you’re building
+# Codex Path Integration Playbook (Production Notes)
 
-Your app will:
+This document captures a full, working implementation pattern for adding a **Codex subscription path** (via `codex app-server`) alongside the normal **OpenAI API key path**, including a **Codex-backed model picker**.
 
-ship or fetch a platform-specific codex binary (pinned)
+Use this when you want an AI coder to implement the same capability quickly in another project.
 
-launch codex app-server as a long-running child process (stdio transport default)
+---
 
-speak JSON-RPC 2.0 shapes, but “lite”: messages omit "jsonrpc":"2.0" and are framed as newline-delimited JSON (JSONL)
+## 1) Target outcome
 
-run the ChatGPT-managed login via JSON-RPC (account/login/start type chatgpt) and open the returned authUrl in the user’s browser
+Implement two chat auth paths in the same app:
 
-create/resume threads (thread/start, thread/resume) and run turns (turn/start) while streaming events (thread/*, turn/*, item/*)
+1. `apiKey` mode (existing OpenAI API key flow)
+2. `codexPath` mode (Codex app-server + ChatGPT-managed login)
 
-handle server-initiated approval requests (shell commands, file changes, tool calls) by responding with accept/decline/etc
+Both modes should:
 
-1) Acquire + pin the Codex binary
-1.1 Install (dev) / ship (prod)
+- use the same app prompt logic/system instructions
+- return the same app-level payload shape (`assistantMessage`, `actions`, etc.)
+- preserve existing behavior where possible
 
-For development, use the documented Codex CLI install method(s) (npm/Homebrew/etc.) on the Codex CLI page.
+Codex mode should additionally support:
 
-For production, do what OpenAI’s own clients do:
+- managed login via `account/login/start { type: "chatgpt" }`
+- model discovery via `model/list` (for UI model picker)
 
-bundle the exact platform binary inside your app, OR
+---
 
-download it on first run and pin to a tested version (recommended if you can update server bits independently).
+## 2) Configuration contract you should store
 
-1.2 Decide where codex lives
+For a persisted config object (example path: `ai.adminAssistant.openai`), add:
 
-Pick one canonical location per OS, e.g.:
+```json
+{
+  "authMode": "apiKey | codexPath",
+  "apiKey": "optional-secret",
+  "hasApiKey": true,
+  "clearApiKey": false,
+  "codexPath": "optional path to binary, fallback to `codex`",
+  "codexHome": "optional isolated state directory",
+  "hasCodexPath": true,
+  "model": "mode-specific default model"
+}
+```
 
-macOS: your app support dir
+Notes:
 
-Windows: %LOCALAPPDATA%/<YourApp>/codex/
+- Keep API key hidden/sanitized in read responses.
+- Compute `hasApiKey`/`hasCodexPath` flags server-side.
+- Trim incoming strings and normalize empty strings to `undefined`.
+- Keep legacy API key behavior unchanged.
 
-Linux: ~/.local/share/<YourApp>/codex/
+---
 
-Then your launcher always starts that exact binary.
+## 3) Request payload contract for chat
 
-2) Understand state + where credentials live
+Add optional fields to your chat endpoint payload:
 
-Codex stores its state under CODEX_HOME (default ~/.codex), including config.toml and auth state (either auth.json or OS keychain/keyring).
+```json
+{
+  "authMode": "apiKey | codexPath",
+  "apiKey": "optional",
+  "codexPath": "optional",
+  "codexHome": "optional",
+  "model": "optional",
+  "messages": [{ "role": "user|assistant", "content": "..." }],
+  "context": {}
+}
+```
 
-What you should do in your app:
+Resolution order that worked well:
 
-set CODEX_HOME explicitly when launching the child process so your app has an isolated Codex state directory per user (and so you don’t collide with the user’s terminal Codex setup).
+1. request field
+2. stored config
+3. env fallback
+4. hard default
 
-Example: CODEX_HOME=<app data dir>/codex_home
+Example defaults:
 
-do not parse or copy tokens yourself in “managed ChatGPT” mode — Codex owns that lifecycle.
+- `authMode`: `apiKey`
+- `model`: `gpt-4o-mini` (`apiKey`) / `gpt-5.1-codex` (`codexPath`)
+- `codexPath`: `process.env.CODEX_PATH || "codex"`
 
-3) Generate protocol schemas (so you don’t hand-write the API)
+---
 
-Run these using the same pinned codex binary you will ship:
+## 4) Codex app-server lifecycle (exact sequence)
 
-codex app-server generate-ts --out ./schemas
-codex app-server generate-json-schema --out ./schemas
+For each request/session:
 
-This generates artifacts matched to that Codex version.
+1. Spawn child process:
+   - command: `codex app-server --listen stdio://`
+   - stdio: piped (`stdin`, `stdout`, `stderr`)
+   - set `CODEX_HOME` if provided
+2. JSONL RPC framing:
+   - write one JSON object per line
+   - parse stdout by `\n`
+3. Handshake:
+   - `initialize` request
+   - `initialized` notification
+4. Auth check:
+   - call `account/read { refreshToken: false }`
+   - if `requiresOpenaiAuth=true`, call `account/login/start { type: "chatgpt" }`
+   - surface `authUrl` to UI/API caller
+5. Thread + turn:
+   - `thread/start` with model/cwd/etc.
+   - `turn/start` with input + model + output schema (if needed)
+6. Stream notifications and collect final output
+7. Close process cleanly (then hard-kill timeout fallback)
 
-Why you care: your AI coder can use the JSON schema to generate strongly typed bindings for whichever language your platforms use, instead of guessing method names and payloads.
+---
 
-4) Launch the App Server as a child process (stdio JSONL)
-4.1 Start command
+## 5) JSON-RPC routing rules (must implement)
 
-The server supports:
+Your router must separate:
 
-stdio:// (default) = newline-delimited JSON messages over stdin/stdout
+1. **Response**: has `id`, no `method`
+2. **Notification**: has `method`, no `id`
+3. **Server request**: has `id` and `method` (you must respond)
 
-websocket (experimental)
+If you do not answer server requests, turns can hang.
 
-Use stdio first. Start it like:
+---
 
-codex app-server --listen stdio://
+## 6) Server-initiated request handling strategy
 
-(You can omit --listen because stdio is default.)
+For a safe "chat-only" integration where you do not want Codex executing tools/commands/files, explicitly respond with deny/cancel shapes.
 
-4.2 Process management requirements (non-negotiable)
+This worked reliably:
 
-Your app must:
+- `item/commandExecution/requestApproval` -> `{ decision: "cancel" }`
+- `item/fileChange/requestApproval` -> `{ decision: "cancel" }`
+- `execCommandApproval` -> `{ decision: "abort" }`
+- `applyPatchApproval` -> `{ decision: "abort" }`
+- `item/tool/requestUserInput` -> `{ answers: {} }`
+- `item/tool/call` -> `{ success: false, contentItems: [{ type: "inputText", text: "Tool calls are disabled..." }] }`
+- `account/chatgptAuthTokens/refresh` -> JSON-RPC error (unsupported for this integration)
 
-open the child process with piped stdin + stdout (and ideally stderr)
+Return `-32601` for unknown server-request methods.
 
-write one JSON object per line to stdin
+---
 
-read stdout as a stream, splitting on \n into JSON objects
+## 7) Streaming + final answer extraction
 
-Also:
+Watch these notifications:
 
-handle restart if the process exits
+- `item/agentMessage/delta` -> incremental assistant text
+- `item/completed` -> final item snapshots
+- `turn/completed` -> terminal turn status
+- `thread/tokenUsage/updated` -> usage accounting
 
-handle backpressure (stdout can be chatty)
+Recommended final-text precedence:
 
-5) Implement the required handshake: initialize → initialized
+1. `item/completed` `agentMessage` with `phase="final_answer"`
+2. latest `agentMessage` text from `item/completed`
+3. concatenated delta stream text
 
-You cannot call anything else until you initialize. Requests before that get Not initialized.
+Handle terminal statuses:
 
-5.1 Send initialize
+- `completed` -> success
+- `failed` -> surface `turn.error.message`
+- `interrupted` -> treat as canceled failure
 
-Example:
+---
 
-{ "method": "initialize", "id": 0, "params": {
-  "clientInfo": { "name": "my_client", "title": "My Client", "version": "1.0.0" },
-  "capabilities": { "experimentalApi": false }
-}}
+## 8) Important model compatibility pitfalls found in real testing
 
-clientInfo.name is important for compliance logs identification
+Do **not** assume all models accept all turn options.
 
-you may opt-in to experimental fields by setting experimentalApi: true
+Real failure observed:
 
-you can also suppress noisy notifications per connection using optOutNotificationMethods
+- `summary: "concise"` rejected for `gpt-5.1-codex` in our run
 
-5.2 Expect response, then send initialized notification
+Guidance:
 
-Flow:
+- avoid hardcoding optional fields like `summary` and `personality` unless you verified compatibility
+- start minimal (`model`, `input`, `effort`, sandbox/approval policy) and add options carefully
 
-you send request with id
+---
 
-server responds with { "id": 0, "result": ... }
+## 9) Model picker via Codex `model/list`
 
-you send notification (no id): { "method": "initialized", "params": {} }
+### 9.1 Backend
 
-This sequence is explicitly required.
+Use `model/list` with pagination:
 
-6) Authentication: ChatGPT-managed OAuth via JSON-RPC
+```json
+{
+  "method": "model/list",
+  "params": { "cursor": null, "includeHidden": false, "limit": 100 }
+}
+```
 
-You have two routes:
+Response shape includes:
 
-Managed ChatGPT (type:"chatgpt") = Codex runs browser OAuth, stores tokens, refreshes automatically
+- `data[]` with `id`, `model`, `displayName`, `description`, `hidden`, `isDefault`, etc.
+- `nextCursor` for pagination
 
-External tokens (type:"chatgptAuthTokens") = your host app supplies tokens and must refresh them when asked
+Implement a dedicated API endpoint, for example:
 
-For what you asked, use managed.
+- `GET /api/ai/codex-models`
+- optional query params:
+  - `codexPath`
+  - `codexHome`
+  - `includeHidden`
 
-6.1 Check whether login is needed
+Return a simple UI-ready shape:
 
-Send:
+```json
+{
+  "source": "codex",
+  "includeHidden": false,
+  "loginRequired": false,
+  "authUrl": null,
+  "models": []
+}
+```
 
-{ "method": "account/read", "id": 1, "params": { "refreshToken": false } }
+If login is required, return:
 
-If response shows account: null and requiresOpenaiAuth: true, you need login.
+```json
+{
+  "loginRequired": true,
+  "authUrl": "https://..."
+}
+```
 
-6.2 Start ChatGPT browser login
+### 9.2 Frontend picker behavior
 
-Send:
+When `authMode === "codexPath"`:
 
-{ "method": "account/login/start", "id": 3, "params": { "type": "chatgpt" } }
+- render a model `<select>` populated from `/api/ai/codex-models`
+- show a "Refresh model list" button
+- if `loginRequired`, show clickable login URL
+- always show an explicit primary button: **"Sign in to OpenAI"** (do not hide login behind errors)
+- auto-select `isDefault` model if current model is missing
+- keep a fallback "custom current model" option if persisted model is not in list
 
-Server responds with:
+When `authMode === "apiKey"`:
 
-loginId
+- keep existing free-text model input
 
-authUrl (open it in the user’s browser; app-server hosts local callback)
+### 9.3 Explicit login UX requirement (required)
 
-6.3 Open the returned authUrl
+Do not rely on users seeing a background error or implicit login prompt.
 
-Your app should:
+In Codex mode, the UI must include a visible login control:
 
-open system browser to authUrl
+- Button label: `Sign in to OpenAI`
+- On click:
+  1. call `/api/ai/codex-models` (or equivalent backend probe)
+  2. if `loginRequired=true` and `authUrl` exists, open `authUrl` in a new browser tab/window
+  3. if models are returned, show "already connected" status
+  4. if neither happens, show a clear actionable error (path/home misconfig, process launch failure, etc.)
 
-show “Waiting for login…” UI state
+Recommended copy in Codex mode:
 
-keep reading stdout events
+- status line should say whether auth mode/path changes are saved yet
+- show a short instruction near the button (example: "Click Sign in to OpenAI to connect Codex subscription")
 
-6.4 Wait for login completion notifications
+---
 
-You’ll receive:
+## 10) Dual-path behavior recommendations
 
-account/login/completed (success/error)
+1. Keep API-key path untouched; only branch behavior by `authMode`.
+2. Keep a common prompt builder/system instruction path for both modes.
+3. Keep output parsing identical across modes.
+4. Keep usage accounting if possible for both modes.
+5. If your app has other AI features that still require API key (for example images), say that clearly in UI.
 
-then account/updated with authMode:"chatgpt"
+---
 
-6.5 Optional: device code login (CLI-side)
+## 11) Timeouts and diagnostics that help in production
 
-If you want a headless fallback, Codex supports device code login via CLI (codex login --device-auth) and it requires enabling device code login in ChatGPT security/workspace settings.
-(If you’re integrating via app-server, prefer the JSON-RPC login flow above; device code is more of a CLI-first pattern.)
+Useful env vars:
 
-7) Create or resume a thread
-7.1 Start a new thread
+- `CODEX_PATH`
+- `CODEX_HOME`
+- `CODEX_RPC_TIMEOUT_MS` (request/response timeout)
+- `CODEX_TURN_TIMEOUT_MS` (turn completion timeout)
+- app-level override (example): `CODEX_TIMEOUT_MS`
 
-Send thread/start:
+Capture a stderr tail from Codex process and append it to errors for easier debugging.
 
-{ "method": "thread/start", "id": 10, "params": {
-  "model": "gpt-5.1-codex",
-  "cwd": "/path/to/workspace",
-  "approvalPolicy": "unlessTrusted",
-  "sandbox": "workspaceWrite",
-  "personality": "friendly"
-}}
+---
 
-Server responds with { thread: { id: "thr_..." } } and emits thread/started.
+## 12) Security and state rules
 
-7.2 Resume an existing thread
+- Do not parse or copy OAuth tokens yourself in managed ChatGPT mode.
+- Let Codex own auth storage and refresh lifecycle.
+- Isolate `CODEX_HOME` per user/app installation to avoid collisions with terminal Codex state.
+- Sanitize secrets from config read APIs.
 
-Store thread IDs in your app. To resume:
+---
 
-{ "method": "thread/resume", "id": 11, "params": { "threadId": "thr_123" } }
+## 13) Minimal integration checklist (copy this into tickets)
 
-8) Start a turn (send user input) and stream events
-8.1 Start a turn
+1. Add config fields (`authMode`, `codexPath`, `codexHome`, flags).
+2. Add Codex app-server client module (spawn + JSONL + router + handshake + auth + turn).
+3. Add chat-mode switch in backend (`apiKey` vs `codexPath`).
+4. Add model-list backend endpoint using `model/list`.
+5. Add frontend auth-mode control + codex path/home inputs.
+6. Add codex model picker + refresh + **explicit Sign in to OpenAI button** + login-required UX.
+7. Keep API-key mode and non-Codex features intact.
+8. Add build/lint + live smoke tests for:
+   - chat via codex path
+   - model/list via codex path
 
-Send:
+---
 
-{ "method": "turn/start", "id": 30, "params": {
-  "threadId": "thr_123",
-  "input": [ { "type": "text", "text": "Run tests and summarize failures." } ],
-  "cwd": "/path/to/workspace",
-  "approvalPolicy": "unlessTrusted",
-  "sandboxPolicy": { "type": "workspaceWrite", "writableRoots": ["/path/to/workspace"], "networkAccess": true },
-  "model": "gpt-5.1-codex",
-  "effort": "medium",
-  "summary": "concise"
-}}
+## 14) Smoke tests that validated this implementation
 
-The server responds immediately with the initial turn object, then streams notifications.
+### Chat smoke test (codex path)
 
-8.2 Read streaming notifications (this is the whole point)
+- invoke codex-backed chat with strict JSON output schema
+- verify non-empty assistant result + usage capture
 
-After turn/start, keep reading stdout JSONL for:
+### Model-list smoke test
 
-thread/status/changed
+- call `listCodexModels({ codexPath: "codex" })`
+- verify `count > 0` and expected fields
 
-turn/* updates
+---
 
-item/started, item/*/delta, item/completed for message text, tool output, file changes, etc.
+## 15) Known tradeoff in this implementation pattern
 
-Example: text streaming comes through item/agentMessage/delta.
+This pattern spawns a fresh `codex app-server` process per request/session for simplicity and isolation.
 
-8.3 Steer / interrupt
+Pros:
 
-turn/steer appends user input to the currently running turn
+- easy lifecycle management
+- minimal cross-request state bugs
 
-turn/interrupt requests cancellation; turn ends with status interrupted
+Cons:
 
-9) Handle approvals (commands, file changes, tool calls)
+- extra process startup overhead
 
-Codex may pause mid-turn and send server-initiated JSON-RPC requests to your client to approve an action.
-
-9.1 Detect “waiting on approval”
-
-You may receive:
-
-{ "method": "thread/status/changed", "params": {
-  "threadId": "thr_123",
-  "status": { "type": "active", "activeFlags": ["waitingOnApproval"] }
-}}
-
-9.2 Command execution approval flow
-
-Order: item/started → item/commandExecution/requestApproval → (your decision response) → item/completed.
-
-Valid decision payloads include:
-
-accept
-
-acceptForSession
-
-decline
-
-cancel
-
-or an exec-policy amendment payload
-
-9.3 File change approvals
-
-Order: item/started (fileChange) → item/fileChange/requestApproval → your decision → item/completed.
-
-10) Build your client correctly (message routing rules)
-
-Your JSONL reader must distinguish:
-
-A) Responses to your requests
-
-They contain an id you sent:
-
-{ "id": 30, "result": {...} }
-B) Notifications
-
-They have method + params, no id:
-
-{ "method": "item/agentMessage/delta", "params": {...} }
-C) Server-initiated requests (IMPORTANT)
-
-They have a method and an id (so you must respond):
-
-{ "method": "item/commandExecution/requestApproval", "id": 9001, "params": {...} }
-
-You must reply:
-
-{ "id": 9001, "result": "accept" }
-
-(Exact shapes are in the generated schemas; don’t freestyle.)
-
-11) Minimal end-to-end “happy path” sequence
-
-Launch codex app-server child process (stdio JSONL)
-
-Send initialize (id=0)
-
-Receive initialize response, send initialized notification
-
-account/read → if needs auth, account/login/start {type:"chatgpt"}
-
-Open authUrl, wait for account/login/completed and account/updated
-
-thread/start (store threadId)
-
-turn/start with text input
-
-Stream item/* notifications and render UI live
-
-If approval request arrives, prompt user → respond with accept/decline
-
-12) What to hand your AI coder (deliverables checklist)
-
-Have them implement these modules:
-
-CodexBinaryManager
-
-resolve pinned version
-
-install/download/bundle logic
-
-CodexProcessHost
-
-spawn process
-
-JSONL writer
-
-JSONL reader (robust framing, buffering, backpressure)
-
-restart + crash handling
-
-JsonRpcRouter
-
-pending requests map (id -> promise)
-
-notification handlers registry (method -> handler)
-
-server-request handlers (method -> handler returns result)
-
-HandshakeManager
-
-initialize + initialized gating
-
-AuthManager
-
-account/read
-
-account/login/start chatgpt
-
-open browser for authUrl
-
-wait for account/login/completed
-
-surface account/rateLimits/read UI optionally
-
-ThreadManager
-
-start/resume/list/read/archive as needed
-
-TurnRunner
-
-start/steer/interrupt
-
-build message timeline from item/started, deltas, item/completed
-
-ApprovalUI + ApprovalResponder
-
-handle item/*/requestApproval server requests and return decision payloads
+For higher throughput, move to a pooled or persistent session host with stronger concurrency controls.
