@@ -128,13 +128,27 @@ final class SessionStore: ObservableObject {
 
     func refreshTokens() async throws {
         guard let refreshToken else {
-            clearAuthData()
+            expireAuthentication()
             throw APIError.unauthorized
         }
 
         let payload: [String: Any] = ["refreshToken": refreshToken]
-        let response = try await apiClient.post("/api/auth/refresh", body: payload, authorized: false)
-        try applyAuthPayload(JSON.object(response))
+        do {
+            let response = try await apiClient.post("/api/auth/refresh", body: payload, authorized: false)
+            try applyAuthPayload(JSON.object(response))
+        } catch let apiError as APIError {
+            if case .unauthorized = apiError {
+                expireAuthentication()
+                throw APIError.unauthorized
+            }
+            throw apiError
+        }
+    }
+
+    func expireAuthentication(message: String = APIError.unauthorized.localizedDescription) {
+        authError = message
+        isProcessingAuth = false
+        clearAuthData()
     }
 
     private func applyAuthPayload(_ rootObject: [String: Any]) throws {
