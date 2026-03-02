@@ -35,7 +35,13 @@ const navigation = [
   { name: 'SSL Certificates', href: '/ssl', icon: Shield, adminOnly: true },
 ]
 
-export function Sidebar() {
+interface SidebarProps {
+  collapsed?: boolean
+  mobile?: boolean
+  onNavigate?: () => void
+}
+
+export function Sidebar({ collapsed = false, mobile = false, onNavigate }: SidebarProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { currentUser } = useAuth()
@@ -48,7 +54,13 @@ export function Sidebar() {
   })
 
   return (
-    <div className="fixed left-0 top-16 z-40 h-[calc(100vh-4rem)] w-64 border-r bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75">
+    <div
+      className={cn(
+        "fixed left-0 top-16 h-[calc(100vh-4rem)] border-r bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75 transition-transform duration-300",
+        mobile ? "z-50 w-[min(20rem,85vw)] shadow-2xl" : "z-40 w-64",
+        collapsed ? "-translate-x-full pointer-events-none" : "translate-x-0"
+      )}
+    >
       <div className="flex h-full flex-col">
         <nav className="flex-1 space-y-2 p-4">
           {visibleNavigation.map((item) => {
@@ -66,6 +78,7 @@ export function Sidebar() {
                 onClick={() => {
                   console.log(`Navigating to ${item.name}:`, item.href)
                   navigate(item.href)
+                  onNavigate?.()
                 }}
               >
                 <item.icon className="h-5 w-5" />
