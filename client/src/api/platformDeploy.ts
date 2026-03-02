@@ -8,6 +8,8 @@ export interface DeployRepoStatus {
   upstream: string;
   dirty: boolean;
   dirtyEntries: string[];
+  ignoredDirtyEntries?: string[];
+  rawDirtyEntries?: string[];
   ahead: number;
   behind: number;
   projectRoot: string;

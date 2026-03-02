@@ -349,10 +349,12 @@ class PlatformDeployService {
       runGit(['status', '--porcelain'], '')
     ]);
 
-    const dirtyEntries = statusOutput
+    const rawDirtyEntries = statusOutput
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
+    const ignoredDirtyEntries = rawDirtyEntries.filter((entry) => this.isIgnorableDirtyEntry(entry));
+    const dirtyEntries = rawDirtyEntries.filter((entry) => !this.isIgnorableDirtyEntry(entry));
 
     let ahead = 0;
     let behind = 0;
@@ -371,6 +373,8 @@ class PlatformDeployService {
       upstream,
       dirty: dirtyEntries.length > 0,
       dirtyEntries,
+      ignoredDirtyEntries,
+      rawDirtyEntries,
       ahead,
       behind,
       projectRoot: this.projectRoot
@@ -624,7 +628,7 @@ class PlatformDeployService {
 
       const resolvedOptions = this.resolveDeployOptions(options);
       let repoStatus = await this.getRepoStatus();
-      if ((repoStatus.dirtyEntries || []).some((entry) => this.isIgnorableDirtyEntry(entry))) {
+      if ((repoStatus.ignoredDirtyEntries || []).length > 0) {
         // Normalize generated frontend artifacts up front so deploy start/pull
         // is not blocked by hashed client/dist churn.
         await this.cleanupClientDistArtifacts().catch(() => {});
@@ -636,7 +640,7 @@ class PlatformDeployService {
           (entry) => !this.isIgnorableDirtyEntry(entry)
         );
 
-        if (blockingDirtyEntries.length === 0 && (repoStatus.dirtyEntries || []).length > 0) {
+        if (blockingDirtyEntries.length === 0 && (repoStatus.ignoredDirtyEntries || []).length > 0) {
           // Dist-only dirtiness is common after client builds; normalize and re-check.
           await this.cleanupClientDistArtifacts().catch(() => {});
           repoStatus = await this.getRepoStatus();

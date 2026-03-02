@@ -208,6 +208,7 @@ export function PlatformDeploy() {
   }, [activeJob, loadHealth, loadStatus]);
 
   const dirtyCount = status?.repo?.dirtyEntries?.length || 0;
+  const ignoredDirtyCount = status?.repo?.ignoredDirtyEntries?.length || 0;
   const isDeployRunning = activeJob?.status === "running";
 
   const stepSummary = useMemo(() => {
@@ -336,6 +337,9 @@ export function PlatformDeploy() {
             <Badge variant={dirtyCount > 0 ? "destructive" : "secondary"}>
               {dirtyCount > 0 ? `Dirty (${dirtyCount})` : "Clean"}
             </Badge>
+            {ignoredDirtyCount > 0 ? (
+              <Badge variant="outline">Ignored dist artifacts: {ignoredDirtyCount}</Badge>
+            ) : null}
             {typeof status?.repo?.behind === "number" ? (
               <Badge variant="outline">Behind: {status.repo.behind}</Badge>
             ) : null}
@@ -352,6 +356,17 @@ export function PlatformDeploy() {
               </div>
               <div className="max-h-28 overflow-auto whitespace-pre-wrap font-mono">
                 {status?.repo?.dirtyEntries?.join("\n")}
+              </div>
+            </div>
+          ) : null}
+          {dirtyCount === 0 && ignoredDirtyCount > 0 ? (
+            <div className="rounded-md border border-blue-300 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100">
+              <div className="mb-1 flex items-center gap-2 font-semibold">
+                <ShieldAlert className="h-4 w-4" />
+                Generated client/dist artifacts ignored
+              </div>
+              <div className="max-h-28 overflow-auto whitespace-pre-wrap font-mono">
+                {status?.repo?.ignoredDirtyEntries?.join("\n")}
               </div>
             </div>
           ) : null}
