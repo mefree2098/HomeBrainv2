@@ -865,7 +865,7 @@ async function validateAndFixAutomation(automation) {
     const fixedAction = { ...action };
 
     // Validate action type
-    if (!['device_control', 'scene_activate', 'notification', 'delay', 'condition'].includes(action.type)) {
+    if (!['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request'].includes(action.type)) {
       issues.push(`Invalid action type at index ${index}: ${action.type}`);
       return null;
     }

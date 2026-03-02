@@ -2461,7 +2461,7 @@ export function Settings() {
                       </div>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Program import creates workflow placeholders; ISY IF/THEN/ELSE logic is not auto-translated.
+                      Program import translates ISY IF/THEN/ELSE into executable HomeBrain workflows, including variable math, program-to-program control, repeat/timer logic, and REST/network-resource execution (native HTTP requests when possible). Imported programs run from unified condition edge-change evaluation to keep THEN/ELSE behavior aligned.
                     </p>
                   </div>
 

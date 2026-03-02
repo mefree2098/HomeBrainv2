@@ -46,6 +46,14 @@ function nodeTypeForAction(actionType) {
       return 'notification';
     case 'condition':
       return 'condition';
+    case 'repeat':
+      return 'delay';
+    case 'workflow_control':
+    case 'variable_control':
+      return 'device_action';
+    case 'isy_network_resource':
+    case 'http_request':
+      return 'notification';
     default:
       return 'device_action';
   }
@@ -282,7 +290,8 @@ class WorkflowService {
       actions,
       graph,
       voiceAliases: normalizeVoiceAliases(workflowData.voiceAliases),
-      linkedAutomationId: workflowData.linkedAutomationId || null
+      linkedAutomationId: workflowData.linkedAutomationId || null,
+      isyRunAtStartup: typeof workflowData.isyRunAtStartup === 'boolean' ? workflowData.isyRunAtStartup : null
     });
 
     const savedWorkflow = await workflow.save();
@@ -347,6 +356,10 @@ class WorkflowService {
     }
     if (Array.isArray(updateData.voiceAliases)) {
       workflow.voiceAliases = normalizeVoiceAliases(updateData.voiceAliases);
+    }
+
+    if (typeof updateData.isyRunAtStartup === 'boolean' || updateData.isyRunAtStartup === null) {
+      workflow.isyRunAtStartup = updateData.isyRunAtStartup;
     }
 
     workflow.graph = normalizeGraph(
@@ -453,11 +466,16 @@ class WorkflowService {
     }
 
     const automation = await this.syncWorkflowToAutomation(workflow._id);
+    const executionContext = options.context && typeof options.context === 'object'
+      ? { ...options.context }
+      : {};
+    executionContext.workflowId = workflow._id.toString();
+
     const execution = await automationService.executeAutomation(automation._id.toString(), {
       triggerType: options.triggerType || workflow.trigger?.type || 'manual',
       triggerSource: options.triggerSource || 'manual',
       voiceCommandId: options.voiceCommandId || null,
-      context: options.context || {}
+      context: executionContext
     });
 
     workflow.lastRun = new Date();
