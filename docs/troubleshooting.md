@@ -74,6 +74,58 @@ id $(whoami) | tr ' ' '\n' | grep dialout || true
 nc -vz <bridge-host> <port>
 ```
 
+### ISY import/link to new PLM fails
+
+Checks:
+
+```bash
+# Confirm HomeBrain can talk to PLM
+curl -s http://127.0.0.1:3000/api/insteon/test
+
+# Test one known device ID first
+curl -s -X POST http://127.0.0.1:3000/api/insteon/devices/import/isy \
+  -H "Content-Type: application/json" \
+  -d '{"deviceIds":["AA.BB.CC"],"group":1,"linkMode":"remote","retries":1}'
+```
+
+If remote linking fails repeatedly:
+1. Retry with `linkMode: "manual"` and press/hold each device set button when prompted by your workflow.
+2. Reduce RF/powerline noise and move dual-band repeaters closer.
+3. Increase `perDeviceTimeoutMs` to account for slower devices.
+
+### ISY topology replay fails (full scene clone)
+
+Run a dry-run first to validate payload structure:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/insteon/devices/import/isy/topology \
+  -H "Content-Type: application/json" \
+  -d '{"dryRun":true,"scenes":[{"name":"Test","group":1,"controller":"gw","responders":["AA.BB.CC"]}]}'
+```
+
+If apply mode fails:
+1. Increase `sceneTimeoutMs` (slow networks/noisy powerline need more time).
+2. Keep `continueOnError=true` for large topology runs so one scene failure does not abort everything.
+3. Replay in smaller batches of scenes to isolate problematic devices.
+
+### Automatic ISY extraction/sync fails
+
+Connectivity test:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/insteon/isy/test \
+  -H "Content-Type: application/json" \
+  -d '{"isyHost":"<isy-host>","isyUsername":"<user>","isyPassword":"<pass>","isyUseHttps":true,"isyIgnoreTlsErrors":true}'
+```
+
+If extraction fails:
+1. Verify `isyHost`, port, and credentials.
+2. If using self-signed certs, set `isyIgnoreTlsErrors=true`.
+3. Try `isyUseHttps=false` only if your ISY is configured for HTTP.
+
+Program import caveat:
+- ISY program IF/THEN/ELSE bodies are not automatically converted into executable HomeBrain actions; import creates workflow placeholders with metadata.
+
 ### Remote device will not come online
 
 On Pi:

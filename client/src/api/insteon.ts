@@ -1,5 +1,110 @@
 import api from './api';
 
+export interface InsteonIsyImportPayload {
+  deviceIds?: string[] | string;
+  addresses?: string[];
+  devices?: Array<{ address?: string; id?: string; deviceId?: string; insteonAddress?: string; name?: string; displayName?: string } | string>;
+  rawDeviceList?: string;
+  rawList?: string;
+  text?: string;
+  isyDeviceList?: string;
+  group?: number;
+  linkGroup?: number;
+  linkMode?: 'remote' | 'manual';
+  perDeviceTimeoutMs?: number;
+  timeoutMs?: number;
+  pauseBetweenMs?: number;
+  pauseBetweenLinksMs?: number;
+  retries?: number;
+  linkRetries?: number;
+  skipLinking?: boolean;
+  importOnly?: boolean;
+  checkExistingLinks?: boolean;
+}
+
+export interface InsteonIsyConnectionPayload {
+  connection?: {
+    host?: string;
+    port?: number;
+    username?: string;
+    password?: string;
+    useHttps?: boolean;
+    ignoreTlsErrors?: boolean;
+  };
+  isyHost?: string;
+  isyPort?: number;
+  isyUsername?: string;
+  isyPassword?: string;
+  isyUseHttps?: boolean;
+  isyIgnoreTlsErrors?: boolean;
+}
+
+export interface InsteonIsyTopologyPayload {
+  scenes?: Array<{
+    name?: string;
+    scene?: string;
+    group?: number;
+    sceneGroup?: number;
+    controller?: string | { address?: string; id?: string; deviceId?: string; insteonAddress?: string };
+    controllerId?: string;
+    source?: string;
+    responders?: Array<string | {
+      id?: string;
+      address?: string;
+      deviceId?: string;
+      insteonAddress?: string;
+      name?: string;
+      displayName?: string;
+      level?: number;
+      ramp?: number;
+      data?: Array<string | number>;
+    }>;
+    members?: Array<string | Record<string, unknown>>;
+    devices?: Array<string | Record<string, unknown>>;
+    remove?: boolean;
+  }>;
+  linkRecords?: Array<{
+    controller?: string;
+    controllerId?: string;
+    source?: string;
+    responder?: string | Record<string, unknown>;
+    target?: string | Record<string, unknown>;
+    device?: string | Record<string, unknown>;
+    deviceId?: string;
+    group?: number;
+    sceneGroup?: number;
+    scene?: string;
+    sceneName?: string;
+    remove?: boolean;
+  }>;
+  topology?: { scenes?: Array<Record<string, unknown>> };
+  dryRun?: boolean;
+  pauseBetweenScenesMs?: number;
+  pauseBetweenMs?: number;
+  sceneTimeoutMs?: number;
+  timeoutMs?: number;
+  continueOnError?: boolean;
+  upsertDevices?: boolean;
+}
+
+export interface InsteonIsySyncPayload extends InsteonIsyConnectionPayload {
+  dryRun?: boolean;
+  importDevices?: boolean;
+  importTopology?: boolean;
+  importPrograms?: boolean;
+  enableProgramWorkflows?: boolean;
+  continueOnError?: boolean;
+  linkMode?: 'remote' | 'manual';
+  group?: number;
+  retries?: number;
+  perDeviceTimeoutMs?: number;
+  pauseBetweenMs?: number;
+  checkExistingLinks?: boolean;
+  skipLinking?: boolean;
+  sceneTimeoutMs?: number;
+  pauseBetweenScenesMs?: number;
+}
+
 // Description: Test Insteon PLM connection
 // Endpoint: GET /api/insteon/test
 // Request: {}
@@ -100,14 +205,81 @@ export const getLinkedInsteonDevices = async () => {
 
 // Description: Import all devices from PLM to database
 // Endpoint: POST /api/insteon/devices/import
-// Request: {}
+// Request: {} OR InsteonIsyImportPayload
 // Response: { success: boolean, message: string, imported: number, skipped: number, errors: number, devices: Array<object> }
-export const importInsteonDevices = async () => {
+export const importInsteonDevices = async (payload?: InsteonIsyImportPayload) => {
   try {
-    const response = await api.post('/api/insteon/devices/import');
+    const response = await api.post('/api/insteon/devices/import', payload || {});
     return response.data;
   } catch (error) {
     console.error('Import Insteon devices error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Import ISY device IDs and link to the currently connected PLM
+// Endpoint: POST /api/insteon/devices/import/isy
+// Request: InsteonIsyImportPayload
+// Response: { success: boolean, message: string, accepted: number, linked: number, alreadyLinked: number, imported: number, updated: number, failed: number, devices: Array<object> }
+export const importInsteonDevicesFromISY = async (payload: InsteonIsyImportPayload) => {
+  try {
+    const response = await api.post('/api/insteon/devices/import/isy', payload || {});
+    return response.data;
+  } catch (error) {
+    console.error('Import ISY Insteon devices error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Recreate ISY scene/link topology on the connected PLM
+// Endpoint: POST /api/insteon/devices/import/isy/topology
+// Request: InsteonIsyTopologyPayload
+// Response: { success: boolean, dryRun: boolean, sceneCount: number, plannedLinkOperations: number, appliedScenes: number, failedScenes: number, imported: number, updated: number, scenes: Array<object> }
+export const syncInsteonISYTopology = async (payload: InsteonIsyTopologyPayload) => {
+  try {
+    const response = await api.post('/api/insteon/devices/import/isy/topology', payload || {});
+    return response.data;
+  } catch (error) {
+    console.error('Sync ISY Insteon topology error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Test direct ISY REST API connectivity
+// Endpoint: POST /api/insteon/isy/test
+// Request: InsteonIsyConnectionPayload
+export const testInsteonISYConnection = async (payload: InsteonIsyConnectionPayload = {}) => {
+  try {
+    const response = await api.post('/api/insteon/isy/test', payload || {});
+    return response.data;
+  } catch (error) {
+    console.error('Test ISY connection error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Extract ISY device/group/program metadata
+// Endpoint: POST /api/insteon/isy/extract
+// Request: InsteonIsyConnectionPayload
+export const extractInsteonISYData = async (payload: InsteonIsyConnectionPayload = {}) => {
+  try {
+    const response = await api.post('/api/insteon/isy/extract', payload || {});
+    return response.data;
+  } catch (error) {
+    console.error('Extract ISY data error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Run end-to-end ISY extraction + import/sync workflow
+// Endpoint: POST /api/insteon/isy/sync
+// Request: InsteonIsySyncPayload
+export const syncInsteonFromISY = async (payload: InsteonIsySyncPayload = {}) => {
+  try {
+    const response = await api.post('/api/insteon/isy/sync', payload || {});
+    return response.data;
+  } catch (error) {
+    console.error('Sync from ISY error:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };

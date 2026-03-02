@@ -197,8 +197,13 @@ async function testInsteonIntegration() {
     console.log('  GET    /api/insteon/serial-ports      - List local serial ports');
     console.log('  POST   /api/insteon/connect           - Connect to PLM');
     console.log('  POST   /api/insteon/disconnect        - Disconnect from PLM');
+    console.log('  POST   /api/insteon/isy/test          - Test ISY REST connectivity');
+    console.log('  POST   /api/insteon/isy/extract       - Extract ISY metadata (devices/scenes/programs)');
+    console.log('  POST   /api/insteon/isy/sync          - Run automatic ISY import/sync workflow');
     console.log('  GET    /api/insteon/devices/linked    - Get all linked devices');
     console.log('  POST   /api/insteon/devices/import    - Import devices to database');
+    console.log('  POST   /api/insteon/devices/import/isy - Import ISY device IDs and link to current PLM');
+    console.log('  POST   /api/insteon/devices/import/isy/topology - Replay ISY scene topology to current PLM');
     console.log('  POST   /api/insteon/devices/scan      - Scan and update all devices');
     console.log('  GET    /api/insteon/devices/:id/status - Get device status');
     console.log('  POST   /api/insteon/devices/:id/on    - Turn device on');

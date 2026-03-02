@@ -71,6 +71,90 @@ Recommended setup for "Ethernet cable" operation:
 3. Set endpoint to `tcp://...` in HomeBrain settings.
 4. Test connection from the INSTEON page.
 
+#### Import devices from ISY and write links to a new USB PLM
+
+Use this when ISY + old PLM stays in place and HomeBrain + new PLM is added as a second controller.
+
+1. Copy device IDs from ISY Admin Console.
+2. Ensure HomeBrain is connected to the new USB PLM (`POST /api/insteon/connect`).
+3. Call:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/insteon/devices/import/isy \
+  -H "Content-Type: application/json" \
+  -d '{
+    "deviceIds": ["AA.BB.CC", "11.22.33"],
+    "group": 1,
+    "linkMode": "remote",
+    "retries": 1
+  }'
+```
+
+Notes:
+- `linkMode: "remote"` is the fastest option for known IDs.
+- `linkMode: "manual"` supports set-button linking (one device at a time).
+- Existing links are detected and skipped by default.
+
+#### Full ISY scene/link clone (topology replay)
+
+If you want the new PLM to mirror ISY scene behavior (controller/responder topology), replay scene topology:
+
+1. Export/build an ISY topology payload (`scenes` or `linkRecords`).
+2. Run dry-run first:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/insteon/devices/import/isy/topology \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dryRun": true,
+    "scenes": [
+      {
+        "name": "Movie Lights",
+        "group": 3,
+        "controller": "gw",
+        "responders": [
+          {"id":"AA.BB.CC","level":20,"ramp":2000},
+          {"id":"11.22.33","level":0}
+        ]
+      }
+    ]
+  }'
+```
+
+3. Apply for real by setting `"dryRun": false`.
+
+#### Automatic extraction directly from ISY (devices + scenes + program stubs)
+
+You can now pull metadata from ISY automatically, then import it into HomeBrain.
+
+1. Configure ISY settings in `Settings` API fields:
+   - `isyHost`, `isyPort`, `isyUsername`, `isyPassword`, `isyUseHttps`, `isyIgnoreTlsErrors`
+2. Test ISY connectivity:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/insteon/isy/test -H "Content-Type: application/json" -d '{}'
+```
+
+3. Run dry-run sync (recommended first):
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/insteon/isy/sync \
+  -H "Content-Type: application/json" \
+  -d '{"dryRun":true}'
+```
+
+4. Apply:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/insteon/isy/sync \
+  -H "Content-Type: application/json" \
+  -d '{"dryRun":false,"importDevices":true,"importTopology":true,"importPrograms":true}'
+```
+
+Notes:
+- Program import creates workflow placeholders (manual trigger + metadata marker), not full IF/THEN/ELSE logic translation.
+- Topology replay uses scene membership/controllers available via ISY REST metadata.
+
 ### Logitech Harmony Hub
 
 Open the `Logitech Harmony Hub Integration` card in `Settings -> Integrations`.
