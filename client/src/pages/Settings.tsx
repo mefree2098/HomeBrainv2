@@ -92,6 +92,11 @@ import {
   startHarmonyActivity,
   turnOffHarmonyHub
 } from "@/api/harmony"
+import {
+  testInsteonISYConnection,
+  extractInsteonISYData,
+  syncInsteonFromISY
+} from "@/api/insteon"
 import { useNavigate } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
 
@@ -129,6 +134,28 @@ export function Settings() {
   const [savingSthmConfig, setSavingSthmConfig] = useState(false)
   const [runningSthmDiagnostics, setRunningSthmDiagnostics] = useState(false)
   const [sthmDiagnostics, setSthmDiagnostics] = useState<any>(null)
+  const [testingIsyConnection, setTestingIsyConnection] = useState(false)
+  const [extractingIsyData, setExtractingIsyData] = useState(false)
+  const [previewingIsyMigration, setPreviewingIsyMigration] = useState(false)
+  const [runningIsyMigration, setRunningIsyMigration] = useState(false)
+  const [isyTestResult, setIsyTestResult] = useState<any>(null)
+  const [isyExtractionResult, setIsyExtractionResult] = useState<any>(null)
+  const [isyMigrationResult, setIsyMigrationResult] = useState<any>(null)
+  const [isyMigrationOptions, setIsyMigrationOptions] = useState<{
+    importDevices: boolean;
+    importTopology: boolean;
+    importPrograms: boolean;
+    enableProgramWorkflows: boolean;
+    continueOnError: boolean;
+    linkMode: "remote" | "manual";
+  }>({
+    importDevices: true,
+    importTopology: true,
+    importPrograms: true,
+    enableProgramWorkflows: false,
+    continueOnError: true,
+    linkMode: "remote"
+  })
   const [sthmConfig, setSthmConfig] = useState<{
     armAwayDeviceId: string;
     armStayDeviceId: string;
@@ -171,6 +198,12 @@ export function Settings() {
       sttLanguage: "en",
       enableNotifications: true,
       insteonPort: "/dev/ttyUSB0",
+      isyHost: "",
+      isyPort: 443,
+      isyUsername: "",
+      isyPassword: "",
+      isyUseHttps: true,
+      isyIgnoreTlsErrors: true,
       smartthingsToken: "",
       smartthingsClientId: "",
       smartthingsClientSecret: "",
@@ -352,6 +385,13 @@ export function Settings() {
   const disarmSelectValue = sthmConfig.disarmDeviceId || STHM_NOT_CONFIGURED
   const armStaySelectValue = sthmConfig.armStayDeviceId || STHM_NOT_CONFIGURED
   const armAwaySelectValue = sthmConfig.armAwayDeviceId || STHM_NOT_CONFIGURED
+  const isyHostValue = (watch("isyHost") || "").toString()
+  const isyPortValueRaw = watch("isyPort")
+  const isyPortValue = isyPortValueRaw === undefined || isyPortValueRaw === null ? "" : String(isyPortValueRaw)
+  const isyUsernameValue = (watch("isyUsername") || "").toString()
+  const isyPasswordValue = (watch("isyPassword") || "").toString()
+  const isyUseHttpsValue = watch("isyUseHttps") !== false
+  const isyIgnoreTlsErrorsValue = watch("isyIgnoreTlsErrors") === true
 
   // Load settings on component mount
   useEffect(() => {
@@ -367,7 +407,7 @@ export function Settings() {
           Object.entries(response.settings).forEach(([key, value]) => {
             if (value !== undefined) {
               // For masked sensitive fields, show a placeholder indicating key is configured
-              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey') &&
+              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey' || key === 'isyPassword') &&
                   typeof value === 'string' && value.includes('*')) {
                 console.log(`Found masked field: ${key}, showing placeholder`);
                 setValue(key, '••••••••••••••••••••••••••••••••••••••••••••••••••'); // Placeholder to show key is configured
@@ -757,6 +797,9 @@ export function Settings() {
       if (settingsToSave.anthropicApiKey && settingsToSave.anthropicApiKey.startsWith('••••')) {
         delete settingsToSave.anthropicApiKey; // Don't update if it's just the placeholder
       }
+      if (settingsToSave.isyPassword && settingsToSave.isyPassword.startsWith('••••')) {
+        delete settingsToSave.isyPassword; // Don't update if it's just the placeholder
+      }
       
       const response = await updateSettings(settingsToSave);
       
@@ -775,6 +818,152 @@ export function Settings() {
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const buildIsyConnectionPayload = () => {
+    const parsedPort = Number(isyPortValue)
+    const normalizedPassword = isyPasswordValue.startsWith('••••') ? '' : isyPasswordValue.trim()
+
+    return {
+      ...(isyHostValue.trim() ? { isyHost: isyHostValue.trim() } : {}),
+      ...(Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535 ? { isyPort: parsedPort } : {}),
+      ...(isyUsernameValue.trim() ? { isyUsername: isyUsernameValue.trim() } : {}),
+      ...(normalizedPassword ? { isyPassword: normalizedPassword } : {}),
+      isyUseHttps: isyUseHttpsValue,
+      isyIgnoreTlsErrors: isyIgnoreTlsErrorsValue
+    }
+  }
+
+  const handleTestIsyConnection = async () => {
+    setTestingIsyConnection(true)
+    try {
+      const response = await testInsteonISYConnection(buildIsyConnectionPayload())
+      setIsyTestResult(response)
+      toast({
+        title: "ISY connection successful",
+        description: response?.message || "HomeBrain can reach your ISY controller."
+      })
+    } catch (error: any) {
+      const message = error?.message || "Failed to connect to ISY."
+      setIsyTestResult({
+        success: false,
+        message
+      })
+      toast({
+        title: "ISY connection failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setTestingIsyConnection(false)
+    }
+  }
+
+  const handleExtractIsyData = async () => {
+    setExtractingIsyData(true)
+    try {
+      const response = await extractInsteonISYData(buildIsyConnectionPayload())
+      setIsyExtractionResult(response?.extraction || null)
+      const counts = response?.extraction?.counts || {}
+      toast({
+        title: "ISY extraction complete",
+        description: `Found ${counts.uniqueDeviceIds ?? 0} devices, ${counts.topologyScenes ?? 0} scenes, ${counts.programs ?? 0} programs.`
+      })
+    } catch (error: any) {
+      const message = error?.message || "ISY extraction failed."
+      toast({
+        title: "ISY extraction failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setExtractingIsyData(false)
+    }
+  }
+
+  const validateIsyMigrationSelection = () => {
+    if (!isyMigrationOptions.importDevices && !isyMigrationOptions.importTopology && !isyMigrationOptions.importPrograms) {
+      toast({
+        title: "Nothing selected to migrate",
+        description: "Enable at least one migration option before running preview or apply.",
+        variant: "destructive"
+      })
+      return false
+    }
+    return true
+  }
+
+  const handlePreviewIsyMigration = async () => {
+    if (!validateIsyMigrationSelection()) {
+      return
+    }
+
+    setPreviewingIsyMigration(true)
+    try {
+      const response = await syncInsteonFromISY({
+        ...buildIsyConnectionPayload(),
+        dryRun: true,
+        importDevices: isyMigrationOptions.importDevices,
+        importTopology: isyMigrationOptions.importTopology,
+        importPrograms: isyMigrationOptions.importPrograms,
+        enableProgramWorkflows: isyMigrationOptions.enableProgramWorkflows,
+        continueOnError: isyMigrationOptions.continueOnError,
+        linkMode: isyMigrationOptions.linkMode
+      })
+      setIsyMigrationResult(response)
+      toast({
+        title: "Migration preview complete",
+        description: response?.message || "Dry run finished. Review results below before applying."
+      })
+    } catch (error: any) {
+      const message = error?.message || "ISY dry run failed."
+      toast({
+        title: "Migration preview failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setPreviewingIsyMigration(false)
+    }
+  }
+
+  const handleRunIsyMigration = async () => {
+    if (!validateIsyMigrationSelection()) {
+      return
+    }
+
+    if (!window.confirm("Run ISY migration now? This writes links/scenes to the connected USB PLM.")) {
+      return
+    }
+
+    setRunningIsyMigration(true)
+    try {
+      const response = await syncInsteonFromISY({
+        ...buildIsyConnectionPayload(),
+        dryRun: false,
+        importDevices: isyMigrationOptions.importDevices,
+        importTopology: isyMigrationOptions.importTopology,
+        importPrograms: isyMigrationOptions.importPrograms,
+        enableProgramWorkflows: isyMigrationOptions.enableProgramWorkflows,
+        continueOnError: isyMigrationOptions.continueOnError,
+        linkMode: isyMigrationOptions.linkMode
+      })
+      setIsyMigrationResult(response)
+      toast({
+        title: response?.success ? "ISY migration completed" : "ISY migration completed with errors",
+        description: response?.message || "Migration run finished. Review the summary below.",
+        variant: response?.success ? "default" : "destructive"
+      })
+    } catch (error: any) {
+      const message = error?.message || "ISY migration failed."
+      toast({
+        title: "ISY migration failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setRunningIsyMigration(false)
     }
   }
 
@@ -2122,6 +2311,298 @@ export function Settings() {
                   <p className="text-xs text-muted-foreground mt-1">
                     USB PLM local serial path (prefer /dev/serial/by-id/... for stable naming) or TCP serial bridge (for example tcp://host:9761)
                   </p>
+                </div>
+                <div className="rounded-lg border border-violet-200 bg-violet-50/40 dark:border-violet-900/60 dark:bg-violet-900/10 p-4 space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Database className="h-4 w-4 text-violet-700" />
+                    <div>
+                      <p className="font-medium text-sm">INSTEON Migration from ISY</p>
+                      <p className="text-xs text-muted-foreground">
+                        Extract from ISY, preview with dry-run, then write devices/scenes to the connected USB PLM.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="text-sm font-medium">ISY Host</label>
+                      <Input
+                        {...register("isyHost")}
+                        placeholder="isy.local or 192.168.1.100"
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">ISY Port</label>
+                      <Input
+                        {...register("isyPort", {
+                          setValueAs: (value) => {
+                            if (value === "" || value === null || value === undefined) return undefined
+                            const parsed = Number(value)
+                            return Number.isFinite(parsed) ? parsed : undefined
+                          }
+                        })}
+                        type="number"
+                        min={1}
+                        max={65535}
+                        placeholder="443"
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">ISY Username</label>
+                      <Input
+                        {...register("isyUsername")}
+                        placeholder="admin"
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">ISY Password</label>
+                      <Input
+                        {...register("isyPassword")}
+                        type="password"
+                        placeholder={isyPasswordValue.startsWith('••••') ? "Password configured" : "Enter ISY password"}
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-md border border-violet-200/70 bg-white/70 dark:bg-slate-900/40 p-3 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">Use HTTPS</p>
+                        <p className="text-xs text-muted-foreground">Recommended for most ISY setups.</p>
+                      </div>
+                      <Switch
+                        checked={isyUseHttpsValue}
+                        onCheckedChange={(checked) => setValue("isyUseHttps", checked)}
+                      />
+                    </div>
+                    <div className="rounded-md border border-violet-200/70 bg-white/70 dark:bg-slate-900/40 p-3 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">Ignore TLS Errors</p>
+                        <p className="text-xs text-muted-foreground">Enable for self-signed ISY certificates.</p>
+                      </div>
+                      <Switch
+                        checked={isyIgnoreTlsErrorsValue}
+                        onCheckedChange={(checked) => setValue("isyIgnoreTlsErrors", checked)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-dashed border-violet-300/70 bg-white/70 dark:bg-slate-900/40 p-3 space-y-3">
+                    <p className="text-sm font-medium">Migration Scope</p>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">Import devices</p>
+                        <Switch
+                          checked={isyMigrationOptions.importDevices}
+                          onCheckedChange={(checked) =>
+                            setIsyMigrationOptions((prev) => ({ ...prev, importDevices: checked }))
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">Import topology (scenes/links)</p>
+                        <Switch
+                          checked={isyMigrationOptions.importTopology}
+                          onCheckedChange={(checked) =>
+                            setIsyMigrationOptions((prev) => ({ ...prev, importTopology: checked }))
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">Import program stubs</p>
+                        <Switch
+                          checked={isyMigrationOptions.importPrograms}
+                          onCheckedChange={(checked) =>
+                            setIsyMigrationOptions((prev) => ({ ...prev, importPrograms: checked }))
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">Enable imported workflow stubs</p>
+                        <Switch
+                          checked={isyMigrationOptions.enableProgramWorkflows}
+                          onCheckedChange={(checked) =>
+                            setIsyMigrationOptions((prev) => ({ ...prev, enableProgramWorkflows: checked }))
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">Continue on errors</p>
+                        <Switch
+                          checked={isyMigrationOptions.continueOnError}
+                          onCheckedChange={(checked) =>
+                            setIsyMigrationOptions((prev) => ({ ...prev, continueOnError: checked }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Device Link Mode</label>
+                        <Select
+                          value={isyMigrationOptions.linkMode}
+                          onValueChange={(value) =>
+                            setIsyMigrationOptions((prev) => ({
+                              ...prev,
+                              linkMode: value === "manual" ? "manual" : "remote"
+                            }))
+                          }
+                        >
+                          <SelectTrigger className="mt-1 h-8">
+                            <SelectValue placeholder="Select link mode" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="remote">Remote</SelectItem>
+                            <SelectItem value="manual">Manual (set-button)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Program import creates workflow placeholders; ISY IF/THEN/ELSE logic is not auto-translated.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2 flex-wrap">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleTestIsyConnection}
+                      disabled={testingIsyConnection}
+                    >
+                      {testingIsyConnection ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Testing...
+                        </>
+                      ) : (
+                        <>
+                          <TestTube className="h-4 w-4 mr-2" />
+                          Test ISY Connection
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleExtractIsyData}
+                      disabled={extractingIsyData}
+                    >
+                      {extractingIsyData ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Extracting...
+                        </>
+                      ) : (
+                        <>
+                          <List className="h-4 w-4 mr-2" />
+                          Extract Metadata
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handlePreviewIsyMigration}
+                      disabled={previewingIsyMigration}
+                    >
+                      {previewingIsyMigration ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Previewing...
+                        </>
+                      ) : (
+                        <>
+                          <Activity className="h-4 w-4 mr-2" />
+                          Preview Migration (Dry Run)
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleRunIsyMigration}
+                      disabled={runningIsyMigration}
+                      className="bg-violet-600 hover:bg-violet-700 text-white"
+                    >
+                      {runningIsyMigration ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Running...
+                        </>
+                      ) : (
+                        <>
+                          <ArrowUp className="h-4 w-4 mr-2" />
+                          Run Migration
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {isyTestResult && (
+                    <div className={`rounded-md border p-3 text-xs ${isyTestResult.success ? "border-green-200 bg-green-50/70 dark:border-green-900/60 dark:bg-green-900/20" : "border-red-200 bg-red-50/70 dark:border-red-900/60 dark:bg-red-900/20"}`}>
+                      <p className="font-medium">
+                        Connection test: {isyTestResult.success ? "success" : "failed"}
+                      </p>
+                      <p className="mt-1 text-muted-foreground">{isyTestResult.message || "No response message provided."}</p>
+                    </div>
+                  )}
+
+                  {isyExtractionResult && (
+                    <div className="rounded-md border border-violet-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-1">
+                      <p className="font-medium">Latest extraction</p>
+                      <p className="text-muted-foreground">
+                        {isyExtractionResult?.counts?.uniqueDeviceIds ?? 0} devices, {isyExtractionResult?.counts?.topologyScenes ?? 0} scenes, {isyExtractionResult?.counts?.programs ?? 0} programs.
+                      </p>
+                      <p className="text-muted-foreground">
+                        ISY endpoint: {isyExtractionResult?.connection?.host || "unknown"}:{isyExtractionResult?.connection?.port || "?"} ({isyExtractionResult?.connection?.useHttps ? "https" : "http"})
+                      </p>
+                    </div>
+                  )}
+
+                  {isyMigrationResult && (
+                    <div className="rounded-md border border-violet-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-1">
+                      <p className="font-medium">
+                        Latest migration {isyMigrationResult?.dryRun ? "preview" : "run"}: {isyMigrationResult?.success === false ? "completed with errors" : "successful"}
+                      </p>
+                      <p className="text-muted-foreground">{isyMigrationResult?.message || "No summary message provided."}</p>
+                      <p className="text-muted-foreground">
+                        Extracted counts: {isyMigrationResult?.extractedCounts?.uniqueDeviceIds ?? 0} devices, {isyMigrationResult?.extractedCounts?.topologyScenes ?? 0} scenes, {isyMigrationResult?.extractedCounts?.programs ?? 0} programs.
+                      </p>
+                      {isyMigrationResult?.devices && (
+                        <p className="text-muted-foreground">
+                          Device replay: {isyMigrationResult.devices.accepted ?? 0} accepted, {isyMigrationResult.devices.linked ?? 0} linked, {isyMigrationResult.devices.failed ?? 0} failed.
+                        </p>
+                      )}
+                      {isyMigrationResult?.topology && (
+                        <p className="text-muted-foreground">
+                          Topology replay: {isyMigrationResult.topology.sceneCount ?? 0} scenes, {isyMigrationResult.topology.appliedScenes ?? 0} applied, {isyMigrationResult.topology.failedScenes ?? 0} failed.
+                        </p>
+                      )}
+                      {isyMigrationResult?.programs && (
+                        <p className="text-muted-foreground">
+                          Program stubs: {isyMigrationResult.programs.processed ?? 0} processed, {isyMigrationResult.programs.created ?? 0} created, {isyMigrationResult.programs.updated ?? 0} updated, {isyMigrationResult.programs.failed ?? 0} failed.
+                        </p>
+                      )}
+                      {Array.isArray(isyMigrationResult?.errors) && isyMigrationResult.errors.length > 0 && (
+                        <div className="pt-1 text-red-700 dark:text-red-300 space-y-1">
+                          {isyMigrationResult.errors.map((error: any, index: number) => (
+                            <p key={`isy-migration-error-${index}`}>
+                              {(error?.stage || "stage").toString()}: {error?.error || "Unknown error"}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 dark:border-emerald-900/60 dark:bg-emerald-900/10 p-4 space-y-4">
                   <div className="flex items-center gap-2">
