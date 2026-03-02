@@ -83,6 +83,6 @@
   },
   "overrides": {
     "esbuild": "^0.25.12",
-    "minimatch": "^10.2.1"
+    "minimatch": "10.2.3"
   }
 }
