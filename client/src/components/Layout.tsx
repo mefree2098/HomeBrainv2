@@ -35,7 +35,7 @@ export function Layout({ children }: LayoutProps) {
   const [isMobileSidebarCollapsed, setIsMobileSidebarCollapsed] = useState<boolean>(() =>
     readStoredBoolean(MOBILE_SIDEBAR_COLLAPSE_STORAGE_KEY, true)
   )
-
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const isSidebarCollapsed = isMobile ? isMobileSidebarCollapsed : isDesktopSidebarCollapsed
 
   useEffect(() => {
@@ -55,13 +55,13 @@ export function Layout({ children }: LayoutProps) {
   }, [isMobileSidebarCollapsed])
 
   useEffect(() => {
-    if (!isMobile || isSidebarCollapsed) {
+    if (!isMobile || !isMobileMenuOpen) {
       return
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setIsMobileSidebarCollapsed(true)
+        setIsMobileMenuOpen(false)
       }
     }
 
@@ -69,7 +69,7 @@ export function Layout({ children }: LayoutProps) {
     return () => {
       window.removeEventListener("keydown", onKeyDown)
     }
-  }, [isMobile, isSidebarCollapsed])
+  }, [isMobile, isMobileMenuOpen])
 
   useEffect(() => {
     if (!isMobile) {
@@ -77,7 +77,7 @@ export function Layout({ children }: LayoutProps) {
       return
     }
 
-    if (isSidebarCollapsed) {
+    if (!isMobileMenuOpen) {
       document.body.style.overflow = ""
       return
     }
@@ -86,9 +86,17 @@ export function Layout({ children }: LayoutProps) {
     return () => {
       document.body.style.overflow = ""
     }
-  }, [isMobile, isSidebarCollapsed])
+  }, [isMobile, isMobileMenuOpen])
 
-  const handleToggleSidebar = () => {
+  const handleToggleMobileMenu = () => {
+    if (!isMobile) {
+      return
+    }
+
+    setIsMobileMenuOpen((prev) => !prev)
+  }
+
+  const handleToggleSidebarCollapse = () => {
     if (isMobile) {
       setIsMobileSidebarCollapsed((prev) => !prev)
       return
@@ -101,31 +109,33 @@ export function Layout({ children }: LayoutProps) {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-blue-900 dark:to-purple-900">
       <Header
         isMobile={isMobile}
-        isSidebarCollapsed={isSidebarCollapsed}
-        onToggleSidebar={handleToggleSidebar}
+        isMobileMenuOpen={isMobileMenuOpen}
+        onToggleMobileMenu={isMobile ? handleToggleMobileMenu : undefined}
       />
       <div className="flex h-[calc(100vh-4rem)] pt-16">
-        {isMobile && !isSidebarCollapsed ? (
+        {isMobile && isMobileMenuOpen ? (
           <button
             type="button"
             aria-label="Close main menu"
             className="fixed inset-x-0 bottom-0 top-16 z-40 bg-black/45 backdrop-blur-[1px]"
-            onClick={() => setIsMobileSidebarCollapsed(true)}
+            onClick={() => setIsMobileMenuOpen(false)}
           />
         ) : null}
 
         <Sidebar
           collapsed={isSidebarCollapsed}
           mobile={isMobile}
+          open={isMobile ? isMobileMenuOpen : true}
+          onToggleCollapsed={handleToggleSidebarCollapse}
           onNavigate={() => {
             if (isMobile) {
-              setIsMobileSidebarCollapsed(true)
+              setIsMobileMenuOpen(false)
             }
           }}
         />
         <main
           className={`flex-1 overflow-y-auto p-4 transition-[margin] duration-300 ${
-            isMobile ? "ml-0" : isSidebarCollapsed ? "ml-0" : "ml-64"
+            isMobile ? "ml-0" : isSidebarCollapsed ? "ml-20" : "ml-64"
           }`}
         >
           <div className="mx-auto max-w-full px-4">
