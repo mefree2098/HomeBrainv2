@@ -70,6 +70,31 @@ router.get('/status', async (req, res) => {
   }
 });
 
+// Description: List local serial ports available for USB PLM use
+// Endpoint: GET /api/insteon/serial-ports
+// Request: {}
+// Response: { success: boolean, count: number, ports: Array<object> }
+router.get('/serial-ports', async (req, res) => {
+  console.log('InsteonRoutes: Listing local serial ports');
+
+  try {
+    const ports = await insteonService.listLocalSerialPorts();
+    res.status(200).json({
+      success: true,
+      count: ports.length,
+      ports
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to list serial ports:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      ports: []
+    });
+  }
+});
+
 // Description: Connect to Insteon PLM
 // Endpoint: POST /api/insteon/connect
 // Request: {}

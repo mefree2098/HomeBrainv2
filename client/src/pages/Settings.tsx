@@ -2116,11 +2116,11 @@ export function Settings() {
                   <label className="text-sm font-medium">INSTEON PLM Endpoint</label>
                   <Input
                     {...register("insteonPort")}
-                    placeholder="/dev/ttyUSB0 or tcp://192.168.1.50:9761"
+                    placeholder="/dev/serial/by-id/... (recommended) or /dev/ttyUSB0 or tcp://192.168.1.50:9761"
                     className="mt-1"
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    Local serial path (for example /dev/ttyUSB0) or TCP serial bridge (for example tcp://host:9761)
+                    USB PLM local serial path (prefer /dev/serial/by-id/... for stable naming) or TCP serial bridge (for example tcp://host:9761)
                   </p>
                 </div>
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 dark:border-emerald-900/60 dark:bg-emerald-900/10 p-4 space-y-4">
