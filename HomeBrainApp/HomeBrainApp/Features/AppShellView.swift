@@ -22,15 +22,15 @@ struct AppShellView: View {
         case dashboard
         case devices
         case scenes
-        case automations
         case workflows
+        case automations
         case voiceDevices
         case userProfiles
-        case settings
-        case operations
-        case platformDeploy
         case ollama
         case whisper
+        case platformDeploy
+        case operations
+        case settings
         case ssl
 
         var id: String { rawValue }
@@ -86,6 +86,8 @@ struct AppShellView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var selection: AppSection? = .dashboard
+    @AppStorage("homebrain.ios.main-menu-collapsed.regular") private var isRegularSidebarCollapsed = false
+    @AppStorage("homebrain.ios.main-menu-collapsed.compact") private var isCompactSidebarCollapsed = true
     @State private var activeDevicesSummary = "--/--"
     @StateObject private var voiceAssistant = VoiceAssistantManager()
     @State private var resourceStripMetrics: [ResourceStripMetric] = defaultResourceStripMetrics()
@@ -97,9 +99,24 @@ struct AppShellView: View {
     private var topBarHeight: CGFloat { isCompactHeight ? 52 : (isCompact ? 56 : 72) }
     private var shellPadding: CGFloat { isCompactHeight ? 8 : (isCompact ? 12 : 16) }
     private var chromeButtonSide: CGFloat { isCompactHeight ? 32 : 36 }
+    private var isSidebarCollapsed: Bool { isCompact ? isCompactSidebarCollapsed : isRegularSidebarCollapsed }
 
     private var visibleSections: [AppSection] {
         AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
+    }
+
+    private func setSidebarCollapsed(_ collapsed: Bool) {
+        if isCompact {
+            isCompactSidebarCollapsed = collapsed
+        } else {
+            isRegularSidebarCollapsed = collapsed
+        }
+    }
+
+    private func toggleSidebarCollapsed() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            setSidebarCollapsed(!isSidebarCollapsed)
+        }
     }
 
     var body: some View {
@@ -159,20 +176,39 @@ struct AppShellView: View {
 
     private var regularShell: some View {
         HStack(spacing: 0) {
-            sidebar
+            if !isSidebarCollapsed {
+                sidebar
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
             detailStack
         }
+        .animation(.easeInOut(duration: 0.25), value: isSidebarCollapsed)
     }
 
     private var compactShell: some View {
-        detailStack
+        ZStack(alignment: .leading) {
+            detailStack
+
+            if !isSidebarCollapsed {
+                Color.black.opacity(0.42)
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            setSidebarCollapsed(true)
+                        }
+                    }
+                    .transition(.opacity)
+
+                sidebar
+                    .shadow(color: Color.black.opacity(0.35), radius: 20, x: 8, y: 0)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: isSidebarCollapsed)
     }
 
     private var topBar: some View {
         HStack(spacing: isCompactHeight ? 8 : 10) {
-            if isCompact {
-                sectionsMenuButton
-            }
+            sidebarToggleButton
 
             HStack(spacing: 8) {
                 Image("HomeBrainBrandIcon")
@@ -360,36 +396,6 @@ struct AppShellView: View {
         )
     }
 
-    private var sectionsMenuButton: some View {
-        Menu {
-            if let user = session.currentUser {
-                Section("Signed In") {
-                    Text("\(user.name) (\(user.role))")
-                }
-            }
-
-            Section("Sections") {
-                ForEach(visibleSections) { section in
-                    Button {
-                        selection = section
-                    } label: {
-                        if selection == section {
-                            Label(section.title, systemImage: "checkmark")
-                        } else {
-                            Label(section.title, systemImage: section.icon)
-                        }
-                    }
-                }
-            }
-        } label: {
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(HBPalette.textPrimary)
-                .frame(width: chromeButtonSide, height: chromeButtonSide)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-    }
-
     private func chromeIconButton(systemImage: String, action: @escaping () -> Void = {}) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
@@ -401,6 +407,20 @@ struct AppShellView: View {
         .buttonStyle(.plain)
     }
 
+    private var sidebarToggleButton: some View {
+        Button {
+            toggleSidebarCollapsed()
+        } label: {
+            Image(systemName: isSidebarCollapsed ? "line.3.horizontal" : "xmark")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(HBPalette.textSecondary)
+                .frame(width: chromeButtonSide, height: chromeButtonSide)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isSidebarCollapsed ? "Open main menu" : "Close main menu")
+    }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 10) {
             Color.clear
@@ -409,6 +429,11 @@ struct AppShellView: View {
             ForEach(visibleSections) { section in
                 Button {
                     selection = section
+                    if isCompact {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            setSidebarCollapsed(true)
+                        }
+                    }
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: section.icon)

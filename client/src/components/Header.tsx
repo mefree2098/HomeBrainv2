@@ -1,4 +1,4 @@
-import { Bug, Copy, Loader2, Mic, MicOff, Settings, LogOut } from "lucide-react"
+import { Bug, Copy, Loader2, Menu, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Settings, LogOut, X } from "lucide-react"
 import { Button } from "./ui/button"
 import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
@@ -17,7 +17,13 @@ import { getDeviceStats } from "@/api/devices"
 import { browserVoiceAssistant, type BrowserVoiceStatus } from "@/services/browserVoiceAssistant"
 import { HeaderResourceUtilizationStrip } from "@/components/system/SystemResourceUtilization"
 
-export function Header() {
+interface HeaderProps {
+  isMobile?: boolean
+  isSidebarCollapsed?: boolean
+  onToggleSidebar?: () => void
+}
+
+export function Header({ isMobile = false, isSidebarCollapsed = false, onToggleSidebar }: HeaderProps) {
   const { logout } = useAuth()
   const navigate = useNavigate()
   const { toast } = useToast()
@@ -179,6 +185,23 @@ export function Header() {
     <header className="fixed top-0 z-50 w-full border-b bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75">
       <div className="flex h-16 items-center justify-between px-6">
         <div className="flex items-center gap-4">
+          {onToggleSidebar ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleSidebar}
+              title={isSidebarCollapsed ? "Open main menu" : "Close main menu"}
+            >
+              {isMobile ? (
+                isSidebarCollapsed ? <Menu className="h-5 w-5" /> : <X className="h-5 w-5" />
+              ) : isSidebarCollapsed ? (
+                <PanelLeftOpen className="h-5 w-5" />
+              ) : (
+                <PanelLeftClose className="h-5 w-5" />
+              )}
+            </Button>
+          ) : null}
+
           <div
             className="flex items-center gap-2 cursor-pointer hover:scale-105 transition-transform"
             onClick={() => navigate("/")}
