@@ -186,6 +186,7 @@ Common causes:
 - Dirty git worktree
 - Missing GitHub credentials
 - Restart command permission issue
+- `client/dist` ownership/permission mismatch (files written by a different user)
 
 Fix checks:
 
@@ -193,6 +194,15 @@ Fix checks:
 cd ~/HomeBrainv2
 git status --short
 git remote -v
+ls -ld client/dist client/dist/assets 2>/dev/null || true
+```
+
+If deploy/build fails with `EACCES` or `Permission denied` under `client/dist`, fix ownership once:
+
+```bash
+cd ~/HomeBrainv2
+sudo chown -R "$(id -un):$(id -gn)" client/dist
+sudo chmod -R u+rwX client/dist
 ```
 
 If restart permission fails, configure sudoers as documented in [DEPLOYMENT.md](../DEPLOYMENT.md).
