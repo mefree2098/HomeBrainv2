@@ -135,6 +135,76 @@ router.post('/disconnect', async (req, res) => {
   }
 });
 
+// Description: Test direct ISY REST API connectivity
+// Endpoint: POST /api/insteon/isy/test
+// Request: { connection?: { host, port?, username, password, useHttps?, ignoreTlsErrors? } } OR top-level equivalents
+// Response: { success: boolean, message: string, connection?: object }
+router.post('/isy/test', async (req, res) => {
+  console.log('InsteonRoutes: Testing ISY connectivity');
+
+  try {
+    const result = await insteonService.testISYConnection(req.body || {});
+    const statusCode = result.success ? 200 : 400;
+    res.status(statusCode).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: ISY connectivity test failed:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Description: Extract device/group/program metadata from ISY without applying changes
+// Endpoint: POST /api/insteon/isy/extract
+// Request: { connection?: {...} } OR top-level ISY connection fields
+// Response: { success: boolean, extraction: object }
+router.post('/isy/extract', async (req, res) => {
+  console.log('InsteonRoutes: Extracting ISY metadata');
+
+  try {
+    const extraction = await insteonService.extractISYData(req.body || {});
+    res.status(200).json({
+      success: true,
+      extraction
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: ISY extraction failed:', error.message);
+    console.error(error.stack);
+    const statusCode = /isy host is required|isy credentials are required|isy request failed/i.test(String(error.message).toLowerCase())
+      ? 400
+      : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Description: End-to-end ISY extraction and import (devices, topology, program stubs)
+// Endpoint: POST /api/insteon/isy/sync
+// Request: { dryRun?: boolean, importDevices?: boolean, importTopology?: boolean, importPrograms?: boolean, enableProgramWorkflows?: boolean, connection?: {...}, linkMode?: 'remote'|'manual' }
+// Response: { success: boolean, dryRun: boolean, extractedCounts: object, devices?: object, topology?: object, programs?: object }
+router.post('/isy/sync', async (req, res) => {
+  console.log('InsteonRoutes: Running ISY sync workflow');
+
+  try {
+    const result = await insteonService.syncFromISY(req.body || {});
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: ISY sync failed:', error.message);
+    console.error(error.stack);
+    const statusCode = /isy host is required|isy credentials are required|isy request failed/i.test(String(error.message).toLowerCase())
+      ? 400
+      : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 // Description: Get all devices linked to PLM
 // Endpoint: GET /api/insteon/devices/linked
 // Request: {}
@@ -162,23 +232,108 @@ router.get('/devices/linked', async (req, res) => {
 
 // Description: Import all devices from PLM to database
 // Endpoint: POST /api/insteon/devices/import
-// Request: {}
+// Request: {} OR ISY import payload
 // Response: { success: boolean, message: string, imported: number, skipped: number, errors: number, devices: Array<object> }
 router.post('/devices/import', async (req, res) => {
-  console.log('InsteonRoutes: Importing devices from PLM');
+  const body = req.body || {};
+  const hasISYPayload =
+    Array.isArray(body.deviceIds) ||
+    Array.isArray(body.addresses) ||
+    Array.isArray(body.devices) ||
+    typeof body.deviceIds === 'string' ||
+    typeof body.rawDeviceList === 'string' ||
+    typeof body.rawList === 'string' ||
+    typeof body.text === 'string' ||
+    typeof body.isyDeviceList === 'string';
+  const hasISYTopologyPayload =
+    Array.isArray(body.scenes) ||
+    Array.isArray(body.linkRecords) ||
+    Array.isArray(body.topology?.scenes) ||
+    typeof body.scenes === 'string';
+
+  console.log(
+    `InsteonRoutes: Importing devices (${hasISYTopologyPayload ? 'ISY topology payload' : hasISYPayload ? 'ISY payload' : 'PLM link table'})`
+  );
 
   try {
-    const result = await insteonService.importDevices();
+    let result;
+    if (hasISYTopologyPayload) {
+      result = await insteonService.applyISYSceneTopology(body);
+    } else if (hasISYPayload) {
+      result = await insteonService.importDevicesFromISY(body);
+    } else {
+      result = await insteonService.importDevices();
+    }
+
     res.status(200).json(result);
   } catch (error) {
     console.error('InsteonRoutes: Device import failed:', error.message);
     console.error(error.stack);
-    res.status(500).json({
+    const statusCode = /no valid insteon|isy .* must be|no valid isy scene topology/i.test(String(error.message).toLowerCase())
+      ? 400
+      : 500;
+    res.status(statusCode).json({
       success: false,
       message: error.message,
       imported: 0,
       skipped: 0,
       errors: 0
+    });
+  }
+});
+
+// Description: Import ISY device IDs and link each device to the current PLM
+// Endpoint: POST /api/insteon/devices/import/isy
+// Request: { deviceIds?: string[]|string, rawDeviceList?: string, group?: number, linkMode?: 'remote'|'manual', perDeviceTimeoutMs?: number, retries?: number, pauseBetweenMs?: number, skipLinking?: boolean }
+// Response: { success: boolean, message: string, accepted: number, linked: number, alreadyLinked: number, imported: number, updated: number, failed: number, devices: Array<object> }
+router.post('/devices/import/isy', async (req, res) => {
+  console.log('InsteonRoutes: Importing ISY devices and linking to current PLM');
+
+  try {
+    const result = await insteonService.importDevicesFromISY(req.body || {});
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: ISY import failed:', error.message);
+    console.error(error.stack);
+    const statusCode = /no valid insteon device ids|isy import .* must be/i.test(String(error.message).toLowerCase())
+      ? 400
+      : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message,
+      accepted: 0,
+      linked: 0,
+      imported: 0,
+      updated: 0,
+      failed: 0
+    });
+  }
+});
+
+// Description: Recreate ISY scene/link topology on the current PLM
+// Endpoint: POST /api/insteon/devices/import/isy/topology
+// Request: { scenes?: Array<object>, linkRecords?: Array<object>, dryRun?: boolean, sceneTimeoutMs?: number, pauseBetweenScenesMs?: number, continueOnError?: boolean, upsertDevices?: boolean }
+// Response: { success: boolean, dryRun: boolean, sceneCount: number, plannedLinkOperations: number, appliedScenes: number, failedScenes: number, imported: number, updated: number, scenes: Array<object> }
+router.post('/devices/import/isy/topology', async (req, res) => {
+  console.log('InsteonRoutes: Syncing ISY scene topology to current PLM');
+
+  try {
+    const result = await insteonService.applyISYSceneTopology(req.body || {});
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: ISY topology sync failed:', error.message);
+    console.error(error.stack);
+    const statusCode = /no valid isy scene topology|isy topology .* must be|scenes must be valid json/i.test(String(error.message).toLowerCase())
+      ? 400
+      : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message,
+      dryRun: Boolean(req.body?.dryRun),
+      sceneCount: 0,
+      plannedLinkOperations: 0,
+      appliedScenes: 0,
+      failedScenes: 0
     });
   }
 });

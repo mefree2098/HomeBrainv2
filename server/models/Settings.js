@@ -134,6 +134,32 @@ const SettingsSchema = new mongoose.Schema({
     type: String,
     default: '/dev/ttyUSB0'
   },
+  isyHost: {
+    type: String,
+    default: ''
+  },
+  isyPort: {
+    type: Number,
+    min: 1,
+    max: 65535,
+    default: 443
+  },
+  isyUsername: {
+    type: String,
+    default: ''
+  },
+  isyPassword: {
+    type: String,
+    default: ''
+  },
+  isyUseHttps: {
+    type: Boolean,
+    default: true
+  },
+  isyIgnoreTlsErrors: {
+    type: Boolean,
+    default: true
+  },
   smartthingsToken: {
     type: String,
     default: ''
@@ -298,6 +324,9 @@ SettingsSchema.methods.toSanitized = function() {
   }
   if (sanitized.anthropicApiKey) {
     sanitized.anthropicApiKey = sanitized.anthropicApiKey.replace(/.(?=.{4})/g, '*');
+  }
+  if (sanitized.isyPassword) {
+    sanitized.isyPassword = sanitized.isyPassword.replace(/.(?=.{4})/g, '*');
   }
   delete sanitized.harmonyKnownHubs;
   delete sanitized.voiceRegion;
