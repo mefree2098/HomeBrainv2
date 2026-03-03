@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const https = require('node:https');
 const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const axios = require('axios');
 const Insteon = require('home-controller').Insteon;
 const Device = require('../models/Device');
@@ -21,6 +22,8 @@ const DEFAULT_ISY_TOPOLOGY_SCENE_TIMEOUT_MS = 20000;
 const DEFAULT_ISY_TOPOLOGY_PAUSE_MS = 400;
 const DEFAULT_ISY_PORT_HTTP = 80;
 const DEFAULT_ISY_PORT_HTTPS = 443;
+const DEFAULT_ISY_SYNC_RUN_RETENTION = 20;
+const DEFAULT_ISY_SYNC_RUN_LOG_LIMIT = 1000;
 const DEFAULT_INSTEON_LOCAL_BRIDGE_HOST = '127.0.0.1';
 const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
 const INSTEON_LOCAL_BRIDGE_SCRIPT = path.join(__dirname, '..', 'scripts', 'insteon_serial_bridge.py');
@@ -53,6 +56,9 @@ class InsteonService {
     this._serialPortLoadError = null;
     this._localSerialBridge = null;
     this.enableLocalSerialBridge = process.env.HOMEBRAIN_INSTEON_ENABLE_LOCAL_TCP_BRIDGE !== 'false';
+    this._isySyncRuns = new Map();
+    this._isySyncRunRetention = Number(process.env.HOMEBRAIN_ISY_SYNC_RUN_RETENTION || DEFAULT_ISY_SYNC_RUN_RETENTION);
+    this._isySyncRunLogLimit = Number(process.env.HOMEBRAIN_ISY_SYNC_RUN_LOG_LIMIT || DEFAULT_ISY_SYNC_RUN_LOG_LIMIT);
     console.log('InsteonService: Initialized');
   }
 
@@ -563,7 +569,15 @@ class InsteonService {
         }
 
         if (entry && typeof entry === 'object') {
-          const rawAddress = entry.address || entry.id || entry.deviceId || entry.insteonAddress;
+          const rawAddress = entry.address
+            || entry.id
+            || entry.deviceId
+            || entry.insteonAddress
+            || entry.resolvedAddress
+            || entry.normalizedAddress
+            || entry.normalizedParent
+            || entry.normalizedPnode
+            || entry?.properties?.insteonAddress;
           const rawName = typeof entry.name === 'string'
             ? entry.name
             : (typeof entry.displayName === 'string' ? entry.displayName : null);
@@ -1773,7 +1787,15 @@ class InsteonService {
     const basePrograms = this._parseISYProgramsXml(programsXml);
     const programs = await this._enrichISYProgramsWithDetails(connection, basePrograms);
     const deviceIds = nodeData.devices
-      .map((device) => device.resolvedAddress || device.normalizedAddress)
+      .map((device) => this._normalizePossibleInsteonAddress(
+        device?.resolvedAddress
+        || device?.normalizedAddress
+        || device?.normalizedParent
+        || device?.normalizedPnode
+        || device?.address
+        || device?.parent
+        || device?.pnode
+      ))
       .filter(Boolean);
     const uniqueDeviceIds = Array.from(new Set(deviceIds));
     const topologyScenes = this._buildTopologyScenesFromISYGroups(nodeData.groups);
@@ -3687,6 +3709,183 @@ class InsteonService {
     };
   }
 
+  _sanitizeISYSyncRunRequest(payload = {}) {
+    const request = payload && typeof payload === 'object' ? payload : {};
+    return {
+      dryRun: request.dryRun !== false,
+      importDevices: request.importDevices !== false,
+      importTopology: request.importTopology !== false,
+      importPrograms: request.importPrograms !== false,
+      enableProgramWorkflows: request.enableProgramWorkflows === true,
+      continueOnError: request.continueOnError !== false,
+      linkMode: request.linkMode === 'manual' ? 'manual' : 'remote'
+    };
+  }
+
+  _normalizeISYSyncLogEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+      return null;
+    }
+
+    const message = typeof entry.message === 'string' ? entry.message.trim() : '';
+    if (!message) {
+      return null;
+    }
+
+    const timestamp = typeof entry.timestamp === 'string' && entry.timestamp.trim()
+      ? entry.timestamp.trim()
+      : new Date().toISOString();
+    const level = typeof entry.level === 'string' ? entry.level.toLowerCase() : 'info';
+    const stage = typeof entry.stage === 'string' ? entry.stage : null;
+    const progress = Number(entry.progress);
+
+    return {
+      timestamp,
+      message,
+      level: ['info', 'warn', 'error'].includes(level) ? level : 'info',
+      stage,
+      progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : null
+    };
+  }
+
+  _snapshotISYSyncRun(run) {
+    if (!run || typeof run !== 'object') {
+      return null;
+    }
+
+    const logs = Array.isArray(run.logs) ? run.logs.slice() : [];
+    return {
+      id: run.id,
+      status: run.status,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+      finishedAt: run.finishedAt || null,
+      request: run.request,
+      logs,
+      result: run.result || null,
+      error: run.error || null
+    };
+  }
+
+  _pruneISYSyncRuns() {
+    const retention = Number.isInteger(this._isySyncRunRetention) && this._isySyncRunRetention > 0
+      ? this._isySyncRunRetention
+      : DEFAULT_ISY_SYNC_RUN_RETENTION;
+
+    while (this._isySyncRuns.size > retention) {
+      const oldestRunId = this._isySyncRuns.keys().next().value;
+      if (!oldestRunId) {
+        break;
+      }
+      this._isySyncRuns.delete(oldestRunId);
+    }
+  }
+
+  _appendISYSyncRunLog(runId, entry) {
+    const run = this._isySyncRuns.get(runId);
+    if (!run) {
+      return;
+    }
+
+    const normalizedEntry = this._normalizeISYSyncLogEntry(entry);
+    if (!normalizedEntry) {
+      return;
+    }
+
+    run.logs.push(normalizedEntry);
+    const logLimit = Number.isInteger(this._isySyncRunLogLimit) && this._isySyncRunLogLimit > 0
+      ? this._isySyncRunLogLimit
+      : DEFAULT_ISY_SYNC_RUN_LOG_LIMIT;
+    if (run.logs.length > logLimit) {
+      run.logs.splice(0, run.logs.length - logLimit);
+    }
+    run.updatedAt = new Date().toISOString();
+  }
+
+  _createISYSyncRun(payload = {}) {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+
+    const run = {
+      id,
+      status: 'running',
+      createdAt: now,
+      updatedAt: now,
+      finishedAt: null,
+      request: this._sanitizeISYSyncRunRequest(payload),
+      logs: [],
+      result: null,
+      error: null
+    };
+
+    this._isySyncRuns.set(id, run);
+    this._pruneISYSyncRuns();
+    return run;
+  }
+
+  getISYSyncRun(runId) {
+    const id = typeof runId === 'string' ? runId.trim() : '';
+    if (!id) {
+      return null;
+    }
+
+    const run = this._isySyncRuns.get(id);
+    return this._snapshotISYSyncRun(run);
+  }
+
+  startISYSyncRun(payload = {}) {
+    const run = this._createISYSyncRun(payload);
+    this._appendISYSyncRunLog(run.id, {
+      message: `Queued ${run.request.dryRun ? 'dry-run preview' : 'migration run'}`,
+      stage: 'queued',
+      progress: 0
+    });
+
+    (async () => {
+      try {
+        const result = await this.syncFromISY(payload, {
+          onProgress: (entry) => this._appendISYSyncRunLog(run.id, entry)
+        });
+
+        const storedRun = this._isySyncRuns.get(run.id);
+        if (!storedRun) {
+          return;
+        }
+
+        storedRun.status = result?.success === false ? 'completed_with_errors' : 'completed';
+        storedRun.result = result;
+        storedRun.error = null;
+        storedRun.finishedAt = new Date().toISOString();
+        storedRun.updatedAt = storedRun.finishedAt;
+        this._appendISYSyncRunLog(run.id, {
+          message: result?.message || 'ISY sync finished',
+          stage: 'complete',
+          level: result?.success === false ? 'warn' : 'info',
+          progress: 100
+        });
+      } catch (error) {
+        const storedRun = this._isySyncRuns.get(run.id);
+        if (!storedRun) {
+          return;
+        }
+
+        storedRun.status = 'failed';
+        storedRun.result = null;
+        storedRun.error = error.message;
+        storedRun.finishedAt = new Date().toISOString();
+        storedRun.updatedAt = storedRun.finishedAt;
+        this._appendISYSyncRunLog(run.id, {
+          message: error.message || 'ISY sync failed',
+          stage: 'complete',
+          level: 'error',
+          progress: 100
+        });
+      }
+    })();
+
+    return this._snapshotISYSyncRun(run);
+  }
+
   async testISYConnection(payload = {}) {
     try {
       const connection = await this._resolveISYConnection(payload);
@@ -3715,10 +3914,29 @@ class InsteonService {
     }
   }
 
-  async syncFromISY(payload = {}) {
+  async syncFromISY(payload = {}, runtime = {}) {
     console.log('InsteonService: Starting automated ISY extraction/sync workflow');
 
     const request = payload && typeof payload === 'object' ? payload : {};
+    const onProgress = runtime && typeof runtime.onProgress === 'function'
+      ? runtime.onProgress
+      : null;
+    const reportProgress = (message, details = {}) => {
+      if (!onProgress) {
+        return;
+      }
+
+      try {
+        onProgress({
+          timestamp: new Date().toISOString(),
+          message,
+          ...details
+        });
+      } catch (error) {
+        console.warn(`InsteonService: Failed to publish ISY sync progress update: ${error.message}`);
+      }
+    };
+
     const options = {
       dryRun: request.dryRun !== false,
       importDevices: request.importDevices !== false,
@@ -3728,7 +3946,12 @@ class InsteonService {
       continueOnError: request.continueOnError !== false
     };
 
+    reportProgress('Connecting to ISY and extracting metadata', { stage: 'extract', progress: 5 });
     const extraction = await this.extractISYData(request);
+    reportProgress(
+      `Extraction complete: ${extraction.deviceIds.length} device IDs, ${extraction.topologyScenes.length} scenes, ${extraction.programs.length} programs`,
+      { stage: 'extract', progress: 25 }
+    );
     const results = {
       success: true,
       dryRun: options.dryRun,
@@ -3753,18 +3976,34 @@ class InsteonService {
     };
 
     if (options.dryRun) {
+      reportProgress('Dry run mode enabled; no PLM writes will be performed', { stage: 'dry-run', progress: 35 });
       if (options.importTopology) {
+        reportProgress(`Previewing topology replay for ${extraction.topologyScenes.length} scenes`, { stage: 'topology', progress: 45 });
         results.topology = await this.applyISYSceneTopology({
           scenes: extraction.topologyScenes,
           dryRun: true
+        }, {
+          onProgress: (entry) => reportProgress(entry?.message || 'Topology preview update', {
+            ...entry,
+            stage: 'topology'
+          })
         });
+        reportProgress(
+          `Topology preview complete: ${results.topology.sceneCount || 0} scenes, ${results.topology.failedScenes || 0} failed`,
+          { stage: 'topology', level: results.topology.success === false ? 'warn' : 'info', progress: 60 }
+        );
       }
       if (options.importPrograms) {
+        reportProgress(`Previewing workflow import for ${extraction.programs.length} programs`, { stage: 'programs', progress: 70 });
         results.programs = await this.importISYProgramsAsWorkflows(extraction.programs, {
           dryRun: true,
           enableWorkflows: options.enableProgramWorkflows,
           resources: extraction.networkResources
         });
+        reportProgress(
+          `Program preview complete: ${results.programs?.processed || 0} processed, ${results.programs?.failed || 0} failed`,
+          { stage: 'programs', level: results.programs?.success === false ? 'warn' : 'info', progress: 90 }
+        );
       }
 
       results.message = [
@@ -3776,10 +4015,12 @@ class InsteonService {
         options.importPrograms ? `${extraction.programs.length} programs parsed` : 'program import skipped'
       ].join(', ');
 
+      reportProgress(results.message, { stage: 'complete', progress: 100 });
       return results;
     }
 
     if (options.importDevices && extraction.deviceIds.length > 0) {
+      reportProgress(`Starting device replay for ${extraction.deviceIds.length} device IDs`, { stage: 'devices', progress: 35 });
       try {
         results.devices = await this.importDevicesFromISY({
           deviceIds: extraction.deviceIds,
@@ -3790,20 +4031,33 @@ class InsteonService {
           pauseBetweenMs: request.pauseBetweenMs,
           checkExistingLinks: request.checkExistingLinks !== false,
           skipLinking: request.skipLinking === true
+        }, {
+          onProgress: (entry) => reportProgress(entry?.message || 'Device replay update', {
+            ...entry,
+            stage: 'devices'
+          })
         });
+        reportProgress(
+          `Device replay complete: ${results.devices.accepted || 0} accepted, ${results.devices.linked || 0} linked, ${results.devices.failed || 0} failed`,
+          { stage: 'devices', level: results.devices.success === false ? 'warn' : 'info', progress: 55 }
+        );
       } catch (error) {
         results.success = false;
         results.errors.push({
           stage: 'devices',
           error: error.message
         });
+        reportProgress(`Device replay failed: ${error.message}`, { stage: 'devices', level: 'error', progress: 55 });
         if (!options.continueOnError) {
           throw error;
         }
       }
+    } else if (options.importDevices) {
+      reportProgress('Device replay skipped: no valid INSTEON IDs extracted from ISY', { stage: 'devices', level: 'warn', progress: 55 });
     }
 
     if (options.importTopology && extraction.topologyScenes.length > 0) {
+      reportProgress(`Starting topology replay for ${extraction.topologyScenes.length} scenes`, { stage: 'topology', progress: 60 });
       try {
         results.topology = await this.applyISYSceneTopology({
           scenes: extraction.topologyScenes,
@@ -3812,8 +4066,17 @@ class InsteonService {
           continueOnError: request.continueOnError !== false,
           sceneTimeoutMs: request.sceneTimeoutMs,
           pauseBetweenScenesMs: request.pauseBetweenScenesMs
+        }, {
+          onProgress: (entry) => reportProgress(entry?.message || 'Topology replay update', {
+            ...entry,
+            stage: 'topology'
+          })
         });
 
+        reportProgress(
+          `Topology replay complete: ${results.topology.appliedScenes || 0} applied, ${results.topology.failedScenes || 0} failed, ${results.topology.skippedExistingScenes || 0} already in desired state`,
+          { stage: 'topology', level: results.topology.success === false ? 'warn' : 'info', progress: 80 }
+        );
         if (!results.topology.success) {
           results.success = false;
         }
@@ -3823,19 +4086,27 @@ class InsteonService {
           stage: 'topology',
           error: error.message
         });
+        reportProgress(`Topology replay failed: ${error.message}`, { stage: 'topology', level: 'error', progress: 80 });
         if (!options.continueOnError) {
           throw error;
         }
       }
+    } else if (options.importTopology) {
+      reportProgress('Topology replay skipped: no scenes parsed from ISY metadata', { stage: 'topology', level: 'warn', progress: 80 });
     }
 
     if (options.importPrograms && extraction.programs.length > 0) {
+      reportProgress(`Starting program translation for ${extraction.programs.length} programs`, { stage: 'programs', progress: 85 });
       try {
         results.programs = await this.importISYProgramsAsWorkflows(extraction.programs, {
           dryRun: false,
           enableWorkflows: options.enableProgramWorkflows,
           resources: extraction.networkResources
         });
+        reportProgress(
+          `Program translation complete: ${results.programs?.processed || 0} processed, ${results.programs?.failed || 0} failed`,
+          { stage: 'programs', level: results.programs?.success === false ? 'warn' : 'info', progress: 95 }
+        );
         if (!results.programs.success) {
           results.success = false;
         }
@@ -3845,10 +4116,13 @@ class InsteonService {
           stage: 'programs',
           error: error.message
         });
+        reportProgress(`Program translation failed: ${error.message}`, { stage: 'programs', level: 'error', progress: 95 });
         if (!options.continueOnError) {
           throw error;
         }
       }
+    } else if (options.importPrograms) {
+      reportProgress('Program translation skipped: no ISY programs parsed', { stage: 'programs', level: 'warn', progress: 95 });
     }
 
     results.message = [
@@ -3860,6 +4134,7 @@ class InsteonService {
       results.programs ? `${results.programs.created || 0} workflows created` : 'programs skipped'
     ].join(', ');
 
+    reportProgress(results.message, { stage: 'complete', level: results.success ? 'info' : 'warn', progress: 100 });
     return results;
   }
 
@@ -4806,19 +5081,57 @@ class InsteonService {
    * @param {Object} payload - ISY import payload
    * @returns {Promise<Object>} Import/link results
    */
-  async importDevicesFromISY(payload = {}) {
+  async importDevicesFromISY(payload = {}, runtime = {}) {
     console.log('InsteonService: Starting ISY device import/link workflow');
 
     try {
+      const onProgress = runtime && typeof runtime.onProgress === 'function'
+        ? runtime.onProgress
+        : null;
+      const reportProgress = (message, details = {}) => {
+        if (!onProgress || typeof message !== 'string' || !message.trim()) {
+          return;
+        }
+        onProgress({
+          timestamp: new Date().toISOString(),
+          stage: 'devices',
+          message: message.trim(),
+          ...details
+        });
+      };
+
       if (!this.isConnected || !this.hub) {
         await this.connect();
       }
 
       const parsed = this._parseISYImportPayload(payload);
-      const targetDevices = parsed.devices;
       const { invalidEntries, duplicateCount, options } = parsed;
+      const targetDevices = [];
+
+      (Array.isArray(parsed.devices) ? parsed.devices : []).forEach((entry, index) => {
+        const resolvedAddress = this._normalizePossibleInsteonAddress(
+          entry?.address || entry?.id || entry?.deviceId || entry?.insteonAddress
+        );
+
+        if (!resolvedAddress) {
+          invalidEntries.push({
+            source: `parsed.devices[${index}]`,
+            value: entry?.address,
+            reason: `Invalid INSTEON address "${entry?.address}"`
+          });
+          return;
+        }
+
+        targetDevices.push({
+          ...entry,
+          address: resolvedAddress,
+          displayAddress: this._formatInsteonAddress(resolvedAddress),
+          name: typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : null
+        });
+      });
 
       if (targetDevices.length === 0) {
+        reportProgress('Device replay skipped: no valid INSTEON IDs in payload', { level: 'warn', progress: 100 });
         throw new Error('No valid INSTEON device IDs were found in the request payload');
       }
 
@@ -4850,8 +5163,10 @@ class InsteonService {
         results.warnings.push('PLM device ID unavailable from modem info; skipping pre-link checks and attempting link operations directly.');
       }
 
+      reportProgress(`Starting replay for ${targetDevices.length} device ID(s)`, { progress: 0 });
       for (let index = 0; index < targetDevices.length; index += 1) {
         const entry = targetDevices[index];
+        const progress = Math.round(((index + 1) / targetDevices.length) * 100);
         const detail = {
           address: entry.address,
           displayAddress: entry.displayAddress,
@@ -4859,6 +5174,11 @@ class InsteonService {
         };
 
         try {
+          reportProgress(
+            `Processing device ${index + 1}/${targetDevices.length}: ${entry.displayAddress}`,
+            { progress }
+          );
+
           const shouldCheckExistingLinks = !options.skipLinking && options.checkExistingLinks && Boolean(normalizedPlmId);
           let isAlreadyLinked = false;
 
@@ -4922,6 +5242,10 @@ class InsteonService {
           }
 
           results.devices.push(detail);
+          reportProgress(
+            `Completed ${entry.displayAddress}: ${detail.linkStatus || 'processed'}, ${detail.importStatus || 'updated'}`,
+            { progress }
+          );
         } catch (error) {
           detail.error = error.message;
           results.failed += 1;
@@ -4930,6 +5254,10 @@ class InsteonService {
             error: error.message
           });
           results.devices.push(detail);
+          reportProgress(
+            `Failed ${entry.displayAddress}: ${error.message}`,
+            { level: 'error', progress }
+          );
         }
 
         if (index < targetDevices.length - 1 && options.pauseBetweenMs > 0) {
@@ -4948,6 +5276,10 @@ class InsteonService {
       ].join(', ');
 
       console.log(`InsteonService: ISY import complete - ${results.message}`);
+      reportProgress(results.message, {
+        level: results.success ? 'info' : 'warn',
+        progress: 100
+      });
       return results;
     } catch (error) {
       console.error('InsteonService: ISY import failed:', error.message);
@@ -4961,10 +5293,25 @@ class InsteonService {
    * @param {Object} payload - Scene topology payload
    * @returns {Promise<Object>} Sync results
    */
-  async applyISYSceneTopology(payload = {}) {
+  async applyISYSceneTopology(payload = {}, runtime = {}) {
     console.log('InsteonService: Starting ISY scene topology sync');
 
     try {
+      const onProgress = runtime && typeof runtime.onProgress === 'function'
+        ? runtime.onProgress
+        : null;
+      const reportProgress = (message, details = {}) => {
+        if (!onProgress || typeof message !== 'string' || !message.trim()) {
+          return;
+        }
+        onProgress({
+          timestamp: new Date().toISOString(),
+          stage: 'topology',
+          message: message.trim(),
+          ...details
+        });
+      };
+
       if (!this.isConnected || !this.hub) {
         await this.connect();
       }
@@ -5002,6 +5349,7 @@ class InsteonService {
         }));
         results.message = `Dry run: ${scenes.length} scenes parsed (${results.plannedLinkOperations} responder links planned)`;
         console.log(`InsteonService: ${results.message}`);
+        reportProgress(results.message, { progress: 100 });
         return results;
       }
 
@@ -5015,8 +5363,12 @@ class InsteonService {
         }
       }
 
+      reportProgress(`Starting topology replay for ${scenes.length} scene(s)`, { progress: 0 });
       for (let index = 0; index < scenes.length; index += 1) {
         const scene = scenes[index];
+        const progress = scenes.length > 0
+          ? Math.round(((index + 1) / scenes.length) * 100)
+          : 100;
         const sceneResult = {
           name: scene.name,
           group: scene.group,
@@ -5025,12 +5377,21 @@ class InsteonService {
         };
 
         try {
+          reportProgress(
+            `Processing scene ${index + 1}/${scenes.length}: ${scene.name || `Group ${scene.group}`}`,
+            { progress }
+          );
+
           if (options.checkExistingSceneLinks) {
             const alreadyLinked = await this._isTopologySceneAlreadyLinked(scene, { normalizedPlmId });
             if (alreadyLinked) {
               sceneResult.status = scene.remove ? 'already-removed' : 'already-linked';
               results.skippedExistingScenes += 1;
               results.scenes.push(sceneResult);
+              reportProgress(
+                `Skipped scene ${scene.name || `Group ${scene.group}`}: already in desired state`,
+                { level: 'warn', progress }
+              );
               if (index < scenes.length - 1 && options.pauseBetweenScenesMs > 0) {
                 await this._sleep(options.pauseBetweenScenesMs);
               }
@@ -5041,6 +5402,10 @@ class InsteonService {
           await this._applyTopologyScene(scene, { timeoutMs: options.sceneTimeoutMs });
           sceneResult.status = 'applied';
           results.appliedScenes += 1;
+          reportProgress(
+            `Applied scene ${scene.name || `Group ${scene.group}`}`,
+            { progress }
+          );
         } catch (error) {
           sceneResult.status = 'failed';
           sceneResult.error = error.message;
@@ -5050,6 +5415,10 @@ class InsteonService {
             group: scene.group,
             error: error.message
           });
+          reportProgress(
+            `Failed scene ${scene.name || `Group ${scene.group}`}: ${error.message}`,
+            { level: 'error', progress }
+          );
 
           if (!options.continueOnError) {
             results.scenes.push(sceneResult);
@@ -5099,6 +5468,10 @@ class InsteonService {
       ].join(', ');
 
       console.log(`InsteonService: ISY topology sync complete - ${results.message}`);
+      reportProgress(results.message, {
+        level: results.success ? 'info' : 'warn',
+        progress: 100
+      });
       return results;
     } catch (error) {
       console.error('InsteonService: ISY topology sync failed:', error.message);
