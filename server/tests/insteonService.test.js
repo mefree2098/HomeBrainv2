@@ -91,6 +91,35 @@ test('_buildSerialTransportUnavailableMessage includes endpoint and load details
   assert.match(message, /NODE_MODULE_VERSION mismatch/);
 });
 
+test('_buildSerialTransportUnavailableMessage includes bridge fallback errors', (t) => {
+  const originalSerialPortLoadError = insteonService._serialPortLoadError;
+
+  t.after(() => {
+    insteonService._serialPortLoadError = originalSerialPortLoadError;
+  });
+
+  insteonService._serialPortLoadError = new Error('native module failed');
+  const message = insteonService._buildSerialTransportUnavailableMessage(
+    '/dev/serial/by-id/usb-test-port0',
+    new Error('bridge startup failed')
+  );
+  assert.match(message, /bridge startup failed/i);
+});
+
+test('_isLocalSerialBridgeActive returns true only for live bridge process', (t) => {
+  const originalBridge = insteonService._localSerialBridge;
+
+  t.after(() => {
+    insteonService._localSerialBridge = originalBridge;
+  });
+
+  insteonService._localSerialBridge = { process: { exitCode: null, killed: false } };
+  assert.equal(insteonService._isLocalSerialBridgeActive(), true);
+
+  insteonService._localSerialBridge = { process: { exitCode: 0, killed: false } };
+  assert.equal(insteonService._isLocalSerialBridgeActive(), false);
+});
+
 test('_validateSerialEndpoint surfaces missing device with detected endpoint hints', async (t) => {
   const originalListLocalSerialPorts = insteonService.listLocalSerialPorts;
   const originalAccess = fs.promises.access;
