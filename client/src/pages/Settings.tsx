@@ -1007,24 +1007,50 @@ export function Settings() {
     }
   }
 
-  const buildIsyConnectionPayload = () => {
+  const buildIsyConnectionPayload = (options: { requireExplicitPassword?: boolean } = {}) => {
+    const { requireExplicitPassword = false } = options
     const parsedPort = Number(isyPortValue)
-    const normalizedPassword = isMaskedSecretPlaceholder(isyPasswordValue) ? '' : isyPasswordValue
+    const normalizedPassword = isMaskedSecretPlaceholder(isyPasswordValue) ? '' : isyPasswordValue.trim()
 
-    return {
+    const payload: Record<string, any> = {
       ...(isyHostValue.trim() ? { isyHost: isyHostValue.trim() } : {}),
       ...(Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535 ? { isyPort: parsedPort } : {}),
       ...(isyUsernameValue.trim() ? { isyUsername: isyUsernameValue.trim() } : {}),
-      ...(normalizedPassword ? { isyPassword: normalizedPassword } : {}),
       isyUseHttps: isyUseHttpsValue,
       isyIgnoreTlsErrors: isyIgnoreTlsErrorsValue
     }
+
+    if (normalizedPassword) {
+      payload.isyPassword = normalizedPassword
+    } else if (requireExplicitPassword) {
+      payload.isyPassword = ""
+    }
+
+    return payload
   }
 
   const handleTestIsyConnection = async () => {
+    if (!isyHostValue.trim() || !isyUsernameValue.trim()) {
+      toast({
+        title: "ISY host and username required",
+        description: "Enter ISY host and username before testing connection.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    if (!isyPasswordValue.trim() || isMaskedSecretPlaceholder(isyPasswordValue)) {
+      toast({
+        title: "Enter ISY password to test",
+        description: "Type your real ISY password in the field, then run Test ISY Connection.",
+        variant: "destructive"
+      })
+      return
+    }
+
     setTestingIsyConnection(true)
     try {
-      const response = await testInsteonISYConnection(buildIsyConnectionPayload())
+      const response = await testInsteonISYConnection(buildIsyConnectionPayload({ requireExplicitPassword: true }))
       setIsyTestResult(response)
       toast({
         title: "ISY connection successful",
