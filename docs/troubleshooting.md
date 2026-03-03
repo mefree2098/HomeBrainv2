@@ -137,6 +137,7 @@ If extraction fails:
 1. Verify `isyHost`, port, and credentials.
 2. If using self-signed certs, set `isyIgnoreTlsErrors=true`.
 3. Try `isyUseHttps=false` only if your ISY is configured for HTTP.
+4. If `Test ISY Connection` reports `HTTP 401`, re-enter the ISY password in HomeBrain settings and save (masked placeholder values are now ignored and flagged).
 
 Program import caveat:
 - ISY program import now executes IF/THEN/ELSE with unified condition edge-change branching in one workflow.

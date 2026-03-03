@@ -930,6 +930,23 @@ class InsteonService {
     return `${'*'.repeat(secret.length - 4)}${secret.slice(-4)}`;
   }
 
+  _isMaskedSecretValue(value) {
+    if (typeof value !== 'string') {
+      return false;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    if (/^[*•]+$/.test(trimmed)) {
+      return true;
+    }
+
+    return /^[*•]{4,}[^*•\s]+$/.test(trimmed);
+  }
+
   async _resolveISYConnection(payload = {}) {
     const request = payload && typeof payload === 'object' ? payload : {};
     const settings = await Settings.getSettings();
@@ -991,8 +1008,20 @@ class InsteonService {
     }
 
     const username = String(connectionInput.isyUsername ?? connectionInput.username ?? settingsConnection.username ?? '').trim();
-    const password = String(connectionInput.isyPassword ?? connectionInput.password ?? settingsConnection.password ?? '').trim();
+
+    const hasExplicitPasswordInput = connectionInput.isyPassword !== undefined || connectionInput.password !== undefined;
+    const explicitPasswordRaw = hasExplicitPasswordInput
+      ? String(connectionInput.isyPassword ?? connectionInput.password ?? '')
+      : '';
+    const storedPasswordRaw = String(settingsConnection.password ?? '');
+    const explicitPassword = this._isMaskedSecretValue(explicitPasswordRaw) ? '' : explicitPasswordRaw;
+    const storedPassword = this._isMaskedSecretValue(storedPasswordRaw) ? '' : storedPasswordRaw;
+    const password = explicitPassword || storedPassword;
+
     if (!username || !password) {
+      if (username && !password && this._isMaskedSecretValue(storedPasswordRaw)) {
+        throw new Error('ISY credentials are required. Stored ISY password appears masked; re-enter the ISY password in Settings and save.');
+      }
       throw new Error('ISY credentials are required (username and password)');
     }
 
@@ -1512,7 +1541,10 @@ class InsteonService {
       return typeof response.data === 'string' ? response.data : String(response.data || '');
     } catch (error) {
       const status = error.response?.status;
-      const detail = status ? `HTTP ${status}` : error.message;
+      let detail = status ? `HTTP ${status}` : error.message;
+      if (status === 401) {
+        detail = 'HTTP 401 (unauthorized; verify ISY username/password. If the password field is masked, re-enter and save the real password.)';
+      }
       throw new Error(`ISY request failed for ${sanitizedPath}: ${detail}`);
     }
   }
