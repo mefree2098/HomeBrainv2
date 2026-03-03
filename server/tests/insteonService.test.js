@@ -767,6 +767,59 @@ test('cancelLinkedStatusRun transitions active run to cancelled', async (t) => {
   assert.ok(snapshot.logs.some((entry) => /query cancelled/i.test(entry.message)));
 });
 
+test('cancelISYSyncRun transitions active migration run to cancelled', async (t) => {
+  const originalSyncFromISY = insteonService.syncFromISY;
+
+  t.after(() => {
+    insteonService.syncFromISY = originalSyncFromISY;
+  });
+
+  insteonService.syncFromISY = async (_payload, runtime = {}) => {
+    runtime.onProgress?.({
+      stage: 'devices',
+      message: 'Processing device 1/72: 11.22.33',
+      progress: 10
+    });
+
+    for (let index = 0; index < 200; index += 1) {
+      if (runtime.shouldCancel?.()) {
+        const cancelled = new Error('ISY migration cancelled by user.');
+        cancelled.code = 'ISY_SYNC_CANCELLED';
+        cancelled.isCancelled = true;
+        throw cancelled;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    return {
+      success: true,
+      message: 'Unexpected completion'
+    };
+  };
+
+  const started = insteonService.startISYSyncRun({ dryRun: false });
+  assert.ok(started.id);
+  assert.equal(started.status, 'running');
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const cancellationResponse = insteonService.cancelISYSyncRun(started.id);
+  assert.ok(cancellationResponse);
+  assert.equal(cancellationResponse.cancelRequested, true);
+
+  let snapshot = insteonService.getISYSyncRun(started.id);
+  for (let attempt = 0; attempt < 200 && snapshot?.status === 'running'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    snapshot = insteonService.getISYSyncRun(started.id);
+  }
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.status, 'cancelled');
+  assert.match(snapshot.error || '', /cancelled/i);
+  assert.ok(Array.isArray(snapshot.logs));
+  assert.ok(snapshot.logs.some((entry) => /cancellation requested/i.test(entry.message)));
+  assert.ok(snapshot.logs.some((entry) => /migration cancelled/i.test(entry.message)));
+});
+
 test('_resolveISYConnection ignores masked input password and falls back to stored password', async (t) => {
   const originalGetSettings = Settings.getSettings;
 
