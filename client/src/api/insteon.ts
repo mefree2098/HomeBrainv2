@@ -170,6 +170,26 @@ export interface InsteonLinkedDeviceStatusResponse {
   devices?: InsteonLinkedDeviceStatusEntry[];
 }
 
+export interface InsteonLinkedStatusQueryPayload {
+  levelTimeoutMs?: number;
+  pingTimeoutMs?: number;
+  infoTimeoutMs?: number;
+  pauseBetweenMs?: number;
+}
+
+export interface InsteonLinkedStatusRunSnapshot {
+  id: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt?: string;
+  updatedAt?: string;
+  finishedAt?: string | null;
+  request?: InsteonLinkedStatusQueryPayload;
+  cancelRequested?: boolean;
+  logs?: InsteonIsySyncRunLogEntry[];
+  result?: InsteonLinkedDeviceStatusResponse | null;
+  error?: string | null;
+}
+
 // Description: Test Insteon PLM connection
 // Endpoint: GET /api/insteon/test
 // Request: {}
@@ -272,12 +292,9 @@ export const getLinkedInsteonDevices = async () => {
 // Endpoint: GET /api/insteon/devices/linked/status
 // Request: {}
 // Response: InsteonLinkedDeviceStatusResponse
-export const queryLinkedInsteonDeviceStatus = async (params?: {
-  levelTimeoutMs?: number;
-  pingTimeoutMs?: number;
-  infoTimeoutMs?: number;
-  pauseBetweenMs?: number;
-}): Promise<InsteonLinkedDeviceStatusResponse> => {
+export const queryLinkedInsteonDeviceStatus = async (
+  params?: InsteonLinkedStatusQueryPayload
+): Promise<InsteonLinkedDeviceStatusResponse> => {
   try {
     const response = await api.get('/api/insteon/devices/linked/status', {
       params: params || {}
@@ -285,6 +302,48 @@ export const queryLinkedInsteonDeviceStatus = async (params?: {
     return response.data;
   } catch (error) {
     console.error('Query linked Insteon device status error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Start asynchronous linked-device status query and return a run id for live polling
+// Endpoint: POST /api/insteon/devices/linked/status/start
+// Request: InsteonLinkedStatusQueryPayload
+// Response: { success: boolean, runId: string, run: InsteonLinkedStatusRunSnapshot }
+export const startInsteonLinkedStatusRun = async (payload: InsteonLinkedStatusQueryPayload = {}) => {
+  try {
+    const response = await api.post('/api/insteon/devices/linked/status/start', payload || {});
+    return response.data as { success: boolean; runId: string; run: InsteonLinkedStatusRunSnapshot };
+  } catch (error) {
+    console.error('Start linked status run error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Fetch asynchronous linked-device status query run status/logs/result
+// Endpoint: GET /api/insteon/devices/linked/status/runs/:runId
+// Request: {}
+// Response: { success: boolean, run: InsteonLinkedStatusRunSnapshot }
+export const getInsteonLinkedStatusRun = async (runId: string) => {
+  try {
+    const response = await api.get(`/api/insteon/devices/linked/status/runs/${encodeURIComponent(runId)}`);
+    return response.data as { success: boolean; run: InsteonLinkedStatusRunSnapshot };
+  } catch (error) {
+    console.error('Get linked status run error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Request cancellation for an asynchronous linked-device status query run
+// Endpoint: POST /api/insteon/devices/linked/status/runs/:runId/cancel
+// Request: {}
+// Response: { success: boolean, message: string, run: InsteonLinkedStatusRunSnapshot }
+export const cancelInsteonLinkedStatusRun = async (runId: string) => {
+  try {
+    const response = await api.post(`/api/insteon/devices/linked/status/runs/${encodeURIComponent(runId)}/cancel`);
+    return response.data as { success: boolean; message?: string; run: InsteonLinkedStatusRunSnapshot };
+  } catch (error) {
+    console.error('Cancel linked status run error:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };

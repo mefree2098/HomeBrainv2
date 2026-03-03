@@ -486,6 +486,110 @@ test('queryLinkedDevicesStatus marks device unreachable when level and info both
   assert.match(result.devices[0].error, /ping failed/i);
 });
 
+test('startLinkedStatusRun records progress logs and stores completed result', async (t) => {
+  const originalQueryLinkedDevicesStatus = insteonService.queryLinkedDevicesStatus;
+
+  t.after(() => {
+    insteonService.queryLinkedDevicesStatus = originalQueryLinkedDevicesStatus;
+  });
+
+  insteonService.queryLinkedDevicesStatus = async (_payload, runtime = {}) => {
+    runtime.onProgress?.({
+      stage: 'devices',
+      message: 'Processing device 1/1: AA.BB.CC',
+      progress: 50
+    });
+    return {
+      success: true,
+      message: 'Queried 1 linked device: 1 reachable, 0 unreachable.',
+      scannedAt: new Date().toISOString(),
+      summary: {
+        linkedDevices: 1,
+        reachable: 1,
+        unreachable: 0,
+        statusKnown: 1,
+        statusUnknown: 0
+      },
+      warnings: [],
+      devices: []
+    };
+  };
+
+  const started = insteonService.startLinkedStatusRun({ pauseBetweenMs: 0 });
+  assert.ok(started.id);
+  assert.equal(started.status, 'running');
+
+  let snapshot = insteonService.getLinkedStatusRun(started.id);
+  for (let attempt = 0; attempt < 100 && snapshot?.status === 'running'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    snapshot = insteonService.getLinkedStatusRun(started.id);
+  }
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.status, 'completed');
+  assert.equal(snapshot.result?.success, true);
+  assert.equal(snapshot.result?.summary?.linkedDevices, 1);
+  assert.ok(Array.isArray(snapshot.logs));
+  assert.ok(snapshot.logs.some((entry) => /Processing device 1\/1/i.test(entry.message)));
+  assert.ok(snapshot.logs.some((entry) => /Queried 1 linked device/i.test(entry.message)));
+});
+
+test('cancelLinkedStatusRun transitions active run to cancelled', async (t) => {
+  const originalQueryLinkedDevicesStatus = insteonService.queryLinkedDevicesStatus;
+
+  t.after(() => {
+    insteonService.queryLinkedDevicesStatus = originalQueryLinkedDevicesStatus;
+  });
+
+  insteonService.queryLinkedDevicesStatus = async (_payload, runtime = {}) => {
+    runtime.onProgress?.({
+      stage: 'devices',
+      message: 'Processing device 1/99: 11.22.33',
+      progress: 10
+    });
+
+    for (let index = 0; index < 200; index += 1) {
+      if (runtime.shouldCancel?.()) {
+        const cancelled = new Error('Query cancelled by user.');
+        cancelled.code = 'QUERY_CANCELLED';
+        cancelled.isCancelled = true;
+        throw cancelled;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    return {
+      success: true,
+      message: 'Unexpected completion',
+      scannedAt: new Date().toISOString(),
+      summary: { linkedDevices: 0, reachable: 0, unreachable: 0, statusKnown: 0, statusUnknown: 0 },
+      warnings: [],
+      devices: []
+    };
+  };
+
+  const started = insteonService.startLinkedStatusRun({ pauseBetweenMs: 0 });
+  assert.ok(started.id);
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const cancellationResponse = insteonService.cancelLinkedStatusRun(started.id);
+  assert.ok(cancellationResponse);
+  assert.equal(cancellationResponse.cancelRequested, true);
+
+  let snapshot = insteonService.getLinkedStatusRun(started.id);
+  for (let attempt = 0; attempt < 200 && snapshot?.status === 'running'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    snapshot = insteonService.getLinkedStatusRun(started.id);
+  }
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.status, 'cancelled');
+  assert.match(snapshot.error || '', /cancelled/i);
+  assert.ok(Array.isArray(snapshot.logs));
+  assert.ok(snapshot.logs.some((entry) => /cancellation requested/i.test(entry.message)));
+  assert.ok(snapshot.logs.some((entry) => /query cancelled/i.test(entry.message)));
+});
+
 test('_resolveISYConnection ignores masked input password and falls back to stored password', async (t) => {
   const originalGetSettings = Settings.getSettings;
 

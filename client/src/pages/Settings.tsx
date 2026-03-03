@@ -96,7 +96,9 @@ import {
 import {
   getInsteonSerialPorts,
   testInsteonConnection,
-  queryLinkedInsteonDeviceStatus,
+  startInsteonLinkedStatusRun,
+  getInsteonLinkedStatusRun,
+  cancelInsteonLinkedStatusRun,
   testInsteonISYConnection,
   extractInsteonISYData,
   syncInsteonFromISY,
@@ -200,9 +202,13 @@ export function Settings() {
   const [scanningInsteonPorts, setScanningInsteonPorts] = useState(false)
   const [testingInsteonPlmConnection, setTestingInsteonPlmConnection] = useState(false)
   const [queryingInsteonLinkedStatus, setQueryingInsteonLinkedStatus] = useState(false)
+  const [cancellingInsteonLinkedStatusQuery, setCancellingInsteonLinkedStatusQuery] = useState(false)
   const [insteonSerialPortCandidates, setInsteonSerialPortCandidates] = useState<InsteonSerialPortCandidate[]>([])
   const [insteonPlmTestResult, setInsteonPlmTestResult] = useState<InsteonPlmConnectionTestResult | null>(null)
   const [insteonLinkedStatusResult, setInsteonLinkedStatusResult] = useState<InsteonLinkedDeviceStatusResponse | null>(null)
+  const [insteonLinkedStatusRunId, setInsteonLinkedStatusRunId] = useState<string | null>(null)
+  const [insteonLinkedStatusRunStatus, setInsteonLinkedStatusRunStatus] = useState<string | null>(null)
+  const [insteonLinkedStatusRunLogs, setInsteonLinkedStatusRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
   const [testingIsyConnection, setTestingIsyConnection] = useState(false)
   const [extractingIsyData, setExtractingIsyData] = useState(false)
   const [previewingIsyMigration, setPreviewingIsyMigration] = useState(false)
@@ -1050,19 +1056,86 @@ export function Settings() {
     }
 
     setQueryingInsteonLinkedStatus(true)
+    setCancellingInsteonLinkedStatusQuery(false)
+    setInsteonLinkedStatusRunId(null)
+    setInsteonLinkedStatusRunStatus("running")
+    setInsteonLinkedStatusRunLogs([])
+    setInsteonLinkedStatusResult(null)
     try {
       await updateSettings({ insteonPort: endpoint })
-      const result = await queryLinkedInsteonDeviceStatus()
-      setInsteonLinkedStatusResult(result || null)
+      const startResponse = await startInsteonLinkedStatusRun()
+      const runId = startResponse?.runId || startResponse?.run?.id
+      if (!runId) {
+        throw new Error("Query run started but no run id was returned by the server.")
+      }
 
-      const linkedCount = result?.summary?.linkedDevices ?? (Array.isArray(result?.devices) ? result.devices.length : 0)
-      const reachable = result?.summary?.reachable ?? 0
-      const unreachable = result?.summary?.unreachable ?? 0
+      setInsteonLinkedStatusRunId(runId)
+      if (Array.isArray(startResponse?.run?.logs)) {
+        setInsteonLinkedStatusRunLogs(startResponse.run.logs)
+      }
+      if (startResponse?.run?.status) {
+        setInsteonLinkedStatusRunStatus(startResponse.run.status)
+      }
 
-      toast({
-        title: "PLM query complete",
-        description: `Checked ${linkedCount} linked device${linkedCount === 1 ? "" : "s"} (${reachable} reachable, ${unreachable} unreachable).`
-      })
+      const pollingStartedAt = Date.now()
+      const maxPollDurationMs = 1000 * 60 * 60 * 4 // 4 hours
+      let consecutivePollFailures = 0
+
+      while (true) {
+        if (Date.now() - pollingStartedAt > maxPollDurationMs) {
+          throw new Error("Query is still running after 4 hours; polling timed out. You can refresh and continue monitoring with the same run id.")
+        }
+
+        try {
+          const statusResponse = await getInsteonLinkedStatusRun(runId)
+          const run = statusResponse?.run
+          if (!run) {
+            throw new Error("Query run status response did not include a run snapshot.")
+          }
+
+          consecutivePollFailures = 0
+          setInsteonLinkedStatusRunStatus(run.status || null)
+          setInsteonLinkedStatusRunLogs(Array.isArray(run.logs) ? run.logs : [])
+
+          const isTerminal = run.status === "completed"
+            || run.status === "failed"
+            || run.status === "cancelled"
+
+          if (isTerminal) {
+            if (run.result) {
+              setInsteonLinkedStatusResult(run.result)
+            }
+
+            if (run.status === "completed" && run.result) {
+              const result = run.result
+              const linkedCount = result?.summary?.linkedDevices ?? (Array.isArray(result?.devices) ? result.devices.length : 0)
+              const reachable = result?.summary?.reachable ?? 0
+              const unreachable = result?.summary?.unreachable ?? 0
+
+              toast({
+                title: "PLM query complete",
+                description: `Checked ${linkedCount} linked device${linkedCount === 1 ? "" : "s"} (${reachable} reachable, ${unreachable} unreachable).`
+              })
+            } else if (run.status === "cancelled") {
+              toast({
+                title: "PLM query cancelled",
+                description: run.error || "Linked-device query was cancelled."
+              })
+            } else if (run.status === "failed") {
+              throw new Error(run.error || "Linked-device query failed.")
+            }
+
+            break
+          }
+        } catch (pollError: any) {
+          consecutivePollFailures += 1
+          if (consecutivePollFailures >= 5) {
+            throw new Error(pollError?.message || "Failed to poll linked-device query log updates.")
+          }
+        }
+
+        await sleep(1000)
+      }
     } catch (error: any) {
       const message = error?.message || "Unable to query linked devices from PLM."
       setInsteonLinkedStatusResult({
@@ -1084,6 +1157,36 @@ export function Settings() {
       })
     } finally {
       setQueryingInsteonLinkedStatus(false)
+      setCancellingInsteonLinkedStatusQuery(false)
+    }
+  }
+
+  const handleCancelInsteonLinkedStatusQuery = async () => {
+    if (!insteonLinkedStatusRunId || !queryingInsteonLinkedStatus) {
+      return
+    }
+
+    setCancellingInsteonLinkedStatusQuery(true)
+    try {
+      const response = await cancelInsteonLinkedStatusRun(insteonLinkedStatusRunId)
+      if (response?.run?.status) {
+        setInsteonLinkedStatusRunStatus(response.run.status)
+      }
+      if (Array.isArray(response?.run?.logs)) {
+        setInsteonLinkedStatusRunLogs(response.run.logs)
+      }
+      toast({
+        title: "Cancel requested",
+        description: response?.message || "Waiting for the current device operation to finish."
+      })
+    } catch (error: any) {
+      toast({
+        title: "Cancel request failed",
+        description: error?.message || "Unable to request cancellation for linked-device query.",
+        variant: "destructive"
+      })
+    } finally {
+      setCancellingInsteonLinkedStatusQuery(false)
     }
   }
 
@@ -1199,6 +1302,29 @@ export function Settings() {
     return `[${timestampText}] ${stageText}${entry?.message || "No message"}`
   }
 
+  const formatLinkedStatusRunStatusLabel = (status: string | null | undefined) => {
+    switch ((status || "").toLowerCase()) {
+      case "running":
+        return "Running"
+      case "completed":
+        return "Completed"
+      case "cancelled":
+        return "Cancelled"
+      case "failed":
+        return "Failed"
+      default:
+        return status || "Unknown"
+    }
+  }
+
+  const formatLinkedStatusLogLine = (entry: InsteonIsySyncRunLogEntry) => {
+    const timestampText = entry?.timestamp
+      ? new Date(entry.timestamp).toLocaleTimeString()
+      : "--:--:--"
+    const stageText = entry?.stage ? `[${entry.stage}] ` : ""
+    return `[${timestampText}] ${stageText}${entry?.message || "No message"}`
+  }
+
   const buildIsyMigrationLogText = () => {
     const headerLines = [
       `Status: ${formatIsyRunStatusLabel(isyMigrationRunStatus)}`,
@@ -1208,6 +1334,20 @@ export function Settings() {
 
     const logLines = isyMigrationRunLogs.length > 0
       ? isyMigrationRunLogs.map((entry) => formatIsyMigrationLogLine(entry))
+      : ["(no log entries)"]
+
+    return [...headerLines, "", ...logLines].join("\n")
+  }
+
+  const buildLinkedStatusLogText = () => {
+    const headerLines = [
+      `Status: ${formatLinkedStatusRunStatusLabel(insteonLinkedStatusRunStatus)}`,
+      `Run ID: ${insteonLinkedStatusRunId || "unknown"}`,
+      `Generated: ${new Date().toISOString()}`
+    ]
+
+    const logLines = insteonLinkedStatusRunLogs.length > 0
+      ? insteonLinkedStatusRunLogs.map((entry) => formatLinkedStatusLogLine(entry))
       : ["(no log entries)"]
 
     return [...headerLines, "", ...logLines].join("\n")
@@ -1266,6 +1406,35 @@ export function Settings() {
       toast({
         title: "Copy failed",
         description: error?.message || "Unable to copy migration logs.",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleCopyInsteonLinkedStatusLogs = async () => {
+    if (insteonLinkedStatusRunLogs.length === 0) {
+      toast({
+        title: "No logs to copy",
+        description: "Run a query first or wait for log output.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      const copied = await copyTextToClipboard(buildLinkedStatusLogText())
+      if (!copied) {
+        throw new Error("Clipboard unavailable")
+      }
+
+      toast({
+        title: "Query log copied",
+        description: `Copied ${insteonLinkedStatusRunLogs.length} log line${insteonLinkedStatusRunLogs.length === 1 ? "" : "s"} to clipboard.`
+      })
+    } catch (error: any) {
+      toast({
+        title: "Copy failed",
+        description: error?.message || "Unable to copy query logs.",
         variant: "destructive"
       })
     }
@@ -2815,6 +2984,25 @@ export function Settings() {
                         </>
                       )}
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCancelInsteonLinkedStatusQuery}
+                      disabled={!queryingInsteonLinkedStatus || !insteonLinkedStatusRunId || cancellingInsteonLinkedStatusQuery}
+                    >
+                      {cancellingInsteonLinkedStatusQuery ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Cancelling...
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="h-4 w-4 mr-2" />
+                          Cancel Query
+                        </>
+                      )}
+                    </Button>
                   </div>
 
                   {insteonSerialPortCandidates.length > 0 && (
@@ -2905,6 +3093,55 @@ export function Settings() {
                           )}
                         </div>
                       </div>
+                    </div>
+                  )}
+
+                  {(queryingInsteonLinkedStatus || insteonLinkedStatusRunLogs.length > 0) && (
+                    <div className="rounded-md border border-slate-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-medium">Linked-device query log</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-muted-foreground">
+                            Status: {formatLinkedStatusRunStatusLabel(insteonLinkedStatusRunStatus)}
+                            {insteonLinkedStatusRunId ? ` • Run ${insteonLinkedStatusRunId.slice(0, 8)}` : ""}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleCopyInsteonLinkedStatusLogs}
+                            disabled={insteonLinkedStatusRunLogs.length === 0}
+                            className="h-7 px-2"
+                          >
+                            <Copy className="h-3.5 w-3.5 mr-1" />
+                            Copy Logs
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="max-h-64 overflow-y-auto rounded border border-slate-200/70 bg-slate-950/85 p-2 font-mono text-[11px] leading-5 text-slate-100 dark:border-slate-800/70">
+                        {insteonLinkedStatusRunLogs.length > 0 ? (
+                          insteonLinkedStatusRunLogs.map((entry, index) => {
+                            const levelClass = entry?.level === "error"
+                              ? "text-red-300"
+                              : entry?.level === "warn"
+                                ? "text-amber-300"
+                                : "text-slate-100"
+
+                            return (
+                              <p key={`insteon-linked-status-log-${index}`} className={levelClass}>
+                                <span className="text-slate-400">
+                                  [{entry?.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "--:--:--"}]
+                                </span> {entry?.stage ? `[${entry.stage}] ` : ""}{entry?.message || "No message"}
+                              </p>
+                            )
+                          })
+                        ) : (
+                          <p className="text-slate-400">Waiting for query log output...</p>
+                        )}
+                      </div>
+                      <p className="text-muted-foreground">
+                        Log updates refresh every second while the query run is active.
+                      </p>
                     </div>
                   )}
 

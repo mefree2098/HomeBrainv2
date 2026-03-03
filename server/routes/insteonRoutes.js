@@ -282,6 +282,79 @@ router.get('/devices/linked', async (req, res) => {
 // Endpoint: GET /api/insteon/devices/linked/status
 // Request: {}
 // Response: { success: boolean, message: string, summary: object, devices: Array<object> }
+router.post('/devices/linked/status/start', async (req, res) => {
+  console.log('InsteonRoutes: Starting async linked-device status query');
+
+  try {
+    const run = insteonService.startLinkedStatusRun(req.body || {});
+    res.status(202).json({
+      success: true,
+      runId: run.id,
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to start linked-device status query:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+router.get('/devices/linked/status/runs/:runId', async (req, res) => {
+  const runId = req.params?.runId;
+  try {
+    const run = insteonService.getLinkedStatusRun(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: `Linked-device query run "${runId}" was not found`
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to fetch linked-device query run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+router.post('/devices/linked/status/runs/:runId/cancel', async (req, res) => {
+  const runId = req.params?.runId;
+  try {
+    const run = insteonService.cancelLinkedStatusRun(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: `Linked-device query run "${runId}" was not found`
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: ['completed', 'failed', 'cancelled'].includes(run.status)
+        ? `Linked-device query is already ${run.status}.`
+        : 'Cancellation requested.',
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to cancel linked-device query run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 router.get('/devices/linked/status', async (req, res) => {
   console.log('InsteonRoutes: Querying linked device status from PLM');
 

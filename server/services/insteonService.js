@@ -24,6 +24,8 @@ const DEFAULT_ISY_PORT_HTTP = 80;
 const DEFAULT_ISY_PORT_HTTPS = 443;
 const DEFAULT_ISY_SYNC_RUN_RETENTION = 20;
 const DEFAULT_ISY_SYNC_RUN_LOG_LIMIT = 1000;
+const DEFAULT_LINKED_STATUS_RUN_RETENTION = 20;
+const DEFAULT_LINKED_STATUS_RUN_LOG_LIMIT = 1000;
 const DEFAULT_INSTEON_LOCAL_BRIDGE_HOST = '127.0.0.1';
 const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
 const INSTEON_LOCAL_BRIDGE_SCRIPT = path.join(__dirname, '..', 'scripts', 'insteon_serial_bridge.py');
@@ -59,6 +61,9 @@ class InsteonService {
     this._isySyncRuns = new Map();
     this._isySyncRunRetention = Number(process.env.HOMEBRAIN_ISY_SYNC_RUN_RETENTION || DEFAULT_ISY_SYNC_RUN_RETENTION);
     this._isySyncRunLogLimit = Number(process.env.HOMEBRAIN_ISY_SYNC_RUN_LOG_LIMIT || DEFAULT_ISY_SYNC_RUN_LOG_LIMIT);
+    this._linkedStatusRuns = new Map();
+    this._linkedStatusRunRetention = Number(process.env.HOMEBRAIN_LINKED_STATUS_RUN_RETENTION || DEFAULT_LINKED_STATUS_RUN_RETENTION);
+    this._linkedStatusRunLogLimit = Number(process.env.HOMEBRAIN_LINKED_STATUS_RUN_LOG_LIMIT || DEFAULT_LINKED_STATUS_RUN_LOG_LIMIT);
     console.log('InsteonService: Initialized');
   }
 
@@ -3998,6 +4003,219 @@ class InsteonService {
     return this._snapshotISYSyncRun(run);
   }
 
+  _normalizeLinkedStatusRunRequest(payload = {}) {
+    const request = payload && typeof payload === 'object' ? payload : {};
+    const normalizeNumber = (value, fallback, min = 0) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) {
+        return fallback;
+      }
+      return Math.max(min, Math.round(parsed));
+    };
+
+    return {
+      levelTimeoutMs: normalizeNumber(request.levelTimeoutMs, 3000, 500),
+      pingTimeoutMs: normalizeNumber(request.pingTimeoutMs, 3000, 500),
+      infoTimeoutMs: normalizeNumber(request.infoTimeoutMs, 3000, 500),
+      pauseBetweenMs: normalizeNumber(request.pauseBetweenMs, 120, 0)
+    };
+  }
+
+  _normalizeLinkedStatusLogEntry(entry = {}) {
+    if (!entry || typeof entry !== 'object') {
+      return null;
+    }
+
+    const message = typeof entry.message === 'string' ? entry.message.trim() : '';
+    if (!message) {
+      return null;
+    }
+
+    const stage = typeof entry.stage === 'string' ? entry.stage.trim() : '';
+    const level = ['info', 'warn', 'error'].includes(entry.level) ? entry.level : 'info';
+    const timestamp = typeof entry.timestamp === 'string' && entry.timestamp.trim()
+      ? entry.timestamp
+      : new Date().toISOString();
+    const progress = Number.isFinite(Number(entry.progress))
+      ? Math.max(0, Math.min(100, Number(entry.progress)))
+      : null;
+
+    return {
+      timestamp,
+      message,
+      stage: stage || null,
+      level,
+      progress
+    };
+  }
+
+  _snapshotLinkedStatusRun(run) {
+    if (!run || typeof run !== 'object') {
+      return null;
+    }
+
+    const logs = Array.isArray(run.logs) ? run.logs.slice() : [];
+    return {
+      id: run.id,
+      status: run.status,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+      finishedAt: run.finishedAt || null,
+      request: run.request,
+      cancelRequested: Boolean(run.cancelRequested),
+      logs,
+      result: run.result || null,
+      error: run.error || null
+    };
+  }
+
+  _pruneLinkedStatusRuns() {
+    const retention = Number.isInteger(this._linkedStatusRunRetention) && this._linkedStatusRunRetention > 0
+      ? this._linkedStatusRunRetention
+      : DEFAULT_LINKED_STATUS_RUN_RETENTION;
+
+    while (this._linkedStatusRuns.size > retention) {
+      const oldestRunId = this._linkedStatusRuns.keys().next().value;
+      if (!oldestRunId) {
+        break;
+      }
+      this._linkedStatusRuns.delete(oldestRunId);
+    }
+  }
+
+  _appendLinkedStatusRunLog(runId, entry) {
+    const run = this._linkedStatusRuns.get(runId);
+    if (!run) {
+      return;
+    }
+
+    const normalizedEntry = this._normalizeLinkedStatusLogEntry(entry);
+    if (!normalizedEntry) {
+      return;
+    }
+
+    run.logs.push(normalizedEntry);
+    const logLimit = Number.isInteger(this._linkedStatusRunLogLimit) && this._linkedStatusRunLogLimit > 0
+      ? this._linkedStatusRunLogLimit
+      : DEFAULT_LINKED_STATUS_RUN_LOG_LIMIT;
+    if (run.logs.length > logLimit) {
+      run.logs.splice(0, run.logs.length - logLimit);
+    }
+    run.updatedAt = new Date().toISOString();
+  }
+
+  _createLinkedStatusRun(payload = {}) {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+
+    const run = {
+      id,
+      status: 'running',
+      createdAt: now,
+      updatedAt: now,
+      finishedAt: null,
+      request: this._normalizeLinkedStatusRunRequest(payload),
+      cancelRequested: false,
+      logs: [],
+      result: null,
+      error: null
+    };
+
+    this._linkedStatusRuns.set(id, run);
+    this._pruneLinkedStatusRuns();
+    return run;
+  }
+
+  getLinkedStatusRun(runId) {
+    const id = typeof runId === 'string' ? runId.trim() : '';
+    if (!id) {
+      return null;
+    }
+
+    const run = this._linkedStatusRuns.get(id);
+    return this._snapshotLinkedStatusRun(run);
+  }
+
+  cancelLinkedStatusRun(runId) {
+    const id = typeof runId === 'string' ? runId.trim() : '';
+    if (!id) {
+      return null;
+    }
+
+    const run = this._linkedStatusRuns.get(id);
+    if (!run) {
+      return null;
+    }
+
+    if (['completed', 'failed', 'cancelled'].includes(run.status)) {
+      return this._snapshotLinkedStatusRun(run);
+    }
+
+    run.cancelRequested = true;
+    run.updatedAt = new Date().toISOString();
+    this._appendLinkedStatusRunLog(run.id, {
+      message: 'Cancellation requested by user; waiting for current device operation to finish.',
+      stage: 'cancel',
+      level: 'warn'
+    });
+
+    return this._snapshotLinkedStatusRun(run);
+  }
+
+  startLinkedStatusRun(payload = {}) {
+    const run = this._createLinkedStatusRun(payload);
+    this._appendLinkedStatusRunLog(run.id, {
+      message: 'Queued linked-device query run',
+      stage: 'queued',
+      progress: 0
+    });
+
+    (async () => {
+      try {
+        const result = await this.queryLinkedDevicesStatus(run.request, {
+          onProgress: (entry) => this._appendLinkedStatusRunLog(run.id, entry),
+          shouldCancel: () => Boolean(this._linkedStatusRuns.get(run.id)?.cancelRequested)
+        });
+
+        const storedRun = this._linkedStatusRuns.get(run.id);
+        if (!storedRun) {
+          return;
+        }
+
+        storedRun.status = 'completed';
+        storedRun.result = result;
+        storedRun.error = null;
+        storedRun.finishedAt = new Date().toISOString();
+        storedRun.updatedAt = storedRun.finishedAt;
+        this._appendLinkedStatusRunLog(run.id, {
+          message: result?.message || 'Linked-device query completed',
+          stage: 'complete',
+          progress: 100
+        });
+      } catch (error) {
+        const storedRun = this._linkedStatusRuns.get(run.id);
+        if (!storedRun) {
+          return;
+        }
+
+        const cancelled = error?.code === 'QUERY_CANCELLED' || error?.isCancelled === true;
+        storedRun.status = cancelled ? 'cancelled' : 'failed';
+        storedRun.result = null;
+        storedRun.error = cancelled ? 'Query cancelled by user.' : (error.message || 'Linked-device query failed.');
+        storedRun.finishedAt = new Date().toISOString();
+        storedRun.updatedAt = storedRun.finishedAt;
+        this._appendLinkedStatusRunLog(run.id, {
+          message: cancelled ? 'Linked-device query cancelled' : (error.message || 'Linked-device query failed'),
+          stage: 'complete',
+          level: cancelled ? 'warn' : 'error',
+          progress: 100
+        });
+      }
+    })();
+
+    return this._snapshotLinkedStatusRun(run);
+  }
+
   async testISYConnection(payload = {}) {
     try {
       const connection = await this._resolveISYConnection(payload);
@@ -5781,15 +5999,50 @@ class InsteonService {
     });
   }
 
-  async queryLinkedDevicesStatus(payload = {}) {
+  async queryLinkedDevicesStatus(payload = {}, runtime = {}) {
     console.log('InsteonService: Querying linked PLM devices for live status');
 
+    const request = payload && typeof payload === 'object' ? payload : {};
+    const onProgress = runtime && typeof runtime.onProgress === 'function'
+      ? runtime.onProgress
+      : null;
+    const shouldCancel = runtime && typeof runtime.shouldCancel === 'function'
+      ? runtime.shouldCancel
+      : null;
+    const reportProgress = (message, details = {}) => {
+      if (!onProgress) {
+        return;
+      }
+
+      try {
+        onProgress({
+          timestamp: new Date().toISOString(),
+          message,
+          ...details
+        });
+      } catch (error) {
+        console.warn(`InsteonService: Failed to publish linked-query progress update: ${error.message}`);
+      }
+    };
+    const throwIfCancelled = () => {
+      if (shouldCancel && shouldCancel()) {
+        const cancellationError = new Error('Query cancelled by user.');
+        cancellationError.code = 'QUERY_CANCELLED';
+        cancellationError.isCancelled = true;
+        throw cancellationError;
+      }
+    };
+
     try {
+      throwIfCancelled();
+
       if (!this.isConnected || !this.hub) {
+        reportProgress('Connecting to PLM runtime', { stage: 'connect', progress: 1 });
         await this.connect();
       }
 
-      const request = payload && typeof payload === 'object' ? payload : {};
+      reportProgress('Connected to PLM; loading linked-device table', { stage: 'query', progress: 3 });
+
       const levelTimeoutMs = Number.isFinite(Number(request.levelTimeoutMs))
         ? Math.max(500, Number(request.levelTimeoutMs))
         : 3000;
@@ -5807,7 +6060,14 @@ class InsteonService {
       const sortedLinkedDevices = linkedDevices
         .slice()
         .sort((a, b) => String(a?.displayAddress || a?.address || '').localeCompare(String(b?.displayAddress || b?.address || '')));
+      const totalDevices = sortedLinkedDevices.length;
 
+      reportProgress(
+        `Loaded ${totalDevices} linked device ID${totalDevices === 1 ? '' : 's'} from PLM`,
+        { stage: 'query', progress: 5 }
+      );
+
+      throwIfCancelled();
       const plmInfo = await this.getPLMInfo().catch((error) => ({
         deviceId: null,
         firmwareVersion: 'Unknown',
@@ -5820,6 +6080,7 @@ class InsteonService {
       const warnings = [];
       if (plmInfo?.error) {
         warnings.push(`PLM metadata query warning: ${plmInfo.error}`);
+        reportProgress(`PLM metadata query warning: ${plmInfo.error}`, { stage: 'query', level: 'warn' });
       }
 
       const dbDevicesByAddress = new Map();
@@ -5833,14 +6094,44 @@ class InsteonService {
         });
       } catch (dbError) {
         warnings.push(`Device-name lookup warning: ${dbError.message}`);
+        reportProgress(`Device-name lookup warning: ${dbError.message}`, { stage: 'query', level: 'warn' });
+      }
+
+      if (totalDevices === 0) {
+        const emptyResult = {
+          success: true,
+          message: 'No linked devices were found in the PLM database.',
+          scannedAt: new Date().toISOString(),
+          plmInfo,
+          summary: {
+            linkedDevices: 0,
+            reachable: 0,
+            unreachable: 0,
+            statusKnown: 0,
+            statusUnknown: 0
+          },
+          warnings,
+          devices: []
+        };
+        reportProgress(emptyResult.message, { stage: 'complete', progress: 100 });
+        return emptyResult;
       }
 
       for (let index = 0; index < sortedLinkedDevices.length; index += 1) {
+        throwIfCancelled();
         const linkedDevice = sortedLinkedDevices[index];
+        const progressStart = 5 + Math.floor((index / totalDevices) * 90);
+        const fallbackDisplayAddress = String(linkedDevice?.displayAddress || linkedDevice?.address || 'Unknown');
+        reportProgress(`Processing device ${index + 1}/${totalDevices}: ${fallbackDisplayAddress}`, {
+          stage: 'devices',
+          progress: progressStart
+        });
+
         let normalizedAddress = null;
         try {
           normalizedAddress = this._normalizeInsteonAddress(linkedDevice.address);
         } catch (normalizeError) {
+          const errorMessage = `Invalid linked-device address "${linkedDevice?.address}": ${normalizeError.message}`;
           queriedDevices.push({
             address: null,
             displayAddress: linkedDevice?.displayAddress || linkedDevice?.address || 'Unknown',
@@ -5854,11 +6145,18 @@ class InsteonService {
             level: null,
             brightness: null,
             respondedVia: 'none',
-            error: `Invalid linked-device address "${linkedDevice?.address}": ${normalizeError.message}`,
+            error: errorMessage,
             deviceInfo: null
           });
 
+          reportProgress(`Failed ${fallbackDisplayAddress}: ${errorMessage}`, {
+            stage: 'devices',
+            level: 'warn',
+            progress: 5 + Math.floor(((index + 1) / totalDevices) * 90)
+          });
+
           if (index < sortedLinkedDevices.length - 1 && pauseBetweenMs > 0) {
+            throwIfCancelled();
             await this._sleep(pauseBetweenMs);
           }
           continue;
@@ -5884,6 +6182,7 @@ class InsteonService {
         };
 
         try {
+          throwIfCancelled();
           const level = await this._queryDeviceLevelByAddress(normalizedAddress, levelTimeoutMs);
           detail.reachable = true;
           detail.isOnline = true;
@@ -5894,6 +6193,7 @@ class InsteonService {
         } catch (levelError) {
           const levelMessage = levelError?.message || 'Unknown level-query error';
           try {
+            throwIfCancelled();
             await this._queryDevicePingByAddress(normalizedAddress, pingTimeoutMs);
             detail.reachable = true;
             detail.isOnline = true;
@@ -5902,6 +6202,7 @@ class InsteonService {
           } catch (pingError) {
             const pingMessage = pingError?.message || 'Unknown ping-query error';
             try {
+              throwIfCancelled();
               const info = await this._queryDeviceInfoByAddress(normalizedAddress, infoTimeoutMs);
               detail.reachable = true;
               detail.isOnline = true;
@@ -5923,8 +6224,20 @@ class InsteonService {
         }
 
         queriedDevices.push(detail);
+        const progressEnd = 5 + Math.floor(((index + 1) / totalDevices) * 90);
+        const statusMessage = detail.reachable
+          ? (detail.status === null
+            ? `Completed ${displayAddress}: reachable (${detail.respondedVia}), status unavailable`
+            : `Completed ${displayAddress}: ${detail.status ? 'On' : 'Off'} via ${detail.respondedVia}`)
+          : `Failed ${displayAddress}: ${detail.error || 'unreachable'}`;
+        reportProgress(statusMessage, {
+          stage: 'devices',
+          level: detail.reachable ? 'info' : 'warn',
+          progress: progressEnd
+        });
 
         if (index < sortedLinkedDevices.length - 1 && pauseBetweenMs > 0) {
+          throwIfCancelled();
           await this._sleep(pauseBetweenMs);
         }
       }
@@ -5934,7 +6247,7 @@ class InsteonService {
       const statusKnown = queriedDevices.filter((device) => device.status !== null).length;
       const statusUnknown = queriedDevices.length - statusKnown;
 
-      return {
+      const result = {
         success: true,
         message: `Queried ${queriedDevices.length} linked device${queriedDevices.length === 1 ? '' : 's'}: ${reachable} reachable, ${unreachable} unreachable.`,
         scannedAt: new Date().toISOString(),
@@ -5949,7 +6262,17 @@ class InsteonService {
         warnings,
         devices: queriedDevices
       };
+
+      reportProgress(result.message, {
+        stage: 'complete',
+        level: unreachable > 0 ? 'warn' : 'info',
+        progress: 100
+      });
+      return result;
     } catch (error) {
+      if (error?.code === 'QUERY_CANCELLED' || error?.isCancelled === true) {
+        throw error;
+      }
       console.error('InsteonService: Linked-device query failed:', error.message);
       console.error(error.stack);
       throw new Error(`Failed to query linked PLM devices: ${error.message}`);
