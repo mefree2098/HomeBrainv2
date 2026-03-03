@@ -5,6 +5,8 @@ const harmonyService = require('./harmonyService');
 const ecobeeService = require('./ecobeeService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
+const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 class DeviceService {
   constructor() {
     this.smartThingsPresence = null;
@@ -26,7 +28,7 @@ class DeviceService {
 
   /**
    * Get all devices
-   * @param {Object} filters - Optional filters (room, type, status, isOnline)
+   * @param {Object} filters - Optional filters (room, type, status, isOnline, source)
    * @returns {Promise<Array>} Array of devices
    */
   async getAllDevices(filters = {}) {
@@ -40,6 +42,18 @@ class DeviceService {
       if (filters.type) query.type = filters.type;
       if (filters.status !== undefined) query.status = filters.status;
       if (filters.isOnline !== undefined) query.isOnline = filters.isOnline;
+      if (filters.source) {
+        const normalizedSource = String(filters.source).trim().toLowerCase();
+        if (normalizedSource === 'unknown') {
+          query.$or = [
+            { 'properties.source': { $exists: false } },
+            { 'properties.source': null },
+            { 'properties.source': '' }
+          ];
+        } else {
+          query['properties.source'] = new RegExp(`^${escapeRegex(normalizedSource)}$`, 'i');
+        }
+      }
       
       const devices = await Device.find(query).sort({ room: 1, name: 1 });
       console.log(`DeviceService: Found ${devices.length} devices`);

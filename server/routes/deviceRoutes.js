@@ -19,6 +19,7 @@ router.get('/', async (req, res) => {
     if (req.query.type) filters.type = req.query.type;
     if (req.query.status !== undefined) filters.status = req.query.status === 'true';
     if (req.query.isOnline !== undefined) filters.isOnline = req.query.isOnline === 'true';
+    if (req.query.source) filters.source = req.query.source;
     
     const devices = await deviceService.getAllDevices(filters);
     
