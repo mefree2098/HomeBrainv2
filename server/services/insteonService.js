@@ -10,6 +10,7 @@ const Scene = require('../models/Scene');
 const Settings = require('../models/Settings');
 const Workflow = require('../models/Workflow');
 const workflowService = require('./workflowService');
+const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 const DEFAULT_INSTEON_SERIAL_PORT = '/dev/ttyUSB0';
 const DEFAULT_INSTEON_TCP_PORT = 9761;
@@ -54,9 +55,11 @@ class InsteonService {
     this._runtimeListenersAttached = false;
     this._runtimeErrorListener = null;
     this._runtimeCloseListener = null;
+    this._runtimeCommandListener = null;
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
     this._localSerialBridge = null;
+    this._pendingRuntimeStateRefreshes = new Map();
     this.enableLocalSerialBridge = process.env.HOMEBRAIN_INSTEON_ENABLE_LOCAL_TCP_BRIDGE !== 'false';
     this._isySyncRuns = new Map();
     this._isySyncRunRetention = Number(process.env.HOMEBRAIN_ISY_SYNC_RUN_RETENTION || DEFAULT_ISY_SYNC_RUN_RETENTION);
@@ -333,13 +336,22 @@ class InsteonService {
       this.hub = null;
       this.connectionTransport = null;
       this.connectionTarget = null;
+      this._clearPendingRuntimeStateRefreshes();
       this._runtimeListenersAttached = false;
       this._runtimeCloseListener = null;
       this._runtimeErrorListener = null;
+      this._runtimeCommandListener = null;
+    };
+
+    this._runtimeCommandListener = (command) => {
+      this._handleRuntimeCommand(command).catch((error) => {
+        console.warn(`InsteonService: Runtime command handling error: ${error.message}`);
+      });
     };
 
     this.hub.on('error', this._runtimeErrorListener);
     this.hub.on('close', this._runtimeCloseListener);
+    this.hub.on('command', this._runtimeCommandListener);
 
     this._runtimeListenersAttached = true;
   }
@@ -356,10 +368,22 @@ class InsteonService {
     if (this._runtimeErrorListener) {
       this.hub.removeListener('error', this._runtimeErrorListener);
     }
+    if (this._runtimeCommandListener) {
+      this.hub.removeListener('command', this._runtimeCommandListener);
+    }
 
     this._runtimeCloseListener = null;
     this._runtimeErrorListener = null;
+    this._runtimeCommandListener = null;
+    this._clearPendingRuntimeStateRefreshes();
     this._runtimeListenersAttached = false;
+  }
+
+  _clearPendingRuntimeStateRefreshes() {
+    for (const timer of this._pendingRuntimeStateRefreshes.values()) {
+      clearTimeout(timer);
+    }
+    this._pendingRuntimeStateRefreshes.clear();
   }
 
   _normalizeSerialPath(serialPath) {
@@ -4920,6 +4944,172 @@ class InsteonService {
     });
   }
 
+  _emitDeviceRealtimeUpdate(device) {
+    const payload = deviceUpdateEmitter.normalizeDevices([device]);
+    if (payload.length > 0) {
+      deviceUpdateEmitter.emit('devices:update', payload);
+    }
+  }
+
+  async _persistDeviceRuntimeState(device, patch = {}) {
+    if (!device || typeof patch !== 'object' || patch === null) {
+      return device || null;
+    }
+
+    const nextState = {
+      ...patch
+    };
+
+    if (nextState.status !== undefined) {
+      nextState.status = Boolean(nextState.status);
+    }
+
+    if (nextState.brightness !== undefined) {
+      const numericBrightness = Number(nextState.brightness);
+      if (Number.isFinite(numericBrightness)) {
+        nextState.brightness = Math.max(0, Math.min(100, Math.round(numericBrightness)));
+      } else {
+        delete nextState.brightness;
+      }
+    }
+
+    if (nextState.isOnline !== undefined) {
+      nextState.isOnline = Boolean(nextState.isOnline);
+    }
+
+    if (nextState.lastSeen === undefined) {
+      nextState.lastSeen = new Date();
+    }
+
+    Object.assign(device, nextState);
+    await device.save();
+
+    const normalizedAddress = this._normalizePossibleInsteonAddress(device?.properties?.insteonAddress || '');
+    if (normalizedAddress) {
+      this.devices.set(normalizedAddress, device);
+    }
+
+    this._emitDeviceRealtimeUpdate(device);
+    return device;
+  }
+
+  async _persistDeviceRuntimeStateByAddress(address, patch = {}) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress) {
+      return null;
+    }
+
+    const device = await this._findExistingInsteonDeviceByAddress(normalizedAddress);
+    if (!device) {
+      return null;
+    }
+
+    return this._persistDeviceRuntimeState(device, patch);
+  }
+
+  _stateFromInsteonLevel(level) {
+    const numericLevel = Number(level);
+    const boundedLevel = Number.isFinite(numericLevel)
+      ? Math.max(0, Math.min(255, Math.round(numericLevel)))
+      : 0;
+    return {
+      level: boundedLevel,
+      status: boundedLevel > 0,
+      brightness: Math.round((boundedLevel / 255) * 100),
+      isOnline: true,
+      lastSeen: new Date()
+    };
+  }
+
+  _parseRuntimeCommand(command) {
+    const payload = command?.standard || command?.extended || null;
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    const normalizedAddress = this._normalizePossibleInsteonAddress(payload.id);
+    if (!normalizedAddress) {
+      return null;
+    }
+
+    const command1 = String(payload.command1 || '').trim().toUpperCase();
+    const command2Hex = String(payload.command2 || '').trim().toUpperCase();
+    const command2 = Number.parseInt(command2Hex, 16);
+    const hasNumericCommand2 = Number.isFinite(command2);
+
+    let inferredState = null;
+    if (command1 === '11' || command1 === '12' || command1 === '21') {
+      const inferredBrightness = hasNumericCommand2
+        ? Math.round((Math.max(0, Math.min(255, command2)) / 255) * 100)
+        : 100;
+      inferredState = {
+        status: true,
+        brightness: inferredBrightness,
+        isOnline: true,
+        lastSeen: new Date()
+      };
+    } else if (command1 === '13' || command1 === '14') {
+      inferredState = {
+        status: false,
+        brightness: 0,
+        isOnline: true,
+        lastSeen: new Date()
+      };
+    } else if (command1 === '19' && hasNumericCommand2) {
+      inferredState = {
+        status: command2 > 0,
+        brightness: Math.round((Math.max(0, Math.min(255, command2)) / 255) * 100),
+        isOnline: true,
+        lastSeen: new Date()
+      };
+    }
+
+    return {
+      address: normalizedAddress,
+      command1,
+      command2: command2Hex,
+      inferredState
+    };
+  }
+
+  _scheduleRuntimeStateRefresh(address, reason = 'command') {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress) {
+      return;
+    }
+
+    if (this._pendingRuntimeStateRefreshes.has(normalizedAddress)) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this._pendingRuntimeStateRefreshes.delete(normalizedAddress);
+      this._confirmDeviceStateByAddress(normalizedAddress, {
+        attempts: 2,
+        timeoutMs: 3500,
+        pauseBetweenMs: 180,
+        persistState: true
+      }).catch((error) => {
+        console.warn(`InsteonService: Runtime state refresh (${reason}) failed for ${this._formatInsteonAddress(normalizedAddress)}: ${error.message}`);
+      });
+    }, 300);
+
+    this._pendingRuntimeStateRefreshes.set(normalizedAddress, timer);
+  }
+
+  async _handleRuntimeCommand(command) {
+    const parsed = this._parseRuntimeCommand(command);
+    if (!parsed) {
+      return;
+    }
+
+    if (parsed.inferredState) {
+      await this._persistDeviceRuntimeStateByAddress(parsed.address, parsed.inferredState);
+    }
+
+    this._scheduleRuntimeStateRefresh(parsed.address, `cmd:${parsed.command1}`);
+  }
+
   async _upsertInsteonDevice({ address, group, insteonType, name, deviceInfo, markLinkedToCurrentPlm = false }) {
     const normalizedAddress = this._normalizeInsteonAddress(address);
     const existingDevice = await this._findExistingInsteonDeviceByAddress(normalizedAddress);
@@ -4943,9 +5133,20 @@ class InsteonService {
       : `Insteon Device ${this._formatInsteonAddress(normalizedAddress)}`;
     const now = new Date();
     const inferredType = this._mapInsteonTypeToDeviceType(resolvedInfo);
+    const descriptor = [
+      insteonType,
+      resolvedInfo?.productKey,
+      preferredName,
+      existingDevice?.name
+    ]
+      .filter((value) => typeof value === 'string' && value.trim())
+      .join(' ')
+      .toLowerCase();
     const inferredSupportsBrightness = (
       resolvedCategory === 0x01
       || existingProperties.supportsBrightness === true
+      || existingDevice?.type === 'light'
+      || /\bdimmer\b/.test(descriptor)
     );
 
     const mergedProperties = {
@@ -4977,9 +5178,13 @@ class InsteonService {
         existingDevice.model = resolvedInfo.productKey.trim();
       }
       if (!existingDevice.type) {
-        existingDevice.type = inferredType;
+        existingDevice.type = inferredSupportsBrightness && inferredType === 'switch'
+          ? 'light'
+          : inferredType;
       } else if (existingDevice.type === 'switch' && inferredType !== 'switch') {
         existingDevice.type = inferredType;
+      } else if (existingDevice.type === 'switch' && inferredSupportsBrightness) {
+        existingDevice.type = 'light';
       } else if (existingDevice.type === 'sensor' && inferredType === 'light') {
         existingDevice.type = inferredType;
       }
@@ -5006,7 +5211,9 @@ class InsteonService {
 
     const createdDevice = await Device.create({
       name: preferredName,
-      type: inferredType,
+      type: inferredSupportsBrightness && inferredType === 'switch'
+        ? 'light'
+        : inferredType,
       room: 'Unassigned',
       status: false,
       brand: 'Insteon',
@@ -6139,6 +6346,39 @@ class InsteonService {
     });
   }
 
+  async _confirmDeviceStateByAddress(address, options = {}) {
+    const normalizedAddress = this._normalizeInsteonAddress(address);
+    const attempts = Number.isFinite(Number(options.attempts))
+      ? Math.max(1, Math.min(5, Number(options.attempts)))
+      : 2;
+    const timeoutMs = Number.isFinite(Number(options.timeoutMs))
+      ? Math.max(500, Number(options.timeoutMs))
+      : 4000;
+    const pauseBetweenMs = Number.isFinite(Number(options.pauseBetweenMs))
+      ? Math.max(0, Number(options.pauseBetweenMs))
+      : 150;
+    const persistState = options.persistState !== false;
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const level = await this._queryDeviceLevelByAddress(normalizedAddress, timeoutMs);
+        const state = this._stateFromInsteonLevel(level);
+        if (persistState) {
+          await this._persistDeviceRuntimeStateByAddress(normalizedAddress, state);
+        }
+        return state;
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts && pauseBetweenMs > 0) {
+          await this._sleep(pauseBetweenMs);
+        }
+      }
+    }
+
+    throw lastError || new Error(`Unable to confirm device state for ${this._formatInsteonAddress(normalizedAddress)}`);
+  }
+
   async _queryDeviceInfoByAddress(address, timeoutMs = 5000) {
     if (!this.isConnected || !this.hub) {
       await this.connect();
@@ -6489,8 +6729,9 @@ class InsteonService {
   async getDeviceStatus(deviceId) {
     console.log(`InsteonService: Getting status for device ${deviceId}`);
 
+    let device = null;
     try {
-      const device = await Device.findById(deviceId);
+      device = await Device.findById(deviceId);
 
       if (!device) {
         throw new Error('Device not found');
@@ -6506,18 +6747,27 @@ class InsteonService {
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
       const level = await this._queryDeviceLevelByAddress(address, 5000);
-      const status = level > 0;
-      const brightness = Math.round((level / 255) * 100);
+      const state = this._stateFromInsteonLevel(level);
+      await this._persistDeviceRuntimeState(device, state);
 
-      console.log(`InsteonService: Device ${address} status - Level: ${level}, Brightness: ${brightness}%`);
+      console.log(`InsteonService: Device ${address} status - Level: ${state.level}, Brightness: ${state.brightness}%`);
 
       return {
-        status,
-        level,
-        brightness,
+        status: state.status,
+        level: state.level,
+        brightness: state.brightness,
         isOnline: true
       };
     } catch (error) {
+      if (device) {
+        try {
+          await this._persistDeviceRuntimeState(device, {
+            isOnline: false
+          });
+        } catch (persistError) {
+          console.warn(`InsteonService: Failed to mark ${device._id} offline after status error: ${persistError.message}`);
+        }
+      }
       console.error(`InsteonService: Failed to get device status:`, error.message);
       console.error(error.stack);
       throw error;
@@ -6548,10 +6798,14 @@ class InsteonService {
         await this.connect();
       }
 
-      const address = device.properties.insteonAddress;
-      const level = Math.round((brightness / 100) * 255);
+      const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
+      const numericBrightness = Number(brightness);
+      const boundedBrightness = Number.isFinite(numericBrightness)
+        ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
+        : 100;
+      const level = Math.round((boundedBrightness / 100) * 255);
 
-      return new Promise((resolve, reject) => {
+      await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('Timeout turning on device'));
         }, 5000);
@@ -6564,22 +6818,30 @@ class InsteonService {
             reject(error);
           } else {
             console.log(`InsteonService: Device ${address} turned on at level ${level}`);
-
-            // Update device in database
-            device.status = true;
-            device.brightness = brightness;
-            device.updatedAt = new Date();
-            device.save().catch(err => console.error('Error saving device state:', err.message));
-
-            resolve({
-              success: true,
-              message: 'Device turned on',
-              status: true,
-              brightness
-            });
+            resolve();
           }
         });
       });
+
+      const confirmedState = await this._confirmDeviceStateByAddress(address, {
+        attempts: 3,
+        timeoutMs: 4200,
+        pauseBetweenMs: 220,
+        persistState: true
+      });
+
+      if (!confirmedState.status) {
+        throw new Error(`Command acknowledged but ${this._formatInsteonAddress(address)} did not report an ON state`);
+      }
+
+      return {
+        success: true,
+        message: 'Device turned on',
+        status: confirmedState.status,
+        brightness: confirmedState.brightness,
+        level: confirmedState.level,
+        confirmed: true
+      };
     } catch (error) {
       console.error('InsteonService: Failed to turn on device:', error.message);
       console.error(error.stack);
@@ -6610,9 +6872,9 @@ class InsteonService {
         await this.connect();
       }
 
-      const address = device.properties.insteonAddress;
+      const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
 
-      return new Promise((resolve, reject) => {
+      await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('Timeout turning off device'));
         }, 5000);
@@ -6625,22 +6887,30 @@ class InsteonService {
             reject(error);
           } else {
             console.log(`InsteonService: Device ${address} turned off`);
-
-            // Update device in database
-            device.status = false;
-            device.brightness = 0;
-            device.updatedAt = new Date();
-            device.save().catch(err => console.error('Error saving device state:', err.message));
-
-            resolve({
-              success: true,
-              message: 'Device turned off',
-              status: false,
-              brightness: 0
-            });
+            resolve();
           }
         });
       });
+
+      const confirmedState = await this._confirmDeviceStateByAddress(address, {
+        attempts: 3,
+        timeoutMs: 4200,
+        pauseBetweenMs: 220,
+        persistState: true
+      });
+
+      if (confirmedState.status) {
+        throw new Error(`Command acknowledged but ${this._formatInsteonAddress(address)} did not report an OFF state`);
+      }
+
+      return {
+        success: true,
+        message: 'Device turned off',
+        status: confirmedState.status,
+        brightness: confirmedState.brightness,
+        level: confirmedState.level,
+        confirmed: true
+      };
     } catch (error) {
       console.error('InsteonService: Failed to turn off device:', error.message);
       console.error(error.stack);
