@@ -145,7 +145,7 @@ export interface InsteonLinkedDeviceStatusEntry {
   status?: boolean | null;
   level?: number | null;
   brightness?: number | null;
-  respondedVia?: 'level' | 'info' | 'none';
+  respondedVia?: 'level' | 'ping' | 'info' | 'none';
   error?: string | null;
   deviceInfo?: {
     firmwareVersion?: string | number | null;
@@ -272,9 +272,16 @@ export const getLinkedInsteonDevices = async () => {
 // Endpoint: GET /api/insteon/devices/linked/status
 // Request: {}
 // Response: InsteonLinkedDeviceStatusResponse
-export const queryLinkedInsteonDeviceStatus = async (): Promise<InsteonLinkedDeviceStatusResponse> => {
+export const queryLinkedInsteonDeviceStatus = async (params?: {
+  levelTimeoutMs?: number;
+  pingTimeoutMs?: number;
+  infoTimeoutMs?: number;
+  pauseBetweenMs?: number;
+}): Promise<InsteonLinkedDeviceStatusResponse> => {
   try {
-    const response = await api.get('/api/insteon/devices/linked/status');
+    const response = await api.get('/api/insteon/devices/linked/status', {
+      params: params || {}
+    });
     return response.data;
   } catch (error) {
     console.error('Query linked Insteon device status error:', error);

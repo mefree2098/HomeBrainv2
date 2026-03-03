@@ -314,6 +314,7 @@ test('queryLinkedDevicesStatus reports level status and info fallback reachabili
   const originalGetAllLinkedDevices = insteonService.getAllLinkedDevices;
   const originalGetPLMInfo = insteonService.getPLMInfo;
   const originalQueryDeviceLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalQueryDevicePingByAddress = insteonService._queryDevicePingByAddress;
   const originalQueryDeviceInfoByAddress = insteonService._queryDeviceInfoByAddress;
   const originalSleep = insteonService._sleep;
   const originalDeviceFind = Device.find;
@@ -324,6 +325,7 @@ test('queryLinkedDevicesStatus reports level status and info fallback reachabili
     insteonService.getAllLinkedDevices = originalGetAllLinkedDevices;
     insteonService.getPLMInfo = originalGetPLMInfo;
     insteonService._queryDeviceLevelByAddress = originalQueryDeviceLevelByAddress;
+    insteonService._queryDevicePingByAddress = originalQueryDevicePingByAddress;
     insteonService._queryDeviceInfoByAddress = originalQueryDeviceInfoByAddress;
     insteonService._sleep = originalSleep;
     Device.find = originalDeviceFind;
@@ -341,6 +343,9 @@ test('queryLinkedDevicesStatus reports level status and info fallback reachabili
       return 128;
     }
     throw new Error('NACK');
+  };
+  insteonService._queryDevicePingByAddress = async () => {
+    throw new Error('ping timeout');
   };
   insteonService._queryDeviceInfoByAddress = async () => ({
     firmwareVersion: '1.0',
@@ -371,12 +376,13 @@ test('queryLinkedDevicesStatus reports level status and info fallback reachabili
   assert.match(fallback.error, /status read unavailable/i);
 });
 
-test('queryLinkedDevicesStatus marks device unreachable when level and info both fail', async (t) => {
+test('queryLinkedDevicesStatus marks device reachable via ping when level query fails', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalGetAllLinkedDevices = insteonService.getAllLinkedDevices;
   const originalGetPLMInfo = insteonService.getPLMInfo;
   const originalQueryDeviceLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalQueryDevicePingByAddress = insteonService._queryDevicePingByAddress;
   const originalQueryDeviceInfoByAddress = insteonService._queryDeviceInfoByAddress;
   const originalSleep = insteonService._sleep;
   const originalDeviceFind = Device.find;
@@ -387,6 +393,65 @@ test('queryLinkedDevicesStatus marks device unreachable when level and info both
     insteonService.getAllLinkedDevices = originalGetAllLinkedDevices;
     insteonService.getPLMInfo = originalGetPLMInfo;
     insteonService._queryDeviceLevelByAddress = originalQueryDeviceLevelByAddress;
+    insteonService._queryDevicePingByAddress = originalQueryDevicePingByAddress;
+    insteonService._queryDeviceInfoByAddress = originalQueryDeviceInfoByAddress;
+    insteonService._sleep = originalSleep;
+    Device.find = originalDeviceFind;
+  });
+
+  let infoLookupCalls = 0;
+  insteonService.hub = {};
+  insteonService.isConnected = true;
+  insteonService.getAllLinkedDevices = async () => ([
+    { address: '445566', displayAddress: '44.55.66', group: 1, controller: false }
+  ]);
+  insteonService.getPLMInfo = async () => ({ deviceId: '010203', firmwareVersion: '9E' });
+  insteonService._queryDeviceLevelByAddress = async () => {
+    throw new Error('NACK');
+  };
+  insteonService._queryDevicePingByAddress = async () => ({
+    id: '445566',
+    command1: '0F',
+    command2: '00'
+  });
+  insteonService._queryDeviceInfoByAddress = async () => {
+    infoLookupCalls += 1;
+    throw new Error('should not be called when ping succeeds');
+  };
+  insteonService._sleep = async () => {};
+  Device.find = async () => [];
+
+  const result = await insteonService.queryLinkedDevicesStatus({ pauseBetweenMs: 0 });
+  assert.equal(result.success, true);
+  assert.equal(result.summary.linkedDevices, 1);
+  assert.equal(result.summary.reachable, 1);
+  assert.equal(result.summary.unreachable, 0);
+  assert.equal(result.summary.statusKnown, 0);
+  assert.equal(result.summary.statusUnknown, 1);
+  assert.equal(result.devices[0].respondedVia, 'ping');
+  assert.equal(result.devices[0].reachable, true);
+  assert.equal(result.devices[0].status, null);
+  assert.equal(infoLookupCalls, 0);
+});
+
+test('queryLinkedDevicesStatus marks device unreachable when level and info both fail', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalGetAllLinkedDevices = insteonService.getAllLinkedDevices;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalQueryDeviceLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalQueryDevicePingByAddress = insteonService._queryDevicePingByAddress;
+  const originalQueryDeviceInfoByAddress = insteonService._queryDeviceInfoByAddress;
+  const originalSleep = insteonService._sleep;
+  const originalDeviceFind = Device.find;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService.getAllLinkedDevices = originalGetAllLinkedDevices;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._queryDeviceLevelByAddress = originalQueryDeviceLevelByAddress;
+    insteonService._queryDevicePingByAddress = originalQueryDevicePingByAddress;
     insteonService._queryDeviceInfoByAddress = originalQueryDeviceInfoByAddress;
     insteonService._sleep = originalSleep;
     Device.find = originalDeviceFind;
@@ -400,6 +465,9 @@ test('queryLinkedDevicesStatus marks device unreachable when level and info both
   insteonService.getPLMInfo = async () => ({ deviceId: '010203', firmwareVersion: '9E' });
   insteonService._queryDeviceLevelByAddress = async () => {
     throw new Error('timeout');
+  };
+  insteonService._queryDevicePingByAddress = async () => {
+    throw new Error('ping timeout');
   };
   insteonService._queryDeviceInfoByAddress = async () => {
     throw new Error('no response');
@@ -415,6 +483,7 @@ test('queryLinkedDevicesStatus marks device unreachable when level and info both
   assert.equal(result.devices[0].respondedVia, 'none');
   assert.equal(result.devices[0].reachable, false);
   assert.match(result.devices[0].error, /level query failed/i);
+  assert.match(result.devices[0].error, /ping failed/i);
 });
 
 test('_resolveISYConnection ignores masked input password and falls back to stored password', async (t) => {
@@ -678,6 +747,23 @@ test('_parseISYTopologyPayload enables existing-scene checks by default', () => 
   });
 
   assert.equal(parsed.options.checkExistingSceneLinks, true);
+});
+
+test('_isISYInsteonNode accepts family 1 and excludes explicit non-insteon families', () => {
+  assert.equal(insteonService._isISYInsteonNode({
+    family: '1',
+    resolvedAddress: 'AA.BB.CC'
+  }), true);
+
+  assert.equal(insteonService._isISYInsteonNode({
+    family: '',
+    resolvedAddress: '11.22.33'
+  }), true);
+
+  assert.equal(insteonService._isISYInsteonNode({
+    family: '4',
+    resolvedAddress: '44.55.66'
+  }), false);
 });
 
 test('_isTopologySceneAlreadyLinked resolves gw controller using PLM id', async (t) => {

@@ -549,6 +549,46 @@ class InsteonService {
     return rawText.match(/\b(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{2}(?:[.\-:\s][0-9A-Fa-f]{2}){2})\b/g) || [];
   }
 
+  _isISYInsteonFamily(familyValue) {
+    const normalized = String(familyValue ?? '').trim().toLowerCase();
+    if (!normalized) {
+      // Older ISY nodes payloads may omit family; keep them eligible and rely on address validation.
+      return true;
+    }
+
+    if (['1', '01', 'insteon'].includes(normalized)) {
+      return true;
+    }
+
+    if (normalized.startsWith('insteon')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  _isISYInsteonNode(node = {}) {
+    if (!node || typeof node !== 'object') {
+      return false;
+    }
+
+    if (!this._isISYInsteonFamily(node.family)) {
+      return false;
+    }
+
+    const resolvedAddress = this._normalizePossibleInsteonAddress(
+      node.resolvedAddress
+      || node.normalizedAddress
+      || node.normalizedParent
+      || node.normalizedPnode
+      || node.address
+      || node.parent
+      || node.pnode
+    );
+
+    return Boolean(resolvedAddress);
+  }
+
   _parseISYImportPayload(payload = {}) {
     const request = payload && typeof payload === 'object' ? payload : {};
     const candidates = [];
@@ -1786,7 +1826,9 @@ class InsteonService {
     const nodeData = this._parseISYNodesXml(nodesXml);
     const basePrograms = this._parseISYProgramsXml(programsXml);
     const programs = await this._enrichISYProgramsWithDetails(connection, basePrograms);
-    const deviceIds = nodeData.devices
+    const insteonNodes = nodeData.devices.filter((node) => this._isISYInsteonNode(node));
+    const excludedNodes = nodeData.devices.length - insteonNodes.length;
+    const deviceIds = insteonNodes
       .map((device) => this._normalizePossibleInsteonAddress(
         device?.resolvedAddress
         || device?.normalizedAddress
@@ -1809,7 +1851,8 @@ class InsteonService {
         username: connection.username,
         passwordMasked: this._maskSecret(connection.password)
       },
-      devices: nodeData.devices,
+      devices: insteonNodes,
+      excludedNodes,
       groups: nodeData.groups,
       programs,
       networkResources,
@@ -1817,6 +1860,8 @@ class InsteonService {
       topologyScenes,
       counts: {
         nodes: nodeData.devices.length,
+        insteonNodes: insteonNodes.length,
+        excludedNonInsteonNodes: excludedNodes,
         groups: nodeData.groups.length,
         programs: programs.length,
         networkResources: networkResources.length,
@@ -3948,8 +3993,11 @@ class InsteonService {
 
     reportProgress('Connecting to ISY and extracting metadata', { stage: 'extract', progress: 5 });
     const extraction = await this.extractISYData(request);
+    const excludedNodeText = extraction?.counts?.excludedNonInsteonNodes
+      ? ` (${extraction.counts.excludedNonInsteonNodes} non-INSTEON nodes excluded)`
+      : '';
     reportProgress(
-      `Extraction complete: ${extraction.deviceIds.length} device IDs, ${extraction.topologyScenes.length} scenes, ${extraction.programs.length} programs`,
+      `Extraction complete: ${extraction.deviceIds.length} device IDs${excludedNodeText}, ${extraction.topologyScenes.length} scenes, ${extraction.programs.length} programs`,
       { stage: 'extract', progress: 25 }
     );
     const results = {
@@ -3962,7 +4010,9 @@ class InsteonService {
         host: extraction.connection.host,
         port: extraction.connection.port,
         useHttps: extraction.connection.useHttps,
-        nodes: extraction.devices.length,
+        nodes: extraction.counts?.nodes ?? extraction.devices.length,
+        insteonNodes: extraction.counts?.insteonNodes ?? extraction.devices.length,
+        excludedNonInsteonNodes: extraction.counts?.excludedNonInsteonNodes ?? 0,
         groups: extraction.groups.length,
         programs: extraction.programs.length,
         networkResources: extraction.networkResources.length,
@@ -3972,6 +4022,7 @@ class InsteonService {
       devices: null,
       topology: null,
       programs: null,
+      excludedNodes: extraction.excludedNodes || 0,
       errors: []
     };
 
@@ -4029,7 +4080,7 @@ class InsteonService {
           perDeviceTimeoutMs: request.perDeviceTimeoutMs,
           retries: request.retries,
           pauseBetweenMs: request.pauseBetweenMs,
-          checkExistingLinks: request.checkExistingLinks !== false,
+          checkExistingLinks: request.checkExistingLinks === true,
           skipLinking: request.skipLinking === true
         }, {
           onProgress: (entry) => reportProgress(entry?.message || 'Device replay update', {
@@ -5615,6 +5666,42 @@ class InsteonService {
     });
   }
 
+  async _queryDevicePingByAddress(address, timeoutMs = 3000) {
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const normalizedAddress = this._normalizeInsteonAddress(address);
+    const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 3000;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Timeout pinging ${this._formatInsteonAddress(normalizedAddress)}`));
+      }, timeoutValue);
+
+      try {
+        this.hub.ping(normalizedAddress, (error, response) => {
+          clearTimeout(timeout);
+
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          if (!response) {
+            reject(new Error(`No ping response from ${this._formatInsteonAddress(normalizedAddress)}`));
+            return;
+          }
+
+          resolve(response);
+        });
+      } catch (error) {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    });
+  }
+
   async queryLinkedDevicesStatus(payload = {}) {
     console.log('InsteonService: Querying linked PLM devices for live status');
 
@@ -5626,10 +5713,13 @@ class InsteonService {
       const request = payload && typeof payload === 'object' ? payload : {};
       const levelTimeoutMs = Number.isFinite(Number(request.levelTimeoutMs))
         ? Math.max(500, Number(request.levelTimeoutMs))
-        : 2500;
+        : 3000;
+      const pingTimeoutMs = Number.isFinite(Number(request.pingTimeoutMs))
+        ? Math.max(500, Number(request.pingTimeoutMs))
+        : 3000;
       const infoTimeoutMs = Number.isFinite(Number(request.infoTimeoutMs))
         ? Math.max(500, Number(request.infoTimeoutMs))
-        : 2500;
+        : 3000;
       const pauseBetweenMs = Number.isFinite(Number(request.pauseBetweenMs))
         ? Math.max(0, Number(request.pauseBetweenMs))
         : 120;
@@ -5725,22 +5815,31 @@ class InsteonService {
         } catch (levelError) {
           const levelMessage = levelError?.message || 'Unknown level-query error';
           try {
-            const info = await this._queryDeviceInfoByAddress(normalizedAddress, infoTimeoutMs);
+            await this._queryDevicePingByAddress(normalizedAddress, pingTimeoutMs);
             detail.reachable = true;
             detail.isOnline = true;
-            detail.respondedVia = 'info';
+            detail.respondedVia = 'ping';
             detail.error = `Status read unavailable via level query: ${levelMessage}`;
-            detail.deviceInfo = {
-              firmwareVersion: info?.firmwareVersion ?? null,
-              deviceCategory: info?.deviceCategory ?? null,
-              subcategory: info?.subcategory ?? null
-            };
-          } catch (infoError) {
-            const infoMessage = infoError?.message || 'Unknown info-query error';
-            detail.reachable = false;
-            detail.isOnline = false;
-            detail.respondedVia = 'none';
-            detail.error = `Level query failed: ${levelMessage}; info query failed: ${infoMessage}`;
+          } catch (pingError) {
+            const pingMessage = pingError?.message || 'Unknown ping-query error';
+            try {
+              const info = await this._queryDeviceInfoByAddress(normalizedAddress, infoTimeoutMs);
+              detail.reachable = true;
+              detail.isOnline = true;
+              detail.respondedVia = 'info';
+              detail.error = `Status read unavailable via level query: ${levelMessage}; ping failed: ${pingMessage}`;
+              detail.deviceInfo = {
+                firmwareVersion: info?.firmwareVersion ?? null,
+                deviceCategory: info?.deviceCategory ?? null,
+                subcategory: info?.subcategory ?? null
+              };
+            } catch (infoError) {
+              const infoMessage = infoError?.message || 'Unknown info-query error';
+              detail.reachable = false;
+              detail.isOnline = false;
+              detail.respondedVia = 'none';
+              detail.error = `Level query failed: ${levelMessage}; ping failed: ${pingMessage}; info query failed: ${infoMessage}`;
+            }
           }
         }
 
