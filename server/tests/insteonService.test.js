@@ -128,6 +128,114 @@ test('_normalizeInsteonInfoPayload maps home-controller info shape into stable f
   assert.equal(normalized.subcategory, 31);
 });
 
+test('_parseRuntimeCommand infers on/off state for incoming runtime events', () => {
+  const onCommand = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '11.22.33',
+      command1: '11',
+      command2: '80'
+    }
+  });
+  const offCommand = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '11.22.33',
+      command1: '13',
+      command2: '00'
+    }
+  });
+
+  assert.ok(onCommand);
+  assert.equal(onCommand.address, '112233');
+  assert.equal(onCommand.inferredState.status, true);
+  assert.equal(onCommand.inferredState.brightness, 50);
+  assert.ok(offCommand);
+  assert.equal(offCommand.inferredState.status, false);
+  assert.equal(offCommand.inferredState.brightness, 0);
+});
+
+test('_confirmDeviceStateByAddress retries level query and persists confirmed state', async (t) => {
+  const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalSleep = insteonService._sleep;
+
+  t.after(() => {
+    insteonService._queryDeviceLevelByAddress = originalQueryLevel;
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._sleep = originalSleep;
+  });
+
+  let queryCalls = 0;
+  let persistedPatch = null;
+
+  insteonService._queryDeviceLevelByAddress = async () => {
+    queryCalls += 1;
+    if (queryCalls === 1) {
+      throw new Error('temporary timeout');
+    }
+    return 255;
+  };
+  insteonService._persistDeviceRuntimeStateByAddress = async (_address, patch) => {
+    persistedPatch = patch;
+    return patch;
+  };
+  insteonService._sleep = async () => {};
+
+  const state = await insteonService._confirmDeviceStateByAddress('11.22.33', {
+    attempts: 2,
+    timeoutMs: 1000,
+    pauseBetweenMs: 0
+  });
+
+  assert.equal(queryCalls, 2);
+  assert.equal(state.status, true);
+  assert.equal(state.brightness, 100);
+  assert.ok(persistedPatch);
+  assert.equal(persistedPatch.status, true);
+  assert.equal(persistedPatch.brightness, 100);
+});
+
+test('turnOn issues normalized command address and returns confirmed state', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmDeviceStateByAddress;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmDeviceStateByAddress = originalConfirmState;
+  });
+
+  let hubAddress = null;
+  let hubLevel = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOn(address, level, callback) {
+      hubAddress = address;
+      hubLevel = level;
+      callback(null);
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    properties: { insteonAddress: '11.22.33' }
+  });
+  insteonService._confirmDeviceStateByAddress = async () => ({
+    status: true,
+    brightness: 68,
+    level: 173
+  });
+
+  const result = await insteonService.turnOn('mock-device', 68);
+  assert.equal(hubAddress, '112233');
+  assert.equal(hubLevel, 173);
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+  assert.equal(result.status, true);
+  assert.equal(result.brightness, 68);
+});
+
 test('importDevicesFromISY skips pre-link lookup when PLM id is unavailable', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;

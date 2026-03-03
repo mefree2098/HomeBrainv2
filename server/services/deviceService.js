@@ -6,6 +6,13 @@ const ecobeeService = require('./ecobeeService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+let cachedInsteonService = null;
+const getInsteonService = () => {
+  if (!cachedInsteonService) {
+    cachedInsteonService = require('./insteonService');
+  }
+  return cachedInsteonService;
+};
 
 class DeviceService {
   constructor() {
@@ -248,6 +255,7 @@ class DeviceService {
       const isSmartThings = this.isSmartThingsDevice(device);
       const isHarmony = this.isHarmonyDevice(device);
       const isEcobee = this.isEcobeeDevice(device);
+      const isInsteon = this.isInsteonDevice(device);
 
       if (isSmartThings) {
         await this.ensureSmartThingsState({ immediate: true });
@@ -285,9 +293,18 @@ class DeviceService {
             const harmonyHubIp = device?.properties?.harmonyHubIp || 'unknown-hub';
             console.warn(`DeviceService: Harmony activity on hub ${harmonyHubIp} still reports offline; attempting command anyway`);
           }
+        } else if (isInsteon) {
+          const insteonAddress = device?.properties?.insteonAddress || 'unknown-device';
+          console.warn(`DeviceService: Insteon device ${insteonAddress} reports offline; attempting command anyway`);
         } else {
           throw new Error('Device is offline and cannot be controlled');
         }
+      }
+
+      if (isInsteon) {
+        const updatedDevice = await this.controlInsteonDevice(device, normalizedAction, value);
+        console.log('DeviceService: Successfully controlled device:', updatedDevice?.name || device.name, 'action:', action);
+        return updatedDevice;
       }
 
       const updateData = { lastSeen: new Date() };
@@ -697,6 +714,11 @@ class DeviceService {
       && !!device?.properties?.smartThingsDeviceId;
   }
 
+  isInsteonDevice(device) {
+    const source = (device?.properties?.source || '').toString().toLowerCase();
+    return source === 'insteon' && !!device?.properties?.insteonAddress;
+  }
+
   isHarmonyDevice(device) {
     const source = (device?.properties?.source || '').toString().toLowerCase();
     return source === 'harmony' &&
@@ -757,6 +779,62 @@ class DeviceService {
       saturation: Math.round(saturation * 100),
       level: Math.round(value * 100)
     };
+  }
+
+  async controlInsteonDevice(device, normalizedAction, value) {
+    const insteonAddress = device?.properties?.insteonAddress;
+    if (!insteonAddress) {
+      throw new Error('Insteon address is not configured for this device');
+    }
+
+    const insteonService = getInsteonService();
+    const deviceId = device?._id?.toString ? device._id.toString() : String(device._id);
+    const persistedBrightness = Number(device?.brightness);
+    const fallbackBrightness = Number.isFinite(persistedBrightness) && persistedBrightness > 0
+      ? Math.max(0, Math.min(100, Math.round(persistedBrightness)))
+      : 100;
+
+    switch (normalizedAction) {
+      case 'toggle':
+        if (device.status) {
+          await insteonService.turnOff(deviceId);
+        } else {
+          await insteonService.turnOn(deviceId, fallbackBrightness);
+        }
+        break;
+
+      case 'turnon': {
+        const requestedBrightness = Number(value);
+        const brightness = Number.isFinite(requestedBrightness)
+          ? Math.max(0, Math.min(100, Math.round(requestedBrightness)))
+          : fallbackBrightness;
+        await insteonService.turnOn(deviceId, brightness);
+        break;
+      }
+
+      case 'turnoff':
+        await insteonService.turnOff(deviceId);
+        break;
+
+      case 'setbrightness': {
+        const numericBrightness = Number(value);
+        if (!Number.isFinite(numericBrightness) || numericBrightness < 0 || numericBrightness > 100) {
+          throw new Error('Brightness must be between 0 and 100');
+        }
+        await insteonService.setBrightness(deviceId, Math.round(numericBrightness));
+        break;
+      }
+
+      default:
+        throw new Error('Insteon devices support only toggle, turn_on, turn_off, and set_brightness actions');
+    }
+
+    const refreshedDevice = await Device.findById(device._id);
+    if (!refreshedDevice) {
+      throw new Error('Device not found');
+    }
+
+    return refreshedDevice;
   }
 
   async refreshHarmonyOnlineStatus(device) {

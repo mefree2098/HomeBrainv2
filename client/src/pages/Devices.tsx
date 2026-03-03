@@ -404,6 +404,11 @@ export function Devices() {
     }, 1800)
   }, [])
 
+  const isInsteonSourceDevice = useCallback((device: any) => {
+    const source = (device?.properties?.source || '').toString().toLowerCase()
+    return source === 'insteon' && !!device?.properties?.insteonAddress
+  }, [])
+
   const applyControlOptimistically = useCallback((deviceId: string, action: string, value?: number | string) => {
     const normalizedMode = normalizeThermostatMode(value)
     const applyToDevice = (device: any) => {
@@ -474,6 +479,11 @@ export function Devices() {
     }
 
     const normalized = { ...updatedDevice }
+    const isInsteon = isInsteonSourceDevice(updatedDevice)
+
+    if (isInsteon) {
+      return normalized
+    }
 
     if (action === 'turn_on') {
       normalized.status = true
@@ -506,7 +516,7 @@ export function Devices() {
     }
 
     return normalized
-  }, [])
+  }, [isInsteonSourceDevice])
 
   const renderControlFeedback = (device: any) => {
     const pending = !!pendingControls[device._id]
@@ -549,7 +559,10 @@ export function Devices() {
       delete next[deviceId]
       return next
     })
-    applyControlOptimistically(deviceId, action, value)
+    const targetDevice = devices.find((device: any) => device?._id === deviceId)
+    if (!isInsteonSourceDevice(targetDevice)) {
+      applyControlOptimistically(deviceId, action, value)
+    }
 
     try {
       console.log('Controlling device:', { deviceId, action, value })
