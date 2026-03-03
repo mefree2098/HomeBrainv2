@@ -188,6 +188,63 @@ test('importDevicesFromISY skips pre-link lookup when PLM id is unavailable', as
   assert.match(result.warnings[0], /PLM device ID unavailable/i);
 });
 
+test('importDevicesFromISY sanitizes malformed parsed entries instead of aborting import', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalParse = insteonService._parseISYImportPayload;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalLinkDeviceRemote = insteonService._linkDeviceRemote;
+  const originalGetDeviceInfo = insteonService.getDeviceInfo;
+  const originalUpsertInsteonDevice = insteonService._upsertInsteonDevice;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService._parseISYImportPayload = originalParse;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._linkDeviceRemote = originalLinkDeviceRemote;
+    insteonService.getDeviceInfo = originalGetDeviceInfo;
+    insteonService._upsertInsteonDevice = originalUpsertInsteonDevice;
+  });
+
+  insteonService.hub = {};
+  insteonService.isConnected = true;
+  insteonService._parseISYImportPayload = () => ({
+    devices: [
+      { address: '11.22.33', displayAddress: '11.22.33', name: 'Good Device' },
+      { address: undefined, displayAddress: null, name: 'Broken Device' }
+    ],
+    invalidEntries: [],
+    duplicateCount: 0,
+    options: {
+      group: 10,
+      linkMode: 'remote',
+      timeoutMs: 5000,
+      pauseBetweenMs: 0,
+      retries: 0,
+      skipLinking: false,
+      checkExistingLinks: false
+    }
+  });
+  insteonService.getPLMInfo = async () => ({ firmwareVersion: '9E', deviceId: null });
+  insteonService._linkDeviceRemote = async () => ({});
+  insteonService.getDeviceInfo = async () => ({ deviceCategory: 1, subcategory: 0, firmwareVersion: '9E' });
+  insteonService._upsertInsteonDevice = async () => ({
+    action: 'created',
+    device: { _id: 'mock-device-id' }
+  });
+
+  const result = await insteonService.importDevicesFromISY({});
+
+  assert.equal(result.success, true);
+  assert.equal(result.accepted, 1);
+  assert.equal(result.invalid, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(result.imported, 1);
+  assert.equal(result.devices.length, 1);
+  assert.match(result.invalidEntries[0].reason, /Invalid INSTEON address/i);
+});
+
 test('queryLinkedDevicesStatus reports level status and info fallback reachability', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
@@ -472,6 +529,22 @@ test('_parseISYImportPayload parses and deduplicates mixed payload formats', () 
   assert.equal(parsed.duplicateCount, 2);
   assert.equal(parsed.options.group, 2);
   assert.equal(parsed.options.retries, 0);
+});
+
+test('_parseISYImportPayload accepts ISY node object variants with resolved/normalized addresses', () => {
+  const parsed = insteonService._parseISYImportPayload({
+    devices: [
+      { resolvedAddress: 'AA.BB.CC', name: 'Kitchen' },
+      { normalizedAddress: '112233', displayName: 'Hallway' },
+      { properties: { insteonAddress: '44-55-66' } }
+    ]
+  });
+
+  assert.equal(parsed.devices.length, 3);
+  assert.equal(parsed.devices[0].address, 'AABBCC');
+  assert.equal(parsed.devices[1].address, '112233');
+  assert.equal(parsed.devices[2].address, '445566');
+  assert.equal(parsed.invalidEntries.length, 0);
 });
 
 test('_parseISYImportPayload rejects out-of-range group values', () => {

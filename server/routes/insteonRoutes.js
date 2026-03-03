@@ -189,6 +189,51 @@ router.post('/isy/extract', async (req, res) => {
 // Endpoint: POST /api/insteon/isy/sync
 // Request: { dryRun?: boolean, importDevices?: boolean, importTopology?: boolean, importPrograms?: boolean, enableProgramWorkflows?: boolean, connection?: {...}, linkMode?: 'remote'|'manual' }
 // Response: { success: boolean, dryRun: boolean, extractedCounts: object, devices?: object, topology?: object, programs?: object }
+router.post('/isy/sync/start', async (req, res) => {
+  console.log('InsteonRoutes: Starting async ISY sync workflow');
+
+  try {
+    const run = insteonService.startISYSyncRun(req.body || {});
+    res.status(202).json({
+      success: true,
+      runId: run.id,
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to start async ISY sync:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+router.get('/isy/sync/runs/:runId', async (req, res) => {
+  const runId = req.params?.runId;
+  try {
+    const run = insteonService.getISYSyncRun(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: `ISY sync run "${runId}" was not found`
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to fetch ISY sync run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 router.post('/isy/sync', async (req, res) => {
   console.log('InsteonRoutes: Running ISY sync workflow');
 

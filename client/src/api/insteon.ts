@@ -105,6 +105,34 @@ export interface InsteonIsySyncPayload extends InsteonIsyConnectionPayload {
   pauseBetweenScenesMs?: number;
 }
 
+export interface InsteonIsySyncRunLogEntry {
+  timestamp?: string;
+  message?: string;
+  stage?: string | null;
+  level?: 'info' | 'warn' | 'error';
+  progress?: number | null;
+}
+
+export interface InsteonIsySyncRunSnapshot {
+  id: string;
+  status: 'running' | 'completed' | 'completed_with_errors' | 'failed';
+  createdAt?: string;
+  updatedAt?: string;
+  finishedAt?: string | null;
+  request?: {
+    dryRun?: boolean;
+    importDevices?: boolean;
+    importTopology?: boolean;
+    importPrograms?: boolean;
+    enableProgramWorkflows?: boolean;
+    continueOnError?: boolean;
+    linkMode?: 'remote' | 'manual';
+  };
+  logs?: InsteonIsySyncRunLogEntry[];
+  result?: any;
+  error?: string | null;
+}
+
 export interface InsteonLinkedDeviceStatusEntry {
   address?: string | null;
   displayAddress?: string;
@@ -331,6 +359,34 @@ export const syncInsteonFromISY = async (payload: InsteonIsySyncPayload = {}) =>
     return response.data;
   } catch (error) {
     console.error('Sync from ISY error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Start asynchronous ISY sync run and return a run id for live polling
+// Endpoint: POST /api/insteon/isy/sync/start
+// Request: InsteonIsySyncPayload
+// Response: { success: boolean, runId: string, run: InsteonIsySyncRunSnapshot }
+export const startInsteonIsySyncRun = async (payload: InsteonIsySyncPayload = {}) => {
+  try {
+    const response = await api.post('/api/insteon/isy/sync/start', payload || {});
+    return response.data as { success: boolean; runId: string; run: InsteonIsySyncRunSnapshot };
+  } catch (error) {
+    console.error('Start ISY sync run error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Fetch asynchronous ISY sync run status/logs/result
+// Endpoint: GET /api/insteon/isy/sync/runs/:runId
+// Request: {}
+// Response: { success: boolean, run: InsteonIsySyncRunSnapshot }
+export const getInsteonIsySyncRun = async (runId: string) => {
+  try {
+    const response = await api.get(`/api/insteon/isy/sync/runs/${encodeURIComponent(runId)}`);
+    return response.data as { success: boolean; run: InsteonIsySyncRunSnapshot };
+  } catch (error) {
+    console.error('Get ISY sync run error:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };

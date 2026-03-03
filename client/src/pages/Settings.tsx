@@ -99,7 +99,10 @@ import {
   testInsteonISYConnection,
   extractInsteonISYData,
   syncInsteonFromISY,
-  type InsteonLinkedDeviceStatusResponse
+  startInsteonIsySyncRun,
+  getInsteonIsySyncRun,
+  type InsteonLinkedDeviceStatusResponse,
+  type InsteonIsySyncRunLogEntry
 } from "@/api/insteon"
 import { useNavigate } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
@@ -206,6 +209,9 @@ export function Settings() {
   const [isyTestResult, setIsyTestResult] = useState<any>(null)
   const [isyExtractionResult, setIsyExtractionResult] = useState<any>(null)
   const [isyMigrationResult, setIsyMigrationResult] = useState<any>(null)
+  const [isyMigrationRunId, setIsyMigrationRunId] = useState<string | null>(null)
+  const [isyMigrationRunStatus, setIsyMigrationRunStatus] = useState<string | null>(null)
+  const [isyMigrationRunLogs, setIsyMigrationRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
   const [isyMigrationOptions, setIsyMigrationOptions] = useState<{
     importDevices: boolean;
     importTopology: boolean;
@@ -1148,6 +1154,23 @@ export function Settings() {
     return true
   }
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  const formatIsyRunStatusLabel = (status: string | null | undefined) => {
+    switch ((status || "").toLowerCase()) {
+      case "running":
+        return "Running"
+      case "completed":
+        return "Completed"
+      case "completed_with_errors":
+        return "Completed With Errors"
+      case "failed":
+        return "Failed"
+      default:
+        return status || "Unknown"
+    }
+  }
+
   const handlePreviewIsyMigration = async () => {
     if (!validateIsyMigrationSelection()) {
       return
@@ -1192,8 +1215,11 @@ export function Settings() {
     }
 
     setRunningIsyMigration(true)
+    setIsyMigrationRunId(null)
+    setIsyMigrationRunStatus("running")
+    setIsyMigrationRunLogs([])
     try {
-      const response = await syncInsteonFromISY({
+      const startResponse = await startInsteonIsySyncRun({
         ...buildIsyConnectionPayload(),
         dryRun: false,
         importDevices: isyMigrationOptions.importDevices,
@@ -1203,12 +1229,75 @@ export function Settings() {
         continueOnError: isyMigrationOptions.continueOnError,
         linkMode: isyMigrationOptions.linkMode
       })
-      setIsyMigrationResult(response)
-      toast({
-        title: response?.success ? "ISY migration completed" : "ISY migration completed with errors",
-        description: response?.message || "Migration run finished. Review the summary below.",
-        variant: response?.success ? "default" : "destructive"
-      })
+
+      const runId = startResponse?.runId || startResponse?.run?.id
+      if (!runId) {
+        throw new Error("Migration run started but no run id was returned by the server.")
+      }
+
+      setIsyMigrationRunId(runId)
+      if (Array.isArray(startResponse?.run?.logs)) {
+        setIsyMigrationRunLogs(startResponse.run.logs)
+      }
+      if (startResponse?.run?.status) {
+        setIsyMigrationRunStatus(startResponse.run.status)
+      }
+
+      const pollingStartedAt = Date.now()
+      const maxPollDurationMs = 1000 * 60 * 30 // 30 minutes
+      let consecutivePollFailures = 0
+
+      while (true) {
+        if (Date.now() - pollingStartedAt > maxPollDurationMs) {
+          throw new Error("Migration is still running, but log polling timed out. Refresh to continue monitoring.")
+        }
+
+        try {
+          const statusResponse = await getInsteonIsySyncRun(runId)
+          const run = statusResponse?.run
+          if (!run) {
+            throw new Error("Migration run status response did not include a run snapshot.")
+          }
+
+          consecutivePollFailures = 0
+          setIsyMigrationRunStatus(run.status || null)
+          setIsyMigrationRunLogs(Array.isArray(run.logs) ? run.logs : [])
+
+          const isTerminal = run.status === "completed"
+            || run.status === "completed_with_errors"
+            || run.status === "failed"
+
+          if (isTerminal) {
+            if (run.result) {
+              setIsyMigrationResult(run.result)
+            }
+
+            if (run.status === "failed") {
+              toast({
+                title: "ISY migration failed",
+                description: run.error || "Migration run failed.",
+                variant: "destructive"
+              })
+            } else {
+              const result = run.result || {}
+              toast({
+                title: result?.success ? "ISY migration completed" : "ISY migration completed with errors",
+                description: result?.message || "Migration run finished. Review the summary and log below.",
+                variant: result?.success ? "default" : "destructive"
+              })
+            }
+
+            break
+          }
+        } catch (pollError: any) {
+          consecutivePollFailures += 1
+          if (consecutivePollFailures >= 5) {
+            throw new Error(pollError?.message || "Failed to poll migration log updates.")
+          }
+        }
+
+        await sleep(1000)
+      }
     } catch (error: any) {
       const message = error?.message || "ISY migration failed."
       toast({
@@ -3011,6 +3100,44 @@ export function Settings() {
                       )}
                     </Button>
                   </div>
+
+                  {(runningIsyMigration || isyMigrationRunLogs.length > 0) && (
+                    <div className="rounded-md border border-violet-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-medium">Migration run log</p>
+                        <p className="text-muted-foreground">
+                          Status: {formatIsyRunStatusLabel(isyMigrationRunStatus)}
+                          {isyMigrationRunId ? ` • Run ${isyMigrationRunId.slice(0, 8)}` : ""}
+                        </p>
+                      </div>
+                      <div className="max-h-64 overflow-y-auto rounded border border-violet-200/70 bg-slate-950/85 p-2 font-mono text-[11px] leading-5 text-slate-100 dark:border-violet-900/60">
+                        {isyMigrationRunLogs.length > 0 ? (
+                          isyMigrationRunLogs.map((entry, index) => {
+                            const timestampText = entry?.timestamp
+                              ? new Date(entry.timestamp).toLocaleTimeString()
+                              : "--:--:--"
+                            const stageText = entry?.stage ? `[${entry.stage}] ` : ""
+                            const levelClass = entry?.level === "error"
+                              ? "text-red-300"
+                              : entry?.level === "warn"
+                                ? "text-amber-300"
+                                : "text-slate-100"
+
+                            return (
+                              <p key={`isy-migration-log-${index}`} className={levelClass}>
+                                <span className="text-slate-400">[{timestampText}]</span> {stageText}{entry?.message || "No message"}
+                              </p>
+                            )
+                          })
+                        ) : (
+                          <p className="text-slate-400">Waiting for migration log output...</p>
+                        )}
+                      </div>
+                      <p className="text-muted-foreground">
+                        Log updates refresh every second while the migration run is active.
+                      </p>
+                    </div>
+                  )}
 
                   {isyTestResult && (
                     <div className={`rounded-md border p-3 text-xs ${isyTestResult.success ? "border-green-200 bg-green-50/70 dark:border-green-900/60 dark:bg-green-900/20" : "border-red-200 bg-red-50/70 dark:border-red-900/60 dark:bg-red-900/20"}`}>
