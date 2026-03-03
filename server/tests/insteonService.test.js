@@ -766,6 +766,121 @@ test('_isISYInsteonNode accepts family 1 and excludes explicit non-insteon famil
   }), false);
 });
 
+test('_buildISYDeviceReplayList deduplicates addresses and keeps friendly names', () => {
+  const replayList = insteonService._buildISYDeviceReplayList([
+    {
+      address: '31.41.0F.1',
+      resolvedAddress: '31.41.0F',
+      name: '31.41.0F.1'
+    },
+    {
+      address: '31.41.0F',
+      resolvedAddress: '31.41.0F',
+      name: 'Kitchen Main'
+    },
+    {
+      address: 'AA.BB.CC',
+      resolvedAddress: 'AA.BB.CC',
+      name: 'Hall Light'
+    }
+  ]);
+
+  assert.equal(replayList.length, 2);
+  const keypad = replayList.find((entry) => entry.address === '31410F');
+  const hall = replayList.find((entry) => entry.address === 'AABBCC');
+  assert.ok(keypad);
+  assert.ok(hall);
+  assert.equal(keypad.name, 'Kitchen Main');
+  assert.equal(hall.name, 'Hall Light');
+});
+
+test('syncFromISY passes extracted device names into device replay payload', async (t) => {
+  const originalExtractISYData = insteonService.extractISYData;
+  const originalImportDevicesFromISY = insteonService.importDevicesFromISY;
+  const originalApplyISYSceneTopology = insteonService.applyISYSceneTopology;
+  const originalImportPrograms = insteonService.importISYProgramsAsWorkflows;
+
+  t.after(() => {
+    insteonService.extractISYData = originalExtractISYData;
+    insteonService.importDevicesFromISY = originalImportDevicesFromISY;
+    insteonService.applyISYSceneTopology = originalApplyISYSceneTopology;
+    insteonService.importISYProgramsAsWorkflows = originalImportPrograms;
+  });
+
+  let capturedPayload = null;
+  insteonService.extractISYData = async () => ({
+    connection: {
+      host: '192.168.1.11',
+      port: 80,
+      useHttps: false,
+      ignoreTlsErrors: true,
+      username: 'admin',
+      passwordMasked: '******'
+    },
+    devices: [
+      { address: '31.41.0F.1', resolvedAddress: '31.41.0F', name: '31.41.0F.1', family: '1' },
+      { address: '31.41.0F', resolvedAddress: '31.41.0F', name: 'Kitchen Main', family: '1' },
+      { address: 'AA.BB.CC', resolvedAddress: 'AA.BB.CC', name: 'Hall Light', family: '1' }
+    ],
+    excludedNodes: 0,
+    groups: [],
+    programs: [],
+    networkResources: [],
+    deviceIds: ['31410F', 'AABBCC'],
+    topologyScenes: [],
+    counts: {
+      nodes: 3,
+      insteonNodes: 3,
+      excludedNonInsteonNodes: 0,
+      groups: 0,
+      programs: 0,
+      networkResources: 0,
+      programsWithLogicBlocks: 0,
+      uniqueDeviceIds: 2,
+      topologyScenes: 0
+    }
+  });
+  insteonService.importDevicesFromISY = async (payload) => {
+    capturedPayload = payload;
+    return {
+      success: true,
+      accepted: 2,
+      linked: 2,
+      linkWriteAttempts: 2,
+      linkWriteSucceeded: 2,
+      linkWriteFailed: 0,
+      failed: 0,
+      imported: 2,
+      updated: 0
+    };
+  };
+  insteonService.applyISYSceneTopology = async () => {
+    throw new Error('applyISYSceneTopology should not be called in this test');
+  };
+  insteonService.importISYProgramsAsWorkflows = async () => {
+    throw new Error('importISYProgramsAsWorkflows should not be called in this test');
+  };
+
+  const result = await insteonService.syncFromISY({
+    dryRun: false,
+    importDevices: true,
+    importTopology: false,
+    importPrograms: false
+  });
+
+  assert.equal(result.success, true);
+  assert.ok(capturedPayload);
+  assert.equal(Array.isArray(capturedPayload.devices), true);
+  assert.equal(capturedPayload.devices.length, 2);
+  const keypad = capturedPayload.devices.find((entry) => entry.address === '31410F');
+  const hall = capturedPayload.devices.find((entry) => entry.address === 'AABBCC');
+  assert.ok(keypad);
+  assert.ok(hall);
+  assert.equal(keypad.name, 'Kitchen Main');
+  assert.equal(hall.name, 'Hall Light');
+  assert.equal(capturedPayload.checkExistingLinks, false);
+});
+
 test('_isTopologySceneAlreadyLinked resolves gw controller using PLM id', async (t) => {
   const originalHasResponderLink = insteonService._deviceHasResponderLinkToController;
 
