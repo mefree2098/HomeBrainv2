@@ -245,6 +245,69 @@ test('importDevicesFromISY sanitizes malformed parsed entries instead of abortin
   assert.match(result.invalidEntries[0].reason, /Invalid INSTEON address/i);
 });
 
+test('importDevicesFromISY uses fallback metadata when device info lookup times out', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalParse = insteonService._parseISYImportPayload;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalLinkDeviceRemote = insteonService._linkDeviceRemote;
+  const originalGetDeviceInfo = insteonService.getDeviceInfo;
+  const originalUpsertInsteonDevice = insteonService._upsertInsteonDevice;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService._parseISYImportPayload = originalParse;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._linkDeviceRemote = originalLinkDeviceRemote;
+    insteonService.getDeviceInfo = originalGetDeviceInfo;
+    insteonService._upsertInsteonDevice = originalUpsertInsteonDevice;
+  });
+
+  let capturedInfo;
+  insteonService.hub = {};
+  insteonService.isConnected = true;
+  insteonService._parseISYImportPayload = () => ({
+    devices: [{ address: '11.22.33', displayAddress: '11.22.33', name: 'Slow Device' }],
+    invalidEntries: [],
+    duplicateCount: 0,
+    options: {
+      group: 10,
+      linkMode: 'remote',
+      timeoutMs: 5000,
+      pauseBetweenMs: 0,
+      retries: 0,
+      skipLinking: false,
+      checkExistingLinks: false
+    }
+  });
+  insteonService.getPLMInfo = async () => ({ firmwareVersion: '9E', deviceId: null });
+  insteonService._linkDeviceRemote = async () => ({});
+  insteonService.getDeviceInfo = async () => {
+    throw new Error('Timeout getting device info');
+  };
+  insteonService._upsertInsteonDevice = async (payload) => {
+    capturedInfo = payload.deviceInfo;
+    return {
+      action: 'created',
+      device: { _id: 'mock-device-id' }
+    };
+  };
+
+  const result = await insteonService.importDevicesFromISY({});
+
+  assert.equal(result.success, true);
+  assert.equal(result.failed, 0);
+  assert.equal(result.imported, 1);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.devices.length, 1);
+  assert.equal(result.devices[0].infoStatus, 'fallback');
+  assert.ok(capturedInfo);
+  assert.equal(capturedInfo.deviceCategory, 0);
+  assert.equal(capturedInfo.subcategory, 0);
+  assert.equal(capturedInfo.firmwareVersion, 'Unknown');
+});
+
 test('queryLinkedDevicesStatus reports level status and info fallback reachability', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
