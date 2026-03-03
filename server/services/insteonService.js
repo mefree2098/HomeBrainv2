@@ -1549,6 +1549,41 @@ class InsteonService {
     }
   }
 
+  _isHttp404Error(error) {
+    return /HTTP 404/i.test(String(error?.message || ''));
+  }
+
+  async _probeISYConnection(connection) {
+    const probePaths = [
+      '/rest/ping',
+      '/rest/config',
+      '/rest/nodes?members=false',
+      '/rest/nodes'
+    ];
+
+    let lastError = null;
+    for (const probePath of probePaths) {
+      try {
+        await this._requestISYResource(connection, probePath);
+        return {
+          path: probePath,
+          usedFallback: probePath !== '/rest/ping'
+        };
+      } catch (error) {
+        lastError = error;
+        if (!this._isHttp404Error(error)) {
+          throw error;
+        }
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
+
+    throw new Error('Unable to validate ISY REST connectivity');
+  }
+
   _mergeISYProgramDetail(baseProgram, detailProgram) {
     if (!detailProgram || typeof detailProgram !== 'object') {
       return baseProgram;
@@ -3568,11 +3603,14 @@ class InsteonService {
   async testISYConnection(payload = {}) {
     try {
       const connection = await this._resolveISYConnection(payload);
-      await this._requestISYResource(connection, '/rest/ping');
+      const probe = await this._probeISYConnection(connection);
+      const message = probe.usedFallback
+        ? `ISY connection successful (validated via ${probe.path}; /rest/ping not available on this ISY)`
+        : 'ISY connection successful';
 
       return {
         success: true,
-        message: 'ISY connection successful',
+        message,
         connection: {
           host: connection.host,
           port: connection.port,

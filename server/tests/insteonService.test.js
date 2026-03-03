@@ -170,6 +170,45 @@ test('_resolveISYConnection surfaces masked stored-password corruption clearly',
   );
 });
 
+test('_probeISYConnection falls back when /rest/ping returns HTTP 404', async (t) => {
+  const originalRequestISYResource = insteonService._requestISYResource;
+
+  t.after(() => {
+    insteonService._requestISYResource = originalRequestISYResource;
+  });
+
+  const requestedPaths = [];
+  insteonService._requestISYResource = async (_connection, path) => {
+    requestedPaths.push(path);
+    if (path === '/rest/ping') {
+      throw new Error('ISY request failed for /rest/ping: HTTP 404');
+    }
+    return '<ok />';
+  };
+
+  const probe = await insteonService._probeISYConnection({});
+  assert.equal(probe.path, '/rest/config');
+  assert.equal(probe.usedFallback, true);
+  assert.deepEqual(requestedPaths, ['/rest/ping', '/rest/config']);
+});
+
+test('_probeISYConnection does not swallow non-404 errors', async (t) => {
+  const originalRequestISYResource = insteonService._requestISYResource;
+
+  t.after(() => {
+    insteonService._requestISYResource = originalRequestISYResource;
+  });
+
+  insteonService._requestISYResource = async () => {
+    throw new Error('ISY request failed for /rest/ping: HTTP 401');
+  };
+
+  await assert.rejects(
+    insteonService._probeISYConnection({}),
+    /HTTP 401/i
+  );
+});
+
 test('_isLocalSerialBridgeActive returns true only for live bridge process', (t) => {
   const originalBridge = insteonService._localSerialBridge;
 
