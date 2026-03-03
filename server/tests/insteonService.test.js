@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const Settings = require('../models/Settings');
 
 const insteonService = require('../services/insteonService');
 
@@ -104,6 +105,69 @@ test('_buildSerialTransportUnavailableMessage includes bridge fallback errors', 
     new Error('bridge startup failed')
   );
   assert.match(message, /bridge startup failed/i);
+});
+
+test('_isMaskedSecretValue detects masked placeholders', () => {
+  assert.equal(insteonService._isMaskedSecretValue('********abcd'), true);
+  assert.equal(insteonService._isMaskedSecretValue('••••••••••••'), true);
+  assert.equal(insteonService._isMaskedSecretValue('real-password-123'), false);
+});
+
+test('_resolveISYConnection ignores masked input password and falls back to stored password', async (t) => {
+  const originalGetSettings = Settings.getSettings;
+
+  t.after(() => {
+    Settings.getSettings = originalGetSettings;
+  });
+
+  Settings.getSettings = async () => ({
+    isyHost: '192.168.1.11',
+    isyPort: 80,
+    isyUsername: 'admin',
+    isyPassword: 'actual-secret',
+    isyUseHttps: false,
+    isyIgnoreTlsErrors: true
+  });
+
+  const resolved = await insteonService._resolveISYConnection({
+    isyHost: '192.168.1.11',
+    isyPort: 80,
+    isyUsername: 'admin',
+    isyPassword: '********cret',
+    isyUseHttps: false
+  });
+
+  assert.equal(resolved.password, 'actual-secret');
+  assert.equal(resolved.host, '192.168.1.11');
+  assert.equal(resolved.port, 80);
+  assert.equal(resolved.useHttps, false);
+});
+
+test('_resolveISYConnection surfaces masked stored-password corruption clearly', async (t) => {
+  const originalGetSettings = Settings.getSettings;
+
+  t.after(() => {
+    Settings.getSettings = originalGetSettings;
+  });
+
+  Settings.getSettings = async () => ({
+    isyHost: '192.168.1.11',
+    isyPort: 80,
+    isyUsername: 'admin',
+    isyPassword: '********abcd',
+    isyUseHttps: false,
+    isyIgnoreTlsErrors: true
+  });
+
+  await assert.rejects(
+    insteonService._resolveISYConnection({
+      isyHost: '192.168.1.11',
+      isyPort: 80,
+      isyUsername: 'admin',
+      isyUseHttps: false
+    }),
+    /stored isy password appears masked/i
+  );
 });
 
 test('_isLocalSerialBridgeActive returns true only for live bridge process', (t) => {

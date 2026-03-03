@@ -134,6 +134,29 @@ type InsteonPlmConnectionTestResult = {
   };
 }
 
+const CONFIGURED_SECRET_PLACEHOLDER = "••••••••••••••••••••••••••••••••••••••••••••••••••";
+
+const isMaskedSecretPlaceholder = (value: unknown): boolean => {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (trimmed.startsWith("••••") || trimmed.startsWith("****")) {
+    return true;
+  }
+
+  if (/^[*•]+$/.test(trimmed)) {
+    return true;
+  }
+
+  return /^[*•]{4,}[^*•\s]+$/.test(trimmed);
+}
+
 export function Settings() {
   const { toast } = useToast()
   const navigate = useNavigate()
@@ -447,9 +470,9 @@ export function Settings() {
             if (value !== undefined) {
               // For masked sensitive fields, show a placeholder indicating key is configured
               if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey' || key === 'isyPassword') &&
-                  typeof value === 'string' && value.includes('*')) {
+                  isMaskedSecretPlaceholder(value)) {
                 console.log(`Found masked field: ${key}, showing placeholder`);
-                setValue(key, '••••••••••••••••••••••••••••••••••••••••••••••••••'); // Placeholder to show key is configured
+                setValue(key, CONFIGURED_SECRET_PLACEHOLDER); // Placeholder to show key is configured
                 return;
               }
               setValue(key, value);
@@ -821,22 +844,22 @@ export function Settings() {
       
       // Don't send placeholder values to backend - preserve existing sensitive fields
       const settingsToSave = { ...data };
-      if (settingsToSave.elevenlabsApiKey && settingsToSave.elevenlabsApiKey.startsWith('••••')) {
+      if (isMaskedSecretPlaceholder(settingsToSave.elevenlabsApiKey)) {
         delete settingsToSave.elevenlabsApiKey; // Don't update if it's just the placeholder
       }
-      if (settingsToSave.smartthingsToken && settingsToSave.smartthingsToken.startsWith('••••')) {
+      if (isMaskedSecretPlaceholder(settingsToSave.smartthingsToken)) {
         delete settingsToSave.smartthingsToken; // Don't update if it's just the placeholder
       }
-      if (settingsToSave.smartthingsClientSecret && settingsToSave.smartthingsClientSecret.startsWith('••••')) {
+      if (isMaskedSecretPlaceholder(settingsToSave.smartthingsClientSecret)) {
         delete settingsToSave.smartthingsClientSecret; // Don't update if it's just the placeholder
       }
-      if (settingsToSave.openaiApiKey && settingsToSave.openaiApiKey.startsWith('••••')) {
+      if (isMaskedSecretPlaceholder(settingsToSave.openaiApiKey)) {
         delete settingsToSave.openaiApiKey; // Don't update if it's just the placeholder
       }
-      if (settingsToSave.anthropicApiKey && settingsToSave.anthropicApiKey.startsWith('••••')) {
+      if (isMaskedSecretPlaceholder(settingsToSave.anthropicApiKey)) {
         delete settingsToSave.anthropicApiKey; // Don't update if it's just the placeholder
       }
-      if (settingsToSave.isyPassword && settingsToSave.isyPassword.startsWith('••••')) {
+      if (isMaskedSecretPlaceholder(settingsToSave.isyPassword)) {
         delete settingsToSave.isyPassword; // Don't update if it's just the placeholder
       }
       
@@ -986,7 +1009,7 @@ export function Settings() {
 
   const buildIsyConnectionPayload = () => {
     const parsedPort = Number(isyPortValue)
-    const normalizedPassword = isyPasswordValue.startsWith('••••') ? '' : isyPasswordValue.trim()
+    const normalizedPassword = isMaskedSecretPlaceholder(isyPasswordValue) ? '' : isyPasswordValue
 
     return {
       ...(isyHostValue.trim() ? { isyHost: isyHostValue.trim() } : {}),
@@ -1136,7 +1159,7 @@ export function Settings() {
     // If no API key in form field or it's the placeholder, get the existing one from the backend
     let apiKeyToTest = formApiKey;
     
-    if (!apiKeyToTest || apiKeyToTest.trim() === '' || apiKeyToTest.startsWith('••••')) {
+    if (!apiKeyToTest || apiKeyToTest.trim() === '' || isMaskedSecretPlaceholder(apiKeyToTest)) {
       try {
         console.log('No API key in form, fetching existing key from backend...');
         const settingResponse = await getSetting('elevenlabsApiKey');
@@ -1194,7 +1217,7 @@ export function Settings() {
     // If no API key in form field or it's the placeholder, get the existing one from the backend
     let apiKeyToTest = formApiKey;
     
-    if (!apiKeyToTest || apiKeyToTest.trim() === '' || apiKeyToTest.startsWith('••••')) {
+    if (!apiKeyToTest || apiKeyToTest.trim() === '' || isMaskedSecretPlaceholder(apiKeyToTest)) {
       try {
         console.log('No API key in form, fetching existing key from backend...');
         const settingResponse = await getSetting('openaiApiKey');
@@ -1252,7 +1275,7 @@ export function Settings() {
     // If no API key in form field or it's the placeholder, get the existing one from the backend
     let apiKeyToTest = formApiKey;
     
-    if (!apiKeyToTest || apiKeyToTest.trim() === '' || apiKeyToTest.startsWith('••••')) {
+    if (!apiKeyToTest || apiKeyToTest.trim() === '' || isMaskedSecretPlaceholder(apiKeyToTest)) {
       try {
         console.log('No API key in form, fetching existing key from backend...');
         const settingResponse = await getSetting('anthropicApiKey');
@@ -2659,7 +2682,7 @@ export function Settings() {
                       <Input
                         {...register("isyPassword")}
                         type="password"
-                        placeholder={isyPasswordValue.startsWith('••••') ? "Password configured" : "Enter ISY password"}
+                        placeholder={isMaskedSecretPlaceholder(isyPasswordValue) ? "Password configured" : "Enter ISY password"}
                         className="mt-1"
                       />
                     </div>
@@ -3116,7 +3139,7 @@ export function Settings() {
                       <Input
                         {...register("smartthingsClientSecret")}
                         type="password"
-                        placeholder={watch("smartthingsClientSecret")?.startsWith('••••') ? "Client secret configured" : "Enter SmartThings Client Secret"}
+                        placeholder={isMaskedSecretPlaceholder(watch("smartthingsClientSecret")) ? "Client secret configured" : "Enter SmartThings Client Secret"}
                         className="mt-1"
                       />
                       <p className="text-xs text-muted-foreground mt-1">
@@ -3724,7 +3747,7 @@ export function Settings() {
                     <Input
                       {...register("elevenlabsApiKey")}
                       type="password"
-                      placeholder={watch("elevenlabsApiKey")?.startsWith('••••') ? "API key configured" : "Enter ElevenLabs API key"}
+                      placeholder={isMaskedSecretPlaceholder(watch("elevenlabsApiKey")) ? "API key configured" : "Enter ElevenLabs API key"}
                       className="flex-1"
                     />
                     <Button
@@ -3792,7 +3815,7 @@ export function Settings() {
                       <Input
                         {...register("openaiApiKey")}
                         type="password"
-                        placeholder={watch("openaiApiKey")?.startsWith('••••') ? "API key configured" : "Enter OpenAI API key"}
+                        placeholder={isMaskedSecretPlaceholder(watch("openaiApiKey")) ? "API key configured" : "Enter OpenAI API key"}
                         className="flex-1"
                       />
                       <Button
@@ -3857,7 +3880,7 @@ export function Settings() {
                       <Input
                         {...register("anthropicApiKey")}
                         type="password"
-                        placeholder={watch("anthropicApiKey")?.startsWith('••••') ? "API key configured" : "Enter Anthropic API key"}
+                        placeholder={isMaskedSecretPlaceholder(watch("anthropicApiKey")) ? "API key configured" : "Enter Anthropic API key"}
                         className="flex-1"
                       />
                       <Button

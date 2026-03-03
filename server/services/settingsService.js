@@ -1,6 +1,23 @@
 const Settings = require('../models/Settings');
 
 class SettingsService {
+  isMaskedSecretValue(value) {
+    if (typeof value !== 'string') {
+      return false;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    if (/^[*•]+$/.test(trimmed)) {
+      return true;
+    }
+
+    return /^[*•]{4,}[^*•\s]+$/.test(trimmed);
+  }
+
   /**
    * Get application settings
    * @returns {Promise<Object>} Settings object
@@ -45,10 +62,21 @@ class SettingsService {
         // Voice/Discovery Preferences
         'voiceRegion', 'autoDiscoveryEnabled'
       ];
+      const sensitiveFields = new Set([
+        'elevenlabsApiKey',
+        'smartthingsToken',
+        'smartthingsClientSecret',
+        'openaiApiKey',
+        'anthropicApiKey',
+        'isyPassword'
+      ]);
       
       const sanitizedUpdates = {};
       Object.keys(updates).forEach(key => {
         if (allowedFields.includes(key)) {
+          if (sensitiveFields.has(key) && this.isMaskedSecretValue(updates[key])) {
+            return;
+          }
           sanitizedUpdates[key] = updates[key];
         }
       });
