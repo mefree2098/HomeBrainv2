@@ -115,7 +115,7 @@ export interface InsteonIsySyncRunLogEntry {
 
 export interface InsteonIsySyncRunSnapshot {
   id: string;
-  status: 'running' | 'completed' | 'completed_with_errors' | 'failed';
+  status: 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
   createdAt?: string;
   updatedAt?: string;
   finishedAt?: string | null;
@@ -128,6 +128,7 @@ export interface InsteonIsySyncRunSnapshot {
     continueOnError?: boolean;
     linkMode?: 'remote' | 'manual';
   };
+  cancelRequested?: boolean;
   logs?: InsteonIsySyncRunLogEntry[];
   result?: any;
   error?: string | null;
@@ -453,6 +454,20 @@ export const getInsteonIsySyncRun = async (runId: string) => {
     return response.data as { success: boolean; run: InsteonIsySyncRunSnapshot };
   } catch (error) {
     console.error('Get ISY sync run error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Request cancellation for an asynchronous ISY sync run
+// Endpoint: POST /api/insteon/isy/sync/runs/:runId/cancel
+// Request: {}
+// Response: { success: boolean, message: string, run: InsteonIsySyncRunSnapshot }
+export const cancelInsteonIsySyncRun = async (runId: string) => {
+  try {
+    const response = await api.post(`/api/insteon/isy/sync/runs/${encodeURIComponent(runId)}/cancel`);
+    return response.data as { success: boolean; message?: string; run: InsteonIsySyncRunSnapshot };
+  } catch (error) {
+    console.error('Cancel ISY sync run error:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };

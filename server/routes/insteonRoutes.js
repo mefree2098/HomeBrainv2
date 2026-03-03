@@ -234,6 +234,34 @@ router.get('/isy/sync/runs/:runId', async (req, res) => {
   }
 });
 
+router.post('/isy/sync/runs/:runId/cancel', async (req, res) => {
+  const runId = req.params?.runId;
+  try {
+    const run = insteonService.cancelISYSyncRun(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: `ISY sync run "${runId}" was not found`
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status)
+        ? `ISY sync run is already ${run.status}.`
+        : 'Cancellation requested.',
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to cancel ISY sync run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 router.post('/isy/sync', async (req, res) => {
   console.log('InsteonRoutes: Running ISY sync workflow');
 

@@ -3941,6 +3941,7 @@ class InsteonService {
       updatedAt: run.updatedAt,
       finishedAt: run.finishedAt || null,
       request: run.request,
+      cancelRequested: Boolean(run.cancelRequested),
       logs,
       result: run.result || null,
       error: run.error || null
@@ -3993,6 +3994,7 @@ class InsteonService {
       updatedAt: now,
       finishedAt: null,
       request: this._sanitizeISYSyncRunRequest(payload),
+      cancelRequested: false,
       logs: [],
       result: null,
       error: null
@@ -4013,6 +4015,32 @@ class InsteonService {
     return this._snapshotISYSyncRun(run);
   }
 
+  cancelISYSyncRun(runId) {
+    const id = typeof runId === 'string' ? runId.trim() : '';
+    if (!id) {
+      return null;
+    }
+
+    const run = this._isySyncRuns.get(id);
+    if (!run) {
+      return null;
+    }
+
+    if (['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status)) {
+      return this._snapshotISYSyncRun(run);
+    }
+
+    run.cancelRequested = true;
+    run.updatedAt = new Date().toISOString();
+    this._appendISYSyncRunLog(run.id, {
+      message: 'Cancellation requested by user; waiting for the current migration operation to finish.',
+      stage: 'cancel',
+      level: 'warn'
+    });
+
+    return this._snapshotISYSyncRun(run);
+  }
+
   startISYSyncRun(payload = {}) {
     const run = this._createISYSyncRun(payload);
     this._appendISYSyncRunLog(run.id, {
@@ -4024,7 +4052,8 @@ class InsteonService {
     (async () => {
       try {
         const result = await this.syncFromISY(payload, {
-          onProgress: (entry) => this._appendISYSyncRunLog(run.id, entry)
+          onProgress: (entry) => this._appendISYSyncRunLog(run.id, entry),
+          shouldCancel: () => Boolean(this._isySyncRuns.get(run.id)?.cancelRequested)
         });
 
         const storedRun = this._isySyncRuns.get(run.id);
@@ -4049,21 +4078,39 @@ class InsteonService {
           return;
         }
 
-        storedRun.status = 'failed';
+        const cancelled = this._isISYSyncCancelledError(error);
+        storedRun.status = cancelled ? 'cancelled' : 'failed';
         storedRun.result = null;
-        storedRun.error = error.message;
+        storedRun.error = cancelled ? 'Migration cancelled by user.' : error.message;
         storedRun.finishedAt = new Date().toISOString();
         storedRun.updatedAt = storedRun.finishedAt;
         this._appendISYSyncRunLog(run.id, {
-          message: error.message || 'ISY sync failed',
+          message: cancelled ? 'ISY migration cancelled by user' : (error.message || 'ISY sync failed'),
           stage: 'complete',
-          level: 'error',
+          level: cancelled ? 'warn' : 'error',
           progress: 100
         });
       }
     })();
 
     return this._snapshotISYSyncRun(run);
+  }
+
+  _isISYSyncCancelledError(error) {
+    return Boolean(error && (error.code === 'ISY_SYNC_CANCELLED' || error.isCancelled === true));
+  }
+
+  _buildISYSyncCancelledError(message = 'ISY migration cancelled by user.') {
+    const cancellationError = new Error(message);
+    cancellationError.code = 'ISY_SYNC_CANCELLED';
+    cancellationError.isCancelled = true;
+    return cancellationError;
+  }
+
+  _throwIfISYSyncCancelled(shouldCancel, message = 'ISY migration cancelled by user.') {
+    if (typeof shouldCancel === 'function' && shouldCancel()) {
+      throw this._buildISYSyncCancelledError(message);
+    }
   }
 
   _normalizeLinkedStatusRunRequest(payload = {}) {
@@ -4314,6 +4361,9 @@ class InsteonService {
     const onProgress = runtime && typeof runtime.onProgress === 'function'
       ? runtime.onProgress
       : null;
+    const shouldCancel = runtime && typeof runtime.shouldCancel === 'function'
+      ? runtime.shouldCancel
+      : null;
     const reportProgress = (message, details = {}) => {
       if (!onProgress) {
         return;
@@ -4329,6 +4379,9 @@ class InsteonService {
         console.warn(`InsteonService: Failed to publish ISY sync progress update: ${error.message}`);
       }
     };
+    const throwIfCancelled = (message = 'ISY migration cancelled by user.') => {
+      this._throwIfISYSyncCancelled(shouldCancel, message);
+    };
 
     const options = {
       dryRun: request.dryRun !== false,
@@ -4339,8 +4392,10 @@ class InsteonService {
       continueOnError: request.continueOnError !== false
     };
 
+    throwIfCancelled();
     reportProgress('Connecting to ISY and extracting metadata', { stage: 'extract', progress: 5 });
     const extraction = await this.extractISYData(request);
+    throwIfCancelled('ISY migration cancelled after extraction.');
     const deviceReplayList = this._buildISYDeviceReplayList(extraction.devices);
     const excludedNodeText = extraction?.counts?.excludedNonInsteonNodes
       ? ` (${extraction.counts.excludedNonInsteonNodes} non-INSTEON nodes excluded)`
@@ -4376,8 +4431,10 @@ class InsteonService {
     };
 
     if (options.dryRun) {
+      throwIfCancelled();
       reportProgress('Dry run mode enabled; no PLM writes will be performed', { stage: 'dry-run', progress: 35 });
       if (options.importTopology) {
+        throwIfCancelled();
         reportProgress(`Previewing topology replay for ${extraction.topologyScenes.length} scenes`, { stage: 'topology', progress: 45 });
         results.topology = await this.applyISYSceneTopology({
           scenes: extraction.topologyScenes,
@@ -4386,7 +4443,8 @@ class InsteonService {
           onProgress: (entry) => reportProgress(entry?.message || 'Topology preview update', {
             ...entry,
             stage: 'topology'
-          })
+          }),
+          shouldCancel
         });
         reportProgress(
           `Topology preview complete: ${results.topology.sceneCount || 0} scenes, ${results.topology.failedScenes || 0} failed`,
@@ -4394,6 +4452,7 @@ class InsteonService {
         );
       }
       if (options.importPrograms) {
+        throwIfCancelled();
         reportProgress(`Previewing workflow import for ${extraction.programs.length} programs`, { stage: 'programs', progress: 70 });
         results.programs = await this.importISYProgramsAsWorkflows(extraction.programs, {
           dryRun: true,
@@ -4420,6 +4479,7 @@ class InsteonService {
     }
 
     if (options.importDevices && extraction.deviceIds.length > 0) {
+      throwIfCancelled();
       reportProgress(
         `Starting device replay for ${extraction.deviceIds.length} device IDs (${deviceReplayList.filter((entry) => Boolean(entry?.name)).length} names resolved)`,
         { stage: 'devices', progress: 35 }
@@ -4439,13 +4499,17 @@ class InsteonService {
           onProgress: (entry) => reportProgress(entry?.message || 'Device replay update', {
             ...entry,
             stage: 'devices'
-          })
+          }),
+          shouldCancel
         });
         reportProgress(
           `Device replay complete: ${results.devices.accepted || 0} accepted, ${results.devices.linked || 0} linked, ${results.devices.linkWriteSucceeded || 0}/${results.devices.linkWriteAttempts || 0} link writes succeeded, ${results.devices.failed || 0} failed`,
           { stage: 'devices', level: results.devices.success === false ? 'warn' : 'info', progress: 55 }
         );
       } catch (error) {
+        if (this._isISYSyncCancelledError(error)) {
+          throw error;
+        }
         results.success = false;
         results.errors.push({
           stage: 'devices',
@@ -4461,6 +4525,7 @@ class InsteonService {
     }
 
     if (options.importTopology && extraction.topologyScenes.length > 0) {
+      throwIfCancelled();
       reportProgress(`Starting topology replay for ${extraction.topologyScenes.length} scenes`, { stage: 'topology', progress: 60 });
       try {
         results.topology = await this.applyISYSceneTopology({
@@ -4475,7 +4540,8 @@ class InsteonService {
           onProgress: (entry) => reportProgress(entry?.message || 'Topology replay update', {
             ...entry,
             stage: 'topology'
-          })
+          }),
+          shouldCancel
         });
 
         reportProgress(
@@ -4486,6 +4552,9 @@ class InsteonService {
           results.success = false;
         }
       } catch (error) {
+        if (this._isISYSyncCancelledError(error)) {
+          throw error;
+        }
         results.success = false;
         results.errors.push({
           stage: 'topology',
@@ -4501,6 +4570,7 @@ class InsteonService {
     }
 
     if (options.importPrograms && extraction.programs.length > 0) {
+      throwIfCancelled();
       reportProgress(`Starting program translation for ${extraction.programs.length} programs`, { stage: 'programs', progress: 85 });
       try {
         results.programs = await this.importISYProgramsAsWorkflows(extraction.programs, {
@@ -4516,6 +4586,9 @@ class InsteonService {
           results.success = false;
         }
       } catch (error) {
+        if (this._isISYSyncCancelledError(error)) {
+          throw error;
+        }
         results.success = false;
         results.errors.push({
           stage: 'programs',
@@ -4549,6 +4622,7 @@ class InsteonService {
         : (failedStages.has('programs') ? 'programs failed' : 'programs skipped')
     ].join(', ');
 
+    throwIfCancelled('ISY migration cancelled before completion.');
     reportProgress(results.message, { stage: 'complete', level: results.success ? 'info' : 'warn', progress: 100 });
     return results;
   }
@@ -4585,25 +4659,45 @@ class InsteonService {
     return Array.from(deviceMap.values());
   }
 
-  async _runTopologySceneWrite(scene, responders, { timeoutMs }) {
+  async _runTopologySceneWrite(scene, responders, { timeoutMs, shouldCancel = null }) {
+    this._throwIfISYSyncCancelled(shouldCancel);
     if (!this.isConnected || !this.hub) {
       await this.connect();
     }
 
+    this._throwIfISYSyncCancelled(shouldCancel);
     await this._cancelLinkingSafe();
+    this._throwIfISYSyncCancelled(shouldCancel);
 
     return new Promise((resolve, reject) => {
       let settled = false;
       const timeout = setTimeout(() => {
         if (settled) return;
         settled = true;
+        if (cancelInterval) {
+          clearInterval(cancelInterval);
+        }
         reject(new Error(`Timeout applying scene "${scene.name}"`));
       }, timeoutMs + 2000);
+      const cancelInterval = typeof shouldCancel === 'function'
+        ? setInterval(() => {
+            if (settled || !shouldCancel()) {
+              return;
+            }
+            settled = true;
+            clearTimeout(timeout);
+            clearInterval(cancelInterval);
+            reject(this._buildISYSyncCancelledError('ISY migration cancelled while applying scene topology.'));
+          }, 200)
+        : null;
 
       const settle = (handler) => (value) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
+        if (cancelInterval) {
+          clearInterval(cancelInterval);
+        }
         handler(value);
       };
 
@@ -4633,13 +4727,17 @@ class InsteonService {
     });
   }
 
-  async _applyTopologyScene(scene, { timeoutMs, responderFallback = true, onFallbackProgress = null }) {
+  async _applyTopologyScene(scene, { timeoutMs, responderFallback = true, onFallbackProgress = null, shouldCancel = null }) {
     const fallbackProgress = typeof onFallbackProgress === 'function'
       ? onFallbackProgress
       : null;
+    const throwIfCancelled = (message = 'ISY migration cancelled while applying scene topology.') => {
+      this._throwIfISYSyncCancelled(shouldCancel, message);
+    };
 
     try {
-      await this._runTopologySceneWrite(scene, scene.responders, { timeoutMs });
+      throwIfCancelled();
+      await this._runTopologySceneWrite(scene, scene.responders, { timeoutMs, shouldCancel });
       return {
         group: scene.group,
         controller: scene.controller,
@@ -4650,6 +4748,10 @@ class InsteonService {
         failedResponders: []
       };
     } catch (fullSceneError) {
+      if (this._isISYSyncCancelledError(fullSceneError)) {
+        throw fullSceneError;
+      }
+
       const canFallback = responderFallback && Array.isArray(scene.responders) && scene.responders.length > 1;
       if (!canFallback) {
         throw fullSceneError;
@@ -4667,6 +4769,7 @@ class InsteonService {
       const failedResponders = [];
 
       for (const responder of scene.responders) {
+        throwIfCancelled();
         const responderLabel = this._formatInsteonAddress(responder.id);
         try {
           await this._runTopologySceneWrite(
@@ -4676,7 +4779,7 @@ class InsteonService {
               responders: [responder]
             },
             [responder],
-            { timeoutMs }
+            { timeoutMs, shouldCancel }
           );
           appliedResponders.push(responder.id);
           fallbackProgress?.(
@@ -4684,6 +4787,10 @@ class InsteonService {
             { level: 'warn' }
           );
         } catch (responderError) {
+          if (this._isISYSyncCancelledError(responderError)) {
+            throw responderError;
+          }
+
           const responderMessage = responderError instanceof Error
             ? responderError.message
             : String(responderError || 'Unknown responder error');
@@ -4763,6 +4870,11 @@ class InsteonService {
           if (error) {
             const role = controller ? 'as controller' : 'as responder';
             rejectOnce(new Error(`Failed to link ${this._formatInsteonAddress(normalizedAddress)} ${role}: ${error.message}`));
+            return;
+          }
+          if (!link) {
+            const role = controller ? 'as controller' : 'as responder';
+            rejectOnce(new Error(`Link command returned no confirmation for ${this._formatInsteonAddress(normalizedAddress)} ${role}`));
             return;
           }
           resolveOnce(link || null);
@@ -5894,6 +6006,9 @@ class InsteonService {
       const onProgress = runtime && typeof runtime.onProgress === 'function'
         ? runtime.onProgress
         : null;
+      const shouldCancel = runtime && typeof runtime.shouldCancel === 'function'
+        ? runtime.shouldCancel
+        : null;
       const reportProgress = (message, details = {}) => {
         if (!onProgress || typeof message !== 'string' || !message.trim()) {
           return;
@@ -5905,7 +6020,11 @@ class InsteonService {
           ...details
         });
       };
+      const throwIfCancelled = (message = 'ISY migration cancelled during device replay.') => {
+        this._throwIfISYSyncCancelled(shouldCancel, message);
+      };
 
+      throwIfCancelled();
       if (!this.isConnected || !this.hub) {
         await this.connect();
       }
@@ -5975,6 +6094,7 @@ class InsteonService {
 
       reportProgress(`Starting replay for ${targetDevices.length} device ID(s)`, { progress: 0 });
       for (let index = 0; index < targetDevices.length; index += 1) {
+        throwIfCancelled(`ISY migration cancelled before device ${index + 1}/${targetDevices.length}.`);
         const entry = targetDevices[index];
         const progress = Math.round(((index + 1) / targetDevices.length) * 100);
         const detail = {
@@ -6014,6 +6134,7 @@ class InsteonService {
             let linkResult = null;
 
             for (let attempt = 0; attempt <= options.retries; attempt += 1) {
+              throwIfCancelled(`ISY migration cancelled while linking ${entry.displayAddress}.`);
               try {
                 if (options.linkMode === 'manual') {
                   await this._linkDeviceManual(entry.address, linkRequest);
@@ -6025,6 +6146,7 @@ class InsteonService {
               } catch (error) {
                 linkError = error;
                 if (attempt < options.retries) {
+                  throwIfCancelled(`ISY migration cancelled while retrying ${entry.displayAddress}.`);
                   await this._sleep(500);
                 }
               }
@@ -6033,6 +6155,19 @@ class InsteonService {
             if (linkError) {
               results.linkWriteFailed += 1;
               throw linkError;
+            }
+
+            if (normalizedPlmId) {
+              const responderLinkVerified = await this._deviceHasResponderLinkToController(
+                entry.address,
+                options.group,
+                normalizedPlmId
+              );
+              if (!responderLinkVerified) {
+                results.linkWriteFailed += 1;
+                throw new Error(`Responder link verification failed for ${entry.displayAddress} (group ${options.group})`);
+              }
+              detail.responderLinkVerified = true;
             }
 
             detail.linkStatus = options.linkMode === 'manual' ? 'linked-manual' : 'linked-remote';
@@ -6108,6 +6243,7 @@ class InsteonService {
         }
 
         if (index < targetDevices.length - 1 && options.pauseBetweenMs > 0) {
+          throwIfCancelled(`ISY migration cancelled during replay pause after ${entry.displayAddress}.`);
           await this._sleep(options.pauseBetweenMs);
         }
       }
@@ -6130,6 +6266,9 @@ class InsteonService {
       });
       return results;
     } catch (error) {
+      if (this._isISYSyncCancelledError(error)) {
+        throw error;
+      }
       console.error('InsteonService: ISY import failed:', error.message);
       console.error(error.stack);
       throw new Error(`Failed to import ISY devices: ${error.message}`);
@@ -6148,6 +6287,9 @@ class InsteonService {
       const onProgress = runtime && typeof runtime.onProgress === 'function'
         ? runtime.onProgress
         : null;
+      const shouldCancel = runtime && typeof runtime.shouldCancel === 'function'
+        ? runtime.shouldCancel
+        : null;
       const reportProgress = (message, details = {}) => {
         if (!onProgress || typeof message !== 'string' || !message.trim()) {
           return;
@@ -6159,7 +6301,11 @@ class InsteonService {
           ...details
         });
       };
+      const throwIfCancelled = (message = 'ISY migration cancelled during topology replay.') => {
+        this._throwIfISYSyncCancelled(shouldCancel, message);
+      };
 
+      throwIfCancelled();
       if (!this.isConnected || !this.hub) {
         await this.connect();
       }
@@ -6205,6 +6351,7 @@ class InsteonService {
 
       let normalizedPlmId = null;
       if (options.checkExistingSceneLinks) {
+        throwIfCancelled();
         try {
           const plmInfo = await this.getPLMInfo();
           normalizedPlmId = this._normalizePossibleInsteonAddress(plmInfo?.deviceId);
@@ -6215,6 +6362,7 @@ class InsteonService {
 
       reportProgress(`Starting topology replay for ${scenes.length} scene(s)`, { progress: 0 });
       for (let index = 0; index < scenes.length; index += 1) {
+        throwIfCancelled(`ISY migration cancelled before scene ${index + 1}/${scenes.length}.`);
         const scene = scenes[index];
         const progress = scenes.length > 0
           ? Math.round(((index + 1) / scenes.length) * 100)
@@ -6255,7 +6403,8 @@ class InsteonService {
             onFallbackProgress: (message, details = {}) => reportProgress(message, {
               ...details,
               progress
-            })
+            }),
+            shouldCancel
           });
 
           if (applyResult?.fallbackUsed) {
@@ -6300,6 +6449,9 @@ class InsteonService {
 
           results.appliedScenes += 1;
         } catch (error) {
+          if (this._isISYSyncCancelledError(error)) {
+            throw error;
+          }
           sceneResult.status = 'failed';
           sceneResult.error = error.message;
           results.failedScenes += 1;
@@ -6322,12 +6474,14 @@ class InsteonService {
         results.scenes.push(sceneResult);
 
         if (index < scenes.length - 1 && options.pauseBetweenScenesMs > 0) {
+          throwIfCancelled(`ISY migration cancelled during topology pause after scene ${scene.name || `Group ${scene.group}`}.`);
           await this._sleep(options.pauseBetweenScenesMs);
         }
       }
 
       if (options.upsertDevices) {
         for (const device of topologyDevices) {
+          throwIfCancelled();
           try {
             const upsertResult = await this._upsertInsteonDevice({
               address: device.address,
@@ -6369,6 +6523,9 @@ class InsteonService {
       });
       return results;
     } catch (error) {
+      if (this._isISYSyncCancelledError(error)) {
+        throw error;
+      }
       console.error('InsteonService: ISY topology sync failed:', error.message);
       console.error(error.stack);
       throw new Error(`Failed to sync ISY topology: ${error.message}`);

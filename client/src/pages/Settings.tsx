@@ -104,6 +104,7 @@ import {
   syncInsteonFromISY,
   startInsteonIsySyncRun,
   getInsteonIsySyncRun,
+  cancelInsteonIsySyncRun,
   type InsteonLinkedDeviceStatusResponse,
   type InsteonIsySyncRunLogEntry
 } from "@/api/insteon"
@@ -213,12 +214,14 @@ export function Settings() {
   const [extractingIsyData, setExtractingIsyData] = useState(false)
   const [previewingIsyMigration, setPreviewingIsyMigration] = useState(false)
   const [runningIsyMigration, setRunningIsyMigration] = useState(false)
+  const [cancellingIsyMigration, setCancellingIsyMigration] = useState(false)
   const [isyTestResult, setIsyTestResult] = useState<any>(null)
   const [isyExtractionResult, setIsyExtractionResult] = useState<any>(null)
   const [isyMigrationResult, setIsyMigrationResult] = useState<any>(null)
   const [isyMigrationRunId, setIsyMigrationRunId] = useState<string | null>(null)
   const [isyMigrationRunStatus, setIsyMigrationRunStatus] = useState<string | null>(null)
   const [isyMigrationRunLogs, setIsyMigrationRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
+  const [isyMigrationCancelRequested, setIsyMigrationCancelRequested] = useState(false)
   const [isyPasswordConfigured, setIsyPasswordConfigured] = useState(false)
   const [isyMigrationOptions, setIsyMigrationOptions] = useState<{
     importDevices: boolean;
@@ -1291,6 +1294,8 @@ export function Settings() {
         return "Completed"
       case "completed_with_errors":
         return "Completed With Errors"
+      case "cancelled":
+        return "Cancelled"
       case "failed":
         return "Failed"
       default:
@@ -1503,6 +1508,8 @@ export function Settings() {
     }
 
     setRunningIsyMigration(true)
+    setCancellingIsyMigration(false)
+    setIsyMigrationCancelRequested(false)
     setIsyMigrationRunId(null)
     setIsyMigrationRunStatus("running")
     setIsyMigrationRunLogs([])
@@ -1530,6 +1537,7 @@ export function Settings() {
       if (startResponse?.run?.status) {
         setIsyMigrationRunStatus(startResponse.run.status)
       }
+      setIsyMigrationCancelRequested(startResponse?.run?.cancelRequested === true)
 
       const pollingStartedAt = Date.now()
       const maxPollDurationMs = 1000 * 60 * 60 * 4 // 4 hours
@@ -1550,9 +1558,11 @@ export function Settings() {
           consecutivePollFailures = 0
           setIsyMigrationRunStatus(run.status || null)
           setIsyMigrationRunLogs(Array.isArray(run.logs) ? run.logs : [])
+          setIsyMigrationCancelRequested(run.cancelRequested === true)
 
           const isTerminal = run.status === "completed"
             || run.status === "completed_with_errors"
+            || run.status === "cancelled"
             || run.status === "failed"
 
           if (isTerminal) {
@@ -1560,7 +1570,12 @@ export function Settings() {
               setIsyMigrationResult(run.result)
             }
 
-            if (run.status === "failed") {
+            if (run.status === "cancelled") {
+              toast({
+                title: "ISY migration cancelled",
+                description: run.error || "Migration run was cancelled."
+              })
+            } else if (run.status === "failed") {
               toast({
                 title: "ISY migration failed",
                 description: run.error || "Migration run failed.",
@@ -1595,6 +1610,38 @@ export function Settings() {
       })
     } finally {
       setRunningIsyMigration(false)
+      setCancellingIsyMigration(false)
+      setIsyMigrationCancelRequested(false)
+    }
+  }
+
+  const handleCancelIsyMigration = async () => {
+    if (!isyMigrationRunId || !runningIsyMigration) {
+      return
+    }
+
+    setCancellingIsyMigration(true)
+    try {
+      const response = await cancelInsteonIsySyncRun(isyMigrationRunId)
+      if (response?.run?.status) {
+        setIsyMigrationRunStatus(response.run.status)
+      }
+      if (Array.isArray(response?.run?.logs)) {
+        setIsyMigrationRunLogs(response.run.logs)
+      }
+      setIsyMigrationCancelRequested(response?.run?.cancelRequested === true)
+      toast({
+        title: "Cancel requested",
+        description: response?.message || "Waiting for the current migration operation to finish."
+      })
+    } catch (error: any) {
+      toast({
+        title: "Cancel request failed",
+        description: error?.message || "Unable to request migration cancellation.",
+        variant: "destructive"
+      })
+    } finally {
+      setCancellingIsyMigration(false)
     }
   }
 
@@ -3455,6 +3502,31 @@ export function Settings() {
                         </>
                       )}
                     </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCancelIsyMigration}
+                      disabled={!runningIsyMigration || !isyMigrationRunId || cancellingIsyMigration || isyMigrationCancelRequested}
+                    >
+                      {cancellingIsyMigration ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Cancelling...
+                        </>
+                      ) : isyMigrationCancelRequested ? (
+                        <>
+                          <XCircle className="h-4 w-4 mr-2" />
+                          Cancel Requested
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="h-4 w-4 mr-2" />
+                          Cancel Migration
+                        </>
+                      )}
+                    </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
                     Run Migration uses the current values above (ISY host/port/credentials, HTTPS/TLS flags, migration scope toggles, and link mode). No separate save step is required.
@@ -3480,6 +3552,7 @@ export function Settings() {
                         <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
                           <p className="text-muted-foreground whitespace-nowrap">
                             Status: {formatIsyRunStatusLabel(isyMigrationRunStatus)}
+                            {runningIsyMigration && isyMigrationCancelRequested ? " (cancel requested)" : ""}
                             {isyMigrationRunId ? ` • Run ${isyMigrationRunId.slice(0, 8)}` : ""}
                           </p>
                         </div>
