@@ -105,6 +105,43 @@ export interface InsteonIsySyncPayload extends InsteonIsyConnectionPayload {
   pauseBetweenScenesMs?: number;
 }
 
+export interface InsteonLinkedDeviceStatusEntry {
+  address?: string | null;
+  displayAddress?: string;
+  name?: string;
+  databaseDeviceId?: string | null;
+  group?: number | null;
+  controller?: boolean;
+  reachable?: boolean;
+  isOnline?: boolean;
+  status?: boolean | null;
+  level?: number | null;
+  brightness?: number | null;
+  respondedVia?: 'level' | 'info' | 'none';
+  error?: string | null;
+  deviceInfo?: {
+    firmwareVersion?: string | number | null;
+    deviceCategory?: number | null;
+    subcategory?: number | null;
+  } | null;
+}
+
+export interface InsteonLinkedDeviceStatusResponse {
+  success: boolean;
+  message?: string;
+  scannedAt?: string;
+  plmInfo?: Record<string, unknown>;
+  summary?: {
+    linkedDevices?: number;
+    reachable?: number;
+    unreachable?: number;
+    statusKnown?: number;
+    statusUnknown?: number;
+  };
+  warnings?: string[];
+  devices?: InsteonLinkedDeviceStatusEntry[];
+}
+
 // Description: Test Insteon PLM connection
 // Endpoint: GET /api/insteon/test
 // Request: {}
@@ -199,6 +236,20 @@ export const getLinkedInsteonDevices = async () => {
     return response.data;
   } catch (error) {
     console.error('Get linked Insteon devices error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Query all PLM-linked devices and return live reachability/status details
+// Endpoint: GET /api/insteon/devices/linked/status
+// Request: {}
+// Response: InsteonLinkedDeviceStatusResponse
+export const queryLinkedInsteonDeviceStatus = async (): Promise<InsteonLinkedDeviceStatusResponse> => {
+  try {
+    const response = await api.get('/api/insteon/devices/linked/status');
+    return response.data;
+  } catch (error) {
+    console.error('Query linked Insteon device status error:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };

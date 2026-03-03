@@ -233,6 +233,38 @@ router.get('/devices/linked', async (req, res) => {
   }
 });
 
+// Description: Query all PLM-linked devices and return live reachability + status details
+// Endpoint: GET /api/insteon/devices/linked/status
+// Request: {}
+// Response: { success: boolean, message: string, summary: object, devices: Array<object> }
+router.get('/devices/linked/status', async (req, res) => {
+  console.log('InsteonRoutes: Querying linked device status from PLM');
+
+  try {
+    const result = await insteonService.queryLinkedDevicesStatus({
+      levelTimeoutMs: req.query.levelTimeoutMs,
+      infoTimeoutMs: req.query.infoTimeoutMs,
+      pauseBetweenMs: req.query.pauseBetweenMs
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: Linked device status query failed:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      summary: {
+        linkedDevices: 0,
+        reachable: 0,
+        unreachable: 0,
+        statusKnown: 0,
+        statusUnknown: 0
+      },
+      devices: []
+    });
+  }
+});
+
 // Description: Import all devices from PLM to database
 // Endpoint: POST /api/insteon/devices/import
 // Request: {} OR ISY import payload

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const Device = require('../models/Device');
 const Settings = require('../models/Settings');
 
 const insteonService = require('../services/insteonService');
@@ -111,6 +112,189 @@ test('_isMaskedSecretValue detects masked placeholders', () => {
   assert.equal(insteonService._isMaskedSecretValue('********abcd'), true);
   assert.equal(insteonService._isMaskedSecretValue('••••••••••••'), true);
   assert.equal(insteonService._isMaskedSecretValue('real-password-123'), false);
+});
+
+test('_normalizeInsteonInfoPayload maps home-controller info shape into stable fields', () => {
+  const normalized = insteonService._normalizeInsteonInfoPayload({
+    id: '2F.AA.10',
+    firmware: '9E',
+    deviceCategory: { id: 2, name: 'Switched Lighting Control' },
+    deviceSubCategory: { id: 31 }
+  });
+
+  assert.equal(normalized.deviceId, '2FAA10');
+  assert.equal(normalized.firmwareVersion, '9E');
+  assert.equal(normalized.deviceCategory, 2);
+  assert.equal(normalized.subcategory, 31);
+});
+
+test('importDevicesFromISY skips pre-link lookup when PLM id is unavailable', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalParse = insteonService._parseISYImportPayload;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalDeviceHasLinkToPLM = insteonService._deviceHasLinkToPLM;
+  const originalLinkDeviceRemote = insteonService._linkDeviceRemote;
+  const originalGetDeviceInfo = insteonService.getDeviceInfo;
+  const originalUpsertInsteonDevice = insteonService._upsertInsteonDevice;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService._parseISYImportPayload = originalParse;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._deviceHasLinkToPLM = originalDeviceHasLinkToPLM;
+    insteonService._linkDeviceRemote = originalLinkDeviceRemote;
+    insteonService.getDeviceInfo = originalGetDeviceInfo;
+    insteonService._upsertInsteonDevice = originalUpsertInsteonDevice;
+  });
+
+  let linkLookupCalls = 0;
+  insteonService.hub = {};
+  insteonService.isConnected = true;
+  insteonService._parseISYImportPayload = () => ({
+    devices: [{ address: '112233', displayAddress: '11.22.33', name: 'Test Device' }],
+    invalidEntries: [],
+    duplicateCount: 0,
+    options: {
+      group: 10,
+      linkMode: 'remote',
+      timeoutMs: 5000,
+      pauseBetweenMs: 0,
+      retries: 0,
+      skipLinking: false,
+      checkExistingLinks: true
+    }
+  });
+  insteonService.getPLMInfo = async () => ({ firmwareVersion: '9E', deviceId: null });
+  insteonService._deviceHasLinkToPLM = async () => {
+    linkLookupCalls += 1;
+    return false;
+  };
+  insteonService._linkDeviceRemote = async () => ({});
+  insteonService.getDeviceInfo = async () => ({ deviceCategory: 1, subcategory: 0, firmwareVersion: '9E' });
+  insteonService._upsertInsteonDevice = async () => ({
+    action: 'created',
+    device: { _id: 'mock-device-id' }
+  });
+
+  const result = await insteonService.importDevicesFromISY({});
+
+  assert.equal(result.success, true);
+  assert.equal(result.failed, 0);
+  assert.equal(result.linked, 1);
+  assert.equal(linkLookupCalls, 0);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /PLM device ID unavailable/i);
+});
+
+test('queryLinkedDevicesStatus reports level status and info fallback reachability', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalGetAllLinkedDevices = insteonService.getAllLinkedDevices;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalQueryDeviceLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalQueryDeviceInfoByAddress = insteonService._queryDeviceInfoByAddress;
+  const originalSleep = insteonService._sleep;
+  const originalDeviceFind = Device.find;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService.getAllLinkedDevices = originalGetAllLinkedDevices;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._queryDeviceLevelByAddress = originalQueryDeviceLevelByAddress;
+    insteonService._queryDeviceInfoByAddress = originalQueryDeviceInfoByAddress;
+    insteonService._sleep = originalSleep;
+    Device.find = originalDeviceFind;
+  });
+
+  insteonService.hub = {};
+  insteonService.isConnected = true;
+  insteonService.getAllLinkedDevices = async () => ([
+    { address: 'AABBCC', displayAddress: 'AA.BB.CC', group: 1, controller: false },
+    { address: '112233', displayAddress: '11.22.33', group: 1, controller: false }
+  ]);
+  insteonService.getPLMInfo = async () => ({ deviceId: '010203', firmwareVersion: '9E' });
+  insteonService._queryDeviceLevelByAddress = async (address) => {
+    if (address === 'AABBCC') {
+      return 128;
+    }
+    throw new Error('NACK');
+  };
+  insteonService._queryDeviceInfoByAddress = async () => ({
+    firmwareVersion: '1.0',
+    deviceCategory: 2,
+    subcategory: 1
+  });
+  insteonService._sleep = async () => {};
+  Device.find = async () => ([
+    { _id: { toString: () => 'db-device-1' }, name: 'Kitchen Light', properties: { source: 'insteon', insteonAddress: 'AA.BB.CC' } }
+  ]);
+
+  const result = await insteonService.queryLinkedDevicesStatus({ pauseBetweenMs: 0 });
+  assert.equal(result.success, true);
+  assert.equal(result.summary.linkedDevices, 2);
+  assert.equal(result.summary.reachable, 2);
+  assert.equal(result.summary.unreachable, 0);
+  assert.equal(result.summary.statusKnown, 1);
+  assert.equal(result.summary.statusUnknown, 1);
+  const kitchen = result.devices.find((device) => device.address === 'AABBCC');
+  const fallback = result.devices.find((device) => device.address === '112233');
+  assert.ok(kitchen);
+  assert.ok(fallback);
+  assert.equal(kitchen.name, 'Kitchen Light');
+  assert.equal(kitchen.status, true);
+  assert.equal(kitchen.respondedVia, 'level');
+  assert.equal(fallback.status, null);
+  assert.equal(fallback.respondedVia, 'info');
+  assert.match(fallback.error, /status read unavailable/i);
+});
+
+test('queryLinkedDevicesStatus marks device unreachable when level and info both fail', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalGetAllLinkedDevices = insteonService.getAllLinkedDevices;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalQueryDeviceLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalQueryDeviceInfoByAddress = insteonService._queryDeviceInfoByAddress;
+  const originalSleep = insteonService._sleep;
+  const originalDeviceFind = Device.find;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService.getAllLinkedDevices = originalGetAllLinkedDevices;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._queryDeviceLevelByAddress = originalQueryDeviceLevelByAddress;
+    insteonService._queryDeviceInfoByAddress = originalQueryDeviceInfoByAddress;
+    insteonService._sleep = originalSleep;
+    Device.find = originalDeviceFind;
+  });
+
+  insteonService.hub = {};
+  insteonService.isConnected = true;
+  insteonService.getAllLinkedDevices = async () => ([
+    { address: '445566', displayAddress: '44.55.66', group: 1, controller: false }
+  ]);
+  insteonService.getPLMInfo = async () => ({ deviceId: '010203', firmwareVersion: '9E' });
+  insteonService._queryDeviceLevelByAddress = async () => {
+    throw new Error('timeout');
+  };
+  insteonService._queryDeviceInfoByAddress = async () => {
+    throw new Error('no response');
+  };
+  insteonService._sleep = async () => {};
+  Device.find = async () => [];
+
+  const result = await insteonService.queryLinkedDevicesStatus({ pauseBetweenMs: 0 });
+  assert.equal(result.success, true);
+  assert.equal(result.summary.linkedDevices, 1);
+  assert.equal(result.summary.reachable, 0);
+  assert.equal(result.summary.unreachable, 1);
+  assert.equal(result.devices[0].respondedVia, 'none');
+  assert.equal(result.devices[0].reachable, false);
+  assert.match(result.devices[0].error, /level query failed/i);
 });
 
 test('_resolveISYConnection ignores masked input password and falls back to stored password', async (t) => {
@@ -350,6 +534,90 @@ test('_parseISYTopologyPayload rejects missing responders', () => {
     }),
     /no valid isy scene topology entries/i
   );
+});
+
+test('_parseISYTopologyPayload enables existing-scene checks by default', () => {
+  const parsed = insteonService._parseISYTopologyPayload({
+    scenes: [{ name: 'Scene', group: 1, controller: '11.22.33', responders: ['AA.BB.CC'] }]
+  });
+
+  assert.equal(parsed.options.checkExistingSceneLinks, true);
+});
+
+test('_isTopologySceneAlreadyLinked resolves gw controller using PLM id', async (t) => {
+  const originalHasResponderLink = insteonService._deviceHasResponderLinkToController;
+
+  t.after(() => {
+    insteonService._deviceHasResponderLinkToController = originalHasResponderLink;
+  });
+
+  const calls = [];
+  insteonService._deviceHasResponderLinkToController = async (responder, group, controller) => {
+    calls.push({ responder, group, controller });
+    return true;
+  };
+
+  const alreadyLinked = await insteonService._isTopologySceneAlreadyLinked({
+    name: 'Scene 1',
+    group: 9,
+    controller: 'gw',
+    responders: [{ id: 'AA.BB.CC' }]
+  }, { normalizedPlmId: '112233' });
+
+  assert.equal(alreadyLinked, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], { responder: 'AABBCC', group: 9, controller: '112233' });
+});
+
+test('applyISYSceneTopology skips scenes already in desired state', async (t) => {
+  const originalConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+  const originalParseTopologyPayload = insteonService._parseISYTopologyPayload;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalIsSceneAlreadyLinked = insteonService._isTopologySceneAlreadyLinked;
+  const originalApplyTopologyScene = insteonService._applyTopologyScene;
+  const originalSleep = insteonService._sleep;
+
+  t.after(() => {
+    insteonService.isConnected = originalConnected;
+    insteonService.hub = originalHub;
+    insteonService._parseISYTopologyPayload = originalParseTopologyPayload;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._isTopologySceneAlreadyLinked = originalIsSceneAlreadyLinked;
+    insteonService._applyTopologyScene = originalApplyTopologyScene;
+    insteonService._sleep = originalSleep;
+  });
+
+  let applyCalls = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService._parseISYTopologyPayload = () => ({
+    scenes: [{ name: 'Scene 1', group: 1, controller: '11.22.33', remove: false, responders: [{ id: 'AA.BB.CC' }] }],
+    invalidEntries: [],
+    options: {
+      dryRun: false,
+      upsertDevices: false,
+      continueOnError: true,
+      checkExistingSceneLinks: true,
+      pauseBetweenScenesMs: 0,
+      sceneTimeoutMs: 5000
+    }
+  });
+  insteonService.getPLMInfo = async () => ({ deviceId: '010203' });
+  insteonService._isTopologySceneAlreadyLinked = async () => true;
+  insteonService._applyTopologyScene = async () => {
+    applyCalls += 1;
+  };
+  insteonService._sleep = async () => {};
+
+  const result = await insteonService.applyISYSceneTopology({});
+  assert.equal(result.success, true);
+  assert.equal(result.sceneCount, 1);
+  assert.equal(result.appliedScenes, 0);
+  assert.equal(result.skippedExistingScenes, 1);
+  assert.equal(result.failedScenes, 0);
+  assert.equal(applyCalls, 0);
+  assert.equal(result.scenes[0].status, 'already-linked');
 });
 
 test('_parseISYNodesXml parses device and group membership from ISY xml', () => {
