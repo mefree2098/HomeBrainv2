@@ -61,6 +61,36 @@ test('listLocalSerialPorts merges serialport list entries with /dev/serial/by-id
   assert.equal(ports[0].likelyInsteon, true);
 });
 
+test('getSerialTransportDiagnostics reports serialport load errors clearly', (t) => {
+  const originalSerialPortModule = insteonService._serialPortModule;
+  const originalSerialPortLoadError = insteonService._serialPortLoadError;
+
+  t.after(() => {
+    insteonService._serialPortModule = originalSerialPortModule;
+    insteonService._serialPortLoadError = originalSerialPortLoadError;
+  });
+
+  insteonService._serialPortModule = null;
+  insteonService._serialPortLoadError = new Error('native bindings mismatch');
+
+  const diagnostics = insteonService.getSerialTransportDiagnostics();
+  assert.equal(diagnostics.supported, false);
+  assert.match(diagnostics.error, /native bindings mismatch/i);
+});
+
+test('_buildSerialTransportUnavailableMessage includes endpoint and load details', (t) => {
+  const originalSerialPortLoadError = insteonService._serialPortLoadError;
+
+  t.after(() => {
+    insteonService._serialPortLoadError = originalSerialPortLoadError;
+  });
+
+  insteonService._serialPortLoadError = new Error('NODE_MODULE_VERSION mismatch');
+  const message = insteonService._buildSerialTransportUnavailableMessage('/dev/serial/by-id/usb-test-port0');
+  assert.match(message, /usb-test-port0/);
+  assert.match(message, /NODE_MODULE_VERSION mismatch/);
+});
+
 test('_validateSerialEndpoint surfaces missing device with detected endpoint hints', async (t) => {
   const originalListLocalSerialPorts = insteonService.listLocalSerialPorts;
   const originalAccess = fs.promises.access;

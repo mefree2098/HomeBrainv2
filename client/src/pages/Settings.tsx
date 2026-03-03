@@ -878,6 +878,10 @@ export function Settings() {
     try {
       const response = await getInsteonSerialPorts()
       const ports = Array.isArray(response?.ports) ? response.ports : []
+      const serialTransportSupported = response?.serialTransportSupported !== false
+      const serialTransportError = typeof response?.serialTransportError === "string"
+        ? response.serialTransportError
+        : ""
       setInsteonSerialPortCandidates(ports)
 
       if (ports.length === 0) {
@@ -904,6 +908,22 @@ export function Settings() {
           ? `Found ${ports.length} serial endpoint(s), ${likelyCount} likely INSTEON.`
           : `Found ${ports.length} serial endpoint(s).`
       })
+
+      if (!serialTransportSupported) {
+        const message = serialTransportError
+          ? `Serial transport is unavailable: ${serialTransportError}`
+          : "Serial transport is unavailable in the current HomeBrain runtime."
+        setInsteonPlmTestResult({
+          success: false,
+          connected: false,
+          message
+        })
+        toast({
+          title: "Serial runtime issue detected",
+          description: "Endpoints were detected, but serial transport is unavailable. Check server runtime/node module compatibility.",
+          variant: "destructive"
+        })
+      }
     } catch (error: any) {
       console.error("INSTEON serial endpoint scan failed:", error)
       toast({

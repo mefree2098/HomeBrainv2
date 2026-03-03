@@ -74,6 +74,19 @@ id $(whoami) | tr ' ' '\n' | grep dialout || true
 nc -vz <bridge-host> <port>
 ```
 
+If PLM test fails with `serial is Unsupported on this platform`:
+
+```bash
+cd ~/HomeBrainv2
+
+# Show the Node binary/version used by the running service
+sudo systemctl show homebrain -p ExecStart --no-pager
+
+# Rebuild serialport for the active runtime and restart
+node scripts/run-with-modern-node.js npm rebuild serialport --prefix server
+sudo systemctl restart homebrain
+```
+
 ### ISY import/link to new PLM fails
 
 Checks:
