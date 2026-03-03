@@ -288,6 +288,7 @@ router.get('/devices/linked/status', async (req, res) => {
   try {
     const result = await insteonService.queryLinkedDevicesStatus({
       levelTimeoutMs: req.query.levelTimeoutMs,
+      pingTimeoutMs: req.query.pingTimeoutMs,
       infoTimeoutMs: req.query.infoTimeoutMs,
       pauseBetweenMs: req.query.pauseBetweenMs
     });
