@@ -1081,11 +1081,32 @@ class InsteonService {
   }
 
   _normalizePossibleInsteonAddress(rawValue) {
-    try {
-      return this._normalizeInsteonAddress(String(rawValue));
-    } catch (error) {
+    if (rawValue === null || rawValue === undefined) {
       return null;
     }
+
+    const input = String(rawValue).trim();
+    if (!input) {
+      return null;
+    }
+
+    try {
+      return this._normalizeInsteonAddress(input);
+    } catch (error) {
+      // Continue with ISY-specific fallback parsing.
+    }
+
+    // ISY node addresses often include child suffixes (for example: AA.BB.CC.1 or AA.BB.CC.1D).
+    const tokenized = input
+      .toUpperCase()
+      .split(/[^0-9A-F]+/)
+      .filter(Boolean);
+
+    if (tokenized.length >= 3 && tokenized[0].length === 2 && tokenized[1].length === 2 && tokenized[2].length === 2) {
+      return `${tokenized[0]}${tokenized[1]}${tokenized[2]}`;
+    }
+
+    return null;
   }
 
   _deriveTopologyGroupNumber(groupAddress, usedGroups = new Set()) {
@@ -1145,16 +1166,23 @@ class InsteonService {
       const attrs = match[1] || '';
       const body = match[2] || '';
       const rawAddress = this._extractXmlTagValue(body, 'address', '');
+      const parent = this._extractXmlTagValue(body, 'parent', '');
+      const pnode = this._extractXmlTagValue(body, 'pnode', '');
       const normalizedAddress = this._normalizePossibleInsteonAddress(rawAddress);
+      const normalizedParent = this._normalizePossibleInsteonAddress(parent);
+      const normalizedPnode = this._normalizePossibleInsteonAddress(pnode);
 
       devices.push({
         address: rawAddress,
+        resolvedAddress: normalizedAddress || normalizedParent || normalizedPnode,
         normalizedAddress,
+        normalizedParent,
+        normalizedPnode,
         name: this._extractXmlTagValue(body, 'name', ''),
         family: this._extractXmlTagValue(body, 'family', ''),
         type: this._extractXmlTagValue(body, 'type', ''),
-        parent: this._extractXmlTagValue(body, 'parent', ''),
-        pnode: this._extractXmlTagValue(body, 'pnode', ''),
+        parent,
+        pnode,
         enabled: this._extractXmlTagValue(body, 'enabled', this._extractXmlAttr(attrs, 'enabled', 'true')) === 'true',
         flag: Number(this._extractXmlAttr(attrs, 'flag', '0')) || 0
       });
@@ -1674,7 +1702,8 @@ class InsteonService {
     };
 
     const [nodesXml, programsXml, networkResources] = await Promise.all([
-      fetchWithFallback('/rest/nodes?members=false', '/rest/nodes'),
+      // Prefer full node listing first so ISY subnodes (button/load endpoints) are included.
+      fetchWithFallback('/rest/nodes', '/rest/nodes?members=false'),
       fetchWithFallback('/rest/programs?subfolders=true', '/rest/programs'),
       this._fetchISYNetworkResources(connection).catch((error) => {
         console.warn(`InsteonService: ISY network resource extraction unavailable: ${error.message}`);
@@ -1686,7 +1715,7 @@ class InsteonService {
     const basePrograms = this._parseISYProgramsXml(programsXml);
     const programs = await this._enrichISYProgramsWithDetails(connection, basePrograms);
     const deviceIds = nodeData.devices
-      .map((device) => device.normalizedAddress)
+      .map((device) => device.resolvedAddress || device.normalizedAddress)
       .filter(Boolean);
     const uniqueDeviceIds = Array.from(new Set(deviceIds));
     const topologyScenes = this._buildTopologyScenesFromISYGroups(nodeData.groups);
@@ -3682,7 +3711,9 @@ class InsteonService {
 
       results.message = [
         `Dry run complete`,
-        options.importDevices ? `${extraction.deviceIds.length} devices available for import` : 'device import skipped',
+        options.importDevices
+          ? `${extraction.deviceIds.length} INSTEON device IDs available for import (${extraction.devices.length} ISY nodes scanned)`
+          : 'device import skipped',
         options.importTopology ? `${extraction.topologyScenes.length} topology scenes parsed` : 'topology import skipped',
         options.importPrograms ? `${extraction.programs.length} programs parsed` : 'program import skipped'
       ].join(', ');
