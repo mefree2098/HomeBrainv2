@@ -74,8 +74,14 @@ class SettingsService {
       const sanitizedUpdates = {};
       Object.keys(updates).forEach(key => {
         if (allowedFields.includes(key)) {
-          if (sensitiveFields.has(key) && this.isMaskedSecretValue(updates[key])) {
-            return;
+          if (sensitiveFields.has(key)) {
+            if (this.isMaskedSecretValue(updates[key])) {
+              return;
+            }
+            if (typeof updates[key] === 'string' && updates[key].trim() === '') {
+              // Treat blank sensitive values as "no change" to avoid wiping stored credentials.
+              return;
+            }
           }
           sanitizedUpdates[key] = updates[key];
         }

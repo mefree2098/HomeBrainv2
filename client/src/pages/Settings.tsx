@@ -1190,7 +1190,7 @@ export function Settings() {
     }
   }
 
-  const buildIsyConnectionPayload = () => {
+  const buildIsyConnectionPayload = (options: { persistConnection?: boolean } = {}) => {
     const parsedPort = Number(isyPortValue)
     const normalizedPassword = isyPasswordValue.trim()
 
@@ -1204,6 +1204,10 @@ export function Settings() {
 
     if (normalizedPassword) {
       payload.isyPassword = normalizedPassword
+    }
+
+    if (options.persistConnection) {
+      payload.persistConnection = true
     }
 
     return payload
@@ -1221,7 +1225,7 @@ export function Settings() {
 
     setTestingIsyConnection(true)
     try {
-      const response = await testInsteonISYConnection(buildIsyConnectionPayload())
+      const response = await testInsteonISYConnection(buildIsyConnectionPayload({ persistConnection: true }))
       setIsyTestResult(response)
       toast({
         title: "ISY connection successful",
@@ -1246,7 +1250,7 @@ export function Settings() {
   const handleExtractIsyData = async () => {
     setExtractingIsyData(true)
     try {
-      const response = await extractInsteonISYData(buildIsyConnectionPayload())
+      const response = await extractInsteonISYData(buildIsyConnectionPayload({ persistConnection: true }))
       setIsyExtractionResult(response?.extraction || null)
       const counts = response?.extraction?.counts || {}
       toast({
@@ -1448,7 +1452,7 @@ export function Settings() {
     setPreviewingIsyMigration(true)
     try {
       const response = await syncInsteonFromISY({
-        ...buildIsyConnectionPayload(),
+        ...buildIsyConnectionPayload({ persistConnection: true }),
         dryRun: true,
         importDevices: isyMigrationOptions.importDevices,
         importTopology: isyMigrationOptions.importTopology,
@@ -1504,7 +1508,7 @@ export function Settings() {
     setIsyMigrationRunLogs([])
     try {
       const startResponse = await startInsteonIsySyncRun({
-        ...buildIsyConnectionPayload(),
+        ...buildIsyConnectionPayload({ persistConnection: true }),
         dryRun: false,
         importDevices: isyMigrationOptions.importDevices,
         importTopology: isyMigrationOptions.importTopology,
@@ -3459,12 +3463,8 @@ export function Settings() {
                   {(runningIsyMigration || isyMigrationRunLogs.length > 0) && (
                     <div className="rounded-md border border-violet-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium">Migration run log</p>
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <p className="text-muted-foreground whitespace-nowrap">
-                            Status: {formatIsyRunStatusLabel(isyMigrationRunStatus)}
-                            {isyMigrationRunId ? ` • Run ${isyMigrationRunId.slice(0, 8)}` : ""}
-                          </p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium">Migration run log</p>
                           <Button
                             type="button"
                             variant="outline"
@@ -3476,6 +3476,12 @@ export function Settings() {
                             <Copy className="h-3.5 w-3.5 mr-1" />
                             Copy Logs
                           </Button>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
+                          <p className="text-muted-foreground whitespace-nowrap">
+                            Status: {formatIsyRunStatusLabel(isyMigrationRunStatus)}
+                            {isyMigrationRunId ? ` • Run ${isyMigrationRunId.slice(0, 8)}` : ""}
+                          </p>
                         </div>
                       </div>
                       <div className="max-h-64 overflow-y-auto rounded border border-violet-200/70 bg-slate-950/85 p-2 font-mono text-[11px] leading-5 text-slate-100 dark:border-violet-900/60">
@@ -3499,9 +3505,22 @@ export function Settings() {
                           <p className="text-slate-400">Waiting for migration log output...</p>
                         )}
                       </div>
-                      <p className="text-muted-foreground">
-                        Log updates refresh every second while the migration run is active.
-                      </p>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-muted-foreground">
+                          Log updates refresh every second while the migration run is active.
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleCopyIsyMigrationLogs}
+                          disabled={isyMigrationRunLogs.length === 0}
+                          className="h-7 px-2"
+                        >
+                          <Copy className="h-3.5 w-3.5 mr-1" />
+                          Copy Logs
+                        </Button>
+                      </div>
                     </div>
                   )}
 
