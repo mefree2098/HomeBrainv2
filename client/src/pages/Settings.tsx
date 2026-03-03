@@ -3100,8 +3100,8 @@ export function Settings() {
                     <div className="rounded-md border border-slate-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="font-medium">Linked-device query log</p>
-                        <div className="flex items-center gap-2">
-                          <p className="text-muted-foreground">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <p className="text-muted-foreground whitespace-nowrap">
                             Status: {formatLinkedStatusRunStatusLabel(insteonLinkedStatusRunStatus)}
                             {insteonLinkedStatusRunId ? ` • Run ${insteonLinkedStatusRunId.slice(0, 8)}` : ""}
                           </p>
@@ -3442,8 +3442,8 @@ export function Settings() {
                     <div className="rounded-md border border-violet-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="font-medium">Migration run log</p>
-                        <div className="flex items-center gap-2">
-                          <p className="text-muted-foreground">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <p className="text-muted-foreground whitespace-nowrap">
                             Status: {formatIsyRunStatusLabel(isyMigrationRunStatus)}
                             {isyMigrationRunId ? ` • Run ${isyMigrationRunId.slice(0, 8)}` : ""}
                           </p>
