@@ -232,6 +232,29 @@ const supportsLightColor = (device: any): boolean => {
   return Boolean(device?.properties?.supportsColor)
 }
 
+const DEFAULT_SOURCE_OPTIONS = ['insteon', 'smartthings', 'harmony', 'ecobee']
+
+const getDeviceSource = (device: any): string => {
+  const sourceValue = (
+    device?.properties?.source ??
+    device?.source ??
+    ''
+  ).toString().trim().toLowerCase()
+  return sourceValue || 'unknown'
+}
+
+const formatSourceLabel = (source: string): string => {
+  if (!source || source === 'unknown') {
+    return 'Unknown'
+  }
+
+  return source
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
 export function Devices() {
   const { toast } = useToast()
   const [devices, setDevices] = useState([])
@@ -239,6 +262,8 @@ export function Devices() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [filterType, setFilterType] = useState("all")
+  const [filterSource, setFilterSource] = useState("all")
+  const [sortMode, setSortMode] = useState("default")
   const [viewMode, setViewMode] = useState("grid")
   const [lightBrightnessDrafts, setLightBrightnessDrafts] = useState<Record<string, number>>({})
   const [lightColorDrafts, setLightColorDrafts] = useState<Record<string, string>>({})
@@ -797,16 +822,73 @@ export function Devices() {
     )
   }
 
-  const filteredDevices = devices.filter(device => {
-    const matchesSearch = device.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         device.room.toLowerCase().includes(searchTerm.toLowerCase())
+  const sourceOptions = Array.from(new Set([
+    ...DEFAULT_SOURCE_OPTIONS,
+    ...devices.map(getDeviceSource)
+  ]))
+    .filter((source) => source !== 'unknown')
+    .sort((a, b) => a.localeCompare(b))
+
+  if (devices.some((device: any) => getDeviceSource(device) === 'unknown')) {
+    sourceOptions.push('unknown')
+  }
+
+  const matchesDeviceFilters = (device: any) => {
+    const lowerSearch = searchTerm.toLowerCase()
+    const deviceName = (device?.name || '').toString().toLowerCase()
+    const deviceRoom = (device?.room || '').toString().toLowerCase()
+    const deviceSource = getDeviceSource(device)
+    const matchesSearch = deviceName.includes(lowerSearch) || deviceRoom.includes(lowerSearch)
     const matchesType =
       filterType === "all" ||
       (filterType === "light"
         ? supportsLightFade(device)
         : device.type === filterType)
-    return matchesSearch && matchesType
-  })
+    const matchesSource = filterSource === "all" || deviceSource === filterSource
+
+    return matchesSearch && matchesType && matchesSource
+  }
+
+  const sortDevices = (deviceList: any[]) => {
+    if (sortMode === 'default') {
+      return deviceList
+    }
+
+    return [...deviceList].sort((a: any, b: any) => {
+      const sourceCompare = getDeviceSource(a).localeCompare(getDeviceSource(b))
+      const roomCompare = (a?.room || '').toString().localeCompare((b?.room || '').toString())
+      const nameCompare = (a?.name || '').toString().localeCompare((b?.name || '').toString())
+
+      if (sortMode === 'source') {
+        if (sourceCompare !== 0) return sourceCompare
+        if (roomCompare !== 0) return roomCompare
+        return nameCompare
+      }
+
+      if (sortMode === 'name') {
+        if (nameCompare !== 0) return nameCompare
+        return roomCompare
+      }
+
+      if (sortMode === 'room') {
+        if (roomCompare !== 0) return roomCompare
+        return nameCompare
+      }
+
+      return 0
+    })
+  }
+
+  const filteredDevices = devices.filter(matchesDeviceFilters)
+  const sortedFilteredDevices = sortDevices(filteredDevices)
+  const filteredRoomDevices = roomDevices
+    .map((room: any) => ({
+      ...room,
+      devices: sortDevices(
+        (Array.isArray(room?.devices) ? room.devices : []).filter(matchesDeviceFilters)
+      )
+    }))
+    .filter((room: any) => Array.isArray(room?.devices) && room.devices.length > 0)
 
   if (loading) {
     return (
@@ -849,7 +931,7 @@ export function Devices() {
       {/* Filters */}
       <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
         <CardContent className="p-4">
-          <div className="flex gap-4 items-center">
+          <div className="flex flex-wrap gap-4 items-center">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
@@ -872,6 +954,30 @@ export function Devices() {
                 <SelectItem value="garage">Garage</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={filterSource} onValueChange={setFilterSource}>
+              <SelectTrigger className="w-52">
+                <SelectValue placeholder="Filter by source" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Sources</SelectItem>
+                {sourceOptions.map((source) => (
+                  <SelectItem key={source} value={source}>
+                    {formatSourceLabel(source)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={sortMode} onValueChange={setSortMode}>
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="Sort" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">Default</SelectItem>
+                <SelectItem value="name">Name</SelectItem>
+                <SelectItem value="room">Room</SelectItem>
+                <SelectItem value="source">Source</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
@@ -885,7 +991,7 @@ export function Devices() {
         <TabsContent value="all" className="space-y-4">
           {viewMode === "grid" ? (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {filteredDevices.map((device) => {
+              {sortedFilteredDevices.map((device) => {
                 const isFavorite = favoriteDeviceIds.has(device._id)
                 const isPendingFavorite = pendingDeviceIds.has(device._id)
 
@@ -916,6 +1022,9 @@ export function Devices() {
                           {device.type === 'thermostat'
                             ? getThermostatMode(device).toUpperCase()
                             : (device.status ? "On" : "Off")}
+                        </Badge>
+                        <Badge variant="outline">
+                          {formatSourceLabel(getDeviceSource(device))}
                         </Badge>
                       </div>
                     </CardHeader>
@@ -962,7 +1071,7 @@ export function Devices() {
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardContent className="p-0">
                 <div className="divide-y">
-                  {filteredDevices.map((device) => {
+                  {sortedFilteredDevices.map((device) => {
                     const isFavorite = favoriteDeviceIds.has(device._id)
                     const isPendingFavorite = pendingDeviceIds.has(device._id)
 
@@ -974,7 +1083,9 @@ export function Devices() {
                           </div>
                           <div>
                             <h3 className="font-medium">{device.name}</h3>
-                            <p className="text-sm text-muted-foreground">{device.room} • {device.type}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {device.room} • {device.type} • {formatSourceLabel(getDeviceSource(device))}
+                            </p>
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -1036,7 +1147,7 @@ export function Devices() {
         </TabsContent>
 
         <TabsContent value="rooms" className="space-y-6">
-          {roomDevices.map((room) => (
+          {filteredRoomDevices.map((room) => (
             <Card key={room.name} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -1060,7 +1171,12 @@ export function Devices() {
                               <div className={`p-1.5 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
                                 {getDeviceIcon(device)}
                               </div>
-                              <span className="font-medium text-sm">{device.name}</span>
+                              <div>
+                                <span className="font-medium text-sm">{device.name}</span>
+                                <p className="text-xs text-muted-foreground">
+                                  {formatSourceLabel(getDeviceSource(device))}
+                                </p>
+                              </div>
                             </div>
                             <div className="flex items-center gap-1">
                               <Button

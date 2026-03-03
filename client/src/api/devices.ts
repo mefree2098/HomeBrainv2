@@ -1,10 +1,18 @@
 import api from './api';
 
+type DeviceFilters = {
+  room?: string;
+  type?: string;
+  status?: boolean;
+  isOnline?: boolean;
+  source?: string;
+}
+
 // Description: Get all smart home devices
 // Endpoint: GET /api/devices
 // Request: {}
 // Response: { success: boolean, data: { devices: Array<Device> } }
-export const getDevices = async (filters?: { room?: string; type?: string; status?: boolean; isOnline?: boolean }) => {
+export const getDevices = async (filters?: DeviceFilters) => {
   try {
     if (filters && Object.keys(filters).length > 0) {
       console.log('Fetching devices from API with filters:', filters);
@@ -17,6 +25,7 @@ export const getDevices = async (filters?: { room?: string; type?: string; statu
     if (filters?.type) params.append('type', filters.type);
     if (filters?.status !== undefined) params.append('status', filters.status.toString());
     if (filters?.isOnline !== undefined) params.append('isOnline', filters.isOnline.toString());
+    if (filters?.source) params.append('source', filters.source);
     
     const queryString = params.toString();
     const url = queryString ? `/api/devices?${queryString}` : '/api/devices';
