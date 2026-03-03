@@ -95,9 +95,11 @@ import {
 import {
   getInsteonSerialPorts,
   testInsteonConnection,
+  queryLinkedInsteonDeviceStatus,
   testInsteonISYConnection,
   extractInsteonISYData,
-  syncInsteonFromISY
+  syncInsteonFromISY,
+  type InsteonLinkedDeviceStatusResponse
 } from "@/api/insteon"
 import { useNavigate } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
@@ -193,8 +195,10 @@ export function Settings() {
   const [sthmDiagnostics, setSthmDiagnostics] = useState<any>(null)
   const [scanningInsteonPorts, setScanningInsteonPorts] = useState(false)
   const [testingInsteonPlmConnection, setTestingInsteonPlmConnection] = useState(false)
+  const [queryingInsteonLinkedStatus, setQueryingInsteonLinkedStatus] = useState(false)
   const [insteonSerialPortCandidates, setInsteonSerialPortCandidates] = useState<InsteonSerialPortCandidate[]>([])
   const [insteonPlmTestResult, setInsteonPlmTestResult] = useState<InsteonPlmConnectionTestResult | null>(null)
+  const [insteonLinkedStatusResult, setInsteonLinkedStatusResult] = useState<InsteonLinkedDeviceStatusResponse | null>(null)
   const [testingIsyConnection, setTestingIsyConnection] = useState(false)
   const [extractingIsyData, setExtractingIsyData] = useState(false)
   const [previewingIsyMigration, setPreviewingIsyMigration] = useState(false)
@@ -897,6 +901,7 @@ export function Settings() {
 
     setValue("insteonPort", endpoint, { shouldDirty: true, shouldTouch: true })
     setInsteonPlmTestResult(null)
+    setInsteonLinkedStatusResult(null)
     toast({
       title: "PLM endpoint selected",
       description: `Using ${endpoint}`
@@ -1004,6 +1009,55 @@ export function Settings() {
       })
     } finally {
       setTestingInsteonPlmConnection(false)
+    }
+  }
+
+  const handleQueryInsteonLinkedStatus = async () => {
+    const endpoint = insteonPortValue.trim()
+    if (!endpoint) {
+      toast({
+        title: "Endpoint required",
+        description: "Enter or scan an INSTEON PLM endpoint first.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setQueryingInsteonLinkedStatus(true)
+    try {
+      await updateSettings({ insteonPort: endpoint })
+      const result = await queryLinkedInsteonDeviceStatus()
+      setInsteonLinkedStatusResult(result || null)
+
+      const linkedCount = result?.summary?.linkedDevices ?? (Array.isArray(result?.devices) ? result.devices.length : 0)
+      const reachable = result?.summary?.reachable ?? 0
+      const unreachable = result?.summary?.unreachable ?? 0
+
+      toast({
+        title: "PLM query complete",
+        description: `Checked ${linkedCount} linked device${linkedCount === 1 ? "" : "s"} (${reachable} reachable, ${unreachable} unreachable).`
+      })
+    } catch (error: any) {
+      const message = error?.message || "Unable to query linked devices from PLM."
+      setInsteonLinkedStatusResult({
+        success: false,
+        message,
+        summary: {
+          linkedDevices: 0,
+          reachable: 0,
+          unreachable: 0,
+          statusKnown: 0,
+          statusUnknown: 0
+        },
+        devices: []
+      })
+      toast({
+        title: "PLM query failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setQueryingInsteonLinkedStatus(false)
     }
   }
 
@@ -2553,6 +2607,25 @@ export function Settings() {
                         </>
                       )}
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleQueryInsteonLinkedStatus}
+                      disabled={queryingInsteonLinkedStatus}
+                    >
+                      {queryingInsteonLinkedStatus ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Querying...
+                        </>
+                      ) : (
+                        <>
+                          <HardDrive className="h-4 w-4 mr-2" />
+                          Query Linked Devices
+                        </>
+                      )}
+                    </Button>
                   </div>
 
                   {insteonSerialPortCandidates.length > 0 && (
@@ -2643,6 +2716,64 @@ export function Settings() {
                           )}
                         </div>
                       </div>
+                    </div>
+                  )}
+
+                  {insteonLinkedStatusResult && (
+                    <div className="rounded-md border border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40 p-3 space-y-2">
+                      <p className="text-sm font-medium">Linked-device query</p>
+                      <p className="text-xs text-muted-foreground">
+                        {insteonLinkedStatusResult.message || "No summary returned."}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Linked: {insteonLinkedStatusResult?.summary?.linkedDevices ?? 0} • Reachable: {insteonLinkedStatusResult?.summary?.reachable ?? 0} • Unreachable: {insteonLinkedStatusResult?.summary?.unreachable ?? 0} • Status known: {insteonLinkedStatusResult?.summary?.statusKnown ?? 0}
+                      </p>
+                      {insteonLinkedStatusResult?.scannedAt && (
+                        <p className="text-xs text-muted-foreground">
+                          Scanned: {new Date(insteonLinkedStatusResult.scannedAt).toLocaleString()}
+                        </p>
+                      )}
+                      {Array.isArray(insteonLinkedStatusResult?.warnings) && insteonLinkedStatusResult.warnings.length > 0 && (
+                        <div className="space-y-1 text-xs text-amber-700 dark:text-amber-300">
+                          {insteonLinkedStatusResult.warnings.map((warning, index) => (
+                            <p key={`insteon-linked-warning-${index}`}>{warning}</p>
+                          ))}
+                        </div>
+                      )}
+                      {Array.isArray(insteonLinkedStatusResult?.devices) && insteonLinkedStatusResult.devices.length > 0 && (
+                        <div className="max-h-64 overflow-y-auto rounded border border-slate-200 dark:border-slate-800">
+                          {insteonLinkedStatusResult.devices.map((device, index) => {
+                            const addressLabel = device.displayAddress || device.address || "Unknown"
+                            const reachable = device.reachable === true
+                            const statusText = reachable
+                              ? (device.status === null || device.status === undefined
+                                ? "Reachable (status unavailable)"
+                                : (device.status ? `On${typeof device.brightness === "number" ? ` • ${device.brightness}%` : ""}` : "Off"))
+                              : "Unreachable"
+
+                            return (
+                              <div
+                                key={`${device.address || "linked-device"}-${index}`}
+                                className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-slate-200/70 px-3 py-2 text-xs last:border-b-0 dark:border-slate-800/80"
+                              >
+                                <div className="min-w-0 space-y-1">
+                                  <p className="truncate font-medium">{device.name || `Insteon Device ${addressLabel}`}</p>
+                                  <p className="font-mono text-muted-foreground">{addressLabel}</p>
+                                  {device.error && (
+                                    <p className="text-red-700 dark:text-red-300">{device.error}</p>
+                                  )}
+                                </div>
+                                <div className="text-right">
+                                  <p className={reachable ? "text-emerald-700 dark:text-emerald-300" : "text-red-700 dark:text-red-300"}>
+                                    {statusText}
+                                  </p>
+                                  <p className="text-muted-foreground">{device.respondedVia || "none"}</p>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2918,7 +3049,7 @@ export function Settings() {
                       )}
                       {isyMigrationResult?.topology && (
                         <p className="text-muted-foreground">
-                          Topology replay: {isyMigrationResult.topology.sceneCount ?? 0} scenes, {isyMigrationResult.topology.appliedScenes ?? 0} applied, {isyMigrationResult.topology.failedScenes ?? 0} failed.
+                          Topology replay: {isyMigrationResult.topology.sceneCount ?? 0} scenes, {isyMigrationResult.topology.appliedScenes ?? 0} applied, {isyMigrationResult.topology.skippedExistingScenes ?? 0} already in desired state, {isyMigrationResult.topology.failedScenes ?? 0} failed.
                         </p>
                       )}
                       {isyMigrationResult?.programs && (

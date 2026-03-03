@@ -917,6 +917,7 @@ class InsteonService {
         dryRun: request.dryRun !== false,
         upsertDevices: request.upsertDevices !== false,
         continueOnError: request.continueOnError !== false,
+        checkExistingSceneLinks: request.checkExistingSceneLinks !== false,
         pauseBetweenScenesMs,
         sceneTimeoutMs
       }
@@ -1107,6 +1108,63 @@ class InsteonService {
     }
 
     return null;
+  }
+
+  _coerceNumericValue(value, fallback = 0) {
+    if (Number.isInteger(value)) {
+      return value;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.trunc(value);
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return fallback;
+      }
+      if (/^0x[0-9a-f]+$/i.test(trimmed)) {
+        const parsedHex = Number.parseInt(trimmed, 16);
+        return Number.isInteger(parsedHex) ? parsedHex : fallback;
+      }
+      const parsed = Number(trimmed);
+      return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
+    }
+    return fallback;
+  }
+
+  _normalizeInsteonInfoPayload(info = {}, fallbackAddress = null) {
+    const rawInfo = info && typeof info === 'object' ? info : {};
+
+    const rawDeviceId = rawInfo.deviceId
+      || rawInfo.id
+      || rawInfo.address
+      || rawInfo.imAddress
+      || rawInfo.insteonAddress
+      || fallbackAddress;
+
+    const normalizedDeviceId = this._normalizePossibleInsteonAddress(rawDeviceId);
+    const rawCategory = rawInfo.deviceCategory;
+    const rawSubcategory = rawInfo.subcategory ?? rawInfo.deviceSubCategory;
+
+    const normalized = {
+      deviceId: normalizedDeviceId || null,
+      firmwareVersion: String(rawInfo.firmwareVersion ?? rawInfo.firmware ?? rawInfo.version ?? 'Unknown'),
+      deviceCategory: this._coerceNumericValue(
+        rawCategory && typeof rawCategory === 'object' ? rawCategory.id : rawCategory,
+        0
+      ),
+      subcategory: this._coerceNumericValue(
+        rawSubcategory && typeof rawSubcategory === 'object' ? rawSubcategory.id : rawSubcategory,
+        0
+      )
+    };
+
+    const productKey = rawInfo.productKey ?? rawInfo.productCode ?? rawInfo.product;
+    if (typeof productKey === 'string' && productKey.trim()) {
+      normalized.productKey = productKey.trim();
+    }
+
+    return normalized;
   }
 
   _deriveTopologyGroupNumber(groupAddress, usedGroups = new Set()) {
@@ -3796,7 +3854,9 @@ class InsteonService {
     results.message = [
       `ISY sync complete`,
       results.devices ? `${results.devices.imported || 0} devices imported` : 'devices skipped',
-      results.topology ? `${results.topology.appliedScenes || 0} scenes applied` : 'topology skipped',
+      results.topology
+        ? `${results.topology.appliedScenes || 0} scenes applied${results.topology.skippedExistingScenes ? ` (${results.topology.skippedExistingScenes} already in desired state)` : ''}`
+        : 'topology skipped',
       results.programs ? `${results.programs.created || 0} workflows created` : 'programs skipped'
     ].join(', ');
 
@@ -4004,12 +4064,16 @@ class InsteonService {
   }
 
   async _deviceHasLinkToPLM(address, group, plmId) {
+    return this._deviceHasResponderLinkToController(address, group, plmId);
+  }
+
+  async _deviceHasResponderLinkToController(address, group, controllerAddress) {
     if (!this.isConnected || !this.hub) {
       await this.connect();
     }
 
     const normalizedAddress = this._normalizeInsteonAddress(address);
-    const normalizedPlmId = this._normalizeInsteonAddress(plmId);
+    const normalizedControllerId = this._normalizeInsteonAddress(controllerAddress);
 
     try {
       const links = await new Promise((resolve, reject) => {
@@ -4040,14 +4104,56 @@ class InsteonService {
           return false;
         }
 
-        return Number(link.group) === group && normalizedLinkedId === normalizedPlmId;
+        return Number(link.group) === group && normalizedLinkedId === normalizedControllerId;
       });
     } catch (error) {
       console.warn(
-        `InsteonService: Could not inspect existing links for ${this._formatInsteonAddress(normalizedAddress)}: ${error.message}`
+        `InsteonService: Could not inspect responder links for ${this._formatInsteonAddress(normalizedAddress)}: ${error.message}`
       );
       return false;
     }
+  }
+
+  async _isTopologySceneAlreadyLinked(scene, { normalizedPlmId = null } = {}) {
+    if (!scene || typeof scene !== 'object' || !Array.isArray(scene.responders) || scene.responders.length === 0) {
+      return false;
+    }
+
+    let controller = scene.controller;
+    if (controller === 'gw') {
+      controller = normalizedPlmId || null;
+    }
+
+    const normalizedController = this._normalizePossibleInsteonAddress(controller);
+    if (!normalizedController) {
+      return false;
+    }
+
+    const group = Number(scene.group);
+    if (!Number.isInteger(group) || group < 0 || group > 255) {
+      return false;
+    }
+
+    const expectLinkPresent = scene.remove !== true;
+    for (const responder of scene.responders) {
+      const responderId = this._normalizePossibleInsteonAddress(
+        responder?.id || responder?.address || responder?.deviceId || responder?.insteonAddress || ''
+      );
+
+      if (!responderId) {
+        return false;
+      }
+
+      const hasLink = await this._deviceHasResponderLinkToController(responderId, group, normalizedController);
+      if (expectLinkPresent && !hasLink) {
+        return false;
+      }
+      if (!expectLinkPresent && hasLink) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   async _findExistingInsteonDeviceByAddress(address) {
@@ -4552,12 +4658,7 @@ class InsteonService {
             reject(error);
           } else {
             console.log('InsteonService: PLM info retrieved successfully');
-            resolve({
-              firmwareVersion: info.firmwareVersion,
-              deviceId: info.deviceId,
-              deviceCategory: info.deviceCategory,
-              subcategory: info.subcategory
-            });
+            resolve(this._normalizeInsteonInfoPayload(info));
           }
         });
       });
@@ -4722,7 +4823,7 @@ class InsteonService {
       }
 
       const plmInfo = await this.getPLMInfo();
-      const normalizedPlmId = this._normalizeInsteonAddress(plmInfo.deviceId);
+      const normalizedPlmId = this._normalizePossibleInsteonAddress(plmInfo?.deviceId);
 
       const results = {
         success: true,
@@ -4741,8 +4842,13 @@ class InsteonService {
         failed: 0,
         devices: [],
         invalidEntries,
-        errors: []
+        errors: [],
+        warnings: []
       };
+
+      if (!options.skipLinking && options.checkExistingLinks && !normalizedPlmId) {
+        results.warnings.push('PLM device ID unavailable from modem info; skipping pre-link checks and attempting link operations directly.');
+      }
 
       for (let index = 0; index < targetDevices.length; index += 1) {
         const entry = targetDevices[index];
@@ -4753,7 +4859,7 @@ class InsteonService {
         };
 
         try {
-          const shouldCheckExistingLinks = !options.skipLinking && options.checkExistingLinks;
+          const shouldCheckExistingLinks = !options.skipLinking && options.checkExistingLinks && Boolean(normalizedPlmId);
           let isAlreadyLinked = false;
 
           if (shouldCheckExistingLinks) {
@@ -4875,13 +4981,15 @@ class InsteonService {
         invalid: invalidEntries.length,
         plannedLinkOperations: scenes.reduce((sum, scene) => sum + scene.responders.length, 0),
         appliedScenes: 0,
+        skippedExistingScenes: 0,
         failedScenes: 0,
         imported: 0,
         updated: 0,
         devices: topologyDevices.length,
         scenes: [],
         invalidEntries,
-        errors: []
+        errors: [],
+        warnings: []
       };
 
       if (options.dryRun) {
@@ -4897,6 +5005,16 @@ class InsteonService {
         return results;
       }
 
+      let normalizedPlmId = null;
+      if (options.checkExistingSceneLinks) {
+        try {
+          const plmInfo = await this.getPLMInfo();
+          normalizedPlmId = this._normalizePossibleInsteonAddress(plmInfo?.deviceId);
+        } catch (error) {
+          results.warnings.push(`Unable to read PLM ID for existing-link checks: ${error.message}`);
+        }
+      }
+
       for (let index = 0; index < scenes.length; index += 1) {
         const scene = scenes[index];
         const sceneResult = {
@@ -4907,6 +5025,19 @@ class InsteonService {
         };
 
         try {
+          if (options.checkExistingSceneLinks) {
+            const alreadyLinked = await this._isTopologySceneAlreadyLinked(scene, { normalizedPlmId });
+            if (alreadyLinked) {
+              sceneResult.status = scene.remove ? 'already-removed' : 'already-linked';
+              results.skippedExistingScenes += 1;
+              results.scenes.push(sceneResult);
+              if (index < scenes.length - 1 && options.pauseBetweenScenesMs > 0) {
+                await this._sleep(options.pauseBetweenScenesMs);
+              }
+              continue;
+            }
+          }
+
           await this._applyTopologyScene(scene, { timeoutMs: options.sceneTimeoutMs });
           sceneResult.status = 'applied';
           results.appliedScenes += 1;
@@ -4961,6 +5092,7 @@ class InsteonService {
       results.message = [
         `Processed ${results.sceneCount} scenes`,
         `${results.appliedScenes} applied`,
+        `${results.skippedExistingScenes} already in desired state`,
         `${results.failedScenes} failed`,
         `${results.imported} imported`,
         `${results.updated} updated`
@@ -5000,13 +5132,14 @@ class InsteonService {
             console.error(`InsteonService: Error getting device ${address} info:`, error.message);
             // Return basic info even on error
             resolve({
+              deviceId: this._normalizePossibleInsteonAddress(address),
               deviceCategory: 0,
               subcategory: 0,
               firmwareVersion: 'Unknown'
             });
           } else {
             console.log(`InsteonService: Device ${address} info retrieved`);
-            resolve(info);
+            resolve(this._normalizeInsteonInfoPayload(info, address));
           }
         });
       });
@@ -5014,10 +5147,232 @@ class InsteonService {
       console.error(`InsteonService: Failed to get device info for ${address}:`, error.message);
       // Return basic info instead of throwing
       return {
+        deviceId: this._normalizePossibleInsteonAddress(address),
         deviceCategory: 0,
         subcategory: 0,
         firmwareVersion: 'Unknown'
       };
+    }
+  }
+
+  async _queryDeviceLevelByAddress(address, timeoutMs = 5000) {
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const normalizedAddress = this._normalizeInsteonAddress(address);
+    const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 5000;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Timeout getting device status for ${this._formatInsteonAddress(normalizedAddress)}`));
+      }, timeoutValue);
+
+      this.hub.level(normalizedAddress, (error, level) => {
+        clearTimeout(timeout);
+
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        const numericLevel = Number(level);
+        if (!Number.isFinite(numericLevel)) {
+          reject(new Error(`Invalid level response for ${this._formatInsteonAddress(normalizedAddress)}`));
+          return;
+        }
+
+        resolve(Math.max(0, Math.min(255, Math.round(numericLevel))));
+      });
+    });
+  }
+
+  async _queryDeviceInfoByAddress(address, timeoutMs = 5000) {
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const normalizedAddress = this._normalizeInsteonAddress(address);
+    const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 5000;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Timeout getting device info for ${this._formatInsteonAddress(normalizedAddress)}`));
+      }, timeoutValue);
+
+      this.hub.info(normalizedAddress, (error, info) => {
+        clearTimeout(timeout);
+
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve(this._normalizeInsteonInfoPayload(info, normalizedAddress));
+      });
+    });
+  }
+
+  async queryLinkedDevicesStatus(payload = {}) {
+    console.log('InsteonService: Querying linked PLM devices for live status');
+
+    try {
+      if (!this.isConnected || !this.hub) {
+        await this.connect();
+      }
+
+      const request = payload && typeof payload === 'object' ? payload : {};
+      const levelTimeoutMs = Number.isFinite(Number(request.levelTimeoutMs))
+        ? Math.max(500, Number(request.levelTimeoutMs))
+        : 2500;
+      const infoTimeoutMs = Number.isFinite(Number(request.infoTimeoutMs))
+        ? Math.max(500, Number(request.infoTimeoutMs))
+        : 2500;
+      const pauseBetweenMs = Number.isFinite(Number(request.pauseBetweenMs))
+        ? Math.max(0, Number(request.pauseBetweenMs))
+        : 120;
+
+      const linkedDevices = await this.getAllLinkedDevices();
+      const sortedLinkedDevices = linkedDevices
+        .slice()
+        .sort((a, b) => String(a?.displayAddress || a?.address || '').localeCompare(String(b?.displayAddress || b?.address || '')));
+
+      const plmInfo = await this.getPLMInfo().catch((error) => ({
+        deviceId: null,
+        firmwareVersion: 'Unknown',
+        deviceCategory: 0,
+        subcategory: 0,
+        error: error.message
+      }));
+
+      const queriedDevices = [];
+      const warnings = [];
+      if (plmInfo?.error) {
+        warnings.push(`PLM metadata query warning: ${plmInfo.error}`);
+      }
+
+      const dbDevicesByAddress = new Map();
+      try {
+        const dbDevices = await Device.find({ 'properties.source': 'insteon' });
+        dbDevices.forEach((device) => {
+          const normalized = this._normalizePossibleInsteonAddress(device?.properties?.insteonAddress || '');
+          if (normalized) {
+            dbDevicesByAddress.set(normalized, device);
+          }
+        });
+      } catch (dbError) {
+        warnings.push(`Device-name lookup warning: ${dbError.message}`);
+      }
+
+      for (let index = 0; index < sortedLinkedDevices.length; index += 1) {
+        const linkedDevice = sortedLinkedDevices[index];
+        let normalizedAddress = null;
+        try {
+          normalizedAddress = this._normalizeInsteonAddress(linkedDevice.address);
+        } catch (normalizeError) {
+          queriedDevices.push({
+            address: null,
+            displayAddress: linkedDevice?.displayAddress || linkedDevice?.address || 'Unknown',
+            name: linkedDevice?.name || 'Unknown Insteon Device',
+            databaseDeviceId: null,
+            group: Number.isInteger(linkedDevice?.group) ? linkedDevice.group : null,
+            controller: linkedDevice?.controller === true,
+            reachable: false,
+            isOnline: false,
+            status: null,
+            level: null,
+            brightness: null,
+            respondedVia: 'none',
+            error: `Invalid linked-device address "${linkedDevice?.address}": ${normalizeError.message}`,
+            deviceInfo: null
+          });
+
+          if (index < sortedLinkedDevices.length - 1 && pauseBetweenMs > 0) {
+            await this._sleep(pauseBetweenMs);
+          }
+          continue;
+        }
+
+        const displayAddress = this._formatInsteonAddress(normalizedAddress);
+        const dbDevice = dbDevicesByAddress.get(normalizedAddress);
+        const detail = {
+          address: normalizedAddress,
+          displayAddress,
+          name: dbDevice?.name || linkedDevice?.name || `Insteon Device ${displayAddress}`,
+          databaseDeviceId: dbDevice?._id?.toString() || null,
+          group: Number.isInteger(linkedDevice?.group) ? linkedDevice.group : null,
+          controller: linkedDevice?.controller === true,
+          reachable: false,
+          isOnline: false,
+          status: null,
+          level: null,
+          brightness: null,
+          respondedVia: 'none',
+          error: null,
+          deviceInfo: null
+        };
+
+        try {
+          const level = await this._queryDeviceLevelByAddress(normalizedAddress, levelTimeoutMs);
+          detail.reachable = true;
+          detail.isOnline = true;
+          detail.status = level > 0;
+          detail.level = level;
+          detail.brightness = Math.round((level / 255) * 100);
+          detail.respondedVia = 'level';
+        } catch (levelError) {
+          const levelMessage = levelError?.message || 'Unknown level-query error';
+          try {
+            const info = await this._queryDeviceInfoByAddress(normalizedAddress, infoTimeoutMs);
+            detail.reachable = true;
+            detail.isOnline = true;
+            detail.respondedVia = 'info';
+            detail.error = `Status read unavailable via level query: ${levelMessage}`;
+            detail.deviceInfo = {
+              firmwareVersion: info?.firmwareVersion ?? null,
+              deviceCategory: info?.deviceCategory ?? null,
+              subcategory: info?.subcategory ?? null
+            };
+          } catch (infoError) {
+            const infoMessage = infoError?.message || 'Unknown info-query error';
+            detail.reachable = false;
+            detail.isOnline = false;
+            detail.respondedVia = 'none';
+            detail.error = `Level query failed: ${levelMessage}; info query failed: ${infoMessage}`;
+          }
+        }
+
+        queriedDevices.push(detail);
+
+        if (index < sortedLinkedDevices.length - 1 && pauseBetweenMs > 0) {
+          await this._sleep(pauseBetweenMs);
+        }
+      }
+
+      const reachable = queriedDevices.filter((device) => device.reachable).length;
+      const unreachable = queriedDevices.length - reachable;
+      const statusKnown = queriedDevices.filter((device) => device.status !== null).length;
+      const statusUnknown = queriedDevices.length - statusKnown;
+
+      return {
+        success: true,
+        message: `Queried ${queriedDevices.length} linked device${queriedDevices.length === 1 ? '' : 's'}: ${reachable} reachable, ${unreachable} unreachable.`,
+        scannedAt: new Date().toISOString(),
+        plmInfo,
+        summary: {
+          linkedDevices: queriedDevices.length,
+          reachable,
+          unreachable,
+          statusKnown,
+          statusUnknown
+        },
+        warnings,
+        devices: queriedDevices
+      };
+    } catch (error) {
+      console.error('InsteonService: Linked-device query failed:', error.message);
+      console.error(error.stack);
+      throw new Error(`Failed to query linked PLM devices: ${error.message}`);
     }
   }
 
@@ -5044,34 +5399,19 @@ class InsteonService {
         await this.connect();
       }
 
-      const address = device.properties.insteonAddress;
+      const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
+      const level = await this._queryDeviceLevelByAddress(address, 5000);
+      const status = level > 0;
+      const brightness = Math.round((level / 255) * 100);
 
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout getting device status'));
-        }, 5000);
+      console.log(`InsteonService: Device ${address} status - Level: ${level}, Brightness: ${brightness}%`);
 
-        this.hub.level(address, (error, level) => {
-          clearTimeout(timeout);
-
-          if (error) {
-            console.error(`InsteonService: Error getting device ${address} status:`, error.message);
-            reject(error);
-          } else {
-            const status = level > 0;
-            const brightness = Math.round((level / 255) * 100);
-
-            console.log(`InsteonService: Device ${address} status - Level: ${level}, Brightness: ${brightness}%`);
-
-            resolve({
-              status,
-              level,
-              brightness,
-              isOnline: true
-            });
-          }
-        });
-      });
+      return {
+        status,
+        level,
+        brightness,
+        isOnline: true
+      };
     } catch (error) {
       console.error(`InsteonService: Failed to get device status:`, error.message);
       console.error(error.stack);
