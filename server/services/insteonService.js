@@ -1909,6 +1909,73 @@ class InsteonService {
     return this._normalizePossibleInsteonAddress(`${match[1]}${match[2]}${match[3]}`);
   }
 
+  _isAddressLikeISYName(value = '') {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    return Boolean(this._normalizePossibleInsteonAddress(trimmed));
+  }
+
+  _sanitizeISYDeviceName(value = '') {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    if (this._isAddressLikeISYName(trimmed)) {
+      return null;
+    }
+
+    return trimmed;
+  }
+
+  _buildISYDeviceReplayList(devices = []) {
+    const byAddress = new Map();
+
+    (Array.isArray(devices) ? devices : []).forEach((device) => {
+      const address = this._normalizePossibleInsteonAddress(
+        device?.resolvedAddress
+        || device?.normalizedAddress
+        || device?.normalizedParent
+        || device?.normalizedPnode
+        || device?.address
+        || device?.parent
+        || device?.pnode
+      );
+
+      if (!address) {
+        return;
+      }
+
+      const candidateName = this._sanitizeISYDeviceName(device?.name || device?.displayName || '');
+      if (!byAddress.has(address)) {
+        byAddress.set(address, { address, name: candidateName });
+        return;
+      }
+
+      const existing = byAddress.get(address);
+      if (!existing?.name && candidateName) {
+        existing.name = candidateName;
+        return;
+      }
+
+      if (existing?.name && candidateName) {
+        const existingLooksAddressLike = this._isAddressLikeISYName(existing.name);
+        const candidateLooksAddressLike = this._isAddressLikeISYName(candidateName);
+        if (existingLooksAddressLike && !candidateLooksAddressLike) {
+          existing.name = candidateName;
+        }
+      }
+    });
+
+    return Array.from(byAddress.values()).map((entry) => ({
+      address: entry.address,
+      name: entry.name || undefined
+    }));
+  }
+
   async _buildISYProgramLookup(programs = [], options = {}) {
     const [devices, scenes] = await Promise.all([
       Device.find({}).select('_id name type properties').lean(),
@@ -3993,6 +4060,7 @@ class InsteonService {
 
     reportProgress('Connecting to ISY and extracting metadata', { stage: 'extract', progress: 5 });
     const extraction = await this.extractISYData(request);
+    const deviceReplayList = this._buildISYDeviceReplayList(extraction.devices);
     const excludedNodeText = extraction?.counts?.excludedNonInsteonNodes
       ? ` (${extraction.counts.excludedNonInsteonNodes} non-INSTEON nodes excluded)`
       : '';
@@ -4071,9 +4139,13 @@ class InsteonService {
     }
 
     if (options.importDevices && extraction.deviceIds.length > 0) {
-      reportProgress(`Starting device replay for ${extraction.deviceIds.length} device IDs`, { stage: 'devices', progress: 35 });
+      reportProgress(
+        `Starting device replay for ${extraction.deviceIds.length} device IDs (${deviceReplayList.filter((entry) => Boolean(entry?.name)).length} names resolved)`,
+        { stage: 'devices', progress: 35 }
+      );
       try {
         results.devices = await this.importDevicesFromISY({
+          devices: deviceReplayList,
           deviceIds: extraction.deviceIds,
           group: request.group ?? DEFAULT_ISY_IMPORT_GROUP,
           linkMode: request.linkMode || 'remote',
@@ -4089,7 +4161,7 @@ class InsteonService {
           })
         });
         reportProgress(
-          `Device replay complete: ${results.devices.accepted || 0} accepted, ${results.devices.linked || 0} linked, ${results.devices.failed || 0} failed`,
+          `Device replay complete: ${results.devices.accepted || 0} accepted, ${results.devices.linked || 0} linked, ${results.devices.linkWriteSucceeded || 0}/${results.devices.linkWriteAttempts || 0} link writes succeeded, ${results.devices.failed || 0} failed`,
           { stage: 'devices', level: results.devices.success === false ? 'warn' : 'info', progress: 55 }
         );
       } catch (error) {
@@ -5211,6 +5283,9 @@ class InsteonService {
         skipLinking: options.skipLinking,
         linked: 0,
         alreadyLinked: 0,
+        linkWriteAttempts: 0,
+        linkWriteSucceeded: 0,
+        linkWriteFailed: 0,
         imported: 0,
         updated: 0,
         failed: 0,
@@ -5253,6 +5328,7 @@ class InsteonService {
             detail.linkStatus = 'already-linked';
             results.alreadyLinked += 1;
           } else {
+            results.linkWriteAttempts += 1;
             const linkRequest = {
               group: options.group,
               timeoutMs: options.timeoutMs
@@ -5277,11 +5353,13 @@ class InsteonService {
             }
 
             if (linkError) {
+              results.linkWriteFailed += 1;
               throw linkError;
             }
 
             detail.linkStatus = options.linkMode === 'manual' ? 'linked-manual' : 'linked-remote';
             results.linked += 1;
+            results.linkWriteSucceeded += 1;
           }
 
           let deviceInfo;
@@ -5349,6 +5427,7 @@ class InsteonService {
       results.message = [
         `Processed ${results.accepted} ISY device IDs`,
         `${results.linked} linked`,
+        `${results.linkWriteSucceeded}/${results.linkWriteAttempts} link writes succeeded`,
         `${results.alreadyLinked} already linked`,
         `${results.imported} imported`,
         `${results.updated} updated`,
