@@ -376,9 +376,43 @@ test('_parseISYNodesXml parses device and group membership from ISY xml', () => 
   const parsed = insteonService._parseISYNodesXml(xml);
   assert.equal(parsed.devices.length, 1);
   assert.equal(parsed.devices[0].normalizedAddress, 'AABBCC');
+  assert.equal(parsed.devices[0].resolvedAddress, 'AABBCC');
   assert.equal(parsed.groups.length, 1);
   assert.deepEqual(parsed.groups[0].controllers, ['AABBCC']);
   assert.deepEqual(parsed.groups[0].members.sort(), ['112233', 'AABBCC']);
+});
+
+test('_parseISYNodesXml resolves ISY subnode addresses to base Insteon IDs', () => {
+  const xml = `
+    <nodes>
+      <node flag="0">
+        <address>31.41.0F.1</address>
+        <name>Keypad Button A</name>
+        <parent>31.41.0F</parent>
+      </node>
+      <node flag="0">
+        <address>31.49.05.1D</address>
+        <name>Keypad LED</name>
+        <parent>31.49.05</parent>
+      </node>
+      <group flag="0">
+        <address>0010</address>
+        <name>Movie Scene</name>
+        <parent>0</parent>
+        <link type="1">31.41.0F.1</link>
+        <link type="0">31.49.05.1D</link>
+      </group>
+    </nodes>
+  `;
+
+  const parsed = insteonService._parseISYNodesXml(xml);
+  assert.equal(parsed.devices.length, 2);
+  assert.equal(parsed.devices[0].normalizedAddress, '31410F');
+  assert.equal(parsed.devices[0].resolvedAddress, '31410F');
+  assert.equal(parsed.devices[1].normalizedAddress, '314905');
+  assert.equal(parsed.devices[1].resolvedAddress, '314905');
+  assert.deepEqual(parsed.groups[0].controllers, ['31410F']);
+  assert.deepEqual(parsed.groups[0].members.sort(), ['31410F', '314905']);
 });
 
 test('_parseISYProgramsXml parses non-folder programs', () => {

@@ -1007,8 +1007,7 @@ export function Settings() {
     }
   }
 
-  const buildIsyConnectionPayload = (options: { requireExplicitPassword?: boolean } = {}) => {
-    const { requireExplicitPassword = false } = options
+  const buildIsyConnectionPayload = () => {
     const parsedPort = Number(isyPortValue)
     const normalizedPassword = isMaskedSecretPlaceholder(isyPasswordValue) ? '' : isyPasswordValue.trim()
 
@@ -1022,8 +1021,6 @@ export function Settings() {
 
     if (normalizedPassword) {
       payload.isyPassword = normalizedPassword
-    } else if (requireExplicitPassword) {
-      payload.isyPassword = ""
     }
 
     return payload
@@ -1039,18 +1036,9 @@ export function Settings() {
       return
     }
 
-    if (!isyPasswordValue.trim() || isMaskedSecretPlaceholder(isyPasswordValue)) {
-      toast({
-        title: "Enter ISY password to test",
-        description: "Type your real ISY password in the field, then run Test ISY Connection.",
-        variant: "destructive"
-      })
-      return
-    }
-
     setTestingIsyConnection(true)
     try {
-      const response = await testInsteonISYConnection(buildIsyConnectionPayload({ requireExplicitPassword: true }))
+      const response = await testInsteonISYConnection(buildIsyConnectionPayload())
       setIsyTestResult(response)
       toast({
         title: "ISY connection successful",
@@ -2906,7 +2894,7 @@ export function Settings() {
                     <div className="rounded-md border border-violet-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-1">
                       <p className="font-medium">Latest extraction</p>
                       <p className="text-muted-foreground">
-                        {isyExtractionResult?.counts?.uniqueDeviceIds ?? 0} devices, {isyExtractionResult?.counts?.topologyScenes ?? 0} scenes, {isyExtractionResult?.counts?.programs ?? 0} programs.
+                        {isyExtractionResult?.counts?.uniqueDeviceIds ?? 0} INSTEON device IDs from {isyExtractionResult?.counts?.nodes ?? 0} ISY nodes, {isyExtractionResult?.counts?.topologyScenes ?? 0} scenes, {isyExtractionResult?.counts?.programs ?? 0} programs.
                       </p>
                       <p className="text-muted-foreground">
                         ISY endpoint: {isyExtractionResult?.connection?.host || "unknown"}:{isyExtractionResult?.connection?.port || "?"} ({isyExtractionResult?.connection?.useHttps ? "https" : "http"})
@@ -2921,7 +2909,7 @@ export function Settings() {
                       </p>
                       <p className="text-muted-foreground">{isyMigrationResult?.message || "No summary message provided."}</p>
                       <p className="text-muted-foreground">
-                        Extracted counts: {isyMigrationResult?.extractedCounts?.uniqueDeviceIds ?? 0} devices, {isyMigrationResult?.extractedCounts?.topologyScenes ?? 0} scenes, {isyMigrationResult?.extractedCounts?.programs ?? 0} programs.
+                        Extracted counts: {isyMigrationResult?.extractedCounts?.uniqueDeviceIds ?? 0} INSTEON device IDs from {isyMigrationResult?.extractedCounts?.nodes ?? 0} ISY nodes, {isyMigrationResult?.extractedCounts?.topologyScenes ?? 0} scenes, {isyMigrationResult?.extractedCounts?.programs ?? 0} programs.
                       </p>
                       {isyMigrationResult?.devices && (
                         <p className="text-muted-foreground">
