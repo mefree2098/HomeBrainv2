@@ -49,7 +49,7 @@ test('controlDevice routes Insteon turn_on through insteon service and skips gen
   };
 
   const updated = await deviceService.controlDevice('device-1', 'turn_on');
-  assert.deepEqual(receivedArgs, { deviceId: 'device-1', brightness: 67 });
+  assert.deepEqual(receivedArgs, { deviceId: 'device-1', brightness: 100 });
   assert.equal(updated.status, true);
   assert.equal(updated.brightness, 67);
 });

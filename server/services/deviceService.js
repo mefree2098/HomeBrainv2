@@ -804,7 +804,7 @@ class DeviceService {
           : null;
         const brightness = boundedRequestedBrightness && boundedRequestedBrightness > 0
           ? boundedRequestedBrightness
-          : fallbackBrightness;
+          : 100;
         await insteonService.turnOn(deviceId, brightness);
         break;
       }

@@ -5102,13 +5102,13 @@ class InsteonService {
 
   _stateFromInsteonLevel(level) {
     const numericLevel = Number(level);
-    const boundedLevel = Number.isFinite(numericLevel)
-      ? Math.max(0, Math.min(255, Math.round(numericLevel)))
+    const boundedPercent = Number.isFinite(numericLevel)
+      ? Math.max(0, Math.min(100, Math.round(numericLevel)))
       : 0;
     return {
-      level: boundedLevel,
-      status: boundedLevel > 0,
-      brightness: Math.round((boundedLevel / 255) * 100),
+      level: boundedPercent,
+      status: boundedPercent > 0,
+      brightness: boundedPercent,
       isOnline: true,
       lastSeen: new Date()
     };
@@ -6450,7 +6450,13 @@ class InsteonService {
           return;
         }
 
-        resolve(Math.max(0, Math.min(255, Math.round(numericLevel))));
+        // home-controller light.level() returns percentage (0-100).
+        // Some adapters may still surface raw 0-255 values; normalize both.
+        const normalizedPercent = numericLevel > 100
+          ? Math.round((Math.max(0, Math.min(255, numericLevel)) / 255) * 100)
+          : Math.round(numericLevel);
+
+        resolve(Math.max(0, Math.min(100, normalizedPercent)));
       });
     });
   }
@@ -6739,7 +6745,7 @@ class InsteonService {
           detail.isOnline = true;
           detail.status = level > 0;
           detail.level = level;
-          detail.brightness = Math.round((level / 255) * 100);
+          detail.brightness = level;
           detail.respondedVia = 'level';
         } catch (levelError) {
           const levelMessage = levelError?.message || 'Unknown level-query error';
