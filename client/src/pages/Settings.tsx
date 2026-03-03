@@ -33,6 +33,7 @@ import {
   Database,
   FileDown,
   Activity,
+  Copy,
   HardDrive,
   Wrench,
   Tv
@@ -1171,6 +1172,86 @@ export function Settings() {
     }
   }
 
+  const formatIsyMigrationLogLine = (entry: InsteonIsySyncRunLogEntry) => {
+    const timestampText = entry?.timestamp
+      ? new Date(entry.timestamp).toLocaleTimeString()
+      : "--:--:--"
+    const stageText = entry?.stage ? `[${entry.stage}] ` : ""
+    return `[${timestampText}] ${stageText}${entry?.message || "No message"}`
+  }
+
+  const buildIsyMigrationLogText = () => {
+    const headerLines = [
+      `Status: ${formatIsyRunStatusLabel(isyMigrationRunStatus)}`,
+      `Run ID: ${isyMigrationRunId || "unknown"}`,
+      `Generated: ${new Date().toISOString()}`
+    ]
+
+    const logLines = isyMigrationRunLogs.length > 0
+      ? isyMigrationRunLogs.map((entry) => formatIsyMigrationLogLine(entry))
+      : ["(no log entries)"]
+
+    return [...headerLines, "", ...logLines].join("\n")
+  }
+
+  const copyTextToClipboard = async (text: string) => {
+    if (!text) {
+      return false
+    }
+
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+
+    const textarea = document.createElement("textarea")
+    textarea.value = text
+    textarea.style.position = "fixed"
+    textarea.style.opacity = "0"
+    textarea.style.left = "-9999px"
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+
+    try {
+      const copied = document.execCommand("copy")
+      document.body.removeChild(textarea)
+      return copied
+    } catch (error) {
+      document.body.removeChild(textarea)
+      return false
+    }
+  }
+
+  const handleCopyIsyMigrationLogs = async () => {
+    if (isyMigrationRunLogs.length === 0) {
+      toast({
+        title: "No logs to copy",
+        description: "Run a migration first or wait for log output.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      const copied = await copyTextToClipboard(buildIsyMigrationLogText())
+      if (!copied) {
+        throw new Error("Clipboard unavailable")
+      }
+
+      toast({
+        title: "Migration log copied",
+        description: `Copied ${isyMigrationRunLogs.length} log line${isyMigrationRunLogs.length === 1 ? "" : "s"} to clipboard.`
+      })
+    } catch (error: any) {
+      toast({
+        title: "Copy failed",
+        description: error?.message || "Unable to copy migration logs.",
+        variant: "destructive"
+      })
+    }
+  }
+
   const handlePreviewIsyMigration = async () => {
     if (!validateIsyMigrationSelection()) {
       return
@@ -1244,12 +1325,12 @@ export function Settings() {
       }
 
       const pollingStartedAt = Date.now()
-      const maxPollDurationMs = 1000 * 60 * 30 // 30 minutes
+      const maxPollDurationMs = 1000 * 60 * 60 * 4 // 4 hours
       let consecutivePollFailures = 0
 
       while (true) {
         if (Date.now() - pollingStartedAt > maxPollDurationMs) {
-          throw new Error("Migration is still running, but log polling timed out. Refresh to continue monitoring.")
+          throw new Error("Migration is still running after 4 hours; polling timed out. You can refresh and continue monitoring with the same run id.")
         }
 
         try {
@@ -3105,18 +3186,27 @@ export function Settings() {
                     <div className="rounded-md border border-violet-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="font-medium">Migration run log</p>
-                        <p className="text-muted-foreground">
-                          Status: {formatIsyRunStatusLabel(isyMigrationRunStatus)}
-                          {isyMigrationRunId ? ` • Run ${isyMigrationRunId.slice(0, 8)}` : ""}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-muted-foreground">
+                            Status: {formatIsyRunStatusLabel(isyMigrationRunStatus)}
+                            {isyMigrationRunId ? ` • Run ${isyMigrationRunId.slice(0, 8)}` : ""}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleCopyIsyMigrationLogs}
+                            disabled={isyMigrationRunLogs.length === 0}
+                            className="h-7 px-2"
+                          >
+                            <Copy className="h-3.5 w-3.5 mr-1" />
+                            Copy Logs
+                          </Button>
+                        </div>
                       </div>
                       <div className="max-h-64 overflow-y-auto rounded border border-violet-200/70 bg-slate-950/85 p-2 font-mono text-[11px] leading-5 text-slate-100 dark:border-violet-900/60">
                         {isyMigrationRunLogs.length > 0 ? (
                           isyMigrationRunLogs.map((entry, index) => {
-                            const timestampText = entry?.timestamp
-                              ? new Date(entry.timestamp).toLocaleTimeString()
-                              : "--:--:--"
-                            const stageText = entry?.stage ? `[${entry.stage}] ` : ""
                             const levelClass = entry?.level === "error"
                               ? "text-red-300"
                               : entry?.level === "warn"
@@ -3125,7 +3215,9 @@ export function Settings() {
 
                             return (
                               <p key={`isy-migration-log-${index}`} className={levelClass}>
-                                <span className="text-slate-400">[{timestampText}]</span> {stageText}{entry?.message || "No message"}
+                                <span className="text-slate-400">
+                                  [{entry?.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "--:--:--"}]
+                                </span> {entry?.stage ? `[${entry.stage}] ` : ""}{entry?.message || "No message"}
                               </p>
                             )
                           })
