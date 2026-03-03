@@ -532,18 +532,12 @@ class DeviceService {
       console.log('DeviceService: Successfully controlled device:', updatedDevice.name, 'action:', action);
       return updatedDevice;
     } catch (error) {
-      console.error('DeviceService: Error controlling device:', error.message);
-      console.error(error.stack);
-      if (error.message === 'Device not found' ||
-          error.message.includes('offline') ||
-          error.message.includes('only available') ||
-          error.message.includes('not supported') ||
-          error.message.includes('support only') ||
-          error.message.includes('must be') ||
-          error.message.includes('Unknown action')) {
-        throw error;
+      const message = error instanceof Error ? error.message : String(error || 'Failed to control device');
+      console.error('DeviceService: Error controlling device:', message);
+      if (error?.stack) {
+        console.error(error.stack);
       }
-      throw new Error('Failed to control device');
+      throw new Error(message || 'Failed to control device');
     }
   }
 

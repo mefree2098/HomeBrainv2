@@ -269,6 +269,7 @@ export function Devices() {
   const [lightColorDrafts, setLightColorDrafts] = useState<Record<string, string>>({})
   const [pendingControls, setPendingControls] = useState<Record<string, boolean>>({})
   const [controlFeedback, setControlFeedback] = useState<Record<string, 'success' | 'error'>>({})
+  const [controlErrorMessages, setControlErrorMessages] = useState<Record<string, string>>({})
   const {
     favoriteDeviceIds,
     toggleDeviceFavorite,
@@ -541,10 +542,21 @@ export function Devices() {
     }
 
     if (feedback === 'error') {
+      const errorMessage = controlErrorMessages[device._id]
+      const trimmedError = typeof errorMessage === 'string' && errorMessage.length > 140
+        ? `${errorMessage.slice(0, 137)}...`
+        : errorMessage
       return (
-        <div className="flex items-center gap-1 text-xs text-red-500">
-          <AlertCircle className="h-3 w-3" />
-          Command failed
+        <div className="space-y-1 text-xs text-red-500">
+          <div className="flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" />
+            Command failed
+          </div>
+          {trimmedError ? (
+            <p className="break-words text-[11px] text-red-400">
+              {trimmedError}
+            </p>
+          ) : null}
         </div>
       )
     }
@@ -555,6 +567,11 @@ export function Devices() {
   const handleDeviceControl = async (deviceId: string, action: string, value?: number | string) => {
     setPendingControls(prev => ({ ...prev, [deviceId]: true }))
     setControlFeedback(prev => {
+      const next = { ...prev }
+      delete next[deviceId]
+      return next
+    })
+    setControlErrorMessages(prev => {
       const next = { ...prev }
       delete next[deviceId]
       return next
@@ -608,6 +625,11 @@ export function Devices() {
       }
 
       setControlFeedbackForDevice(deviceId, 'success')
+      setControlErrorMessages(prev => {
+        const next = { ...prev }
+        delete next[deviceId]
+        return next
+      })
       setTimeout(() => {
         refreshDevicesSnapshot().catch((error) => console.warn('Post-control refresh failed:', error))
       }, 1200)
@@ -616,13 +638,20 @@ export function Devices() {
       }, 3800)
     } catch (error) {
       console.error('Failed to control device:', error)
+      const errorMessage = error instanceof Error
+        ? error.message
+        : 'Failed to control device'
       setControlFeedbackForDevice(deviceId, 'error')
+      setControlErrorMessages(prev => ({
+        ...prev,
+        [deviceId]: errorMessage || 'Failed to control device'
+      }))
       setTimeout(() => {
         refreshDevicesSnapshot().catch((refreshError) => console.warn('Refresh after failed control failed:', refreshError))
       }, 1000)
       toast({
         title: "Error",
-        description: "Failed to control device",
+        description: errorMessage || "Failed to control device",
         variant: "destructive"
       })
     } finally {

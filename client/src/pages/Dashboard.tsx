@@ -179,9 +179,12 @@ export function Dashboard() {
       }
     } catch (error) {
       console.error('Failed to control device:', error)
+      const errorMessage = error instanceof Error
+        ? error.message
+        : 'Failed to control device'
       toast({
         title: "Error",
-        description: "Failed to control device",
+        description: errorMessage || "Failed to control device",
         variant: "destructive"
       })
     }
