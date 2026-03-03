@@ -93,12 +93,39 @@ import {
   turnOffHarmonyHub
 } from "@/api/harmony"
 import {
+  getInsteonSerialPorts,
+  testInsteonConnection,
   testInsteonISYConnection,
   extractInsteonISYData,
   syncInsteonFromISY
 } from "@/api/insteon"
 import { useNavigate } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
+
+type InsteonSerialPortCandidate = {
+  path?: string;
+  stablePath?: string | null;
+  aliases?: string[];
+  manufacturer?: string | null;
+  friendlyName?: string | null;
+  vendorId?: string | null;
+  productId?: string | null;
+  likelyInsteon?: boolean;
+}
+
+type InsteonPlmConnectionTestResult = {
+  success?: boolean;
+  message?: string;
+  connected?: boolean;
+  transport?: string;
+  port?: string;
+  plmInfo?: {
+    deviceId?: string;
+    firmwareVersion?: string | number;
+    deviceCategory?: string | number;
+    subcategory?: string | number;
+  };
+}
 
 export function Settings() {
   const { toast } = useToast()
@@ -134,6 +161,10 @@ export function Settings() {
   const [savingSthmConfig, setSavingSthmConfig] = useState(false)
   const [runningSthmDiagnostics, setRunningSthmDiagnostics] = useState(false)
   const [sthmDiagnostics, setSthmDiagnostics] = useState<any>(null)
+  const [scanningInsteonPorts, setScanningInsteonPorts] = useState(false)
+  const [testingInsteonPlmConnection, setTestingInsteonPlmConnection] = useState(false)
+  const [insteonSerialPortCandidates, setInsteonSerialPortCandidates] = useState<InsteonSerialPortCandidate[]>([])
+  const [insteonPlmTestResult, setInsteonPlmTestResult] = useState<InsteonPlmConnectionTestResult | null>(null)
   const [testingIsyConnection, setTestingIsyConnection] = useState(false)
   const [extractingIsyData, setExtractingIsyData] = useState(false)
   const [previewingIsyMigration, setPreviewingIsyMigration] = useState(false)
@@ -385,6 +416,7 @@ export function Settings() {
   const disarmSelectValue = sthmConfig.disarmDeviceId || STHM_NOT_CONFIGURED
   const armStaySelectValue = sthmConfig.armStayDeviceId || STHM_NOT_CONFIGURED
   const armAwaySelectValue = sthmConfig.armAwayDeviceId || STHM_NOT_CONFIGURED
+  const insteonPortValue = (watch("insteonPort") || "").toString()
   const isyHostValue = (watch("isyHost") || "").toString()
   const isyPortValueRaw = watch("isyPort")
   const isyPortValue = isyPortValueRaw === undefined || isyPortValueRaw === null ? "" : String(isyPortValueRaw)
@@ -818,6 +850,117 @@ export function Settings() {
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const resolveCandidateEndpoint = (candidate: InsteonSerialPortCandidate | null | undefined) => {
+    const stablePath = typeof candidate?.stablePath === "string" ? candidate.stablePath.trim() : ""
+    const directPath = typeof candidate?.path === "string" ? candidate.path.trim() : ""
+    return stablePath || directPath
+  }
+
+  const handleUseDetectedInsteonEndpoint = (candidate: InsteonSerialPortCandidate) => {
+    const endpoint = resolveCandidateEndpoint(candidate)
+    if (!endpoint) {
+      return
+    }
+
+    setValue("insteonPort", endpoint, { shouldDirty: true, shouldTouch: true })
+    setInsteonPlmTestResult(null)
+    toast({
+      title: "PLM endpoint selected",
+      description: `Using ${endpoint}`
+    })
+  }
+
+  const handleScanInsteonPlmEndpoints = async () => {
+    setScanningInsteonPorts(true)
+    try {
+      const response = await getInsteonSerialPorts()
+      const ports = Array.isArray(response?.ports) ? response.ports : []
+      setInsteonSerialPortCandidates(ports)
+
+      if (ports.length === 0) {
+        toast({
+          title: "No serial endpoints detected",
+          description: "Connect the USB PLM and check USB permissions for the HomeBrain service user.",
+          variant: "destructive"
+        })
+        return
+      }
+
+      const bestCandidate = ports.find((port: InsteonSerialPortCandidate) => port?.likelyInsteon) || ports[0]
+      const bestEndpoint = resolveCandidateEndpoint(bestCandidate)
+      const currentEndpoint = insteonPortValue.trim()
+
+      if (!currentEndpoint && bestEndpoint) {
+        setValue("insteonPort", bestEndpoint, { shouldDirty: true, shouldTouch: true })
+      }
+
+      const likelyCount = ports.filter((port: InsteonSerialPortCandidate) => Boolean(port?.likelyInsteon)).length
+      toast({
+        title: "PLM scan complete",
+        description: likelyCount > 0
+          ? `Found ${ports.length} serial endpoint(s), ${likelyCount} likely INSTEON.`
+          : `Found ${ports.length} serial endpoint(s).`
+      })
+    } catch (error: any) {
+      console.error("INSTEON serial endpoint scan failed:", error)
+      toast({
+        title: "PLM scan failed",
+        description: error?.message || "Unable to list serial endpoints.",
+        variant: "destructive"
+      })
+    } finally {
+      setScanningInsteonPorts(false)
+    }
+  }
+
+  const handleTestInsteonPlm = async () => {
+    const endpoint = insteonPortValue.trim()
+    if (!endpoint) {
+      toast({
+        title: "Endpoint required",
+        description: "Enter or scan an INSTEON PLM endpoint first.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setTestingInsteonPlmConnection(true)
+    try {
+      await updateSettings({ insteonPort: endpoint })
+      const result = await testInsteonConnection()
+      setInsteonPlmTestResult(result || {})
+
+      if (result?.success) {
+        const plmId = result?.plmInfo?.deviceId ? ` PLM ID ${result.plmInfo.deviceId}.` : ""
+        toast({
+          title: "PLM connection successful",
+          description: `${result?.message || "Insteon PLM is reachable."}${plmId}`
+        })
+      } else {
+        toast({
+          title: "PLM connection failed",
+          description: result?.message || "HomeBrain could not talk to the configured PLM endpoint.",
+          variant: "destructive"
+        })
+      }
+    } catch (error: any) {
+      console.error("INSTEON PLM test failed:", error)
+      const message = error?.message || "Unable to test INSTEON PLM connection."
+      setInsteonPlmTestResult({
+        success: false,
+        connected: false,
+        message
+      })
+      toast({
+        title: "PLM connection failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setTestingInsteonPlmConnection(false)
     }
   }
 
@@ -2301,16 +2444,145 @@ export function Settings() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium">INSTEON PLM Endpoint</label>
-                  <Input
-                    {...register("insteonPort")}
-                    placeholder="/dev/serial/by-id/... (recommended) or /dev/ttyUSB0 or tcp://192.168.1.50:9761"
-                    className="mt-1"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    USB PLM local serial path (prefer /dev/serial/by-id/... for stable naming) or TCP serial bridge (for example tcp://host:9761)
-                  </p>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-sm font-medium">INSTEON PLM Endpoint</label>
+                    <Input
+                      {...register("insteonPort")}
+                      placeholder="/dev/serial/by-id/... (recommended) or /dev/ttyUSB0 or tcp://192.168.1.50:9761"
+                      className="mt-1"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      USB PLM local serial path (prefer /dev/serial/by-id/... for stable naming) or TCP serial bridge (for example tcp://host:9761)
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleScanInsteonPlmEndpoints}
+                      disabled={scanningInsteonPorts}
+                    >
+                      {scanningInsteonPorts ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Scanning...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Scan USB PLMs
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleTestInsteonPlm}
+                      disabled={testingInsteonPlmConnection}
+                    >
+                      {testingInsteonPlmConnection ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Testing...
+                        </>
+                      ) : (
+                        <>
+                          <TestTube className="h-4 w-4 mr-2" />
+                          Test PLM Connection
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {insteonSerialPortCandidates.length > 0 && (
+                    <div className="rounded-md border border-blue-200/70 bg-blue-50/50 dark:border-blue-900/50 dark:bg-blue-950/10 p-3 space-y-2">
+                      <p className="text-xs font-medium text-blue-800 dark:text-blue-300">
+                        Detected serial endpoints
+                      </p>
+                      <div className="space-y-2">
+                        {insteonSerialPortCandidates.slice(0, 6).map((candidate, index) => {
+                          const endpoint = resolveCandidateEndpoint(candidate)
+                          const isSelected = endpoint === insteonPortValue.trim()
+                          const aliasList = Array.isArray(candidate?.aliases)
+                            ? candidate.aliases.filter((alias) => alias && alias !== candidate.path)
+                            : []
+
+                          return (
+                            <div
+                              key={`${candidate?.path || "port"}-${index}`}
+                              className="flex flex-col gap-2 rounded-md border border-blue-200/80 bg-white/80 dark:bg-slate-900/40 p-2 md:flex-row md:items-center md:justify-between"
+                            >
+                              <div className="space-y-1">
+                                <p className="text-xs font-mono break-all">{endpoint || candidate?.path || "Unknown endpoint"}</p>
+                                <p className="text-[11px] text-muted-foreground">
+                                  {candidate?.likelyInsteon ? "Likely INSTEON PLM" : "Serial device"}
+                                  {candidate?.manufacturer ? ` • ${candidate.manufacturer}` : ""}
+                                  {candidate?.vendorId && candidate?.productId ? ` • ${candidate.vendorId}:${candidate.productId}` : ""}
+                                </p>
+                                {aliasList.length > 0 && (
+                                  <p className="text-[11px] text-muted-foreground break-all">
+                                    Aliases: {aliasList.join(", ")}
+                                  </p>
+                                )}
+                              </div>
+                              <Button
+                                type="button"
+                                variant={isSelected ? "secondary" : "outline"}
+                                size="sm"
+                                onClick={() => handleUseDetectedInsteonEndpoint(candidate)}
+                                disabled={!endpoint}
+                              >
+                                {isSelected ? "Selected" : "Use endpoint"}
+                              </Button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {insteonPlmTestResult && (
+                    <div
+                      className={`rounded-md border p-3 ${
+                        insteonPlmTestResult.success
+                          ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/50 dark:bg-emerald-950/10"
+                          : "border-red-200 bg-red-50/60 dark:border-red-900/50 dark:bg-red-950/10"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        {insteonPlmTestResult.success ? (
+                          <CheckCircle className="h-4 w-4 text-emerald-600 mt-0.5" />
+                        ) : (
+                          <AlertCircle className="h-4 w-4 text-red-600 mt-0.5" />
+                        )}
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">
+                            {insteonPlmTestResult.success ? "PLM reachable" : "PLM connection failed"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {insteonPlmTestResult.message || "No additional details returned."}
+                          </p>
+                          {insteonPlmTestResult.port && (
+                            <p className="text-xs text-muted-foreground">
+                              Endpoint: <span className="font-mono">{insteonPlmTestResult.port}</span>
+                            </p>
+                          )}
+                          {insteonPlmTestResult.plmInfo?.deviceId && (
+                            <p className="text-xs text-muted-foreground">
+                              PLM ID: <span className="font-mono">{insteonPlmTestResult.plmInfo.deviceId}</span>
+                              {insteonPlmTestResult.plmInfo.firmwareVersion !== undefined
+                                ? ` • Firmware: ${insteonPlmTestResult.plmInfo.firmwareVersion}`
+                                : ""}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="rounded-lg border border-violet-200 bg-violet-50/40 dark:border-violet-900/60 dark:bg-violet-900/10 p-4 space-y-4">
                   <div className="flex items-center gap-2">
