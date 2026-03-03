@@ -4125,13 +4125,23 @@ class InsteonService {
       reportProgress('Program translation skipped: no ISY programs parsed', { stage: 'programs', level: 'warn', progress: 95 });
     }
 
+    const failedStages = new Set(
+      Array.isArray(results.errors)
+        ? results.errors.map((entry) => String(entry?.stage || '').toLowerCase()).filter(Boolean)
+        : []
+    );
+
     results.message = [
       `ISY sync complete`,
-      results.devices ? `${results.devices.imported || 0} devices imported` : 'devices skipped',
+      results.devices
+        ? `${results.devices.imported || 0} devices imported`
+        : (failedStages.has('devices') ? 'devices failed' : 'devices skipped'),
       results.topology
         ? `${results.topology.appliedScenes || 0} scenes applied${results.topology.skippedExistingScenes ? ` (${results.topology.skippedExistingScenes} already in desired state)` : ''}`
-        : 'topology skipped',
-      results.programs ? `${results.programs.created || 0} workflows created` : 'programs skipped'
+        : (failedStages.has('topology') ? 'topology failed' : 'topology skipped'),
+      results.programs
+        ? `${results.programs.created || 0} workflows created`
+        : (failedStages.has('programs') ? 'programs failed' : 'programs skipped')
     ].join(', ');
 
     reportProgress(results.message, { stage: 'complete', level: results.success ? 'info' : 'warn', progress: 100 });

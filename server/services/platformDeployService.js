@@ -1,6 +1,7 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const mongoose = require('mongoose');
@@ -353,16 +354,17 @@ class PlatformDeployService {
       return paths;
     };
     const recreateDistDirectory = async () => {
+      const quarantineDir = path.join(os.tmpdir(), 'homebrain-dist-quarantine');
+      await fsp.mkdir(quarantineDir, { recursive: true });
       const quarantinePath = path.join(
-        this.projectRoot,
-        'client',
+        quarantineDir,
         `dist.quarantine.${new Date().toISOString().replace(/[:.]/g, '-')}`
       );
 
       await fsp.rename(distPath, quarantinePath);
       await fsp.mkdir(distPath, { recursive: true });
       await log(
-        `Replaced non-writable client/dist with a clean directory and quarantined prior contents at ${path.relative(this.projectRoot, quarantinePath)}.`
+        `Replaced non-writable client/dist with a clean directory and quarantined prior contents at ${quarantinePath}.`
       );
 
       return quarantinePath;
@@ -541,7 +543,8 @@ class PlatformDeployService {
     if (!filePath) {
       return false;
     }
-    return filePath.startsWith('client/dist/');
+    return filePath.startsWith('client/dist/')
+      || filePath.startsWith('client/dist.quarantine.');
   }
 
   getBlockingDirtyEntries(repoStatus = null) {
