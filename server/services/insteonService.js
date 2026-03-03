@@ -1114,6 +1114,27 @@ class InsteonService {
     }
     ignoreTlsErrors = Boolean(ignoreTlsErrors);
 
+    const shouldPersistConnection = request.persistConnection === true || connectionInput.persistConnection === true;
+    if (shouldPersistConnection) {
+      const settingsUpdates = {
+        isyHost: parsedHost,
+        isyPort: port,
+        isyUsername: username,
+        isyUseHttps: useHttps,
+        isyIgnoreTlsErrors: ignoreTlsErrors
+      };
+
+      if (hasExplicitPasswordInput && explicitPasswordRaw.trim() && !this._isMaskedSecretValue(explicitPasswordRaw)) {
+        settingsUpdates.isyPassword = explicitPasswordRaw;
+      }
+
+      try {
+        await Settings.updateSettings(settingsUpdates);
+      } catch (error) {
+        console.warn(`InsteonService: Failed to persist ISY connection settings: ${error.message}`);
+      }
+    }
+
     return {
       host: parsedHost,
       port,

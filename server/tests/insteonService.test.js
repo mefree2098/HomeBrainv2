@@ -647,6 +647,97 @@ test('_resolveISYConnection surfaces masked stored-password corruption clearly',
   );
 });
 
+test('_resolveISYConnection persists resolved connection fields when requested', async (t) => {
+  const originalGetSettings = Settings.getSettings;
+  const originalUpdateSettings = Settings.updateSettings;
+
+  t.after(() => {
+    Settings.getSettings = originalGetSettings;
+    Settings.updateSettings = originalUpdateSettings;
+  });
+
+  const persistedPayloads = [];
+  Settings.getSettings = async () => ({
+    isyHost: '192.168.1.11',
+    isyPort: 80,
+    isyUsername: 'admin',
+    isyPassword: 'stored-secret',
+    isyUseHttps: false,
+    isyIgnoreTlsErrors: true
+  });
+  Settings.updateSettings = async (payload) => {
+    persistedPayloads.push(payload);
+    return {};
+  };
+
+  const resolved = await insteonService._resolveISYConnection({
+    isyHost: '192.168.1.22',
+    isyPort: 443,
+    isyUsername: 'isy-admin',
+    isyPassword: 'fresh-secret',
+    isyUseHttps: true,
+    isyIgnoreTlsErrors: false,
+    persistConnection: true
+  });
+
+  assert.equal(resolved.host, '192.168.1.22');
+  assert.equal(resolved.port, 443);
+  assert.equal(resolved.username, 'isy-admin');
+  assert.equal(resolved.password, 'fresh-secret');
+  assert.equal(persistedPayloads.length, 1);
+  assert.deepEqual(persistedPayloads[0], {
+    isyHost: '192.168.1.22',
+    isyPort: 443,
+    isyUsername: 'isy-admin',
+    isyUseHttps: true,
+    isyIgnoreTlsErrors: false,
+    isyPassword: 'fresh-secret'
+  });
+});
+
+test('_resolveISYConnection persist does not overwrite stored password when no explicit password is provided', async (t) => {
+  const originalGetSettings = Settings.getSettings;
+  const originalUpdateSettings = Settings.updateSettings;
+
+  t.after(() => {
+    Settings.getSettings = originalGetSettings;
+    Settings.updateSettings = originalUpdateSettings;
+  });
+
+  const persistedPayloads = [];
+  Settings.getSettings = async () => ({
+    isyHost: '192.168.1.11',
+    isyPort: 80,
+    isyUsername: 'admin',
+    isyPassword: 'stored-secret',
+    isyUseHttps: false,
+    isyIgnoreTlsErrors: true
+  });
+  Settings.updateSettings = async (payload) => {
+    persistedPayloads.push(payload);
+    return {};
+  };
+
+  const resolved = await insteonService._resolveISYConnection({
+    isyHost: '192.168.1.33',
+    isyPort: 8080,
+    isyUsername: 'isy-admin',
+    isyUseHttps: false,
+    isyIgnoreTlsErrors: true,
+    persistConnection: true
+  });
+
+  assert.equal(resolved.password, 'stored-secret');
+  assert.equal(persistedPayloads.length, 1);
+  assert.deepEqual(persistedPayloads[0], {
+    isyHost: '192.168.1.33',
+    isyPort: 8080,
+    isyUsername: 'isy-admin',
+    isyUseHttps: false,
+    isyIgnoreTlsErrors: true
+  });
+});
+
 test('_probeISYConnection falls back when /rest/ping returns HTTP 404', async (t) => {
   const originalRequestISYResource = insteonService._requestISYResource;
 
