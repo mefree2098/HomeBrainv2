@@ -213,6 +213,7 @@ export function Settings() {
   const [isyMigrationRunId, setIsyMigrationRunId] = useState<string | null>(null)
   const [isyMigrationRunStatus, setIsyMigrationRunStatus] = useState<string | null>(null)
   const [isyMigrationRunLogs, setIsyMigrationRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
+  const [isyPasswordConfigured, setIsyPasswordConfigured] = useState(false)
   const [isyMigrationOptions, setIsyMigrationOptions] = useState<{
     importDevices: boolean;
     importTopology: boolean;
@@ -475,12 +476,20 @@ export function Settings() {
         
         if (response.success && response.settings) {
           console.log('Loaded settings:', response.settings);
+          setIsyPasswordConfigured(Boolean(
+            response.settings.isyPassword && String(response.settings.isyPassword).trim()
+          ))
           
           // Update form values with loaded settings, handle masked sensitive fields
           Object.entries(response.settings).forEach(([key, value]) => {
             if (value !== undefined) {
+              if (key === 'isyPassword') {
+                // Keep the input empty and track configured state separately so typing/saving behaves predictably.
+                setValue('isyPassword', '')
+                return
+              }
               // For masked sensitive fields, show a placeholder indicating key is configured
-              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey' || key === 'isyPassword') &&
+              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey') &&
                   isMaskedSecretPlaceholder(value)) {
                 console.log(`Found masked field: ${key}, showing placeholder`);
                 setValue(key, CONFIGURED_SECRET_PLACEHOLDER); // Placeholder to show key is configured
@@ -870,13 +879,23 @@ export function Settings() {
       if (isMaskedSecretPlaceholder(settingsToSave.anthropicApiKey)) {
         delete settingsToSave.anthropicApiKey; // Don't update if it's just the placeholder
       }
-      if (isMaskedSecretPlaceholder(settingsToSave.isyPassword)) {
-        delete settingsToSave.isyPassword; // Don't update if it's just the placeholder
+
+      const trimmedIsyPassword = typeof settingsToSave.isyPassword === "string"
+        ? settingsToSave.isyPassword.trim()
+        : ""
+      if (!trimmedIsyPassword || isMaskedSecretPlaceholder(trimmedIsyPassword)) {
+        delete settingsToSave.isyPassword // Preserve existing saved password when field is left blank
+      } else {
+        settingsToSave.isyPassword = trimmedIsyPassword
       }
       
       const response = await updateSettings(settingsToSave);
       
       if (response.success) {
+        setIsyPasswordConfigured(Boolean(
+          response.settings?.isyPassword && String(response.settings.isyPassword).trim()
+        ))
+        setValue("isyPassword", "")
         toast({
           title: "Settings Saved",
           description: response.message || "Your settings have been saved successfully"
@@ -1070,7 +1089,7 @@ export function Settings() {
 
   const buildIsyConnectionPayload = () => {
     const parsedPort = Number(isyPortValue)
-    const normalizedPassword = isMaskedSecretPlaceholder(isyPasswordValue) ? '' : isyPasswordValue.trim()
+    const normalizedPassword = isyPasswordValue.trim()
 
     const payload: Record<string, any> = {
       ...(isyHostValue.trim() ? { isyHost: isyHostValue.trim() } : {}),
@@ -2997,7 +3016,7 @@ export function Settings() {
                       <Input
                         {...register("isyPassword")}
                         type="password"
-                        placeholder={isMaskedSecretPlaceholder(isyPasswordValue) ? "Password configured" : "Enter ISY password"}
+                        placeholder={isyPasswordConfigured ? "Password saved (leave blank to keep)" : "Enter ISY password"}
                         className="mt-1"
                       />
                     </div>
