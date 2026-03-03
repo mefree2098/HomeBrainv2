@@ -783,6 +783,18 @@ test('_parseISYImportPayload accepts ISY node object variants with resolved/norm
   assert.equal(parsed.invalidEntries.length, 0);
 });
 
+test('_parseISYImportPayload keeps friendly names when duplicate IDs arrive across payload fields', () => {
+  const parsed = insteonService._parseISYImportPayload({
+    deviceIds: ['AA.BB.CC'],
+    devices: [{ address: 'AA.BB.CC', name: 'Kitchen Dimmer' }]
+  });
+
+  assert.equal(parsed.devices.length, 1);
+  assert.equal(parsed.devices[0].address, 'AABBCC');
+  assert.equal(parsed.devices[0].name, 'Kitchen Dimmer');
+  assert.equal(parsed.duplicateCount, 1);
+});
+
 test('_parseISYImportPayload rejects out-of-range group values', () => {
   assert.throws(
     () => insteonService._parseISYImportPayload({ deviceIds: ['AA.BB.CC'], group: 300 }),
@@ -983,6 +995,111 @@ test('syncFromISY passes extracted device names into device replay payload', asy
   assert.equal(keypad.name, 'Kitchen Main');
   assert.equal(hall.name, 'Hall Light');
   assert.equal(capturedPayload.checkExistingLinks, false);
+});
+
+test('_upsertInsteonDevice upgrades switch metadata to light and applies resolved name', async (t) => {
+  const originalFindExisting = insteonService._findExistingInsteonDeviceByAddress;
+  const originalGetDeviceInfo = insteonService.getDeviceInfo;
+
+  t.after(() => {
+    insteonService._findExistingInsteonDeviceByAddress = originalFindExisting;
+    insteonService.getDeviceInfo = originalGetDeviceInfo;
+  });
+
+  const existingDevice = {
+    _id: 'device-1',
+    name: '31.41.F1',
+    type: 'switch',
+    room: 'Unassigned',
+    brand: 'Insteon',
+    model: 'Unknown',
+    properties: {
+      source: 'insteon',
+      insteonAddress: '3141F1',
+      deviceCategory: 0,
+      subcategory: 0
+    },
+    isOnline: false,
+    lastSeen: null,
+    save: async function save() {
+      return this;
+    }
+  };
+
+  insteonService._findExistingInsteonDeviceByAddress = async () => existingDevice;
+  insteonService.getDeviceInfo = async () => ({
+    deviceId: '3141F1',
+    deviceCategory: 1,
+    subcategory: 46,
+    productKey: '2477D'
+  });
+
+  const result = await insteonService._upsertInsteonDevice({
+    address: '31.41.F1',
+    group: 1,
+    name: 'Kitchen Main',
+    markLinkedToCurrentPlm: true
+  });
+
+  assert.equal(result.action, 'updated');
+  assert.equal(existingDevice.name, 'Kitchen Main');
+  assert.equal(existingDevice.type, 'light');
+  assert.equal(existingDevice.model, '2477D');
+  assert.equal(existingDevice.properties.deviceCategory, 1);
+  assert.equal(existingDevice.properties.subcategory, 46);
+  assert.equal(existingDevice.properties.supportsBrightness, true);
+  assert.equal(existingDevice.properties.linkedToCurrentPlm, true);
+});
+
+test('_upsertInsteonDevice preserves known category metadata when refreshed info is unavailable', async (t) => {
+  const originalFindExisting = insteonService._findExistingInsteonDeviceByAddress;
+  const originalGetDeviceInfo = insteonService.getDeviceInfo;
+
+  t.after(() => {
+    insteonService._findExistingInsteonDeviceByAddress = originalFindExisting;
+    insteonService.getDeviceInfo = originalGetDeviceInfo;
+  });
+
+  const existingDevice = {
+    _id: 'device-2',
+    name: 'Hall Dimmer',
+    type: 'light',
+    room: 'Unassigned',
+    brand: 'Insteon',
+    model: '2477D',
+    properties: {
+      source: 'insteon',
+      insteonAddress: 'AABBCC',
+      deviceCategory: 1,
+      subcategory: 46,
+      supportsBrightness: true
+    },
+    isOnline: true,
+    lastSeen: null,
+    save: async function save() {
+      return this;
+    }
+  };
+
+  insteonService._findExistingInsteonDeviceByAddress = async () => existingDevice;
+  insteonService.getDeviceInfo = async () => ({
+    deviceId: 'AABBCC',
+    deviceCategory: 0,
+    subcategory: 0,
+    firmwareVersion: 'Unknown'
+  });
+
+  const result = await insteonService._upsertInsteonDevice({
+    address: 'AA.BB.CC',
+    group: 1,
+    name: 'Hall Dimmer'
+  });
+
+  assert.equal(result.action, 'updated');
+  assert.equal(existingDevice.type, 'light');
+  assert.equal(existingDevice.properties.deviceCategory, 1);
+  assert.equal(existingDevice.properties.subcategory, 46);
+  assert.equal(existingDevice.properties.supportsBrightness, true);
 });
 
 test('_isTopologySceneAlreadyLinked resolves gw controller using PLM id', async (t) => {

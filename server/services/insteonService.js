@@ -657,8 +657,7 @@ class InsteonService {
       }
     });
 
-    const seen = new Set();
-    const parsedDevices = [];
+    const parsedDevicesByAddress = new Map();
     let duplicateCount = 0;
 
     candidates.forEach((candidate) => {
@@ -684,22 +683,36 @@ class InsteonService {
         return;
       }
 
-      if (seen.has(normalizedAddress)) {
-        duplicateCount += 1;
-        return;
-      }
-      seen.add(normalizedAddress);
-
       const name = typeof candidate.name === 'string' && candidate.name.trim()
         ? candidate.name.trim()
         : null;
 
-      parsedDevices.push({
+      if (parsedDevicesByAddress.has(normalizedAddress)) {
+        duplicateCount += 1;
+        const existing = parsedDevicesByAddress.get(normalizedAddress);
+        const existingName = typeof existing?.name === 'string' ? existing.name.trim() : '';
+        const existingLooksAddressLike = this._isAddressLikeISYName(existingName);
+        const candidateLooksAddressLike = this._isAddressLikeISYName(name || '');
+        if (
+          name
+          && (
+            !existingName
+            || (existingLooksAddressLike && !candidateLooksAddressLike)
+          )
+        ) {
+          existing.name = name;
+        }
+        return;
+      }
+
+      parsedDevicesByAddress.set(normalizedAddress, {
         address: normalizedAddress,
         displayAddress: this._formatInsteonAddress(normalizedAddress),
         name
       });
     });
+
+    const parsedDevices = Array.from(parsedDevicesByAddress.values());
 
     const group = Number(request.group ?? request.linkGroup ?? DEFAULT_ISY_IMPORT_GROUP);
     if (!Number.isInteger(group) || group < 0 || group > 255) {
@@ -4801,17 +4814,36 @@ class InsteonService {
     const normalizedAddress = this._normalizeInsteonAddress(address);
     const existingDevice = await this._findExistingInsteonDeviceByAddress(normalizedAddress);
     const info = deviceInfo || await this.getDeviceInfo(normalizedAddress);
+    const existingProperties = existingDevice ? (existingDevice.properties || {}) : {};
+    const existingCategory = this._coerceNumericValue(existingProperties.deviceCategory, 0);
+    const existingSubcategory = this._coerceNumericValue(existingProperties.subcategory, 0);
+    const incomingCategory = this._coerceNumericValue(info?.deviceCategory, 0);
+    const incomingSubcategory = this._coerceNumericValue(info?.subcategory, 0);
+    const resolvedCategory = incomingCategory > 0 ? incomingCategory : existingCategory;
+    const resolvedSubcategory = (incomingCategory > 0 || incomingSubcategory > 0)
+      ? incomingSubcategory
+      : existingSubcategory;
+    const resolvedInfo = {
+      ...(info || {}),
+      deviceCategory: resolvedCategory,
+      subcategory: resolvedSubcategory
+    };
     const preferredName = typeof name === 'string' && name.trim()
       ? name.trim()
       : `Insteon Device ${this._formatInsteonAddress(normalizedAddress)}`;
     const now = new Date();
+    const inferredType = this._mapInsteonTypeToDeviceType(resolvedInfo);
+    const inferredSupportsBrightness = (
+      resolvedCategory === 0x01
+      || existingProperties.supportsBrightness === true
+    );
 
     const mergedProperties = {
-      ...(existingDevice ? (existingDevice.properties || {}) : {}),
+      ...existingProperties,
       source: 'insteon',
       insteonAddress: normalizedAddress,
-      deviceCategory: info.deviceCategory || 0,
-      subcategory: info.subcategory || 0
+      deviceCategory: resolvedCategory,
+      subcategory: resolvedSubcategory
     };
 
     if (Number.isInteger(group)) {
@@ -4824,19 +4856,32 @@ class InsteonService {
       mergedProperties.linkedToCurrentPlm = true;
       mergedProperties.lastLinkedAt = now;
     }
+    if (inferredSupportsBrightness) {
+      mergedProperties.supportsBrightness = true;
+    }
 
     if (existingDevice) {
       existingDevice.properties = mergedProperties;
       existingDevice.brand = existingDevice.brand || 'Insteon';
-      if (typeof info.productKey === 'string' && info.productKey.trim()) {
-        existingDevice.model = info.productKey.trim();
+      if (typeof resolvedInfo.productKey === 'string' && resolvedInfo.productKey.trim()) {
+        existingDevice.model = resolvedInfo.productKey.trim();
       }
-      existingDevice.type = existingDevice.type || this._mapInsteonTypeToDeviceType(info);
+      if (!existingDevice.type) {
+        existingDevice.type = inferredType;
+      } else if (existingDevice.type === 'switch' && inferredType !== 'switch') {
+        existingDevice.type = inferredType;
+      } else if (existingDevice.type === 'sensor' && inferredType === 'light') {
+        existingDevice.type = inferredType;
+      }
       existingDevice.room = existingDevice.room || 'Unassigned';
       existingDevice.isOnline = true;
       existingDevice.lastSeen = now;
 
-      if (preferredName && (!existingDevice.name || /^Insteon Device\b/i.test(existingDevice.name))) {
+      if (preferredName && (
+        !existingDevice.name
+        || /^Insteon Device\b/i.test(existingDevice.name)
+        || this._isAddressLikeISYName(existingDevice.name)
+      )) {
         existingDevice.name = preferredName;
       }
 
@@ -4851,11 +4896,11 @@ class InsteonService {
 
     const createdDevice = await Device.create({
       name: preferredName,
-      type: this._mapInsteonTypeToDeviceType(info),
+      type: inferredType,
       room: 'Unassigned',
       status: false,
       brand: 'Insteon',
-      model: info.productKey || 'Unknown',
+      model: resolvedInfo.productKey || 'Unknown',
       properties: mergedProperties,
       isOnline: true,
       lastSeen: now
