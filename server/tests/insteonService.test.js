@@ -229,11 +229,80 @@ test('turnOn issues normalized command address and returns confirmed state', asy
 
   const result = await insteonService.turnOn('mock-device', 68);
   assert.equal(hubAddress, '112233');
-  assert.equal(hubLevel, 173);
+  assert.equal(hubLevel, 68);
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
   assert.equal(result.status, true);
   assert.equal(result.brightness, 68);
+});
+
+test('_linkDeviceRemote writes responder and controller links when controller links are enabled', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalCancelLinkingSafe = insteonService._cancelLinkingSafe;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService._cancelLinkingSafe = originalCancelLinkingSafe;
+  });
+
+  const linkCalls = [];
+  insteonService.isConnected = true;
+  insteonService._cancelLinkingSafe = async () => {};
+  insteonService.hub = {
+    link(address, options, callback) {
+      linkCalls.push({ address, options: { ...options } });
+      callback(null, { id: address, controller: options.controller === true });
+    }
+  };
+
+  const result = await insteonService._linkDeviceRemote('11.22.33', {
+    group: 1,
+    timeoutMs: 5000,
+    ensureControllerLinks: true
+  });
+
+  assert.equal(linkCalls.length, 2);
+  assert.equal(linkCalls[0].address, '112233');
+  assert.equal(linkCalls[0].options.controller, false);
+  assert.equal(linkCalls[1].options.controller, true);
+  assert.equal(result.controllerLinkError, null);
+});
+
+test('_linkDeviceRemote tolerates controller-link failure and returns warning detail', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalCancelLinkingSafe = insteonService._cancelLinkingSafe;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService._cancelLinkingSafe = originalCancelLinkingSafe;
+  });
+
+  insteonService.isConnected = true;
+  insteonService._cancelLinkingSafe = async () => {};
+  insteonService.hub = {
+    link(address, options, callback) {
+      if (options.controller === true) {
+        callback(new Error('link refused'));
+        return;
+      }
+      callback(null, { id: address, controller: false });
+    }
+  };
+
+  const result = await insteonService._linkDeviceRemote('11.22.33', {
+    group: 1,
+    timeoutMs: 5000,
+    ensureControllerLinks: true
+  });
+
+  assert.ok(result.responderLink);
+  assert.equal(result.controllerLink, null);
+  assert.ok(result.controllerLinkError instanceof Error);
+  assert.match(result.controllerLinkError.message, /link refused/i);
 });
 
 test('importDevicesFromISY skips pre-link lookup when PLM id is unavailable', async (t) => {

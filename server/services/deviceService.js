@@ -799,8 +799,11 @@ class DeviceService {
 
       case 'turnon': {
         const requestedBrightness = Number(value);
-        const brightness = Number.isFinite(requestedBrightness)
+        const boundedRequestedBrightness = Number.isFinite(requestedBrightness)
           ? Math.max(0, Math.min(100, Math.round(requestedBrightness)))
+          : null;
+        const brightness = boundedRequestedBrightness && boundedRequestedBrightness > 0
+          ? boundedRequestedBrightness
           : fallbackBrightness;
         await insteonService.turnOn(deviceId, brightness);
         break;

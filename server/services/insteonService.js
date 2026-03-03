@@ -776,7 +776,8 @@ class InsteonService {
         pauseBetweenMs,
         retries,
         skipLinking: Boolean(request.skipLinking || request.importOnly),
-        checkExistingLinks: request.checkExistingLinks !== false
+        checkExistingLinks: request.checkExistingLinks !== false,
+        ensureControllerLinks: request.ensureControllerLinks !== false
       }
     };
   }
@@ -4734,11 +4735,7 @@ class InsteonService {
     }
   }
 
-  async _linkDeviceRemote(address, { group, timeoutMs }) {
-    if (!this.isConnected || !this.hub) {
-      await this.connect();
-    }
-
+  async _executeRemoteLink(address, { group, timeoutMs, controller = false }) {
     const normalizedAddress = this._normalizeInsteonAddress(address);
     await this._cancelLinkingSafe();
 
@@ -4747,7 +4744,8 @@ class InsteonService {
       const timeout = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new Error(`Timeout linking device ${this._formatInsteonAddress(normalizedAddress)}`));
+        const role = controller ? 'as controller' : 'as responder';
+        reject(new Error(`Timeout linking device ${this._formatInsteonAddress(normalizedAddress)} ${role}`));
       }, timeoutMs + 2000);
 
       const settle = (handler) => (value) => {
@@ -4761,9 +4759,10 @@ class InsteonService {
       const rejectOnce = settle((error) => reject(error instanceof Error ? error : new Error(String(error))));
 
       try {
-        this.hub.link(normalizedAddress, { group }, (error, link) => {
+        this.hub.link(normalizedAddress, { group, controller }, (error, link) => {
           if (error) {
-            rejectOnce(new Error(`Failed to link ${this._formatInsteonAddress(normalizedAddress)}: ${error.message}`));
+            const role = controller ? 'as controller' : 'as responder';
+            rejectOnce(new Error(`Failed to link ${this._formatInsteonAddress(normalizedAddress)} ${role}: ${error.message}`));
             return;
           }
           resolveOnce(link || null);
@@ -4772,6 +4771,39 @@ class InsteonService {
         rejectOnce(error);
       }
     });
+  }
+
+  async _linkDeviceRemote(address, { group, timeoutMs, ensureControllerLinks = true }) {
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const normalizedAddress = this._normalizeInsteonAddress(address);
+    const responderLink = await this._executeRemoteLink(normalizedAddress, {
+      group,
+      timeoutMs,
+      controller: false
+    });
+
+    let controllerLink = null;
+    let controllerLinkError = null;
+    if (ensureControllerLinks) {
+      try {
+        controllerLink = await this._executeRemoteLink(normalizedAddress, {
+          group,
+          timeoutMs,
+          controller: true
+        });
+      } catch (error) {
+        controllerLinkError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    return {
+      responderLink,
+      controllerLink,
+      controllerLinkError
+    };
   }
 
   async _linkDeviceManual(address, { group, timeoutMs }) {
@@ -4836,8 +4868,22 @@ class InsteonService {
     });
   }
 
-  async _deviceHasLinkToPLM(address, group, plmId) {
-    return this._deviceHasResponderLinkToController(address, group, plmId);
+  async _deviceHasLinkToPLM(address, group, plmId, { requireControllerLinks = true } = {}) {
+    const hasResponderLink = await this._deviceHasResponderLinkToController(address, group, plmId);
+    if (!hasResponderLink) {
+      return false;
+    }
+
+    if (!requireControllerLinks) {
+      return true;
+    }
+
+    const hasControllerLink = await this._deviceHasControllerLinkToTarget(address, group, plmId);
+    if (hasControllerLink === null) {
+      return true;
+    }
+
+    return hasControllerLink;
   }
 
   async _deviceHasResponderLinkToController(address, group, controllerAddress) {
@@ -4884,6 +4930,53 @@ class InsteonService {
         `InsteonService: Could not inspect responder links for ${this._formatInsteonAddress(normalizedAddress)}: ${error.message}`
       );
       return false;
+    }
+  }
+
+  async _deviceHasControllerLinkToTarget(address, group, targetAddress) {
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const normalizedAddress = this._normalizeInsteonAddress(address);
+    const normalizedTargetId = this._normalizeInsteonAddress(targetAddress);
+
+    try {
+      const links = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error(`Timeout reading link table for ${this._formatInsteonAddress(normalizedAddress)}`));
+        }, 12000);
+
+        this.hub.links(normalizedAddress, (error, linkRecords) => {
+          clearTimeout(timeout);
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve(Array.isArray(linkRecords) ? linkRecords : []);
+        });
+      });
+
+      return links.some((link) => {
+        if (!link || link.isInUse === false || link.controller !== true) {
+          return false;
+        }
+
+        const rawId = typeof link.id === 'string' ? link.id : '';
+        let normalizedLinkedId;
+        try {
+          normalizedLinkedId = this._normalizeInsteonAddress(rawId);
+        } catch (error) {
+          return false;
+        }
+
+        return Number(link.group) === group && normalizedLinkedId === normalizedTargetId;
+      });
+    } catch (error) {
+      console.warn(
+        `InsteonService: Could not inspect controller links for ${this._formatInsteonAddress(normalizedAddress)}: ${error.message}`
+      );
+      return null;
     }
   }
 
@@ -5861,6 +5954,7 @@ class InsteonService {
         group: options.group,
         linkMode: options.linkMode,
         skipLinking: options.skipLinking,
+        ensureControllerLinks: options.ensureControllerLinks,
         linked: 0,
         alreadyLinked: 0,
         linkWriteAttempts: 0,
@@ -5899,7 +5993,9 @@ class InsteonService {
           let isAlreadyLinked = false;
 
           if (shouldCheckExistingLinks) {
-            isAlreadyLinked = await this._deviceHasLinkToPLM(entry.address, options.group, normalizedPlmId);
+            isAlreadyLinked = await this._deviceHasLinkToPLM(entry.address, options.group, normalizedPlmId, {
+              requireControllerLinks: options.ensureControllerLinks
+            });
           }
 
           if (options.skipLinking) {
@@ -5911,16 +6007,18 @@ class InsteonService {
             results.linkWriteAttempts += 1;
             const linkRequest = {
               group: options.group,
-              timeoutMs: options.timeoutMs
+              timeoutMs: options.timeoutMs,
+              ensureControllerLinks: options.ensureControllerLinks
             };
             let linkError = null;
+            let linkResult = null;
 
             for (let attempt = 0; attempt <= options.retries; attempt += 1) {
               try {
                 if (options.linkMode === 'manual') {
                   await this._linkDeviceManual(entry.address, linkRequest);
                 } else {
-                  await this._linkDeviceRemote(entry.address, linkRequest);
+                  linkResult = await this._linkDeviceRemote(entry.address, linkRequest);
                 }
                 linkError = null;
                 break;
@@ -5940,6 +6038,17 @@ class InsteonService {
             detail.linkStatus = options.linkMode === 'manual' ? 'linked-manual' : 'linked-remote';
             results.linked += 1;
             results.linkWriteSucceeded += 1;
+            if (linkResult?.controllerLinkError) {
+              detail.controllerLinkStatus = 'warning';
+              detail.controllerLinkWarning = `Device-to-PLM controller link failed (${linkResult.controllerLinkError.message}); this device may require polling for state updates.`;
+              results.warnings.push(`${entry.displayAddress}: ${detail.controllerLinkWarning}`);
+              reportProgress(
+                `Controller link warning for ${entry.displayAddress}: ${linkResult.controllerLinkError.message}`,
+                { level: 'warn', progress }
+              );
+            } else if (options.ensureControllerLinks && options.linkMode !== 'manual') {
+              detail.controllerLinkStatus = 'linked';
+            }
           }
 
           let deviceInfo;
@@ -6803,21 +6912,19 @@ class InsteonService {
       const boundedBrightness = Number.isFinite(numericBrightness)
         ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
         : 100;
-      const level = Math.round((boundedBrightness / 100) * 255);
-
       await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('Timeout turning on device'));
         }, 5000);
 
-        this.hub.turnOn(address, level, (error) => {
+        this.hub.turnOn(address, boundedBrightness, (error) => {
           clearTimeout(timeout);
 
           if (error) {
             console.error(`InsteonService: Error turning on device ${address}:`, error.message);
             reject(error);
           } else {
-            console.log(`InsteonService: Device ${address} turned on at level ${level}`);
+            console.log(`InsteonService: Device ${address} turned on at ${boundedBrightness}%`);
             resolve();
           }
         });
