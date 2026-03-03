@@ -1479,7 +1479,22 @@ export function Settings() {
       return
     }
 
-    if (!window.confirm("Run ISY migration now? This writes links/scenes to the connected USB PLM.")) {
+    const selectedScopes: string[] = []
+    if (isyMigrationOptions.importDevices) selectedScopes.push("devices")
+    if (isyMigrationOptions.importTopology) selectedScopes.push("topology/scenes")
+    if (isyMigrationOptions.importPrograms) selectedScopes.push("programs")
+    const scopeSummary = selectedScopes.length > 0 ? selectedScopes.join(", ") : "none"
+
+    const confirmationText = [
+      "Run ISY migration now with the current settings?",
+      `Scopes: ${scopeSummary}.`,
+      `Program workflows: ${isyMigrationOptions.enableProgramWorkflows ? "enabled" : "disabled"}.`,
+      `Continue on error: ${isyMigrationOptions.continueOnError ? "yes" : "no"}.`,
+      `Device link mode: ${isyMigrationOptions.linkMode}.`,
+      "This writes links/scenes to the connected USB PLM."
+    ].join("\n")
+
+    if (!window.confirm(confirmationText)) {
       return
     }
 
@@ -3437,6 +3452,9 @@ export function Settings() {
                       )}
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Run Migration uses the current values above (ISY host/port/credentials, HTTPS/TLS flags, migration scope toggles, and link mode). No separate save step is required.
+                  </p>
 
                   {(runningIsyMigration || isyMigrationRunLogs.length > 0) && (
                     <div className="rounded-md border border-violet-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">

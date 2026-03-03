@@ -982,6 +982,9 @@ class InsteonService {
       throw new Error('ISY topology sceneTimeoutMs must be between 5000 and 300000 milliseconds');
     }
 
+    const responderFallback = request.responderFallback !== false
+      && request.sceneResponderFallback !== false;
+
     return {
       scenes,
       invalidEntries,
@@ -990,6 +993,7 @@ class InsteonService {
         upsertDevices: request.upsertDevices !== false,
         continueOnError: request.continueOnError !== false,
         checkExistingSceneLinks: request.checkExistingSceneLinks !== false,
+        responderFallback,
         pauseBetweenScenesMs,
         sceneTimeoutMs
       }
@@ -4419,7 +4423,8 @@ class InsteonService {
           upsertDevices: false,
           continueOnError: request.continueOnError !== false,
           sceneTimeoutMs: request.sceneTimeoutMs,
-          pauseBetweenScenesMs: request.pauseBetweenScenesMs
+          pauseBetweenScenesMs: request.pauseBetweenScenesMs,
+          responderFallback: request.responderFallback
         }, {
           onProgress: (entry) => reportProgress(entry?.message || 'Topology replay update', {
             ...entry,
@@ -4428,7 +4433,7 @@ class InsteonService {
         });
 
         reportProgress(
-          `Topology replay complete: ${results.topology.appliedScenes || 0} applied, ${results.topology.failedScenes || 0} failed, ${results.topology.skippedExistingScenes || 0} already in desired state`,
+          `Topology replay complete: ${results.topology.appliedScenes || 0} applied, ${results.topology.partialScenes || 0} partial, ${results.topology.fallbackScenes || 0} via fallback, ${results.topology.failedScenes || 0} failed, ${results.topology.skippedExistingScenes || 0} already in desired state`,
           { stage: 'topology', level: results.topology.success === false ? 'warn' : 'info', progress: 80 }
         );
         if (!results.topology.success) {
@@ -4491,7 +4496,7 @@ class InsteonService {
         ? `${results.devices.imported || 0} devices imported`
         : (failedStages.has('devices') ? 'devices failed' : 'devices skipped'),
       results.topology
-        ? `${results.topology.appliedScenes || 0} scenes applied${results.topology.skippedExistingScenes ? ` (${results.topology.skippedExistingScenes} already in desired state)` : ''}`
+        ? `${results.topology.appliedScenes || 0} scenes applied${results.topology.partialScenes ? ` (${results.topology.partialScenes} partial, ${results.topology.fallbackScenes || 0} via fallback${results.topology.skippedExistingScenes ? `, ${results.topology.skippedExistingScenes} already in desired state` : ''})` : (results.topology.skippedExistingScenes ? ` (${results.topology.skippedExistingScenes} already in desired state)` : '')}`
         : (failedStages.has('topology') ? 'topology failed' : 'topology skipped'),
       results.programs
         ? `${results.programs.created || 0} workflows created`
@@ -4534,7 +4539,7 @@ class InsteonService {
     return Array.from(deviceMap.values());
   }
 
-  async _applyTopologyScene(scene, { timeoutMs }) {
+  async _runTopologySceneWrite(scene, responders, { timeoutMs }) {
     if (!this.isConnected || !this.hub) {
       await this.connect();
     }
@@ -4562,7 +4567,7 @@ class InsteonService {
       try {
         this.hub.scene(
           scene.controller,
-          scene.responders.map(({ id, level, ramp, data }) => ({ id, level, ramp, data })),
+          responders.map(({ id, level, ramp, data }) => ({ id, level, ramp, data })),
           { group: scene.group, remove: scene.remove },
           (error) => {
             if (error) {
@@ -4580,6 +4585,90 @@ class InsteonService {
         rejectOnce(error);
       }
     });
+  }
+
+  async _applyTopologyScene(scene, { timeoutMs, responderFallback = true, onFallbackProgress = null }) {
+    const fallbackProgress = typeof onFallbackProgress === 'function'
+      ? onFallbackProgress
+      : null;
+
+    try {
+      await this._runTopologySceneWrite(scene, scene.responders, { timeoutMs });
+      return {
+        group: scene.group,
+        controller: scene.controller,
+        responderCount: scene.responders.length,
+        fallbackUsed: false,
+        fullSceneError: null,
+        appliedResponders: scene.responders.map((responder) => responder.id),
+        failedResponders: []
+      };
+    } catch (fullSceneError) {
+      const canFallback = responderFallback && Array.isArray(scene.responders) && scene.responders.length > 1;
+      if (!canFallback) {
+        throw fullSceneError;
+      }
+
+      const fullSceneErrorMessage = fullSceneError instanceof Error
+        ? fullSceneError.message
+        : String(fullSceneError || 'Unknown scene error');
+      fallbackProgress?.(
+        `Scene ${scene.name || `Group ${scene.group}`} failed as a bulk write; retrying per responder`,
+        { level: 'warn' }
+      );
+
+      const appliedResponders = [];
+      const failedResponders = [];
+
+      for (const responder of scene.responders) {
+        const responderLabel = this._formatInsteonAddress(responder.id);
+        try {
+          await this._runTopologySceneWrite(
+            {
+              ...scene,
+              name: `${scene.name || `Group ${scene.group}`} (responder ${responderLabel})`,
+              responders: [responder]
+            },
+            [responder],
+            { timeoutMs }
+          );
+          appliedResponders.push(responder.id);
+          fallbackProgress?.(
+            `Fallback applied responder ${responderLabel} for scene ${scene.name || `Group ${scene.group}`}`,
+            { level: 'warn' }
+          );
+        } catch (responderError) {
+          const responderMessage = responderError instanceof Error
+            ? responderError.message
+            : String(responderError || 'Unknown responder error');
+          failedResponders.push({
+            id: responder.id,
+            error: responderMessage
+          });
+          fallbackProgress?.(
+            `Fallback failed responder ${responderLabel}: ${responderMessage}`,
+            { level: 'warn' }
+          );
+        }
+      }
+
+      if (appliedResponders.length === 0) {
+        const firstResponderError = failedResponders[0]?.error || 'No responder-level detail available';
+        throw new Error(
+          `Scene "${scene.name}" failed: ${fullSceneErrorMessage}. Responder fallback failed for all ${scene.responders.length} responders. First responder error: ${firstResponderError}`
+        );
+      }
+
+      return {
+        group: scene.group,
+        controller: scene.controller,
+        responderCount: scene.responders.length,
+        fallbackUsed: true,
+        fullSceneError: fullSceneErrorMessage,
+        appliedResponders,
+        failedResponders
+      };
+    }
   }
 
   async _sleep(ms) {
@@ -5750,6 +5839,8 @@ class InsteonService {
         invalid: invalidEntries.length,
         plannedLinkOperations: scenes.reduce((sum, scene) => sum + scene.responders.length, 0),
         appliedScenes: 0,
+        partialScenes: 0,
+        fallbackScenes: 0,
         skippedExistingScenes: 0,
         failedScenes: 0,
         imported: 0,
@@ -5821,13 +5912,56 @@ class InsteonService {
             }
           }
 
-          await this._applyTopologyScene(scene, { timeoutMs: options.sceneTimeoutMs });
-          sceneResult.status = 'applied';
+          const applyResult = await this._applyTopologyScene(scene, {
+            timeoutMs: options.sceneTimeoutMs,
+            responderFallback: options.responderFallback !== false,
+            onFallbackProgress: (message, details = {}) => reportProgress(message, {
+              ...details,
+              progress
+            })
+          });
+
+          if (applyResult?.fallbackUsed) {
+            sceneResult.fallbackUsed = true;
+            sceneResult.fullSceneError = applyResult.fullSceneError || null;
+            sceneResult.appliedResponders = Array.isArray(applyResult.appliedResponders)
+              ? applyResult.appliedResponders.map((responderId) => this._formatInsteonAddress(responderId))
+              : [];
+            sceneResult.failedResponders = Array.isArray(applyResult.failedResponders)
+              ? applyResult.failedResponders.map((entry) => ({
+                  ...entry,
+                  displayAddress: this._formatInsteonAddress(entry?.id)
+                }))
+              : [];
+            results.fallbackScenes += 1;
+
+            if (sceneResult.failedResponders.length > 0) {
+              sceneResult.status = 'applied-partial';
+              sceneResult.warning = `${sceneResult.failedResponders.length} responder${sceneResult.failedResponders.length === 1 ? '' : 's'} failed during fallback`;
+              results.partialScenes += 1;
+              results.warnings.push(
+                `${scene.name || `Group ${scene.group}`}: fallback applied with ${sceneResult.failedResponders.length} responder failure${sceneResult.failedResponders.length === 1 ? '' : 's'}.`
+              );
+              reportProgress(
+                `Applied scene ${scene.name || `Group ${scene.group}`} with responder fallback (${sceneResult.failedResponders.length} responder failure${sceneResult.failedResponders.length === 1 ? '' : 's'})`,
+                { level: 'warn', progress }
+              );
+            } else {
+              sceneResult.status = 'applied-fallback';
+              reportProgress(
+                `Applied scene ${scene.name || `Group ${scene.group}`} via responder fallback`,
+                { level: 'warn', progress }
+              );
+            }
+          } else {
+            sceneResult.status = 'applied';
+            reportProgress(
+              `Applied scene ${scene.name || `Group ${scene.group}`}`,
+              { progress }
+            );
+          }
+
           results.appliedScenes += 1;
-          reportProgress(
-            `Applied scene ${scene.name || `Group ${scene.group}`}`,
-            { progress }
-          );
         } catch (error) {
           sceneResult.status = 'failed';
           sceneResult.error = error.message;
@@ -5883,6 +6017,8 @@ class InsteonService {
       results.message = [
         `Processed ${results.sceneCount} scenes`,
         `${results.appliedScenes} applied`,
+        `${results.partialScenes} partial`,
+        `${results.fallbackScenes} via fallback`,
         `${results.skippedExistingScenes} already in desired state`,
         `${results.failedScenes} failed`,
         `${results.imported} imported`,

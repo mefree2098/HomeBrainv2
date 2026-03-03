@@ -865,6 +865,19 @@ test('_parseISYTopologyPayload enables existing-scene checks by default', () => 
   assert.equal(parsed.options.checkExistingSceneLinks, true);
 });
 
+test('_parseISYTopologyPayload enables responder fallback by default', () => {
+  const parsed = insteonService._parseISYTopologyPayload({
+    scenes: [{ name: 'Scene', group: 1, controller: '11.22.33', responders: ['AA.BB.CC'] }]
+  });
+  assert.equal(parsed.options.responderFallback, true);
+
+  const disabled = insteonService._parseISYTopologyPayload({
+    responderFallback: false,
+    scenes: [{ name: 'Scene', group: 1, controller: '11.22.33', responders: ['AA.BB.CC'] }]
+  });
+  assert.equal(disabled.options.responderFallback, false);
+});
+
 test('_isISYInsteonNode accepts family 1 and excludes explicit non-insteon families', () => {
   assert.equal(insteonService._isISYInsteonNode({
     family: '1',
@@ -1176,6 +1189,102 @@ test('applyISYSceneTopology skips scenes already in desired state', async (t) =>
   assert.equal(result.failedScenes, 0);
   assert.equal(applyCalls, 0);
   assert.equal(result.scenes[0].status, 'already-linked');
+});
+
+test('_applyTopologyScene falls back to per-responder writes when bulk scene write fails', async (t) => {
+  const originalConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+
+  t.after(() => {
+    insteonService.isConnected = originalConnected;
+    insteonService.hub = originalHub;
+  });
+
+  const sceneCalls = [];
+  const fallbackMessages = [];
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    cancelLinking: async () => {},
+    scene: (_controller, responders, _options, callback) => {
+      sceneCalls.push(responders.map((entry) => entry.id).join(','));
+      if (responders.length > 1) {
+        callback(new Error('bulk write timeout'));
+        return;
+      }
+      callback(null);
+    }
+  };
+
+  const result = await insteonService._applyTopologyScene({
+    name: 'Movie Scene',
+    group: 9,
+    controller: 'AABBCC',
+    remove: false,
+    responders: [
+      { id: '112233' },
+      { id: '445566' }
+    ]
+  }, {
+    timeoutMs: 5000,
+    responderFallback: true,
+    onFallbackProgress: (message) => fallbackMessages.push(message)
+  });
+
+  assert.equal(result.fallbackUsed, true);
+  assert.equal(result.failedResponders.length, 0);
+  assert.deepEqual(result.appliedResponders, ['112233', '445566']);
+  assert.deepEqual(sceneCalls, ['112233,445566', '112233', '445566']);
+  assert.equal(fallbackMessages.length > 0, true);
+});
+
+test('applyISYSceneTopology marks partial scenes when responder fallback has failures', async (t) => {
+  const originalConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+  const originalParseTopologyPayload = insteonService._parseISYTopologyPayload;
+  const originalApplyTopologyScene = insteonService._applyTopologyScene;
+  const originalSleep = insteonService._sleep;
+
+  t.after(() => {
+    insteonService.isConnected = originalConnected;
+    insteonService.hub = originalHub;
+    insteonService._parseISYTopologyPayload = originalParseTopologyPayload;
+    insteonService._applyTopologyScene = originalApplyTopologyScene;
+    insteonService._sleep = originalSleep;
+  });
+
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService._parseISYTopologyPayload = () => ({
+    scenes: [{ name: 'Scene 1', group: 1, controller: '11.22.33', remove: false, responders: [{ id: 'AA.BB.CC' }, { id: '44.55.66' }] }],
+    invalidEntries: [],
+    options: {
+      dryRun: false,
+      upsertDevices: false,
+      continueOnError: true,
+      checkExistingSceneLinks: false,
+      responderFallback: true,
+      pauseBetweenScenesMs: 0,
+      sceneTimeoutMs: 5000
+    }
+  });
+  insteonService._applyTopologyScene = async () => ({
+    fallbackUsed: true,
+    fullSceneError: 'bulk write timeout',
+    appliedResponders: ['AABBCC'],
+    failedResponders: [{ id: '445566', error: 'responder timeout' }]
+  });
+  insteonService._sleep = async () => {};
+
+  const result = await insteonService.applyISYSceneTopology({});
+  assert.equal(result.success, true);
+  assert.equal(result.appliedScenes, 1);
+  assert.equal(result.partialScenes, 1);
+  assert.equal(result.fallbackScenes, 1);
+  assert.equal(result.failedScenes, 0);
+  assert.equal(result.scenes[0].status, 'applied-partial');
+  assert.equal(result.scenes[0].fallbackUsed, true);
+  assert.equal(Array.isArray(result.scenes[0].failedResponders), true);
+  assert.equal(result.warnings.length, 1);
 });
 
 test('_parseISYNodesXml parses device and group membership from ISY xml', () => {
