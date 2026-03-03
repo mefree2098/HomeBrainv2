@@ -5233,7 +5233,26 @@ class InsteonService {
             results.linked += 1;
           }
 
-          const deviceInfo = await this.getDeviceInfo(entry.address);
+          let deviceInfo;
+          try {
+            deviceInfo = await this.getDeviceInfo(entry.address);
+          } catch (infoError) {
+            const infoErrorMessage = infoError instanceof Error ? infoError.message : String(infoError || 'Unknown error');
+            deviceInfo = {
+              deviceId: entry.address,
+              deviceCategory: 0,
+              subcategory: 0,
+              firmwareVersion: 'Unknown'
+            };
+            detail.infoStatus = 'fallback';
+            detail.infoWarning = `Device metadata unavailable (${infoErrorMessage}); imported with basic metadata.`;
+            results.warnings.push(`${entry.displayAddress}: ${detail.infoWarning}`);
+            reportProgress(
+              `Info unavailable for ${entry.displayAddress}; continuing with basic metadata`,
+              { level: 'warn', progress }
+            );
+          }
+
           const upsertResult = await this._upsertInsteonDevice({
             address: entry.address,
             group: options.group,
