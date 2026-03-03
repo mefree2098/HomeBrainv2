@@ -118,7 +118,14 @@ type InsteonPlmConnectionTestResult = {
   message?: string;
   connected?: boolean;
   transport?: string;
+  runtimeTransport?: string;
+  runtimeEndpoint?: string;
   port?: string;
+  bridge?: {
+    host?: string;
+    port?: number;
+    serialPath?: string;
+  };
   plmInfo?: {
     deviceId?: string;
     firmwareVersion?: string | number;
@@ -910,18 +917,11 @@ export function Settings() {
       })
 
       if (!serialTransportSupported) {
-        const message = serialTransportError
-          ? `Serial transport is unavailable: ${serialTransportError}`
-          : "Serial transport is unavailable in the current HomeBrain runtime."
-        setInsteonPlmTestResult({
-          success: false,
-          connected: false,
-          message
-        })
         toast({
-          title: "Serial runtime issue detected",
-          description: "Endpoints were detected, but serial transport is unavailable. Check server runtime/node module compatibility.",
-          variant: "destructive"
+          title: "Serial module unavailable",
+          description: serialTransportError
+            ? `HomeBrain will use local TCP bridge fallback. (${serialTransportError})`
+            : "HomeBrain will use local TCP bridge fallback for this endpoint."
         })
       }
     } catch (error: any) {
@@ -2589,6 +2589,11 @@ export function Settings() {
                           {insteonPlmTestResult.port && (
                             <p className="text-xs text-muted-foreground">
                               Endpoint: <span className="font-mono">{insteonPlmTestResult.port}</span>
+                            </p>
+                          )}
+                          {insteonPlmTestResult.runtimeEndpoint && (
+                            <p className="text-xs text-muted-foreground">
+                              Runtime endpoint: <span className="font-mono">{insteonPlmTestResult.runtimeEndpoint}</span>
                             </p>
                           )}
                           {insteonPlmTestResult.plmInfo?.deviceId && (

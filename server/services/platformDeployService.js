@@ -70,6 +70,7 @@ class PlatformDeployService {
     // Cleaning client/dist can roll back freshly built frontend bundles on systems
     // that serve dist directly. Keep this opt-in only.
     this.autoCleanClientDist = process.env.HOMEBRAIN_DEPLOY_AUTOCLEAN_CLIENT_DIST === 'true';
+    this.autoRecoverDirtyRepo = process.env.HOMEBRAIN_DEPLOY_AUTO_STASH_DIRTY !== 'false';
     this.restartOllamaOnDeploy = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA !== 'false';
     this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD
       || 'sudo systemctl restart ollama';
@@ -102,6 +103,7 @@ class PlatformDeployService {
     return {
       preset: presetId,
       allowDirty: pickBoolean(options.allowDirty, defaults.allowDirty),
+      autoRecoverDirtyRepo: pickBoolean(options.autoRecoverDirtyRepo, this.autoRecoverDirtyRepo),
       installDependencies: pickBoolean(options.installDependencies, defaults.installDependencies),
       runServerTests: pickBoolean(options.runServerTests, defaults.runServerTests),
       runClientLint: pickBoolean(options.runClientLint, defaults.runClientLint),
@@ -289,9 +291,36 @@ class PlatformDeployService {
     return path.join(this.projectRoot, 'client', 'dist');
   }
 
-  async isPathWritable(targetPath) {
+  async isPathWritable(targetPath, { probeCreate = false } = {}) {
     try {
       await fsp.access(targetPath, fs.constants.W_OK);
+    } catch (error) {
+      return false;
+    }
+
+    if (!probeCreate) {
+      return true;
+    }
+
+    let stat;
+    try {
+      stat = await fsp.stat(targetPath);
+    } catch (error) {
+      return false;
+    }
+
+    if (!stat.isDirectory()) {
+      return true;
+    }
+
+    const probeFile = path.join(
+      targetPath,
+      `.homebrain-write-probe-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+
+    try {
+      await fsp.writeFile(probeFile, '');
+      await fsp.unlink(probeFile);
       return true;
     } catch (error) {
       return false;
@@ -313,15 +342,30 @@ class PlatformDeployService {
       return { checked: false, repaired: false, missing: true };
     }
 
-    const checkTargets = [distPath, path.join(distPath, 'assets')].filter((value) => fs.existsSync(value));
+    const getCheckTargets = () => [distPath, path.join(distPath, 'assets')].filter((value) => fs.existsSync(value));
     const findNonWritable = async () => {
       const paths = [];
-      for (const target of checkTargets) {
-        if (!(await this.isPathWritable(target))) {
+      for (const target of getCheckTargets()) {
+        if (!(await this.isPathWritable(target, { probeCreate: true }))) {
           paths.push(target);
         }
       }
       return paths;
+    };
+    const recreateDistDirectory = async () => {
+      const quarantinePath = path.join(
+        this.projectRoot,
+        'client',
+        `dist.quarantine.${new Date().toISOString().replace(/[:.]/g, '-')}`
+      );
+
+      await fsp.rename(distPath, quarantinePath);
+      await fsp.mkdir(distPath, { recursive: true });
+      await log(
+        `Replaced non-writable client/dist with a clean directory and quarantined prior contents at ${path.relative(this.projectRoot, quarantinePath)}.`
+      );
+
+      return quarantinePath;
     };
 
     let nonWritablePaths = await findNonWritable();
@@ -339,18 +383,41 @@ class PlatformDeployService {
         captureStdout: false
       });
     } catch (error) {
-      const manualFix = `sudo chown -R "$(id -un):$(id -gn)" "${distPath}" && sudo chmod -R u+rwX "${distPath}"`;
-      throw new Error(
-        `client/dist is not writable and automatic repair failed. Run this once on the host: ${manualFix}`
-      );
+      await log(`sudo repair failed (${error.message}). Falling back to dist directory replacement.`);
+      try {
+        await recreateDistDirectory();
+        nonWritablePaths = await findNonWritable();
+        if (nonWritablePaths.length === 0) {
+          await log('client/dist permissions repaired via directory replacement.');
+          return { checked: true, repaired: true, missing: false, replaced: true };
+        }
+      } catch (replacementError) {
+        throw new Error(
+          `client/dist is not writable and fallback replacement failed: ${replacementError.message}`
+        );
+      }
+
+      throw new Error('client/dist remains non-writable after fallback replacement.');
     }
 
     nonWritablePaths = await findNonWritable();
     if (nonWritablePaths.length > 0) {
-      const manualFix = `sudo chown -R "$(id -un):$(id -gn)" "${distPath}" && sudo chmod -R u+rwX "${distPath}"`;
-      throw new Error(
-        `client/dist remains non-writable after repair. Run this once on the host: ${manualFix}`
-      );
+      await log('client/dist is still not writable after sudo repair; replacing directory.');
+      try {
+        await recreateDistDirectory();
+      } catch (replacementError) {
+        throw new Error(
+          `client/dist remains non-writable after repair and replacement failed: ${replacementError.message}`
+        );
+      }
+
+      nonWritablePaths = await findNonWritable();
+      if (nonWritablePaths.length > 0) {
+        throw new Error('client/dist remains non-writable after automatic repair and replacement.');
+      }
+
+      await log('client/dist permissions repaired via directory replacement.');
+      return { checked: true, repaired: true, missing: false, replaced: true };
     }
 
     await log('client/dist permissions repaired.');
@@ -475,6 +542,73 @@ class PlatformDeployService {
       return false;
     }
     return filePath.startsWith('client/dist/');
+  }
+
+  getBlockingDirtyEntries(repoStatus = null) {
+    const entries = Array.isArray(repoStatus?.dirtyEntries) ? repoStatus.dirtyEntries : [];
+    return entries.filter((entry) => !this.isIgnorableDirtyEntry(entry));
+  }
+
+  async autoStashDirtyChanges({ jobId = null, repoStatus = null } = {}) {
+    const log = async (message) => {
+      if (!jobId) return;
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [Auto-stash local changes] ${message}\n`
+      );
+    };
+
+    let currentStatus = repoStatus || await this.getRepoStatus();
+    let blockingEntries = this.getBlockingDirtyEntries(currentStatus);
+    const initialDirtyCount = blockingEntries.length;
+    if (blockingEntries.length === 0) {
+      await log('No blocking dirty entries found; skipping auto-stash.');
+      return {
+        applied: false,
+        dirtyCount: 0,
+        stashRef: null
+      };
+    }
+
+    await log(`Detected ${blockingEntries.length} non-dist local change(s); creating automatic stash backup.`);
+    await log(`Dirty entries: ${blockingEntries.slice(0, 40).join(', ')}${blockingEntries.length > 40 ? ' ...' : ''}`);
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const stashMessage = `homebrain-auto-stash-${stamp}`;
+    const stashResult = await this.runCommand(
+      'git',
+      this.getSafeGitArgs(['stash', 'push', '-u', '-m', stashMessage])
+    );
+    const stashOutput = trimStdout(stashResult.stdout || stashResult.stderr || '');
+    await log(`git stash output: ${stashOutput || '(no output)'}`);
+
+    let stashRef = null;
+    try {
+      const latestStash = await this.runCommand(
+        'git',
+        this.getSafeGitArgs(['stash', 'list', '--max-count=1'])
+      );
+      const firstLine = (latestStash.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean)[0] || '';
+      const match = firstLine.match(/^(stash@\{\d+\})\s*:/);
+      stashRef = match ? match[1] : null;
+      if (stashRef) {
+        await log(`Latest stash reference: ${stashRef}`);
+      }
+    } catch (error) {
+      await log(`WARN: Unable to read stash list after auto-stash: ${error.message}`);
+    }
+
+    currentStatus = await this.getRepoStatus();
+    blockingEntries = this.getBlockingDirtyEntries(currentStatus);
+    if (blockingEntries.length > 0) {
+      throw new Error('Repository still has non-dist local changes after automatic stash.');
+    }
+
+    return {
+      applied: true,
+      dirtyCount: initialDirtyCount,
+      stashRef
+    };
   }
 
   async writeLatestJobRef(jobId) {
@@ -725,13 +859,18 @@ class PlatformDeployService {
         );
 
         if (blockingAfterCleanup.length > 0) {
-          const error = new Error('Repository has uncommitted non-dist changes. Commit/stash first or enable allowDirty.');
-          error.code = 'REPO_DIRTY';
-          error.repoStatus = {
-            ...repoStatus,
-            blockingDirtyEntries: blockingAfterCleanup
-          };
-          throw error;
+          if (!resolvedOptions.autoRecoverDirtyRepo) {
+            const error = new Error(
+              'Repository has uncommitted non-dist changes and auto-recovery is disabled. ' +
+              'Commit/stash first, enable allowDirty, or enable autoRecoverDirtyRepo.'
+            );
+            error.code = 'REPO_DIRTY';
+            error.repoStatus = {
+              ...repoStatus,
+              blockingDirtyEntries: blockingAfterCleanup
+            };
+            throw error;
+          }
         }
       }
 
@@ -744,6 +883,7 @@ class PlatformDeployService {
         options: {
           preset: resolvedOptions.preset,
           allowDirty,
+          autoRecoverDirtyRepo: resolvedOptions.autoRecoverDirtyRepo,
           installDependencies: resolvedOptions.installDependencies,
           runServerTests: resolvedOptions.runServerTests,
           runClientLint: resolvedOptions.runClientLint,
@@ -848,7 +988,21 @@ class PlatformDeployService {
         await this.cleanupClientDistArtifacts({ jobId });
       });
 
-      const prePullRepoStatus = await this.getRepoStatus();
+      let prePullRepoStatus = await this.getRepoStatus();
+      const shouldAutoRecoverDirtyRepo = Boolean(job.options?.autoRecoverDirtyRepo) && !Boolean(job.options?.allowDirty);
+      if (shouldAutoRecoverDirtyRepo) {
+        const blockingPrePullEntries = this.getBlockingDirtyEntries(prePullRepoStatus);
+        if (blockingPrePullEntries.length > 0) {
+          await runCustomStep('Auto-stash local changes', async () => {
+            await this.autoStashDirtyChanges({
+              jobId,
+              repoStatus: prePullRepoStatus
+            });
+          });
+          prePullRepoStatus = await this.getRepoStatus();
+        }
+      }
+
       const skipPullForDirtyRepo = Boolean(job.options?.allowDirty) && Boolean(prePullRepoStatus?.dirty);
 
       await runStep('Fetch latest refs', 'git', this.getSafeGitArgs(['fetch', '--all', '--prune']));

@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const https = require('node:https');
+const { spawn } = require('node:child_process');
 const axios = require('axios');
 const Insteon = require('home-controller').Insteon;
 const Device = require('../models/Device');
@@ -20,6 +21,9 @@ const DEFAULT_ISY_TOPOLOGY_SCENE_TIMEOUT_MS = 20000;
 const DEFAULT_ISY_TOPOLOGY_PAUSE_MS = 400;
 const DEFAULT_ISY_PORT_HTTP = 80;
 const DEFAULT_ISY_PORT_HTTPS = 443;
+const DEFAULT_INSTEON_LOCAL_BRIDGE_HOST = '127.0.0.1';
+const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
+const INSTEON_LOCAL_BRIDGE_SCRIPT = path.join(__dirname, '..', 'scripts', 'insteon_serial_bridge.py');
 const INSTEON_SERIAL_OPTIONS = Object.freeze({
   baudRate: 19200,
   dataBits: 8,
@@ -47,6 +51,8 @@ class InsteonService {
     this._runtimeCloseListener = null;
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
+    this._localSerialBridge = null;
+    this.enableLocalSerialBridge = process.env.HOMEBRAIN_INSTEON_ENABLE_LOCAL_TCP_BRIDGE !== 'false';
     console.log('InsteonService: Initialized');
   }
 
@@ -67,19 +73,23 @@ class InsteonService {
     return this._serialPortModule;
   }
 
-  _buildSerialTransportUnavailableMessage(serialPath = '') {
+  _buildSerialTransportUnavailableMessage(serialPath = '', bridgeError = null) {
     const endpoint = typeof serialPath === 'string' && serialPath.trim()
       ? ` Endpoint: "${serialPath.trim()}".`
       : '';
     const loadError = this._serialPortLoadError?.message
       ? ` serialport load error: ${this._serialPortLoadError.message}.`
       : '';
+    const bridgeFailure = bridgeError?.message
+      ? ` Local serial TCP bridge fallback failed: ${bridgeError.message}.`
+      : '';
 
     return [
       'Serial transport is unavailable because the HomeBrain runtime cannot load the "serialport" module.',
       endpoint,
       loadError,
-      'Reinstall/rebuild server dependencies using the same Node runtime as the homebrain service, then restart the service.'
+      bridgeFailure,
+      'HomeBrain automatically attempts a local TCP bridge fallback. If this still fails, ensure Python 3 is available and the HomeBrain service user can access the selected serial endpoint.'
     ].join(' ').replace(/\s+/g, ' ').trim();
   }
 
@@ -90,6 +100,209 @@ class InsteonService {
       module: serialPortModule ? 'serialport' : null,
       error: serialPortModule ? null : (this._serialPortLoadError?.message || 'serialport module not available')
     };
+  }
+
+  _isLocalSerialBridgeActive() {
+    const child = this._localSerialBridge?.process || null;
+    return Boolean(child && child.exitCode === null && !child.killed);
+  }
+
+  async _stopLocalSerialBridge({ reason = 'cleanup', timeoutMs = 1500 } = {}) {
+    const bridge = this._localSerialBridge;
+    if (!bridge || !bridge.process) {
+      this._localSerialBridge = null;
+      return;
+    }
+
+    const child = bridge.process;
+    this._localSerialBridge = null;
+
+    if (child.exitCode !== null || child.killed) {
+      return;
+    }
+
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null && !child.killed) {
+          child.kill('SIGKILL');
+        }
+        finish();
+      }, timeoutMs);
+
+      child.once('exit', () => {
+        clearTimeout(killTimer);
+        finish();
+      });
+
+      try {
+        child.kill('SIGTERM');
+      } catch (error) {
+        clearTimeout(killTimer);
+        finish();
+      }
+    });
+
+    console.log(`InsteonService: Local serial bridge stopped (${reason})`);
+  }
+
+  async _ensureLocalSerialBridge(serialPath, { baudRate = INSTEON_SERIAL_OPTIONS.baudRate } = {}) {
+    const normalizedSerialPath = this._normalizeSerialPath(serialPath);
+    if (!normalizedSerialPath) {
+      throw new Error('Cannot start local serial bridge: serial endpoint is empty.');
+    }
+
+    if (!this.enableLocalSerialBridge) {
+      throw new Error('Local serial TCP bridge is disabled by configuration.');
+    }
+
+    if (this._isLocalSerialBridgeActive() && this._localSerialBridge?.serialPath === normalizedSerialPath) {
+      return {
+        host: this._localSerialBridge.host,
+        port: this._localSerialBridge.port,
+        serialPath: this._localSerialBridge.serialPath,
+        reused: true
+      };
+    }
+
+    if (this._isLocalSerialBridgeActive()) {
+      await this._stopLocalSerialBridge({ reason: 'serial endpoint changed' });
+    }
+
+    if (!fs.existsSync(INSTEON_LOCAL_BRIDGE_SCRIPT)) {
+      throw new Error(`Bridge script not found: ${INSTEON_LOCAL_BRIDGE_SCRIPT}`);
+    }
+
+    const pythonBin = process.env.PYTHON_BIN || 'python3';
+    const bridgeArgs = [
+      INSTEON_LOCAL_BRIDGE_SCRIPT,
+      '--serial',
+      normalizedSerialPath,
+      '--baud',
+      String(Number(baudRate) || INSTEON_SERIAL_OPTIONS.baudRate),
+      '--host',
+      DEFAULT_INSTEON_LOCAL_BRIDGE_HOST,
+      '--port',
+      '0'
+    ];
+
+    console.log(`InsteonService: Starting local serial bridge for ${normalizedSerialPath}`);
+
+    const child = spawn(pythonBin, bridgeArgs, {
+      cwd: path.join(__dirname, '..', '..'),
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    const parseLines = (buffer, emit) => {
+      let working = buffer;
+      let newlineIndex = working.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = working.slice(0, newlineIndex).trim();
+        if (line) {
+          emit(line);
+        }
+        working = working.slice(newlineIndex + 1);
+        newlineIndex = working.indexOf('\n');
+      }
+      return working;
+    };
+
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
+    let lastBridgeError = '';
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        if (child.exitCode === null && !child.killed) {
+          try {
+            child.kill('SIGTERM');
+          } catch (killError) {
+            // ignore
+          }
+        }
+        reject(error);
+      };
+
+      const startupTimeout = setTimeout(() => {
+        fail(new Error(`Timed out starting local serial bridge for ${normalizedSerialPath}`));
+      }, INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS);
+
+      const onBridgeLine = (line, source) => {
+        if (source === 'stderr') {
+          lastBridgeError = line;
+          console.warn(`InsteonService: local bridge stderr: ${line}`);
+          return;
+        }
+
+        const readyMatch = line.match(/^BRIDGE_READY\s+(\d+)$/);
+        if (readyMatch) {
+          const port = Number(readyMatch[1]);
+          clearTimeout(startupTimeout);
+          settled = true;
+          this._localSerialBridge = {
+            process: child,
+            host: DEFAULT_INSTEON_LOCAL_BRIDGE_HOST,
+            port,
+            serialPath: normalizedSerialPath,
+            startedAt: new Date().toISOString()
+          };
+          console.log(`InsteonService: Local serial bridge ready on ${DEFAULT_INSTEON_LOCAL_BRIDGE_HOST}:${port}`);
+          resolve({
+            host: DEFAULT_INSTEON_LOCAL_BRIDGE_HOST,
+            port,
+            serialPath: normalizedSerialPath,
+            reused: false
+          });
+          return;
+        }
+
+        console.log(`InsteonService: local bridge stdout: ${line}`);
+      };
+
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+
+      child.stdout.on('data', (chunk) => {
+        stdoutBuffer += chunk;
+        stdoutBuffer = parseLines(stdoutBuffer, (line) => onBridgeLine(line, 'stdout'));
+      });
+
+      child.stderr.on('data', (chunk) => {
+        stderrBuffer += chunk;
+        stderrBuffer = parseLines(stderrBuffer, (line) => onBridgeLine(line, 'stderr'));
+      });
+
+      child.once('error', (error) => {
+        clearTimeout(startupTimeout);
+        fail(new Error(`Local serial bridge process failed to start: ${error.message}`));
+      });
+
+      child.on('exit', (code, signal) => {
+        if (this._localSerialBridge?.process === child) {
+          this._localSerialBridge = null;
+        }
+
+        if (!settled) {
+          clearTimeout(startupTimeout);
+          const detail = lastBridgeError || `exit code ${code ?? 'unknown'}${signal ? ` (signal ${signal})` : ''}`;
+          fail(new Error(`Local serial bridge exited before ready: ${detail}`));
+          return;
+        }
+
+        console.warn(`InsteonService: Local serial bridge exited (${code ?? 'unknown'}${signal ? ` signal ${signal}` : ''})`);
+      });
+    });
   }
 
   _attachRuntimeListeners() {
@@ -3974,44 +4187,83 @@ class InsteonService {
       const connection = this.resolveConnectionTarget(configuredTarget);
       let validatedSerial = null;
       let serialPortModule = null;
+      let runtimeTransport = connection.transport;
+      let bridgeConnection = null;
+
+      if (connection.transport === 'serial') {
+        validatedSerial = await this._validateSerialEndpoint(connection.serialPath);
+        connection.serialPath = validatedSerial.serialPath;
+        connection.label = validatedSerial.serialPath;
+
+        serialPortModule = this._loadSerialPortModule();
+        if (serialPortModule) {
+          if (this._isLocalSerialBridgeActive()) {
+            await this._stopLocalSerialBridge({ reason: 'native serial transport available' });
+          }
+        } else {
+          try {
+            bridgeConnection = await this._ensureLocalSerialBridge(validatedSerial.serialPath, {
+              baudRate: INSTEON_SERIAL_OPTIONS.baudRate
+            });
+            runtimeTransport = 'tcp';
+            connection.host = bridgeConnection.host;
+            connection.port = bridgeConnection.port;
+            console.log(
+              `InsteonService: Serial transport unavailable, using local TCP bridge at ${bridgeConnection.host}:${bridgeConnection.port}`
+            );
+          } catch (bridgeError) {
+            throw new Error(this._buildSerialTransportUnavailableMessage(validatedSerial.serialPath, bridgeError));
+          }
+        }
+
+        if (validatedSerial.stablePath && validatedSerial.serialPath.startsWith('/dev/tty')) {
+          console.log(`InsteonService: Serial port ${validatedSerial.serialPath} also available as stable path ${validatedSerial.stablePath}`);
+        }
+        if (runtimeTransport === 'serial') {
+          console.log(`InsteonService: Connecting to PLM on serial port ${connection.serialPath}`);
+        }
+      } else {
+        if (this._isLocalSerialBridgeActive()) {
+          await this._stopLocalSerialBridge({ reason: 'TCP endpoint selected' });
+        }
+        console.log(`InsteonService: Connecting to PLM over TCP at ${connection.label}`);
+      }
+
+      const targetIdentity = connection.transport === 'serial'
+        ? connection.serialPath
+        : connection.label;
 
       if (this.isConnected && this.hub) {
         const alreadyConnectedToTarget =
           this.connectionTransport === connection.transport &&
-          this.connectionTarget === connection.label;
+          this.connectionTarget === targetIdentity;
 
         if (alreadyConnectedToTarget) {
           console.log('InsteonService: Already connected to PLM');
-          return {
+          const response = {
             success: true,
             message: 'Already connected to Insteon PLM',
-            port: this.connectionTarget || connection.label,
-            transport: this.connectionTransport || connection.transport
+            port: this.connectionTarget || targetIdentity,
+            transport: this.connectionTransport || connection.transport,
+            runtimeTransport
           };
+          if (connection.transport === 'serial' && runtimeTransport === 'tcp' && this._isLocalSerialBridgeActive()) {
+            response.bridge = {
+              host: this._localSerialBridge.host,
+              port: this._localSerialBridge.port,
+              serialPath: this._localSerialBridge.serialPath
+            };
+            response.runtimeEndpoint = `${this._localSerialBridge.host}:${this._localSerialBridge.port}`;
+          }
+          return response;
         }
 
-        console.log(`InsteonService: Endpoint changed (${this.connectionTarget || 'unknown'} -> ${connection.label}), reconnecting`);
+        console.log(`InsteonService: Endpoint changed (${this.connectionTarget || 'unknown'} -> ${targetIdentity}), reconnecting`);
         await this.disconnect();
       }
 
-      if (connection.transport === 'tcp') {
-        console.log(`InsteonService: Connecting to PLM over TCP at ${connection.label}`);
-      } else {
-        validatedSerial = await this._validateSerialEndpoint(connection.serialPath);
-        serialPortModule = this._loadSerialPortModule();
-        if (!serialPortModule) {
-          throw new Error(this._buildSerialTransportUnavailableMessage(validatedSerial.serialPath));
-        }
-        connection.serialPath = validatedSerial.serialPath;
-        connection.label = validatedSerial.serialPath;
-        if (validatedSerial.stablePath && validatedSerial.serialPath.startsWith('/dev/tty')) {
-          console.log(`InsteonService: Serial port ${validatedSerial.serialPath} also available as stable path ${validatedSerial.stablePath}`);
-        }
-        console.log(`InsteonService: Connecting to PLM on serial port ${connection.serialPath}`);
-      }
-
       this.hub = new Insteon();
-      if (connection.transport === 'serial' && serialPortModule) {
+      if (runtimeTransport === 'serial' && serialPortModule) {
         this.hub.SerialPort = serialPortModule;
       }
       this._attachRuntimeListeners();
@@ -4040,16 +4292,25 @@ class InsteonService {
           this.isConnected = true;
           this.connectionAttempts = 0;
           this.connectionTransport = connection.transport;
-          this.connectionTarget = connection.label;
+          this.connectionTarget = targetIdentity;
           console.log('InsteonService: Successfully connected to PLM');
           const response = {
             success: true,
             message: 'Successfully connected to Insteon PLM',
-            port: connection.label,
-            transport: connection.transport
+            port: targetIdentity,
+            transport: connection.transport,
+            runtimeTransport
           };
           if (validatedSerial && validatedSerial.stablePath) {
             response.recommendedStablePort = validatedSerial.stablePath;
+          }
+          if (connection.transport === 'serial' && runtimeTransport === 'tcp' && bridgeConnection) {
+            response.bridge = {
+              host: bridgeConnection.host,
+              port: bridgeConnection.port,
+              serialPath: bridgeConnection.serialPath
+            };
+            response.runtimeEndpoint = `${bridgeConnection.host}:${bridgeConnection.port}`;
           }
           resolve(response);
         };
@@ -4068,7 +4329,7 @@ class InsteonService {
         this.hub.once('error', onError);
 
         try {
-          if (connection.transport === 'tcp') {
+          if (runtimeTransport === 'tcp') {
             this.hub.connect(connection.host, connection.port);
           } else {
             this.hub.serial(connection.serialPath, { ...INSTEON_SERIAL_OPTIONS });
@@ -4113,6 +4374,7 @@ class InsteonService {
       this.devices.clear();
       this.connectionTransport = null;
       this.connectionTarget = null;
+      await this._stopLocalSerialBridge({ reason: 'manual disconnect' });
 
       console.log('InsteonService: Successfully disconnected from PLM');
 
@@ -5103,7 +5365,16 @@ class InsteonService {
       connectionAttempts: this.connectionAttempts,
       transport: this.connectionTransport,
       port: this.connectionTarget,
-      lastConnectionError: this.lastConnectionError
+      lastConnectionError: this.lastConnectionError,
+      localSerialBridge: this._localSerialBridge
+        ? {
+            active: this._isLocalSerialBridgeActive(),
+            host: this._localSerialBridge.host,
+            port: this._localSerialBridge.port,
+            serialPath: this._localSerialBridge.serialPath,
+            startedAt: this._localSerialBridge.startedAt
+          }
+        : null
     };
   }
 }

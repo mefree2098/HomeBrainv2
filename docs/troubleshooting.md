@@ -74,7 +74,9 @@ id $(whoami) | tr ' ' '\n' | grep dialout || true
 nc -vz <bridge-host> <port>
 ```
 
-If PLM test fails with `serial is Unsupported on this platform`:
+HomeBrain now attempts an automatic local serial-to-TCP bridge fallback when Node `serialport` is unavailable.
+
+If PLM test still fails with `serial is Unsupported on this platform` or `Module did not self-register`:
 
 ```bash
 cd ~/HomeBrainv2
@@ -201,6 +203,10 @@ Common causes:
 - Restart command permission issue
 - `client/dist` ownership/permission mismatch (files written by a different user)
 
+Current behavior:
+- Deploy now auto-stashes unexpected non-`client/dist` local changes before pull (`Auto-stash local changes` step), so routine pulls are not blocked by a dirty checkout.
+- Deploy auto-repairs non-writable `client/dist` paths and will replace `client/dist` with a clean directory when sudo-based repair is unavailable.
+
 Fix checks:
 
 ```bash
@@ -210,13 +216,9 @@ git remote -v
 ls -ld client/dist client/dist/assets 2>/dev/null || true
 ```
 
-If deploy/build fails with `EACCES` or `Permission denied` under `client/dist`, fix ownership once:
+HomeBrain deploy now auto-repairs `client/dist` by probing writability and replacing a non-writable `client/dist` directory when needed.
 
-```bash
-cd ~/HomeBrainv2
-sudo chown -R "$(id -un):$(id -gn)" client/dist
-sudo chmod -R u+rwX client/dist
-```
+If deploy still fails with `EACCES` or `Permission denied` under `client/dist`, check the deploy log for the `Ensure client dist permissions` step. It now reports whether sudo repair failed and whether automatic directory replacement succeeded.
 
 If restart permission fails, configure sudoers as documented in [DEPLOYMENT.md](../DEPLOYMENT.md).
 
