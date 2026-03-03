@@ -79,10 +79,13 @@ router.get('/serial-ports', async (req, res) => {
 
   try {
     const ports = await insteonService.listLocalSerialPorts();
+    const serialTransport = insteonService.getSerialTransportDiagnostics();
     res.status(200).json({
       success: true,
       count: ports.length,
-      ports
+      ports,
+      serialTransportSupported: serialTransport.supported,
+      serialTransportError: serialTransport.error
     });
   } catch (error) {
     console.error('InsteonRoutes: Failed to list serial ports:', error.message);

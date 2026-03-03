@@ -46,6 +46,7 @@ class InsteonService {
     this._runtimeErrorListener = null;
     this._runtimeCloseListener = null;
     this._serialPortModule = undefined;
+    this._serialPortLoadError = null;
     console.log('InsteonService: Initialized');
   }
 
@@ -56,11 +57,39 @@ class InsteonService {
 
     try {
       this._serialPortModule = require('serialport');
+      this._serialPortLoadError = null;
     } catch (error) {
       this._serialPortModule = null;
+      this._serialPortLoadError = error;
+      console.warn(`InsteonService: Failed to load serialport module: ${error.message}`);
     }
 
     return this._serialPortModule;
+  }
+
+  _buildSerialTransportUnavailableMessage(serialPath = '') {
+    const endpoint = typeof serialPath === 'string' && serialPath.trim()
+      ? ` Endpoint: "${serialPath.trim()}".`
+      : '';
+    const loadError = this._serialPortLoadError?.message
+      ? ` serialport load error: ${this._serialPortLoadError.message}.`
+      : '';
+
+    return [
+      'Serial transport is unavailable because the HomeBrain runtime cannot load the "serialport" module.',
+      endpoint,
+      loadError,
+      'Reinstall/rebuild server dependencies using the same Node runtime as the homebrain service, then restart the service.'
+    ].join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  getSerialTransportDiagnostics() {
+    const serialPortModule = this._loadSerialPortModule();
+    return {
+      supported: Boolean(serialPortModule),
+      module: serialPortModule ? 'serialport' : null,
+      error: serialPortModule ? null : (this._serialPortLoadError?.message || 'serialport module not available')
+    };
   }
 
   _attachRuntimeListeners() {
@@ -3944,6 +3973,7 @@ class InsteonService {
       const configuredTarget = settings.insteonPort || DEFAULT_INSTEON_SERIAL_PORT;
       const connection = this.resolveConnectionTarget(configuredTarget);
       let validatedSerial = null;
+      let serialPortModule = null;
 
       if (this.isConnected && this.hub) {
         const alreadyConnectedToTarget =
@@ -3968,6 +3998,10 @@ class InsteonService {
         console.log(`InsteonService: Connecting to PLM over TCP at ${connection.label}`);
       } else {
         validatedSerial = await this._validateSerialEndpoint(connection.serialPath);
+        serialPortModule = this._loadSerialPortModule();
+        if (!serialPortModule) {
+          throw new Error(this._buildSerialTransportUnavailableMessage(validatedSerial.serialPath));
+        }
         connection.serialPath = validatedSerial.serialPath;
         connection.label = validatedSerial.serialPath;
         if (validatedSerial.stablePath && validatedSerial.serialPath.startsWith('/dev/tty')) {
@@ -3977,6 +4011,9 @@ class InsteonService {
       }
 
       this.hub = new Insteon();
+      if (connection.transport === 'serial' && serialPortModule) {
+        this.hub.SerialPort = serialPortModule;
+      }
       this._attachRuntimeListeners();
       this.lastConnectionError = null;
 
