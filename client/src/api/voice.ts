@@ -5,7 +5,7 @@ import JSONbig from 'json-bigint';
 const requestCache = new Map<string, { data: any; timestamp: number; promise?: Promise<any> }>();
 const CACHE_DURATION = 10000; // 10 seconds cache (more aggressive)
 const IN_FLIGHT_REQUESTS = new Map<string, Promise<any>>(); // Track in-flight requests globally
-const BROWSER_STT_FETCH_TIMEOUT_MS = 12000;
+const BROWSER_STT_FETCH_TIMEOUT_MS = 45000;
 
 // Debug mode controlled by environment variable
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_API_DEBUG === 'true';
@@ -220,7 +220,10 @@ export const transcribeBrowserAudio = async (payload: {
     const firstMessage = error?.message || 'Unknown browser transcription error';
     const shouldRetryWithSlash =
       firstMessage.includes('HTTP 404') ||
-      firstMessage.toLowerCase().includes('page not found');
+      firstMessage.toLowerCase().includes('page not found') ||
+      firstMessage.toLowerCase().includes('timed out') ||
+      firstMessage.toLowerCase().includes('networkerror') ||
+      firstMessage.toLowerCase().includes('failed to fetch');
 
     if (shouldRetryWithSlash) {
       try {
