@@ -23,7 +23,7 @@ const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
 const WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX = 2;
 const FALLBACK_WAKE_STITCH_WINDOW_MS = 5200;
 const FALLBACK_WAKE_STITCH_MAX_PARTS = 4;
-const BROWSER_VOICE_BUILD_TAG = "2026-03-04-win11-no-speech-fallback-v2";
+const BROWSER_VOICE_BUILD_TAG = "2026-03-04-win11-stt-timeout-v3";
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;

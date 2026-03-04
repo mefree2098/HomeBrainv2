@@ -5,6 +5,7 @@ import JSONbig from 'json-bigint';
 const requestCache = new Map<string, { data: any; timestamp: number; promise?: Promise<any> }>();
 const CACHE_DURATION = 10000; // 10 seconds cache (more aggressive)
 const IN_FLIGHT_REQUESTS = new Map<string, Promise<any>>(); // Track in-flight requests globally
+const BROWSER_STT_FETCH_TIMEOUT_MS = 12000;
 
 // Debug mode controlled by environment variable
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_API_DEBUG === 'true';
@@ -156,14 +157,37 @@ export const transcribeBrowserAudio = async (payload: {
 }): Promise<BrowserTranscriptionResult> => {
   const attempt = async (path: string) => {
     const token = localStorage.getItem('accessToken');
-    const response = await fetch(path, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify(payload)
-    });
+    const timeoutMs = payload?.profile === 'realtime'
+      ? BROWSER_STT_FETCH_TIMEOUT_MS
+      : BROWSER_STT_FETCH_TIMEOUT_MS + 6000;
+    const controller = typeof AbortController !== 'undefined'
+      ? new AbortController()
+      : null;
+    const timeout = setTimeout(() => {
+      controller?.abort();
+    }, timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(payload),
+        ...(controller ? { signal: controller.signal } : {})
+      });
+    } catch (error: any) {
+      const message = String(error?.message || '');
+      const aborted = error?.name === 'AbortError' || message.toLowerCase().includes('abort');
+      if (aborted) {
+        throw new Error(`Browser STT request timed out after ${timeoutMs}ms (${path})`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     const raw = await response.text();
     let parsed: any = null;
