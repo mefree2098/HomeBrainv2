@@ -436,6 +436,11 @@ class BrowserVoiceAssistant {
       return;
     }
 
+    if (this.isWindowsChromiumBrowser()) {
+      this.updateStatus({}, "on-device speech disabled on Windows Chromium; using default recognition service");
+      return;
+    }
+
     const hasOnDeviceStatics = typeof RecognitionCtor.available === "function"
       && typeof RecognitionCtor.install === "function";
 
