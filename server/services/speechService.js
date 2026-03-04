@@ -284,8 +284,9 @@ class SpeechService {
     const normalizedProfile = typeof profile === 'string' ? profile.trim().toLowerCase() : '';
     const realtimeProfile = normalizedProfile === 'realtime';
     if (providerConfig.provider === 'whisper_local') {
+      const realtimePreferredModel = model || process.env.BROWSER_STT_MODEL || process.env.BROWSER_STT_REALTIME_MODEL || null;
       const resolvedModel = realtimeProfile
-        ? (model || process.env.BROWSER_STT_MODEL || providerConfig.model || 'small')
+        ? realtimePreferredModel
         : (model || providerConfig.model || 'small');
       return this.transcribeMediaWithWhisperLocal({
         audioBuffer,
@@ -383,13 +384,34 @@ class SpeechService {
     const filePath = path.join(tempDir, `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`);
     await fs.promises.writeFile(filePath, audioBuffer);
 
-    const activeModel = model || 'small';
+    const requestedModel = typeof model === 'string' && model.trim().length > 0
+      ? model.trim()
+      : null;
+    let activeModel = requestedModel || 'small';
     let status = null;
     try {
       status = await whisperService.getStatus();
-      if (status.activeModel !== activeModel && status.installedModels?.some((m) => m.name === activeModel)) {
+      const installedModels = Array.isArray(status.installedModels) ? status.installedModels : [];
+
+      if (realtimeProfile) {
+        const requestedInstalled = requestedModel
+          ? installedModels.some((m) => m?.name === requestedModel)
+          : false;
+
+        if (requestedModel && status.activeModel !== requestedModel && requestedInstalled) {
+          await whisperService.setActiveModel(requestedModel);
+          activeModel = requestedModel;
+        } else if (status.activeModel) {
+          if (requestedModel && status.activeModel !== requestedModel && !requestedInstalled) {
+            console.warn(
+              `Whisper local realtime: requested model ${requestedModel} is not installed; using active model ${status.activeModel}`
+            );
+          }
+          activeModel = status.activeModel;
+        }
+      } else if (status.activeModel !== activeModel && installedModels.some((m) => m?.name === activeModel)) {
         await whisperService.setActiveModel(activeModel);
-      } else if (status.activeModel !== activeModel && status.installedModels?.length) {
+      } else if (status.activeModel !== activeModel && installedModels.length) {
         try {
           await whisperService.downloadModel(activeModel);
           await whisperService.setActiveModel(activeModel);
