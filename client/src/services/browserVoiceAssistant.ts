@@ -7,6 +7,9 @@ const DEFAULT_WAKE_WORDS = ["anna", "hey anna", "henry", "hey henry", "home brai
 const WAIT_FOR_COMMAND_TIMEOUT_MS = 22000;
 const NETWORK_ERROR_WINDOW_MS = 15000;
 const NETWORK_ERROR_THRESHOLD = 6;
+const CONSECUTIVE_NETWORK_ERROR_THRESHOLD = 3;
+const WINDOWS_CHROMIUM_BURST_NETWORK_ERROR_THRESHOLD = 3;
+const WINDOWS_CHROMIUM_CONSECUTIVE_NETWORK_ERROR_THRESHOLD = 2;
 const FALLBACK_CAPTURE_INTERVAL_MS = 250;
 const FALLBACK_CAPTURE_DURATION_MS = 1400;
 const FALLBACK_COMMAND_CAPTURE_DURATION_MS = 1800;
@@ -17,7 +20,7 @@ const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
 const WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX = 2;
 const FALLBACK_WAKE_STITCH_WINDOW_MS = 5200;
 const FALLBACK_WAKE_STITCH_MAX_PARTS = 4;
-const BROWSER_VOICE_BUILD_TAG = "2026-02-27-lowlatency-v2";
+const BROWSER_VOICE_BUILD_TAG = "2026-03-04-win11-network-fallback-v1";
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;
@@ -111,6 +114,7 @@ class BrowserVoiceAssistant {
   private defaultVoiceId = "";
   private mediaStream: MediaStream | null = null;
   private recentNetworkErrors: number[] = [];
+  private consecutiveNetworkErrors = 0;
   private playbackMutedUntil = 0;
   private fallbackNoChunkCount = 0;
   private fallbackSmallClipCount = 0;
@@ -183,6 +187,7 @@ class BrowserVoiceAssistant {
     this.isStopping = false;
     this.useServerSttFallback = false;
     this.recentNetworkErrors = [];
+    this.consecutiveNetworkErrors = 0;
     this.playbackMutedUntil = 0;
     this.stopFallbackLoop();
     this.clearFallbackWakeTranscriptHistory();
@@ -214,6 +219,7 @@ class BrowserVoiceAssistant {
     this.resumeRecognitionAfterStop = false;
     this.useServerSttFallback = false;
     this.recentNetworkErrors = [];
+    this.consecutiveNetworkErrors = 0;
     this.playbackMutedUntil = 0;
     this.clearFallbackWakeTranscriptHistory();
     this.clearWaitForCommandTimer();
@@ -609,15 +615,45 @@ class BrowserVoiceAssistant {
     const now = Date.now();
     this.recentNetworkErrors = [...this.recentNetworkErrors, now]
       .filter((timestamp) => now - timestamp <= NETWORK_ERROR_WINDOW_MS);
+    this.consecutiveNetworkErrors += 1;
 
-    this.updateStatus({}, `network error burst count: ${this.recentNetworkErrors.length}`);
+    const isWindowsChromium = this.isWindowsChromiumBrowser();
+    const burstThreshold = isWindowsChromium
+      ? WINDOWS_CHROMIUM_BURST_NETWORK_ERROR_THRESHOLD
+      : NETWORK_ERROR_THRESHOLD;
+    const consecutiveThreshold = isWindowsChromium
+      ? WINDOWS_CHROMIUM_CONSECUTIVE_NETWORK_ERROR_THRESHOLD
+      : CONSECUTIVE_NETWORK_ERROR_THRESHOLD;
+
+    this.updateStatus(
+      {},
+      `network error burst=${this.recentNetworkErrors.length}/${burstThreshold} consecutive=${this.consecutiveNetworkErrors}/${consecutiveThreshold}`
+    );
 
     if (
       !this.useServerSttFallback &&
-      this.recentNetworkErrors.length >= NETWORK_ERROR_THRESHOLD
+      (
+        this.recentNetworkErrors.length >= burstThreshold ||
+        this.consecutiveNetworkErrors >= consecutiveThreshold
+      )
     ) {
-      void this.activateServerSttFallback('persistent browser speech network errors');
+      void this.activateServerSttFallback(
+        `persistent browser speech network errors (burst=${this.recentNetworkErrors.length}, consecutive=${this.consecutiveNetworkErrors}, windowsChromium=${isWindowsChromium})`
+      );
     }
+  }
+
+  private isWindowsChromiumBrowser(): boolean {
+    if (typeof navigator === "undefined") {
+      return false;
+    }
+
+    const userAgent = navigator.userAgent || "";
+    const isWindows = /\bWindows NT\b/i.test(userAgent);
+    const isChromiumFamily = /\b(?:Chrome|Chromium|Edg)\/\d+/i.test(userAgent);
+    const isFirefox = /\bFirefox\/\d+/i.test(userAgent);
+
+    return isWindows && isChromiumFamily && !isFirefox;
   }
 
   private async activateServerSttFallback(reason: string): Promise<void> {
@@ -646,6 +682,7 @@ class BrowserVoiceAssistant {
 
     this.useServerSttFallback = true;
     this.awaitingCommand = false;
+    this.consecutiveNetworkErrors = 0;
     this.fallbackNoChunkCount = 0;
     this.fallbackSmallClipCount = 0;
     this.clearFallbackWakeTranscriptHistory();
@@ -944,6 +981,11 @@ class BrowserVoiceAssistant {
     const results = event?.results;
     if (!results) {
       return;
+    }
+
+    if (this.consecutiveNetworkErrors > 0) {
+      this.consecutiveNetworkErrors = 0;
+      this.updateStatus({}, "network error counter reset after recognition result");
     }
 
     const startIndex = typeof event.resultIndex === "number" ? event.resultIndex : 0;
