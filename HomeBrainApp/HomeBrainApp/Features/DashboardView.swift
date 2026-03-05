@@ -42,6 +42,9 @@ struct DashboardView: View {
         if useLandscapeCompactLayout {
             return Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
         }
+        if !isCompact {
+            return Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
+        }
         return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     }
 
@@ -70,85 +73,94 @@ struct DashboardView: View {
         Array(scenes.prefix(useLandscapeCompactLayout ? 4 : (isCompact ? 3 : 5)))
     }
 
+    private var commandSuggestions: [String] {
+        [
+            "Turn on the patio lights at sunset",
+            "Set the upstairs thermostat to 70",
+            "Run movie night in the living room",
+            "Create a bedtime shutdown workflow"
+        ]
+    }
+
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [HBPalette.pageTop.opacity(0.42), HBPalette.pageMid.opacity(0.34), HBPalette.pageBottom.opacity(0.38)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            Group {
-                if isLoading {
-                    LoadingView(title: "Loading dashboard...")
-                        .padding()
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 12 : 16) {
-                            if let errorMessage {
-                                InlineErrorView(message: errorMessage) {
-                                    Task { await loadDashboard() }
-                                }
+        Group {
+            if isLoading {
+                LoadingView(title: "Loading dashboard...")
+                    .padding(useLandscapeCompactLayout ? 10 : 16)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 12 : 16) {
+                        if let errorMessage {
+                            InlineErrorView(message: errorMessage) {
+                                Task { await loadDashboard() }
                             }
+                        }
 
-                            dashboardHeader
+                        dashboardHeader
 
-                            LazyVGrid(columns: metricColumns, spacing: 12) {
-                                metricCard(
-                                    title: "Active Devices",
-                                    value: "\(onlineDevices)/\(devices.count)",
-                                    subtitle: "Smart devices online",
-                                    icon: "lightbulb.max",
-                                    colors: [Color(red: 0.08, green: 0.14, blue: 0.36), Color(red: 0.05, green: 0.10, blue: 0.29)],
-                                    accent: HBPalette.accentBlue
-                                )
-                                metricCard(
-                                    title: "Voice Devices",
-                                    value: "\(onlineVoiceDevices)/\(voiceDevices.count)",
-                                    subtitle: "Voice hubs connected",
-                                    icon: "mic",
-                                    colors: [Color(red: 0.03, green: 0.25, blue: 0.16), Color(red: 0.02, green: 0.17, blue: 0.11)],
-                                    accent: HBPalette.accentGreen
-                                )
-                                metricCard(
-                                    title: "Scenes",
-                                    value: "\(scenes.count)",
-                                    subtitle: "Available scenes",
-                                    icon: "play.fill",
-                                    colors: [Color(red: 0.20, green: 0.08, blue: 0.33), Color(red: 0.14, green: 0.06, blue: 0.25)],
-                                    accent: Color(red: 0.73, green: 0.55, blue: 1.0)
-                                )
-                                metricCard(
-                                    title: "System Status",
-                                    value: systemStatus,
-                                    subtitle: "All systems operational",
-                                    icon: "waveform.path.ecg",
-                                    colors: [Color(red: 0.31, green: 0.12, blue: 0.06), Color(red: 0.22, green: 0.08, blue: 0.04)],
-                                    accent: HBPalette.accentOrange
-                                )
+                        LazyVGrid(columns: metricColumns, spacing: 12) {
+                            metricCard(
+                                title: "Live Devices",
+                                value: "\(onlineDevices)/\(devices.count)",
+                                subtitle: "Realtime endpoints responding",
+                                icon: "lightbulb.max",
+                                colors: [HBPalette.accentBlue.opacity(0.24), HBPalette.accentPurple.opacity(0.14)],
+                                accent: HBPalette.accentBlue
+                            )
+                            metricCard(
+                                title: "Voice Mesh",
+                                value: "\(onlineVoiceDevices)/\(voiceDevices.count)",
+                                subtitle: "Wake hubs currently connected",
+                                icon: "mic",
+                                colors: [HBPalette.accentGreen.opacity(0.22), HBPalette.accentBlue.opacity(0.12)],
+                                accent: HBPalette.accentGreen
+                            )
+                            metricCard(
+                                title: "Scene Library",
+                                value: "\(scenes.count)",
+                                subtitle: "Pinned atmospheres available",
+                                icon: "play.fill",
+                                colors: [HBPalette.accentPurple.opacity(0.24), HBPalette.panelSoft.opacity(0.18)],
+                                accent: HBPalette.accentPurple
+                            )
+                            metricCard(
+                                title: "Automation Signal",
+                                value: systemStatus,
+                                subtitle: "Residence mesh health",
+                                icon: "waveform.path.ecg",
+                                colors: [HBPalette.accentOrange.opacity(0.22), HBPalette.panelSoft.opacity(0.16)],
+                                accent: HBPalette.accentOrange
+                            )
+                        }
+
+                        if supportsTwoColumnCards {
+                            HStack(alignment: .top, spacing: 12) {
+                                securityPanel
+                                quickScenePanel
                             }
-
-                            if supportsTwoColumnCards {
-                                HStack(alignment: .top, spacing: 12) {
-                                    securityPanel
-                                    quickScenePanel
-                                }
-                            } else {
-                                VStack(spacing: 12) {
-                                    securityPanel
-                                    quickScenePanel
-                                }
+                        } else {
+                            VStack(spacing: 12) {
+                                securityPanel
+                                quickScenePanel
                             }
+                        }
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            HBSectionHeader(
+                                title: "Favorite Devices",
+                                subtitle: favoritesProfileId == nil
+                                    ? "Activate a user profile to pin favorite controls."
+                                    : "Profile-tuned shortcuts for your most-used devices.",
+                                eyebrow: "Priority Controls"
+                            )
 
                             if featuredDevices.isEmpty {
-                                HBPanel {
-                                    EmptyStateView(
-                                        title: "No favorite devices yet",
-                                        subtitle: favoritesProfileId == nil
-                                            ? "Create or activate a user profile, then favorite devices to pin them to dashboard."
-                                            : "Favorite your go-to devices from the Devices screen to pin them here."
-                                    )
-                                }
+                                EmptyStateView(
+                                    title: "No favorite devices yet",
+                                    subtitle: favoritesProfileId == nil
+                                        ? "Create or activate a user profile, then favorite devices to pin them here."
+                                        : "Favorite your go-to devices from the Devices screen to pin them here."
+                                )
                             } else {
                                 VStack(alignment: .leading, spacing: 12) {
                                     ForEach(featuredFullWidthDevices) { device in
@@ -166,71 +178,115 @@ struct DashboardView: View {
                                     }
                                 }
                             }
-
-                            voiceCommandPanel
                         }
-                        .padding(.bottom, 10)
+
+                        voiceCommandPanel
                     }
-                    .scrollIndicators(.hidden)
-                    .refreshable {
-                        await loadDashboard()
-                    }
+                    .padding(useLandscapeCompactLayout ? 10 : 16)
+                    .padding(.bottom, 12)
+                }
+                .scrollIndicators(.hidden)
+                .refreshable {
+                    await loadDashboard()
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
         .task {
             await loadDashboard()
         }
     }
 
     private var dashboardHeader: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Welcome Home")
-                    .font(
-                        .system(
-                            size: useLandscapeCompactLayout ? 24 : (isCompact ? 38 : 48),
-                            weight: .bold,
-                            design: .rounded
-                        )
+        HBPanel {
+            Group {
+                if supportsTwoColumnCards {
+                    HStack(alignment: .top, spacing: 18) {
+                        dashboardHeroCopy
+                        dashboardHeroCommandSurface
+                            .frame(maxWidth: 360, alignment: .trailing)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 16) {
+                        dashboardHeroCopy
+                        dashboardHeroCommandSurface
+                    }
+                }
+            }
+        }
+    }
+
+    private var dashboardHeroCopy: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Residence Control Nexus")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(3.0)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text("Welcome home. Every room, routine, and wake-word path is online.")
+                .font(.system(size: useLandscapeCompactLayout ? 28 : (isCompact ? 36 : 48), weight: .bold, design: .rounded))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [HBPalette.accentBlue, HBPalette.accentPurple, HBPalette.textPrimary],
+                        startPoint: .leading,
+                        endPoint: .trailing
                     )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                Text("Control your smart home with voice commands or touch")
-                    .font(.system(size: useLandscapeCompactLayout ? 14 : 19, weight: .medium, design: .rounded))
+                )
+
+            Text("Control the home as one responsive system with cinematic visibility across devices, scenes, voice hubs, and automations.")
+                .font(.system(size: useLandscapeCompactLayout ? 14 : 18, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    HBBadge(text: "\(scenes.count) scenes ready")
+                    HBBadge(text: "\(onlineVoiceDevices) voice hubs online")
+                    if favoritesProfileId != nil {
+                        HBBadge(text: "Favorites tuned")
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var dashboardHeroCommandSurface: some View {
+        HBCardRow {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Natural Language Interface")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2.6)
+                    .foregroundStyle(HBPalette.textMuted)
+
+                Text("Speak the next move")
+                    .font(.system(size: useLandscapeCompactLayout ? 22 : 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+
+                Text("Trigger a scene, dim a room, or compose a workflow from a single command surface.")
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
-            }
 
-            Spacer(minLength: 0)
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                    ForEach(commandSuggestions, id: \.self) { suggestion in
+                        Text(suggestion)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                    }
+                }
 
-            Button {
-                selectionHaptic()
-            } label: {
-                Label("Voice Commands", systemImage: "message")
-                    .font(.system(size: useLandscapeCompactLayout ? 15 : 17, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, useLandscapeCompactLayout ? 12 : 14)
-                    .padding(.vertical, useLandscapeCompactLayout ? 8 : 10)
-                    .background(
-                        LinearGradient(
-                            colors: [HBPalette.accentGreen, HBPalette.accentBlue],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ),
-                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    )
+                Button {
+                    selectionHaptic()
+                } label: {
+                    Label("Open Voice Console", systemImage: "waveform")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBPrimaryButtonStyle())
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -243,52 +299,84 @@ struct DashboardView: View {
         accent: Color
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title)
-                    .font(.system(size: useLandscapeCompactLayout ? 14 : 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
-                Spacer()
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.2)
+                        .foregroundStyle(HBPalette.textMuted)
+
+                    Text(value)
+                        .font(.system(size: useLandscapeCompactLayout ? 28 : 34, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                }
+
+                Spacer(minLength: 10)
+
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(accent)
+                    .frame(width: 38, height: 38)
+                    .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
             }
-            Text(value)
-                .font(.system(size: useLandscapeCompactLayout ? 30 : 38, weight: .bold, design: .rounded))
-                .foregroundStyle(accent)
-                .lineLimit(1)
-                .minimumScaleFactor(0.65)
+
             Text(subtitle)
                 .font(.system(size: useLandscapeCompactLayout ? 13 : 15, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
+
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [accent, accent.opacity(0.18)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 52, height: 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
-        )
+        .padding(18)
+        .background {
+            ZStack {
+                HBGlassBackground(cornerRadius: 22, variant: .panelSoft)
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .opacity(0.92)
+            }
+        }
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(accent.opacity(0.55), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(accent.opacity(0.32), lineWidth: 1)
         )
     }
 
     private var securityPanel: some View {
-        return HBPanel {
+        HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Label("Security Alarm", systemImage: "shield")
-                        .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Security Envelope")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .textCase(.uppercase)
+                            .tracking(2.6)
+                            .foregroundStyle(HBPalette.textMuted)
+
+                        Label("Security Alarm", systemImage: "shield")
+                            .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                    }
 
                     Spacer()
 
-                    Text(securityStatus.capitalized)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.black.opacity(0.7))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.85), in: Capsule())
+                    HBBadge(
+                        text: securityStatus.capitalized,
+                        foreground: HBPalette.textPrimary,
+                        background: HBPalette.panelSoft.opacity(0.95),
+                        stroke: HBPalette.panelStrokeStrong
+                    )
                 }
 
                 HStack {
@@ -318,8 +406,7 @@ struct DashboardView: View {
                         Label("Arm Stay", systemImage: "house")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.black.opacity(0.65))
+                    .buttonStyle(HBSecondaryButtonStyle())
 
                     Button {
                         Task { await armSecurity(stay: false) }
@@ -327,16 +414,13 @@ struct DashboardView: View {
                         Label("Arm Away", systemImage: "car")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.black.opacity(0.65))
+                    .buttonStyle(HBSecondaryButtonStyle())
                 }
 
                 Button("Sync with SmartThings") {
                     Task { await syncSecurity() }
                 }
-                .buttonStyle(.plain)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(HBPalette.textSecondary)
+                .buttonStyle(HBGhostButtonStyle())
                 .frame(maxWidth: .infinity)
                 .padding(.top, 2)
             }
@@ -347,47 +431,45 @@ struct DashboardView: View {
     private var quickScenePanel: some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 12) {
-                Label("Quick Scene Actions", systemImage: "play")
-                    .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scene Launchpad")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.6)
+                        .foregroundStyle(HBPalette.textMuted)
+
+                    Label("Quick Scene Actions", systemImage: "play")
+                        .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                }
 
                 if quickScenes.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "heart")
-                            .foregroundStyle(HBPalette.textSecondary)
-                        Text("No favorite scenes yet. Use the list below to pin your most-used automations.")
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    EmptyStateView(
+                        title: "No favorite scenes yet",
+                        subtitle: "Pin your most-used automations and they will appear here for instant launch."
                     )
                 } else {
                     ForEach(quickScenes) { scene in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(scene.name)
-                                    .font(.system(size: 18, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(HBPalette.textPrimary)
-                                Text(scene.details)
-                                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                                    .foregroundStyle(HBPalette.textSecondary)
-                                    .lineLimit(1)
-                            }
+                        HBCardRow {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(scene.name)
+                                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                    Text(scene.details)
+                                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .lineLimit(1)
+                                }
 
-                            Spacer()
+                                Spacer()
 
-                            Button("Activate") {
-                                Task { await activateScene(scene) }
+                                Button("Activate") {
+                                    Task { await activateScene(scene) }
+                                }
+                                .buttonStyle(HBSecondaryButtonStyle(compact: true))
                             }
-                            .buttonStyle(.bordered)
-                            .tint(HBPalette.accentBlue)
                         }
-                        .padding(.vertical, 2)
                     }
                 }
 
@@ -408,60 +490,74 @@ struct DashboardView: View {
         let statusEnabled = isThermostat ? mode != "off" : device.status
 
         return HBPanel {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
                     Image(systemName: iconForDevice(device.type))
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(HBPalette.accentBlue.opacity(0.65), in: Circle())
+                        .foregroundStyle(Color.white)
+                        .frame(width: 38, height: 38)
+                        .background(
+                            LinearGradient(
+                                colors: statusEnabled
+                                    ? [HBPalette.accentGreen, HBPalette.accentBlue]
+                                    : [HBPalette.accentSlate, HBPalette.panelSoft],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            in: Circle()
+                        )
 
-                    Spacer()
-
-                    HStack(spacing: 8) {
-                        favoriteButton(for: device)
-
-                        Text(statusText)
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(statusEnabled ? Color.black.opacity(0.7) : HBPalette.textPrimary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(statusEnabled ? Color.white.opacity(0.9) : Color.white.opacity(0.12), in: Capsule())
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(device.name)
+                            .font(.system(size: useLandscapeCompactLayout ? 20 : 22, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .lineLimit(2)
+                        Text(device.room)
+                            .font(.system(size: useLandscapeCompactLayout ? 13 : 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
                     }
+
+                    Spacer(minLength: 0)
+
+                    favoriteButton(for: device)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(device.name)
-                        .font(.system(size: useLandscapeCompactLayout ? 20 : 22, weight: .bold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
-                        .lineLimit(2)
-                    Text(device.room)
-                        .font(.system(size: useLandscapeCompactLayout ? 13 : 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(HBPalette.textSecondary)
+                HStack(spacing: 8) {
+                    HBBadge(
+                        text: statusText,
+                        foreground: statusEnabled ? HBPalette.textPrimary : HBPalette.textSecondary,
+                        background: statusEnabled ? HBPalette.accentBlue.opacity(0.22) : HBPalette.panelSoft.opacity(0.88),
+                        stroke: statusEnabled ? HBPalette.accentBlue : HBPalette.panelStrokeStrong
+                    )
+
+                    if let temperature = device.temperature, !isThermostat {
+                        HBBadge(
+                            text: "\(Int(temperature))°F",
+                            foreground: HBPalette.textPrimary,
+                            background: HBPalette.panelSoft.opacity(0.88),
+                            stroke: HBPalette.panelStrokeStrong
+                        )
+                    }
                 }
 
                 if isThermostat {
                     featuredThermostatControls(for: device)
                 } else {
-                    if let temperature = device.temperature {
-                        HStack {
-                            Text("Temperature")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(HBPalette.textSecondary)
-                            Spacer()
-                            Text("\(Int(temperature))°F")
-                                .font(.system(size: 18, weight: .bold, design: .rounded))
-                                .foregroundStyle(HBPalette.textPrimary)
+                    if device.status {
+                        Button(device.status ? "Turn Off" : "Turn On") {
+                            Task { await toggleDevice(device) }
                         }
+                        .buttonStyle(HBSecondaryButtonStyle())
+                        .frame(maxWidth: .infinity)
+                        .disabled(pendingControlDeviceIds.contains(device.id))
+                    } else {
+                        Button(device.status ? "Turn Off" : "Turn On") {
+                            Task { await toggleDevice(device) }
+                        }
+                        .buttonStyle(HBPrimaryButtonStyle())
+                        .frame(maxWidth: .infinity)
+                        .disabled(pendingControlDeviceIds.contains(device.id))
                     }
-
-                    Button(device.status ? "Turn Off" : "Turn On") {
-                        Task { await toggleDevice(device) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(device.status ? Color.red.opacity(0.9) : HBPalette.accentBlue)
-                    .frame(maxWidth: .infinity)
-                    .disabled(pendingControlDeviceIds.contains(device.id))
 
                     Text("Say: \"Hey Anna, \(device.status ? "turn off" : "turn on") \(device.name)\"")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -482,17 +578,16 @@ struct DashboardView: View {
             if isPending {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(width: 22, height: 22)
-                    .padding(4)
+                    .frame(width: 30, height: 30)
             } else {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(isFavorite ? Color.red.opacity(0.95) : HBPalette.textSecondary)
-                    .frame(width: 22, height: 22)
-                    .padding(4)
+                    .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
         }
+        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
         .buttonStyle(.plain)
         .disabled(isPending)
         .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
@@ -507,17 +602,27 @@ struct DashboardView: View {
         let isOff = mode == "off"
 
         return VStack(alignment: .leading, spacing: 12) {
-            Button {
-                let nextMode = isOff ? onMode : "off"
-                Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
-            } label: {
-                Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
-                    .frame(maxWidth: .infinity)
+            if isOff {
+                Button {
+                    let nextMode = isOff ? onMode : "off"
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
+                } label: {
+                    Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBPrimaryButtonStyle())
+                .disabled(pending)
+            } else {
+                Button {
+                    let nextMode = isOff ? onMode : "off"
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
+                } label: {
+                    Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBSecondaryButtonStyle())
+                .disabled(pending)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(isOff ? Color.black.opacity(0.68) : Color.white.opacity(0.88))
-            .foregroundStyle(isOff ? Color.white : Color.black.opacity(0.82))
-            .disabled(pending)
 
             thermostatSetpointPanel(
                 device: device,
@@ -583,7 +688,7 @@ struct DashboardView: View {
                     Task { await handleDeviceControl(deviceId: device.id, action: "set_temperature", value: next) }
                 }
             )
-            .tint(Color.white.opacity(0.95))
+            .tint(HBPalette.accentBlue)
             .disabled(pending)
 
             HStack(spacing: 8) {
@@ -597,12 +702,8 @@ struct DashboardView: View {
                 }
             }
         }
-        .padding(12)
-        .background(Color(red: 0.09, green: 0.15, blue: 0.37).opacity(0.66), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(HBPalette.accentBlue.opacity(0.5), lineWidth: 1)
-        )
+        .padding(14)
+        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
     }
 
     private func thermostatModeChip(
@@ -618,38 +719,53 @@ struct DashboardView: View {
         }
         .buttonStyle(.plain)
         .font(.system(size: 14, weight: .bold, design: .rounded))
-        .foregroundStyle(active ? Color.black.opacity(0.86) : HBPalette.textPrimary)
+        .foregroundStyle(active ? Color.white : HBPalette.textPrimary)
         .frame(maxWidth: .infinity)
         .padding(.vertical, useLandscapeCompactLayout ? 9 : 11)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(active ? Color.white.opacity(0.9) : Color.black.opacity(0.62))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    active
+                    ? LinearGradient(
+                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    : LinearGradient(
+                        colors: [HBPalette.panelSoft.opacity(0.92), HBPalette.panel.opacity(0.74)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(active ? Color.clear : Color.white.opacity(0.14), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(active ? HBPalette.accentBlue.opacity(0.18) : HBPalette.panelStroke.opacity(0.4), lineWidth: 1)
         )
         .disabled(pending)
     }
 
     private var voiceCommandPanel: some View {
         HBPanel {
-            VStack(alignment: .leading, spacing: 12) {
-                Label("Voice Command", systemImage: "waveform")
-                    .font(.system(size: useLandscapeCompactLayout ? 19 : 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Voice Command Surface")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.6)
+                        .foregroundStyle(HBPalette.textMuted)
+
+                    Text("Launch a natural-language control pass")
+                        .font(.system(size: useLandscapeCompactLayout ? 20 : 26, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                }
+
+                Text("Type or speak a request and HomeBrain interprets the intent, confidence, and execution path.")
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
 
                 TextField("Type a natural language command", text: $commandText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: useLandscapeCompactLayout ? 15 : 17, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, useLandscapeCompactLayout ? 10 : 12)
-                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                    )
+                    .hbPanelTextField()
 
                 HStack(spacing: 10) {
                     Button {
@@ -658,34 +774,32 @@ struct DashboardView: View {
                         if isSendingCommand {
                             HStack(spacing: 8) {
                                 ProgressView()
-                                    .tint(.white)
+                                    .tint(HBPalette.textPrimary)
                                 Text("Sending...")
                             }
                             .frame(maxWidth: .infinity)
                         } else {
-                            Text("Run Command")
+                            Label("Run Command", systemImage: "waveform")
                                 .frame(maxWidth: .infinity)
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(HBPalette.accentGreen)
+                    .buttonStyle(HBPrimaryButtonStyle())
                     .disabled(commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSendingCommand)
 
                     Button("Refresh") {
                         Task { await loadDashboard() }
                     }
-                    .buttonStyle(.bordered)
-                    .tint(HBPalette.accentBlue)
+                    .buttonStyle(HBSecondaryButtonStyle())
                 }
 
                 if !commandResponse.isEmpty {
                     Text(commandResponse)
                         .font(.system(size: 15, weight: .medium, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
                 }
             }
         }
