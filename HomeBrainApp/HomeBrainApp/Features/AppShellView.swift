@@ -53,6 +53,42 @@ struct AppShellView: View {
             }
         }
 
+        var chromeLabel: String {
+            switch self {
+            case .dashboard: return "Residence Overview"
+            case .devices: return "Device Matrix"
+            case .scenes: return "Scene Sequencer"
+            case .workflows: return "Workflow Studio"
+            case .automations: return "Automation Grid"
+            case .voiceDevices: return "Voice Nexus"
+            case .userProfiles: return "Identity Profiles"
+            case .settings: return "System Configuration"
+            case .operations: return "Operations Center"
+            case .platformDeploy: return "Deployment Bay"
+            case .ollama: return "LLM Core"
+            case .whisper: return "Whisper Matrix"
+            case .ssl: return "Certificate Vault"
+            }
+        }
+
+        var chromeKicker: String {
+            switch self {
+            case .dashboard: return "Live Command Deck"
+            case .devices: return "Hardware Orchestration"
+            case .scenes: return "Atmosphere Control"
+            case .workflows: return "Behavior Programming"
+            case .automations: return "Scheduled Intelligence"
+            case .voiceDevices: return "Wake Mesh"
+            case .userProfiles: return "Identity Layer"
+            case .settings: return "Control Core"
+            case .operations: return "Telemetry"
+            case .platformDeploy: return "Rollout Status"
+            case .ollama: return "Inference Systems"
+            case .whisper: return "Speech Intelligence"
+            case .ssl: return "Trust Fabric"
+            }
+        }
+
         var icon: String {
             switch self {
             case .dashboard: return "house"
@@ -97,11 +133,12 @@ struct AppShellView: View {
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
-    private var topBarHeight: CGFloat { isCompactHeight ? 52 : (isCompact ? 56 : 72) }
-    private var shellPadding: CGFloat { isCompactHeight ? 8 : (isCompact ? 12 : 16) }
-    private var chromeButtonSide: CGFloat { isCompactHeight ? 32 : 36 }
+    private var topBarHeight: CGFloat { isCompactHeight ? 72 : (isCompact ? 86 : 102) }
+    private var shellPadding: CGFloat { isCompactHeight ? 10 : (isCompact ? 14 : 18) }
+    private var chromeButtonSide: CGFloat { isCompactHeight ? 38 : 42 }
     private var isSidebarCollapsed: Bool { isCompact ? isCompactSidebarCollapsed : isRegularSidebarCollapsed }
-    private var sidebarWidth: CGFloat { isSidebarCollapsed ? (isCompact ? 76 : 82) : 245 }
+    private var sidebarWidth: CGFloat { isSidebarCollapsed ? (isCompact ? 88 : 94) : 280 }
+    private var currentSection: AppSection { selection ?? visibleSections.first ?? .dashboard }
 
     private var visibleSections: [AppSection] {
         AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
@@ -147,7 +184,6 @@ struct AppShellView: View {
         }
         .ignoresSafeArea(edges: .top)
         .tint(HBPalette.accentBlue)
-        .preferredColorScheme(.dark)
         .onAppear {
             syncSelectionWithVisibleSections()
             voiceAssistant.bind(sessionStore: session)
@@ -183,11 +219,13 @@ struct AppShellView: View {
     }
 
     private var regularShell: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: shellPadding) {
             sidebar
                 .frame(width: sidebarWidth)
             detailStack
         }
+        .padding(.horizontal, shellPadding)
+        .padding(.bottom, shellPadding)
         .animation(.easeInOut(duration: 0.25), value: sidebarWidth)
     }
 
@@ -196,7 +234,7 @@ struct AppShellView: View {
             detailStack
 
             if isCompactSidebarVisible {
-                Color.black.opacity(isSidebarCollapsed ? 0.30 : 0.42)
+                HBPalette.pageBottom.opacity(isSidebarCollapsed ? 0.12 : 0.20)
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.25)) {
                             isCompactSidebarVisible = false
@@ -206,105 +244,143 @@ struct AppShellView: View {
 
                 sidebar
                     .frame(width: sidebarWidth)
-                    .shadow(color: Color.black.opacity(0.35), radius: 20, x: 8, y: 0)
+                    .padding(.leading, shellPadding)
+                    .padding(.bottom, shellPadding)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
+        .padding(.bottom, shellPadding)
         .animation(.easeInOut(duration: 0.25), value: isCompactSidebarVisible)
         .animation(.easeInOut(duration: 0.25), value: sidebarWidth)
     }
 
     private var topBar: some View {
-        HStack(spacing: isCompactHeight ? 8 : 10) {
-            if isCompact {
-                compactMenuButton
-            }
+        ZStack {
+            HBGlassBackground(cornerRadius: isCompactHeight ? 24 : 30, variant: .chrome)
 
-            HStack(spacing: 8) {
-                Image("HomeBrainBrandIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: isCompactHeight ? 22 : (isCompact ? 24 : 30), height: isCompactHeight ? 22 : (isCompact ? 24 : 30))
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                Text("Home Brain")
-                    .font(
-                        .system(
-                            size: isCompactHeight ? 16 : (isCompact ? 18 : 32),
-                            weight: .bold,
-                            design: .rounded
-                        )
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .layoutPriority(1)
-
-            Text(isCompact ? activeDevicesSummary : "\(activeDevicesSummary) devices active")
-                .font(.system(size: isCompactHeight ? 12 : 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.black.opacity(0.85))
-                .padding(.horizontal, isCompactHeight ? 10 : 12)
-                .padding(.vertical, isCompactHeight ? 5 : 6)
-                .background(Color.white.opacity(0.92), in: Capsule())
-                .lineLimit(1)
-                .layoutPriority(1)
-
-            resourceUtilizationStrip
-                .layoutPriority(2)
-
-            Spacer(minLength: 8)
-
-            Button {
-                Task { await voiceAssistant.toggle() }
-            } label: {
-                Group {
-                    if isCompact {
-                        Label("", systemImage: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash")
-                            .labelStyle(.iconOnly)
-                    } else {
-                        Label(
-                            voiceAssistant.isEnabled
-                            ? (voiceAssistant.isProcessing ? "Processing..." : "Voice On")
-                            : "Voice Off",
-                            systemImage: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash"
-                        )
-                            .labelStyle(.titleAndIcon)
+            Group {
+                if isCompact {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: isCompactHeight ? 8 : 10) {
+                            compactMenuButton
+                            chromeBrandCluster(compact: true)
+                            chromeSectionCluster(compact: true)
+                            HBBadge(text: "\(activeDevicesSummary) active")
+                            resourceUtilizationStrip
+                            voiceToggleButton(compact: true)
+                            HBThemeToggleMenu()
+                            chromeIconButton(systemImage: "gearshape") {
+                                selection = .settings
+                            }
+                            chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
+                                session.logout()
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, isCompactHeight ? 8 : 10)
                     }
-                }
-                .font(.system(size: isCompactHeight ? 13 : 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(HBPalette.textPrimary)
-                .padding(.horizontal, isCompactHeight ? 9 : (isCompact ? 10 : 14))
-                .padding(.vertical, isCompactHeight ? 7 : 8)
-                .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            .buttonStyle(.plain)
+                } else {
+                    HStack(spacing: 12) {
+                        chromeBrandCluster(compact: false)
+                        chromeSectionCluster(compact: false)
+                        HBBadge(text: "\(activeDevicesSummary) devices active")
+                        resourceUtilizationStrip
 
-            if !isCompact {
-                chromeIconButton(systemImage: "sun.max")
-                chromeIconButton(systemImage: "gearshape") {
-                    selection = .settings
-                }
-            }
+                        Spacer(minLength: 8)
 
-            chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
-                session.logout()
+                        voiceToggleButton(compact: false)
+                        HBThemeToggleMenu()
+                        chromeIconButton(systemImage: "gearshape") {
+                            selection = .settings
+                        }
+                        chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
+                            session.logout()
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, isCompactHeight ? 8 : 10)
+                }
             }
         }
-        .padding(.horizontal, isCompact ? 12 : 16)
-        .padding(.vertical, isCompactHeight ? 8 : 12)
-        .background(HBPalette.chrome.opacity(0.98))
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
+        .frame(height: topBarHeight - (isCompactHeight ? 12 : 16))
+        .padding(.horizontal, shellPadding)
+    }
+
+    private func chromeBrandCluster(compact: Bool) -> some View {
+        HStack(spacing: compact ? 10 : 12) {
+            Image("HomeBrainBrandIcon")
+                .resizable()
+                .scaledToFit()
+                .frame(width: compact ? 26 : 34, height: compact ? 26 : 34)
+                .padding(compact ? 8 : 10)
+                .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("HomeBrain OS")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2.8)
+                    .foregroundStyle(HBPalette.textMuted)
+                Text("Cinematic Command Deck")
+                    .font(.system(size: compact ? 16 : 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .lineLimit(1)
+            }
         }
+        .padding(.horizontal, compact ? 12 : 14)
+        .padding(.vertical, compact ? 8 : 10)
+        .background(HBGlassBackground(cornerRadius: 22, variant: .panel))
+    }
+
+    private func chromeSectionCluster(compact: Bool) -> some View {
+        HStack(spacing: compact ? 8 : 10) {
+            Circle()
+                .fill(HBPalette.accentGreen)
+                .frame(width: compact ? 10 : 12, height: compact ? 10 : 12)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(currentSection.chromeKicker)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2.8)
+                    .foregroundStyle(HBPalette.textMuted)
+
+                Text(currentSection.chromeLabel)
+                    .font(.system(size: compact ? 15 : 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, compact ? 12 : 16)
+        .padding(.vertical, compact ? 8 : 10)
+        .background(HBGlassBackground(cornerRadius: 22, variant: .panel))
+    }
+
+    private func voiceToggleButton(compact: Bool) -> some View {
+        Button {
+            Task { await voiceAssistant.toggle() }
+        } label: {
+            if compact {
+                Label(
+                    voiceAssistant.isEnabled
+                    ? (voiceAssistant.isProcessing ? "Processing" : "Voice On")
+                    : "Voice Off",
+                    systemImage: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash"
+                )
+                .labelStyle(.iconOnly)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+            } else {
+                Label(
+                    voiceAssistant.isEnabled
+                    ? (voiceAssistant.isProcessing ? "Processing" : "Voice On")
+                    : "Voice Off",
+                    systemImage: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash"
+                )
+                .labelStyle(.titleAndIcon)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+            }
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: compact))
     }
 
     private var resourceUtilizationStrip: some View {
@@ -326,12 +402,12 @@ struct AppShellView: View {
     }
 
     private func resourceUtilizationStripContent(metrics: [ResourceStripMetric], compact: Bool = false) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: compact ? 8 : 10) {
             ForEach(metrics) { metric in
                 resourceMetricChip(metric, compact: compact)
             }
 
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Circle()
                     .fill(Color.green.opacity((resourceStripLoading || resourceStripRefreshing) ? 0.6 : 0.95))
                     .frame(width: compact ? 5 : 6, height: compact ? 5 : 6)
@@ -341,15 +417,11 @@ struct AppShellView: View {
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             }
-            .padding(.horizontal, 3)
+            .padding(.horizontal, compact ? 4 : 6)
         }
-        .padding(.horizontal, compact ? 4 : 6)
-        .padding(.vertical, compact ? 4 : 5)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
+        .padding(.horizontal, compact ? 6 : 8)
+        .padding(.vertical, compact ? 5 : 6)
+        .background(HBGlassBackground(cornerRadius: 18, variant: .panel))
     }
 
     private func resourceMetricChip(_ metric: ResourceStripMetric, compact: Bool = false) -> some View {
@@ -372,7 +444,7 @@ struct AppShellView: View {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(Color.white.opacity(0.18))
+                        .fill(HBPalette.panelStroke.opacity(0.55))
 
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(
@@ -396,23 +468,19 @@ struct AppShellView: View {
                     .foregroundStyle(metric.available ? resourceValueColor(for: metric.percent) : HBPalette.textSecondary)
             }
         }
-        .frame(width: compact ? 50 : 58)
-        .padding(.horizontal, compact ? 4 : 5)
-        .padding(.vertical, compact ? 3 : 4)
-        .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .frame(width: compact ? 50 : 60)
+        .padding(.horizontal, compact ? 5 : 6)
+        .padding(.vertical, compact ? 4 : 5)
+        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
     }
 
     private func chromeIconButton(systemImage: String, action: @escaping () -> Void = {}) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(HBPalette.textSecondary)
+                .foregroundStyle(HBPalette.textPrimary)
                 .frame(width: chromeButtonSide, height: chromeButtonSide)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
         }
         .buttonStyle(.plain)
     }
@@ -425,134 +493,113 @@ struct AppShellView: View {
         } label: {
             Image(systemName: isCompactSidebarVisible ? "xmark" : "line.3.horizontal")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(HBPalette.textSecondary)
+                .foregroundStyle(HBPalette.textPrimary)
                 .frame(width: chromeButtonSide, height: chromeButtonSide)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(HBGlassBackground(cornerRadius: 14, variant: .panel))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isCompactSidebarVisible ? "Close main menu" : "Open main menu")
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
                 if !isSidebarCollapsed {
-                    Text("Main Menu")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(HBPalette.textSecondary)
-                        .textCase(.uppercase)
-                        .tracking(0.7)
-                    Spacer()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Nav Core")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textMuted)
+                            .textCase(.uppercase)
+                            .tracking(2.8)
+                        Text("Residence Systems")
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                    }
                 }
+
+                Spacer(minLength: 0)
 
                 Button {
                     toggleSidebarCollapsed()
                 } label: {
                     Image(systemName: isSidebarCollapsed ? "chevron.right" : "chevron.left")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(HBPalette.textSecondary)
-                        .frame(width: 30, height: 30)
-                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .frame(width: 38, height: 38)
+                        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(isSidebarCollapsed ? "Expand main menu" : "Collapse main menu")
             }
-            .padding(.horizontal, isSidebarCollapsed ? 0 : 4)
-            .padding(.top, isCompactHeight ? 4 : 6)
 
-            ForEach(visibleSections) { section in
-                Button {
-                    selection = section
-                    if isCompact {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            isCompactSidebarVisible = false
-                        }
+            Rectangle()
+                .fill(HBPalette.divider.opacity(0.7))
+                .frame(height: 1)
+
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 10) {
+                    ForEach(visibleSections) { section in
+                        sidebarButton(for: section)
                     }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: section.icon)
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 18, height: 18)
-
-                        if !isSidebarCollapsed {
-                            Text(section.title)
-                                .font(.system(size: 22, weight: .semibold, design: .rounded))
-                        }
-
-                        if !isSidebarCollapsed {
-                            Spacer()
-
-                            if selection == section {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .bold))
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: isSidebarCollapsed ? .center : .leading)
-                    .foregroundStyle(selection == section ? HBPalette.textPrimary : HBPalette.textSecondary)
-                    .padding(.horizontal, isSidebarCollapsed ? 0 : 14)
-                    .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(
-                                selection == section
-                                ? LinearGradient(
-                                    colors: [HBPalette.accentBlue.opacity(0.95), HBPalette.accentPurple.opacity(0.95)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                                : LinearGradient(
-                                    colors: [Color.white.opacity(0.03), Color.white.opacity(0.0)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(selection == section ? Color.clear : Color.white.opacity(0.08), lineWidth: 1)
-                    )
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(section.title)
+                .padding(.vertical, 2)
             }
-
-            Spacer()
 
             if isSidebarCollapsed {
                 HBPanel {
-                    HStack {
-                        Spacer(minLength: 0)
+                    VStack(spacing: 8) {
+                        Circle()
+                            .fill(voiceAssistant.isEnabled ? HBPalette.accentGreen : HBPalette.accentSlate)
+                            .frame(width: 10, height: 10)
+
                         Image(systemName: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(voiceAssistant.isEnabled ? HBPalette.accentBlue : HBPalette.textSecondary)
-                        Spacer(minLength: 0)
                     }
-                    .padding(.vertical, 2)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
                 }
             } else {
                 HBPanel {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(voiceAssistant.isEnabled ? "Voice Commands Active" : "Voice Commands Off")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(voiceAssistant.isEnabled ? HBPalette.accentGreen : HBPalette.accentSlate)
+                                .frame(width: 12, height: 12)
+
+                            Text("Wake Mesh")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .textCase(.uppercase)
+                                .tracking(2.6)
+                                .foregroundStyle(HBPalette.textMuted)
+                        }
+
+                        Text(voiceAssistant.isEnabled ? "Voice Commands Armed" : "Voice Commands Offline")
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
+
                         Text(voiceAssistant.statusText)
-                            .font(.system(size: 12, weight: .regular, design: .rounded))
-                            .foregroundStyle(voiceAssistant.errorMessage == nil ? HBPalette.textSecondary : Color.red.opacity(0.9))
-                            .lineLimit(2)
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(voiceAssistant.errorMessage == nil ? HBPalette.textSecondary : HBPalette.accentRed)
+                            .lineLimit(3)
+
                         if let pending = voiceAssistant.pendingWakeWord {
-                            Text("Wake word detected: \"\(pending)\"")
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
-                                .foregroundStyle(HBPalette.accentBlue)
+                            HBBadge(
+                                text: "Wake word: \(pending)",
+                                foreground: HBPalette.textPrimary,
+                                background: HBPalette.panelSoft.opacity(0.95),
+                                stroke: HBPalette.panelStrokeStrong
+                            )
                         } else {
                             Text("Wake words: \(voiceAssistant.wakeWordsSummary)")
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .lineLimit(2)
                         }
+
                         if let response = voiceAssistant.lastResponse, !response.isEmpty {
                             Text(response)
-                                .font(.system(size: 11, weight: .regular, design: .rounded))
+                                .font(.system(size: 12, weight: .regular, design: .rounded))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .lineLimit(2)
                         }
@@ -560,43 +607,94 @@ struct AppShellView: View {
                 }
             }
         }
-        .padding(.horizontal, isSidebarCollapsed ? 8 : 10)
-        .padding(.vertical, 12)
+        .padding(isSidebarCollapsed ? 12 : 16)
         .frame(width: sidebarWidth)
-        .background(
-            LinearGradient(
-                colors: [HBPalette.sidebar.opacity(0.98), HBPalette.chrome.opacity(0.96)],
-                startPoint: .top,
-                endPoint: .bottom
+        .background(HBGlassBackground(cornerRadius: 30, variant: .panelStrong))
+    }
+
+    private func sidebarButton(for section: AppSection) -> some View {
+        let isSelected = selection == section
+
+        return Button {
+            selection = section
+            if isCompact {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isCompactSidebarVisible = false
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.white : HBPalette.accentBlue)
+                    .frame(width: 22, height: 22)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(isSelected ? Color.white.opacity(0.16) : HBPalette.panelSoft.opacity(0.72))
+                    )
+
+                if !isSidebarCollapsed {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(section.title)
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(isSelected ? Color.white : HBPalette.textPrimary)
+                            .lineLimit(1)
+                        Text(section.chromeKicker)
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.72) : HBPalette.textMuted)
+                            .textCase(.uppercase)
+                            .tracking(1.6)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if isSelected {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.white.opacity(0.78))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: isSidebarCollapsed ? .center : .leading)
+            .padding(.horizontal, isSidebarCollapsed ? 0 : 10)
+            .padding(.vertical, 8)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [HBPalette.accentBlue.opacity(0.98), HBPalette.accentPurple.opacity(0.92)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                } else {
+                    HBGlassBackground(cornerRadius: 20, variant: .panelSoft)
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(isSelected ? HBPalette.panelStrokeStrong.opacity(0.25) : HBPalette.panelStroke.opacity(0.38), lineWidth: 1)
             )
-        )
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(width: 1)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(section.title)
     }
 
     private var detailStack: some View {
         NavigationStack {
-            detailContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            HBDeckSurface(cornerRadius: 32) {
+                VStack(spacing: 0) {
+                    detailContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
                 .padding(shellPadding)
+            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            LinearGradient(
-                colors: [HBPalette.pageTop.opacity(0.72), HBPalette.pageMid.opacity(0.62), HBPalette.pageBottom.opacity(0.55)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.white.opacity(0.07))
-                .frame(height: 1)
-        }
     }
 
     @ViewBuilder

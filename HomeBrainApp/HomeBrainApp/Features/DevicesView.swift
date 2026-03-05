@@ -73,28 +73,20 @@ struct DevicesView: View {
     }
 
     var body: some View {
-        VStack(spacing: useLandscapeCompactLayout ? 10 : 12) {
+        Group {
             if isLoading {
                 LoadingView(title: "Loading devices...")
+                    .padding(useLandscapeCompactLayout ? 10 : 16)
             } else {
                 ScrollView {
-                    VStack(spacing: useLandscapeCompactLayout ? 10 : 12) {
-                        HBSectionHeader(
-                            title: "Devices",
-                            subtitle: "Manage dimming, color, thermostat, and power controls",
-                            buttonTitle: "Add Device",
-                            buttonIcon: "plus"
-                        ) {
-                            showCreateSheet = true
-                        }
+                    VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
+                        deviceHeaderPanel
 
                         if let errorMessage {
                             InlineErrorView(message: errorMessage) {
                                 Task { await loadDevices(showLoading: true) }
                             }
                         }
-
-                        filterPanel
 
                         if filteredDevices.isEmpty {
                             EmptyStateView(
@@ -118,6 +110,7 @@ struct DevicesView: View {
                             }
                         }
                     }
+                    .padding(useLandscapeCompactLayout ? 10 : 16)
                     .padding(.bottom, 8)
                 }
                 .scrollIndicators(.hidden)
@@ -126,7 +119,6 @@ struct DevicesView: View {
                 }
             }
         }
-        .padding(useLandscapeCompactLayout ? 10 : 16)
         .sheet(isPresented: $showCreateSheet) {
             createDeviceSheet
         }
@@ -135,17 +127,53 @@ struct DevicesView: View {
         }
     }
 
-    private var filterPanel: some View {
+    private var deviceHeaderPanel: some View {
         HBPanel {
-            VStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 16) {
+                HBSectionHeader(
+                    title: "Smart Devices",
+                    subtitle: "Manage dimming, color, thermostat, and power controls across the residence mesh.",
+                    eyebrow: "Hardware Orchestration",
+                    buttonTitle: "Add Device",
+                    buttonIcon: "plus"
+                ) {
+                    showCreateSheet = true
+                }
+
+                filterPanel
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        HBBadge(text: "\(filteredDevices.count) matched")
+                        HBBadge(text: "\(devices.filter(\.isOnline).count) online")
+                        HBBadge(text: typeFilter == "all" ? "All types" : typeFilter.capitalized)
+                        if !searchText.isEmpty {
+                            HBBadge(text: "Search active")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var filterPanel: some View {
+        HBCardRow {
+            VStack(spacing: 12) {
                 TextField("Search devices", text: $searchText)
                     .hbPanelTextField()
 
                 HStack {
-                    Text("Type")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Spacer()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Filter Matrix")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .textCase(.uppercase)
+                            .tracking(2.2)
+                            .foregroundStyle(HBPalette.textMuted)
+                        Text("Type")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                    Spacer(minLength: 12)
                     Picker("Type", selection: $typeFilter) {
                         ForEach(availableTypes, id: \.self) { type in
                             Text(type.capitalized).tag(type)
@@ -161,14 +189,23 @@ struct DevicesView: View {
     private func deviceCard(_ device: DeviceItem) -> some View {
         HBPanel {
             VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
                     Image(systemName: iconName(for: device))
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(device.status ? HBPalette.accentGreen.opacity(0.75) : Color.white.opacity(0.26), in: Circle())
+                        .foregroundStyle(Color.white)
+                        .frame(width: 38, height: 38)
+                        .background(
+                            LinearGradient(
+                                colors: device.status
+                                    ? [HBPalette.accentGreen, HBPalette.accentBlue]
+                                    : [HBPalette.accentSlate, HBPalette.panelSoft],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            in: Circle()
+                        )
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(device.name)
                             .font(.system(size: useLandscapeCompactLayout ? 18 : 20, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
@@ -183,9 +220,34 @@ struct DevicesView: View {
 
                     Spacer(minLength: 0)
 
-                    VStack(alignment: .trailing, spacing: 8) {
-                        favoriteButton(for: device)
+                    favoriteButton(for: device)
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
                         statusBadge(for: device)
+                        HBBadge(
+                            text: device.type.uppercased(),
+                            foreground: HBPalette.textPrimary,
+                            background: HBPalette.panelSoft.opacity(0.88),
+                            stroke: HBPalette.panelStrokeStrong
+                        )
+                        if supportsLightFade(device) && device.type != "thermostat" {
+                            HBBadge(
+                                text: "Dimmable",
+                                foreground: HBPalette.textPrimary,
+                                background: HBPalette.panelSoft.opacity(0.88),
+                                stroke: HBPalette.panelStrokeStrong
+                            )
+                        }
+                        if supportsLightColor(device) {
+                            HBBadge(
+                                text: "Color",
+                                foreground: HBPalette.textPrimary,
+                                background: HBPalette.panelSoft.opacity(0.88),
+                                stroke: HBPalette.panelStrokeStrong
+                            )
+                        }
                     }
                 }
 
@@ -224,17 +286,16 @@ struct DevicesView: View {
             if isPending {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(width: 24, height: 24)
-                    .padding(4)
+                    .frame(width: 30, height: 30)
             } else {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(isFavorite ? Color.red.opacity(0.95) : HBPalette.textSecondary)
-                    .frame(width: 24, height: 24)
-                    .padding(4)
+                    .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
         }
+        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
         .buttonStyle(.plain)
         .disabled(isPending)
         .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
@@ -248,33 +309,45 @@ struct DevicesView: View {
             text = device.status ? "On" : "Off"
         }
 
-        let backgroundColor = device.status ? Color.white.opacity(0.9) : Color.white.opacity(0.14)
-        let foregroundColor = device.status ? Color.black.opacity(0.75) : HBPalette.textPrimary
-
-        return Text(text)
-            .font(.system(size: 13, weight: .bold, design: .rounded))
-            .foregroundStyle(foregroundColor)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(backgroundColor, in: Capsule())
+        return HBBadge(
+            text: text,
+            foreground: device.status ? HBPalette.textPrimary : HBPalette.textSecondary,
+            background: device.status ? HBPalette.accentBlue.opacity(0.22) : HBPalette.panelSoft.opacity(0.88),
+            stroke: device.status ? HBPalette.accentBlue : HBPalette.panelStrokeStrong
+        )
     }
 
+    @ViewBuilder
     private func defaultPowerControl(for device: DeviceItem) -> some View {
-        Button {
-            Task {
-                await handleDeviceControl(
-                    deviceId: device.id,
-                    action: device.status ? "turn_off" : "turn_on"
-                )
+        if device.status {
+            Button {
+                Task {
+                    await handleDeviceControl(
+                        deviceId: device.id,
+                        action: device.status ? "turn_off" : "turn_on"
+                    )
+                }
+            } label: {
+                Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
+                    .frame(maxWidth: .infinity)
             }
-        } label: {
-            Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
-                .frame(maxWidth: .infinity)
+            .buttonStyle(HBSecondaryButtonStyle())
+            .disabled(pendingControls.contains(device.id))
+        } else {
+            Button {
+                Task {
+                    await handleDeviceControl(
+                        deviceId: device.id,
+                        action: device.status ? "turn_off" : "turn_on"
+                    )
+                }
+            } label: {
+                Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBPrimaryButtonStyle())
+            .disabled(pendingControls.contains(device.id))
         }
-        .buttonStyle(.borderedProminent)
-        .tint(device.status ? Color.white.opacity(0.88) : Color.black.opacity(0.65))
-        .foregroundStyle(device.status ? Color.black.opacity(0.85) : Color.white)
-        .disabled(pendingControls.contains(device.id))
     }
 
     private func thermostatControls(for device: DeviceItem) -> some View {
@@ -286,17 +359,27 @@ struct DevicesView: View {
         let isOff = mode == "off"
 
         return VStack(alignment: .leading, spacing: 12) {
-            Button {
-                let nextMode = isOff ? onMode : "off"
-                Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
-            } label: {
-                Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
-                    .frame(maxWidth: .infinity)
+            if isOff {
+                Button {
+                    let nextMode = isOff ? onMode : "off"
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
+                } label: {
+                    Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBPrimaryButtonStyle())
+                .disabled(pending)
+            } else {
+                Button {
+                    let nextMode = isOff ? onMode : "off"
+                    Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
+                } label: {
+                    Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBSecondaryButtonStyle())
+                .disabled(pending)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(isOff ? Color.black.opacity(0.68) : Color.white.opacity(0.88))
-            .foregroundStyle(isOff ? Color.white : Color.black.opacity(0.82))
-            .disabled(pending)
 
             thermostatSetpointPanel(
                 device: device,
@@ -357,7 +440,7 @@ struct DevicesView: View {
                     Task { await handleDeviceControl(deviceId: device.id, action: "set_temperature", value: next) }
                 }
             )
-            .tint(Color.white.opacity(0.95))
+            .tint(HBPalette.accentBlue)
             .disabled(pending)
 
             HStack(spacing: 8) {
@@ -371,12 +454,8 @@ struct DevicesView: View {
                 }
             }
         }
-        .padding(12)
-        .background(Color(red: 0.09, green: 0.15, blue: 0.37).opacity(0.66), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(HBPalette.accentBlue.opacity(0.5), lineWidth: 1)
-        )
+        .padding(14)
+        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
     }
 
     private func thermostatModeChip(
@@ -392,16 +471,28 @@ struct DevicesView: View {
         }
         .buttonStyle(.plain)
         .font(.system(size: 14, weight: .bold, design: .rounded))
-        .foregroundStyle(active ? Color.black.opacity(0.86) : HBPalette.textPrimary)
+        .foregroundStyle(active ? Color.white : HBPalette.textPrimary)
         .frame(maxWidth: .infinity)
         .padding(.vertical, useLandscapeCompactLayout ? 9 : 11)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(active ? Color.white.opacity(0.9) : Color.black.opacity(0.62))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    active
+                    ? LinearGradient(
+                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    : LinearGradient(
+                        colors: [HBPalette.panelSoft.opacity(0.92), HBPalette.panel.opacity(0.74)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(active ? Color.clear : Color.white.opacity(0.14), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(active ? HBPalette.accentBlue.opacity(0.18) : HBPalette.panelStroke.opacity(0.4), lineWidth: 1)
         )
         .disabled(pending)
     }
@@ -443,8 +534,7 @@ struct DevicesView: View {
                     let next = Int(clampBrightness(brightness - 10).rounded())
                     Task { await handleDeviceControl(deviceId: device.id, action: "set_brightness", value: next) }
                 }
-                .buttonStyle(.bordered)
-                .tint(HBPalette.accentBlue)
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
                 .frame(maxWidth: .infinity)
                 .disabled(pending)
 
@@ -452,8 +542,7 @@ struct DevicesView: View {
                     let next = Int(clampBrightness(brightness + 10).rounded())
                     Task { await handleDeviceControl(deviceId: device.id, action: "set_brightness", value: next) }
                 }
-                .buttonStyle(.bordered)
-                .tint(HBPalette.accentBlue)
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
                 .frame(maxWidth: .infinity)
                 .disabled(pending)
             }
@@ -474,39 +563,48 @@ struct DevicesView: View {
                         ColorPicker("", selection: colorBinding(for: device), supportsOpacity: false)
                             .labelsHidden()
                             .frame(width: 34, height: 34)
-                            .background(Color.black.opacity(0.38), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                            )
+                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
                             .disabled(pending)
 
                         Button("Apply Color") {
                             Task { await handleDeviceControl(deviceId: device.id, action: "set_color", value: currentLightColor(for: device)) }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.black.opacity(0.65))
+                        .buttonStyle(HBPrimaryButtonStyle())
                         .frame(maxWidth: .infinity)
                         .disabled(pending)
                     }
                 }
             }
 
-            Button {
-                Task {
-                    await handleDeviceControl(
-                        deviceId: device.id,
-                        action: device.status ? "turn_off" : "turn_on"
-                    )
+            if device.status {
+                Button {
+                    Task {
+                        await handleDeviceControl(
+                            deviceId: device.id,
+                            action: device.status ? "turn_off" : "turn_on"
+                        )
+                    }
+                } label: {
+                    Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
+                        .frame(maxWidth: .infinity)
                 }
-            } label: {
-                Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
-                    .frame(maxWidth: .infinity)
+                .buttonStyle(HBSecondaryButtonStyle())
+                .disabled(pending)
+            } else {
+                Button {
+                    Task {
+                        await handleDeviceControl(
+                            deviceId: device.id,
+                            action: device.status ? "turn_off" : "turn_on"
+                        )
+                    }
+                } label: {
+                    Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBPrimaryButtonStyle())
+                .disabled(pending)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(device.status ? Color.white.opacity(0.88) : Color.black.opacity(0.65))
-            .foregroundStyle(device.status ? Color.black.opacity(0.85) : Color.white)
-            .disabled(pending)
         }
     }
 
@@ -543,35 +641,73 @@ struct DevicesView: View {
 
     private var createDeviceSheet: some View {
         NavigationStack {
-            Form {
-                TextField("Name", text: $newName)
-                TextField("Room", text: $newRoom)
+            ZStack {
+                HBPageBackground()
+                    .ignoresSafeArea()
 
-                Picker("Type", selection: $newType) {
-                    ForEach(availableTypes.filter { $0 != "all" }, id: \.self) { type in
-                        Text(type.capitalized).tag(type)
+                VStack(spacing: 16) {
+                    HStack {
+                        Button("Cancel") {
+                            showCreateSheet = false
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle())
+
+                        Spacer()
+
+                        Button("Create") {
+                            Task { await createDevice() }
+                        }
+                        .buttonStyle(HBPrimaryButtonStyle())
+                        .disabled(
+                            newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                || newRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
                     }
+
+                    HBPanel {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("Device Provisioning")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .textCase(.uppercase)
+                                .tracking(2.6)
+                                .foregroundStyle(HBPalette.textMuted)
+
+                            Text("Add a new endpoint to the device matrix")
+                                .font(.system(size: 28, weight: .bold, design: .rounded))
+                                .foregroundStyle(
+                                    LinearGradient(
+                                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+
+                            TextField("Name", text: $newName)
+                                .hbPanelTextField()
+                            TextField("Room", text: $newRoom)
+                                .hbPanelTextField()
+
+                            HStack {
+                                Text("Type")
+                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                Spacer()
+                                Picker("Type", selection: $newType) {
+                                    ForEach(availableTypes.filter { $0 != "all" }, id: \.self) { type in
+                                        Text(type.capitalized).tag(type)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .tint(HBPalette.accentBlue)
+                            }
+                        }
+                    }
+
+                    Spacer()
                 }
+                .padding(18)
             }
-            .hbFormStyle()
-            .navigationTitle("New Device")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        showCreateSheet = false
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        Task { await createDevice() }
-                    }
-                    .disabled(
-                        newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            || newRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    )
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
     }
 
