@@ -9,12 +9,24 @@ struct AuthView: View {
     }
 
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var uiPreview: UIPreviewStore
 
     @State private var mode: Mode = .login
     @State private var serverURL = ""
     @State private var email = ""
     @State private var password = ""
     @State private var confirmPassword = ""
+
+    private let previewSections: [AppShellView.AppSection] = [
+        .dashboard,
+        .devices,
+        .scenes,
+        .workflows,
+        .automations,
+        .voiceDevices,
+        .settings,
+        .ollama
+    ]
 
     var body: some View {
         NavigationStack {
@@ -33,6 +45,7 @@ struct AuthView: View {
                             VStack(alignment: .leading, spacing: 22) {
                                 heroPanel
                                 authPanel
+                                previewPanel
                             }
                             .padding(20)
                         }
@@ -179,6 +192,55 @@ struct AuthView: View {
                 Text(mode == .login ? "Enter your HomeBrain credentials to rejoin the command deck." : "Create an operator account to personalize favorites, voice routines, and access control.")
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
+            }
+        }
+    }
+
+    private var previewPanel: some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("UI Preview")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2.8)
+                    .foregroundStyle(HBPalette.textMuted)
+
+                Text("Jump directly into the app shell without authentication to inspect layouts, theme behavior, and spacing on each module.")
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
+                    ForEach(previewSections) { section in
+                        Button {
+                            uiPreview.enter(section: section)
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: section.icon)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(HBPalette.accentBlue)
+                                    .frame(width: 32, height: 32)
+                                    .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(section.title)
+                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                        .lineLimit(1)
+                                    Text(section.chromeKicker)
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .textCase(.uppercase)
+                                        .tracking(1.6)
+                                        .foregroundStyle(HBPalette.textMuted)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer(minLength: 0)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle())
+                    }
+                }
             }
         }
     }

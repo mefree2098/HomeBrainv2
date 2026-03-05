@@ -2,6 +2,8 @@ import SwiftUI
 import UIKit
 
 struct DevicesView: View {
+    let previewMode: Bool
+
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -26,6 +28,7 @@ struct DevicesView: View {
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
+    @State private var contentWidth: CGFloat = UIScreen.main.bounds.width
 
     private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "switch", "camera"]
     private let thermostatModes = ["auto", "cool", "heat", "off"]
@@ -38,7 +41,8 @@ struct DevicesView: View {
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
     private var useLandscapeCompactLayout: Bool { isCompact && isCompactHeight }
-    private var useTwoColumnLayout: Bool { !isCompact || useLandscapeCompactLayout }
+    private var useTwoColumnLayout: Bool { useLandscapeCompactLayout || contentWidth >= 860 }
+    private var usesStackedFilterLayout: Bool { contentWidth < 620 }
 
     private var gridColumns: [GridItem] {
         if useTwoColumnLayout {
@@ -72,51 +76,63 @@ struct DevicesView: View {
         filteredDevices.filter { $0.type != "thermostat" }
     }
 
+    init(previewMode: Bool = false) {
+        self.previewMode = previewMode
+    }
+
     var body: some View {
-        Group {
-            if isLoading {
-                LoadingView(title: "Loading devices...")
-                    .padding(useLandscapeCompactLayout ? 10 : 16)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
-                        deviceHeaderPanel
+        GeometryReader { proxy in
+            Group {
+                if isLoading {
+                    LoadingView(title: "Loading devices...")
+                        .padding(useLandscapeCompactLayout ? 10 : 16)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
+                            deviceHeaderPanel
 
-                        if let errorMessage {
-                            InlineErrorView(message: errorMessage) {
-                                Task { await loadDevices(showLoading: true) }
-                            }
-                        }
-
-                        if filteredDevices.isEmpty {
-                            EmptyStateView(
-                                title: "No devices match",
-                                subtitle: "Adjust filters or create a new device."
-                            )
-                        } else {
-                            VStack(alignment: .leading, spacing: 12) {
-                                ForEach(thermostatDevices) { device in
-                                    deviceCard(device)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+                            if let errorMessage {
+                                InlineErrorView(message: errorMessage) {
+                                    Task { await loadDevices(showLoading: true) }
                                 }
+                            }
 
-                                if !nonThermostatDevices.isEmpty {
-                                    LazyVGrid(columns: gridColumns, spacing: 12) {
-                                        ForEach(nonThermostatDevices) { device in
-                                            deviceCard(device)
+                            if filteredDevices.isEmpty {
+                                EmptyStateView(
+                                    title: "No devices match",
+                                    subtitle: "Adjust filters or create a new device."
+                                )
+                            } else {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ForEach(thermostatDevices) { device in
+                                        deviceCard(device)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+
+                                    if !nonThermostatDevices.isEmpty {
+                                        LazyVGrid(columns: gridColumns, spacing: 12) {
+                                            ForEach(nonThermostatDevices) { device in
+                                                deviceCard(device)
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        .padding(useLandscapeCompactLayout ? 10 : 16)
+                        .padding(.bottom, 8)
                     }
-                    .padding(useLandscapeCompactLayout ? 10 : 16)
-                    .padding(.bottom, 8)
+                    .scrollIndicators(.hidden)
+                    .refreshable {
+                        await loadDevices(showLoading: false)
+                    }
                 }
-                .scrollIndicators(.hidden)
-                .refreshable {
-                    await loadDevices(showLoading: false)
-                }
+            }
+            .onAppear {
+                contentWidth = proxy.size.width
+            }
+            .onChange(of: proxy.size.width) { _, newWidth in
+                contentWidth = newWidth
             }
         }
         .sheet(isPresented: $showCreateSheet) {
@@ -158,29 +174,52 @@ struct DevicesView: View {
 
     private var filterPanel: some View {
         HBCardRow {
-            VStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 12) {
                 TextField("Search devices", text: $searchText)
                     .hbPanelTextField()
 
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Filter Matrix")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .textCase(.uppercase)
-                            .tracking(2.2)
-                            .foregroundStyle(HBPalette.textMuted)
-                        Text("Type")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                    }
-                    Spacer(minLength: 12)
-                    Picker("Type", selection: $typeFilter) {
-                        ForEach(availableTypes, id: \.self) { type in
-                            Text(type.capitalized).tag(type)
+                if usesStackedFilterLayout {
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Filter Matrix")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .textCase(.uppercase)
+                                .tracking(2.2)
+                                .foregroundStyle(HBPalette.textMuted)
+                            Text("Type")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
                         }
+
+                        Picker("Type", selection: $typeFilter) {
+                            ForEach(availableTypes, id: \.self) { type in
+                                Text(type.capitalized).tag(type)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(HBPalette.accentBlue)
                     }
-                    .pickerStyle(.menu)
-                    .tint(HBPalette.accentBlue)
+                } else {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Filter Matrix")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .textCase(.uppercase)
+                                .tracking(2.2)
+                                .foregroundStyle(HBPalette.textMuted)
+                            Text("Type")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                        }
+                        Spacer(minLength: 12)
+                        Picker("Type", selection: $typeFilter) {
+                            ForEach(availableTypes, id: \.self) { type in
+                                Text(type.capitalized).tag(type)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(HBPalette.accentBlue)
+                    }
                 }
             }
         }
@@ -712,6 +751,15 @@ struct DevicesView: View {
     }
 
     private func loadDevices(showLoading: Bool) async {
+        if previewMode {
+            devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            favoritesProfileId = UIPreviewData.favoriteProfileId
+            favoriteDeviceIds = UIPreviewData.favoriteDeviceIds
+            errorMessage = nil
+            isLoading = false
+            return
+        }
+
         if showLoading {
             isLoading = true
         }
@@ -779,6 +827,16 @@ struct DevicesView: View {
     }
 
     private func toggleDeviceFavorite(_ device: DeviceItem) async {
+        if previewMode {
+            favoritesProfileId = UIPreviewData.favoriteProfileId
+            if favoriteDeviceIds.contains(device.id) {
+                favoriteDeviceIds.remove(device.id)
+            } else {
+                favoriteDeviceIds.insert(device.id)
+            }
+            return
+        }
+
         guard let profileId = favoritesProfileId, !profileId.isEmpty else {
             errorMessage = "Create or activate a user profile to manage favorite devices."
             return
@@ -827,6 +885,12 @@ struct DevicesView: View {
         pendingControls.insert(deviceId)
         controlFeedback.removeValue(forKey: deviceId)
         applyControlOptimistically(deviceId: deviceId, action: action, value: value)
+
+        if previewMode {
+            setControlFeedback(deviceId: deviceId, status: .success)
+            pendingControls.remove(deviceId)
+            return
+        }
 
         do {
             var payload: [String: Any] = [
@@ -949,6 +1013,30 @@ struct DevicesView: View {
     }
 
     private func createDevice() async {
+        if previewMode {
+            let created = DeviceItem(
+                id: UUID().uuidString,
+                name: newName.trimmingCharacters(in: .whitespacesAndNewlines),
+                type: newType,
+                room: newRoom.trimmingCharacters(in: .whitespacesAndNewlines),
+                status: false,
+                isOnline: true,
+                brightness: newType == "light" ? 0 : 0,
+                color: "#ffffff",
+                temperature: newType == "thermostat" ? 68 : nil,
+                targetTemperature: newType == "thermostat" ? 68 : nil,
+                properties: newType == "thermostat" ? ["hvacMode": "auto"] : [:],
+                lastSeen: "Just now"
+            )
+            devices.append(created)
+            devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            showCreateSheet = false
+            newName = ""
+            newRoom = ""
+            newType = "light"
+            return
+        }
+
         do {
             let payload: [String: Any] = [
                 "name": newName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -975,6 +1063,12 @@ struct DevicesView: View {
     }
 
     private func deleteDevice(_ device: DeviceItem) async {
+        if previewMode {
+            devices.removeAll { $0.id == device.id }
+            favoriteDeviceIds.remove(device.id)
+            return
+        }
+
         do {
             _ = try await session.apiClient.delete("/api/devices/\(device.id)")
             devices.removeAll { $0.id == device.id }

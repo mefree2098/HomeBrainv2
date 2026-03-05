@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct DashboardView: View {
+    let previewMode: Bool
+
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -24,11 +26,13 @@ struct DashboardView: View {
     @State private var commandText = ""
     @State private var commandResponse = ""
     @State private var isSendingCommand = false
+    @State private var contentWidth: CGFloat = UIScreen.main.bounds.width
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
     private var useLandscapeCompactLayout: Bool { isCompact && isCompactHeight }
-    private var supportsTwoColumnCards: Bool { !isCompact || useLandscapeCompactLayout }
+    private var usesHeroSplitLayout: Bool { useLandscapeCompactLayout || contentWidth >= 860 }
+    private var supportsTwoColumnCards: Bool { useLandscapeCompactLayout || contentWidth >= 820 }
 
     private var onlineDevices: Int {
         devices.filter { $0.status }.count
@@ -42,17 +46,27 @@ struct DashboardView: View {
         if useLandscapeCompactLayout {
             return Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
         }
-        if !isCompact {
+        if contentWidth >= 1060 {
             return Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
         }
-        return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+        if contentWidth >= 620 {
+            return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+        }
+        return [GridItem(.flexible(), spacing: 12)]
     }
 
     private var featuredHalfColumns: [GridItem] {
-        if !supportsTwoColumnCards {
-            return [GridItem(.flexible(), spacing: 12)]
+        if contentWidth >= 720 {
+            return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
         }
-        return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+        return [GridItem(.flexible(), spacing: 12)]
+    }
+
+    private var commandSuggestionColumns: [GridItem] {
+        if contentWidth >= 720 {
+            return [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+        }
+        return [GridItem(.flexible(), spacing: 8)]
     }
 
     private var featuredDevices: [DeviceItem] {
@@ -82,113 +96,125 @@ struct DashboardView: View {
         ]
     }
 
+    init(previewMode: Bool = false) {
+        self.previewMode = previewMode
+    }
+
     var body: some View {
-        Group {
-            if isLoading {
-                LoadingView(title: "Loading dashboard...")
-                    .padding(useLandscapeCompactLayout ? 10 : 16)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 12 : 16) {
-                        if let errorMessage {
-                            InlineErrorView(message: errorMessage) {
-                                Task { await loadDashboard() }
+        GeometryReader { proxy in
+            Group {
+                if isLoading {
+                    LoadingView(title: "Loading dashboard...")
+                        .padding(useLandscapeCompactLayout ? 10 : 16)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 12 : 16) {
+                            if let errorMessage {
+                                InlineErrorView(message: errorMessage) {
+                                    Task { await loadDashboard() }
+                                }
                             }
-                        }
 
-                        dashboardHeader
+                            dashboardHeader
 
-                        LazyVGrid(columns: metricColumns, spacing: 12) {
-                            metricCard(
-                                title: "Live Devices",
-                                value: "\(onlineDevices)/\(devices.count)",
-                                subtitle: "Realtime endpoints responding",
-                                icon: "lightbulb.max",
-                                colors: [HBPalette.accentBlue.opacity(0.24), HBPalette.accentPurple.opacity(0.14)],
-                                accent: HBPalette.accentBlue
-                            )
-                            metricCard(
-                                title: "Voice Mesh",
-                                value: "\(onlineVoiceDevices)/\(voiceDevices.count)",
-                                subtitle: "Wake hubs currently connected",
-                                icon: "mic",
-                                colors: [HBPalette.accentGreen.opacity(0.22), HBPalette.accentBlue.opacity(0.12)],
-                                accent: HBPalette.accentGreen
-                            )
-                            metricCard(
-                                title: "Scene Library",
-                                value: "\(scenes.count)",
-                                subtitle: "Pinned atmospheres available",
-                                icon: "play.fill",
-                                colors: [HBPalette.accentPurple.opacity(0.24), HBPalette.panelSoft.opacity(0.18)],
-                                accent: HBPalette.accentPurple
-                            )
-                            metricCard(
-                                title: "Automation Signal",
-                                value: systemStatus,
-                                subtitle: "Residence mesh health",
-                                icon: "waveform.path.ecg",
-                                colors: [HBPalette.accentOrange.opacity(0.22), HBPalette.panelSoft.opacity(0.16)],
-                                accent: HBPalette.accentOrange
-                            )
-                        }
-
-                        if supportsTwoColumnCards {
-                            HStack(alignment: .top, spacing: 12) {
-                                securityPanel
-                                quickScenePanel
-                            }
-                        } else {
-                            VStack(spacing: 12) {
-                                securityPanel
-                                quickScenePanel
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            HBSectionHeader(
-                                title: "Favorite Devices",
-                                subtitle: favoritesProfileId == nil
-                                    ? "Activate a user profile to pin favorite controls."
-                                    : "Profile-tuned shortcuts for your most-used devices.",
-                                eyebrow: "Priority Controls"
-                            )
-
-                            if featuredDevices.isEmpty {
-                                EmptyStateView(
-                                    title: "No favorite devices yet",
-                                    subtitle: favoritesProfileId == nil
-                                        ? "Create or activate a user profile, then favorite devices to pin them here."
-                                        : "Favorite your go-to devices from the Devices screen to pin them here."
+                            LazyVGrid(columns: metricColumns, spacing: 12) {
+                                metricCard(
+                                    title: "Live Devices",
+                                    value: "\(onlineDevices)/\(devices.count)",
+                                    subtitle: "Realtime endpoints responding",
+                                    icon: "lightbulb.max",
+                                    colors: [HBPalette.accentBlue.opacity(0.24), HBPalette.accentPurple.opacity(0.14)],
+                                    accent: HBPalette.accentBlue
                                 )
-                            } else {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    ForEach(featuredFullWidthDevices) { device in
-                                        featuredDeviceCard(device)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
+                                metricCard(
+                                    title: "Voice Mesh",
+                                    value: "\(onlineVoiceDevices)/\(voiceDevices.count)",
+                                    subtitle: "Wake hubs currently connected",
+                                    icon: "mic",
+                                    colors: [HBPalette.accentGreen.opacity(0.22), HBPalette.accentBlue.opacity(0.12)],
+                                    accent: HBPalette.accentGreen
+                                )
+                                metricCard(
+                                    title: "Scene Library",
+                                    value: "\(scenes.count)",
+                                    subtitle: "Pinned atmospheres available",
+                                    icon: "play.fill",
+                                    colors: [HBPalette.accentPurple.opacity(0.24), HBPalette.panelSoft.opacity(0.18)],
+                                    accent: HBPalette.accentPurple
+                                )
+                                metricCard(
+                                    title: "Automation Signal",
+                                    value: systemStatus,
+                                    subtitle: "Residence mesh health",
+                                    icon: "waveform.path.ecg",
+                                    colors: [HBPalette.accentOrange.opacity(0.22), HBPalette.panelSoft.opacity(0.16)],
+                                    accent: HBPalette.accentOrange
+                                )
+                            }
 
-                                    if !featuredHalfWidthDevices.isEmpty {
-                                        LazyVGrid(columns: featuredHalfColumns, spacing: 12) {
-                                            ForEach(featuredHalfWidthDevices) { device in
-                                                featuredDeviceCard(device)
-                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            if supportsTwoColumnCards {
+                                HStack(alignment: .top, spacing: 12) {
+                                    securityPanel
+                                    quickScenePanel
+                                }
+                            } else {
+                                VStack(spacing: 12) {
+                                    securityPanel
+                                    quickScenePanel
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 12) {
+                                HBSectionHeader(
+                                    title: "Favorite Devices",
+                                    subtitle: favoritesProfileId == nil
+                                        ? "Activate a user profile to pin favorite controls."
+                                        : "Profile-tuned shortcuts for your most-used devices.",
+                                    eyebrow: "Priority Controls"
+                                )
+
+                                if featuredDevices.isEmpty {
+                                    EmptyStateView(
+                                        title: "No favorite devices yet",
+                                        subtitle: favoritesProfileId == nil
+                                            ? "Create or activate a user profile, then favorite devices to pin them here."
+                                            : "Favorite your go-to devices from the Devices screen to pin them here."
+                                    )
+                                } else {
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        ForEach(featuredFullWidthDevices) { device in
+                                            featuredDeviceCard(device)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+
+                                        if !featuredHalfWidthDevices.isEmpty {
+                                            LazyVGrid(columns: featuredHalfColumns, spacing: 12) {
+                                                ForEach(featuredHalfWidthDevices) { device in
+                                                    featuredDeviceCard(device)
+                                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        voiceCommandPanel
+                            voiceCommandPanel
+                        }
+                        .padding(useLandscapeCompactLayout ? 10 : 16)
+                        .padding(.bottom, 12)
                     }
-                    .padding(useLandscapeCompactLayout ? 10 : 16)
-                    .padding(.bottom, 12)
+                    .scrollIndicators(.hidden)
+                    .refreshable {
+                        await loadDashboard()
+                    }
                 }
-                .scrollIndicators(.hidden)
-                .refreshable {
-                    await loadDashboard()
-                }
+            }
+            .onAppear {
+                contentWidth = proxy.size.width
+            }
+            .onChange(of: proxy.size.width) { _, newWidth in
+                contentWidth = newWidth
             }
         }
         .task {
@@ -199,7 +225,7 @@ struct DashboardView: View {
     private var dashboardHeader: some View {
         HBPanel {
             Group {
-                if supportsTwoColumnCards {
+                if usesHeroSplitLayout {
                     HStack(alignment: .top, spacing: 18) {
                         dashboardHeroCopy
                         dashboardHeroCommandSurface
@@ -224,7 +250,13 @@ struct DashboardView: View {
                 .foregroundStyle(HBPalette.textMuted)
 
             Text("Welcome home. Every room, routine, and wake-word path is online.")
-                .font(.system(size: useLandscapeCompactLayout ? 28 : (isCompact ? 36 : 48), weight: .bold, design: .rounded))
+                .font(
+                    .system(
+                        size: useLandscapeCompactLayout ? 28 : (contentWidth < 760 ? 38 : (contentWidth < 960 ? 42 : 48)),
+                        weight: .bold,
+                        design: .rounded
+                    )
+                )
                 .foregroundStyle(
                     LinearGradient(
                         colors: [HBPalette.accentBlue, HBPalette.accentPurple, HBPalette.textPrimary],
@@ -260,14 +292,14 @@ struct DashboardView: View {
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text("Speak the next move")
-                    .font(.system(size: useLandscapeCompactLayout ? 22 : 28, weight: .bold, design: .rounded))
+                    .font(.system(size: useLandscapeCompactLayout ? 22 : (contentWidth < 760 ? 24 : 28), weight: .bold, design: .rounded))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text("Trigger a scene, dim a room, or compose a workflow from a single command surface.")
                     .font(.system(size: 15, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
 
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                LazyVGrid(columns: commandSuggestionColumns, spacing: 8) {
                     ForEach(commandSuggestions, id: \.self) { suggestion in
                         Text(suggestion)
                             .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -825,6 +857,21 @@ struct DashboardView: View {
     }
 
     private func loadDashboard() async {
+        if previewMode {
+            errorMessage = nil
+            devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            scenes = UIPreviewData.scenes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            voiceDevices = UIPreviewData.voiceDevices
+            securityStatus = "Disarmed"
+            securityZonesActive = 0
+            securityZonesTotal = 9
+            systemStatus = "Online"
+            favoritesProfileId = UIPreviewData.favoriteProfileId
+            favoriteDeviceIds = UIPreviewData.favoriteDeviceIds
+            isLoading = false
+            return
+        }
+
         isLoading = true
         errorMessage = nil
 
@@ -884,6 +931,14 @@ struct DashboardView: View {
         pendingControlDeviceIds.insert(deviceId)
         defer {
             pendingControlDeviceIds.remove(deviceId)
+        }
+
+        if previewMode {
+            applyControlLocally(deviceId: deviceId, action: action, value: value)
+            if action == "set_temperature" {
+                thermostatTemperatureDrafts.removeValue(forKey: deviceId)
+            }
+            return
         }
 
         do {
@@ -1085,6 +1140,16 @@ struct DashboardView: View {
     }
 
     private func toggleDeviceFavorite(_ device: DeviceItem) async {
+        if previewMode {
+            if favoriteDeviceIds.contains(device.id) {
+                favoriteDeviceIds.remove(device.id)
+            } else {
+                favoriteDeviceIds.insert(device.id)
+            }
+            favoritesProfileId = UIPreviewData.favoriteProfileId
+            return
+        }
+
         guard let profileId = favoritesProfileId, !profileId.isEmpty else {
             errorMessage = "Create or activate a user profile to manage favorite devices."
             return
@@ -1130,6 +1195,13 @@ struct DashboardView: View {
     }
 
     private func activateScene(_ scene: SceneItem) async {
+        if previewMode {
+            for index in scenes.indices {
+                scenes[index].active = scenes[index].id == scene.id
+            }
+            return
+        }
+
         do {
             let payload: [String: Any] = ["sceneId": scene.id]
             _ = try await session.apiClient.post("/api/scenes/activate", body: payload)
@@ -1142,6 +1214,12 @@ struct DashboardView: View {
     }
 
     private func armSecurity(stay: Bool) async {
+        if previewMode {
+            securityStatus = stay ? "Armed Stay" : "Armed Away"
+            systemStatus = "Online"
+            return
+        }
+
         do {
             let endpoint = stay ? "/api/security-alarm/sthm/arm-stay" : "/api/security-alarm/sthm/arm-away"
             _ = try await session.apiClient.post(endpoint, body: [:])
@@ -1152,6 +1230,11 @@ struct DashboardView: View {
     }
 
     private func syncSecurity() async {
+        if previewMode {
+            systemStatus = "Online"
+            return
+        }
+
         do {
             _ = try await session.apiClient.post("/api/security-alarm/sync-state", body: [:])
             await loadDashboard()
@@ -1163,6 +1246,12 @@ struct DashboardView: View {
     private func sendVoiceCommand() async {
         let trimmed = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        if previewMode {
+            commandResponse = "Preview mode executed: \(trimmed). Residence mesh accepted the request and staged the cinematic control path."
+            commandText = ""
+            return
+        }
 
         isSendingCommand = true
         defer { isSendingCommand = false }

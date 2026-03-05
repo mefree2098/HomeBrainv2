@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct AppShellView: View {
+    let previewMode: Bool
+
     private struct ResourceStripMetric: Identifiable {
         enum Key: String {
             case cpu
@@ -118,6 +120,7 @@ struct AppShellView: View {
     }
 
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var uiPreview: UIPreviewStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
@@ -130,18 +133,73 @@ struct AppShellView: View {
     @State private var resourceStripMetrics: [ResourceStripMetric] = defaultResourceStripMetrics()
     @State private var resourceStripLoading = true
     @State private var resourceStripRefreshing = false
+    @State private var previewVoiceEnabled = false
+    @State private var containerWidth: CGFloat = UIScreen.main.bounds.width
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
-    private var topBarHeight: CGFloat { isCompactHeight ? 72 : (isCompact ? 86 : 102) }
+    private var usesSidebarDrawer: Bool { isCompact || containerWidth < 980 }
+    private var usesCondensedRegularTopBar: Bool { !usesSidebarDrawer && containerWidth < 1220 }
+    private var topBarHeight: CGFloat {
+        if isCompactHeight {
+            return 72
+        }
+        if isCompact {
+            return 86
+        }
+        return usesCondensedRegularTopBar || usesSidebarDrawer ? 88 : 92
+    }
     private var shellPadding: CGFloat { isCompactHeight ? 10 : (isCompact ? 14 : 18) }
     private var chromeButtonSide: CGFloat { isCompactHeight ? 38 : 42 }
-    private var isSidebarCollapsed: Bool { isCompact ? isCompactSidebarCollapsed : isRegularSidebarCollapsed }
-    private var sidebarWidth: CGFloat { isSidebarCollapsed ? (isCompact ? 88 : 94) : 280 }
+    private var compactTopBarClearance: CGFloat { isCompact ? 10 : 0 }
+    private var isSidebarCollapsed: Bool { usesSidebarDrawer ? isCompactSidebarCollapsed : isRegularSidebarCollapsed }
+    private var sidebarWidth: CGFloat {
+        if usesSidebarDrawer {
+            return isSidebarCollapsed ? 84 : (isCompact ? 268 : 256)
+        }
+        return isSidebarCollapsed ? 78 : 240
+    }
     private var currentSection: AppSection { selection ?? visibleSections.first ?? .dashboard }
+    private var voiceEnabled: Bool { previewMode ? previewVoiceEnabled : voiceAssistant.isEnabled }
+    private var voiceProcessing: Bool { previewMode ? false : voiceAssistant.isProcessing }
+    private var useCondensedChromeControls: Bool { usesSidebarDrawer || usesCondensedRegularTopBar }
+    private var topBarStatusBadgeText: String? {
+        guard !previewMode else { return nil }
+        return useCondensedChromeControls ? activeDevicesSummary : "\(activeDevicesSummary) active"
+    }
+    private var shellVoiceTitle: String {
+        voiceEnabled ? "Voice Commands Armed" : "Voice Commands Offline"
+    }
+    private var shellVoiceDescription: String {
+        if previewMode {
+            return voiceEnabled
+            ? "Say \"Hey Anna\" or \"Henry\" to orchestrate rooms, scenes, and automations from a single command surface."
+            : "Enable the wake mesh to arm hands-free room, scene, and automation control."
+        }
+        return voiceAssistant.statusText
+    }
+    private var shellVoiceSupplementaryText: String {
+        previewMode ? "Wake words: Hey Anna, Henry" : "Wake words: \(voiceAssistant.wakeWordsSummary)"
+    }
+    private var resourceStripCondensedMaxWidth: CGFloat {
+        if isCompact {
+            return 164
+        }
+        if usesSidebarDrawer {
+            return 252
+        }
+        return 310
+    }
+
+    init(previewMode: Bool = false) {
+        self.previewMode = previewMode
+    }
 
     private var visibleSections: [AppSection] {
-        AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
+        if previewMode {
+            return AppSection.allCases
+        }
+        return AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
     }
 
     private func setSidebarCollapsed(_ collapsed: Bool) {
@@ -167,48 +225,77 @@ struct AppShellView: View {
                     .ignoresSafeArea()
 
                 Group {
-                    if isCompact {
+                    if usesSidebarDrawer {
                         compactShell
                     } else {
                         regularShell
                     }
                 }
-                .padding(.top, topInset + topBarHeight)
+                .padding(.top, topInset + topBarHeight + compactTopBarClearance)
 
                 topBar
-                    .padding(.top, topInset)
-                    .frame(height: topBarHeight + topInset, alignment: .bottom)
+                    .padding(.top, topInset + compactTopBarClearance)
+                    .frame(height: topBarHeight + topInset + compactTopBarClearance, alignment: .bottom)
                     .frame(maxWidth: .infinity, alignment: .bottom)
                     .zIndex(2)
             }
+            .onAppear {
+                syncNavigationPresentation(for: proxy.size.width)
+            }
+            .onChange(of: proxy.size.width) { _, newWidth in
+                syncNavigationPresentation(for: newWidth)
+            }
         }
-        .ignoresSafeArea(edges: .top)
         .tint(HBPalette.accentBlue)
         .onAppear {
             syncSelectionWithVisibleSections()
-            voiceAssistant.bind(sessionStore: session)
-            isCompactSidebarVisible = !isCompact
-        }
-        .onChange(of: horizontalSizeClass) { _, sizeClass in
-            withAnimation(.easeInOut(duration: 0.25)) {
-                isCompactSidebarVisible = sizeClass != .compact
-            }
-        }
-        .onChange(of: session.currentUser?.role) { _, _ in
-            syncSelectionWithVisibleSections()
-        }
-        .onChange(of: session.isAuthenticated) { _, isAuthenticated in
-            if !isAuthenticated {
-                voiceAssistant.stop()
+            if previewMode {
+                selection = uiPreview.selectedSection
+                activeDevicesSummary = "75/225"
+                resourceStripMetrics = previewResourceStripMetrics()
+                resourceStripLoading = false
+                resourceStripRefreshing = false
+                isRegularSidebarCollapsed = false
             } else {
                 voiceAssistant.bind(sessionStore: session)
             }
+            isCompactSidebarVisible = false
+        }
+        .onChange(of: selection) { _, newValue in
+            if previewMode, let newValue {
+                uiPreview.updateSection(newValue)
+            }
+        }
+        .onChange(of: horizontalSizeClass) { _, sizeClass in
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isCompactSidebarVisible = sizeClass == .compact ? false : !usesSidebarDrawer
+            }
+        }
+        .onChange(of: session.currentUser?.role) { _, _ in
+            if !previewMode {
+                syncSelectionWithVisibleSections()
+            }
+        }
+        .onChange(of: session.isAuthenticated) { _, isAuthenticated in
+            if !previewMode {
+                if !isAuthenticated {
+                    voiceAssistant.stop()
+                } else {
+                    voiceAssistant.bind(sessionStore: session)
+                }
+            }
         }
         .task(id: session.currentUser?.id ?? "guest") {
-            await refreshHeaderSummary()
+            if !previewMode {
+                await refreshHeaderSummary()
+            }
         }
         .task(id: session.isAuthenticated) {
-            if session.isAuthenticated {
+            if previewMode {
+                resourceStripMetrics = previewResourceStripMetrics()
+                resourceStripLoading = false
+                resourceStripRefreshing = false
+            } else if session.isAuthenticated {
                 await runResourceStripLoop()
             } else {
                 resourceStripMetrics = Self.defaultResourceStripMetrics()
@@ -260,76 +347,132 @@ struct AppShellView: View {
 
             Group {
                 if isCompact {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: isCompactHeight ? 8 : 10) {
-                            compactMenuButton
-                            chromeBrandCluster(compact: true)
-                            chromeSectionCluster(compact: true)
-                            HBBadge(text: "\(activeDevicesSummary) active")
-                            resourceUtilizationStrip
-                            voiceToggleButton(compact: true)
-                            HBThemeToggleMenu()
-                            chromeIconButton(systemImage: "gearshape") {
-                                selection = .settings
-                            }
-                            chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
-                                session.logout()
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, isCompactHeight ? 8 : 10)
-                    }
+                    compactTopBarContent
                 } else {
-                    HStack(spacing: 12) {
-                        chromeBrandCluster(compact: false)
-                        chromeSectionCluster(compact: false)
-                        HBBadge(text: "\(activeDevicesSummary) devices active")
-                        resourceUtilizationStrip
-
-                        Spacer(minLength: 8)
-
-                        voiceToggleButton(compact: false)
-                        HBThemeToggleMenu()
-                        chromeIconButton(systemImage: "gearshape") {
-                            selection = .settings
-                        }
-                        chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
-                            session.logout()
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, isCompactHeight ? 8 : 10)
+                    singleLineTopBarContent
                 }
             }
         }
-        .frame(height: topBarHeight - (isCompactHeight ? 12 : 16))
+        .frame(height: topBarHeight - (isCompactHeight ? 12 : 14))
         .padding(.horizontal, shellPadding)
     }
 
+    private var compactTopBarContent: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: isCompactHeight ? 8 : 10) {
+                compactMenuButton
+                chromeBrandCluster(compact: true)
+                if let topBarStatusBadgeText {
+                    HBBadge(text: topBarStatusBadgeText)
+                }
+                resourceUtilizationStrip
+                voiceToggleButton(compact: true)
+                HBThemeToggleMenu()
+                chromeIconButton(systemImage: "gearshape") {
+                    selection = .settings
+                }
+                chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
+                    exitShell()
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, isCompactHeight ? 8 : 10)
+        }
+    }
+
+    private var singleLineTopBarContent: some View {
+        HStack(spacing: useCondensedChromeControls ? 6 : 10) {
+            if usesSidebarDrawer {
+                drawerToggleButton
+            }
+
+            chromeBrandCluster(compact: true)
+            if let topBarStatusBadgeText {
+                HBBadge(text: topBarStatusBadgeText)
+            }
+            resourceUtilizationStrip
+            Spacer(minLength: 0)
+            voiceToggleButton(compact: useCondensedChromeControls)
+            HBThemeToggleMenu()
+            chromeIconButton(systemImage: "gearshape") {
+                selection = .settings
+            }
+            chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
+                exitShell()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var drawerToggleButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isCompactSidebarVisible.toggle()
+            }
+        } label: {
+            if useCondensedChromeControls {
+                Image(systemName: isCompactSidebarVisible ? "xmark" : "sidebar.left")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .frame(width: chromeButtonSide, height: chromeButtonSide)
+                    .background(HBGlassBackground(cornerRadius: 14, variant: .panel))
+            } else {
+                Label(isCompactSidebarVisible ? "Close" : "Menu", systemImage: isCompactSidebarVisible ? "xmark" : "sidebar.left")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: 38)
+                    .background(HBGlassBackground(cornerRadius: 999, variant: .panelSoft))
+                    .overlay(
+                        Capsule()
+                            .stroke(HBPalette.panelStrokeStrong.opacity(0.72), lineWidth: 1)
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isCompactSidebarVisible ? "Close main menu" : "Open main menu")
+    }
+
     private func chromeBrandCluster(compact: Bool) -> some View {
-        HStack(spacing: compact ? 10 : 12) {
+        HStack(spacing: compact ? 8 : 10) {
             Image("HomeBrainBrandIcon")
                 .resizable()
                 .scaledToFit()
-                .frame(width: compact ? 26 : 34, height: compact ? 26 : 34)
-                .padding(compact ? 8 : 10)
-                .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                .frame(width: compact ? 22 : 28, height: compact ? 22 : 28)
+                .padding(compact ? 7 : 9)
+                .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text("HomeBrain OS")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .textCase(.uppercase)
-                    .tracking(2.8)
-                    .foregroundStyle(HBPalette.textMuted)
-                Text("Cinematic Command Deck")
-                    .font(.system(size: compact ? 16 : 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
+            VStack(alignment: .leading, spacing: compact ? 1 : 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("HomeBrain")
+                        .font(.system(size: compact ? 14 : 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+
+                    Text("OS")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.0)
+                        .baselineOffset(compact ? 3 : 4)
+                        .foregroundStyle(HBPalette.textMuted)
+                }
+
+                Text(currentSection.title)
+                    .font(.system(size: compact ? 12 : 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, compact ? 12 : 14)
-        .padding(.vertical, compact ? 8 : 10)
-        .background(HBGlassBackground(cornerRadius: 22, variant: .panel))
+        .frame(minWidth: isCompact ? 152 : (compact ? 178 : 208), alignment: .leading)
+        .padding(.horizontal, compact ? 10 : 12)
+        .padding(.vertical, compact ? 7 : 9)
+        .background(HBGlassBackground(cornerRadius: 20, variant: .panel))
+        .layoutPriority(2)
     }
 
     private func chromeSectionCluster(compact: Bool) -> some View {
@@ -338,43 +481,51 @@ struct AppShellView: View {
                 .fill(HBPalette.accentGreen)
                 .frame(width: compact ? 10 : 12, height: compact ? 10 : 12)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(currentSection.chromeKicker)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .textCase(.uppercase)
-                    .tracking(2.8)
-                    .foregroundStyle(HBPalette.textMuted)
+            VStack(alignment: .leading, spacing: compact ? 1 : 3) {
+                if !compact {
+                    Text(currentSection.chromeKicker)
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.8)
+                        .foregroundStyle(HBPalette.textMuted)
+                }
 
-                Text(currentSection.chromeLabel)
-                    .font(.system(size: compact ? 15 : 18, weight: .bold, design: .rounded))
+                Text(compact ? currentSection.title : currentSection.chromeLabel)
+                    .font(.system(size: compact ? 14 : 17, weight: .bold, design: .rounded))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
         }
-        .padding(.horizontal, compact ? 12 : 16)
-        .padding(.vertical, compact ? 8 : 10)
+        .padding(.horizontal, compact ? 10 : 14)
+        .padding(.vertical, compact ? 7 : 10)
         .background(HBGlassBackground(cornerRadius: 22, variant: .panel))
+        .layoutPriority(1)
     }
 
     private func voiceToggleButton(compact: Bool) -> some View {
         Button {
-            Task { await voiceAssistant.toggle() }
+            if previewMode {
+                previewVoiceEnabled.toggle()
+            } else {
+                Task { await voiceAssistant.toggle() }
+            }
         } label: {
             if compact {
                 Label(
-                    voiceAssistant.isEnabled
-                    ? (voiceAssistant.isProcessing ? "Processing" : "Voice On")
+                    voiceEnabled
+                    ? (voiceProcessing ? "Processing" : "Voice On")
                     : "Voice Off",
-                    systemImage: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash"
+                    systemImage: voiceEnabled ? "mic.fill" : "mic.slash"
                 )
                 .labelStyle(.iconOnly)
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
             } else {
                 Label(
-                    voiceAssistant.isEnabled
-                    ? (voiceAssistant.isProcessing ? "Processing" : "Voice On")
+                    voiceEnabled
+                    ? (voiceProcessing ? "Processing" : "Voice On")
                     : "Voice Off",
-                    systemImage: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash"
+                    systemImage: voiceEnabled ? "mic.fill" : "mic.slash"
                 )
                 .labelStyle(.titleAndIcon)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -388,15 +539,22 @@ struct AppShellView: View {
         let minimal = resourceStripMetrics.filter { $0.key == .cpu || $0.key == .ram }
 
         return Group {
-            if isCompact {
+            if isCompact && !isCompactHeight {
                 resourceUtilizationStripContent(metrics: minimal, compact: true)
                     .frame(maxWidth: 150)
+            } else if isCompactHeight {
+                resourceUtilizationStripContent(metrics: resourceStripMetrics, compact: true)
+                    .fixedSize(horizontal: true, vertical: false)
+            } else if !usesSidebarDrawer {
+                resourceUtilizationStripContent(metrics: resourceStripMetrics, compact: true)
+                    .fixedSize(horizontal: true, vertical: false)
             } else {
                 ViewThatFits(in: .horizontal) {
-                    resourceUtilizationStripContent(metrics: resourceStripMetrics)
-                    resourceUtilizationStripContent(metrics: noGPU)
-                    resourceUtilizationStripContent(metrics: minimal)
+                    resourceUtilizationStripContent(metrics: resourceStripMetrics, compact: useCondensedChromeControls)
+                    resourceUtilizationStripContent(metrics: noGPU, compact: useCondensedChromeControls)
+                    resourceUtilizationStripContent(metrics: minimal, compact: true)
                 }
+                .frame(maxWidth: useCondensedChromeControls ? resourceStripCondensedMaxWidth : 310, alignment: .leading)
             }
         }
     }
@@ -501,8 +659,22 @@ struct AppShellView: View {
         .accessibilityLabel(isCompactSidebarVisible ? "Close main menu" : "Open main menu")
     }
 
+    private func syncNavigationPresentation(for width: CGFloat) {
+        containerWidth = width
+
+        let shouldUseDrawer = isCompact || width < 980
+        if shouldUseDrawer {
+            if !isCompact {
+                isCompactSidebarCollapsed = false
+            }
+            isCompactSidebarVisible = false
+        } else {
+            isCompactSidebarVisible = false
+        }
+    }
+
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 if !isSidebarCollapsed {
                     VStack(alignment: .leading, spacing: 4) {
@@ -549,12 +721,12 @@ struct AppShellView: View {
                 HBPanel {
                     VStack(spacing: 8) {
                         Circle()
-                            .fill(voiceAssistant.isEnabled ? HBPalette.accentGreen : HBPalette.accentSlate)
+                            .fill(voiceEnabled ? HBPalette.accentGreen : HBPalette.accentSlate)
                             .frame(width: 10, height: 10)
 
-                        Image(systemName: voiceAssistant.isEnabled ? "mic.fill" : "mic.slash")
+                        Image(systemName: voiceEnabled ? "mic.fill" : "mic.slash")
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(voiceAssistant.isEnabled ? HBPalette.accentBlue : HBPalette.textSecondary)
+                            .foregroundStyle(voiceEnabled ? HBPalette.accentBlue : HBPalette.textSecondary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
@@ -564,7 +736,7 @@ struct AppShellView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
                             Circle()
-                                .fill(voiceAssistant.isEnabled ? HBPalette.accentGreen : HBPalette.accentSlate)
+                                .fill(voiceEnabled ? HBPalette.accentGreen : HBPalette.accentSlate)
                                 .frame(width: 12, height: 12)
 
                             Text("Wake Mesh")
@@ -574,16 +746,16 @@ struct AppShellView: View {
                                 .foregroundStyle(HBPalette.textMuted)
                         }
 
-                        Text(voiceAssistant.isEnabled ? "Voice Commands Armed" : "Voice Commands Offline")
+                        Text(shellVoiceTitle)
                             .font(.system(size: 18, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
 
-                        Text(voiceAssistant.statusText)
+                        Text(shellVoiceDescription)
                             .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .foregroundStyle(voiceAssistant.errorMessage == nil ? HBPalette.textSecondary : HBPalette.accentRed)
+                            .foregroundStyle(previewMode || voiceAssistant.errorMessage == nil ? HBPalette.textSecondary : HBPalette.accentRed)
                             .lineLimit(3)
 
-                        if let pending = voiceAssistant.pendingWakeWord {
+                        if !previewMode, let pending = voiceAssistant.pendingWakeWord {
                             HBBadge(
                                 text: "Wake word: \(pending)",
                                 foreground: HBPalette.textPrimary,
@@ -591,7 +763,7 @@ struct AppShellView: View {
                                 stroke: HBPalette.panelStrokeStrong
                             )
                         } else {
-                            Text("Wake words: \(voiceAssistant.wakeWordsSummary)")
+                            Text(shellVoiceSupplementaryText)
                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .lineLimit(2)
@@ -607,9 +779,9 @@ struct AppShellView: View {
                 }
             }
         }
-        .padding(isSidebarCollapsed ? 12 : 16)
+        .padding(isSidebarCollapsed ? 10 : 14)
         .frame(width: sidebarWidth)
-        .background(HBGlassBackground(cornerRadius: 30, variant: .panelStrong))
+        .background(HBGlassBackground(cornerRadius: 30, variant: .panel))
     }
 
     private func sidebarButton(for section: AppSection) -> some View {
@@ -685,12 +857,19 @@ struct AppShellView: View {
 
     private var detailStack: some View {
         NavigationStack {
-            HBDeckSurface(cornerRadius: 32) {
-                VStack(spacing: 0) {
-                    detailContent
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                }
-                .padding(shellPadding)
+            ZStack {
+                HBGlassBackground(cornerRadius: 32, variant: .panelStrong)
+
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .stroke(HBPalette.panelStroke.opacity(0.24), lineWidth: 1)
+
+                HBGridOverlay(spacing: 42)
+                    .opacity(0.12)
+                    .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+
+                detailContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(shellPadding)
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -714,31 +893,75 @@ struct AppShellView: View {
     private func sectionView(_ section: AppSection) -> some View {
         switch section {
         case .dashboard:
-            DashboardView()
+            DashboardView(previewMode: previewMode)
         case .devices:
-            DevicesView()
+            DevicesView(previewMode: previewMode)
         case .scenes:
-            ScenesView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                ScenesView()
+            }
         case .automations:
-            AutomationsView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                AutomationsView()
+            }
         case .workflows:
-            WorkflowsView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                WorkflowsView()
+            }
         case .voiceDevices:
-            VoiceDevicesView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                VoiceDevicesView()
+            }
         case .userProfiles:
-            UserProfilesView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                UserProfilesView()
+            }
         case .settings:
-            SettingsView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                SettingsView()
+            }
         case .operations:
-            OperationsView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                OperationsView()
+            }
         case .platformDeploy:
-            PlatformDeployView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                PlatformDeployView()
+            }
         case .ollama:
-            OllamaView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                OllamaView()
+            }
         case .whisper:
-            WhisperView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                WhisperView()
+            }
         case .ssl:
-            SSLView()
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                SSLView()
+            }
         }
     }
 
@@ -846,5 +1069,22 @@ struct AppShellView: View {
             ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: 0, available: true),
             ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: 0, available: true)
         ]
+    }
+
+    private func previewResourceStripMetrics() -> [ResourceStripMetric] {
+        [
+            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: 9, available: true),
+            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: 0, available: false),
+            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: 37, available: true),
+            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: 42, available: true)
+        ]
+    }
+
+    private func exitShell() {
+        if previewMode {
+            uiPreview.exit()
+        } else {
+            session.logout()
+        }
     }
 }

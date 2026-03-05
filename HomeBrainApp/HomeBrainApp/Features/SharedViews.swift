@@ -85,7 +85,7 @@ enum HBPalette {
     static let glow = dynamic(light: hex(0x0D254E, alpha: 0.14), dark: hex(0x020812, alpha: 0.42))
 }
 
-private struct HBGridOverlay: View {
+struct HBGridOverlay: View {
     var spacing: CGFloat = 28
 
     var body: some View {
