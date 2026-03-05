@@ -377,7 +377,7 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                         <TableCell>
                           <div className="flex flex-wrap items-center gap-1">
                             {model.nanoFit && (
-                              <Badge className="bg-emerald-600">Nano fit</Badge>
+                              <Badge className="bg-emerald-600 text-white">Nano fit</Badge>
                             )}
                             {(model.capabilities || []).map((capability) => (
                               <Badge key={`${model.name}-${capability}`} variant="outline" className="capitalize">
@@ -476,7 +476,7 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                     </TableCell>
                     <TableCell>
                       {isActive ? (
-                        <Badge className="bg-green-500">
+                        <Badge className="bg-green-500 text-white">
                           <CheckCircleIcon className="h-3 w-3 mr-1" />
                           Active
                         </Badge>

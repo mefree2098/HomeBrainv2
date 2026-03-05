@@ -1,1 +1,0 @@
-import{r as t,j as s}from"./vendor-react-DP6kTGLx.js";import{y as o}from"./index-CRE2P75c.js";const x=t.forwardRef(({className:e,...r},a)=>s.jsx("textarea",{className:o("field-shell flex min-h-[120px] w-full px-4 py-3 text-sm text-foreground ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",e),ref:a,...r}));x.displayName="Textarea";export{x as T};

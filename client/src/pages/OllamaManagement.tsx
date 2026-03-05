@@ -516,7 +516,7 @@ export default function OllamaManagement() {
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-sm text-muted-foreground">Service</span>
                 {isServiceRunning ? (
-                  <Badge className={isExternalService ? 'bg-slate-500' : 'bg-green-500'}>
+                  <Badge className={isExternalService ? 'bg-slate-500 text-white' : 'bg-green-500 text-white'}>
                     {isExternalService ? 'External Service' : 'Running'}
                   </Badge>
                 ) : (
@@ -551,7 +551,7 @@ export default function OllamaManagement() {
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-sm text-muted-foreground">Updates</span>
                 {status.updateAvailable ? (
-                  <Badge className="bg-orange-500">Available</Badge>
+                  <Badge className="bg-orange-500 text-white">Available</Badge>
                 ) : (
                   <Badge variant="outline">Up to Date</Badge>
                 )}
@@ -588,7 +588,7 @@ export default function OllamaManagement() {
           {status.activeModel && (
             <div className="mt-4 pt-4 border-t">
               <span className="text-sm text-muted-foreground">Active Model:</span>
-              <Badge className="ml-2 bg-blue-500">{status.activeModel}</Badge>
+              <Badge className="ml-2 bg-blue-500 text-white">{status.activeModel}</Badge>
             </div>
           )}
 

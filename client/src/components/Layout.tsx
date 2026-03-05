@@ -152,7 +152,7 @@ export function Layout({ children }: LayoutProps) {
         />
         <main
           className={cn(
-            "relative flex-1 overflow-y-auto pb-28 transition-[margin,padding] duration-500",
+            "relative flex-1 overflow-y-auto pb-10 transition-[margin,padding] duration-500",
             isMobile ? "ml-0 px-3" : isSidebarCollapsed ? "ml-[6.75rem] px-4 lg:px-6" : "ml-[18.25rem] px-4 lg:px-6"
           )}
         >
