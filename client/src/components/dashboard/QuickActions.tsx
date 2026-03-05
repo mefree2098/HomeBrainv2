@@ -44,32 +44,41 @@ export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onTogg
   const sceneIsPending = (sceneId: string) => pendingSceneIds?.has(sceneId)
 
   return (
-    <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+    <Card className="rounded-[1.85rem]">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Play className="h-5 w-5 text-blue-600" />
+        <p className="section-kicker">Scene Launchpad</p>
+        <CardTitle className="mt-2 flex items-center gap-2 text-2xl">
+          <Play className="h-5 w-5 text-cyan-600 dark:text-cyan-300" />
           Quick Scene Actions
         </CardTitle>
       </CardHeader>
       <CardContent>
         {favoriteScenes.length > 0 ? (
-          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {favoriteScenes.map((scene) => (
               <div key={scene._id} className="relative">
                 <Button
                   onClick={() => onSceneActivate(scene._id)}
-                  className={`h-16 w-full p-2 flex flex-col items-center justify-center gap-1 bg-gradient-to-r ${getSceneColor(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
+                  className={`h-24 w-full rounded-[1.35rem] p-3 flex-col items-start justify-between border-0 bg-gradient-to-br ${getSceneColor(scene.name)} text-left text-white shadow-lg shadow-black/10`}
                   title={scene.description}
                 >
-                  {getSceneIcon(scene.name)}
-                  <div className="font-medium text-xs text-center leading-tight truncate max-w-full">
-                    {scene.name}
+                  <div className="flex w-full items-center justify-between">
+                    <span className="rounded-full bg-white/15 p-2">
+                      {getSceneIcon(scene.name)}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-[0.22em] text-white/80">Launch</span>
+                  </div>
+                  <div className="w-full">
+                    <div className="font-medium text-sm leading-tight">{scene.name}</div>
+                    <div className="mt-1 line-clamp-1 text-xs text-white/75">
+                      {scene.description || "Instantly orchestrate this scene."}
+                    </div>
                   </div>
                 </Button>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="absolute top-1 right-1 h-7 w-7 text-white/90 hover:text-red-500"
+                  className="absolute right-2 top-2 h-8 w-8 text-white/90 hover:bg-white/15 hover:text-white"
                   onClick={(event) => {
                     event.stopPropagation()
                     onToggleFavorite(scene._id, false)
@@ -83,7 +92,7 @@ export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onTogg
             ))}
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 bg-white/60 dark:bg-slate-900/50 py-8 text-center text-sm text-muted-foreground">
+          <div className="flex flex-col items-center justify-center gap-2 rounded-[1.5rem] border border-dashed border-white/20 bg-white/10 py-8 text-center text-sm text-muted-foreground dark:bg-slate-950/20">
             <Heart className="h-5 w-5 text-muted-foreground" />
             <p className="max-w-xs">
               {canModifyFavorites
@@ -94,8 +103,8 @@ export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onTogg
         )}
 
         {availableScenes.length > 0 && (
-          <div className="mt-4 space-y-2 border-t border-muted/40 pt-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="mt-5 space-y-3 border-t border-white/10 pt-5 dark:border-cyan-200/10">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
               {favoriteScenes.length > 0 ? 'Add More Scenes' : 'Start Your Quick Actions'}
             </p>
             <div className="flex flex-wrap gap-2">
@@ -117,8 +126,8 @@ export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onTogg
           </div>
         )}
 
-        <div className="mt-4 text-xs text-muted-foreground text-center">
-          Say: "Hey Anna, activate [scene name]" to control with voice
+        <div className="mt-5 text-xs text-muted-foreground">
+          Say: "Hey Anna, activate [scene name]" to trigger any scene by voice.
         </div>
       </CardContent>
     </Card>

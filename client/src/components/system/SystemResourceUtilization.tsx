@@ -216,7 +216,7 @@ export function HeaderResourceUtilizationStrip({ intervalMs = 12000 }: ResourceW
   const { metrics, loading, refreshing } = useSystemResourceMetrics(intervalMs)
 
   return (
-    <div className="hidden lg:flex items-center gap-2 rounded-2xl border border-border/60 bg-white/70 px-2.5 py-1.5 shadow-sm backdrop-blur-sm dark:bg-slate-900/70">
+    <div className="hidden lg:flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-2.5 py-1.5 shadow-sm backdrop-blur-xl dark:bg-slate-950/20">
       {metrics.map((metric) => {
         const tone = getUsageTone(metric.percent)
         const Icon = metric.icon
@@ -225,13 +225,13 @@ export function HeaderResourceUtilizationStrip({ intervalMs = 12000 }: ResourceW
         return (
           <div
             key={metric.key}
-            className="min-w-[66px] rounded-xl border border-border/40 bg-background/70 px-2 py-1 shadow-sm"
+            className="min-w-[68px] rounded-[1rem] border border-white/10 bg-white/20 px-2 py-1 shadow-sm dark:bg-slate-900/60"
           >
             <div className="flex items-center justify-between text-[9px] font-semibold tracking-[0.08em] text-muted-foreground">
               <span>{metric.shortLabel}</span>
               <Icon className="h-2.5 w-2.5" />
             </div>
-            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200/80 dark:bg-slate-700/70">
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200/70 dark:bg-slate-700/70">
               <div
                 className={cn("h-full rounded-full bg-gradient-to-r transition-all duration-500", tone.bar)}
                 style={{ width: `${metric.available ? metric.percent : 0}%` }}

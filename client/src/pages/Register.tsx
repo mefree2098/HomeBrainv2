@@ -17,6 +17,7 @@ import {
   UserPlus
 } from "lucide-react"
 import { useAuth } from "@/contexts/AuthContext"
+import { ThemeToggle } from "@/components/ui/theme-toggle"
 
 type RegisterForm = {
   email: string
@@ -52,54 +53,104 @@ export function Register() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background to-secondary p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Create an account</CardTitle>
-          <CardDescription>Enter your details to get started</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="Enter your email"
-                {...register("email", { required: true })}
-              />
+    <div className="relative min-h-screen overflow-hidden px-4 py-6 sm:px-6 lg:px-8">
+      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="drift-slow absolute left-[-9rem] top-[10rem] h-[22rem] w-[22rem] rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/18" />
+        <div className="float-slow absolute right-[-9rem] top-[8rem] h-[22rem] w-[22rem] rounded-full bg-blue-300/22 blur-3xl dark:bg-blue-500/16" />
+      </div>
+
+      <div className="relative mx-auto grid min-h-[calc(100vh-3rem)] max-w-6xl items-center gap-6 lg:grid-cols-[1.05fr_0.95fr]">
+        <section className="glass-panel glass-panel-strong rounded-[2rem] p-8 lg:p-10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="relative flex h-12 w-12 items-center justify-center rounded-[1.1rem] bg-gradient-to-br from-cyan-300/70 via-sky-300/55 to-blue-500/70 shadow-lg shadow-sky-400/20">
+                <div className="absolute inset-[1px] rounded-[calc(1.1rem-1px)] bg-white/70 dark:bg-slate-950/35" />
+                <img src="/homebrain-brand-64.png" alt="HomeBrain" className="relative h-7 w-7 rounded object-cover" />
+              </div>
+              <div>
+                <p className="section-kicker">HomeBrain OS</p>
+                <p className="text-base font-semibold text-foreground">Cinematic Command Deck</p>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="Choose a password"
-                {...register("password", { required: true })}
-              />
+            <ThemeToggle />
+          </div>
+
+          <div className="mt-10 max-w-2xl">
+            <p className="section-kicker">Identity Provisioning</p>
+            <h1 className="mt-3 text-balance text-4xl font-semibold leading-tight text-foreground sm:text-5xl">
+              <span className="text-signal">Create your control identity.</span>
+            </h1>
+            <p className="mt-4 text-base leading-relaxed text-muted-foreground">
+              Join the command deck with a profile that can personalize favorites, shortcuts, and your daily
+              orchestration flow.
+            </p>
+          </div>
+
+          <div className="mt-8 grid gap-3 sm:grid-cols-3">
+            <div className="card-shell rounded-[1.3rem] p-4">
+              <p className="section-kicker">Profiles</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">Adaptive favorites</p>
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? (
-                "Loading..."
-              ) : (
-                <>
-                  <UserPlus className="mr-2 h-4 w-4" />
-                  Create Account
-                </>
-              )}
+            <div className="card-shell rounded-[1.3rem] p-4">
+              <p className="section-kicker">Automations</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">Personal routines</p>
+            </div>
+            <div className="card-shell rounded-[1.3rem] p-4">
+              <p className="section-kicker">Access</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">Secure command entry</p>
+            </div>
+          </div>
+        </section>
+
+        <Card className="w-full rounded-[2rem]">
+          <CardHeader>
+            <p className="section-kicker">Create Account</p>
+            <CardTitle className="mt-2 text-3xl">Create an account</CardTitle>
+            <CardDescription>Enter your details to get started with HomeBrain.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="Enter your email"
+                  {...register("email", { required: true })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Choose a password"
+                  {...register("password", { required: true })}
+                />
+              </div>
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? (
+                  "Loading..."
+                ) : (
+                  <>
+                    <UserPlus className="h-4 w-4" />
+                    Create Account
+                  </>
+                )}
+              </Button>
+            </form>
+          </CardContent>
+          <CardFooter className="flex justify-center">
+            <Button
+              variant="link"
+              className="text-sm text-muted-foreground"
+              onClick={() => navigate("/login")}
+            >
+              Already have an account? Sign in
             </Button>
-          </form>
-        </CardContent>
-        <CardFooter className="flex justify-center">
-          <Button
-            variant="link"
-            className="text-sm text-muted-foreground"
-            onClick={() => navigate("/login")}
-          >
-            Already have an account? Sign in
-          </Button>
-        </CardFooter>
-      </Card>
+          </CardFooter>
+        </Card>
+      </div>
     </div>
   )
 }

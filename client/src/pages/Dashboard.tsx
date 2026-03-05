@@ -3,16 +3,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { 
-  Home, 
   Lightbulb, 
-  Lock, 
-  Thermometer, 
   Mic, 
   Play,
-  Power,
-  PowerOff,
   Activity,
-  Users,
   Zap
 } from "lucide-react"
 import { getDevices, controlDevice } from "@/api/devices"
@@ -88,7 +82,6 @@ export function Dashboard() {
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        console.log('Fetching dashboard data')
         const [devicesData, scenesData, voiceData] = await Promise.all([
           getDevices(),
           getScenes(),
@@ -116,7 +109,6 @@ export function Dashboard() {
 
   const handleDeviceControl = async (deviceId: string, action: string, value?: number | string) => {
     try {
-      console.log('Controlling device from dashboard:', { deviceId, action, value })
       const payload: { deviceId: string; action: string; value?: number | string } = { deviceId, action }
       if (value !== undefined) {
         payload.value = value
@@ -192,7 +184,6 @@ export function Dashboard() {
 
   const handleSceneActivation = async (sceneId: string) => {
     try {
-      console.log('Activating scene from dashboard:', sceneId)
       await activateScene({ sceneId })
       toast({
         title: "Scene Activated",
@@ -218,98 +209,119 @@ export function Dashboard() {
 
   if (!isLoaded) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <div className="flex h-64 items-center justify-center">
+        <div className="glass-panel glass-panel-strong rounded-[1.75rem] px-8 py-7 text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-cyan-400" />
+          <p className="mt-4 section-kicker">Loading Dashboard</p>
+          <p className="mt-2 text-sm text-muted-foreground">Syncing residence systems.</p>
+        </div>
       </div>
     )
   }
 
   const onlineDevices = devices.filter(device => device.status).length
   const onlineVoiceDevices = voiceDevices.filter(device => device.status === 'online').length
+  const favoriteSceneCount = scenes.filter((scene) => favoriteSceneIds.has(scene._id)).length
+  const summaryCards = [
+    {
+      title: "Live Devices",
+      value: `${onlineDevices}/${devices.length}`,
+      description: "Realtime endpoints responding",
+      icon: Lightbulb,
+      accent: "text-cyan-700 dark:text-cyan-300",
+      glow: "from-cyan-300/35 via-cyan-200/10 to-transparent"
+    },
+    {
+      title: "Voice Mesh",
+      value: `${onlineVoiceDevices}/${voiceDevices.length}`,
+      description: "Wake hubs currently connected",
+      icon: Mic,
+      accent: "text-emerald-700 dark:text-emerald-300",
+      glow: "from-emerald-300/30 via-emerald-200/10 to-transparent"
+    },
+    {
+      title: "Scene Library",
+      value: `${scenes.length}`,
+      description: `${favoriteSceneCount} pinned for instant launch`,
+      icon: Play,
+      accent: "text-violet-700 dark:text-violet-300",
+      glow: "from-violet-300/30 via-violet-200/10 to-transparent"
+    },
+    {
+      title: "Automation Signal",
+      value: hasProfile ? "Tuned" : "Standby",
+      description: hasProfile ? "Favorites adapt to your active profile" : "Activate a profile for personalized quick access",
+      icon: Zap,
+      accent: "text-amber-700 dark:text-amber-300",
+      glow: "from-amber-300/32 via-amber-200/10 to-transparent"
+    }
+  ]
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            Welcome Home
-          </h1>
-          <p className="text-muted-foreground mt-2">
-            Control your smart home with voice commands or touch
-          </p>
+    <div className="space-y-8">
+      <section className="glass-panel glass-panel-strong rounded-[2rem]">
+        <div className="panel-grid absolute inset-0 opacity-40" />
+        <div className="absolute -right-16 top-[-4rem] h-64 w-64 rounded-full bg-cyan-300/25 blur-3xl dark:bg-cyan-500/18" />
+        <div className="absolute bottom-[-5rem] left-[-4rem] h-56 w-56 rounded-full bg-blue-300/20 blur-3xl dark:bg-blue-500/16" />
+
+        <div className="relative grid gap-6 p-6 lg:grid-cols-[1.4fr_0.9fr] lg:p-8">
+          <div className="space-y-6">
+            <div className="space-y-4">
+              <p className="section-kicker">Residence Control Nexus</p>
+              <div className="max-w-4xl">
+                <h1 className="text-balance text-4xl font-semibold leading-tight text-foreground sm:text-5xl">
+                  <span className="text-signal">Welcome home.</span> Every room, routine, and wake-word path is online.
+                </h1>
+                <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground">
+                  Control the home as one responsive system with cinematic visibility across devices, scenes,
+                  voice hubs, and automations.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="secondary">Scene library {scenes.length}</Badge>
+                <Badge variant="outline">
+                  {hasProfile ? "Profile-tuned favorites ready" : "Activate a profile for adaptive favorites"}
+                </Badge>
+                <Badge variant="outline">{onlineVoiceDevices} voice hubs online</Badge>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {summaryCards.map((card) => (
+                <div key={card.title} className="card-shell rounded-[1.6rem] p-5">
+                  <div className={`absolute inset-0 bg-gradient-to-br ${card.glow}`} />
+                  <div className="relative flex items-start justify-between gap-3">
+                    <div>
+                      <p className="section-kicker">{card.title}</p>
+                      <p className="mt-3 text-3xl font-semibold text-foreground">{card.value}</p>
+                      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{card.description}</p>
+                    </div>
+                    <div className={`rounded-[1rem] border border-white/20 bg-white/10 p-3 ${card.accent}`}>
+                      <card.icon className="h-5 w-5" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="card-shell rounded-[1.75rem] p-5">
+              <p className="section-kicker">Natural Language Interface</p>
+              <h2 className="mt-2 text-2xl font-semibold text-foreground">Speak the next move</h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                Trigger a scene, dim a room, or compose a workflow from a single command surface.
+              </p>
+            </div>
+            <VoiceCommandPanel />
+          </div>
         </div>
-        <VoiceCommandPanel />
-      </div>
+      </section>
 
-      {/* Stats Overview */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-        <Card className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 border-blue-200 dark:border-blue-800">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Devices</CardTitle>
-            <Lightbulb className="h-4 w-4 text-blue-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
-              {onlineDevices}/{devices.length}
-            </div>
-            <p className="text-xs text-blue-600/80 dark:text-blue-400/80">
-              Smart devices online
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 border-green-200 dark:border-green-800">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Voice Devices</CardTitle>
-            <Mic className="h-4 w-4 text-green-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-700 dark:text-green-300">
-              {onlineVoiceDevices}/{voiceDevices.length}
-            </div>
-            <p className="text-xs text-green-600/80 dark:text-green-400/80">
-              Voice hubs connected
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/20 border-purple-200 dark:border-purple-800">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Scenes</CardTitle>
-            <Play className="h-4 w-4 text-purple-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-700 dark:text-purple-300">
-              {scenes.length}
-            </div>
-            <p className="text-xs text-purple-600/80 dark:text-purple-400/80">
-              Available scenes
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-800/20 border-orange-200 dark:border-orange-800">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">System Status</CardTitle>
-            <Activity className="h-4 w-4 text-orange-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-700 dark:text-orange-300">
-              Online
-            </div>
-            <p className="text-xs text-orange-600/80 dark:text-orange-400/80">
-              All systems operational
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Security Alarm and Quick Actions */}
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 xl:grid-cols-[1.05fr_1.45fr]">
         <SecurityAlarmWidget />
-        <div className="lg:col-span-2">
-        <QuickActions 
-          scenes={scenes} 
+        <QuickActions
+          scenes={scenes}
           onSceneActivate={handleSceneActivation}
           favoriteSceneIds={favoriteSceneIds}
           onToggleFavorite={toggleSceneFavorite}
@@ -317,46 +329,54 @@ export function Dashboard() {
           pendingSceneIds={pendingSceneIds}
         />
       </div>
-    </div>
 
-    {/* Device Widgets */}
-    {favoriteDevices.length > 0 ? (
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
-        {favoriteDevices.map((device) => (
-          <DashboardWidget
-            key={device._id}
-            device={device}
-            onControl={handleDeviceControl}
-            isFavorite
-            onToggleFavorite={toggleDeviceFavorite}
-            canToggleFavorite={hasProfile}
-            isFavoritePending={pendingDeviceIds.has(device._id)}
-          />
-        ))}
-      </div>
-    ) : (
-      <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
-        <CardHeader>
-          <CardTitle className="text-lg">No Favorite Devices Yet</CardTitle>
-          <CardDescription>
-            {hasProfile
-              ? "Pick your go-to devices to pin them here for quick access."
-              : "Create an active user profile to start favoriting devices."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button
-            asChild
-            variant="outline"
-            className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-dashed"
-          >
-            <Link to="/devices">
-              Browse Devices
-            </Link>
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="section-kicker">Favorites Dock</p>
+            <h2 className="mt-1 text-2xl font-semibold text-foreground">Your fastest manual controls</h2>
+          </div>
+          <Button asChild variant="outline">
+            <Link to="/devices">Open Device Matrix</Link>
           </Button>
-        </CardContent>
-      </Card>
-    )}
-  </div>
- )
+        </div>
+
+        <div className="signal-line" />
+
+        {favoriteDevices.length > 0 ? (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {favoriteDevices.map((device) => (
+              <DashboardWidget
+                key={device._id}
+                device={device}
+                onControl={handleDeviceControl}
+                isFavorite
+                onToggleFavorite={toggleDeviceFavorite}
+                canToggleFavorite={hasProfile}
+                isFavoritePending={pendingDeviceIds.has(device._id)}
+              />
+            ))}
+          </div>
+        ) : (
+          <Card className="rounded-[1.8rem]">
+            <CardHeader>
+              <p className="section-kicker">Favorites Required</p>
+              <CardTitle className="mt-2 text-2xl">No favorite devices pinned yet</CardTitle>
+              <CardDescription>
+                {hasProfile
+                  ? "Promote your most-used controls into the dock for one-tap access."
+                  : "Create or activate a user profile to start building a personalized control deck."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-3">
+              <Button asChild variant="outline">
+                <Link to="/devices">Browse Devices</Link>
+              </Button>
+              <Badge variant="outline">Favorites update in realtime</Badge>
+            </CardContent>
+          </Card>
+        )}
+      </section>
+    </div>
+  )
 }

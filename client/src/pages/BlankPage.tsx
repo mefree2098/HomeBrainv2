@@ -7,23 +7,26 @@ export function BlankPage() {
   const navigate = useNavigate()
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-blue-900 dark:to-purple-900 flex items-center justify-center p-6">
-      <Card className="bg-white/80 dark:bg-slate-900/75 backdrop-blur-sm border border-border/50 shadow-xl max-w-md w-full">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden p-6">
+      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="drift-slow absolute left-[-8rem] top-[8rem] h-[24rem] w-[24rem] rounded-full bg-cyan-300/28 blur-3xl dark:bg-cyan-500/18" />
+        <div className="float-slow absolute right-[-8rem] top-[12rem] h-[22rem] w-[22rem] rounded-full bg-blue-300/20 blur-3xl dark:bg-blue-500/16" />
+      </div>
+
+      <Card className="w-full max-w-xl rounded-[2rem]">
         <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-          <div className="p-4 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 text-white mb-6">
+          <div className="mb-6 rounded-[1.4rem] bg-gradient-to-br from-cyan-400 to-blue-500 p-4 text-white shadow-lg shadow-cyan-500/25">
             <Home className="h-8 w-8" />
           </div>
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+          <p className="section-kicker">Navigation Fault</p>
+          <h1 className="mb-2 mt-3 text-3xl font-semibold text-foreground">
             Page Not Found
           </h1>
-          <p className="text-muted-foreground mb-6">
+          <p className="mb-6 max-w-md text-muted-foreground">
             The page you're looking for doesn't exist or has been moved.
           </p>
-          <Button
-            onClick={() => navigate("/")}
-            className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-lg"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
+          <Button onClick={() => navigate("/")}>
+            <ArrowLeft className="h-4 w-4" />
             Back to Dashboard
           </Button>
         </CardContent>

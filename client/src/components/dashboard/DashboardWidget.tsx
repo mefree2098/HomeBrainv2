@@ -184,15 +184,16 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
   }
 
   return (
-    <Card className={`bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 ${device.type === "thermostat" ? "col-span-2 xl:col-span-2" : ""}`}>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 px-5 pt-5">
+    <Card className={`rounded-[1.7rem] transition-all duration-300 hover:-translate-y-1 ${device.type === "thermostat" ? "xl:col-span-2" : ""}`}>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-5 pt-5">
         <div className="flex items-center gap-2">
-          <div className={`p-2 rounded-full ${getStatusColor(device.status, device.type)} text-white`}>
+          <div className={`rounded-[1rem] p-2.5 text-white shadow-lg ${getStatusColor(device.status, device.type)}`}>
             {getDeviceIcon(device.type)}
           </div>
           <div>
-            <CardTitle className="text-sm font-medium">{device.name}</CardTitle>
-            <p className="text-xs text-muted-foreground">{device.room}</p>
+            <p className="section-kicker">Favorite Device</p>
+            <CardTitle className="mt-1 text-base font-medium">{device.name}</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">{device.room}</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -220,7 +221,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
         <Button
           onClick={handleToggle}
           variant={device.status ? "default" : "outline"}
-          className="w-full transition-all duration-200"
+          className="w-full"
           size="sm"
         >
           {device.status ? (
@@ -237,7 +238,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
         </Button>
 
         {device.type === 'light' && device.status && (
-          <div className="space-y-2">
+          <div className="space-y-2 rounded-[1.25rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20">
             <div className="flex justify-between text-sm">
               <span>Brightness</span>
               <span>{brightness}%</span>
@@ -253,14 +254,14 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
         )}
 
         {device.type === 'thermostat' && (
-          <div className="space-y-3 rounded-lg border border-blue-200/60 dark:border-blue-500/30 bg-blue-50/40 dark:bg-blue-950/25 p-3">
+          <div className="space-y-3 rounded-[1.4rem] border border-cyan-400/15 bg-cyan-100/30 p-4 dark:bg-cyan-950/18">
             <div className="flex items-end justify-between">
               <div>
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Setpoint</p>
+                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Setpoint</p>
                 <p className="text-2xl font-semibold leading-tight">{temperature}°F</p>
               </div>
               <div className="text-right">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Current</p>
+                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current</p>
                 <p className="text-sm font-medium">
                   {Number.isFinite(device.temperature) ? `${Math.round(device.temperature as number)}°F` : "--"}
                 </p>
@@ -283,7 +284,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
                     key={mode}
                     variant={active ? "default" : "outline"}
                     size="sm"
-                    className={`h-9 w-full px-0 text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap ${active ? "" : "bg-background/80"}`}
+                    className={`h-9 w-full px-0 text-[11px] font-semibold uppercase tracking-[0.14em] whitespace-nowrap ${active ? "" : "bg-background/80"}`}
                     onClick={() => handleThermostatModeChange(mode)}
                   >
                     {getModeLabel(mode)}
@@ -294,7 +295,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
           </div>
         )}
 
-        <div className="text-xs text-muted-foreground">
+        <div className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/20">
           {device.type === "thermostat"
             ? `Say: "Hey Anna, set ${device.name} to ${thermostatMode} and ${temperature} degrees"`
             : `Say: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}

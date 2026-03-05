@@ -10,12 +10,13 @@ import {
   DialogTitle
 } from "./ui/dialog"
 import { useAuth } from "@/contexts/AuthContext"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/useToast"
 import { getDeviceStats } from "@/api/devices"
 import { browserVoiceAssistant, type BrowserVoiceStatus } from "@/services/browserVoiceAssistant"
 import { HeaderResourceUtilizationStrip } from "@/components/system/SystemResourceUtilization"
+import { cn } from "@/lib/utils"
 
 interface HeaderProps {
   isMobile?: boolean
@@ -23,9 +24,26 @@ interface HeaderProps {
   onToggleMobileMenu?: () => void
 }
 
+const ROUTE_META: Record<string, { label: string; detail: string }> = {
+  "/": { label: "Residence Overview", detail: "Live command deck" },
+  "/devices": { label: "Device Matrix", detail: "Hardware orchestration" },
+  "/scenes": { label: "Scene Sequencer", detail: "Atmosphere presets" },
+  "/workflows": { label: "Workflow Studio", detail: "Behavioral automation" },
+  "/automations": { label: "Automation Grid", detail: "Scheduled intelligence" },
+  "/voice-devices": { label: "Voice Nexus", detail: "Wake and response mesh" },
+  "/profiles": { label: "Identity Profiles", detail: "Personalized control" },
+  "/settings": { label: "System Configuration", detail: "Core tuning" },
+  "/platform-deploy": { label: "Deployment Bay", detail: "Platform rollout status" },
+  "/operations": { label: "Operations Center", detail: "Service telemetry" },
+  "/ssl": { label: "Certificate Vault", detail: "Trust fabric monitoring" },
+  "/ollama": { label: "LLM Core", detail: "Inference systems" },
+  "/whisper": { label: "Whisper Matrix", detail: "Speech intelligence" }
+}
+
 export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMobileMenu }: HeaderProps) {
   const { logout } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const { toast } = useToast()
   const [voiceStatus, setVoiceStatus] = useState<BrowserVoiceStatus>(() => browserVoiceAssistant.getStatus())
   const [homeDeviceStats, setHomeDeviceStats] = useState({
@@ -97,7 +115,6 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
   }, [])
 
   const handleLogout = () => {
-    console.log('User logging out')
     logout()
     navigate("/login")
   }
@@ -178,46 +195,69 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
       : voiceStatus.mode === "waiting_command"
           ? "Awaiting Command"
           : isVoiceEnabled
-            ? (voiceStatus.engine === "server_stt_fallback" ? "Listening (Fallback)" : "Listening")
+          ? (voiceStatus.engine === "server_stt_fallback" ? "Listening (Fallback)" : "Listening")
             : "Voice Off"
+  const activeRoute = ROUTE_META[location.pathname] ?? {
+    label: "Command Deck",
+    detail: "Residence intelligence mesh"
+  }
+  const deviceLabel = homeDeviceStats.loaded
+    ? `${homeDeviceStats.active}/${homeDeviceStats.total} devices active`
+    : "Syncing device telemetry"
 
   return (
-    <header className="fixed top-0 z-50 w-full border-b bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75">
-      <div className="flex h-16 items-center justify-between px-6">
-        <div className="flex items-center gap-4">
+    <header className="fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:px-5">
+      <div className="glass-panel glass-panel-strong mx-auto flex h-[4.5rem] max-w-[1720px] items-center justify-between rounded-[1.75rem] px-3 sm:px-4 lg:px-5">
+        <div className="flex min-w-0 items-center gap-3">
           {isMobile && onToggleMobileMenu ? (
             <Button
               variant="ghost"
               size="icon"
               onClick={onToggleMobileMenu}
               title={isMobileMenuOpen ? "Close main menu" : "Open main menu"}
+              className="shrink-0"
             >
               {isMobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </Button>
           ) : null}
 
-          <div
-            className="flex items-center gap-2 cursor-pointer hover:scale-105 transition-transform"
+          <button
+            type="button"
+            className="group flex min-w-0 items-center gap-3 rounded-[1.4rem] border border-white/10 bg-white/10 px-2 py-2 transition-transform duration-300 hover:-translate-y-0.5 dark:bg-slate-950/20"
             onClick={() => navigate("/")}
           >
-            <img
-              src="/homebrain-brand-64.png"
-              alt="Home Brain"
-              className="h-8 w-8 rounded-md object-cover"
-            />
-            <div className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              Home Brain
+            <div className="relative flex h-11 w-11 items-center justify-center rounded-[1.05rem] bg-gradient-to-br from-cyan-300/70 via-sky-300/55 to-blue-500/70 shadow-lg shadow-sky-400/20">
+              <div className="absolute inset-[1px] rounded-[calc(1.05rem-1px)] bg-white/70 dark:bg-slate-950/35" />
+              <img
+                src="/homebrain-brand-64.png"
+                alt="Home Brain"
+                className="relative h-7 w-7 rounded object-cover"
+              />
+            </div>
+            <div className="hidden min-w-0 sm:block">
+              <p className="section-kicker">HomeBrain OS</p>
+              <div className="truncate text-base font-semibold text-foreground">Cinematic Command Deck</div>
+            </div>
+          </button>
+
+          <div className="hidden min-w-0 xl:flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-4 py-2 dark:bg-slate-950/20">
+            <span className="status-dot h-2.5 w-2.5 rounded-full bg-emerald-400" />
+            <div className="min-w-0">
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+                {activeRoute.detail}
+              </p>
+              <p className="truncate text-sm font-medium text-foreground">{activeRoute.label}</p>
             </div>
           </div>
-          <Badge variant="default" className={homeDeviceStats.loaded ? "" : "animate-pulse"}>
-            {homeDeviceStats.loaded
-              ? `${homeDeviceStats.active}/${homeDeviceStats.total} devices active`
-              : "Loading devices..."}
+
+          <Badge variant="secondary" className={cn("hidden md:inline-flex", homeDeviceStats.loaded ? "" : "animate-pulse")}>
+            {deviceLabel}
           </Badge>
+
           <HeaderResourceUtilizationStrip />
         </div>
-        
-        <div className="flex items-center gap-4">
+
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <Button
             variant="ghost"
             size="icon"
@@ -229,40 +269,39 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
 
           <Button
             variant={isVoiceEnabled ? "default" : "outline"}
-            size="sm"
+            size={isMobile ? "icon" : "sm"}
             onClick={toggleVoiceListening}
             disabled={!voiceStatus.supported}
             title={voiceStatus.pendingWakeWord ? `Wake word: ${voiceStatus.pendingWakeWord}` : undefined}
-            className={`transition-all duration-200 ${
-              isVoiceEnabled
-                ? "bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/25" 
-                : "hover:bg-red-50 hover:text-red-600 hover:border-red-300 dark:hover:bg-red-950/30 dark:hover:text-red-300 dark:hover:border-red-900"
-            }`}
+            className={cn(
+              !isMobile && "min-w-[11.5rem] justify-start px-4",
+              isVoiceEnabled && "shadow-cyan-500/20"
+            )}
           >
             {isVoiceBusy ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                {voiceLabel}
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {!isMobile ? voiceLabel : null}
               </>
             ) : isVoiceEnabled ? (
               <>
-                <Mic className="h-4 w-4 mr-2" />
-                {voiceLabel}
+                <Mic className="h-4 w-4" />
+                {!isMobile ? voiceLabel : null}
               </>
             ) : (
               <>
-                <MicOff className="h-4 w-4 mr-2" />
-                {voiceLabel}
+                <MicOff className="h-4 w-4" />
+                {!isMobile ? voiceLabel : null}
               </>
             )}
           </Button>
-          
+
           <ThemeToggle />
-          
+
           <Button variant="ghost" size="icon" onClick={() => navigate("/settings")}>
             <Settings className="h-5 w-5" />
           </Button>
-          
+
           <Button variant="ghost" size="icon" onClick={handleLogout}>
             <LogOut className="h-5 w-5" />
           </Button>
@@ -270,7 +309,7 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
       </div>
 
       <Dialog open={isVoiceDiagnosticsOpen} onOpenChange={setIsVoiceDiagnosticsOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Browser Voice Diagnostics</DialogTitle>
             <DialogDescription>
@@ -278,26 +317,43 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <div><strong>Mode:</strong> {voiceStatus.mode}</div>
-              <div><strong>Enabled:</strong> {voiceStatus.enabled ? "yes" : "no"}</div>
-              <div><strong>Engine:</strong> {voiceStatus.engine}</div>
-              <div><strong>Pending wake:</strong> {voiceStatus.pendingWakeWord || "none"}</div>
-              <div><strong>Last wake:</strong> {voiceStatus.lastWakeWord || "none"}</div>
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <div className="card-shell rounded-[1.35rem] p-4">
+                <p className="section-kicker">Mode</p>
+                <p className="mt-2 text-sm font-medium text-foreground">{voiceStatus.mode}</p>
+              </div>
+              <div className="card-shell rounded-[1.35rem] p-4">
+                <p className="section-kicker">Enabled</p>
+                <p className="mt-2 text-sm font-medium text-foreground">{voiceStatus.enabled ? "Yes" : "No"}</p>
+              </div>
+              <div className="card-shell rounded-[1.35rem] p-4">
+                <p className="section-kicker">Engine</p>
+                <p className="mt-2 truncate text-sm font-medium text-foreground">{voiceStatus.engine}</p>
+              </div>
+              <div className="card-shell rounded-[1.35rem] p-4">
+                <p className="section-kicker">Pending Wake</p>
+                <p className="mt-2 text-sm font-medium text-foreground">{voiceStatus.pendingWakeWord || "None"}</p>
+              </div>
+              <div className="card-shell rounded-[1.35rem] p-4">
+                <p className="section-kicker">Last Wake</p>
+                <p className="mt-2 text-sm font-medium text-foreground">{voiceStatus.lastWakeWord || "None"}</p>
+              </div>
             </div>
 
-            <div className="text-sm">
-              <strong>Configured wake words:</strong>{" "}
-              {voiceStatus.configuredWakeWords.length > 0
-                ? voiceStatus.configuredWakeWords.join(", ")
-                : "none"}
+            <div className="card-shell rounded-[1.5rem] p-4 text-sm">
+              <p className="section-kicker">Configured Wake Words</p>
+              <p className="mt-2 text-foreground">
+                {voiceStatus.configuredWakeWords.length > 0
+                  ? voiceStatus.configuredWakeWords.join(", ")
+                  : "None"}
+              </p>
             </div>
 
-            <div className="rounded border bg-muted/30 p-3 text-xs">
-              <div><strong>Last transcript:</strong> {voiceStatus.lastTranscript || "none"}</div>
-              <div><strong>Last command:</strong> {voiceStatus.lastCommand || "none"}</div>
-              <div><strong>Last response:</strong> {voiceStatus.lastResponse || "none"}</div>
+            <div className="card-shell rounded-[1.5rem] space-y-2 p-4 text-sm">
+              <div><strong>Last transcript:</strong> {voiceStatus.lastTranscript || "None"}</div>
+              <div><strong>Last command:</strong> {voiceStatus.lastCommand || "None"}</div>
+              <div><strong>Last response:</strong> {voiceStatus.lastResponse || "None"}</div>
               {voiceStatus.error ? (
                 <div className="text-red-600 dark:text-red-400"><strong>Error:</strong> {voiceStatus.error}</div>
               ) : null}
@@ -310,7 +366,12 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
               </Button>
             </div>
 
-            <div className="max-h-72 overflow-y-auto rounded border bg-black/90 p-3 font-mono text-xs text-green-300">
+            <div className="rounded-[1.5rem] border border-cyan-400/20 bg-slate-950/85 p-4 font-mono text-xs text-cyan-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+              <div className="mb-3 flex items-center gap-2 text-[10px] uppercase tracking-[0.26em] text-cyan-200/80">
+                <span className="status-dot h-2 w-2 rounded-full bg-cyan-300" />
+                Trace Stream
+              </div>
+              <div className="max-h-72 space-y-1 overflow-y-auto pr-2 text-cyan-100/90">
               {voiceStatus.trace.length > 0 ? (
                 voiceStatus.trace.map((line, index) => (
                   <div key={`${index}-${line}`}>{line}</div>
@@ -318,6 +379,7 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
               ) : (
                 <div>[trace] no entries yet</div>
               )}
+              </div>
             </div>
           </div>
         </DialogContent>

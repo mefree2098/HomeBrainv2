@@ -66,18 +66,24 @@ export function Sidebar({
   return (
     <div
       className={cn(
-        "fixed left-0 top-16 h-[calc(100vh-4rem)] border-r bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75 transition-[width,transform] duration-300",
+        "glass-panel glass-panel-strong fixed bottom-6 left-3 top-[5.5rem] transition-[width,transform] duration-500",
         mobile ? "z-50 shadow-2xl" : "z-40",
-        collapsed ? "w-20" : "w-64",
+        collapsed ? "w-[5.75rem]" : "w-[17rem]",
         mobile ? (open ? "translate-x-0" : "-translate-x-full pointer-events-none") : "translate-x-0"
       )}
     >
       <div className="flex h-full flex-col">
-        <div className={cn("border-b p-3", collapsed ? "flex justify-center" : "flex items-center justify-between")}>
+        <div
+          className={cn(
+            "border-b border-white/10 px-3 py-4 dark:border-cyan-200/10",
+            collapsed ? "flex justify-center" : "flex items-center justify-between gap-3"
+          )}
+        >
           {!collapsed ? (
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Main Menu
-            </p>
+            <div className="min-w-0">
+              <p className="section-kicker">Nav Core</p>
+              <p className="mt-1 text-sm font-medium text-foreground">Residence Systems</p>
+            </div>
           ) : null}
           {onToggleCollapsed ? (
             <Button
@@ -85,13 +91,14 @@ export function Sidebar({
               size="icon"
               onClick={onToggleCollapsed}
               title={collapsed ? "Expand main menu" : "Collapse main menu"}
+              className="shrink-0"
             >
               {collapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
             </Button>
           ) : null}
         </div>
 
-        <nav className={cn("flex-1 space-y-2", collapsed ? "p-2" : "p-4")}>
+        <nav className={cn("flex-1 space-y-2 overflow-y-auto", collapsed ? "p-2.5" : "p-3.5")}>
           {visibleNavigation.map((item) => {
             const isActive = location.pathname === item.href
             return (
@@ -99,42 +106,58 @@ export function Sidebar({
                 key={item.name}
                 variant={isActive ? "default" : "ghost"}
                 className={cn(
-                  "w-full transition-all duration-200",
-                  collapsed ? "h-11 justify-center px-0" : "justify-start gap-3",
-                  isActive 
-                    ? "bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25 hover:shadow-xl hover:shadow-blue-500/30" 
-                    : "hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-900/20"
+                  "group w-full rounded-[1.4rem] border text-sm transition-all duration-300",
+                  collapsed ? "h-14 justify-center px-0" : "h-14 justify-start gap-3 px-3",
+                  isActive
+                    ? "border-cyan-300/30 shadow-xl shadow-cyan-500/15"
+                    : "border-transparent text-muted-foreground hover:border-white/15 hover:text-foreground dark:hover:border-cyan-200/10"
                 )}
                 title={collapsed ? item.name : undefined}
                 onClick={() => {
-                  console.log(`Navigating to ${item.name}:`, item.href)
                   navigate(item.href)
                   onNavigate?.()
                 }}
               >
-                <item.icon className="h-5 w-5" />
-                {!collapsed ? item.name : null}
-                {!collapsed && isActive ? <ChevronRight className="ml-auto h-4 w-4" /> : null}
+                <span
+                  className={cn(
+                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-[1rem] border transition-colors",
+                    isActive
+                      ? "border-white/20 bg-white/10 text-white"
+                      : "border-white/10 bg-white/10 text-cyan-700 dark:text-cyan-300"
+                  )}
+                >
+                  <item.icon className="h-4.5 w-4.5" />
+                </span>
+                {!collapsed ? (
+                  <>
+                    <span className="truncate font-medium">{item.name}</span>
+                    {isActive ? <ChevronRight className="ml-auto h-4 w-4" /> : null}
+                  </>
+                ) : null}
               </Button>
             )
           })}
         </nav>
-        
-        <div className={cn("border-t p-3", collapsed ? "flex justify-center" : "")}>
+
+        <div className={cn("border-t border-white/10 p-3 dark:border-cyan-200/10", collapsed ? "flex justify-center" : "")}>
           {collapsed ? (
             <div
               title="Voice commands active"
-              className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-r from-blue-500/10 to-purple-600/10"
+              className="glass-panel glass-panel-soft flex h-11 w-11 items-center justify-center rounded-[1rem]"
             >
-              <Mic className="h-4 w-4 text-blue-700 dark:text-blue-300" />
+              <Mic className="h-4 w-4 text-cyan-700 dark:text-cyan-300" />
             </div>
           ) : (
-            <div className="rounded-lg bg-gradient-to-r from-blue-500/10 to-purple-600/10 p-3">
-              <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
-                Voice Commands Active
+            <div className="glass-panel glass-panel-soft rounded-[1.5rem] p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="status-dot h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                <p className="section-kicker">Wake Mesh</p>
+              </div>
+              <p className="text-sm font-medium text-foreground">
+                Voice Commands Armed
               </p>
-              <p className="text-xs text-blue-600/80 dark:text-blue-400/80">
-                Say "Hey Anna" or "Henry" to control your home
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Say "Hey Anna" or "Henry" to orchestrate your home scene-by-scene.
               </p>
             </div>
           )}
