@@ -151,7 +151,7 @@ struct AppShellView: View {
     }
     private var shellPadding: CGFloat { isCompactHeight ? 10 : (isCompact ? 14 : 18) }
     private var chromeButtonSide: CGFloat { isCompactHeight ? 38 : 42 }
-    private var compactTopBarClearance: CGFloat { isCompact ? 10 : 0 }
+    private var compactTopBarClearance: CGFloat { 0 }
     private var isSidebarCollapsed: Bool { usesSidebarDrawer ? isCompactSidebarCollapsed : isRegularSidebarCollapsed }
     private var sidebarWidth: CGFloat {
         if usesSidebarDrawer {
@@ -218,8 +218,6 @@ struct AppShellView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let topInset = proxy.safeAreaInsets.top
-
             ZStack(alignment: .top) {
                 HBPageBackground()
                     .ignoresSafeArea()
@@ -231,11 +229,11 @@ struct AppShellView: View {
                         regularShell
                     }
                 }
-                .padding(.top, topInset + topBarHeight + compactTopBarClearance)
+                .padding(.top, topBarHeight + compactTopBarClearance)
 
                 topBar
-                    .padding(.top, topInset + compactTopBarClearance)
-                    .frame(height: topBarHeight + topInset + compactTopBarClearance, alignment: .bottom)
+                    .padding(.top, compactTopBarClearance)
+                    .frame(height: topBarHeight + compactTopBarClearance, alignment: .bottom)
                     .frame(maxWidth: .infinity, alignment: .bottom)
                     .zIndex(2)
             }
