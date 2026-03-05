@@ -1,8 +1,10 @@
 import { ReactNode, useEffect, useState } from "react"
+import { useLocation } from "react-router-dom"
 import { Header } from "./Header"
 import { Sidebar } from "./Sidebar"
 import { Footer } from "./Footer"
 import { useIsMobile } from "@/hooks/useMobile"
+import { cn } from "@/lib/utils"
 
 interface LayoutProps {
   children: ReactNode
@@ -29,6 +31,7 @@ const readStoredBoolean = (key: string, fallback: boolean): boolean => {
 
 export function Layout({ children }: LayoutProps) {
   const isMobile = useIsMobile()
+  const location = useLocation()
   const [isDesktopSidebarCollapsed, setIsDesktopSidebarCollapsed] = useState<boolean>(() =>
     readStoredBoolean(DESKTOP_SIDEBAR_COLLAPSE_STORAGE_KEY, false)
   )
@@ -88,6 +91,13 @@ export function Layout({ children }: LayoutProps) {
     }
   }, [isMobile, isMobileMenuOpen])
 
+  useEffect(() => {
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth"
+    })
+  }, [location.pathname])
+
   const handleToggleMobileMenu = () => {
     if (!isMobile) {
       return
@@ -106,18 +116,25 @@ export function Layout({ children }: LayoutProps) {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-blue-900 dark:to-purple-900">
+    <div className="relative min-h-screen overflow-hidden">
+      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+        <div className="drift-slow absolute -left-24 top-20 h-[28rem] w-[28rem] rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/20" />
+        <div className="drift-slow absolute right-[-10rem] top-[8rem] h-[30rem] w-[30rem] rounded-full bg-blue-300/25 blur-3xl dark:bg-blue-500/20" />
+        <div className="float-slow absolute bottom-[-8rem] left-1/2 h-[24rem] w-[24rem] -translate-x-1/2 rounded-full bg-amber-200/20 blur-3xl dark:bg-teal-400/10" />
+      </div>
+
       <Header
         isMobile={isMobile}
         isMobileMenuOpen={isMobileMenuOpen}
         onToggleMobileMenu={isMobile ? handleToggleMobileMenu : undefined}
       />
-      <div className="flex h-[calc(100vh-4rem)] pt-16">
+
+      <div className="relative flex min-h-screen pt-[5.5rem]">
         {isMobile && isMobileMenuOpen ? (
           <button
             type="button"
             aria-label="Close main menu"
-            className="fixed inset-x-0 bottom-0 top-16 z-40 bg-black/45 backdrop-blur-[1px]"
+            className="fixed inset-x-0 bottom-0 top-[5.5rem] z-40 bg-slate-950/45 backdrop-blur-md"
             onClick={() => setIsMobileMenuOpen(false)}
           />
         ) : null}
@@ -134,15 +151,23 @@ export function Layout({ children }: LayoutProps) {
           }}
         />
         <main
-          className={`flex-1 overflow-y-auto p-4 transition-[margin] duration-300 ${
-            isMobile ? "ml-0" : isSidebarCollapsed ? "ml-20" : "ml-64"
-          }`}
+          className={cn(
+            "relative flex-1 overflow-y-auto pb-28 transition-[margin,padding] duration-500",
+            isMobile ? "ml-0 px-3" : isSidebarCollapsed ? "ml-[6.75rem] px-4 lg:px-6" : "ml-[18.25rem] px-4 lg:px-6"
+          )}
         >
-          <div className="mx-auto max-w-full px-4">
-            {children}
+          <div key={location.pathname} className="page-enter mx-auto max-w-[1700px] pb-12 pt-2 sm:pt-4">
+            <div className="glass-panel glass-panel-strong shine-scan rounded-[2rem]">
+              <div className="panel-grid absolute inset-0 opacity-40" />
+              <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent dark:via-cyan-200/30" />
+              <div className="relative min-h-[calc(100vh-10rem)] px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+                {children}
+              </div>
+            </div>
           </div>
         </main>
       </div>
+
       <Footer />
     </div>
   )

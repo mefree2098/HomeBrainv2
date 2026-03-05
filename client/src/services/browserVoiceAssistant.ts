@@ -23,7 +23,7 @@ const WAKE_WORD_FUZZY_MIN_SCORE = 0.72;
 const WAKE_WORD_FUZZY_MAX_START_TOKEN_INDEX = 2;
 const FALLBACK_WAKE_STITCH_WINDOW_MS = 5200;
 const FALLBACK_WAKE_STITCH_MAX_PARTS = 4;
-const BROWSER_VOICE_BUILD_TAG = "2026-03-04-win11-stt-warmup-v5";
+const BROWSER_VOICE_BUILD_TAG = "2026-03-04-win11-default-profile-v6";
 
 type BrowserSpeechRecognitionEvent = {
   resultIndex?: number;
@@ -886,7 +886,7 @@ class BrowserVoiceAssistant {
         audioBase64,
         mimeType: clip.type || "audio/webm",
         language: "en",
-        profile: "realtime"
+        profile: this.isWindowsChromiumBrowser() ? "default" : "realtime"
       });
 
       if (this.awaitingCommand) {

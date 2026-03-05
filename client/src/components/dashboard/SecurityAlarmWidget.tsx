@@ -258,18 +258,18 @@ export function SecurityAlarmWidget() {
 
   if (loading) {
     return (
-      <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
-        <CardHeader className="pb-2">
+      <Card className="rounded-[1.85rem]">
+        <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Shield className="h-5 w-5 text-blue-600" />
+              <Shield className="h-5 w-5 text-cyan-600 dark:text-cyan-300" />
               Security Alarm
             </div>
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-center h-20">
-            <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+          <div className="flex h-24 items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-cyan-500" />
           </div>
         </CardContent>
       </Card>
@@ -277,10 +277,11 @@ export function SecurityAlarmWidget() {
   }
 
   return (
-    <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
-      <CardHeader className="pb-2">
+    <Card className="rounded-[1.85rem]">
+      <CardHeader className="pb-3">
+        <p className="section-kicker">Security Envelope</p>
         <CardTitle className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-2">
             {getAlarmIcon()}
             Security Alarm
           </div>
@@ -288,37 +289,45 @@ export function SecurityAlarmWidget() {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Status Information */}
         {alarmStatus && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Zones:</span>
-              <span>{alarmStatus.activeZones}/{alarmStatus.zoneCount} active</span>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20">
+              <p className="section-kicker">Zones</p>
+              <p className="mt-2 text-2xl font-semibold text-foreground">{alarmStatus.activeZones}/{alarmStatus.zoneCount}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Active perimeter points</p>
             </div>
-            
-            {alarmStatus.bypassedZones > 0 && (
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Bypassed:</span>
-                <span className="text-yellow-600">{alarmStatus.bypassedZones} zones</span>
-              </div>
-            )}
-            
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Status:</span>
-              <span className={`${alarmStatus.isOnline ? 'text-green-600' : 'text-red-600'}`}>
+
+            <div className="rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20">
+              <p className="section-kicker">Link State</p>
+              <p className={`mt-2 text-2xl font-semibold ${alarmStatus.isOnline ? 'text-emerald-600 dark:text-emerald-300' : 'text-red-600 dark:text-red-300'}`}>
                 {alarmStatus.isOnline ? 'Online' : 'Offline'}
-              </span>
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {alarmStatus.bypassedZones > 0 ? `${alarmStatus.bypassedZones} bypassed zones` : 'No bypassed zones'}
+              </p>
             </div>
-            
+
+            <div className="rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20">
+              <p className="section-kicker">State</p>
+              <p className="mt-2 text-2xl font-semibold text-foreground">{alarmStatus.alarmState}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {alarmStatus.isArmed ? 'System currently armed' : 'System currently disarmed'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {alarmStatus && (
+          <div className="rounded-[1.35rem] border border-white/10 bg-white/10 p-4 text-sm dark:bg-slate-950/20">
             {alarmStatus.lastArmed && alarmStatus.isArmed && (
               <div className="text-xs text-muted-foreground">
                 Armed: {new Date(alarmStatus.lastArmed).toLocaleString()}
                 {alarmStatus.armedBy && ` by ${alarmStatus.armedBy}`}
               </div>
             )}
-            
+
             {alarmStatus.isTriggered && alarmStatus.lastTriggered && (
-              <div className="text-xs text-red-600 font-medium">
+              <div className="mt-2 text-xs font-medium text-red-600 dark:text-red-300">
                 <AlertTriangle className="h-3 w-3 inline mr-1" />
                 Triggered: {new Date(alarmStatus.lastTriggered).toLocaleString()}
               </div>
@@ -326,7 +335,6 @@ export function SecurityAlarmWidget() {
           </div>
         )}
 
-        {/* Control Buttons */}
         <div className="space-y-2">
           {alarmStatus && alarmStatus.alarmState === 'disarmed' ? (
             <div className="grid grid-cols-2 gap-2">
@@ -396,7 +404,6 @@ export function SecurityAlarmWidget() {
             )
           )}
 
-          {/* Sync Button */}
           <Button
             size="sm"
             variant="ghost"

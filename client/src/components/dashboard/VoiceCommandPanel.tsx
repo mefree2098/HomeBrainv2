@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Mic, Send, MessageSquare } from "lucide-react"
+import { Mic, Send, MessageSquare, X } from "lucide-react"
 import { interpretVoiceCommand, VoiceCommandResult } from "@/api/voice"
 import { useToast } from "@/hooks/useToast"
 
@@ -62,28 +62,58 @@ export function VoiceCommandPanel() {
 
   if (!isOpen) {
     return (
-      <Button
-        onClick={() => setIsOpen(true)}
-        className="bg-gradient-to-r from-green-500 to-blue-600 hover:from-green-600 hover:to-blue-700 text-white shadow-lg hover:shadow-xl transition-all duration-200"
-      >
-        <MessageSquare className="h-4 w-4 mr-2" />
-        Voice Commands
-      </Button>
+      <Card className="rounded-[1.75rem]">
+        <CardContent className="space-y-5 p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-2">
+              <p className="section-kicker">Voice Command Surface</p>
+              <h3 className="text-xl font-semibold text-foreground">Launch a natural-language control pass</h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Type or speak a request and HomeBrain interprets the intent, confidence, and execution path.
+              </p>
+            </div>
+            <div className="rounded-[1rem] border border-white/20 bg-white/10 p-3 text-cyan-700 dark:text-cyan-300">
+              <MessageSquare className="h-5 w-5" />
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            {[
+              "Turn on the patio lights at sunset",
+              "Set the upstairs thermostat to 70",
+              "Run movie night in the living room",
+              "Create a workflow for bedtime shutdown"
+            ].map((sample) => (
+              <div key={sample} className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-sm text-muted-foreground dark:bg-slate-950/20">
+                {sample}
+              </div>
+            ))}
+          </div>
+
+          <Button onClick={() => setIsOpen(true)} className="w-full">
+            <MessageSquare className="h-4 w-4" />
+            Open Voice Console
+          </Button>
+        </CardContent>
+      </Card>
     )
   }
 
   return (
-    <Card className="w-80 bg-white/95 dark:bg-slate-900/80 backdrop-blur-sm border border-border/50 shadow-xl">
-      <CardContent className="p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm">Natural Language Commands</h3>
-          <Button variant="ghost" size="sm" onClick={handleClose}>
-            x
+    <Card className="w-full rounded-[1.75rem]">
+      <CardContent className="space-y-4 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="section-kicker">Natural Language Console</p>
+            <h3 className="mt-1 text-lg font-semibold text-foreground">Live command parsing</h3>
+          </div>
+          <Button variant="ghost" size="icon" onClick={handleClose}>
+            <X className="h-4 w-4" />
           </Button>
         </div>
 
         <Textarea
-          placeholder="Type your command... e.g., 'Turn on all living room lights when I get home'"
+          placeholder="Type your command... e.g. 'Turn on all living room lights when I get home'"
           value={command}
           onChange={(event) => setCommand(event.target.value)}
           className="min-h-[80px] resize-none"
@@ -93,12 +123,12 @@ export function VoiceCommandPanel() {
           <Button
             onClick={handleSubmitCommand}
             disabled={!command.trim() || isProcessing}
-            className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
+            className="flex-1"
           >
             {isProcessing ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/25 border-t-white" />
             ) : (
-              <Send className="h-4 w-4 mr-2" />
+              <Send className="h-4 w-4" />
             )}
             Process
           </Button>
@@ -109,7 +139,7 @@ export function VoiceCommandPanel() {
         </div>
 
         {lastResult && (
-          <div className="rounded-md border border-border/60 bg-muted/40 p-3 text-xs space-y-2">
+          <div className="card-shell rounded-[1.25rem] space-y-3 p-4 text-xs">
             <div>
               <span className="font-semibold text-foreground">Response:</span>{" "}
               {lastResult.responseText || "Processed without a spoken reply."}
@@ -144,15 +174,19 @@ export function VoiceCommandPanel() {
           </div>
         )}
 
-        <div className="text-xs text-muted-foreground">
-          <p className="font-medium mb-1">Try saying:</p>
-          <ul className="space-y-1">
-            <li>- "Turn on kitchen lights at sunset"</li>
-            <li>- "Lock all doors when I leave"</li>
-            <li>- "Set temperature to 72 degrees at 7 AM"</li>
-            <li>- "Create a workflow to turn lights off at 11 PM"</li>
-            <li>- "Run bedtime workflow"</li>
-          </ul>
+        <div className="space-y-2 text-xs text-muted-foreground">
+          <p className="font-medium">Try saying:</p>
+          <div className="grid gap-2">
+            <div className="rounded-[0.9rem] border border-white/10 bg-white/10 px-3 py-2 dark:bg-slate-950/20">
+              Turn on kitchen lights at sunset
+            </div>
+            <div className="rounded-[0.9rem] border border-white/10 bg-white/10 px-3 py-2 dark:bg-slate-950/20">
+              Lock all doors when I leave
+            </div>
+            <div className="rounded-[0.9rem] border border-white/10 bg-white/10 px-3 py-2 dark:bg-slate-950/20">
+              Create a workflow to turn lights off at 11 PM
+            </div>
+          </div>
         </div>
       </CardContent>
     </Card>
