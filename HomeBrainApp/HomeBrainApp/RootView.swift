@@ -2,12 +2,15 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var uiPreview: UIPreviewStore
     @AppStorage("homebrain.ios.theme-mode") private var themeModeRaw = HBThemeMode.system.rawValue
 
     var body: some View {
         Group {
-            if session.isAuthenticated {
-                AppShellView()
+            if uiPreview.isEnabled {
+                AppShellView(previewMode: true)
+            } else if session.isAuthenticated {
+                AppShellView(previewMode: false)
             } else {
                 AuthView()
             }
