@@ -1038,28 +1038,32 @@ export function Devices() {
                 const isPendingFavorite = pendingDeviceIds.has(device._id)
 
                 return (
-                  <Card key={device._id} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                      <div className="flex items-center gap-2">
-                        <div className={`p-2 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
-                          {getDeviceIcon(device)}
+                  <Card key={device._id} className="rounded-[1.7rem] transition-all duration-300 hover:-translate-y-1">
+                    <CardHeader className="space-y-4 pb-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className={`mt-1 rounded-[1rem] p-2.5 ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
+                            {getDeviceIcon(device)}
+                          </div>
+                          <div className="min-w-0">
+                            <CardTitle className="break-words text-lg leading-snug">{device.name}</CardTitle>
+                            <p className="mt-1 text-sm text-muted-foreground">{device.room}</p>
+                          </div>
                         </div>
-                        <div>
-                          <CardTitle className="text-sm font-medium">{device.name}</CardTitle>
-                          <p className="text-xs text-muted-foreground">{device.room}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
+
                         <Button
                           variant="ghost"
                           size="icon"
-                          className={`h-8 w-8 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'}`}
+                          className={`h-9 w-9 shrink-0 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'}`}
                           onClick={() => toggleDeviceFavorite(device._id, !isFavorite)}
                           disabled={!hasProfile || isPendingFavorite}
                           aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
                         >
                           <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
                         </Button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={device.status ? "default" : "secondary"}>
                           {device.type === 'thermostat'
                             ? getThermostatMode(device).toUpperCase()
@@ -1097,7 +1101,7 @@ export function Devices() {
                         </Button>
                       )}
                       {renderControlFeedback(device)}
-                      <div className="text-xs text-muted-foreground">
+                      <div className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/20">
                         {device.type === 'thermostat'
                           ? `Voice: "Hey Anna, set ${device.name} to ${getThermostatTargetTemperature(device)} degrees"`
                           : supportsLightFade(device)
@@ -1118,19 +1122,19 @@ export function Devices() {
                     const isPendingFavorite = pendingDeviceIds.has(device._id)
 
                     return (
-                      <div key={device._id} className="p-4 flex items-center justify-between hover:bg-gray-50/50 dark:hover:bg-slate-800/60 transition-colors">
-                        <div className="flex items-center gap-4">
+                      <div key={device._id} className="flex flex-wrap items-center justify-between gap-4 p-4 transition-colors hover:bg-gray-50/50 dark:hover:bg-slate-800/60">
+                        <div className="flex min-w-0 items-center gap-4">
                           <div className={`p-2 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
                             {getDeviceIcon(device)}
                           </div>
-                          <div>
-                            <h3 className="font-medium">{device.name}</h3>
+                          <div className="min-w-0">
+                            <h3 className="break-words font-medium">{device.name}</h3>
                             <p className="text-sm text-muted-foreground">
                               {device.room} • {device.type} • {formatSourceLabel(getDeviceSource(device))}
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-3">
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1164,6 +1168,7 @@ export function Devices() {
                               : (device.status ? "default" : "outline")}
                             size="sm"
                             disabled={!!pendingControls[device._id]}
+                            className="min-w-[8.5rem]"
                           >
                             {(device.type === 'thermostat' ? getThermostatMode(device) !== 'off' : device.status) ? (
                               <>
@@ -1207,20 +1212,20 @@ export function Devices() {
                       const isPendingFavorite = pendingDeviceIds.has(device._id)
 
                       return (
-                        <div key={device._id} className="p-4 rounded-lg border bg-white/50 dark:bg-slate-900/40 hover:bg-white/80 dark:hover:bg-slate-900/70 transition-colors">
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
+                        <div key={device._id} className="rounded-lg border bg-white/50 p-4 transition-colors hover:bg-white/80 dark:bg-slate-900/40 dark:hover:bg-slate-900/70">
+                          <div className="mb-3 flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-start gap-2">
                               <div className={`p-1.5 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
                                 {getDeviceIcon(device)}
                               </div>
-                              <div>
-                                <span className="font-medium text-sm">{device.name}</span>
+                              <div className="min-w-0">
+                                <span className="block break-words text-sm font-medium leading-snug">{device.name}</span>
                                 <p className="text-xs text-muted-foreground">
                                   {formatSourceLabel(getDeviceSource(device))}
                                 </p>
                               </div>
                             </div>
-                            <div className="flex items-center gap-1">
+                            <div className="flex shrink-0 items-center gap-1">
                               <Button
                                 variant="ghost"
                                 size="icon"
