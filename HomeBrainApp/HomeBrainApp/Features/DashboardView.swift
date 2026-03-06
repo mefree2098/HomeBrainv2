@@ -96,6 +96,19 @@ struct DashboardView: View {
         ]
     }
 
+    private var heroBadgeTexts: [String] {
+        var badges = [
+            "\(scenes.count) scenes ready",
+            "\(onlineVoiceDevices) voice hubs online"
+        ]
+
+        if favoritesProfileId != nil {
+            badges.append("Favorites tuned")
+        }
+
+        return badges
+    }
+
     init(previewMode: Bool = false) {
         self.previewMode = previewMode
     }
@@ -269,12 +282,16 @@ struct DashboardView: View {
                 .font(.system(size: useLandscapeCompactLayout ? 14 : 18, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
 
-            ScrollView(.horizontal, showsIndicators: false) {
+            ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
-                    HBBadge(text: "\(scenes.count) scenes ready")
-                    HBBadge(text: "\(onlineVoiceDevices) voice hubs online")
-                    if favoritesProfileId != nil {
-                        HBBadge(text: "Favorites tuned")
+                    ForEach(heroBadgeTexts, id: \.self) { badge in
+                        HBBadge(text: badge)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(heroBadgeTexts, id: \.self) { badge in
+                        HBBadge(text: badge)
                     }
                 }
             }
