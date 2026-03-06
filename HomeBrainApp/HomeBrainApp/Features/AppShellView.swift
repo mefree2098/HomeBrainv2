@@ -140,18 +140,29 @@ struct AppShellView: View {
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
     private var usesSidebarDrawer: Bool { isCompact || containerWidth < 980 }
     private var usesCondensedRegularTopBar: Bool { !usesSidebarDrawer && containerWidth < 1220 }
+    private var usesPortraitPhoneTopBar: Bool { isCompact && !isCompactHeight }
+    private var showsTopBarResourceStrip: Bool { !usesPortraitPhoneTopBar }
     private var topBarHeight: CGFloat {
         if isCompactHeight {
-            return 72
+            return 60
         }
         if isCompact {
-            return 86
+            return 78
         }
-        return usesCondensedRegularTopBar || usesSidebarDrawer ? 88 : 92
+        return usesCondensedRegularTopBar || usesSidebarDrawer ? 82 : 86
     }
-    private var shellPadding: CGFloat { isCompactHeight ? 10 : (isCompact ? 14 : 18) }
+    private var shellPadding: CGFloat { isCompactHeight ? 8 : (isCompact ? 14 : 18) }
     private var chromeButtonSide: CGFloat { isCompactHeight ? 38 : 42 }
     private var compactTopBarClearance: CGFloat { 0 }
+    private var topBarBottomSpacing: CGFloat {
+        if isCompactHeight {
+            return 6
+        }
+        if usesSidebarDrawer {
+            return 10
+        }
+        return 12
+    }
     private var isSidebarCollapsed: Bool { usesSidebarDrawer ? isCompactSidebarCollapsed : isRegularSidebarCollapsed }
     private var sidebarWidth: CGFloat {
         if usesSidebarDrawer {
@@ -163,10 +174,7 @@ struct AppShellView: View {
     private var voiceEnabled: Bool { previewMode ? previewVoiceEnabled : voiceAssistant.isEnabled }
     private var voiceProcessing: Bool { previewMode ? false : voiceAssistant.isProcessing }
     private var useCondensedChromeControls: Bool { usesSidebarDrawer || usesCondensedRegularTopBar }
-    private var topBarStatusBadgeText: String? {
-        guard !previewMode else { return nil }
-        return useCondensedChromeControls ? activeDevicesSummary : "\(activeDevicesSummary) active"
-    }
+    private var topBarStatusBadgeText: String? { nil }
     private var shellVoiceTitle: String {
         voiceEnabled ? "Voice Commands Armed" : "Voice Commands Offline"
     }
@@ -186,7 +194,7 @@ struct AppShellView: View {
             return 164
         }
         if usesSidebarDrawer {
-            return 252
+            return containerWidth < 860 ? 304 : 320
         }
         return 310
     }
@@ -229,7 +237,7 @@ struct AppShellView: View {
                         regularShell
                     }
                 }
-                .padding(.top, topBarHeight + compactTopBarClearance)
+                .padding(.top, topBarHeight + topBarBottomSpacing + compactTopBarClearance)
 
                 topBar
                     .padding(.top, compactTopBarClearance)
@@ -317,6 +325,7 @@ struct AppShellView: View {
     private var compactShell: some View {
         ZStack(alignment: .leading) {
             detailStack
+                .padding(.horizontal, shellPadding)
 
             if isCompactSidebarVisible {
                 HBPalette.pageBottom.opacity(isSidebarCollapsed ? 0.12 : 0.20)
@@ -356,25 +365,39 @@ struct AppShellView: View {
     }
 
     private var compactTopBarContent: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: isCompactHeight ? 8 : 10) {
-                compactMenuButton
-                chromeBrandCluster(compact: true)
-                if let topBarStatusBadgeText {
-                    HBBadge(text: topBarStatusBadgeText)
+        Group {
+            if usesPortraitPhoneTopBar {
+                HStack(spacing: 8) {
+                    compactMenuButton
+                    chromeBrandCluster(compact: true)
+                    Spacer(minLength: 0)
+                    voiceToggleButton(compact: true)
+                    HBThemeToggleMenu()
+                    compactOverflowMenu
                 }
-                resourceUtilizationStrip
-                voiceToggleButton(compact: true)
-                HBThemeToggleMenu()
-                chromeIconButton(systemImage: "gearshape") {
-                    selection = .settings
-                }
-                chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
-                    exitShell()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: isCompactHeight ? 8 : 10) {
+                        compactMenuButton
+                        chromeBrandCluster(compact: true)
+                        if showsTopBarResourceStrip {
+                            resourceUtilizationStrip
+                        }
+                        voiceToggleButton(compact: true)
+                        HBThemeToggleMenu()
+                        chromeIconButton(systemImage: "gearshape") {
+                            selection = .settings
+                        }
+                        chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
+                            exitShell()
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, isCompactHeight ? 8 : 10)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, isCompactHeight ? 8 : 10)
         }
     }
 
@@ -385,10 +408,9 @@ struct AppShellView: View {
             }
 
             chromeBrandCluster(compact: true)
-            if let topBarStatusBadgeText {
-                HBBadge(text: topBarStatusBadgeText)
+            if showsTopBarResourceStrip {
+                resourceUtilizationStrip
             }
-            resourceUtilizationStrip
             Spacer(minLength: 0)
             voiceToggleButton(compact: useCondensedChromeControls)
             HBThemeToggleMenu()
@@ -433,6 +455,30 @@ struct AppShellView: View {
         .accessibilityLabel(isCompactSidebarVisible ? "Close main menu" : "Open main menu")
     }
 
+    private var compactOverflowMenu: some View {
+        Menu {
+            Button {
+                selection = .settings
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+
+            Button {
+                exitShell()
+            } label: {
+                Label(previewMode ? "Exit Preview" : "Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(HBPalette.textPrimary)
+                .frame(width: chromeButtonSide, height: chromeButtonSide)
+                .background(HBGlassBackground(cornerRadius: 14, variant: .panel))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("More")
+    }
+
     private func chromeBrandCluster(compact: Bool) -> some View {
         HStack(spacing: compact ? 8 : 10) {
             Image("HomeBrainBrandIcon")
@@ -466,7 +512,7 @@ struct AppShellView: View {
             }
             Spacer(minLength: 0)
         }
-        .frame(minWidth: isCompact ? 152 : (compact ? 178 : 208), alignment: .leading)
+        .frame(minWidth: usesPortraitPhoneTopBar ? 142 : (isCompact ? 152 : (compact ? 178 : 208)), alignment: .leading)
         .padding(.horizontal, compact ? 10 : 12)
         .padding(.vertical, compact ? 7 : 9)
         .background(HBGlassBackground(cornerRadius: 20, variant: .panel))
@@ -854,23 +900,25 @@ struct AppShellView: View {
     }
 
     private var detailStack: some View {
-        NavigationStack {
+        let detailShape = RoundedRectangle(cornerRadius: 32, style: .continuous)
+
+        return ZStack {
+            HBGlassBackground(cornerRadius: 32, variant: .panelStrong)
+
             ZStack {
-                HBGlassBackground(cornerRadius: 32, variant: .panelStrong)
-
-                RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .stroke(HBPalette.panelStroke.opacity(0.24), lineWidth: 1)
-
                 HBGridOverlay(spacing: 42)
                     .opacity(0.12)
-                    .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
 
                 detailContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(shellPadding)
             }
+            .clipShape(detailShape)
+
+            detailShape
+                .stroke(HBPalette.panelStroke.opacity(0.24), lineWidth: 1)
         }
-        .toolbar(.hidden, for: .navigationBar)
+        .clipShape(detailShape)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
