@@ -34,6 +34,7 @@ Progress log
 - 2026-03-12: Updated deployment/runtime docs and verified the repo with `server` tests, client build, and client lint.
 - 2026-03-12: Updated the Linux installer to stop an already-running `homebrain` service before install/update work, added automatic reverse-proxy database bootstrap/seeding for installer, `setup-services.sh update`, and `Platform Deploy`, and kept the default HomeBrain/Axiom route seeds idempotent so existing settings are preserved.
 - 2026-03-12: Hardened the installer after a real Jetson run exposed a root-owned `client/dist` build failure. The installer now normalizes `client/dist` ownership before the Vite build, and the systemd service installer now prefers the system Node binary path so a stale user-level Node in `PATH` does not leak into production service configuration.
+- 2026-03-12: Hardened the installer again after a Jetson restart exposed an upgrade-path `.env` gap. Existing `server/.env` files are now backfilled with required keys such as `DATABASE_URL`, `CADDY_ADMIN_URL`, and `ACME_ENV`, and failed service starts now print recent `journalctl` output for faster diagnosis.
 
 Implemented artifacts
 
