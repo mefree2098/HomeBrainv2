@@ -158,6 +158,8 @@ The repository now also advertises its runtime preference directly:
 
 For Jetson deployment, Node `22.x` is the intended production runtime.
 
+If a Node `22` upgrade leaves `serialport` unable to load, HomeBrain will now warn but continue. That module is only needed for Node-side direct serial access; the Insteon service can still use its local Python serial-bridge fallback when configured.
+
 ## Public Domain Deployment
 
 This is the recommended production path for the current HomeBrain domain set and future Axiom routing.

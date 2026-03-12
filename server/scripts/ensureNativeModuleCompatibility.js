@@ -5,8 +5,8 @@ const { spawnSync } = require('child_process');
 
 const projectRoot = path.join(__dirname, '..');
 const modulesToVerify = [
-  { name: 'bcrypt', requirePath: 'bcrypt' },
-  { name: 'serialport bindings', requirePath: '@serialport/bindings' }
+  { name: 'bcrypt', requirePath: 'bcrypt', required: true },
+  { name: 'serialport bindings', requirePath: '@serialport/bindings', required: false }
 ];
 const rebuildTargets = ['bcrypt', 'serialport', '@serialport/bindings'];
 
@@ -55,9 +55,14 @@ function main() {
   const rebuildableFailures = failures.filter((entry) => needsNativeRebuild(entry.result.error));
   if (rebuildableFailures.length === 0) {
     for (const failure of failures) {
-      console.error(`Failed to load native dependency "${failure.name}": ${failure.result.error?.message || failure.result.error}`);
+      const prefix = failure.required ? 'ERROR' : 'WARN';
+      const log = failure.required ? console.error : console.warn;
+      log(`${prefix}: Failed to load native dependency "${failure.name}": ${failure.result.error?.message || failure.result.error}`);
     }
-    process.exit(1);
+    if (failures.some((failure) => failure.required)) {
+      process.exit(1);
+    }
+    return;
   }
 
   rebuildNativeModules();
@@ -66,14 +71,28 @@ function main() {
     .map((entry) => ({ ...entry, result: canRequireModule(entry.requirePath) }))
     .filter((entry) => !entry.result.ok);
 
-  if (retryFailures.length > 0) {
-    for (const failure of retryFailures) {
+  const blockingFailures = retryFailures.filter((entry) => entry.required);
+  const warningFailures = retryFailures.filter((entry) => !entry.required);
+
+  for (const failure of warningFailures) {
+    console.warn(
+      `WARN: Optional native dependency "${failure.name}" still failed after rebuild: ${failure.result.error?.message || failure.result.error}. `
+      + 'HomeBrain can continue, but any feature that depends on that module may use a fallback path or remain unavailable.'
+    );
+  }
+
+  if (blockingFailures.length > 0) {
+    for (const failure of blockingFailures) {
       console.error(`Native dependency "${failure.name}" still failed after rebuild: ${failure.result.error?.message || failure.result.error}`);
     }
     process.exit(1);
   }
 
-  console.log('Native server modules rebuilt successfully for the active Node.js runtime.');
+  console.log(
+    warningFailures.length > 0
+      ? 'Required native server modules are compatible with the active Node.js runtime; optional module warnings were reported above.'
+      : 'Native server modules rebuilt successfully for the active Node.js runtime.'
+  );
 }
 
 main();
