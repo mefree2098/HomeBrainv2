@@ -63,7 +63,32 @@ detect_host() {
 }
 
 stop_running_homebrain_if_present() {
+  local stale_pids=()
+
+  cleanup_orphaned_homebrain_processes() {
+    while IFS= read -r line; do
+      [[ -z "${line}" ]] && continue
+
+      local pid="${line%% *}"
+      local cmd="${line#* }"
+
+      if [[ "${cmd}" == *"${HOMEBRAIN_DIR}"* ]] && [[ "${cmd}" == *"node"* ]] && [[ "${cmd}" == *"server.js"* || "${cmd}" == *"run-with-modern-node.js npm start"* ]]; then
+        stale_pids+=("${pid}")
+      fi
+    done < <(ps -eo pid=,args=)
+
+    if [[ "${#stale_pids[@]}" -eq 0 ]]; then
+      return
+    fi
+
+    print_warning "Stopping orphaned HomeBrain Node process(es): ${stale_pids[*]}"
+    sudo kill "${stale_pids[@]}" 2>/dev/null || true
+    sleep 2
+    sudo kill -9 "${stale_pids[@]}" 2>/dev/null || true
+  }
+
   if ! command -v systemctl >/dev/null 2>&1; then
+    cleanup_orphaned_homebrain_processes
     return
   fi
 
@@ -79,6 +104,8 @@ stop_running_homebrain_if_present() {
   else
     print_success "HomeBrain service is already stopped."
   fi
+
+  cleanup_orphaned_homebrain_processes
 }
 
 install_base_packages() {

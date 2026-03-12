@@ -55,6 +55,59 @@ run_modern_npm() {
   sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node scripts/run-with-modern-node.js npm ${quoted_args[*]}"
 }
 
+cleanup_orphaned_homebrain_processes() {
+  local service_pid="0"
+  local stale_pids=()
+
+  service_pid="$(sudo systemctl show -p MainPID --value "${SERVICE_NAME}" 2>/dev/null || echo 0)"
+  service_pid="${service_pid:-0}"
+
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+
+    local pid="${line%% *}"
+    local cmd="${line#* }"
+    if [[ -z "${pid}" || "${pid}" == "${service_pid}" ]]; then
+      continue
+    fi
+
+    if [[ "${cmd}" == *"${HOMEBRAIN_DIR}"* ]] && [[ "${cmd}" == *"node"* ]] && [[ "${cmd}" == *"server.js"* || "${cmd}" == *"run-with-modern-node.js npm start"* ]]; then
+      stale_pids+=("${pid}")
+    fi
+  done < <(ps -eo pid=,args=)
+
+  if [[ "${#stale_pids[@]}" -eq 0 ]]; then
+    return
+  fi
+
+  print_warning "Stopping orphaned HomeBrain Node process(es): ${stale_pids[*]}"
+  sudo kill "${stale_pids[@]}" 2>/dev/null || true
+  sleep 2
+  sudo kill -9 "${stale_pids[@]}" 2>/dev/null || true
+}
+
+print_port_listener_summary() {
+  sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
+}
+
+report_edge_port_owner() {
+  local edge_output
+  edge_output="$(sudo ss -lntp '( sport = :80 or sport = :443 )' 2>/dev/null || true)"
+
+  if [[ -z "${edge_output//[[:space:]]/}" ]]; then
+    echo "  edge listener: none"
+    return
+  fi
+
+  if grep -qi 'caddy' <<<"${edge_output}"; then
+    echo "  edge listener: caddy"
+  elif grep -qi 'node' <<<"${edge_output}"; then
+    echo "  edge listener: unexpected node process"
+  else
+    echo "  edge listener: unexpected process"
+  fi
+}
+
 install_service() {
   require_repo
 
@@ -102,6 +155,7 @@ start_services() {
 stop_services() {
   print_status "Stopping HomeBrain..."
   sudo systemctl stop "${SERVICE_NAME}"
+  cleanup_orphaned_homebrain_processes
   print_success "HomeBrain stopped."
 }
 
@@ -246,7 +300,7 @@ show_status() {
   sudo systemctl status "${CADDY_SERVICE_NAME}" --no-pager || true
   echo
   echo "Listening ports:"
-  sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
+  print_port_listener_summary
 }
 
 show_logs() {
@@ -280,6 +334,7 @@ update_homebrain() {
 
   print_status "Updating HomeBrain from Git..."
   sudo systemctl stop "${SERVICE_NAME}" || true
+  cleanup_orphaned_homebrain_processes
   sudo -u "$HOMEBRAIN_USER" git -C "${HOMEBRAIN_DIR}" pull --ff-only
 
   print_status "Installing dependencies..."
@@ -334,10 +389,11 @@ run_health_check() {
   else
     echo "  caddy admin: failed"
   fi
+  report_edge_port_owner
   echo
 
   echo "Ports:"
-  sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
+  print_port_listener_summary
   echo
 
   echo "Disk:"
