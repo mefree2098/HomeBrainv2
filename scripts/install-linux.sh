@@ -193,22 +193,51 @@ set_env_value() {
   fi
 }
 
+set_env_value_if_missing() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+
+  if grep -q "^${key}=" "${file}"; then
+    return
+  fi
+
+  echo "${key}=${value}" >> "${file}"
+}
+
 configure_env() {
   print_status "Configuring server environment..."
   local env_file="${HOMEBRAIN_DIR}/server/.env"
 
-  if [[ -f "${env_file}" ]]; then
-    print_success "Existing ${env_file} found; leaving it unchanged."
-    return
+  if [[ ! -f "${env_file}" ]]; then
+    cp "${HOMEBRAIN_DIR}/server/.env.example" "${env_file}"
+    set_env_value "${env_file}" "JWT_SECRET" "$(openssl rand -hex 32)"
+    set_env_value "${env_file}" "REFRESH_TOKEN_SECRET" "$(openssl rand -hex 32)"
+    print_success "Created ${env_file} with fresh local secrets."
+  else
+    print_success "Existing ${env_file} found; backfilling required keys if needed."
   fi
 
-  cp "${HOMEBRAIN_DIR}/server/.env.example" "${env_file}"
-  set_env_value "${env_file}" "JWT_SECRET" "$(openssl rand -hex 32)"
-  set_env_value "${env_file}" "REFRESH_TOKEN_SECRET" "$(openssl rand -hex 32)"
-  set_env_value "${env_file}" "DATABASE_URL" "mongodb://localhost/HomeBrain"
-  set_env_value "${env_file}" "CADDY_ADMIN_URL" "http://127.0.0.1:2019"
-  set_env_value "${env_file}" "ACME_ENV" "staging"
-  print_success "Created ${env_file} with fresh local secrets."
+  set_env_value_if_missing "${env_file}" "DATABASE_URL" "mongodb://localhost/HomeBrain"
+  set_env_value_if_missing "${env_file}" "CADDY_ADMIN_URL" "http://127.0.0.1:2019"
+  set_env_value_if_missing "${env_file}" "ACME_ENV" "staging"
+
+  if ! grep -q '^JWT_SECRET=' "${env_file}"; then
+    set_env_value "${env_file}" "JWT_SECRET" "$(openssl rand -hex 32)"
+  fi
+
+  if ! grep -q '^REFRESH_TOKEN_SECRET=' "${env_file}"; then
+    set_env_value "${env_file}" "REFRESH_TOKEN_SECRET" "$(openssl rand -hex 32)"
+  fi
+
+  if [[ -n "${HOMEBRAIN_PUBLIC_BASE_URL:-}" ]]; then
+    set_env_value "${env_file}" "HOMEBRAIN_PUBLIC_BASE_URL" "${HOMEBRAIN_PUBLIC_BASE_URL}"
+  fi
+
+  if [[ -n "${HOMEBRAIN_EXPECTED_PUBLIC_IP:-}" ]]; then
+    set_env_value "${env_file}" "HOMEBRAIN_EXPECTED_PUBLIC_IP" "${HOMEBRAIN_EXPECTED_PUBLIC_IP}"
+  fi
+
   print_warning "Add optional API keys to ${env_file} before enabling cloud providers."
 }
 
@@ -286,6 +315,7 @@ start_and_verify() {
   if ! sudo systemctl is-active --quiet homebrain; then
     print_error "homebrain failed to start."
     sudo systemctl status homebrain --no-pager || true
+    sudo journalctl -u homebrain -n 80 --no-pager || true
     exit 1
   fi
 

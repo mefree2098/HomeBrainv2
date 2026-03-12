@@ -30,6 +30,7 @@ The installer now:
 - installs Node.js `22.x`
 - installs MongoDB `6.0`
 - creates `server/.env` from `server/.env.example`
+- backfills required keys into an existing `server/.env` on upgrade installs
 - generates fresh local JWT secrets
 - sets `CADDY_ADMIN_URL=http://127.0.0.1:2019`
 - sets `ACME_ENV=staging`
