@@ -15,6 +15,7 @@ const ReverseProxyAuditLog = require('../models/ReverseProxyAuditLog');
 const ReverseProxySettings = require('../models/ReverseProxySettings');
 const caddyAdminService = require('./caddyAdminService');
 
+const CADDY_LETSENCRYPT_PRODUCTION_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';
 const CADDY_STAGING_DIRECTORY = 'https://acme-staging-v02.api.letsencrypt.org/directory';
 const CADDY_CERTIFICATE_DIR = path.join(__dirname, '..', 'certificates');
 const DEFAULT_EDGE_PROBE_HOST = process.env.CADDY_EDGE_PROBE_HOST || '127.0.0.1';
@@ -526,7 +527,9 @@ function buildGlobalOptions(settings) {
     lines.push(`  email ${quoteCaddy(settings.acmeEmail)}`);
   }
 
-  if (settings.acmeEnv === 'staging') {
+  if (settings.acmeEnv === 'production') {
+    lines.push(`  acme_ca ${quoteCaddy(CADDY_LETSENCRYPT_PRODUCTION_DIRECTORY)}`);
+  } else if (settings.acmeEnv === 'staging') {
     lines.push(`  acme_ca ${quoteCaddy(CADDY_STAGING_DIRECTORY)}`);
   }
 

@@ -85,6 +85,42 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
   assert.match(result.caddyfile, /tls \{\n    on_demand\n  \}/);
 });
 
+test('buildDesiredConfig pins production ACME to Let\'s Encrypt', async (t) => {
+  const originalGetSettings = ReverseProxySettings.getSettings;
+  const originalFind = ReverseProxyRoute.find;
+
+  t.after(() => {
+    ReverseProxySettings.getSettings = originalGetSettings;
+    ReverseProxyRoute.find = originalFind;
+  });
+
+  ReverseProxySettings.getSettings = async () => createSettings({
+    acmeEnv: 'production'
+  });
+
+  ReverseProxyRoute.find = () => ({
+    sort: () => ({
+      lean: async () => ([
+        {
+          hostname: 'freestonefamily.com',
+          upstreamProtocol: 'http',
+          upstreamHost: '127.0.0.1',
+          upstreamPort: 3000,
+          healthCheckPath: '/ping',
+          stripPrefix: '',
+          tlsMode: 'automatic',
+          websocketSupport: true
+        }
+      ])
+    })
+  });
+
+  const result = await reverseProxyService.buildDesiredConfig();
+
+  assert.match(result.caddyfile, /acme_ca "https:\/\/acme-v02\.api\.letsencrypt\.org\/directory"/);
+  assert.doesNotMatch(result.caddyfile, /acme-staging-v02/);
+});
+
 test('updateSettings requires confirmation before switching ACME from staging to production', async (t) => {
   const originalGetSettings = ReverseProxySettings.getSettings;
   const originalAuditCreate = ReverseProxyAuditLog.create;

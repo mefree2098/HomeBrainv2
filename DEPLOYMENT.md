@@ -250,7 +250,7 @@ When staging validation looks correct:
 - click `Validate`
 - click `Apply Caddy Config` again
 
-After that, `https://freestonefamily.com` and `https://www.freestonefamily.com` should serve through Caddy with production certificates.
+After that, `https://freestonefamily.com` and `https://www.freestonefamily.com` should serve through Caddy with production certificates. HomeBrain now pins production ACME issuance to the Let's Encrypt production directory explicitly.
 
 ## Adding Axiom Later
 
