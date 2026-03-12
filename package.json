@@ -23,7 +23,7 @@
     "reset": "npm run clean:confirm && npm run seed"
   },
   "author": "",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "description": "",
   "dependencies": {
     "concurrently": "^9.1.0"

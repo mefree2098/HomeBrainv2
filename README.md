@@ -136,3 +136,7 @@ This repository is set up so secrets should stay local:
 - build output and generated download packages are gitignored
 
 One thing git itself can still expose is commit author metadata. If you want to hide older author email addresses before publishing the full history, that requires a separate git history rewrite.
+
+## License
+
+HomeBrain is licensed under the Apache License 2.0. See [`LICENSE`](LICENSE).
