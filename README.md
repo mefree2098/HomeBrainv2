@@ -1,3 +1,5 @@
+![HomeBrain logo](client/public/homebrain-brand-64.png)
+
 # HomeBrain
 
 HomeBrain is a local-first home automation and voice-assistant platform. It combines a Node/Express backend, a React web app, optional local AI services, remote room listeners, and an optional iOS companion app into one self-hosted system.
