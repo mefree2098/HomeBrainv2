@@ -174,7 +174,7 @@ export default function WhisperManagement() {
       await startWhisperService(status?.activeModel || undefined);
       toast({
         title: 'Whisper started',
-        description: 'Local speech-to-text will run on the Jetson.'
+        description: 'Local speech-to-text will run on this HomeBrain host.'
       });
       await loadStatus();
     } catch (error: any) {
@@ -393,7 +393,7 @@ export default function WhisperManagement() {
               Model Library
             </CardTitle>
             <CardDescription>
-              Download and activate local Whisper models optimized for the Jetson.
+              Download and activate local Whisper models for this HomeBrain host.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">

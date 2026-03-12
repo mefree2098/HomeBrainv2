@@ -1,231 +1,177 @@
-# HomeBrain Deployment Runbook (Production)
+# HomeBrain Deployment Guide
 
-Use this guide when you want HomeBrain to run continuously on a Jetson hub with minimal manual work.
+This is the production deployment guide for a HomeBrain hub.
 
-## Deployment Goal
+## Choose Your Path
 
-After this runbook:
-- HomeBrain starts automatically on boot.
-- MongoDB starts automatically on boot.
-- Remote devices can onboard from the UI.
-- You can deploy updates from the `Platform Deploy` page.
-
-## 1. Host Prerequisites
-
-- Jetson Orin Nano with Ubuntu/JetPack (Jammy-based recommended)
-- Stable LAN connection
-- GitHub access to this repository
-
-Install core dependencies:
+Jetson Orin Nano:
 
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y git curl gnupg build-essential python3 python3-pip python3-venv pkg-config libcap2-bin
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt install -y nodejs
+git clone <your-public-repo-url> HomeBrain
+cd HomeBrain
+bash scripts/install-jetson.sh
 ```
 
-Install MongoDB:
+Other Ubuntu/Debian Linux host:
 
 ```bash
-curl -fsSL https://pgp.mongodb.com/server-6.0.asc | \
-  sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-6.0.gpg
-echo "deb [ arch=arm64,amd64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | \
-  sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
-sudo apt update
-sudo apt install -y mongodb-org
-sudo systemctl enable --now mongod
+git clone <your-public-repo-url> HomeBrain
+cd HomeBrain
+bash scripts/install-linux.sh
 ```
 
-Expected result:
-- `node -v` prints `v22.x` (or newer)
-- `sudo systemctl status mongod --no-pager` shows `active (running)`
+That is the recommended path for almost everyone.
 
-## 2. Install HomeBrain
+## What The Installer Does
+
+The installer:
+
+- installs system packages
+- installs Node.js `22.x`
+- installs MongoDB `6.0`
+- creates `server/.env` from `server/.env.example`
+- generates fresh local JWT secrets
+- installs npm dependencies
+- builds the production web app
+- optionally bootstraps wake-word training dependencies
+- creates and enables one systemd service: `homebrain`
+- configures sudo so the HomeBrain UI can restart its own service during platform deploys
+
+## First Login
+
+After installation:
+
+1. Find the hub IP address
 
 ```bash
-git clone https://github.com/mefree2098/HomeBrainv2.git
-cd HomeBrainv2
-npm install
+hostname -I
 ```
 
-Optional but recommended (for healthy wake-word worker on clean hosts):
+2. Open HomeBrain:
+
+```text
+http://<hub-ip>:3000
+```
+
+3. Create the first account
+4. Continue with [`docs/configuration.md`](docs/configuration.md)
+
+## Ports
+
+Production:
+
+- `3000/tcp`: HomeBrain UI and API
+- `12345/udp`: listener auto-discovery
+
+Optional:
+
+- `80/tcp`: ACME HTTP challenge or nginx reverse proxy
+- `443/tcp`: built-in HTTPS or reverse proxy TLS
+
+Development only:
+
+- `5173/tcp`: Vite frontend dev server
+
+## Service Management
+
+Check status:
 
 ```bash
-cd server
-PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh
-cd ..
+bash scripts/setup-services.sh status
 ```
 
-## 3. Configure Environment
+Follow logs:
 
 ```bash
-cp server/.env.example server/.env
-nano server/.env
-```
-
-Minimum required variables:
-- `PORT=3000`
-- `DATABASE_URL=mongodb://localhost/HomeBrain`
-- `JWT_SECRET=<secure-random>`
-- `REFRESH_TOKEN_SECRET=<secure-random>`
-
-Generate secrets:
-
-```bash
-openssl rand -hex 32
-```
-
-Optional but common:
-- `ELEVENLABS_API_KEY`
-- `OPENAI_API_KEY`
-- `SMARTTHINGS_PAT`
-
-## 4. Build Frontend
-
-```bash
-node scripts/run-with-modern-node.js npm run build --prefix client
-```
-
-Expected result: `client/dist` is created.
-
-## 5. Create Systemd Service
-
-Create `/etc/systemd/system/homebrain.service`:
-
-```ini
-[Unit]
-Description=HomeBrain Smart Home Hub
-After=network.target mongod.service
-Requires=mongod.service
-
-[Service]
-Type=simple
-User=<JETSON_USER>
-WorkingDirectory=/home/<JETSON_USER>/HomeBrainv2
-Environment=NODE_ENV=production
-Environment=WAKEWORD_PIPER_EXEC=/home/<JETSON_USER>/HomeBrainv2/server/.wakeword-venv/bin/piper
-ExecStart=/usr/bin/node scripts/run-with-modern-node.js npm start
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now homebrain
-sudo systemctl status homebrain --no-pager
-```
-
-Expected result: `homebrain` status is `active (running)`.
-
-Grant Node the ability to bind ports 80/443 (required for HTTPS + ACME):
-
-```bash
-NODE_BIN="$(cd ~/HomeBrainv2 && node scripts/run-with-modern-node.js node -p 'process.execPath')"
-sudo setcap 'cap_net_bind_service=+ep' "$NODE_BIN"
-getcap "$NODE_BIN"
-```
-
-## 6. Allow Platform Deploy to Restart Services
-
-The UI `Platform Deploy` feature uses a restart command after deployment.
-
-Allow controlled passwordless restart:
-
-```bash
-echo "<JETSON_USER> ALL=(ALL) NOPASSWD:/usr/bin/systemctl,/bin/systemctl" | \
-  sudo tee /etc/sudoers.d/homebrain-deploy
-sudo chmod 0440 /etc/sudoers.d/homebrain-deploy
-```
-
-Optional: add extra pre-restart commands for Platform Deploy.
-Platform Deploy now always runs a core restart sequence with `homebrain` restarted last:
-
-`sudo systemctl daemon-reload || true; sudo systemctl restart homebrain-discovery || true; sudo systemctl restart homebrain`
-
-Use `HOMEBRAIN_DEPLOY_RESTART_CMD` only for additional commands before that core restart sequence.
-Do not put `systemctl restart homebrain` inside `HOMEBRAIN_DEPLOY_RESTART_CMD`.
-
-```bash
-sudo systemctl edit homebrain
-```
-
-Add:
-
-```ini
-[Service]
-Environment=HOMEBRAIN_DEPLOY_RESTART_CMD=sudo systemctl restart some-extra-service || true
-```
-
-Advanced: replace the entire core restart sequence:
-
-```ini
-[Service]
-Environment=HOMEBRAIN_DEPLOY_CORE_RESTART_CMD=sudo systemctl daemon-reload || true; sudo systemctl restart homebrain
-```
-
-Apply:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart homebrain
-```
-
-## 7. First Login and Admin Setup
-
-1. Open `http://<hub-ip>:5173`
-2. Create the first account
-3. Configure integrations and voice settings
-4. Add first remote listener from `Voice Devices -> Add Remote Device`
-
-## 8. Operational Commands
-
-Service status:
-
-```bash
-sudo systemctl status homebrain --no-pager
-```
-
-Live logs:
-
-```bash
-sudo journalctl -u homebrain -f
+bash scripts/setup-services.sh logs follow
 ```
 
 Restart:
 
 ```bash
-sudo systemctl restart homebrain
+bash scripts/setup-services.sh restart
 ```
 
-## 9. Upgrade Process (Recommended)
-
-Preferred:
-1. Use UI `Platform Deploy -> Pull + Deploy Latest`.
-2. Review job log and completion state in UI.
-
-Fallback (terminal):
+Health check:
 
 ```bash
-cd ~/HomeBrainv2
-git pull --ff-only
-node scripts/run-with-modern-node.js npm install --no-audit --no-fund
-node scripts/run-with-modern-node.js npm install --no-audit --no-fund --prefix server
-node scripts/run-with-modern-node.js npm install --no-audit --no-fund --prefix client
-node scripts/run-with-modern-node.js npm run build --prefix client
-node scripts/run-with-modern-node.js npm test --prefix server
-sudo systemctl restart homebrain
+bash scripts/setup-services.sh health
 ```
 
-## 10. Backup Essentials
+## Updating HomeBrain Later
 
-Back up:
-- `server/.env`
-- MongoDB data directory
-- `server/data`
-- `server/public/wake-words`
+Recommended terminal path:
+
+```bash
+bash scripts/setup-services.sh update
+```
+
+Recommended UI path:
+
+1. Open `Platform Deploy`
+2. Choose a preset
+3. Start the deploy job
+4. Review the job log and health cards
+
+## Environment File
+
+The installer creates:
+
+[`server/.env`](server/.env)
+
+At minimum, verify:
+
+- `DATABASE_URL`
+- `JWT_SECRET`
+- `REFRESH_TOKEN_SECRET`
+
+Optional provider keys:
+
+- `ELEVENLABS_API_KEY`
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `STT_OPENAI_API_KEY`
+- SmartThings / Ecobee OAuth values
+
+Template file:
+
+[`server/.env.example`](server/.env.example)
+
+## HTTPS / Public Access
+
+Simplest local deployment:
+
+- use `http://<hub-ip>:3000` on your LAN
+
+If you want a public domain and TLS:
+
+1. Point DNS at the HomeBrain host
+2. Ensure ports `80` and `443` are reachable
+3. Either:
+   use the HomeBrain `SSL` page
+4. Or:
+   run `bash scripts/setup-services.sh setup-nginx`
+5. Then:
+   run `bash scripts/setup-services.sh setup-ssl`
+
+If you do not need public internet access, skip this.
+
+## Hardware Notes
+
+HomeBrain runs beyond Jetson now.
+
+- Jetson is best when you want local Whisper and Ollama with GPU help
+- Generic `amd64` and `arm64` Ubuntu/Debian hosts work for the main platform
+- Remote listener devices are still best-tested on Raspberry Pi, but they are not hard-locked to it
+
+## Beginner Checklist
+
+If you know almost nothing about Linux, this is the shortest safe checklist:
+
+1. Clone the repo
+2. Run the correct install script
+3. Open `http://<hub-ip>:3000`
+4. Create an account
+5. Add optional API keys in `Settings`
+6. Add remote listener devices from `Voice Devices`
+7. Use `Platform Deploy` or `scripts/setup-services.sh update` for future upgrades

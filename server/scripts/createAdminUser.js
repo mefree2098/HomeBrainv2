@@ -364,7 +364,7 @@ const main = async () => {
     console.log('\n💡 You can now log in with these credentials:');
     console.log(`   Email: ${email}`);
     console.log('   Password: [hidden for security]');
-    console.log(`\n🔗 Login at: ${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`);
+    console.log(`\n🔗 Login at: ${process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000'}/login`);
     
     process.exit(0);
     

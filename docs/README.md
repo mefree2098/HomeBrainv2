@@ -1,26 +1,24 @@
-# HomeBrain Documentation
+# HomeBrain Docs
 
-This folder is organized by role so new users can get running quickly.
+## Start Here
 
-## If You Are Setting Up a New Hub
+- Jetson hub install: [`jetson-setup.md`](jetson-setup.md)
+- General deployment: [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
+- Post-install configuration: [`configuration.md`](configuration.md)
 
-1. [Jetson Setup](jetson-setup.md)
-2. [Configuration Guide](configuration.md)
-3. [Troubleshooting](troubleshooting.md)
+## Day-To-Day Guides
 
-## If You Are the Home/Admin Owner
+- Admin/operator guide: [`admin-guide.md`](admin-guide.md)
+- End-user guide: [`user-guide.md`](user-guide.md)
+- Wake-word setup: [`wake-word-setup.md`](wake-word-setup.md)
+- Troubleshooting: [`troubleshooting.md`](troubleshooting.md)
+- Remote listener guide: [`../remote-device/README.md`](../remote-device/README.md)
 
-1. [Admin Guide](admin-guide.md)
-2. Workflow Studio (covered in Admin Guide)
-3. [Wake Word Setup](wake-word-setup.md)
-4. [Deployment Runbook](../DEPLOYMENT.md)
-5. Operations Center (covered in Admin Guide)
-6. [Implementation Roadmap](IMPLEMENTATION_ROADMAP.md)
+## Reference / Historical Notes
 
-## If You Are an End User in the Home
+These are not the main onboarding docs:
 
-1. [User Guide](user-guide.md)
-
-## Remote Listener (Raspberry Pi) Docs
-
-1. [Remote Device Setup](../remote-device/README.md)
+- SmartThings webhook design notes: [`SMARTTHINGS_WEBHOOK_PLAN.md`](SMARTTHINGS_WEBHOOK_PLAN.md)
+- Historical implementation roadmap: [`IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md)
+- ISY importer capability matrix: [`isy-program-capability-matrix.md`](isy-program-capability-matrix.md)
+- Archived Codex integration note: [`codexpath.md`](codexpath.md)

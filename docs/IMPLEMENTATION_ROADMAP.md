@@ -1,4 +1,8 @@
-# HomeBrain Implementation Roadmap (Active)
+# HomeBrain Implementation Roadmap (Historical)
+
+Historical note:
+
+This file is kept as a record of earlier implementation work. It is not the main operational documentation for the current HomeBrain platform.
 
 Last updated: 2026-02-24
 

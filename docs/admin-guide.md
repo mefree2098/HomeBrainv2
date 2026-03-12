@@ -1,115 +1,95 @@
 # HomeBrain Admin Guide
 
-This guide is for the person who manages the HomeBrain system.
+This guide is for the person running the HomeBrain hub.
 
-## Daily Admin Workflow
+## Daily Tasks
 
-### 1. Check System Health
+Check these pages first:
 
-Open `Dashboard`, `Voice Devices`, and `Operations`.
+- `Dashboard`
+- `Voice Devices`
+- `Operations`
 
-Look for:
-- Offline devices
-- Update failures
-- Low battery warnings
-- New `error` events in Operations feed
-- Degraded API/WebSocket/DB/wake-word checks
+Watch for:
 
-### 2. Manage Listener Devices (Raspberry Pi)
+- offline listener devices
+- failed updates
+- degraded health checks
+- repeated errors in the live event feed
+
+## Adding A New Listener
 
 Open `Voice Devices`.
 
-To add a new room:
-1. Click `Add Remote Device`.
-2. Enter device name and room.
-3. Copy the generated one-command installer.
-4. Run it on the Pi.
+1. Click `Add Remote Device`
+2. Enter name and room
+3. Copy the one-command installer
+4. Run it on the target listener
 
-To update your full fleet:
-1. In `Remote Fleet Updates`, click `Update + Verify Outdated Devices`.
-2. If needed, click `Verify Versions` for an on-demand recheck.
+Use Raspberry Pi if you want the most tested path. Other Debian/Ubuntu-based listeners are also possible now.
 
-### 3. Manage Users and Voice Profiles
+## Managing Profiles
 
 Open `User Profiles`.
 
-For each profile:
-- Set display name/personality
-- Set voice (for TTS)
-- Set wake words (for example, Anna, Hey Anna)
+Set:
 
-### 4. Build and Manage Workflows
+- display name
+- prompt / behavior
+- voice
+- wake words
 
-Open `Workflows`.
+## Managing Smart Home Integrations
 
-You can:
-1. Create visual workflows with trigger + action steps.
-2. Generate workflows from plain-English text.
-3. Run/enable/disable workflows immediately.
-4. Add voice aliases (for example, `bedtime workflow`) so household users can trigger them naturally.
+Open `Settings -> Integrations`.
 
-Recommended pattern:
-- Start with AI generation.
-- Open the visual builder to fine-tune trigger/action details.
-- Test with `Run Now`.
+Typical order:
 
-Harmony note:
-- Harmony Hub activity devices appear as switch-type devices and support `turn_on`, `turn_off`, and `toggle`.
-- Prefer explicit `turn_on`/`turn_off` in scheduled workflows for predictable AV behavior.
+1. SmartThings or Ecobee
+2. Harmony
+3. INSTEON / ISY
 
-### 5. Manage Wake Words
+Only add one integration at a time and test after each save.
 
-Open `Settings -> Voice & Audio -> Wake Word Models`.
+## Workflows, Automations, And Scenes
 
-1. Download Piper voices once.
-2. Create or retrain wake words.
-3. Wait until status is `ready`.
-4. Confirm remote devices sync automatically.
+Use:
 
-### 6. Deploy Latest GitHub Changes
+- `Scenes` for grouped device states
+- `Automations` for routine triggers
+- `Workflows` for the most flexible logic and AI-assisted generation
 
-Open `Platform Deploy`.
+If something is complicated, build it in `Workflows` first.
 
-1. Confirm repo status is healthy.
-2. Click `Pull + Deploy Latest`.
-3. Monitor job log tail in the same page.
+## Updating HomeBrain
 
-### 7. Review Operations Event Stream
+Two supported paths:
 
-Open `Operations`.
+1. `Platform Deploy` in the UI
+2. `bash scripts/setup-services.sh update` in the terminal
 
-Use this page to:
-1. Watch real-time workflow/voice/device/deploy events.
-2. Filter by `source` or `type`.
-3. Quickly identify failures and recent operational changes.
+If the repo has uncommitted local changes, fix that first before updating from git.
 
-If restart fails with permissions, configure sudoers:
+## Health And Logs
 
 ```bash
-echo "<JETSON_USER> ALL=(ALL) NOPASSWD:/usr/bin/systemctl,/bin/systemctl" | \
-  sudo tee /etc/sudoers.d/homebrain-deploy
-sudo chmod 0440 /etc/sudoers.d/homebrain-deploy
+bash scripts/setup-services.sh status
+bash scripts/setup-services.sh logs follow
+bash scripts/setup-services.sh health
 ```
-
-## Weekly Checklist
-
-1. Verify backups exist for:
-   - `server/.env`
-   - MongoDB data
-   - `server/data`
-   - `server/public/wake-words`
-2. Run one full remote fleet version verification.
-3. Confirm SmartThings, INSTEON, and Logitech Harmony Hub integrations are still healthy.
-4. Review `Platform Deploy` status for last successful update.
-5. Review top error event types in `Operations`.
 
 ## Security Baseline
 
-1. Keep Jetson OS and npm dependencies updated.
-2. Use strong admin passwords.
-3. Keep API keys only in environment/config (never in client code).
-4. Keep HomeBrain on trusted local networks or behind VPN/reverse proxy.
+- Keep the host OS updated
+- Keep secrets only in `server/.env`
+- Do not commit `server/.env`
+- Use strong passwords for admin accounts
+- Prefer LAN-only access unless you really need public HTTPS
 
-## If Something Breaks
+## Weekly Checklist
 
-Go to [Troubleshooting](troubleshooting.md) first.
+- verify HomeBrain still opens on `http://<hub-ip>:3000`
+- check that listener devices are online
+- confirm at least one successful recent backup of MongoDB and `server/.env`
+- verify integrations still connect
+- review recent errors in `Operations`

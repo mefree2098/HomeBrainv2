@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 
-# HomeBrain Services Setup Script
-# Additional configuration and service management utilities
-
 set -euo pipefail
 
-# Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -13,418 +9,212 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+DEFAULT_HOMEBRAIN_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$DEFAULT_HOMEBRAIN_DIR}"
 HOMEBRAIN_USER="${HOMEBRAIN_USER:-${SUDO_USER:-$USER}}"
-NODE_BIN=""
-
-run_modern_npm() {
-    if [[ "${USER}" == "${HOMEBRAIN_USER}" ]]; then
-        (cd "$HOMEBRAIN_DIR" && node scripts/run-with-modern-node.js npm "$@")
-    else
-        local quoted_args=()
-        local arg
-        for arg in "$@"; do
-            quoted_args+=("$(printf '%q' "$arg")")
-        done
-        sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node scripts/run-with-modern-node.js npm ${quoted_args[*]}"
-    fi
-}
-
-setup_wakeword_if_missing() {
-    local venv_python="$HOMEBRAIN_DIR/server/.wakeword-venv/bin/python"
-    if [[ -x "$venv_python" ]]; then
-        return
-    fi
-
-    print_status "Wake-word virtualenv missing; installing OpenWakeWord dependencies..."
-    if (cd "$HOMEBRAIN_DIR/server" && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh); then
-        print_success "Wake-word dependencies installed"
-    else
-        print_warning "Wake-word dependency install failed. Retry manually:"
-        print_warning "  cd $HOMEBRAIN_DIR/server && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh"
-    fi
-}
-
-ensure_node_capability() {
-    if [[ ! -d "$HOMEBRAIN_DIR" ]]; then
-        print_warning "HomeBrain directory not found at $HOMEBRAIN_DIR; skipping capability setup"
-        return
-    fi
-
-    if ! command -v node &>/dev/null; then
-        print_warning "Node.js not found; cannot set privileged port capability"
-        return
-    fi
-
-    NODE_BIN="$(cd "$HOMEBRAIN_DIR" && node scripts/run-with-modern-node.js node -p 'process.execPath' 2>/dev/null | tail -n 1 || true)"
-    if [[ -z "$NODE_BIN" ]]; then
-        NODE_BIN=$(readlink -f "$(command -v node)")
-    fi
-    if [[ -z "$NODE_BIN" ]]; then
-        print_warning "Unable to resolve node binary path for capability setup"
-        return
-    fi
-
-    if ! command -v setcap &>/dev/null || ! command -v getcap &>/dev/null; then
-        print_warning "setcap/getcap not available; install libcap2-bin to allow Node to bind port 80"
-        return
-    fi
-
-    if getcap "$NODE_BIN" 2>/dev/null | grep -q "cap_net_bind_service"; then
-        return
-    fi
-
-    if sudo setcap 'cap_net_bind_service=+ep' "$NODE_BIN"; then
-        print_success "Granted Node.js permission to bind privileged ports (cap_net_bind_service)"
-    else
-        print_warning "Failed to grant Node.js privileged port access. Run manually: sudo setcap 'cap_net_bind_service=+ep' $NODE_BIN"
-    fi
-}
+SERVICE_NAME="homebrain"
+SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Function to show usage
-show_usage() {
-    echo "Usage: $0 [COMMAND]"
-    echo
-    echo "Commands:"
-    echo "  start           Start all HomeBrain services"
-    echo "  stop            Stop all HomeBrain services"
-    echo "  restart         Restart all HomeBrain services"
-    echo "  status          Show service status"
-    echo "  logs            Show service logs"
-    echo "  update          Update HomeBrain application"
-    echo "  backup          Create system backup"
-    echo "  restore         Restore from backup"
-    echo "  reset           Reset configuration to defaults"
-    echo "  health          Run system health check"
-    echo "  setup-nginx     Configure nginx reverse proxy"
-    echo "  setup-ssl       Configure SSL certificates"
-    echo "  setup-wakeword  Install wake-word training dependencies if missing"
-    echo "  optimize        Run performance optimizations"
-    echo
+require_repo() {
+  if [[ ! -f "${HOMEBRAIN_DIR}/package.json" || ! -d "${HOMEBRAIN_DIR}/server" || ! -d "${HOMEBRAIN_DIR}/client" ]]; then
+    print_error "HomeBrain repo not found at ${HOMEBRAIN_DIR}"
+    exit 1
+  fi
 }
 
-# Service management functions
+resolve_node_bin() {
+  command -v node 2>/dev/null || true
+}
+
+run_modern_npm() {
+  local quoted_args=()
+  local arg
+
+  for arg in "$@"; do
+    quoted_args+=("$(printf '%q' "$arg")")
+  done
+
+  sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node scripts/run-with-modern-node.js npm ${quoted_args[*]}"
+}
+
+install_service() {
+  require_repo
+
+  local node_bin
+  node_bin="$(resolve_node_bin)"
+  if [[ -z "$node_bin" ]]; then
+    print_error "Node.js is not installed."
+    exit 1
+  fi
+
+  print_status "Writing ${SERVICE_PATH}"
+  sudo tee "$SERVICE_PATH" >/dev/null <<EOF
+[Unit]
+Description=HomeBrain Smart Home Hub
+After=network-online.target mongod.service
+Wants=network-online.target
+Requires=mongod.service
+
+[Service]
+Type=simple
+User=${HOMEBRAIN_USER}
+WorkingDirectory=${HOMEBRAIN_DIR}
+Environment=NODE_ENV=production
+ExecStart=${node_bin} scripts/run-with-modern-node.js npm start
+Restart=always
+RestartSec=5
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable "${SERVICE_NAME}"
+  print_success "Service installed and enabled."
+}
+
 start_services() {
-    print_status "Starting HomeBrain services..."
-    ensure_node_capability
-    sudo systemctl start mongod
-    sudo systemctl start homebrain
-    sudo systemctl start homebrain-discovery
-    print_success "Services started"
+  print_status "Starting MongoDB and HomeBrain..."
+  sudo systemctl start mongod
+  sudo systemctl start "${SERVICE_NAME}"
+  print_success "Services started."
 }
 
 stop_services() {
-    print_status "Stopping HomeBrain services..."
-    sudo systemctl stop homebrain-discovery
-    sudo systemctl stop homebrain
-    print_success "Services stopped"
+  print_status "Stopping HomeBrain..."
+  sudo systemctl stop "${SERVICE_NAME}"
+  print_success "HomeBrain stopped."
 }
 
 restart_services() {
-    print_status "Restarting HomeBrain services..."
-    ensure_node_capability
-    sudo systemctl restart homebrain
-    sudo systemctl restart homebrain-discovery
-    print_success "Services restarted"
+  print_status "Restarting HomeBrain..."
+  sudo systemctl restart "${SERVICE_NAME}"
+  print_success "HomeBrain restarted."
 }
 
 show_status() {
-    echo "HomeBrain Service Status:"
-    echo "========================"
-    sudo systemctl status mongod --no-pager
-    echo
-    sudo systemctl status homebrain --no-pager
-    echo
-    sudo systemctl status homebrain-discovery --no-pager
-    echo
-
-    # Show process information
-    echo "Process Information:"
-    echo "==================="
-    ps aux | grep -E "(mongod|node.*homebrain)" | grep -v grep
-    echo
-
-    # Show port usage
-    echo "Port Usage:"
-    echo "==========="
-    sudo netstat -tulnp | grep -E "(80|3000|443|5173|8080|12345|27017)"
+  echo "MongoDB:"
+  sudo systemctl status mongod --no-pager || true
+  echo
+  echo "HomeBrain:"
+  sudo systemctl status "${SERVICE_NAME}" --no-pager || true
+  echo
+  echo "Listening ports:"
+  sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
 }
 
 show_logs() {
-    echo "Select log to view:"
-    echo "1) HomeBrain main service"
-    echo "2) Discovery service"
-    echo "3) MongoDB"
-    echo "4) All services"
-    echo "5) Live follow mode"
-    read -p "Choice (1-5): " choice
-
-    case $choice in
-        1) sudo journalctl -u homebrain -n 50 ;;
-        2) sudo journalctl -u homebrain-discovery -n 50 ;;
-        3) sudo tail -50 /var/log/mongodb/mongod.log ;;
-        4)
-            sudo journalctl -u homebrain -n 25
-            echo "--- Discovery Service ---"
-            sudo journalctl -u homebrain-discovery -n 25
-            ;;
-        5) sudo journalctl -f -u homebrain -u homebrain-discovery ;;
-        *) print_error "Invalid choice" ;;
-    esac
+  case "${1:-homebrain}" in
+    homebrain)
+      sudo journalctl -u "${SERVICE_NAME}" -n 100 --no-pager
+      ;;
+    mongodb|mongod)
+      sudo journalctl -u mongod -n 100 --no-pager || sudo tail -50 /var/log/mongodb/mongod.log
+      ;;
+    follow)
+      sudo journalctl -f -u "${SERVICE_NAME}" -u mongod
+      ;;
+    *)
+      print_error "Usage: $0 logs [homebrain|mongodb|follow]"
+      exit 1
+      ;;
+  esac
 }
 
-# Update application
 update_homebrain() {
-    print_status "Updating HomeBrain application..."
+  require_repo
 
-    # Stop services
-    stop_services
+  if [[ -n "$(git -C "${HOMEBRAIN_DIR}" status --porcelain)" ]]; then
+    print_error "Repository has local changes. Commit or stash them before running update."
+    exit 1
+  fi
 
-    # Backup current version
-    BACKUP_DIR="/tmp/homebrain-backup-$(date +%Y%m%d-%H%M%S)"
-    sudo -u $HOMEBRAIN_USER cp -r $HOMEBRAIN_DIR $BACKUP_DIR
-    print_status "Backed up current version to $BACKUP_DIR"
+  print_status "Updating HomeBrain from Git..."
+  sudo systemctl stop "${SERVICE_NAME}" || true
+  sudo -u "$HOMEBRAIN_USER" git -C "${HOMEBRAIN_DIR}" pull --ff-only
 
-    # Update application
-    cd "$HOMEBRAIN_DIR"
-    sudo -u "$HOMEBRAIN_USER" git pull --ff-only
+  print_status "Installing dependencies..."
+  run_modern_npm install --no-audit --no-fund
 
-    # Update dependencies and build using modern node wrapper
-    run_modern_npm install --no-audit --no-fund
-    run_modern_npm install --no-audit --no-fund --prefix server
-    run_modern_npm install --no-audit --no-fund --prefix client
-    run_modern_npm run build --prefix client
+  print_status "Building client..."
+  run_modern_npm run build --prefix client
 
-    # Ensure wake-word worker is bootstrapped on clean hosts.
-    setup_wakeword_if_missing
-    ensure_node_capability
+  if [[ ! -x "${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/python" && -x "${HOMEBRAIN_DIR}/server/scripts/install-openwakeword-deps.sh" ]]; then
+    print_warning "Wake-word virtualenv is missing. Bootstrapping it now."
+    (cd "${HOMEBRAIN_DIR}/server" && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh) || true
+  fi
 
-    # Start services
-    start_services
-
-    print_success "HomeBrain updated successfully"
-    print_warning "Backup available at: $BACKUP_DIR"
+  install_service
+  sudo systemctl restart "${SERVICE_NAME}"
+  print_success "HomeBrain updated."
 }
 
-# Backup system
-create_backup() {
-    print_status "Creating system backup..."
-
-    BACKUP_DIR="/backup/homebrain-$(date +%Y%m%d-%H%M%S)"
-    sudo mkdir -p $BACKUP_DIR
-
-    # Backup database
-    sudo -u $HOMEBRAIN_USER mongodump --db homebrain --out $BACKUP_DIR/database
-
-    # Backup configuration
-    sudo cp -r $HOMEBRAIN_DIR/server/.env $BACKUP_DIR/
-    sudo cp -r $HOMEBRAIN_DIR/server/config $BACKUP_DIR/ 2>/dev/null || true
-
-    # Backup service files
-    sudo cp /etc/systemd/system/homebrain*.service $BACKUP_DIR/
-
-    # Create archive
-    sudo tar -czf $BACKUP_DIR.tar.gz -C $(dirname $BACKUP_DIR) $(basename $BACKUP_DIR)
-    sudo rm -rf $BACKUP_DIR
-
-    print_success "Backup created: $BACKUP_DIR.tar.gz"
-}
-
-# Restore system
-restore_backup() {
-    echo "Available backups:"
-    ls -la /backup/homebrain-*.tar.gz 2>/dev/null || echo "No backups found"
-    echo
-    read -p "Enter backup file path: " backup_file
-
-    if [[ ! -f "$backup_file" ]]; then
-        print_error "Backup file not found: $backup_file"
-        return 1
-    fi
-
-    print_warning "This will restore the system from backup. Continue? (y/N)"
-    read -p "> " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_status "Restore cancelled"
-        return 0
-    fi
-
-    print_status "Restoring from backup: $backup_file"
-
-    # Stop services
-    stop_services
-
-    # Extract backup
-    TEMP_DIR="/tmp/homebrain-restore-$(date +%s)"
-    mkdir -p $TEMP_DIR
-    tar -xzf $backup_file -C $TEMP_DIR
-
-    # Restore database
-    BACKUP_NAME=$(basename $backup_file .tar.gz)
-    mongorestore --db homebrain --drop $TEMP_DIR/$BACKUP_NAME/database/homebrain/
-
-    # Restore configuration
-    sudo cp $TEMP_DIR/$BACKUP_NAME/.env $HOMEBRAIN_DIR/server/
-    sudo chown $HOMEBRAIN_USER:$HOMEBRAIN_USER $HOMEBRAIN_DIR/server/.env
-
-    # Start services
-    start_services
-
-    # Cleanup
-    rm -rf $TEMP_DIR
-
-    print_success "System restored from backup"
-}
-
-# Reset configuration
-reset_config() {
-    print_warning "This will reset all configuration to defaults. Continue? (y/N)"
-    read -p "> " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        print_status "Reset cancelled"
-        return 0
-    fi
-
-    print_status "Resetting configuration..."
-
-    # Stop services
-    stop_services
-
-    # Backup current config
-    sudo cp $HOMEBRAIN_DIR/server/.env $HOMEBRAIN_DIR/server/.env.backup.$(date +%s)
-
-    # Reset to example
-    sudo -u $HOMEBRAIN_USER cp $HOMEBRAIN_DIR/server/.env.example $HOMEBRAIN_DIR/server/.env
-
-    # Generate new JWT secrets
-    JWT_ACCESS_SECRET=$(openssl rand -base64 64)
-    JWT_REFRESH_SECRET=$(openssl rand -base64 64)
-
-    sudo -u $HOMEBRAIN_USER sed -i "s/your-super-secret-jwt-access-key-here/$JWT_ACCESS_SECRET/" $HOMEBRAIN_DIR/server/.env
-    sudo -u $HOMEBRAIN_USER sed -i "s/your-super-secret-jwt-refresh-key-here/$JWT_REFRESH_SECRET/" $HOMEBRAIN_DIR/server/.env
-
-    # Start services
-    start_services
-
-    print_success "Configuration reset to defaults"
-    print_warning "Please edit $HOMEBRAIN_DIR/server/.env to configure your settings"
-}
-
-# Health check
 run_health_check() {
-    print_status "Running system health check..."
+  print_status "Running health checks..."
 
-    # Check services
-    echo "Service Health:"
-    echo "=============="
-    for service in mongod homebrain homebrain-discovery; do
-        if sudo systemctl is-active --quiet $service; then
-            echo -e "  $service: ${GREEN}Running${NC}"
-        else
-            echo -e "  $service: ${RED}Stopped${NC}"
-        fi
-    done
-    echo
-
-    # Check network ports
-    echo "Network Ports:"
-    echo "============="
-    for port in 80 3000 443 5173 8080 12345 27017; do
-        if sudo netstat -tuln | grep -q ":$port "; then
-            echo -e "  Port $port: ${GREEN}Open${NC}"
-        else
-            echo -e "  Port $port: ${RED}Closed${NC}"
-        fi
-    done
-    echo
-
-    # Check disk space
-    echo "Disk Space:"
-    echo "==========="
-    df -h | grep -E "(Filesystem|/dev/)"
-    echo
-
-    # Check memory usage
-    echo "Memory Usage:"
-    echo "============"
-    free -h
-    echo
-
-    # Check system load
-    echo "System Load:"
-    echo "==========="
-    uptime
-    echo
-
-    # Test database connection
-    echo "Database Connection:"
-    echo "==================="
-    if mongosh --quiet --eval "db.runCommand({ ping: 1 })" "mongodb://localhost/HomeBrain" &>/dev/null; then
-        echo -e "  MongoDB: ${GREEN}Connected${NC}"
+  echo "Service state:"
+  for service in mongod "${SERVICE_NAME}"; do
+    if sudo systemctl is-active --quiet "$service"; then
+      echo "  $service: running"
     else
-        echo -e "  MongoDB: ${RED}Connection Failed${NC}"
+      echo "  $service: stopped"
     fi
+  done
+  echo
+
+  echo "HTTP checks:"
+  if curl -fsS http://localhost:3000/ping >/dev/null; then
+    echo "  ping: ok"
+  else
+    echo "  ping: failed"
+  fi
+
+  if curl -fsS http://localhost:3000/ >/dev/null; then
+    echo "  web app: ok"
+  else
+    echo "  web app: failed"
+  fi
+  echo
+
+  echo "Ports:"
+  sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
+  echo
+
+  echo "Disk:"
+  df -h | sed -n '1,6p'
+  echo
+
+  echo "Memory:"
+  free -h
+  echo
+
+  if command -v mongosh >/dev/null 2>&1; then
+    echo "MongoDB ping:"
+    mongosh --quiet "mongodb://localhost/HomeBrain" --eval "db.runCommand({ ping: 1 })" || true
     echo
-
-    # Test API endpoints
-    echo "API Endpoints:"
-    echo "============="
-    if curl -s http://localhost:3000/api/ping &>/dev/null; then
-        echo -e "  API: ${GREEN}Responding${NC}"
-    else
-        echo -e "  API: ${RED}Not Responding${NC}"
-    fi
-
-    if curl -s http://localhost:5173 &>/dev/null; then
-        echo -e "  Web Interface: ${GREEN}Accessible${NC}"
-    else
-        echo -e "  Web Interface: ${RED}Not Accessible${NC}"
-    fi
-    echo
-
-    print_success "Health check complete"
+  fi
 }
 
-# Setup nginx reverse proxy
 setup_nginx() {
-    print_status "Setting up nginx reverse proxy..."
+  print_status "Installing and configuring nginx..."
+  sudo apt-get update
+  sudo apt-get install -y nginx
 
-    # Install nginx
-    sudo apt update
-    sudo apt install -y nginx
-
-    # Create configuration
-    sudo tee /etc/nginx/sites-available/homebrain > /dev/null << 'EOF'
+  sudo tee /etc/nginx/sites-available/homebrain >/dev/null <<'EOF'
 server {
     listen 80;
     server_name _;
 
-    # Main application
     location / {
-        proxy_pass http://localhost:5173;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # API endpoints
-    location /api {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # WebSocket support
-    location /socket.io {
-        proxy_pass http://localhost:8080;
+        proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -432,113 +222,70 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300;
     }
 }
 EOF
 
-    # Enable site
-    sudo ln -sf /etc/nginx/sites-available/homebrain /etc/nginx/sites-enabled/
-    sudo rm -f /etc/nginx/sites-enabled/default
-
-    # Test configuration
-    sudo nginx -t
-
-    # Start and enable nginx
-    sudo systemctl enable nginx
-    sudo systemctl restart nginx
-
-    # Update firewall
-    sudo ufw allow 'Nginx Full'
-
-    print_success "Nginx reverse proxy configured"
-    print_status "HomeBrain is now accessible on port 80"
-    print_warning "HomeBrain now serves ACME challenges directly; ensure port 80 is free when requesting certificates."
+  sudo ln -sf /etc/nginx/sites-available/homebrain /etc/nginx/sites-enabled/homebrain
+  sudo rm -f /etc/nginx/sites-enabled/default
+  sudo nginx -t
+  sudo systemctl enable --now nginx
+  print_success "nginx now proxies port 80 to HomeBrain on port 3000."
 }
 
-# Setup SSL certificates
 setup_ssl() {
-    print_status "Setting up SSL certificates with Let's Encrypt..."
+  print_status "Preparing certbot + nginx..."
+  sudo apt-get update
+  sudo apt-get install -y snapd
+  sudo snap install core || true
+  sudo snap refresh core || true
+  sudo snap install --classic certbot || true
+  sudo ln -sf /snap/bin/certbot /usr/bin/certbot
 
-    # Install certbot
-    sudo apt update
-    sudo apt install -y snapd
-    sudo snap install core; sudo snap refresh core
-    sudo snap install --classic certbot
-    sudo ln -sf /snap/bin/certbot /usr/bin/certbot
+  read -r -p "Domain name for HomeBrain: " domain
+  if [[ -z "${domain}" ]]; then
+    print_error "Domain name is required."
+    exit 1
+  fi
 
-    echo "Enter your domain name (e.g., homebrain.yourdomain.com):"
-    read -p "> " domain
-
-    if [[ -z "$domain" ]]; then
-        print_error "Domain name is required"
-        return 1
-    fi
-
-    # Get certificate
-    sudo certbot --nginx -d $domain
-
-    # Test renewal
-    sudo certbot renew --dry-run
-
-    print_success "SSL certificate configured for $domain"
+  sudo certbot --nginx -d "${domain}"
+  sudo certbot renew --dry-run
+  print_success "TLS configured for ${domain}."
 }
 
-# Performance optimizations
-run_optimizations() {
-    print_status "Running performance optimizations..."
+show_usage() {
+  cat <<EOF
+Usage: $0 <command>
 
-    # Set Jetson to max performance
-    if command -v nvpmodel &> /dev/null; then
-        sudo nvpmodel -m 0
-        print_success "Set Jetson to maximum performance mode"
-    fi
-
-    # Set CPU governor
-    echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null
-    print_success "Set CPU governor to performance mode"
-
-    # Optimize MongoDB
-    sudo tee -a /etc/mongod.conf > /dev/null << EOF
-
-# Performance optimizations
-storage:
-  wiredTiger:
-    engineConfig:
-      cacheSizeGB: 1
-    collectionConfig:
-      blockCompressor: snappy
-    indexConfig:
-      prefixCompression: true
+Commands:
+  install-service   Write /etc/systemd/system/homebrain.service
+  start             Start MongoDB and HomeBrain
+  stop              Stop HomeBrain
+  restart           Restart HomeBrain
+  status            Show MongoDB/HomeBrain status
+  logs [target]     Show logs: homebrain, mongodb, or follow
+  update            Pull latest git changes, install deps, build client, restart
+  health            Run basic local health checks
+  setup-nginx       Proxy port 80 to HomeBrain on port 3000
+  setup-ssl         Obtain a Let's Encrypt certificate with certbot + nginx
 EOF
-
-    # Optimize Node.js
-    echo 'export NODE_OPTIONS="--max-old-space-size=2048"' | sudo tee -a /etc/environment
-
-    # Restart services to apply changes
-    restart_services
-
-    print_success "Performance optimizations applied"
 }
 
-# Main function
 main() {
-    case "${1:-}" in
-        start) start_services ;;
-        stop) stop_services ;;
-        restart) restart_services ;;
-        status) show_status ;;
-        logs) show_logs ;;
-        update) update_homebrain ;;
-        backup) create_backup ;;
-        restore) restore_backup ;;
-        reset) reset_config ;;
-        health) run_health_check ;;
-        setup-nginx) setup_nginx ;;
-        setup-ssl) setup_ssl ;;
-        setup-wakeword) setup_wakeword_if_missing ;;
-        optimize) run_optimizations ;;
-        *) show_usage ;;
-    esac
+  case "${1:-}" in
+    install-service) install_service ;;
+    start) start_services ;;
+    stop) stop_services ;;
+    restart) restart_services ;;
+    status) show_status ;;
+    logs) show_logs "${2:-homebrain}" ;;
+    update) update_homebrain ;;
+    health) run_health_check ;;
+    setup-nginx) setup_nginx ;;
+    setup-ssl) setup_ssl ;;
+    *) show_usage ;;
+  esac
 }
 
 main "$@"

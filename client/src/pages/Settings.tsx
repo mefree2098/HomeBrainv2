@@ -2843,12 +2843,12 @@ export function Settings() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="openai">OpenAI Whisper API (Cloud)</SelectItem>
-                        <SelectItem value="local">On-device Whisper (Jetson)</SelectItem>
+                        <SelectItem value="local">On-device Whisper (Local)</SelectItem>
                       </SelectContent>
                     </Select>
-                    <p className="text-xs text-muted-foreground mt-1">
+                      <p className="text-xs text-muted-foreground mt-1">
                       {sttProviderValue === "local"
-                        ? "Audio stays on-device and is processed by the Jetson Orin Nano."
+                        ? "Audio stays on this HomeBrain host and is processed locally."
                         : "Audio is sent securely to OpenAI for transcription."}
                     </p>
                   </div>
