@@ -31,6 +31,16 @@ require_repo() {
 }
 
 resolve_node_bin() {
+  if [[ -x /usr/bin/node ]]; then
+    echo /usr/bin/node
+    return
+  fi
+
+  if [[ -x /usr/local/bin/node ]]; then
+    echo /usr/local/bin/node
+    return
+  fi
+
   command -v node 2>/dev/null || true
 }
 

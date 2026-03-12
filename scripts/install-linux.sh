@@ -105,7 +105,14 @@ install_node() {
 
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-  print_success "Installed Node.js $(node -v)."
+  hash -r 2>/dev/null || true
+
+  local node_bin="/usr/bin/node"
+  if [[ ! -x "${node_bin}" ]]; then
+    node_bin="$(command -v node)"
+  fi
+
+  print_success "Installed Node.js $("${node_bin}" -v) at ${node_bin}."
 }
 
 install_mongodb() {
@@ -209,6 +216,12 @@ install_app() {
   print_status "Installing HomeBrain dependencies..."
   cd "${HOMEBRAIN_DIR}"
   node scripts/run-with-modern-node.js npm install --no-audit --no-fund
+
+  if [[ -d "${HOMEBRAIN_DIR}/client/dist" ]]; then
+    print_status "Normalizing client/dist ownership before build..."
+    sudo chown -R "${USER}:$(id -gn)" "${HOMEBRAIN_DIR}/client/dist"
+    sudo chmod -R u+rwX "${HOMEBRAIN_DIR}/client/dist"
+  fi
 
   print_status "Building the production web app..."
   node scripts/run-with-modern-node.js npm run build --prefix client

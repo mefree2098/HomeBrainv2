@@ -33,6 +33,7 @@ Progress log
 - 2026-03-12: Removed HomeBrain ownership of public `80/443` from the runtime, updated listener/bootstrap URL generation for proxy-aware `https`/`wss`, and added Caddy-native install/service management to the deployment scripts.
 - 2026-03-12: Updated deployment/runtime docs and verified the repo with `server` tests, client build, and client lint.
 - 2026-03-12: Updated the Linux installer to stop an already-running `homebrain` service before install/update work, added automatic reverse-proxy database bootstrap/seeding for installer, `setup-services.sh update`, and `Platform Deploy`, and kept the default HomeBrain/Axiom route seeds idempotent so existing settings are preserved.
+- 2026-03-12: Hardened the installer after a real Jetson run exposed a root-owned `client/dist` build failure. The installer now normalizes `client/dist` ownership before the Vite build, and the systemd service installer now prefers the system Node binary path so a stale user-level Node in `PATH` does not leak into production service configuration.
 
 Implemented artifacts
 
