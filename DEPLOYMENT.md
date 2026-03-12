@@ -35,6 +35,7 @@ The installer now:
 - sets `ACME_ENV=staging`
 - stops `homebrain` first if it is already running on the host
 - installs npm dependencies
+- repairs `client/dist` ownership before the production build if an earlier deploy left it root-owned
 - builds the production web app
 - optionally bootstraps wake-word training dependencies
 - creates and enables `homebrain`
