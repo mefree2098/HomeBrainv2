@@ -115,8 +115,8 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
     }
   }, [])
 
-  const handleLogout = () => {
-    logout()
+  const handleLogout = async () => {
+    await logout()
     navigate("/login")
   }
 

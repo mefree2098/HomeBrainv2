@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useForm } from "react-hook-form"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -29,7 +29,24 @@ export function Register() {
   const { toast } = useToast()
   const { register: registerUser } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const { register, handleSubmit } = useForm<RegisterForm>()
+  const returnTo = (() => {
+    const raw = new URLSearchParams(location.search).get("returnTo")
+    if (!raw) {
+      return ""
+    }
+
+    try {
+      const parsed = new URL(raw, window.location.origin)
+      if (parsed.origin !== window.location.origin) {
+        return ""
+      }
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`
+    } catch (_error) {
+      return ""
+    }
+  })()
 
   const onSubmit = async (data: RegisterForm) => {
     try {
@@ -39,7 +56,7 @@ export function Register() {
         title: "Success",
         description: "Account created successfully",
       })
-      navigate("/login")
+      navigate(returnTo ? `/login?returnTo=${encodeURIComponent(returnTo)}` : "/login")
     } catch (error) {
       console.log("Register error:", error)
       toast({
@@ -144,7 +161,7 @@ export function Register() {
             <Button
               variant="link"
               className="text-sm text-muted-foreground"
-              onClick={() => navigate("/login")}
+              onClick={() => navigate(returnTo ? `/login?returnTo=${encodeURIComponent(returnTo)}` : "/login")}
             >
               Already have an account? Sign in
             </Button>

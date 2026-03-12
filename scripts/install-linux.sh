@@ -308,6 +308,8 @@ install_app() {
   print_status "Installing HomeBrain dependencies..."
   cd "${HOMEBRAIN_DIR}"
   node scripts/run-with-modern-node.js npm install --no-audit --no-fund
+  print_status "Ensuring native server modules match the active Node.js runtime..."
+  node scripts/run-with-modern-node.js npm run ensure:native --prefix server
 
   if [[ -d "${HOMEBRAIN_DIR}/client/dist" ]]; then
     print_status "Normalizing client/dist ownership before build..."
@@ -393,7 +395,9 @@ bootstrap_reverse_proxy_state() {
   print_status "Bootstrapping reverse proxy database state..."
   cd "${HOMEBRAIN_DIR}"
   node server/scripts/bootstrapReverseProxyState.js --actor system:install
-  print_success "Reverse proxy database state is ready."
+  print_status "Bootstrapping identity database state..."
+  node server/scripts/bootstrapIdentityState.js --actor system:install
+  print_success "Reverse proxy and identity database state are ready."
 }
 
 print_summary() {

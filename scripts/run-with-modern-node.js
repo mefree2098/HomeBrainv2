@@ -85,7 +85,9 @@ function selectNodeBinary() {
   const candidates = getCandidates();
   const inspected = [];
   let bestSupported = null;
+  let bestPreferredSupported = null;
   let bestAny = null;
+  const preferredMajor = Number(process.env.HOMEBRAIN_PREFERRED_NODE_MAJOR || 22);
 
   for (const bin of candidates) {
     const version = getNodeVersion(bin);
@@ -104,12 +106,22 @@ function selectNodeBinary() {
     if (supported && (!bestSupported || compareVersion(version, bestSupported.version) > 0)) {
       bestSupported = { bin, version };
     }
+
+    if (
+      supported
+      && Number.isFinite(preferredMajor)
+      && version.major === preferredMajor
+      && (!bestPreferredSupported || compareVersion(version, bestPreferredSupported.version) > 0)
+    ) {
+      bestPreferredSupported = { bin, version };
+    }
   }
 
   return {
-    selected: bestSupported || null,
+    selected: bestPreferredSupported || bestSupported || null,
     inspected,
-    bestAny
+    bestAny,
+    preferredMajor
   };
 }
 
@@ -149,10 +161,13 @@ function main() {
     process.exit(1);
   }
 
-  const { selected, inspected, bestAny } = selectNodeBinary();
+  const { selected, inspected, bestAny, preferredMajor } = selectNodeBinary();
   if (!selected) {
     const latest = bestAny ? `${bestAny.version.raw} at ${bestAny.bin}` : 'none';
     console.error('HomeBrain requires Node ^20.19.0 or >=22.12.0.');
+    if (Number.isFinite(preferredMajor)) {
+      console.error(`Preferred major version: ${preferredMajor}.`);
+    }
     console.error(`Best detected Node: ${latest}`);
     console.error('Detected binaries:');
     console.error(formatInspected(inspected));
@@ -187,4 +202,3 @@ function main() {
 }
 
 main();
-

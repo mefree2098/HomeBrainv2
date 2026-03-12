@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const express = require("express");
 const basicRoutes = require("./routes/index");
 const authRoutes = require("./routes/authRoutes");
+const oidcRoutes = require("./routes/oidcRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const sceneRoutes = require("./routes/sceneRoutes");
 const automationRoutes = require("./routes/automationRoutes");
@@ -188,6 +189,8 @@ app.get('/api/devices/stream', requireUser(), (req, res) => {
   res.on('close', cleanup);
   res.on('error', cleanup);
 });
+// OIDC Provider Routes
+app.use(oidcRoutes);
 // Basic Routes
 app.use(basicRoutes);
 // Authentication Routes

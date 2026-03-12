@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from "react";
-import { login as apiLogin, register as apiRegister } from "../api/auth";
+import { login as apiLogin, logout as apiLogout, register as apiRegister } from "../api/auth";
 import { User } from "../../../shared/types/user";
 
 type AuthContextType = {
@@ -7,7 +7,7 @@ type AuthContextType = {
   currentUser: User | null;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -43,14 +43,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const logout = () => {
-    resetAuth();
-    window.location.reload();
+  const logout = async () => {
+    try {
+      await apiLogout();
+    } catch (error) {
+      console.warn("Logout request failed, clearing local auth state anyway.", error);
+    } finally {
+      resetAuth();
+    }
   };
 
-  const clearAccessTokenCookie = () => {
+  const clearAuthCookies = () => {
     const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
     document.cookie = `hbAccessToken=; Max-Age=0; path=/; SameSite=Lax${secureFlag}`;
+    document.cookie = `hbSessionToken=; Max-Age=0; path=/; SameSite=Lax${secureFlag}`;
   };
 
   const resetAuth = () => {
@@ -59,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("userData");
     setCurrentUser(null);
     setIsAuthenticated(false);
-    clearAccessTokenCookie();
+    clearAuthCookies();
   };
 
   const setAuthData = (accessToken, refreshToken, userData) => {
@@ -96,4 +102,3 @@ export function useAuth() {
   }
   return context;
 }
-
