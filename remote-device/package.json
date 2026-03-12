@@ -17,7 +17,7 @@
     "homebrain"
   ],
   "author": "HomeBrain",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "ws": "^8.18.0",
     "node-record-lpcm16": "^1.0.1",
