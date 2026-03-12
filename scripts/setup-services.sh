@@ -340,6 +340,9 @@ update_homebrain() {
   print_status "Installing dependencies..."
   run_modern_npm install --no-audit --no-fund
 
+  print_status "Ensuring native server modules match the active Node.js runtime..."
+  run_modern_npm run ensure:native --prefix server
+
   print_status "Building client..."
   run_modern_npm run build --prefix client
 
@@ -355,6 +358,8 @@ update_homebrain() {
 
   print_status "Bootstrapping reverse proxy database state..."
   sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapReverseProxyState.js --actor system:update"
+  print_status "Bootstrapping identity database state..."
+  sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapIdentityState.js --actor system:update"
   print_success "HomeBrain updated."
 }
 

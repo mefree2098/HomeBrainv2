@@ -9,6 +9,7 @@ const wakeWordTrainingService = require('./wakeWordTrainingService');
 const eventStreamService = require('./eventStreamService');
 const caddyAdminService = require('./caddyAdminService');
 const reverseProxyService = require('./reverseProxyService');
+const oidcService = require('./oidcService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
 
@@ -1048,6 +1049,8 @@ class PlatformDeployService {
         await runNpmStep('Install client dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'client']);
       }
 
+      await runNpmStep('Ensure server native modules', ['run', 'ensure:native', '--prefix', 'server']);
+
       if (job.options.runClientLint) {
         await runNpmStep('Run client lint', ['run', 'lint', '--prefix', 'client', '--', '--max-warnings=0']);
       }
@@ -1071,6 +1074,20 @@ class PlatformDeployService {
           + `settingsUpdated=${bootstrapSummary.settingsUpdated.join(',') || 'none'} `
           + `createdRoutes=${bootstrapSummary.createdRoutes.join(',') || 'none'} `
           + `revalidatedRoutes=${bootstrapSummary.revalidatedRoutes.join(',') || 'none'}\n`
+        );
+      });
+
+      await runCustomStep('Bootstrap identity state', async () => {
+        const bootstrapSummary = await oidcService.ensureBootstrapState({
+          actor: `platform-deploy:${job.actor || 'unknown'}`
+        });
+
+        await this.appendJobLog(
+          jobId,
+          `[${new Date().toISOString()}] [Bootstrap identity state] `
+          + `settingsUpdated=${bootstrapSummary.settingsUpdated.join(',') || 'none'} `
+          + `createdClients=${bootstrapSummary.createdClients.join(',') || 'none'} `
+          + `updatedClients=${bootstrapSummary.updatedClients.join(',') || 'none'}\n`
         );
       });
 

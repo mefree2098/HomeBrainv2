@@ -18,6 +18,7 @@ Current implementation status
 - [x] Native-service deployment/install flow updated for Caddy.
 - [x] Installer/update/deploy paths now bootstrap reverse-proxy database state automatically.
 - [x] Tests, lint, and deployment documentation completed.
+- [x] HomeBrain OIDC provider support for Axiom SSO implemented.
 
 Known constraints / assumptions
 
@@ -39,6 +40,9 @@ Progress log
 - 2026-03-12: Clarified the staging certificate experience in both the reverse-proxy UI and the deployment guide. HomeBrain now warns directly that browser SSL errors are expected while `ACME_ENV` remains `staging`, which removes ambiguity during the final production cutover step.
 - 2026-03-12: Corrected the upgrade-path ACME defaulting behavior so already-public deployments no longer silently fall back to staging when `ACME_ENV` is absent. Reverse-proxy settings now infer `production` when a real public base URL is present, while first-time local/test installs still default to staging.
 - 2026-03-12: Pinned production ACME issuance explicitly to the Let's Encrypt production directory in generated Caddy config, so automatic renewal now stays on Let's Encrypt instead of relying on Caddy's generic public-issuer defaults.
+- 2026-03-12: Began HomeBrain OIDC provider work for Axiom SSO. Confirmed the current auth stack is JWT-only with no discovery, authorization, token, JWKS, or userinfo endpoints, and identified the need for a durable server-recognized session cookie plus a login-return flow so direct-to-Axiom and already-signed-in browser flows both work reliably.
+- 2026-03-12: Implemented HomeBrain OIDC provider support for Axiom SSO. HomeBrain now exposes discovery, JWKS, authorize, token, and userinfo endpoints; seeds a default `homebrain-axiom` client for `https://mail.freestonefamily.com/api/identity/homebrain/callback`; maintains a durable server-recognized session cookie for SSO; and preserves login-return flow through the existing React login/register pages.
+- 2026-03-12: Verified HomeBrain on Node `22.21.1` and fixed the main upgrade-path hazard: stale native module binaries after switching Node majors. HomeBrain now prefers Node `22` by default when multiple supported Node versions are installed, advertises supported engines in `package.json`, ships `.nvmrc`, and rebuilds native server modules such as `serialport` and `bcrypt` during install/update/deploy so Jetson upgrades do not leave ABI-mismatched bindings behind.
 
 Implemented artifacts
 
@@ -48,19 +52,22 @@ Implemented artifacts
    - New internal Caddy policy endpoint at `/internal/caddy/can-issue-cert`.
    - Caddyfile generation plus `/adapt` and `/load` admin API integration.
    - DNS, public-IP, edge-port, upstream, and served-certificate validation snapshots.
+   - New OIDC provider models and routes for discovery, JWKS, authorization code flow, token exchange, and userinfo.
 2. Runtime / deploy
    - HomeBrain no longer starts its own ACME helper or HTTPS listener.
    - `scripts/setup-services.sh setup-caddy` installs and runs Caddy as the native edge service with `--resume`.
-   - Install scripts now stop a running `homebrain` service before deployment work, bootstrap Caddy automatically, seed reverse-proxy database state automatically, and no longer require HomeBrain to hold privileged bind capability.
+   - Install scripts now stop a running `homebrain` service before deployment work, bootstrap Caddy automatically, seed reverse-proxy and OIDC identity database state automatically, and no longer require HomeBrain to hold privileged bind capability.
 3. UI
    - New `Reverse Proxy / Domains` page for route management and config apply.
    - `Platform Deploy` health now includes reverse-proxy/Caddy admin reachability.
    - SSL management text now clearly marks the old certificate page as legacy inventory.
+   - Login and register flows now preserve and resume OIDC authorization requests so Axiom can redirect into HomeBrain and back out cleanly.
 
 Next steps
 
 1. Apply the documented deployment steps on the actual Jetson or Linux host with live DNS and router forwarding.
-2. Keep `mail.freestonefamily.com` in DNS now; the route will already be seeded disabled, so only enable it once the Axiom service is actually present on its internal upstream.
+2. Configure Axiom to use HomeBrain as its OIDC issuer at `https://freestonefamily.com` with the seeded `homebrain-axiom` client and callback `https://mail.freestonefamily.com/api/identity/homebrain/callback`.
+3. Keep `mail.freestonefamily.com` in DNS now; the route will already be seeded disabled, so only enable it once the Axiom service is actually present on its internal upstream.
 
 Objective
 

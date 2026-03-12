@@ -1,16 +1,19 @@
 const express = require('express');
 const UserService = require('../services/userService.js');
-const { requireUser } = require('./middlewares/auth.js');
+const { requireUser, extractToken, verifyAccessToken } = require('./middlewares/auth.js');
 const User = require('../models/User.js');
 const { generateAccessToken, generateRefreshToken } = require('../utils/auth.js');
 const jwt = require('jsonwebtoken');
 const { ALL_ROLES } = require('../../shared/config/roles.js');
+const oidcService = require('../services/oidcService');
+const {
+  SESSION_TOKEN_COOKIE_NAME,
+  clearAuthCookies,
+  getCookieValue,
+  setAuthCookies
+} = require('../utils/authCookies');
 
 const router = express.Router();
-
-const ACCESS_TOKEN_COOKIE_NAME = 'hbAccessToken';
-const SECURE_COOKIE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
-const ACCESS_TOKEN_COOKIE_MAX_AGE = Number(process.env.ACCESS_TOKEN_COOKIE_MAX_AGE || 60 * 60 * 1000);
 
 router.post('/login', async (req, res) => {
   const sendError = msg => res.status(400).json({ message: msg });
@@ -28,12 +31,7 @@ router.post('/login', async (req, res) => {
 
     user.refreshToken = refreshToken;
     await user.save();
-    res.cookie(ACCESS_TOKEN_COOKIE_NAME, accessToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: SECURE_COOKIE,
-      maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE
-    });
+    setAuthCookies(res, accessToken, refreshToken);
     return res.json({...user.toObject(), accessToken, refreshToken});
   } else {
     return sendError('Email or password is incorrect');
@@ -55,30 +53,45 @@ router.post('/register', async (req, res, next) => {
 });
 
 router.post('/logout', async (req, res) => {
-  const { email } = req.body;
+  const { email } = req.body || {};
 
-  const user = await User.findOne({ email });
+  let user = null;
+  const accessToken = extractToken(req);
+  if (accessToken) {
+    try {
+      user = await verifyAccessToken(accessToken, ALL_ROLES);
+    } catch (_error) {
+      user = null;
+    }
+  }
+
+  if (!user) {
+    const sessionToken = getCookieValue(req, SESSION_TOKEN_COOKIE_NAME);
+    user = await oidcService.getUserFromSessionToken(sessionToken);
+  }
+
+  if (!user && email) {
+    user = await User.findOne({ email });
+  }
+
   if (user) {
     user.refreshToken = null;
     await user.save();
   }
 
-  res.clearCookie(ACCESS_TOKEN_COOKIE_NAME, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: SECURE_COOKIE
-  });
+  clearAuthCookies(res);
 
   res.status(200).json({ message: 'User logged out successfully.' });
 });
 
 router.post('/refresh', async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.body?.refreshToken || getCookieValue(req, SESSION_TOKEN_COOKIE_NAME);
 
   console.log('Refresh token request received');
 
   if (!refreshToken) {
     console.log('No refresh token provided in request');
+    clearAuthCookies(res);
     return res.status(401).json({
       success: false,
       message: 'Refresh token is required'
@@ -90,6 +103,7 @@ router.post('/refresh', async (req, res) => {
     
     if (!process.env.REFRESH_TOKEN_SECRET) {
       console.error('REFRESH_TOKEN_SECRET environment variable is not set');
+      clearAuthCookies(res);
       return res.status(500).json({
         success: false,
         message: 'Server configuration error'
@@ -105,6 +119,7 @@ router.post('/refresh', async (req, res) => {
 
     if (!user) {
       console.log('User not found in database');
+      clearAuthCookies(res);
       return res.status(403).json({
         success: false,
         message: 'User not found'
@@ -114,6 +129,7 @@ router.post('/refresh', async (req, res) => {
     console.log('User found, comparing refresh tokens');
     if (user.refreshToken !== refreshToken) {
       console.log('Refresh token mismatch - stored token does not match provided token');
+      clearAuthCookies(res);
       return res.status(403).json({
         success: false,
         message: 'Invalid refresh token'
@@ -129,6 +145,7 @@ router.post('/refresh', async (req, res) => {
     console.log('Updating user refresh token in database');
     user.refreshToken = newRefreshToken;
     await user.save();
+    setAuthCookies(res, newAccessToken, newRefreshToken);
 
     console.log('Token refresh successful');
     // Return new tokens
@@ -146,6 +163,7 @@ router.post('/refresh', async (req, res) => {
     console.error('Full error details:', error);
 
     if (error.name === 'TokenExpiredError') {
+      clearAuthCookies(res);
       return res.status(403).json({
         success: false,
         message: 'Refresh token has expired'
@@ -154,12 +172,14 @@ router.post('/refresh', async (req, res) => {
 
     if (error.name === 'JsonWebTokenError') {
       console.error('JWT verification failed - possible signature mismatch');
+      clearAuthCookies(res);
       return res.status(403).json({
         success: false,
         message: 'Invalid refresh token signature'
       });
     }
 
+    clearAuthCookies(res);
     return res.status(403).json({
       success: false,
       message: 'Invalid refresh token'

@@ -36,12 +36,14 @@ The installer now:
 - defaults `ACME_ENV` to `production` for already-public deployments and to `staging` for first-time local/testing installs
 - stops `homebrain` first if it is already running on the host
 - installs npm dependencies
+- ensures native server modules are rebuilt for the active Node.js runtime after a Node major-version change
 - repairs `client/dist` ownership before the production build if an earlier deploy left it root-owned
 - builds the production web app
 - optionally bootstraps wake-word training dependencies
 - creates and enables `homebrain`
 - installs and enables `caddy-api`
 - seeds the reverse-proxy database state for Caddy management
+- seeds the HomeBrain OIDC identity state for the default Axiom SSO client
 - configures sudo so the HomeBrain UI can restart `homebrain` during Platform Deploy
 
 HomeBrain no longer owns public `80/443`. Caddy is the intended public ingress.
@@ -148,6 +150,13 @@ If you still want direct LAN access on `:3000`, leave `HOMEBRAIN_BIND_HOST` unse
 Template file:
 
 [`server/.env.example`](server/.env.example)
+
+The repository now also advertises its runtime preference directly:
+
+- [`.nvmrc`](.nvmrc) prefers Node `22`
+- root, server, and client `package.json` files declare `^20.19.0 || >=22.12.0`
+
+For Jetson deployment, Node `22.x` is the intended production runtime.
 
 ## Public Domain Deployment
 
@@ -280,6 +289,34 @@ At that point:
 
 Both can share the same public IP because Caddy routes by hostname.
 
+## Axiom SSO Through HomeBrain
+
+HomeBrain now acts as an OIDC provider for Axiom. The installer, `setup-services.sh update`, and `Platform Deploy` all seed the default Axiom client automatically.
+
+Use these Axiom OIDC settings:
+
+- Issuer: `https://freestonefamily.com`
+- Discovery document: `https://freestonefamily.com/.well-known/openid-configuration`
+- Client ID: `homebrain-axiom`
+- Redirect URI: `https://mail.freestonefamily.com/api/identity/homebrain/callback`
+- Grant type: `authorization_code`
+- Client auth: public client with PKCE
+- PKCE: required
+- Requested scopes: `openid profile email`
+
+What this gives you:
+
+- if you are already signed into HomeBrain in the browser, Axiom can bounce through HomeBrain and come back authenticated without a second password prompt
+- if you go directly to Axiom while signed out, HomeBrain will send you to its login page, then resume the authorization request automatically after sign-in
+
+HomeBrain exposes these OIDC endpoints:
+
+- `/.well-known/openid-configuration`
+- `/.well-known/jwks.json`
+- `/oauth/authorize`
+- `/oauth/token`
+- `/oauth/userinfo`
+
 ## Updating HomeBrain Later
 
 Terminal path:
@@ -288,7 +325,7 @@ Terminal path:
 bash scripts/setup-services.sh update
 ```
 
-That update path now waits for HomeBrain to come back and re-seeds the reverse-proxy database state if new Caddy-management fields or routes were added by the release.
+That update path now waits for HomeBrain to come back and re-seeds both reverse-proxy state and OIDC identity state if new managed fields or clients were added by the release.
 
 UI path:
 
@@ -297,7 +334,7 @@ UI path:
 3. Start the deploy job
 4. Review the job log and health cards
 
-`Platform Deploy` still works after these Caddy changes because it still restarts only the `homebrain` app service. During the deploy job it now also bootstraps the reverse-proxy database state before the final restart, while Caddy remains in front and keeps owning public ingress.
+`Platform Deploy` still works after these Caddy changes because it still restarts only the `homebrain` app service. During the deploy job it now bootstraps both reverse-proxy state and OIDC identity state before the final restart, while Caddy remains in front and keeps owning public ingress.
 
 ## Beginner Checklist
 
