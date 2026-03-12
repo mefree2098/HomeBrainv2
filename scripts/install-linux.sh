@@ -62,6 +62,25 @@ detect_host() {
   fi
 }
 
+stop_running_homebrain_if_present() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'homebrain.service'; then
+    print_success "No existing HomeBrain service is installed yet."
+    return
+  fi
+
+  if sudo systemctl is-active --quiet homebrain; then
+    print_status "Stopping the running HomeBrain service before install/update..."
+    sudo systemctl stop homebrain
+    print_success "Stopped the existing HomeBrain service."
+  else
+    print_success "HomeBrain service is already stopped."
+  fi
+}
+
 install_base_packages() {
   print_status "Installing base packages..."
   sudo apt-get update
@@ -180,6 +199,8 @@ configure_env() {
   set_env_value "${env_file}" "JWT_SECRET" "$(openssl rand -hex 32)"
   set_env_value "${env_file}" "REFRESH_TOKEN_SECRET" "$(openssl rand -hex 32)"
   set_env_value "${env_file}" "DATABASE_URL" "mongodb://localhost/HomeBrain"
+  set_env_value "${env_file}" "CADDY_ADMIN_URL" "http://127.0.0.1:2019"
+  set_env_value "${env_file}" "ACME_ENV" "staging"
   print_success "Created ${env_file} with fresh local secrets."
   print_warning "Add optional API keys to ${env_file} before enabling cloud providers."
 }
@@ -236,7 +257,6 @@ configure_firewall() {
   sudo ufw default deny incoming
   sudo ufw default allow outgoing
   sudo ufw allow ssh
-  sudo ufw allow 3000/tcp
   sudo ufw allow 80/tcp
   sudo ufw allow 443/tcp
   sudo ufw allow 12345/udp
@@ -263,6 +283,13 @@ start_and_verify() {
   fi
 }
 
+bootstrap_reverse_proxy_state() {
+  print_status "Bootstrapping reverse proxy database state..."
+  cd "${HOMEBRAIN_DIR}"
+  node server/scripts/bootstrapReverseProxyState.js --actor system:install
+  print_success "Reverse proxy database state is ready."
+}
+
 print_summary() {
   local ip
   ip="$(hostname -I | awk '{print $1}')"
@@ -272,6 +299,7 @@ print_summary() {
   echo "Repository: ${HOMEBRAIN_DIR}"
   echo "Open HomeBrain at: http://${ip}:3000"
   echo "Health check:     http://${ip}:3000/ping"
+  echo "Reverse proxy:    bash ${HOMEBRAIN_DIR}/scripts/setup-services.sh setup-caddy"
   echo
   echo "Useful commands:"
   echo "  bash ${HOMEBRAIN_DIR}/scripts/setup-services.sh status"
@@ -293,14 +321,17 @@ main() {
   install_base_packages
   install_node
   install_mongodb
+  stop_running_homebrain_if_present
   prepare_repo
   configure_env
   install_app
   bootstrap_wakeword
   install_service
+  bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" setup-caddy
   configure_deploy_sudoers
   configure_firewall
   start_and_verify
+  bootstrap_reverse_proxy_state
   print_summary
 }
 

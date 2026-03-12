@@ -7,6 +7,8 @@ const { spawn } = require('child_process');
 const mongoose = require('mongoose');
 const wakeWordTrainingService = require('./wakeWordTrainingService');
 const eventStreamService = require('./eventStreamService');
+const caddyAdminService = require('./caddyAdminService');
+const reverseProxyService = require('./reverseProxyService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
 
@@ -160,7 +162,18 @@ class PlatformDeployService {
       pendingJobs: wakeQueue.pending.length
     };
 
-    const checks = { api, websocket, database, wakeWordWorker };
+    const caddyStatus = await caddyAdminService.ping().catch((error) => ({
+      reachable: false,
+      error: error.message
+    }));
+    const reverseProxy = {
+      status: caddyStatus.reachable ? 'healthy' : 'degraded',
+      message: caddyStatus.reachable
+        ? 'Caddy admin API is reachable.'
+        : `Caddy admin API is unavailable${caddyStatus.error ? `: ${caddyStatus.error}` : '.'}`
+    };
+
+    const checks = { api, websocket, database, wakeWordWorker, reverseProxy };
     const hasDegraded = Object.values(checks).some((item) => item.status !== 'healthy');
 
     return {
@@ -1044,6 +1057,22 @@ class PlatformDeployService {
       if (job.options.runServerTests) {
         await runNpmStep('Run server tests', ['test', '--prefix', 'server']);
       }
+
+      await runCustomStep('Bootstrap reverse proxy state', async () => {
+        const bootstrapSummary = await reverseProxyService.ensureBootstrapState({
+          actor: `platform-deploy:${job.actor || 'unknown'}`,
+          seedDefaultRoutes: true,
+          validateExistingRoutes: true
+        });
+
+        await this.appendJobLog(
+          jobId,
+          `[${new Date().toISOString()}] [Bootstrap reverse proxy state] `
+          + `settingsUpdated=${bootstrapSummary.settingsUpdated.join(',') || 'none'} `
+          + `createdRoutes=${bootstrapSummary.createdRoutes.join(',') || 'none'} `
+          + `revalidatedRoutes=${bootstrapSummary.revalidatedRoutes.join(',') || 'none'}\n`
+        );
+      });
 
       // Do not clean client/dist after build.
       // This server serves client/dist directly at runtime, so post-build cleanup would

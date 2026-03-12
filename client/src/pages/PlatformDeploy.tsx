@@ -305,6 +305,12 @@ export function PlatformDeploy() {
       title: "Wake-Word Worker",
       message: `${health?.checks.wakeWordWorker.message || "Unknown"} Active jobs: ${health?.checks.wakeWordWorker.activeJobs ?? 0}, Pending: ${health?.checks.wakeWordWorker.pendingJobs ?? 0}`,
       status: health?.checks.wakeWordWorker.status
+    },
+    {
+      key: "reverseProxy",
+      title: "Reverse Proxy",
+      message: health?.checks.reverseProxy.message || "Unknown",
+      status: health?.checks.reverseProxy.status
     }
   ] as const;
 

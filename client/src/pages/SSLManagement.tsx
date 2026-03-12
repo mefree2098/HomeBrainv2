@@ -294,7 +294,7 @@ const SSLManagement = () => {
             SSL Certificate Management
           </h1>
           <p className="text-muted-foreground mt-1">
-            Manage SSL/TLS certificates for secure HTTPS connections
+            Legacy certificate inventory. Production ingress and automatic TLS now live under Reverse Proxy / Domains.
           </p>
         </div>
         <Button
@@ -348,7 +348,7 @@ const SSLManagement = () => {
                 Let's Encrypt - Free Automated Certificates
               </CardTitle>
               <CardDescription>
-                Obtain and automatically renew free SSL certificates from Let's Encrypt
+                Legacy flow only. New production TLS should be managed through Caddy in Reverse Proxy / Domains.
               </CardDescription>
             </CardHeader>
             <CardContent>

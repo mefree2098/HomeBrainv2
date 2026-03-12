@@ -14,6 +14,9 @@ HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$DEFAULT_HOMEBRAIN_DIR}"
 HOMEBRAIN_USER="${HOMEBRAIN_USER:-${SUDO_USER:-$USER}}"
 SERVICE_NAME="homebrain"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+CADDY_SERVICE_NAME="${CADDY_SERVICE_NAME:-caddy-api}"
+CADDY_SERVICE_PATH="/etc/systemd/system/${CADDY_SERVICE_NAME}.service"
+CADDY_BOOTSTRAP_PATH="${CADDY_BOOTSTRAP_PATH:-/etc/caddy/Caddyfile}"
 
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -68,8 +71,6 @@ Environment=NODE_ENV=production
 ExecStart=${node_bin} scripts/run-with-modern-node.js npm start
 Restart=always
 RestartSec=5
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 
 [Install]
@@ -100,12 +101,139 @@ restart_services() {
   print_success "HomeBrain restarted."
 }
 
+wait_for_homebrain_http() {
+  local attempts="${1:-20}"
+  local delay_seconds="${2:-1}"
+  local attempt=1
+
+  while (( attempt <= attempts )); do
+    if curl -fsS http://127.0.0.1:3000/ping >/dev/null 2>&1; then
+      print_success "HomeBrain is responding on port 3000."
+      return 0
+    fi
+
+    sleep "${delay_seconds}"
+    attempt=$((attempt + 1))
+  done
+
+  print_error "HomeBrain did not respond on port 3000 after restart."
+  return 1
+}
+
+ensure_caddy_user() {
+  if ! id -u caddy >/dev/null 2>&1; then
+    sudo useradd --system --home /var/lib/caddy --shell /usr/sbin/nologin caddy
+  fi
+}
+
+install_caddy_package() {
+  print_status "Ensuring Caddy is installed..."
+  sudo apt-get update
+  if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y caddy; then
+    print_success "Caddy package installed."
+    return
+  fi
+
+  print_warning "Default apt source did not provide Caddy. Adding the upstream stable repository."
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y caddy
+  print_success "Caddy package installed from upstream repository."
+}
+
+write_caddy_bootstrap() {
+  sudo mkdir -p /etc/caddy /var/lib/caddy /var/log/caddy
+  ensure_caddy_user
+  sudo chown -R caddy:caddy /var/lib/caddy /var/log/caddy
+
+  print_status "Writing ${CADDY_BOOTSTRAP_PATH}"
+  sudo tee "${CADDY_BOOTSTRAP_PATH}" >/dev/null <<'EOF'
+{
+    admin 127.0.0.1:2019
+    storage file_system {
+        root /var/lib/caddy
+    }
+}
+EOF
+}
+
+install_caddy_service() {
+  local caddy_bin
+  caddy_bin="$(command -v caddy 2>/dev/null || true)"
+  if [[ -z "${caddy_bin}" ]]; then
+    print_error "Caddy is not installed."
+    exit 1
+  fi
+
+  ensure_caddy_user
+
+  print_status "Writing ${CADDY_SERVICE_PATH}"
+  sudo tee "${CADDY_SERVICE_PATH}" >/dev/null <<EOF
+[Unit]
+Description=Caddy API Edge for HomeBrain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+ExecStart=${caddy_bin} run --environ --resume --config ${CADDY_BOOTSTRAP_PATH} --adapter caddyfile
+ExecReload=${caddy_bin} reload --address 127.0.0.1:2019 --config ${CADDY_BOOTSTRAP_PATH} --adapter caddyfile
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/caddy /var/log/caddy /etc/caddy
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable "${CADDY_SERVICE_NAME}"
+}
+
+setup_caddy() {
+  install_caddy_package
+  write_caddy_bootstrap
+  install_caddy_service
+
+  if [[ "${CADDY_SERVICE_NAME}" != "caddy" ]] && sudo systemctl list-unit-files | grep -q '^caddy.service'; then
+    print_warning "Disabling the stock caddy.service so ${CADDY_SERVICE_NAME} owns the edge runtime."
+    sudo systemctl disable --now caddy || true
+  fi
+
+  if sudo systemctl is-active --quiet nginx; then
+    print_warning "Stopping nginx so Caddy can own public 80/443."
+    sudo systemctl disable --now nginx || true
+  fi
+
+  print_status "Starting ${CADDY_SERVICE_NAME}..."
+  sudo systemctl restart "${CADDY_SERVICE_NAME}"
+
+  if curl -fsS http://127.0.0.1:2019/config/ >/dev/null; then
+    print_success "Caddy admin API is reachable at http://127.0.0.1:2019."
+  else
+    print_warning "Caddy started, but the admin API did not respond yet."
+  fi
+}
+
 show_status() {
   echo "MongoDB:"
   sudo systemctl status mongod --no-pager || true
   echo
   echo "HomeBrain:"
   sudo systemctl status "${SERVICE_NAME}" --no-pager || true
+  echo
+  echo "Caddy:"
+  sudo systemctl status "${CADDY_SERVICE_NAME}" --no-pager || true
   echo
   echo "Listening ports:"
   sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
@@ -119,11 +247,14 @@ show_logs() {
     mongodb|mongod)
       sudo journalctl -u mongod -n 100 --no-pager || sudo tail -50 /var/log/mongodb/mongod.log
       ;;
+    caddy)
+      sudo journalctl -u "${CADDY_SERVICE_NAME}" -n 100 --no-pager
+      ;;
     follow)
-      sudo journalctl -f -u "${SERVICE_NAME}" -u mongod
+      sudo journalctl -f -u "${SERVICE_NAME}" -u mongod -u "${CADDY_SERVICE_NAME}"
       ;;
     *)
-      print_error "Usage: $0 logs [homebrain|mongodb|follow]"
+      print_error "Usage: $0 logs [homebrain|mongodb|caddy|follow]"
       exit 1
       ;;
   esac
@@ -154,6 +285,11 @@ update_homebrain() {
 
   install_service
   sudo systemctl restart "${SERVICE_NAME}"
+
+  wait_for_homebrain_http 20 1
+
+  print_status "Bootstrapping reverse proxy database state..."
+  sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapReverseProxyState.js --actor system:update"
   print_success "HomeBrain updated."
 }
 
@@ -161,7 +297,7 @@ run_health_check() {
   print_status "Running health checks..."
 
   echo "Service state:"
-  for service in mongod "${SERVICE_NAME}"; do
+  for service in mongod "${SERVICE_NAME}" "${CADDY_SERVICE_NAME}"; do
     if sudo systemctl is-active --quiet "$service"; then
       echo "  $service: running"
     else
@@ -181,6 +317,12 @@ run_health_check() {
     echo "  web app: ok"
   else
     echo "  web app: failed"
+  fi
+
+  if curl -fsS http://127.0.0.1:2019/config/ >/dev/null; then
+    echo "  caddy admin: ok"
+  else
+    echo "  caddy admin: failed"
   fi
   echo
 
@@ -235,6 +377,7 @@ EOF
 }
 
 setup_ssl() {
+  print_warning "setup-ssl is a legacy path. Prefer 'setup-caddy' plus Reverse Proxy / Domains in the HomeBrain UI."
   print_status "Preparing certbot + nginx..."
   sudo apt-get update
   sudo apt-get install -y snapd
@@ -260,21 +403,23 @@ Usage: $0 <command>
 
 Commands:
   install-service   Write /etc/systemd/system/homebrain.service
+  setup-caddy       Install Caddy as the native public edge service
   start             Start MongoDB and HomeBrain
   stop              Stop HomeBrain
   restart           Restart HomeBrain
   status            Show MongoDB/HomeBrain status
-  logs [target]     Show logs: homebrain, mongodb, or follow
+  logs [target]     Show logs: homebrain, mongodb, caddy, or follow
   update            Pull latest git changes, install deps, build client, restart
   health            Run basic local health checks
-  setup-nginx       Proxy port 80 to HomeBrain on port 3000
-  setup-ssl         Obtain a Let's Encrypt certificate with certbot + nginx
+  setup-nginx       Legacy: proxy port 80 to HomeBrain on port 3000
+  setup-ssl         Legacy: obtain a Let's Encrypt certificate with certbot + nginx
 EOF
 }
 
 main() {
   case "${1:-}" in
     install-service) install_service ;;
+    setup-caddy) setup_caddy ;;
     start) start_services ;;
     stop) stop_services ;;
     restart) restart_services ;;

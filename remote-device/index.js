@@ -2172,7 +2172,7 @@ class HomeBrainRemoteDevice {
       this.stopAutoDiscovery();
 
       // Update configuration
-      this.config.hubUrl = `http://${hubInfo.address}:${hubInfo.port}`;
+      this.config.hubUrl = hubInfo.baseUrl || `http://${hubInfo.address}:${hubInfo.port}`;
       this.config.hubId = hubInfo.hubId;
 
       // Send connection request

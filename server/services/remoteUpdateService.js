@@ -5,6 +5,7 @@ const { createWriteStream } = require('fs');
 const crypto = require('crypto');
 const { ZipFile } = require('yazl');
 const eventStreamService = require('./eventStreamService');
+const { getConfiguredPublicOrigin } = require('../utils/publicOrigin');
 
 class RemoteUpdateService {
   constructor() {
@@ -303,7 +304,7 @@ class RemoteUpdateService {
       }
 
       // Prepare update command
-      const origin = options.baseUrl || `http://${process.env.HOST || 'localhost'}:${process.env.PORT || 3000}`;
+      const origin = options.baseUrl || getConfiguredPublicOrigin() || `http://localhost:${process.env.PORT || 3000}`;
       const updateCommand = {
         type: 'update_available',
         version: packageInfo.version,

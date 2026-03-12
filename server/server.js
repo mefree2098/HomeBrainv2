@@ -19,6 +19,7 @@ const ecobeeRoutes = require("./routes/ecobeeRoutes");
 const harmonyRoutes = require("./routes/harmonyRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const platformDeployRoutes = require("./routes/platformDeployRoutes");
+const reverseProxyRoutes = require("./routes/reverseProxyRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
@@ -27,6 +28,7 @@ const discoveryRoutes = require("./routes/discoveryRoutes");
 const insteonRoutes = require("./routes/insteonRoutes");
 const piperVoiceRoutes = require("./routes/piperVoiceRoutes");
 const sslRoutes = require("./routes/sslRoutes");
+const internalCaddyRoutes = require("./routes/internalCaddyRoutes");
 const ollamaRoutes = require("./routes/ollamaRoutes");
 const resourceRoutes = require("./routes/resourceRoutes");
 const whisperRoutes = require("./routes/whisperRoutes");
@@ -46,49 +48,10 @@ const automationSchedulerService = require("./services/automationSchedulerServic
 const { connectDB } = require("./config/database");
 const cors = require("cors");
 const http = require("http");
-const https = require("https");
 const fs = require("fs");
 const path = require("path");
-
-const ACME_CHALLENGE_PORT = Number(process.env.ACME_CHALLENGE_PORT || 80);
 const SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS = Math.max(0, Number(process.env.SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS || 5000));
-const ACME_CHALLENGE_DIR = path.join(__dirname, 'public', '.well-known', 'acme-challenge');
-let challengeServer = null;
 let isShuttingDown = false;
-
-function startAcmeChallengeServer() {
-  if (Number.isNaN(ACME_CHALLENGE_PORT)) {
-    console.warn('ACME challenge server disabled: invalid ACME_CHALLENGE_PORT value');
-    return;
-  }
-
-  const challengeApp = express();
-  challengeApp.use('/.well-known/acme-challenge', express.static(ACME_CHALLENGE_DIR));
-  challengeApp.use((req, res) => res.status(404).end());
-
-  challengeServer = http.createServer(challengeApp);
-
-  challengeServer.on('error', (error) => {
-    const { code, message } = error;
-    if (code === 'EACCES') {
-      console.warn(`ACME challenge server requires elevated privileges to bind port ${ACME_CHALLENGE_PORT}: ${message}`);
-    } else if (code === 'EADDRINUSE') {
-      console.warn(`ACME challenge server could not bind port ${ACME_CHALLENGE_PORT}: address already in use`);
-    } else {
-      console.error(`ACME challenge server error: ${message}`);
-    }
-    challengeServer = null;
-  });
-
-  try {
-    challengeServer.listen(ACME_CHALLENGE_PORT, () => {
-      console.log(`ACME challenge server running on port ${ACME_CHALLENGE_PORT}`);
-    });
-  } catch (error) {
-    console.warn(`Failed to start ACME challenge server on port ${ACME_CHALLENGE_PORT}: ${error.message}`);
-    challengeServer = null;
-  }
-}
 
 function closeServer(server, name) {
   return new Promise((resolve) => {
@@ -134,12 +97,22 @@ const normalizeWebhookPath = (value, fallback) => {
 
 const app = express();
 const port = process.env.PORT || 3000;
+const bindHost = process.env.HOMEBRAIN_BIND_HOST || '0.0.0.0';
 // Pretty-print JSON responses
 app.enable('json spaces');
 // We want to be consistent with URL paths, so we enable strict routing
 app.enable('strict routing');
+app.disable('x-powered-by');
+app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 
 app.use(cors({}));
+app.use((req, res, next) => {
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), microphone=(self)');
+  next();
+});
 app.use(express.json({
   limit: '8mb',
   verify: (req, res, buf) => {
@@ -149,9 +122,6 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true, limit: '8mb' }));
-// Serve ACME HTTP-01 challenge files on the primary app server as a fallback.
-// This allows deployments that forward external :80 traffic to app :3000.
-app.use('/.well-known/acme-challenge', express.static(ACME_CHALLENGE_DIR));
 
 // Database connection
 connectDB();
@@ -252,6 +222,8 @@ app.use('/api/harmony', harmonyRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 // Platform Deploy Routes
 app.use('/api/platform-deploy', platformDeployRoutes);
+// Reverse Proxy Routes
+app.use('/api/admin/reverse-proxy', reverseProxyRoutes);
 // Remote Device Routes
 app.use('/api/remote-devices', remoteDeviceRoutes);
 // Piper Voice Routes
@@ -274,6 +246,8 @@ app.use('/api/insteon', insteonRoutes);
   app.use('/api/whisper', whisperRoutes);
   // Resource Monitor Routes
   app.use('/api/resources', resourceRoutes);
+// Internal Caddy Policy Routes
+app.use('/internal/caddy', internalCaddyRoutes);
 
 // Serve update packages from server/public/downloads so devices can fetch them
 const updatesPath = path.join(__dirname, 'public', 'downloads');
@@ -319,86 +293,6 @@ app.use((err, req, res, next) => {
 
 // Create HTTP server
 const httpServer = http.createServer(app);
-
-// Create HTTPS server if SSL certificate is available
-let httpsServer = null;
-const sslService = require('./services/sslService');
-
-async function setupHttpsServer() {
-  try {
-    const sslConfig = await sslService.getActiveCertificateForServer();
-
-    if (sslConfig) {
-      console.log(`SSL certificate found for ${sslConfig.domain}, enabling HTTPS...`);
-
-      httpsServer = https.createServer({
-        key: sslConfig.key,
-        cert: sslConfig.cert
-      }, app);
-
-      const httpsPort = Number(process.env.HTTPS_PORT || 443);
-
-      const listenResult = await new Promise((resolve) => {
-        const onError = (error) => {
-          httpsServer.off('listening', onListening);
-          resolve({ ok: false, error });
-        };
-
-        const onListening = () => {
-          httpsServer.off('error', onError);
-          resolve({ ok: true });
-        };
-
-        httpsServer.once('error', onError);
-        httpsServer.once('listening', onListening);
-
-        try {
-          httpsServer.listen(httpsPort);
-        } catch (error) {
-          onError(error);
-        }
-      });
-
-      if (!listenResult.ok) {
-        const { error } = listenResult;
-        if (error && error.code === 'EACCES') {
-          console.warn(`HTTPS disabled: insufficient privileges to bind port ${httpsPort}`);
-        } else if (error && error.code === 'EADDRINUSE') {
-          console.warn(`HTTPS disabled: port ${httpsPort} already in use`);
-        } else {
-          console.warn(`HTTPS disabled: failed to bind port ${httpsPort}: ${error?.message || 'unknown error'}`);
-        }
-
-        try {
-          await closeServer(httpsServer, 'HTTPS server');
-        } catch (closeError) {
-          // noop
-        }
-        httpsServer = null;
-        return null;
-      }
-
-      httpsServer.on('error', (error) => {
-        console.error(`HTTPS server error: ${error.message}`);
-      });
-
-      console.log(`HTTPS server running at https://localhost:${httpsPort}`);
-
-      // Initialize WebSocket server on HTTPS
-      const httpsVoiceWsServer = new VoiceWebSocketServer();
-      httpsVoiceWsServer.initialize(httpsServer);
-      deviceWebSocket.initialize(httpsServer);
-
-      return httpsVoiceWsServer;
-    } else {
-      console.log('No active SSL certificate found, HTTPS disabled');
-      return null;
-    }
-  } catch (error) {
-    console.error('Error setting up HTTPS server:', error.message);
-    return null;
-  }
-}
 
 // Initialize WebSocket server on HTTP
 const voiceWsServer = new VoiceWebSocketServer();
@@ -467,8 +361,6 @@ automationSchedulerService.start();
   }
 })();
 
-startAcmeChallengeServer();
-
 async function gracefulShutdown(signal) {
   if (isShuttingDown) {
     return;
@@ -517,13 +409,7 @@ async function gracefulShutdown(signal) {
       console.error('Error stopping Ecobee status sync task:', error.message);
     }
 
-    await closeServer(challengeServer, 'ACME challenge server');
-    challengeServer = null;
-
   await closeServer(httpServer, 'HTTP server');
-
-  await closeServer(httpsServer, 'HTTPS server');
-  httpsServer = null;
 
   process.exit(0);
 }
@@ -533,19 +419,10 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Start HTTP server
-httpServer.listen(port, async () => {
-  console.log(`HTTP server running at http://localhost:${port}`);
+httpServer.listen(port, bindHost, async () => {
+  console.log(`HTTP server running at http://${bindHost}:${port}`);
   console.log(`WebSocket server ready for voice devices`);
-
-  // Try to setup HTTPS server after HTTP is running
-  const httpsWs = await setupHttpsServer();
-  if (httpsWs) {
-    // Prefer HTTPS WebSocket server for device operations if available
-    app.set('voiceWebSocket', httpsWs);
-    console.log('Voice WebSocket (HTTPS) selected for device operations');
-  } else {
-    console.log('Voice WebSocket (HTTP) selected for device operations');
-  }
+  console.log('Public 80/443 ingress is expected to be handled by Caddy');
 
   const bootstrapTimer = setTimeout(() => {
     smartThingsService.bootstrapConnectionState({ reason: 'server-startup' })

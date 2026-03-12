@@ -14,6 +14,9 @@ require('./VoiceCommand');
 require('./SmartThingsIntegration');
 require('./SSLCertificate');
 require('./OllamaConfig');
+require('./ReverseProxyRoute');
+require('./ReverseProxyAuditLog');
+require('./ReverseProxySettings');
 
 const dbInit = async (options = {}) => {
   const mongoUrl = process.env.DATABASE_URL || 'mongodb://localhost/myDb';

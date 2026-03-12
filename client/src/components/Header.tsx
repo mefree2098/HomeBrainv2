@@ -34,6 +34,7 @@ const ROUTE_META: Record<string, { label: string; detail: string }> = {
   "/profiles": { label: "Identity Profiles", detail: "Personalized control" },
   "/settings": { label: "System Configuration", detail: "Core tuning" },
   "/platform-deploy": { label: "Deployment Bay", detail: "Platform rollout status" },
+  "/reverse-proxy": { label: "Ingress Fabric", detail: "Domains and TLS routing" },
   "/operations": { label: "Operations Center", detail: "Service telemetry" },
   "/ssl": { label: "Certificate Vault", detail: "Trust fabric monitoring" },
   "/ollama": { label: "LLM Core", detail: "Inference systems" },
