@@ -1,4 +1,0 @@
-type: OpenNMTTokenizer
-params:
-  mode: none
-  sp_model_path: /averaged-ende-ckpt500k-v2/wmtende.model

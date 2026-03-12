@@ -1,3 +1,0 @@
-ctranslate2>=4.2.1
-transformers[torch]==4.40.*
-accelerate
