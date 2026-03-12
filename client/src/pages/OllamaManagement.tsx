@@ -435,7 +435,7 @@ export default function OllamaManagement() {
         <div>
           <h1 className="text-3xl font-bold mb-2">Ollama Management</h1>
           <p className="text-muted-foreground">
-            Run local LLM models directly on your Jetson device
+            Run local LLM models directly on this HomeBrain host
           </p>
         </div>
 
@@ -449,12 +449,12 @@ export default function OllamaManagement() {
           <CardContent className="space-y-4">
             <p>
               Ollama allows you to run large language models like Llama, Mistral, and others
-              directly on your Jetson Orin Nano. This provides:
+              directly on this machine. This provides:
             </p>
             <ul className="list-disc list-inside space-y-2 text-muted-foreground">
               <li>Complete privacy - all processing happens locally</li>
               <li>No API costs or rate limits</li>
-              <li>Fast responses with GPU acceleration</li>
+              <li>Fast local responses, with GPU acceleration when available</li>
               <li>Works offline without internet connection</li>
             </ul>
             <Button

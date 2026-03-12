@@ -1,255 +1,121 @@
 # HomeBrain Configuration Guide
 
-This guide covers what to configure in the UI after initial install.
+Use this after the hub is installed and reachable in a browser.
 
 ## 1. First Login
 
-1. Open `http://<hub-ip>:5173`
-2. Register your first account
-3. Sign in
+Open:
 
-Expected result: you land on `Dashboard`.
+```text
+http://<hub-ip>:3000
+```
 
-## 2. Core Voice Settings
+Create the first account, then sign in.
+
+## 2. General Settings
+
+Open `Settings -> General`.
+
+Use this tab for the main system behavior and defaults. Save once after reviewing the screen so the database stores your baseline configuration.
+
+## 3. Voice And Audio
 
 Open `Settings -> Voice & Audio`.
 
-Configure:
-- LLM provider/model
-- STT provider/model
-- TTS provider and API key (if using ElevenLabs)
+This is where you configure:
 
-Recommended initial setup:
-- STT: `On-device Whisper` with model `small` or `small.en`
-- Voice response volume: start around mid-range
+- local or cloud speech-to-text
+- cloud text-to-speech providers
+- wake-word sensitivity
+- wake-word models and Piper voices
 
-## 3. Integrations
+Recommended beginner path:
+
+1. Leave advanced values alone at first
+2. Add optional cloud API keys only if you want them
+3. Use the default wake-word tooling in the UI
+
+If you want local speech-to-text:
+
+- install Whisper models from the `Whisper` page
+- Jetson is the best-tested hardware for that
+
+## 4. Integrations
 
 Open `Settings -> Integrations`.
 
-### SmartThings
+Current integration areas in the UI:
 
-1. Enter `SmartThings Client ID` and `SmartThings Client Secret` in `Settings -> Integrations`.
-2. Click `Configure OAuth`.
-3. Click `Connect SmartThings` and complete SmartThings authorization.
-4. Test connection and sync devices.
+- SmartThings
+- Ecobee
+- Logitech Harmony Hub
+- INSTEON / ISY
 
-#### SmartThings Home Monitor (Security Alarm bridge)
+Practical guidance:
 
-HomeBrain mirrors SmartThings Home Monitor (STHM) through virtual switches.
+- SmartThings: use OAuth, not a short-lived PAT
+- Ecobee: configure OAuth and test before syncing devices
+- Harmony: discover hubs, then sync activities to devices
+- INSTEON: use a real serial path or a serial-to-TCP bridge; the PLM is not an Ethernet device
+- ISY: use the built-in test, extract, preview, and sync tools from the same settings area
 
-1. In SmartThings, create three virtual switches (Disarm, Arm Stay, Arm Away).
-2. Create routines that keep these three switches one-hot:
-   - When STHM mode changes, turn on the matching switch and turn the other two off.
-   - When one bridge switch turns on, set STHM to the matching mode.
-3. In `Settings -> Integrations -> SmartThings Home Monitor Bridge`, map each switch and save.
-4. Use `Refresh Devices` after creating switches/routines if they are not listed yet.
-
-Notes:
-- New SmartThings PATs expire after 24 hours; prefer OAuth.
-- SmartThings currently exposes security arm-state as an event subscription source, so HomeBrain relies on virtual-switch + webhook/event sync for control/state mirroring.
-
-### INSTEON
-
-The 2413S PLM RJ45 jack is a serial interface, not Ethernet networking.
-
-Use one of these supported endpoint formats in `Settings -> Integrations -> INSTEON PLM Endpoint`:
-
-1. Direct local serial:
-`/dev/serial/by-id/usb-...` (recommended) or `/dev/ttyUSB0`
-2. Serial-over-TCP bridge:
-`tcp://<bridge-host>:<port>` (for example `tcp://192.168.1.50:9761`)
-
-USB PLM note:
-- 2413U USB PLMs often enumerate as `/dev/ttyUSB*` or `/dev/ttyACM*`.
-- Prefer `/dev/serial/by-id/...` in HomeBrain settings so the path stays stable across reboots/USB reorder.
-
-Recommended setup for "Ethernet cable" operation:
-
-1. PLM -> RS-232 serial bridge device (or PLM WiFi/Ethernet adapter that exposes raw PLM TCP).
-2. Jetson -> same network (built-in NIC or USB Ethernet adapter).
-3. Set endpoint to `tcp://...` in HomeBrain settings.
-4. Test connection from the INSTEON page.
-
-#### Import devices from ISY and write links to a new USB PLM
-
-Use this when ISY + old PLM stays in place and HomeBrain + new PLM is added as a second controller.
-
-1. Copy device IDs from ISY Admin Console.
-2. Ensure HomeBrain is connected to the new USB PLM (`POST /api/insteon/connect`).
-3. Call:
-
-```bash
-curl -s -X POST http://127.0.0.1:3000/api/insteon/devices/import/isy \
-  -H "Content-Type: application/json" \
-  -d '{
-    "deviceIds": ["AA.BB.CC", "11.22.33"],
-    "group": 1,
-    "linkMode": "remote",
-    "retries": 1
-  }'
-```
-
-Notes:
-- `linkMode: "remote"` is the fastest option for known IDs.
-- `linkMode: "manual"` supports set-button linking (one device at a time).
-- Existing links are detected and skipped by default.
-
-#### Full ISY scene/link clone (topology replay)
-
-If you want the new PLM to mirror ISY scene behavior (controller/responder topology), replay scene topology:
-
-1. Export/build an ISY topology payload (`scenes` or `linkRecords`).
-2. Run dry-run first:
-
-```bash
-curl -s -X POST http://127.0.0.1:3000/api/insteon/devices/import/isy/topology \
-  -H "Content-Type: application/json" \
-  -d '{
-    "dryRun": true,
-    "scenes": [
-      {
-        "name": "Movie Lights",
-        "group": 3,
-        "controller": "gw",
-        "responders": [
-          {"id":"AA.BB.CC","level":20,"ramp":2000},
-          {"id":"11.22.33","level":0}
-        ]
-      }
-    ]
-  }'
-```
-
-3. Apply for real by setting `"dryRun": false`.
-
-#### Automatic extraction directly from ISY (devices + scenes + program stubs)
-
-You can now pull metadata from ISY automatically, then import it into HomeBrain.
-
-1. Configure ISY settings in `Settings` API fields:
-   - `isyHost`, `isyPort`, `isyUsername`, `isyPassword`, `isyUseHttps`, `isyIgnoreTlsErrors`
-2. Test ISY connectivity:
-
-```bash
-curl -s -X POST http://127.0.0.1:3000/api/insteon/isy/test -H "Content-Type: application/json" -d '{}'
-```
-
-3. Run dry-run sync (recommended first):
-
-```bash
-curl -s -X POST http://127.0.0.1:3000/api/insteon/isy/sync \
-  -H "Content-Type: application/json" \
-  -d '{"dryRun":true}'
-```
-
-4. Apply:
-
-```bash
-curl -s -X POST http://127.0.0.1:3000/api/insteon/isy/sync \
-  -H "Content-Type: application/json" \
-  -d '{"dryRun":false,"importDevices":true,"importTopology":true,"importPrograms":true}'
-```
-
-Notes:
-- Program import translates ISY IF/THEN/ELSE into executable HomeBrain workflows with unified condition branching.
-- Variable operations (`=`, `+=`, `-=`, `*=`, `/=`, `%=` and bitwise ops), `Wait`, and `Repeat` actions are translated into runtime-executable workflow actions.
-- Program control actions (`Run/Stop/Enable/Disable`, `Set Program ... Run At Startup`) are translated into executable workflow-control actions.
-- ISY `Network Resource` / `Resource` statements are translated into executable actions. HTTP/HTTPS resources become native HomeBrain `http_request` actions; non-HTTP resources use ISY passthrough execution by id/name.
-- Any statements that still cannot be mapped are preserved as explicit notification steps for manual follow-up.
-- Topology replay uses scene membership/controllers available via ISY REST metadata.
-- Detailed parity matrix: [isy-program-capability-matrix.md](isy-program-capability-matrix.md)
-
-### Logitech Harmony Hub
-
-Open the `Logitech Harmony Hub Integration` card in `Settings -> Integrations`.
-
-1. (Optional) Add known hub IPs/hosts in `Configured Harmony Hub IPs/Hosts`.
-2. Click `Discover Hubs` to find hubs on your LAN.
-3. Click `Sync Activities to Devices` to create Harmony Hub activity devices in HomeBrain.
-4. Use those devices in automations and workflows.
-
-Behavior notes:
-- Harmony Hub activity devices support `turn_on`, `turn_off`, and `toggle`.
-- `turn_on` starts that activity, `turn_off` powers the hub activity off.
-- Discovered hubs stay listed in `Settings -> Integrations` with last device-sync and activity-state-sync status.
-
-## 4. User Profiles (Voices + Personalities)
+## 5. User Profiles
 
 Open `User Profiles`.
 
-For each profile:
-- Name (for example Anna or Henry)
-- Personality/system prompt
-- Voice ID
-- Wake words (comma-separated)
+Each profile can hold:
 
-Expected result: profile appears as active and can be used by listeners.
+- name
+- prompt / personality
+- voice
+- wake words
 
-## 5. Wake Word Models
+Profiles are what let HomeBrain answer like different family members or assistants.
 
-Open `Settings -> Voice & Audio -> Wake Word Models`.
-
-Before first training on a clean hub, run once:
-
-```bash
-cd ~/HomeBrainv2/server
-PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh
-```
-
-1. Download at least one Piper voice.
-2. Create wake word phrase(s).
-3. Wait for each model status to become `ready`.
-4. Assign those phrases in `User Profiles`.
-
-Detailed instructions: [wake-word-setup.md](wake-word-setup.md)
-
-## 6. Add Listener Devices (Raspberry Pi)
+## 6. Remote Voice Devices
 
 Open `Voice Devices`.
 
-1. Click `Add Remote Device`.
-2. Enter name + room.
-3. Copy one-command installer.
-4. Run on the Pi.
+To add a listener:
 
-Expected result: device comes online and appears in the table.
+1. Click `Add Remote Device`
+2. Enter the name and room
+3. Copy the generated one-command installer
+4. Run it on the listener device
 
-## 7. Fleet Update Management
+The current system supports Raspberry Pi best, but other Debian/Ubuntu-based Linux listeners can also be used.
 
-Still in `Voice Devices`, use the `Remote Fleet Updates` card:
-- `Update + Verify Outdated Devices`
-- `Verify Versions`
+## 7. Scenes, Automations, And Workflows
 
-Expected result: online devices show latest version.
+Current structure:
 
-## 8. Hub Deployment from UI
+- `Scenes`: reusable grouped device actions
+- `Automations`: event or schedule driven automation rules
+- `Workflows`: the most powerful builder, including visual editing and AI generation
 
-Open `Platform Deploy`.
+Recommended order:
 
-Use:
-- `Pull + Deploy Latest` to update from GitHub
-- `Restart Services` when needed
+1. Create devices and profiles first
+2. Build scenes second
+3. Use workflows for advanced logic
+4. Use automations for simpler scheduled or event-driven rules
 
-Expected result: job status is `completed` and logs show no failing steps.
+## 8. Operations And Deploy
 
-## 9. SSL (Optional)
+Open:
 
-Open `SSL Certificates` for certificate setup and renewal management if using HTTPS on LAN/WAN.
+- `Operations` for event monitoring and health visibility
+- `Platform Deploy` for git pull/build/restart jobs
 
-## 10. Save/Backup Critical Config
+Use `Platform Deploy` only after the host itself is already stable and working.
 
-Back up:
-- `server/.env`
-- MongoDB data
-- `server/data`
-- `server/public/wake-words`
+## 9. SSL
 
-## 11. Operations Monitoring
+Open `SSL` if you want HomeBrain reachable at a public HTTPS domain.
 
-Open `Operations` (admin users).
+You only need this if:
 
-Use it to:
-- watch live events (workflows, deploys, fleet updates, voice commands),
-- filter by source/type,
-- confirm platform health checks remain `healthy`.
+- you want internet-reachable access
+- or an external integration requires a public HTTPS endpoint
+
+If you only use HomeBrain inside your LAN, plain `http://<hub-ip>:3000` is enough.

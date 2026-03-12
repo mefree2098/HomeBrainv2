@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Build the downloadable Raspberry Pi remote-device package.
+ * Build the downloadable HomeBrain Linux remote-device package.
  * Produces:
  * - server/public/downloads/homebrain-remote-setup.tar.gz
  * - server/public/downloads/homebrain-remote-setup.sh

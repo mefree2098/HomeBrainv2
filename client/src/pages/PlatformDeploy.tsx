@@ -316,7 +316,7 @@ export function PlatformDeploy() {
             Platform Deploy
           </h1>
           <p className="mt-2 text-muted-foreground">
-            Pull latest GitHub code on this Jetson and deploy from the HomeBrain UI.
+            Pull the latest GitHub code on this HomeBrain host and deploy it from the UI.
           </p>
         </div>
         <Button variant="outline" onClick={() => void refreshAll()}>

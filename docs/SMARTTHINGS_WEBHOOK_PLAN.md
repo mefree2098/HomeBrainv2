@@ -1,5 +1,9 @@
 # SmartThings Event Subscription Webhook Plan
 
+Historical note:
+
+This file is a design/planning document, not the primary setup guide. SmartThings webhook support already exists in the current codebase. Use [`configuration.md`](configuration.md) for actual setup instructions.
+
 This document captures the end-to-end plan for adding SmartThings push-based status updates to HomeBrain. The goal is to replace (or significantly reduce) the current polling cadence by registering a SmartApp that pushes events to our existing HTTPS endpoint. The plan assumes the current OAuth integration is working and we already have a public HTTPS URL with a trusted certificate (the same origin SmartThings uses for OAuth redirects).
 
 ---

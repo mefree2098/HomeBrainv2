@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # HomeBrain Remote Device Installation Script
-# For Raspberry Pi OS
+# Best-tested on Raspberry Pi OS, but works on other Debian/Ubuntu-based Linux systems too.
 
-set -e
+set -euo pipefail
 
 echo "======================================"
 echo "HomeBrain Remote Device Installer"
@@ -60,18 +60,18 @@ if [[ -f /proc/device-tree/model ]]; then
     PI_MODEL=$(cat /proc/device-tree/model | tr -d '\0')
     print_success "Raspberry Pi detected: $PI_MODEL"
 else
-    print_warning "Raspberry Pi not detected, proceeding anyway..."
+    print_warning "Raspberry Pi not detected. Proceeding with the generic Linux listener install."
 fi
 
-# Update system
-print_status "Updating system packages..."
+# Update package index
+print_status "Updating package index..."
 sudo apt-get update -y
-sudo apt-get upgrade -y
 
 # Install required system packages
 print_status "Installing required system packages..."
 sudo apt-get install -y \
     curl \
+    ca-certificates \
     git \
     build-essential \
     rsync \
@@ -129,7 +129,7 @@ cat > package.json << 'EOF'
 {
   "name": "homebrain-remote-device",
   "version": "1.0.0",
-  "description": "HomeBrain Remote Voice Device for Raspberry Pi",
+  "description": "HomeBrain Remote Voice Device for Linux listeners",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -162,14 +162,14 @@ print_status "Installing Node.js dependencies..."
 if [ -d "$INSTALL_DIR/node_modules" ]; then
     print_warning "Dependencies already present (skipping npm install)"
 else
-    if ! npm install; then
+    if ! npm install --no-audit --no-fund; then
         print_warning "npm install failed; attempting to enforce tflite-node@1.0.0 and retry"
         # Ensure tflite-node version is pinned in package.json
         if grep -q '"tflite-node"' package.json; then
             sed -i 's/"tflite-node"\s*:\s*"[^"]*"/"tflite-node": "1.0.0"/g' package.json || true
         fi
-        npm install || true
-        npm install tflite-node@1.0.0 || true
+        npm install --no-audit --no-fund || true
+        npm install --no-audit --no-fund tflite-node@1.0.0 || true
     fi
 fi
 
@@ -262,6 +262,11 @@ sudo usermod -a -G audio "$USER"
 
 # Create systemd service
 print_status "Creating systemd service..."
+NODE_BIN="$(command -v node)"
+if [[ -z "$NODE_BIN" ]]; then
+    print_error "Unable to locate node on PATH."
+    exit 1
+fi
 
 sudo tee /etc/systemd/system/homebrain-remote.service > /dev/null << EOF
 [Unit]
@@ -273,7 +278,7 @@ Wants=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/node $INSTALL_DIR/index.js
+ExecStart=$NODE_BIN $INSTALL_DIR/index.js
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
@@ -380,7 +385,9 @@ print_status "Creating README..."
 cat > README.md << 'EOF'
 # HomeBrain Remote Device
 
-This is a HomeBrain remote voice device for Raspberry Pi.
+This is a HomeBrain remote voice device for Debian/Ubuntu-based Linux systems.
+
+Raspberry Pi is the best-tested target, but other Linux mini PCs and SBCs also work.
 
 ## Quick Start
 
@@ -426,8 +433,6 @@ Edit `config.json` to customize audio settings and other options.
 - **Audio issues**: Run `./test-audio.sh` to verify microphone and speaker
 - **Connection issues**: Check network connectivity and hub URL
 - **Service issues**: Check logs with `sudo journalctl -u homebrain-remote`
-
-For more help, visit: https://github.com/homebrain/remote-device
 EOF
 
 print_success "Installation completed successfully!"

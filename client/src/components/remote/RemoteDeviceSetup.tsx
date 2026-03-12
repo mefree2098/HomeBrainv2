@@ -366,7 +366,7 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  Run this command on the Raspberry Pi to install, register, and start the listener automatically.
+                  Run this command on the listener device to install, register, and start it automatically.
                 </p>
                 <div className="flex items-center gap-2">
                   <code className="text-xs bg-muted px-2 py-1 rounded flex-1 font-mono break-all">
@@ -389,7 +389,7 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  For zero-touch setup, use this cloud-init URL in Raspberry Pi Imager advanced options.
+                  For zero-touch Raspberry Pi setup, use this cloud-init URL in Raspberry Pi Imager advanced options.
                 </p>
                 <div className="flex items-center gap-2">
                   <code className="text-xs bg-muted px-2 py-1 rounded flex-1 font-mono break-all">

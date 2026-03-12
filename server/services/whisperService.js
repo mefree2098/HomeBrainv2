@@ -9,7 +9,7 @@ const WhisperConfig = require('../models/WhisperConfig');
 const AVAILABLE_MODELS = [
   { name: 'tiny',     sizeLabel: '~75 MB',  languages: ['multi'], notes: 'Fastest, lowest accuracy' },
   { name: 'base',     sizeLabel: '~142 MB', languages: ['multi'], notes: 'Good compromise for simple commands' },
-  { name: 'small',    sizeLabel: '~466 MB', languages: ['multi'], notes: 'Recommended for Jetson Orin Nano' },
+  { name: 'small',    sizeLabel: '~466 MB', languages: ['multi'], notes: 'Recommended starting point for most hosts' },
   { name: 'small.en', sizeLabel: '~466 MB', languages: ['en'],    notes: 'English-optimized variant' },
   { name: 'medium',   sizeLabel: '~1.5 GB', languages: ['multi'], notes: 'Highest accuracy, heaviest resource usage' }
 ];

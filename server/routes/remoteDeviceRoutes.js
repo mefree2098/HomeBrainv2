@@ -893,9 +893,9 @@ router.get('/setup-instructions', requireUser(), async (req, res) => {
 
     const origin = `${req.protocol}://${req.get('host')}`;
     const instructions = {
-      overview: 'Set up a Raspberry Pi as a HomeBrain remote listener with a single command.',
+      overview: 'Set up a Linux remote listener with a single command. Raspberry Pi is the most common target.',
       requirements: [
-        'Raspberry Pi 4/5 (Raspberry Pi OS Lite recommended)',
+        '64-bit Debian or Ubuntu based Linux device (Raspberry Pi OS Lite, Ubuntu Server, or similar)',
         'A local user account with sudo access',
         'Working network connection to the HomeBrain hub',
         'Microphone + speaker hardware configured'
@@ -903,14 +903,14 @@ router.get('/setup-instructions', requireUser(), async (req, res) => {
       steps: [
         {
           title: 'Run the one-command installer',
-          description: 'After registering a device in the UI, run the generated command on the Pi.',
+          description: 'After registering a device in the UI, run the generated command on the listener device.',
           commands: [
             'curl -fsSL <HUB_URL>/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE> | bash'
           ]
         },
         {
           title: 'Optional: zero-touch with cloud-init',
-          description: 'Use the generated cloud-init URL in Raspberry Pi Imager advanced options for first boot automation.',
+          description: 'Use the generated cloud-init URL in Raspberry Pi Imager advanced options for first-boot Raspberry Pi automation.',
           commands: [
             'curl -fsSL <HUB_URL>/api/remote-devices/<DEVICE_ID>/cloud-init.yaml?claim=<CLAIM_TOKEN>'
           ]

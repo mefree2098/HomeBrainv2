@@ -77,7 +77,7 @@ class PlatformDeployService {
       || 'sudo systemctl restart ollama';
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
-      || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain-discovery || true; sudo systemctl restart homebrain';
+      || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain';
   }
 
   async initialize() {
@@ -772,7 +772,7 @@ class PlatformDeployService {
     }
 
     const coreRestart = this.sanitizeShellCommand(this.coreRestartCommand)
-      || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain-discovery || true; sudo systemctl restart homebrain';
+      || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain';
     commandParts.push(coreRestart);
 
     return {

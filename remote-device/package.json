@@ -1,7 +1,7 @@
 {
   "name": "homebrain-remote-device",
   "version": "1.0.0",
-  "description": "HomeBrain Remote Voice Device for Raspberry Pi",
+  "description": "HomeBrain Remote Voice Device for Linux listeners",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -30,9 +30,5 @@
   },
   "engines": {
     "node": ">=20.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/homebrain/remote-device.git"
   }
 }
