@@ -201,7 +201,6 @@ const reverseProxyRouteSchema = new mongoose.Schema({
   timestamps: true
 });
 
-reverseProxyRouteSchema.index({ hostname: 1 }, { unique: true });
 reverseProxyRouteSchema.index({ platformKey: 1, enabled: 1 });
 reverseProxyRouteSchema.index({ lastApplyStatus: 1, validationStatus: 1 });
 
