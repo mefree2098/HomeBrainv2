@@ -38,6 +38,7 @@ Progress log
 - 2026-03-12: Removed the duplicate `ReverseProxyRoute.hostname` index warning and hardened the service/install scripts against stale legacy HomeBrain Node listeners. Health checks now flag when public `80/443` are owned by `node` instead of Caddy, and install/update/stop flows now kill orphaned HomeBrain processes discovered outside systemd.
 - 2026-03-12: Clarified the staging certificate experience in both the reverse-proxy UI and the deployment guide. HomeBrain now warns directly that browser SSL errors are expected while `ACME_ENV` remains `staging`, which removes ambiguity during the final production cutover step.
 - 2026-03-12: Corrected the upgrade-path ACME defaulting behavior so already-public deployments no longer silently fall back to staging when `ACME_ENV` is absent. Reverse-proxy settings now infer `production` when a real public base URL is present, while first-time local/test installs still default to staging.
+- 2026-03-12: Pinned production ACME issuance explicitly to the Let's Encrypt production directory in generated Caddy config, so automatic renewal now stays on Let's Encrypt instead of relying on Caddy's generic public-issuer defaults.
 
 Implemented artifacts
 
