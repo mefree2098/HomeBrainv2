@@ -1,8 +1,10 @@
 # HomeBrain Deployment Guide
 
-This is the production deployment guide for a HomeBrain hub.
+This is the production deployment guide for a HomeBrain hub with Caddy as the public edge.
 
 ## Choose Your Path
+
+These instructions are valid for a Jetson Orin Nano Super running a supported Ubuntu-based JetPack release. The Jetson path is just the Linux installer with `HOMEBRAIN_HOST_PROFILE=jetson`, so the same Caddy/MongoDB/systemd flow applies on ARM64.
 
 Jetson Orin Nano:
 
@@ -12,7 +14,7 @@ cd HomeBrain
 bash scripts/install-jetson.sh
 ```
 
-Other Ubuntu/Debian Linux host:
+Other Ubuntu/Debian host:
 
 ```bash
 git clone <your-public-repo-url> HomeBrain
@@ -20,53 +22,55 @@ cd HomeBrain
 bash scripts/install-linux.sh
 ```
 
-That is the recommended path for almost everyone.
-
 ## What The Installer Does
 
-The installer:
+The installer now:
 
 - installs system packages
 - installs Node.js `22.x`
 - installs MongoDB `6.0`
 - creates `server/.env` from `server/.env.example`
 - generates fresh local JWT secrets
+- sets `CADDY_ADMIN_URL=http://127.0.0.1:2019`
+- sets `ACME_ENV=staging`
+- stops `homebrain` first if it is already running on the host
 - installs npm dependencies
 - builds the production web app
 - optionally bootstraps wake-word training dependencies
-- creates and enables one systemd service: `homebrain`
-- configures sudo so the HomeBrain UI can restart its own service during platform deploys
+- creates and enables `homebrain`
+- installs and enables `caddy-api`
+- seeds the reverse-proxy database state for Caddy management
+- configures sudo so the HomeBrain UI can restart `homebrain` during Platform Deploy
+
+HomeBrain no longer owns public `80/443`. Caddy is the intended public ingress.
 
 ## First Login
 
 After installation:
 
-1. Find the hub IP address
+1. Find the hub IP address.
 
 ```bash
 hostname -I
 ```
 
-2. Open HomeBrain:
+2. Open HomeBrain locally.
 
 ```text
 http://<hub-ip>:3000
 ```
 
-3. Create the first account
-4. Continue with [`docs/configuration.md`](docs/configuration.md)
+3. Create the first account.
+4. Continue with [`docs/configuration.md`](docs/configuration.md).
 
 ## Ports
 
 Production:
 
-- `3000/tcp`: HomeBrain UI and API
+- `3000/tcp`: internal HomeBrain UI/API upstream
+- `80/tcp`: Caddy public HTTP ingress
+- `443/tcp`: Caddy public HTTPS ingress
 - `12345/udp`: listener auto-discovery
-
-Optional:
-
-- `80/tcp`: ACME HTTP challenge or nginx reverse proxy
-- `443/tcp`: built-in HTTPS or reverse proxy TLS
 
 Development only:
 
@@ -86,10 +90,22 @@ Follow logs:
 bash scripts/setup-services.sh logs follow
 ```
 
-Restart:
+Show Caddy logs only:
+
+```bash
+bash scripts/setup-services.sh logs caddy
+```
+
+Restart HomeBrain:
 
 ```bash
 bash scripts/setup-services.sh restart
+```
+
+Re-run Caddy bootstrap if needed:
+
+```bash
+bash scripts/setup-services.sh setup-caddy
 ```
 
 Health check:
@@ -97,21 +113,6 @@ Health check:
 ```bash
 bash scripts/setup-services.sh health
 ```
-
-## Updating HomeBrain Later
-
-Recommended terminal path:
-
-```bash
-bash scripts/setup-services.sh update
-```
-
-Recommended UI path:
-
-1. Open `Platform Deploy`
-2. Choose a preset
-3. Start the deploy job
-4. Review the job log and health cards
 
 ## Environment File
 
@@ -124,54 +125,186 @@ At minimum, verify:
 - `DATABASE_URL`
 - `JWT_SECRET`
 - `REFRESH_TOKEN_SECRET`
+- `CADDY_ADMIN_URL`
+- `ACME_ENV`
 
-Optional provider keys:
+Recommended additions for public deployment:
 
-- `ELEVENLABS_API_KEY`
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `STT_OPENAI_API_KEY`
-- SmartThings / Ecobee OAuth values
+```dotenv
+HOMEBRAIN_PUBLIC_BASE_URL=https://freestonefamily.com
+HOMEBRAIN_EXPECTED_PUBLIC_IP=<your-public-ip>
+```
+
+Optional if you want HomeBrain accessible only through Caddy:
+
+```dotenv
+HOMEBRAIN_BIND_HOST=127.0.0.1
+```
+
+If you still want direct LAN access on `:3000`, leave `HOMEBRAIN_BIND_HOST` unset or `0.0.0.0`.
 
 Template file:
 
 [`server/.env.example`](server/.env.example)
 
-## HTTPS / Public Access
+## Public Domain Deployment
 
-Simplest local deployment:
+This is the recommended production path for the current HomeBrain domain set and future Axiom routing.
 
-- use `http://<hub-ip>:3000` on your LAN
+### 1. Confirm the services
 
-If you want a public domain and TLS:
+On the hub:
 
-1. Point DNS at the HomeBrain host
-2. Ensure ports `80` and `443` are reachable
-3. Either:
-   use the HomeBrain `SSL` page
-4. Or:
-   run `bash scripts/setup-services.sh setup-nginx`
-5. Then:
-   run `bash scripts/setup-services.sh setup-ssl`
+```bash
+bash scripts/setup-services.sh status
+```
 
-If you do not need public internet access, skip this.
+You want both `homebrain` and `caddy-api` running.
 
-## Hardware Notes
+### 2. Set the public origin and expected public IP
 
-HomeBrain runs beyond Jetson now.
+Edit [`server/.env`](server/.env):
 
-- Jetson is best when you want local Whisper and Ollama with GPU help
-- Generic `amd64` and `arm64` Ubuntu/Debian hosts work for the main platform
-- Remote listener devices are still best-tested on Raspberry Pi, but they are not hard-locked to it
+```dotenv
+HOMEBRAIN_PUBLIC_BASE_URL=https://freestonefamily.com
+HOMEBRAIN_EXPECTED_PUBLIC_IP=<your-public-ip>
+```
+
+Then restart HomeBrain:
+
+```bash
+bash scripts/setup-services.sh restart
+```
+
+### 3. Point DNS at the hub
+
+Create or update DNS records so they resolve to the same public IP:
+
+- `freestonefamily.com`
+- `www.freestonefamily.com`
+- `mail.freestonefamily.com`
+
+That `mail.freestonefamily.com` record is the future Axiom hostname. It can exist now even before the Axiom service is live.
+
+### 4. Forward the router
+
+Forward public `80` and `443` from your router/firewall to the HomeBrain host.
+
+### 5. Open the reverse-proxy control plane
+
+Open HomeBrain locally at `http://<hub-ip>:3000`, then go to:
+
+`Reverse Proxy / Domains`
+
+In the settings card:
+
+- leave `Caddy Admin URL` as `http://127.0.0.1:2019`
+- keep `ACME mode` at `staging` first
+- set `Expected Public IPv4` to your public IP
+- leave `On-Demand TLS` disabled unless you explicitly need it
+
+Save the settings.
+
+### 6. Review the seeded public routes
+
+The installer and deploy paths now seed these routes automatically if they do not already exist. In `Reverse Proxy / Domains`, confirm these records are present and enabled:
+
+1. `freestonefamily.com`
+   - Platform: `HomeBrain`
+   - Upstream: `http://127.0.0.1:3000`
+   - Health check: `/ping`
+   - TLS mode: `automatic`
+   - Enabled: `true`
+
+2. `www.freestonefamily.com`
+   - Platform: `HomeBrain`
+   - Upstream: `http://127.0.0.1:3000`
+   - Health check: `/ping`
+   - TLS mode: `automatic`
+   - Enabled: `true`
+
+Run `Validate`.
+
+If validation reports DNS or upstream issues, fix those first.
+
+### 7. Apply the Caddy config in staging
+
+Still in `Reverse Proxy / Domains`:
+
+- click `Apply Caddy Config`
+- wait for the Caddy status to remain reachable
+- browse to `https://freestonefamily.com`
+
+Because `ACME_ENV=staging`, you should expect staging certificates during this test phase.
+
+### 8. Switch to production ACME
+
+When staging validation looks correct:
+
+- change `ACME mode` to `production`
+- confirm the mode switch
+- save settings
+- click `Validate`
+- click `Apply Caddy Config` again
+
+After that, `https://freestonefamily.com` and `https://www.freestonefamily.com` should serve through Caddy with production certificates.
+
+## Adding Axiom Later
+
+HomeBrain is now ready for Axiom routing even though the Axiom app is not part of this repository.
+
+When the Axiom service exists, run it on an internal upstream such as:
+
+```text
+127.0.0.1:3001
+```
+
+Then create or enable this route in `Reverse Proxy / Domains`:
+
+- Hostname: `mail.freestonefamily.com`
+- Platform: `Axiom`
+- Upstream: `http://127.0.0.1:3001`
+- Health check: `/`
+- TLS mode: `automatic`
+- Enabled: `true`
+
+Run `Validate`, then `Apply Caddy Config`.
+
+At that point:
+
+- `https://freestonefamily.com` routes to HomeBrain
+- `https://mail.freestonefamily.com` routes to Axiom
+
+Both can share the same public IP because Caddy routes by hostname.
+
+## Updating HomeBrain Later
+
+Terminal path:
+
+```bash
+bash scripts/setup-services.sh update
+```
+
+That update path now waits for HomeBrain to come back and re-seeds the reverse-proxy database state if new Caddy-management fields or routes were added by the release.
+
+UI path:
+
+1. Open `Platform Deploy`
+2. Choose a preset
+3. Start the deploy job
+4. Review the job log and health cards
+
+`Platform Deploy` still works after these Caddy changes because it still restarts only the `homebrain` app service. During the deploy job it now also bootstraps the reverse-proxy database state before the final restart, while Caddy remains in front and keeps owning public ingress.
 
 ## Beginner Checklist
 
-If you know almost nothing about Linux, this is the shortest safe checklist:
-
-1. Clone the repo
-2. Run the correct install script
-3. Open `http://<hub-ip>:3000`
-4. Create an account
-5. Add optional API keys in `Settings`
-6. Add remote listener devices from `Voice Devices`
-7. Use `Platform Deploy` or `scripts/setup-services.sh update` for future upgrades
+1. Run the installer.
+2. Confirm `homebrain` and `caddy-api` are running.
+3. Open `http://<hub-ip>:3000`.
+4. Create an account.
+5. Set `HOMEBRAIN_PUBLIC_BASE_URL` and your expected public IP.
+6. Point DNS for `freestonefamily.com`, `www.freestonefamily.com`, and `mail.freestonefamily.com`.
+7. Forward router ports `80` and `443`.
+8. Configure routes from `Reverse Proxy / Domains`.
+9. Validate and apply in `staging`.
+10. Switch ACME to `production`, re-apply, and verify HTTPS.

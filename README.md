@@ -6,7 +6,7 @@ HomeBrain is a local-first home automation and voice-assistant platform. It comb
 
 ## What HomeBrain Includes
 
-- A web dashboard for devices, scenes, automations, workflows, voice devices, profiles, settings, operations, SSL, Whisper, Ollama, and platform deploy
+- A web dashboard for devices, scenes, automations, workflows, voice devices, profiles, settings, reverse proxy/domains, operations, SSL inventory, Whisper, Ollama, and platform deploy
 - Smart home integrations for SmartThings, Ecobee, INSTEON/ISY, and Logitech Harmony Hub
 - Remote listener onboarding and fleet updates for room devices
 - Wake-word training and distribution using OpenWakeWord plus Piper-generated training data
@@ -59,9 +59,9 @@ After the installer finishes:
 
 Important:
 
-- Production HomeBrain serves both the UI and API from port `3000`
+- Production HomeBrain serves the UI/API on internal port `3000`
+- Caddy is now the intended public edge on `80/443`
 - Port `5173` is only used by the Vite dev server during local frontend development
-- Ports `80` and `443` are only needed if you enable public HTTPS / ACME
 
 ## Documentation
 
@@ -89,9 +89,10 @@ Raspberry Pi cloud-init onboarding is also available from the same dialog.
 
 ## Production Service Management
 
-The installer writes one systemd service:
+The installer writes and enables:
 
 - `homebrain`
+- `caddy-api`
 
 Useful commands:
 
@@ -101,6 +102,8 @@ bash scripts/setup-services.sh logs follow
 bash scripts/setup-services.sh health
 bash scripts/setup-services.sh update
 ```
+
+Public HTTPS routing is managed from `Reverse Proxy / Domains` in the HomeBrain UI. The built-in `Platform Deploy` flow still deploys HomeBrain in place and keeps working behind Caddy because Caddy stays up while only the `homebrain` app service restarts.
 
 ## Development
 

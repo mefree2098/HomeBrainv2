@@ -14,6 +14,7 @@ const { promisify } = require('util');
 const elevenLabsService = require('../services/elevenLabsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 const eventStreamService = require('../services/eventStreamService');
+const { getRequestOrigin, toWebSocketOrigin } = require('../utils/publicOrigin');
 
 const execFileAsync = promisify(execFile);
 const REMOTE_SETUP_PACKAGE_NAME = 'homebrain-remote-setup.tar.gz';
@@ -80,16 +81,8 @@ function consumeSlidingWindow(map, key, limit, windowMs) {
 }
 
 function getRequesterIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim();
-  }
-
-  if (Array.isArray(forwarded) && forwarded.length > 0) {
-    return forwarded[0];
-  }
-
-  return req.ip || req.socket?.remoteAddress || 'unknown';
+  const candidate = req.ip || req.socket?.remoteAddress || 'unknown';
+  return String(candidate).replace(/^::ffff:/, '');
 }
 
 function sendBootstrapRateLimited(res, retryAfterSeconds, message) {
@@ -336,7 +329,7 @@ router.get('/:deviceId/bootstrap.sh', async (req, res) => {
 
     await ensureRemoteSetupPackage();
 
-    const hubOrigin = `${req.protocol}://${req.get('host')}`;
+    const hubOrigin = getRequestOrigin(req);
     const safeHubOrigin = shellQuote(hubOrigin);
     const safeRegistrationCode = shellQuote(device.settings?.registrationCode || code);
     const archiveUrl = `${hubOrigin}/downloads/${REMOTE_SETUP_PACKAGE_NAME}`;
@@ -449,7 +442,7 @@ router.get('/:deviceId/cloud-init.yaml', async (req, res) => {
     }
     bootstrapInvalidAttemptWindow.delete(invalidAttemptKey);
 
-    const hubOrigin = `${req.protocol}://${req.get('host')}`;
+    const hubOrigin = getRequestOrigin(req);
     const credentialQuery = claim
       ? `claim=${encodeURIComponent(claim)}`
       : `code=${encodeURIComponent(device.settings?.registrationCode || code)}`;
@@ -712,8 +705,7 @@ router.post('/activate', async (req, res) => {
       tags: ['remote-device', 'activation']
     });
 
-    // Generate hub WebSocket URL
-    const hubUrl = `ws://${req.get('host')}/ws/voice-device?deviceId=${device._id}`;
+    const hubUrl = `${toWebSocketOrigin(getRequestOrigin(req))}/ws/voice-device?deviceId=${device._id}`;
 
     console.log(`POST /api/remote-devices/activate - Successfully activated device: ${device.name} (${device._id})`);
     res.status(200).json({
@@ -805,7 +797,7 @@ router.get('/:deviceId/config', async (req, res) => {
       wakeWords: device.supportedWakeWords,
       volume: device.volume,
       microphoneSensitivity: device.microphoneSensitivity,
-      hubUrl: `ws://${req.get('host')}/ws/voice-device/${device._id}`,
+        hubUrl: `${toWebSocketOrigin(getRequestOrigin(req))}/ws/voice-device/${device._id}`,
       settings: {
         audioSampleRate: 16000,
         audioChannels: 1,
@@ -891,7 +883,7 @@ router.get('/setup-instructions', requireUser(), async (req, res) => {
   try {
     await ensureRemoteSetupPackage();
 
-    const origin = `${req.protocol}://${req.get('host')}`;
+    const origin = getRequestOrigin(req);
     const instructions = {
       overview: 'Set up a Linux remote listener with a single command. Raspberry Pi is the most common target.',
       requirements: [

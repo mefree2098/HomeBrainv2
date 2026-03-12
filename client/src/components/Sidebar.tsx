@@ -14,7 +14,8 @@ import {
   Cpu,
   Rocket,
   Workflow,
-  Activity
+  Activity,
+  Waypoints
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -32,6 +33,7 @@ const navigation = [
   { name: 'Ollama / LLM', href: '/ollama', icon: Brain },
   { name: 'Whisper STT', href: '/whisper', icon: Cpu },
   { name: 'Platform Deploy', href: '/platform-deploy', icon: Rocket, adminOnly: true },
+  { name: 'Reverse Proxy', href: '/reverse-proxy', icon: Waypoints, adminOnly: true },
   { name: 'Operations', href: '/operations', icon: Activity, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Settings },
   { name: 'SSL Certificates', href: '/ssl', icon: Shield, adminOnly: true },

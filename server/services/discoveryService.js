@@ -1,5 +1,6 @@
 const dgram = require('dgram');
 const os = require('os');
+const { getConfiguredPublicOrigin } = require('../utils/publicOrigin');
 
 class DiscoveryService {
   constructor() {
@@ -85,14 +86,18 @@ class DiscoveryService {
 
   broadcastPresence() {
     try {
+      const publicOrigin = getConfiguredPublicOrigin();
+      const advertisedPort = publicOrigin
+        ? (new URL(publicOrigin).port || (new URL(publicOrigin).protocol === 'https:' ? '443' : '80'))
+        : String(process.env.PORT || 3000);
       const hubInfo = {
         type: 'homebrain_hub',
         version: '1.0.0',
         hubId: this.getHubId(),
         name: 'HomeBrain Hub',
         services: {
-          http: process.env.PORT || 3000,
-          websocket: process.env.PORT || 3000
+          http: advertisedPort,
+          websocket: advertisedPort
         },
         timestamp: new Date().toISOString(),
         capabilities: ['voice_commands', 'automation', 'device_control']
@@ -135,12 +140,16 @@ class DiscoveryService {
 
   handleDeviceDiscovery(request, rinfo) {
     // Device is scanning for hubs
+    const publicOrigin = getConfiguredPublicOrigin();
+    const publicUrl = publicOrigin ? new URL(publicOrigin) : null;
+    const baseUrl = publicOrigin || `http://${this.getLocalIpAddress()}:${process.env.PORT || 3000}`;
     const response = {
       type: 'homebrain_hub_response',
       hubId: this.getHubId(),
       name: 'HomeBrain Hub',
-      address: this.getLocalIpAddress(),
-      port: process.env.PORT || 3000,
+      address: publicUrl ? publicUrl.hostname : this.getLocalIpAddress(),
+      port: publicUrl ? (publicUrl.port || (publicUrl.protocol === 'https:' ? '443' : '80')) : (process.env.PORT || 3000),
+      baseUrl,
       version: '1.0.0',
       timestamp: new Date().toISOString(),
       capabilities: ['voice_commands', 'automation', 'device_control']
@@ -178,12 +187,13 @@ class DiscoveryService {
     console.log(`DiscoveryService: Device ${deviceInfo.name} (${deviceInfo.id}) requesting auto-connect`);
 
     // Send response with temporary connection info
+    const publicOrigin = getConfiguredPublicOrigin();
     const response = {
       type: 'homebrain_connect_response',
       status: 'pending_approval',
       deviceId: deviceInfo.id,
       message: 'Device discovered. Awaiting user approval.',
-      hubUrl: `http://${this.getLocalIpAddress()}:${process.env.PORT || 3000}`
+      hubUrl: publicOrigin || `http://${this.getLocalIpAddress()}:${process.env.PORT || 3000}`
     };
 
     const responseMessage = JSON.stringify(response);

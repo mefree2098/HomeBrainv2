@@ -87,6 +87,7 @@ export interface DeployHealthResponse {
       activeJobs?: number;
       pendingJobs?: number;
     };
+    reverseProxy: DeployHealthCheck;
   };
 }
 
