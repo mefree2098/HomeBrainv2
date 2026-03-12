@@ -1,8 +1,36 @@
 const mongoose = require('mongoose');
 
-const getDefaultAcmeEnv = () => (
-  process.env.ACME_ENV === 'production' ? 'production' : 'staging'
-);
+function hasPublicBaseUrl() {
+  const baseUrl = String(process.env.HOMEBRAIN_PUBLIC_BASE_URL || '').trim();
+  if (!baseUrl) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(baseUrl);
+    const host = (parsed.hostname || '').trim().toLowerCase();
+    return Boolean(
+      host
+      && host !== 'localhost'
+      && host !== '127.0.0.1'
+      && host !== '::1'
+    );
+  } catch (_error) {
+    return false;
+  }
+}
+
+const getDefaultAcmeEnv = () => {
+  if (process.env.ACME_ENV === 'production') {
+    return 'production';
+  }
+
+  if (process.env.ACME_ENV === 'staging') {
+    return 'staging';
+  }
+
+  return hasPublicBaseUrl() ? 'production' : 'staging';
+};
 
 const reverseProxySettingsSchema = new mongoose.Schema({
   singletonKey: {
