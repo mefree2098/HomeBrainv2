@@ -348,6 +348,8 @@ export function ReverseProxyManagement() {
     () => routes.filter((route) => route.tlsMode === "on_demand" || route.allowOnDemandTls || route.certificateStatus?.adminApproved || route.certificateStatus?.ownershipVerified),
     [routes]
   );
+  const activeAcmeMode = status?.settings?.acmeEnv || settingsForm.acmeEnv;
+  const usingStagingAcme = activeAcmeMode === "staging";
 
   const refresh = async () => {
     const [statusResponse, routesResponse, certificateResponse] = await Promise.all([
@@ -626,6 +628,21 @@ export function ReverseProxyManagement() {
           </CardContent>
         </Card>
       </div>
+
+      {usingStagingAcme ? (
+        <div className="rounded-md border border-yellow-300 bg-yellow-50 p-4 text-sm text-yellow-950 dark:border-yellow-900 dark:bg-yellow-950/40 dark:text-yellow-100">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="space-y-1">
+              <p className="font-medium">ACME staging is active.</p>
+              <p>
+                Browser certificate warnings and a &quot;Not Secure&quot; label are expected while staging certificates are in use.
+                Switch ACME mode to <span className="font-semibold">production</span>, save, validate, and apply again when you are ready for a browser-trusted certificate.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>

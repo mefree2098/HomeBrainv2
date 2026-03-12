@@ -33,7 +33,7 @@ The installer now:
 - backfills required keys into an existing `server/.env` on upgrade installs
 - generates fresh local JWT secrets
 - sets `CADDY_ADMIN_URL=http://127.0.0.1:2019`
-- sets `ACME_ENV=staging`
+- defaults `ACME_ENV` to `production` for already-public deployments and to `staging` for first-time local/testing installs
 - stops `homebrain` first if it is already running on the host
 - installs npm dependencies
 - repairs `client/dist` ownership before the production build if an earlier deploy left it root-owned
@@ -238,6 +238,7 @@ Still in `Reverse Proxy / Domains`:
 - browse to `https://freestonefamily.com`
 
 Because `ACME_ENV=staging`, you should expect staging certificates during this test phase.
+Browsers will typically show a certificate warning or a `Not Secure` label in this mode. That is expected until you switch to production ACME.
 
 ### 8. Switch to production ACME
 

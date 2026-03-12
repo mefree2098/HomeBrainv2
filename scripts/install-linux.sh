@@ -232,9 +232,44 @@ set_env_value_if_missing() {
   echo "${key}=${value}" >> "${file}"
 }
 
+get_existing_env_value() {
+  local file="$1"
+  local key="$2"
+
+  if [[ ! -f "${file}" ]]; then
+    return
+  fi
+
+  grep -E "^${key}=" "${file}" | tail -n 1 | cut -d '=' -f 2- || true
+}
+
+get_default_acme_env() {
+  local env_file="$1"
+  local explicit="${ACME_ENV:-}"
+  local public_base_url="${HOMEBRAIN_PUBLIC_BASE_URL:-$(get_existing_env_value "${env_file}" "HOMEBRAIN_PUBLIC_BASE_URL")}"
+
+  if [[ "${explicit}" == "production" || "${explicit}" == "staging" ]]; then
+    echo "${explicit}"
+    return
+  fi
+
+  if [[ -n "${public_base_url}" && "${public_base_url}" != "http://localhost"* && "${public_base_url}" != "http://127.0.0.1"* ]]; then
+    echo "production"
+    return
+  fi
+
+  if [[ -f "${HOMEBRAIN_DIR}/server/certificates/active-chain.pem" && -f "${HOMEBRAIN_DIR}/server/certificates/active-key.pem" ]]; then
+    echo "production"
+    return
+  fi
+
+  echo "staging"
+}
+
 configure_env() {
   print_status "Configuring server environment..."
   local env_file="${HOMEBRAIN_DIR}/server/.env"
+  local default_acme_env
 
   if [[ ! -f "${env_file}" ]]; then
     cp "${HOMEBRAIN_DIR}/server/.env.example" "${env_file}"
@@ -245,9 +280,10 @@ configure_env() {
     print_success "Existing ${env_file} found; backfilling required keys if needed."
   fi
 
+  default_acme_env="$(get_default_acme_env "${env_file}")"
   set_env_value_if_missing "${env_file}" "DATABASE_URL" "mongodb://localhost/HomeBrain"
   set_env_value_if_missing "${env_file}" "CADDY_ADMIN_URL" "http://127.0.0.1:2019"
-  set_env_value_if_missing "${env_file}" "ACME_ENV" "staging"
+  set_env_value_if_missing "${env_file}" "ACME_ENV" "${default_acme_env}"
 
   if ! grep -q '^JWT_SECRET=' "${env_file}"; then
     set_env_value "${env_file}" "JWT_SECRET" "$(openssl rand -hex 32)"
