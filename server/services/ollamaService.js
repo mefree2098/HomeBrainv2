@@ -2048,6 +2048,32 @@ class OllamaService {
         await config.save();
       }
 
+      try {
+        const settings = await Settings.getSettings();
+        let settingsUpdated = false;
+
+        if (settings.localLlmModel === modelName) {
+          settings.localLlmModel = '';
+          settingsUpdated = true;
+        }
+
+        if (settings.homebrainLocalLlmModel === modelName) {
+          settings.homebrainLocalLlmModel = '';
+          settingsUpdated = true;
+        }
+
+        if (settings.spamFilterLocalLlmModel === modelName) {
+          settings.spamFilterLocalLlmModel = '';
+          settingsUpdated = true;
+        }
+
+        if (settingsUpdated) {
+          await settings.save();
+        }
+      } catch (settingsError) {
+        console.warn(`OllamaService: Failed to clear deleted-model role assignments for ${modelName}: ${settingsError.message}`);
+      }
+
       return { success: true, message: `Model ${modelName} deleted successfully` };
     } catch (error) {
       console.error(`Error deleting model ${modelName}:`, error);
@@ -2065,11 +2091,10 @@ class OllamaService {
       const config = await OllamaConfig.getConfig();
       await config.setActiveModel(modelName);
 
-      // Keep voice-command local model preference aligned with the activated Ollama model.
+      // Preserve explicit HomeBrain/spam model role assignments. Activation only changes the Ollama default.
       try {
         const settings = await Settings.getSettings();
         settings.localLlmModel = modelName;
-        settings.homebrainLocalLlmModel = modelName;
         await settings.save();
       } catch (settingsError) {
         console.warn(`OllamaService: Failed to sync Settings.localLlmModel to ${modelName}: ${settingsError.message}`);
@@ -2282,6 +2307,8 @@ class OllamaService {
 
       await config.save();
 
+      const settings = await Settings.getSettings();
+
       return {
         isInstalled: installStatus.isInstalled,
         version: installStatus.version,
@@ -2290,6 +2317,8 @@ class OllamaService {
         serviceOwner: config.serviceOwner,
         installedModels: config.installedModels,
         activeModel: config.activeModel,
+        homebrainLocalLlmModel: settings.homebrainLocalLlmModel || settings.localLlmModel || null,
+        spamFilterLocalLlmModel: settings.spamFilterLocalLlmModel || settings.homebrainLocalLlmModel || settings.localLlmModel || null,
         configuration: config.configuration,
         updateAvailable: config.updateAvailable,
         latestVersion: config.latestVersion,

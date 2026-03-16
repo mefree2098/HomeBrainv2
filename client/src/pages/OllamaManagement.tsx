@@ -13,6 +13,7 @@ import {
   stopOllamaService,
   checkOllamaUpdates,
   updateOllama,
+  updateModelRoles,
 } from '@/api/ollama';
 import ModelManager from '@/components/ollama/ModelManager';
 import ChatInterface from '@/components/ollama/ChatInterface';
@@ -36,6 +37,8 @@ interface OllamaStatus {
   serviceOwner?: string | null;
   installedModels: any[];
   activeModel: string | null;
+  homebrainLocalLlmModel?: string | null;
+  spamFilterLocalLlmModel?: string | null;
   updateAvailable: boolean;
   latestVersion: string | null;
   lastUpdateCheck: Date | null;
@@ -55,6 +58,10 @@ export default function OllamaManagement() {
   const [logReturnedCount, setLogReturnedCount] = useState(0);
   const [logTruncated, setLogTruncated] = useState(false);
   const [logFetchedOnce, setLogFetchedOnce] = useState(false);
+  const [selectedHomeBrainModel, setSelectedHomeBrainModel] = useState('');
+  const [selectedSpamModel, setSelectedSpamModel] = useState('');
+  const [roleSelectionsDirty, setRoleSelectionsDirty] = useState(false);
+  const [savingModelRoles, setSavingModelRoles] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -80,6 +87,27 @@ export default function OllamaManagement() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!status || roleSelectionsDirty) {
+      return;
+    }
+
+    const fallbackHomeBrainModel =
+      status.homebrainLocalLlmModel ||
+      status.activeModel ||
+      status.installedModels?.[0]?.name ||
+      '';
+    const fallbackSpamModel =
+      status.spamFilterLocalLlmModel ||
+      fallbackHomeBrainModel;
+
+    setSelectedHomeBrainModel(fallbackHomeBrainModel);
+    setSelectedSpamModel(fallbackSpamModel);
+  }, [
+    roleSelectionsDirty,
+    status,
+  ]);
 
   const loadLogs = useCallback(
     async (lineCount?: number) => {
@@ -405,6 +433,37 @@ export default function OllamaManagement() {
     }
   };
 
+  const handleSaveModelRoles = async () => {
+    if (!selectedHomeBrainModel || !selectedSpamModel) {
+      toast({
+        variant: 'destructive',
+        title: 'Models required',
+        description: 'Select both the HomeBrain model and the spam filter model.',
+      });
+      return;
+    }
+
+    setSavingModelRoles(true);
+    try {
+      await updateModelRoles(selectedHomeBrainModel, selectedSpamModel);
+      setRoleSelectionsDirty(false);
+      toast({
+        title: 'Model roles saved',
+        description: 'HomeBrain and spam-filter model assignments were updated.',
+      });
+      await loadStatus();
+    } catch (error: any) {
+      console.error('Error saving model roles:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Save failed',
+        description: error.message || 'Failed to save model roles',
+      });
+    } finally {
+      setSavingModelRoles(false);
+    }
+  };
+
   const isExternalService = status?.serviceStatus === 'running_external';
   const isServiceRunning =
     status?.serviceStatus === 'running' || status?.serviceStatus === 'running_external';
@@ -620,6 +679,119 @@ export default function OllamaManagement() {
         </TabsList>
 
         <TabsContent value="models" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Model Roles</CardTitle>
+              <CardDescription>
+                Choose which installed Ollama models HomeBrain uses for its own local tasks and for external spam filtering requests.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {status.installedModels.length === 0 ? (
+                <Alert>
+                  <AlertDescription>
+                    Install at least one model before assigning HomeBrain or spam-filter roles.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">HomeBrain Model</label>
+                      <Select
+                        value={selectedHomeBrainModel || undefined}
+                        onValueChange={(value) => {
+                          setSelectedHomeBrainModel(value);
+                          setRoleSelectionsDirty(true);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a HomeBrain model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {status.installedModels.map((model) => (
+                            <SelectItem key={`homebrain-${model.name}`} value={model.name}>
+                              {model.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Used for HomeBrain local inference such as voice interpretation and automation reasoning.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Spam Filter Model</label>
+                      <Select
+                        value={selectedSpamModel || undefined}
+                        onValueChange={(value) => {
+                          setSelectedSpamModel(value);
+                          setRoleSelectionsDirty(true);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a spam filter model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {status.installedModels.map((model) => (
+                            <SelectItem key={`spam-${model.name}`} value={model.name}>
+                              {model.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Used by <code>/api/ollama/spam/filter</code> for Axiom or other mail-processing clients.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      The active model remains the default for the Ollama chat playground. Role assignments are separate.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={!roleSelectionsDirty || savingModelRoles}
+                        onClick={() => {
+                          const fallbackHomeBrainModel =
+                            status.homebrainLocalLlmModel ||
+                            status.activeModel ||
+                            status.installedModels?.[0]?.name ||
+                            '';
+                          const fallbackSpamModel =
+                            status.spamFilterLocalLlmModel ||
+                            fallbackHomeBrainModel;
+                          setSelectedHomeBrainModel(fallbackHomeBrainModel);
+                          setSelectedSpamModel(fallbackSpamModel);
+                          setRoleSelectionsDirty(false);
+                        }}
+                      >
+                        Reset
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={handleSaveModelRoles}
+                        disabled={!roleSelectionsDirty || savingModelRoles}
+                      >
+                        {savingModelRoles ? (
+                          <>
+                            <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          'Save Roles'
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
           <ModelManager activeModel={status.activeModel} onModelChange={loadStatus} />
         </TabsContent>
 

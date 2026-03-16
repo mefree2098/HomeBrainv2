@@ -4,6 +4,7 @@ const { requireUser } = require('./middlewares/auth');
 const ollamaService = require('../services/ollamaService');
 const spamFilterService = require('../services/spamFilterService');
 const OllamaConfig = require('../models/OllamaConfig');
+const settingsService = require('../services/settingsService');
 
 // Create auth middleware instance
 const auth = requireUser();
@@ -283,6 +284,56 @@ router.post('/models/activate', auth, async (req, res) => {
     res.status(200).json(result);
   } catch (error) {
     console.error('Error activating model:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Description: Update HomeBrain/spam local model role assignments
+// Endpoint: POST /api/ollama/models/roles
+// Request: { homebrainLocalLlmModel: string, spamFilterLocalLlmModel: string }
+// Response: { success: boolean, homebrainLocalLlmModel: string, spamFilterLocalLlmModel: string }
+router.post('/models/roles', auth, async (req, res) => {
+  try {
+    const homebrainLocalLlmModel = typeof req.body?.homebrainLocalLlmModel === 'string'
+      ? req.body.homebrainLocalLlmModel.trim()
+      : '';
+    const spamFilterLocalLlmModel = typeof req.body?.spamFilterLocalLlmModel === 'string'
+      ? req.body.spamFilterLocalLlmModel.trim()
+      : '';
+
+    if (!homebrainLocalLlmModel || !spamFilterLocalLlmModel) {
+      return res.status(400).json({ error: 'Both HomeBrain and spam filter models are required.' });
+    }
+
+    const config = await OllamaConfig.getConfig();
+    const installedModels = Array.isArray(config?.installedModels) ? config.installedModels : [];
+    const installedModelNames = new Set(
+      installedModels
+        .map((model) => (typeof model?.name === 'string' ? model.name.trim() : ''))
+        .filter(Boolean)
+    );
+
+    const missingModels = [homebrainLocalLlmModel, spamFilterLocalLlmModel]
+      .filter((modelName) => !installedModelNames.has(modelName));
+
+    if (missingModels.length) {
+      return res.status(400).json({
+        error: `Model not installed in Ollama: ${missingModels.join(', ')}`
+      });
+    }
+
+    const settings = await settingsService.updateSettings({
+      homebrainLocalLlmModel,
+      spamFilterLocalLlmModel
+    });
+
+    res.status(200).json({
+      success: true,
+      homebrainLocalLlmModel: settings.homebrainLocalLlmModel || settings.localLlmModel || homebrainLocalLlmModel,
+      spamFilterLocalLlmModel: settings.spamFilterLocalLlmModel || spamFilterLocalLlmModel
+    });
+  } catch (error) {
+    console.error('Error updating Ollama model roles:', error);
     res.status(500).json({ error: error.message });
   }
 });
