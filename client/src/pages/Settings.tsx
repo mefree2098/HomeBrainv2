@@ -4708,34 +4708,8 @@ export function Settings() {
                     </p>
                   </div>
                   
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div>
-                      <label className="text-sm font-medium">HomeBrain Local Model</label>
-                      <Input
-                        {...register("homebrainLocalLlmModel")}
-                        placeholder="qwen2.5:7b"
-                        className="mt-1"
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Used for HomeBrain local features like voice interpretation and automations.
-                      </p>
-                    </div>
-
-                    <div>
-                      <label className="text-sm font-medium">Spam Filter Local Model</label>
-                      <Input
-                        {...register("spamFilterLocalLlmModel")}
-                        placeholder="phi3:mini"
-                        className="mt-1"
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Used by the HomeBrain spam-filter API so Axiom can classify incoming email without choosing a model itself.
-                      </p>
-                    </div>
-                  </div>
-
                   <div className="rounded-md border border-green-200/70 bg-white/70 p-3 text-xs text-muted-foreground dark:border-green-900/60 dark:bg-slate-950/30">
-                    HomeBrain will use the configured HomeBrain model for its own local LLM tasks. The spam filter model is exposed through <code>/api/ollama/spam/filter</code> for external services like Axiom.
+                    Model role assignment now lives on the Ollama page. Use <code>Ollama / Models</code> to choose the HomeBrain model and the spam-filter model. This settings page only keeps the local endpoint configuration.
                   </div>
                 </div>
               </CardContent>
