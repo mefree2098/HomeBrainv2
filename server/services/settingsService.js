@@ -56,7 +56,7 @@ class SettingsService {
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',
         'anthropicApiKey', 'anthropicModel',
-        'localLlmEndpoint', 'localLlmModel', 'llmPriorityList',
+        'localLlmEndpoint', 'localLlmModel', 'homebrainLocalLlmModel', 'spamFilterLocalLlmModel', 'llmPriorityList',
         // SmartThings OAuth Settings
         'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth',
         // Voice/Discovery Preferences
@@ -86,6 +86,18 @@ class SettingsService {
           sanitizedUpdates[key] = updates[key];
         }
       });
+
+      if (typeof sanitizedUpdates.homebrainLocalLlmModel === 'string') {
+        sanitizedUpdates.homebrainLocalLlmModel = sanitizedUpdates.homebrainLocalLlmModel.trim();
+        sanitizedUpdates.localLlmModel = sanitizedUpdates.homebrainLocalLlmModel;
+      } else if (typeof sanitizedUpdates.localLlmModel === 'string') {
+        sanitizedUpdates.localLlmModel = sanitizedUpdates.localLlmModel.trim();
+        sanitizedUpdates.homebrainLocalLlmModel = sanitizedUpdates.localLlmModel;
+      }
+
+      if (typeof sanitizedUpdates.spamFilterLocalLlmModel === 'string') {
+        sanitizedUpdates.spamFilterLocalLlmModel = sanitizedUpdates.spamFilterLocalLlmModel.trim();
+      }
       
       console.log('SettingsService: Sanitized update keys:', Object.keys(sanitizedUpdates));
       

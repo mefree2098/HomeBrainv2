@@ -208,8 +208,13 @@ function normalizeModelVariants(modelName) {
   return variants;
 }
 
-function buildLocalModelCandidates(preferredModel) {
+function buildLocalModelCandidates(preferredModel, { strict = false } = {}) {
   const candidates = normalizeModelVariants(preferredModel);
+
+  if (strict) {
+    return candidates;
+  }
+
   const defaults = ['llama3.1:8b', 'llama3:8b', 'llama2:7b', 'llama2'];
 
   defaults.forEach((model) => {
@@ -219,6 +224,27 @@ function buildLocalModelCandidates(preferredModel) {
   });
 
   return candidates;
+}
+
+function normalizeConfiguredModelName(modelName) {
+  if (typeof modelName !== 'string') {
+    return null;
+  }
+
+  const trimmed = modelName.trim();
+  return trimmed || null;
+}
+
+function resolveHomeBrainLocalModel(settings) {
+  return normalizeConfiguredModelName(settings?.homebrainLocalLlmModel) ||
+    normalizeConfiguredModelName(settings?.localLlmModel) ||
+    null;
+}
+
+function resolveRequestedLocalModel(settings, requestConfig = {}, fallbackModel = null) {
+  return normalizeConfiguredModelName(requestConfig?.localModelOverride) ||
+    normalizeConfiguredModelName(fallbackModel) ||
+    resolveHomeBrainLocalModel(settings);
 }
 
 function extractOllamaErrorMessage(error) {
@@ -556,9 +582,13 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
   }
 
   const installedModels = await getOllamaInstalledModels(testUrl);
-  const candidateModels = buildLocalModelCandidates(model);
+  const requestedModel = normalizeConfiguredModelName(model);
+  const strictModel = requestConfig.strictModel === true && Boolean(requestedModel);
+  const preferActiveModel = requestConfig.preferActiveModel === true ||
+    (!requestedModel && requestConfig.preferActiveModel !== false);
+  const candidateModels = buildLocalModelCandidates(requestedModel, { strict: strictModel });
 
-  const activeModel = await getActiveOllamaModel();
+  const activeModel = preferActiveModel ? await getActiveOllamaModel() : null;
   if (activeModel) {
     const activeVariants = normalizeModelVariants(activeModel);
     activeVariants.reverse().forEach((variant) => {
@@ -574,16 +604,27 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
     });
   }
 
-  installedModels.forEach((installedModel) => {
-    normalizeModelVariants(installedModel).forEach((variant) => {
-      if (!candidateModels.includes(variant)) {
-        candidateModels.push(variant);
-      }
+  if (!strictModel) {
+    installedModels.forEach((installedModel) => {
+      normalizeModelVariants(installedModel).forEach((variant) => {
+        if (!candidateModels.includes(variant)) {
+          candidateModels.push(variant);
+        }
+      });
     });
-  });
+  }
 
   if (candidateModels.length === 0) {
     throw new Error('No local LLM models available. Install a model with "ollama pull <model>" or configure Settings.localLlmModel.');
+  }
+
+  if (strictModel && installedModels.length > 0) {
+    const normalizedInstalled = new Set(installedModels.map((item) => normalizeModelNameForComparison(item)));
+    const configuredInstalled = candidateModels.some((item) => normalizedInstalled.has(normalizeModelNameForComparison(item)));
+
+    if (!configuredInstalled) {
+      throw new Error(`Configured local LLM model "${requestedModel}" is not installed in Ollama.`);
+    }
   }
 
   if (!installedModels.length) {
@@ -756,7 +797,11 @@ async function sendLLMRequest(provider, model, message) {
     case 'local':
       // Get settings to retrieve local LLM endpoint
       const settings = await Settings.getSettings();
-      return sendRequestToLocalLLM(settings.localLlmEndpoint, settings.localLlmModel || model, message);
+      const localModel = normalizeConfiguredModelName(model) || resolveHomeBrainLocalModel(settings);
+      return sendRequestToLocalLLM(settings.localLlmEndpoint, localModel, message, {
+        strictModel: Boolean(localModel),
+        preferActiveModel: false
+      });
     default:
       throw new Error(`Unsupported LLM provider: ${provider}`);
   }
@@ -790,7 +835,7 @@ async function sendLLMRequestWithFallback(message, priorityList = null, requestC
       switch (provider.toLowerCase()) {
         case 'local':
           endpoint = settings.localLlmEndpoint;
-          model = settings.localLlmModel;
+          model = resolveRequestedLocalModel(settings, requestConfig, settings.localLlmModel);
 
           if (!endpoint) {
             console.log(`LLM Service: Local LLM endpoint not configured, skipping`);
@@ -798,7 +843,11 @@ async function sendLLMRequestWithFallback(message, priorityList = null, requestC
             continue;
           }
 
-          const response = await sendRequestToLocalLLM(endpoint, model, message, requestConfig);
+          const response = await sendRequestToLocalLLM(endpoint, model, message, {
+            ...requestConfig,
+            strictModel: requestConfig.strictModel === true || Boolean(model),
+            preferActiveModel: requestConfig.preferActiveModel === true
+          });
           console.log(`LLM Service: Successfully received response from ${provider}`);
           return response;
 
@@ -865,7 +914,7 @@ async function sendLLMRequestWithFallbackDetailed(message, priorityList = null, 
       switch (provider.toLowerCase()) {
         case 'local':
           endpoint = settings.localLlmEndpoint;
-          model = settings.localLlmModel;
+          model = resolveRequestedLocalModel(settings, requestConfig, settings.localLlmModel);
 
           if (!endpoint) {
             errors.push({ provider, error: 'Local LLM endpoint not configured' });
@@ -874,6 +923,8 @@ async function sendLLMRequestWithFallbackDetailed(message, priorityList = null, 
 
           const localResult = await sendRequestToLocalLLM(endpoint, model, message, {
             ...requestConfig,
+            strictModel: requestConfig.strictModel === true || Boolean(model),
+            preferActiveModel: requestConfig.preferActiveModel === true,
             returnMetadata: true
           });
 

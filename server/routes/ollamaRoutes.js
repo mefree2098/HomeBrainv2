@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireUser } = require('./middlewares/auth');
 const ollamaService = require('../services/ollamaService');
+const spamFilterService = require('../services/spamFilterService');
 const OllamaConfig = require('../models/OllamaConfig');
 
 // Create auth middleware instance
@@ -357,6 +358,31 @@ router.post('/generate', auth, async (req, res) => {
   } catch (error) {
     console.error('Error during generation:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Description: Classify an email with the configured spam-filter local model
+// Endpoint: POST /api/ollama/spam/filter
+// Request: { subject?: string, from?: string, to?: string, text?: string, html?: string, messageId?: string }
+// Response: { success: boolean, classification: "spam"|"inbox"|"review", recommendedAction: string, ... }
+router.post('/spam/filter', auth, async (req, res) => {
+  try {
+    console.log('POST /api/ollama/spam/filter - Classifying email with spam filter model');
+
+    const result = await spamFilterService.classifyEmail(req.body || {});
+
+    res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error during spam filtering:', error);
+
+    const status = /required|configured|not installed/i.test(error.message) ? 400 : 500;
+    res.status(status).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 

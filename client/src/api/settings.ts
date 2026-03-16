@@ -47,7 +47,8 @@ export const updateSettings = async (settings: {
   anthropicApiKey?: string;
   anthropicModel?: string;
   localLlmEndpoint?: string;
-  localLlmModel?: string;
+  homebrainLocalLlmModel?: string;
+  spamFilterLocalLlmModel?: string;
   voiceRegion?: string;
   autoDiscoveryEnabled?: boolean;
 }) => {

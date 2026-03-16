@@ -297,8 +297,9 @@ export function Settings() {
       openaiModel: "gpt-5.2-codex",
       anthropicApiKey: "",
       anthropicModel: "claude-3-sonnet-20240229",
-      localLlmEndpoint: "http://localhost:8080",
-      localLlmModel: "llama2-7b",
+      localLlmEndpoint: "http://localhost:11434",
+      homebrainLocalLlmModel: "llama2-7b",
+      spamFilterLocalLlmModel: "llama2-7b",
       enableSecurityMode: false
     }
   })
@@ -488,7 +489,15 @@ export function Settings() {
           setIsyPasswordConfigured(Boolean(
             response.settings.isyPassword && String(response.settings.isyPassword).trim()
           ))
-          
+
+          const resolvedHomeBrainModel =
+            response.settings.homebrainLocalLlmModel ||
+            response.settings.localLlmModel ||
+            "llama2-7b"
+          const resolvedSpamFilterModel =
+            response.settings.spamFilterLocalLlmModel ||
+            resolvedHomeBrainModel
+
           // Update form values with loaded settings, handle masked sensitive fields
           Object.entries(response.settings).forEach(([key, value]) => {
             if (value !== undefined) {
@@ -507,6 +516,9 @@ export function Settings() {
               setValue(key, value);
             }
           });
+
+          setValue("homebrainLocalLlmModel", resolvedHomeBrainModel)
+          setValue("spamFilterLocalLlmModel", resolvedSpamFilterModel)
           
           toast({
             title: "Settings Loaded",
@@ -888,6 +900,8 @@ export function Settings() {
       if (isMaskedSecretPlaceholder(settingsToSave.anthropicApiKey)) {
         delete settingsToSave.anthropicApiKey; // Don't update if it's just the placeholder
       }
+
+      delete settingsToSave.localLlmModel
 
       const trimmedIsyPassword = typeof settingsToSave.isyPassword === "string"
         ? settingsToSave.isyPassword.trim()
@@ -1820,7 +1834,7 @@ export function Settings() {
 
   const handleTestLocalLLM = async () => {
     const formEndpoint = watch('localLlmEndpoint');
-    const formModel = watch('localLlmModel');
+    const formModel = watch('homebrainLocalLlmModel');
     
     if (!formEndpoint || formEndpoint.trim() === '') {
       toast({
@@ -4666,7 +4680,7 @@ export function Settings() {
                     <div className="flex gap-2 mt-1">
                       <Input
                         {...register("localLlmEndpoint")}
-                        placeholder="http://localhost:8080"
+                        placeholder="http://localhost:11434"
                         className="flex-1"
                       />
                       <Button
@@ -4694,16 +4708,34 @@ export function Settings() {
                     </p>
                   </div>
                   
-                  <div>
-                    <label className="text-sm font-medium">Local LLM Model</label>
-                    <Input
-                      {...register("localLlmModel")}
-                      placeholder="llama2-7b"
-                      className="mt-1"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Name of the model to use on your local LLM server
-                    </p>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="text-sm font-medium">HomeBrain Local Model</label>
+                      <Input
+                        {...register("homebrainLocalLlmModel")}
+                        placeholder="qwen2.5:7b"
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Used for HomeBrain local features like voice interpretation and automations.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium">Spam Filter Local Model</label>
+                      <Input
+                        {...register("spamFilterLocalLlmModel")}
+                        placeholder="phi3:mini"
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Used by the HomeBrain spam-filter API so Axiom can classify incoming email without choosing a model itself.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-green-200/70 bg-white/70 p-3 text-xs text-muted-foreground dark:border-green-900/60 dark:bg-slate-950/30">
+                    HomeBrain will use the configured HomeBrain model for its own local LLM tasks. The spam filter model is exposed through <code>/api/ollama/spam/filter</code> for external services like Axiom.
                   </div>
                 </div>
               </CardContent>

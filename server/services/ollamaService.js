@@ -2069,6 +2069,7 @@ class OllamaService {
       try {
         const settings = await Settings.getSettings();
         settings.localLlmModel = modelName;
+        settings.homebrainLocalLlmModel = modelName;
         await settings.save();
       } catch (settingsError) {
         console.warn(`OllamaService: Failed to sync Settings.localLlmModel to ${modelName}: ${settingsError.message}`);
