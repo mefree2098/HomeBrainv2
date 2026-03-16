@@ -224,6 +224,14 @@ const SettingsSchema = new mongoose.Schema({
     type: String,
     default: 'llama2-7b'
   },
+  homebrainLocalLlmModel: {
+    type: String,
+    default: 'llama2-7b'
+  },
+  spamFilterLocalLlmModel: {
+    type: String,
+    default: 'llama2-7b'
+  },
   llmPriorityList: {
     type: [String],
     default: ['local', 'openai', 'anthropic'],
@@ -281,6 +289,35 @@ SettingsSchema.statics.getSettings = async function() {
     settings.localLlmEndpoint = 'http://localhost:11434';
     await settings.save();
     console.log('Settings: localLlmEndpoint updated to http://localhost:11434');
+  }
+
+  let updated = false;
+  const legacyLocalModel = typeof settings.localLlmModel === 'string' ? settings.localLlmModel.trim() : '';
+  const homebrainLocalModel = typeof settings.homebrainLocalLlmModel === 'string'
+    ? settings.homebrainLocalLlmModel.trim()
+    : '';
+  const spamFilterLocalModel = typeof settings.spamFilterLocalLlmModel === 'string'
+    ? settings.spamFilterLocalLlmModel.trim()
+    : '';
+
+  if (!homebrainLocalModel && legacyLocalModel) {
+    settings.homebrainLocalLlmModel = legacyLocalModel;
+    updated = true;
+  }
+
+  if (!settings.localLlmModel && homebrainLocalModel) {
+    settings.localLlmModel = homebrainLocalModel;
+    updated = true;
+  }
+
+  if (!spamFilterLocalModel && (homebrainLocalModel || legacyLocalModel)) {
+    settings.spamFilterLocalLlmModel = homebrainLocalModel || legacyLocalModel;
+    updated = true;
+  }
+
+  if (updated) {
+    console.log('Settings: Migrated local model role settings');
+    await settings.save();
   }
   
   return settings;
