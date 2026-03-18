@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 const remoteUpdateService = require('../services/remoteUpdateService');
 const os = require('os');
+
+const admin = requireAdmin();
 
 function getVoiceWebSocketCandidates(app) {
   const wsPrimary = app.get('voiceWebSocket');
@@ -41,7 +43,7 @@ function buildDeviceReachableBaseUrl(req) {
 // Endpoint: GET /api/remote-updates/version
 // Request: {}
 // Response: { version: string }
-router.get('/version', requireUser(), async (req, res) => {
+router.get('/version', admin, async (req, res) => {
   console.log('GET /api/remote-updates/version - Fetching current version');
 
   try {
@@ -66,7 +68,7 @@ router.get('/version', requireUser(), async (req, res) => {
 // Endpoint: GET /api/remote-updates/check/:deviceId
 // Request: {}
 // Response: { updateAvailable: boolean, currentVersion: string, latestVersion: string, deviceName: string }
-router.get('/check/:deviceId', requireUser(), async (req, res) => {
+router.get('/check/:deviceId', admin, async (req, res) => {
   const { deviceId } = req.params;
   console.log(`GET /api/remote-updates/check/${deviceId} - Checking for updates`);
 
@@ -92,7 +94,7 @@ router.get('/check/:deviceId', requireUser(), async (req, res) => {
 // Endpoint: POST /api/remote-updates/generate-package
 // Request: {}
 // Response: { success: boolean, version: string, packageName: string, checksum: string }
-router.post('/generate-package', requireUser(), async (req, res) => {
+router.post('/generate-package', admin, async (req, res) => {
   console.log('POST /api/remote-updates/generate-package - Generating update package');
 
   try {
@@ -119,7 +121,7 @@ router.post('/generate-package', requireUser(), async (req, res) => {
 // Endpoint: GET /api/remote-updates/package-info
 // Request: {}
 // Response: { success: boolean, version?: string, packageName?: string, size?: number, checksum?: string, downloadUrl?: string }
-router.get('/package-info', requireUser(), async (req, res) => {
+router.get('/package-info', admin, async (req, res) => {
   console.log('GET /api/remote-updates/package-info - Fetching package information');
 
   try {
@@ -151,7 +153,7 @@ router.get('/package-info', requireUser(), async (req, res) => {
 // Endpoint: POST /api/remote-updates/initiate/:deviceId
 // Request: {}
 // Response: { success: boolean, device: string, version: string, message: string }
-router.post('/initiate/:deviceId', requireUser(), async (req, res) => {
+router.post('/initiate/:deviceId', admin, async (req, res) => {
   const { deviceId } = req.params;
   console.log(`POST /api/remote-updates/initiate/${deviceId} - Initiating update`);
 
@@ -178,7 +180,7 @@ router.post('/initiate/:deviceId', requireUser(), async (req, res) => {
 // Endpoint: POST /api/remote-updates/initiate-all
 // Request: {}
 // Response: { success: boolean, totalDevices: number, initiated: number, failed: number, results: Array }
-router.post('/initiate-all', requireUser(), async (req, res) => {
+router.post('/initiate-all', admin, async (req, res) => {
   console.log('POST /api/remote-updates/initiate-all - Initiating update for all devices');
 
   try {
@@ -210,7 +212,7 @@ router.post('/initiate-all', requireUser(), async (req, res) => {
 // Endpoint: GET /api/remote-updates/fleet-status
 // Request: {}
 // Response: { success: boolean, latestVersion: string, summary: object, devices: Array }
-router.get('/fleet-status', requireUser(), async (req, res) => {
+router.get('/fleet-status', admin, async (req, res) => {
   console.log('GET /api/remote-updates/fleet-status - Fetching fleet verification state');
 
   try {
@@ -233,7 +235,7 @@ router.get('/fleet-status', requireUser(), async (req, res) => {
 // Endpoint: GET /api/remote-updates/statistics
 // Request: {}
 // Response: { success: boolean, totalDevices: number, currentVersion: string, upToDate: number, outdated: number, updating: number, offline: number, byVersion: object }
-router.get('/statistics', requireUser(), async (req, res) => {
+router.get('/statistics', admin, async (req, res) => {
   console.log('GET /api/remote-updates/statistics - Fetching update statistics');
 
   try {
@@ -258,7 +260,7 @@ router.get('/statistics', requireUser(), async (req, res) => {
 // Endpoint: GET /api/remote-updates/devices-needing-update
 // Request: {}
 // Response: { success: boolean, devices: Array<{ id, name, room, currentVersion, latestVersion, status, lastSeen }> }
-router.get('/devices-needing-update', requireUser(), async (req, res) => {
+router.get('/devices-needing-update', admin, async (req, res) => {
   console.log('GET /api/remote-updates/devices-needing-update - Fetching devices needing update');
 
   try {

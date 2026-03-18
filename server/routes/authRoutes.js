@@ -4,7 +4,7 @@ const { requireUser, extractToken, verifyAccessToken } = require('./middlewares/
 const User = require('../models/User.js');
 const { generateAccessToken, generateRefreshToken } = require('../utils/auth.js');
 const jwt = require('jsonwebtoken');
-const { ALL_ROLES } = require('../../shared/config/roles.js');
+const { ALL_ROLES, ROLES } = require('../../shared/config/roles.js');
 const oidcService = require('../services/oidcService');
 const {
   SESSION_TOKEN_COOKIE_NAME,
@@ -23,7 +23,14 @@ router.post('/login', async (req, res) => {
     return sendError('Email and password are required');
   }
 
-  const user = await UserService.authenticateWithPassword(email, password);
+  let user = null;
+
+  try {
+    user = await UserService.authenticateWithPassword(email, password);
+  } catch (error) {
+    const statusCode = error.status || (error.message === 'User account is inactive' ? 403 : 500);
+    return res.status(statusCode).json({ message: error.message || 'Login failed' });
+  }
 
   if (user) {
     const accessToken = generateAccessToken(user);
@@ -40,15 +47,34 @@ router.post('/login', async (req, res) => {
 });
 
 router.post('/register', async (req, res, next) => {
-  if (req.user) {
-    return res.json({ user: req.user });
-  }
   try {
-    const user = await UserService.create(req.body);
-    return res.status(200).json(user);
+    const registrationOpen = await UserService.canPublicRegister();
+    if (!registrationOpen) {
+      return res.status(403).json({
+        message: 'Public registration is closed. Ask an admin to create your account.'
+      });
+    }
+
+    const user = await UserService.create({
+      ...req.body,
+      role: ROLES.ADMIN
+    });
+
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+
+    user.refreshToken = refreshToken;
+    await user.save();
+    setAuthCookies(res, accessToken, refreshToken);
+
+    return res.status(200).json({
+      ...user.toObject(),
+      accessToken,
+      refreshToken
+    });
   } catch (error) {
     console.error(`Error while registering user: ${error}`);
-    return res.status(400).json({ error });
+    return res.status(400).json({ message: error.message || 'Registration failed' });
   }
 });
 
@@ -189,6 +215,24 @@ router.post('/refresh', async (req, res) => {
 
 router.get('/me', requireUser(ALL_ROLES), async (req, res) => {
   return res.status(200).json(req.user);
+});
+
+router.get('/registration-status', async (_req, res) => {
+  try {
+    const userCount = await UserService.countUsers();
+    const activeAdminCount = await UserService.countActiveAdmins();
+
+    return res.status(200).json({
+      registrationOpen: userCount === 0,
+      userCount,
+      hasActiveAdmin: activeAdminCount > 0
+    });
+  } catch (error) {
+    console.error(`Error while getting registration status: ${error}`);
+    return res.status(500).json({
+      message: 'Failed to get registration status'
+    });
+  }
 });
 
 module.exports = router;

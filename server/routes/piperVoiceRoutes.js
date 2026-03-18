@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 const piperVoiceService = require('../services/piperVoiceService');
 
-router.get('/', requireUser(), async (req, res) => {
+const admin = requireAdmin();
+
+router.get('/', admin, async (req, res) => {
   try {
     const voices = await piperVoiceService.listVoices();
     res.status(200).json({
@@ -19,7 +21,7 @@ router.get('/', requireUser(), async (req, res) => {
   }
 });
 
-router.post('/:voiceId', requireUser(), async (req, res) => {
+router.post('/:voiceId', admin, async (req, res) => {
   try {
     const voice = await piperVoiceService.downloadVoice(req.params.voiceId);
     res.status(202).json({
@@ -36,7 +38,7 @@ router.post('/:voiceId', requireUser(), async (req, res) => {
   }
 });
 
-router.delete('/:voiceId', requireUser(), async (req, res) => {
+router.delete('/:voiceId', admin, async (req, res) => {
   try {
     await piperVoiceService.removeVoice(req.params.voiceId);
     res.status(200).json({
@@ -53,7 +55,7 @@ router.delete('/:voiceId', requireUser(), async (req, res) => {
 });
 
 // Test Piper device/provider (CPU vs GPU)
-router.get('/probe/device', requireUser(), async (req, res) => {
+router.get('/probe/device', admin, async (req, res) => {
   try {
     const info = await piperVoiceService.detectPiperDevice();
     res.status(200).json({ success: true, info });

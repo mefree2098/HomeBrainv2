@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const express = require("express");
 const basicRoutes = require("./routes/index");
 const authRoutes = require("./routes/authRoutes");
+const userRoutes = require("./routes/userRoutes");
 const oidcRoutes = require("./routes/oidcRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const sceneRoutes = require("./routes/sceneRoutes");
@@ -195,6 +196,8 @@ app.use(oidcRoutes);
 app.use(basicRoutes);
 // Authentication Routes
 app.use('/api/auth', authRoutes);
+// User Management Routes
+app.use('/api/users', userRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
 // Scene Routes

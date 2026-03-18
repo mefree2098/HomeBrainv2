@@ -15,7 +15,8 @@ import {
   Rocket,
   Workflow,
   Activity,
-  Waypoints
+  Waypoints,
+  Volume2
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -28,14 +29,15 @@ const navigation = [
   { name: 'Scenes', href: '/scenes', icon: Palette },
   { name: 'Workflows', href: '/workflows', icon: Workflow },
   { name: 'Automations', href: '/automations', icon: Zap },
-  { name: 'Voice Devices', href: '/voice-devices', icon: Mic },
-  { name: 'User Profiles', href: '/profiles', icon: Users },
-  { name: 'Ollama / LLM', href: '/ollama', icon: Brain },
-  { name: 'Whisper STT', href: '/whisper', icon: Cpu },
+  { name: 'Voice Profiles', href: '/voice-profiles', icon: Volume2 },
+  { name: 'Voice Devices', href: '/voice-devices', icon: Mic, adminOnly: true },
+  { name: 'Users', href: '/users', icon: Users, adminOnly: true },
+  { name: 'Ollama / LLM', href: '/ollama', icon: Brain, adminOnly: true },
+  { name: 'Whisper STT', href: '/whisper', icon: Cpu, adminOnly: true },
   { name: 'Platform Deploy', href: '/platform-deploy', icon: Rocket, adminOnly: true },
   { name: 'Reverse Proxy', href: '/reverse-proxy', icon: Waypoints, adminOnly: true },
   { name: 'Operations', href: '/operations', icon: Activity, adminOnly: true },
-  { name: 'Settings', href: '/settings', icon: Settings },
+  { name: 'Settings', href: '/settings', icon: Settings, adminOnly: true },
   { name: 'SSL Certificates', href: '/ssl', icon: Shield, adminOnly: true },
 ]
 

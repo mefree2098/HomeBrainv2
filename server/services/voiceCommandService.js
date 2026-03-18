@@ -6,6 +6,7 @@ const automationService = require('./automationService');
 const workflowService = require('./workflowService');
 const insteonService = require('./insteonService');
 const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
+const { ROLES } = require('../../shared/config/roles.js');
 
 const ACTION_MAP = {
   turn_on: 'turnOn',
@@ -863,6 +864,56 @@ RULES
     });
   }
 
+  enforceRolePermissions(interpretation, userRole = ROLES.USER) {
+    if (!interpretation || userRole === ROLES.ADMIN) {
+      return interpretation;
+    }
+
+    const actions = Array.isArray(interpretation.actions) ? interpretation.actions : [];
+    let blocked = false;
+
+    const allowedActions = actions.filter((action) => {
+      const type = String(action?.type || '').toLowerCase();
+      if (type === 'automation_create' || type === 'workflow_create') {
+        blocked = true;
+        return false;
+      }
+
+      if (type === 'workflow_control') {
+        const operation = String(action?.operation || action?.command || 'run').toLowerCase();
+        if (!['run', 'execute', 'start', 'trigger'].includes(operation)) {
+          blocked = true;
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    if (!blocked) {
+      return interpretation;
+    }
+
+    if (allowedActions.length > 0) {
+      return {
+        ...interpretation,
+        actions: allowedActions,
+        usedFallback: true,
+        response: 'Running the parts of that request available to a standard user.'
+      };
+    }
+
+    return {
+      intent: 'query',
+      confidence: typeof interpretation.confidence === 'number' ? interpretation.confidence : 0.5,
+      normalizedCommand: interpretation.normalizedCommand || '',
+      actions: [],
+      response: 'That action requires an admin account. Standard users can control devices and run existing scenes or workflows.',
+      followUpQuestion: null,
+      usedFallback: true
+    };
+  }
+
   shouldRejectUnsafeControlInterpretation(commandText, interpretation) {
     if (!this.hasControlIntentActions(interpretation)) {
       return false;
@@ -1375,7 +1426,8 @@ RULES
       room,
       wakeWord,
       deviceId,
-      stt
+      stt,
+      userRole = ROLES.USER
     } = options;
 
     const context = await this.getContext();
@@ -1413,6 +1465,8 @@ RULES
       interpretation = interpretationResult.interpretation;
       llm = interpretationResult.llm;
     }
+
+    interpretation = this.enforceRolePermissions(interpretation, userRole);
 
     const likelyAutomation = this.isLikelyAutomationRequest(commandText);
     const hasAutomationLikeActions = Array.isArray(interpretation?.actions) &&

@@ -1,13 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 const ollamaService = require('../services/ollamaService');
 const spamFilterService = require('../services/spamFilterService');
 const OllamaConfig = require('../models/OllamaConfig');
 const settingsService = require('../services/settingsService');
 
 // Create auth middleware instance
-const auth = requireUser();
+const auth = requireAdmin();
 
 // Description: Get Ollama status and configuration
 // Endpoint: GET /api/ollama/status

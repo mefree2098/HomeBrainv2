@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 const ecobeeService = require('../services/ecobeeService');
 const EcobeeIntegration = require('../models/EcobeeIntegration');
 
-const auth = requireUser();
+const auth = requireAdmin();
 
 router.get('/status', auth, async (req, res) => {
   try {

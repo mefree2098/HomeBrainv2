@@ -2,10 +2,10 @@ const express = require('express');
 const router = express.Router();
 const settingsService = require('../services/settingsService');
 const { testOpenAIModelCompatibility } = require('../services/llmService');
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 
 // Create auth middleware instance
-const auth = requireUser();
+const auth = requireAdmin();
 
 /**
  * GET /api/settings

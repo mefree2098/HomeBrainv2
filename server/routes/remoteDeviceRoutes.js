@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const VoiceDevice = require('../models/VoiceDevice');
-const { requireUser } = require('./middlewares/auth');
+const { requireUser, requireAdmin } = require('./middlewares/auth');
 const crypto = require('crypto');
 const wakeWordAssets = require('../utils/wakeWordAssets');
 const WakeWordModel = require('../models/WakeWordModel');
@@ -17,6 +17,7 @@ const eventStreamService = require('../services/eventStreamService');
 const { getRequestOrigin, toWebSocketOrigin } = require('../utils/publicOrigin');
 
 const execFileAsync = promisify(execFile);
+const admin = requireAdmin();
 const REMOTE_SETUP_PACKAGE_NAME = 'homebrain-remote-setup.tar.gz';
 const REMOTE_SETUP_PACKAGE_DIR = path.join(__dirname, '..', 'public', 'downloads');
 const REMOTE_SETUP_PACKAGE_PATH = path.join(REMOTE_SETUP_PACKAGE_DIR, REMOTE_SETUP_PACKAGE_NAME);
@@ -155,7 +156,7 @@ async function ensureRemoteSetupPackage() {
 // Endpoint: POST /api/remote-devices/register
 // Request: { name: string, room: string, deviceType?: string, macAddress?: string }
 // Response: { success: boolean, device: object, registrationCode: string }
-router.post('/register', requireUser(), async (req, res) => {
+router.post('/register', admin, async (req, res) => {
   console.log('POST /api/remote-devices/register - Registering new remote device');
 
   try {
@@ -725,7 +726,7 @@ router.post('/activate', async (req, res) => {
   }
 });
 
-router.post('/:deviceId/claim-token/rotate', requireUser(), async (req, res) => {
+router.post('/:deviceId/claim-token/rotate', admin, async (req, res) => {
   const { deviceId } = req.params;
   try {
     const device = await VoiceDevice.findById(deviceId);
@@ -877,7 +878,7 @@ router.post('/:deviceId/heartbeat', async (req, res) => {
 // Endpoint: GET /api/remote-devices/setup-instructions
 // Request: {}
 // Response: { success: boolean, instructions: object }
-router.get('/setup-instructions', requireUser(), async (req, res) => {
+router.get('/setup-instructions', admin, async (req, res) => {
   console.log('GET /api/remote-devices/setup-instructions - Fetching setup instructions');
 
   try {
@@ -952,7 +953,7 @@ router.get('/setup-instructions', requireUser(), async (req, res) => {
 // Endpoint: DELETE /api/remote-devices/:deviceId
 // Request: {}
 // Response: { success: boolean, message: string }
-router.delete('/:deviceId', requireUser(), async (req, res) => {
+router.delete('/:deviceId', admin, async (req, res) => {
   const { deviceId } = req.params;
   console.log(`DELETE /api/remote-devices/${deviceId} - Deleting remote device`);
 

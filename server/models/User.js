@@ -5,12 +5,19 @@ const {randomUUID} = require("crypto");
 const { ROLES } = require('../../shared/config/roles.js');
 
 const schema = new mongoose.Schema({
+  name: {
+    type: String,
+    default: '',
+    trim: true,
+    maxlength: 120,
+  },
   email: {
     type: String,
     required: true,
     index: true,
     unique: true,
     lowercase: true,
+    trim: true,
   },
   password: {
     type: String,

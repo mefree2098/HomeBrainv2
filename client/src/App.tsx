@@ -16,6 +16,7 @@ const Automations = lazy(() => import("./pages/Automations").then((module) => ({
 const Workflows = lazy(() => import("./pages/Workflows").then((module) => ({ default: module.Workflows })))
 const VoiceDevices = lazy(() => import("./pages/VoiceDevices").then((module) => ({ default: module.VoiceDevices })))
 const UserProfiles = lazy(() => import("./pages/UserProfiles").then((module) => ({ default: module.UserProfiles })))
+const Users = lazy(() => import("./pages/Users").then((module) => ({ default: module.Users })))
 const Settings = lazy(() => import("./pages/Settings").then((module) => ({ default: module.Settings })))
 const PlatformDeploy = lazy(() => import("./pages/PlatformDeploy").then((module) => ({ default: module.PlatformDeploy })))
 const ReverseProxyManagement = lazy(() => import("./pages/ReverseProxyManagement"))
@@ -36,8 +37,8 @@ function LoadingScreen() {
   )
 }
 
-const withLayout = (content: ReactNode) => (
-  <ProtectedRoute>
+const withLayout = (content: ReactNode, options: { adminOnly?: boolean } = {}) => (
+  <ProtectedRoute adminOnly={options.adminOnly}>
     <Layout>{content}</Layout>
   </ProtectedRoute>
 )
@@ -56,15 +57,17 @@ function App() {
             <Route path="/scenes" element={withLayout(<Scenes />)} />
             <Route path="/workflows" element={withLayout(<Workflows />)} />
             <Route path="/automations" element={withLayout(<Automations />)} />
-            <Route path="/voice-devices" element={withLayout(<VoiceDevices />)} />
+            <Route path="/voice-devices" element={withLayout(<VoiceDevices />, { adminOnly: true })} />
+            <Route path="/voice-profiles" element={withLayout(<UserProfiles />)} />
             <Route path="/profiles" element={withLayout(<UserProfiles />)} />
-            <Route path="/settings" element={withLayout(<Settings />)} />
-            <Route path="/platform-deploy" element={withLayout(<PlatformDeploy />)} />
-            <Route path="/reverse-proxy" element={withLayout(<ReverseProxyManagement />)} />
-            <Route path="/operations" element={withLayout(<Operations />)} />
-            <Route path="/ssl" element={withLayout(<SSLManagement />)} />
-            <Route path="/ollama" element={withLayout(<OllamaManagement />)} />
-            <Route path="/whisper" element={withLayout(<WhisperManagement />)} />
+            <Route path="/users" element={withLayout(<Users />, { adminOnly: true })} />
+            <Route path="/settings" element={withLayout(<Settings />, { adminOnly: true })} />
+            <Route path="/platform-deploy" element={withLayout(<PlatformDeploy />, { adminOnly: true })} />
+            <Route path="/reverse-proxy" element={withLayout(<ReverseProxyManagement />, { adminOnly: true })} />
+            <Route path="/operations" element={withLayout(<Operations />, { adminOnly: true })} />
+            <Route path="/ssl" element={withLayout(<SSLManagement />, { adminOnly: true })} />
+            <Route path="/ollama" element={withLayout(<OllamaManagement />, { adminOnly: true })} />
+            <Route path="/whisper" element={withLayout(<WhisperManagement />, { adminOnly: true })} />
             <Route path="*" element={<BlankPage />} />
           </Routes>
         </Suspense>

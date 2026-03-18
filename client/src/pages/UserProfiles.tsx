@@ -19,9 +19,11 @@ import { getUserProfiles, saveUserProfile, getAvailableVoices, updateUserProfile
 import { generateVoicePreview, playAudioBlob } from "@/api/elevenLabs"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
+import { useAuth } from "@/contexts/AuthContext"
 
 export function UserProfiles() {
   const { toast } = useToast()
+  const { isAdmin } = useAuth()
   const [profiles, setProfiles] = useState([])
   const [voices, setVoices] = useState([])
   const [loading, setLoading] = useState(true)
@@ -201,25 +203,29 @@ export function UserProfiles() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            User Profiles
+            Voice Profiles
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage voice recognition and personalized AI responses
+            {isAdmin
+              ? "Manage voice recognition, wake words, and assistant personas"
+              : "Browse the voice personas configured for your HomeBrain assistant"}
           </p>
         </div>
 
+        {isAdmin ? (
+        <>
         <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
           <DialogTrigger asChild>
             <Button className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-lg">
               <Plus className="h-4 w-4 mr-2" />
-              Create Profile
+              Create Voice Profile
             </Button>
           </DialogTrigger>
           <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60 max-w-2xl" aria-describedby="create-profile-description">
             <DialogHeader>
-              <DialogTitle>Create User Profile</DialogTitle>
+              <DialogTitle>Create Voice Profile</DialogTitle>
               <p id="create-profile-description" className="text-sm text-muted-foreground">
-                Create a new user profile with personalized voice recognition and AI settings
+                Create a new voice persona with personalized wake words and AI settings
               </p>
             </DialogHeader>
             <form onSubmit={handleSubmit(handleCreateProfile)} className="space-y-4">
@@ -281,9 +287,9 @@ export function UserProfiles() {
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
           <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60 max-w-2xl" aria-describedby="edit-profile-description">
             <DialogHeader>
-              <DialogTitle>Edit User Profile</DialogTitle>
+              <DialogTitle>Edit Voice Profile</DialogTitle>
               <p id="edit-profile-description" className="text-sm text-muted-foreground">
-                Modify the settings for {editingProfile?.name || 'this profile'}
+                Modify the settings for {editingProfile?.name || 'this voice profile'}
               </p>
             </DialogHeader>
             <form onSubmit={handleSubmitEdit(handleUpdateProfile)} className="space-y-4">
@@ -328,7 +334,7 @@ export function UserProfiles() {
                   className="mt-1 min-h-[100px]"
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  This defines the AI personality and behavior for this user
+                  This defines the AI personality and behavior for this voice persona
                 </p>
               </div>
               <div className="flex gap-2 pt-4">
@@ -340,7 +346,15 @@ export function UserProfiles() {
             </form>
           </DialogContent>
         </Dialog>
+        </>
+        ) : null}
       </div>
+
+      {!isAdmin ? (
+        <div className="rounded-[1.5rem] border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          Standard users can review voice profiles and preview voices, but only admins can edit assistant personas.
+        </div>
+      ) : null}
 
       {/* Profile Stats */}
       <div className="grid gap-4 md:grid-cols-3">
@@ -466,21 +480,23 @@ export function UserProfiles() {
                 </p>
               </div>
 
-              <div className="flex gap-2">
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="flex-1"
-                  onClick={() => handleEditProfile(profile)}
-                >
-                  <Settings className="h-3 w-3 mr-1" />
-                  Edit
-                </Button>
-                <Button variant="outline" size="sm" className="flex-1">
-                  <Mic className="h-3 w-3 mr-1" />
-                  Train
-                </Button>
-              </div>
+              {isAdmin ? (
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="flex-1"
+                    onClick={() => handleEditProfile(profile)}
+                  >
+                    <Settings className="h-3 w-3 mr-1" />
+                    Edit
+                  </Button>
+                  <Button variant="outline" size="sm" className="flex-1">
+                    <Mic className="h-3 w-3 mr-1" />
+                    Train
+                  </Button>
+                </div>
+              ) : null}
 
               <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
                 <strong>Test:</strong> Say "{profile.wakeWords[0]}, hello" to test voice recognition
@@ -494,17 +510,21 @@ export function UserProfiles() {
         <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Users className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No User Profiles</h3>
+            <h3 className="text-lg font-semibold mb-2">No Voice Profiles</h3>
             <p className="text-muted-foreground text-center mb-4">
-              Create user profiles for personalized voice recognition and AI responses
+              {isAdmin
+                ? "Create voice profiles for personalized wake words and AI responses"
+                : "No voice profiles are configured yet."}
             </p>
-            <Button
-              onClick={() => setIsCreateDialogOpen(true)}
-              className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Create Your First Profile
-            </Button>
+            {isAdmin ? (
+              <Button
+                onClick={() => setIsCreateDialogOpen(true)}
+                className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Create Your First Voice Profile
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       )}

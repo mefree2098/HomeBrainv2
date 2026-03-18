@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 const harmonyService = require('../services/harmonyService');
 
-router.use(requireUser());
+router.use(requireAdmin());
 
 router.get('/status', async (req, res) => {
   try {

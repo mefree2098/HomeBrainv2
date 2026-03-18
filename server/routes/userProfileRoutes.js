@@ -2,10 +2,11 @@ const express = require('express');
 const router = express.Router();
 const userProfileService = require('../services/userProfileService');
 const elevenLabsService = require('../services/elevenLabsService');
-const { requireUser } = require('./middlewares/auth');
+const { requireUser, requireAdmin } = require('./middlewares/auth');
 
 // Create auth middleware instance
 const auth = requireUser();
+const admin = requireAdmin();
 
 /**
  * GET /api/profiles
@@ -173,7 +174,7 @@ router.get('/:id', auth, async (req, res) => {
  * POST /api/profiles
  * Create new user profile
  */
-router.post('/', auth, async (req, res) => {
+router.post('/', admin, async (req, res) => {
   try {
     console.log('POST /api/profiles - Creating new user profile');
     console.log('Request body:', JSON.stringify(req.body, null, 2));
@@ -279,7 +280,7 @@ router.post('/', auth, async (req, res) => {
  * PUT /api/profiles/:id
  * Update user profile
  */
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', admin, async (req, res) => {
   try {
     console.log(`PUT /api/profiles/${req.params.id} - Updating user profile`);
     console.log('Request body:', JSON.stringify(req.body, null, 2));
@@ -324,7 +325,7 @@ router.put('/:id', auth, async (req, res) => {
  * DELETE /api/profiles/:id
  * Delete user profile
  */
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', admin, async (req, res) => {
   try {
     console.log(`DELETE /api/profiles/${req.params.id} - Deleting user profile`);
     
@@ -359,7 +360,7 @@ router.delete('/:id', auth, async (req, res) => {
  * PATCH /api/profiles/:id/toggle
  * Toggle profile active status
  */
-router.patch('/:id/toggle', auth, async (req, res) => {
+router.patch('/:id/toggle', admin, async (req, res) => {
   try {
     console.log(`PATCH /api/profiles/${req.params.id}/toggle - Toggling profile status`);
     

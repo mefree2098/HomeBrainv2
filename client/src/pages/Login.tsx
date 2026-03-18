@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { useLocation, useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { useAuth } from "@/contexts/AuthContext"
 import { ThemeToggle } from "@/components/ui/theme-toggle"
+import { getRegistrationStatus } from "@/api/auth"
 
 type LoginForm = {
   email: string
@@ -26,6 +27,7 @@ type LoginForm = {
 
 export function Login() {
   const [loading, setLoading] = useState(false)
+  const [registrationOpen, setRegistrationOpen] = useState(false)
   const { toast } = useToast()
   const { login } = useAuth()
   const navigate = useNavigate()
@@ -47,6 +49,29 @@ export function Login() {
       return ""
     }
   })()
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadRegistrationStatus = async () => {
+      try {
+        const status = await getRegistrationStatus()
+        if (!cancelled) {
+          setRegistrationOpen(status.registrationOpen)
+        }
+      } catch (_error) {
+        if (!cancelled) {
+          setRegistrationOpen(false)
+        }
+      }
+    }
+
+    void loadRegistrationStatus()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const onSubmit = async (data: LoginForm) => {
     try {
@@ -162,13 +187,19 @@ export function Login() {
             </form>
           </CardContent>
           <CardFooter className="flex justify-center">
-            <Button
-              variant="link"
-              className="text-sm text-muted-foreground"
-              onClick={() => navigate(returnTo ? `/register?returnTo=${encodeURIComponent(returnTo)}` : "/register")}
-            >
-              Don't have an account? Sign up
-            </Button>
+            {registrationOpen ? (
+              <Button
+                variant="link"
+                className="text-sm text-muted-foreground"
+                onClick={() => navigate(returnTo ? `/register?returnTo=${encodeURIComponent(returnTo)}` : "/register")}
+              >
+                Don't have an account? Sign up
+              </Button>
+            ) : (
+              <p className="text-center text-sm text-muted-foreground">
+                New accounts are created by an admin from the Users screen.
+              </p>
+            )}
           </CardFooter>
         </Card>
       </div>

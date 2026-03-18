@@ -1,6 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const automationService = require('../services/automationService');
+const { requireUser, requireAdmin } = require('./middlewares/auth');
+
+const auth = requireUser();
+const admin = requireAdmin();
+
+router.use(auth);
 
 /**
  * GET /api/automations
@@ -98,7 +104,7 @@ router.get('/:id', async (req, res) => {
  * POST /api/automations
  * Create a new automation
  */
-router.post('/', async (req, res) => {
+router.post('/', admin, async (req, res) => {
   try {
     console.log('AutomationRoutes: POST /api/automations - Creating new automation');
     console.log('AutomationRoutes: Automation data received:', req.body);
@@ -168,7 +174,7 @@ router.post('/', async (req, res) => {
  * POST /api/automations/create-from-text
  * Create automation from natural language text
  */
-router.post('/create-from-text', async (req, res) => {
+router.post('/create-from-text', admin, async (req, res) => {
   try {
     console.log('AutomationRoutes: POST /api/automations/create-from-text - Creating automation from natural language');
     console.log('AutomationRoutes: Text received:', req.body);
@@ -213,7 +219,7 @@ router.post('/create-from-text', async (req, res) => {
  * PUT /api/automations/:id
  * Update an existing automation
  */
-router.put('/:id', async (req, res) => {
+router.put('/:id', admin, async (req, res) => {
   try {
     const { id } = req.params;
     console.log(`AutomationRoutes: PUT /api/automations/${id} - Updating automation`);
@@ -282,7 +288,7 @@ router.put('/:id', async (req, res) => {
  * PUT /api/automations/:id/toggle
  * Toggle automation enabled status
  */
-router.put('/:id/toggle', async (req, res) => {
+router.put('/:id/toggle', admin, async (req, res) => {
   try {
     const { id } = req.params;
     const { enabled } = req.body;
@@ -382,7 +388,7 @@ router.post('/:id/execute', async (req, res) => {
  * DELETE /api/automations/:id
  * Delete an automation
  */
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', admin, async (req, res) => {
   try {
     const { id } = req.params;
     console.log(`AutomationRoutes: DELETE /api/automations/${id} - Deleting automation`);

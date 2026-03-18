@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { useLocation, useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { useAuth } from "@/contexts/AuthContext"
 import { ThemeToggle } from "@/components/ui/theme-toggle"
+import { getRegistrationStatus } from "@/api/auth"
 
 type RegisterForm = {
   email: string
@@ -26,6 +27,7 @@ type RegisterForm = {
 
 export function Register() {
   const [loading, setLoading] = useState(false)
+  const [registrationOpen, setRegistrationOpen] = useState<boolean | null>(null)
   const { toast } = useToast()
   const { register: registerUser } = useAuth()
   const navigate = useNavigate()
@@ -48,6 +50,29 @@ export function Register() {
     }
   })()
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadRegistrationStatus = async () => {
+      try {
+        const status = await getRegistrationStatus()
+        if (!cancelled) {
+          setRegistrationOpen(status.registrationOpen)
+        }
+      } catch (_error) {
+        if (!cancelled) {
+          setRegistrationOpen(false)
+        }
+      }
+    }
+
+    void loadRegistrationStatus()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const onSubmit = async (data: RegisterForm) => {
     try {
       setLoading(true)
@@ -56,7 +81,7 @@ export function Register() {
         title: "Success",
         description: "Account created successfully",
       })
-      navigate(returnTo ? `/login?returnTo=${encodeURIComponent(returnTo)}` : "/login")
+      navigate(returnTo || "/")
     } catch (error) {
       console.log("Register error:", error)
       toast({
@@ -123,39 +148,49 @@ export function Register() {
           <CardHeader>
             <p className="section-kicker">Create Account</p>
             <CardTitle className="mt-2 text-3xl">Create an account</CardTitle>
-            <CardDescription>Enter your details to get started with HomeBrain.</CardDescription>
+            <CardDescription>
+              {registrationOpen === false
+                ? "Initial setup is complete. Ask an admin to create your account from the Users page."
+                : "Enter your details to get started with HomeBrain."}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="Enter your email"
-                  {...register("email", { required: true })}
-                />
+            {registrationOpen === false ? (
+              <div className="rounded-[1.5rem] border border-border/70 bg-muted/40 p-4 text-sm text-muted-foreground">
+                Public registration is only available before the first HomeBrain admin account is created.
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="Choose a password"
-                  {...register("password", { required: true })}
-                />
-              </div>
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? (
-                  "Loading..."
-                ) : (
-                  <>
-                    <UserPlus className="h-4 w-4" />
-                    Create Account
-                  </>
-                )}
-              </Button>
-            </form>
+            ) : (
+              <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="Enter your email"
+                    {...register("email", { required: true })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="Choose a password"
+                    {...register("password", { required: true })}
+                  />
+                </div>
+                <Button type="submit" className="w-full" disabled={loading || registrationOpen === null}>
+                  {loading ? (
+                    "Loading..."
+                  ) : (
+                    <>
+                      <UserPlus className="h-4 w-4" />
+                      Create Account
+                    </>
+                  )}
+                </Button>
+              </form>
+            )}
           </CardContent>
           <CardFooter className="flex justify-center">
             <Button

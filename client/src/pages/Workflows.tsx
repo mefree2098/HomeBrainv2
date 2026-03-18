@@ -34,6 +34,7 @@ import {
 import { getDevices } from "@/api/devices";
 import { getScenes } from "@/api/scenes";
 import { interpretVoiceCommand } from "@/api/voice";
+import { useAuth } from "@/contexts/AuthContext";
 
 type DeviceLite = {
   _id: string;
@@ -177,6 +178,7 @@ const sanitizeWorkflowPayload = (workflow: Partial<Workflow>): Partial<Workflow>
 
 export function Workflows() {
   const { toast } = useToast();
+  const { isAdmin } = useAuth();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [devices, setDevices] = useState<DeviceLite[]>([]);
@@ -527,19 +529,23 @@ export function Workflows() {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Workflow Studio</h1>
           <p className="mt-1 text-muted-foreground">
-            Build automations visually, create them with AI chat, and trigger them by voice.
+            {isAdmin
+              ? "Build automations visually, create them with AI chat, and trigger them by voice."
+              : "Review and run existing workflows without changing the underlying automation logic."}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={handleImportClick}>
-            <Upload className="mr-2 h-4 w-4" />
-            Import JSON
-          </Button>
-          <Button onClick={openCreateDialog}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Workflow
-          </Button>
-        </div>
+        {isAdmin ? (
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={handleImportClick}>
+              <Upload className="mr-2 h-4 w-4" />
+              Import JSON
+            </Button>
+            <Button onClick={openCreateDialog}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Workflow
+            </Button>
+          </div>
+        ) : null}
       </div>
       <input
         ref={importInputRef}
@@ -576,54 +582,62 @@ export function Workflows() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4" />
-            Quick Templates
-          </CardTitle>
-          <CardDescription>
-            Start from a proven template, then customize in the visual builder.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {TEMPLATE_DEFINITIONS.map((template) => (
-            <button
-              key={template.id}
-              type="button"
-              className="rounded-md border p-3 text-left transition hover:border-blue-300 hover:bg-blue-50/60 dark:hover:bg-blue-950/20"
-              onClick={() => void createTemplateWorkflow(template.id)}
-            >
-              <div className="mb-1 font-medium">{template.name}</div>
-              <p className="text-xs text-muted-foreground">{template.description}</p>
-            </button>
-          ))}
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-4 lg:grid-cols-2">
+      {isAdmin ? (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Sparkles className="h-4 w-4" />
-              Create with AI
+              Quick Templates
             </CardTitle>
             <CardDescription>
-              Describe the workflow in plain English. HomeBrain will generate trigger + action steps automatically.
+              Start from a proven template, then customize in the visual builder.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <Textarea
-              value={nlPrompt}
-              onChange={(event) => setNlPrompt(event.target.value)}
-              placeholder="Every weekday at 6:30 AM, turn on kitchen lights and set thermostat to 71."
-            />
-            <Button onClick={() => void handleCreateFromText()} disabled={creatingFromText || !nlPrompt.trim()}>
-              <Wand2 className="mr-2 h-4 w-4" />
-              {creatingFromText ? "Creating..." : "Generate Workflow"}
-            </Button>
+          <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {TEMPLATE_DEFINITIONS.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                className="rounded-md border p-3 text-left transition hover:border-blue-300 hover:bg-blue-50/60 dark:hover:bg-blue-950/20"
+                onClick={() => void createTemplateWorkflow(template.id)}
+              >
+                <div className="mb-1 font-medium">{template.name}</div>
+                <p className="text-xs text-muted-foreground">{template.description}</p>
+              </button>
+            ))}
           </CardContent>
         </Card>
+      ) : (
+        <div className="rounded-[1.5rem] border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          Standard users can run workflows and use command chat, but only admins can create or reconfigure workflow templates.
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {isAdmin ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4" />
+                Create with AI
+              </CardTitle>
+              <CardDescription>
+                Describe the workflow in plain English. HomeBrain will generate trigger + action steps automatically.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Textarea
+                value={nlPrompt}
+                onChange={(event) => setNlPrompt(event.target.value)}
+                placeholder="Every weekday at 6:30 AM, turn on kitchen lights and set thermostat to 71."
+              />
+              <Button onClick={() => void handleCreateFromText()} disabled={creatingFromText || !nlPrompt.trim()}>
+                <Wand2 className="mr-2 h-4 w-4" />
+                {creatingFromText ? "Creating..." : "Generate Workflow"}
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader>
@@ -639,7 +653,9 @@ export function Workflows() {
             <Input
               value={chatCommand}
               onChange={(event) => setChatCommand(event.target.value)}
-              placeholder='Try: "create a workflow that turns off lights at 11 PM"'
+              placeholder={isAdmin
+                ? 'Try: "create a workflow that turns off lights at 11 PM"'
+                : 'Try: "turn on the living room lights"'}
             />
             <Button onClick={() => void handleRunChatCommand()} disabled={runningChatCommand || !chatCommand.trim()}>
               <Bot className="mr-2 h-4 w-4" />
@@ -665,7 +681,11 @@ export function Workflows() {
                   <Badge variant={workflow.enabled ? "secondary" : "outline"}>
                     {workflow.enabled ? "Enabled" : "Disabled"}
                   </Badge>
-                  <Switch checked={workflow.enabled} onCheckedChange={(value) => void handleToggleWorkflow(workflow, value)} />
+                  <Switch
+                    checked={workflow.enabled}
+                    disabled={!isAdmin}
+                    onCheckedChange={(value) => void handleToggleWorkflow(workflow, value)}
+                  />
                 </div>
               </div>
             </CardHeader>
@@ -714,22 +734,26 @@ export function Workflows() {
                   <Play className="mr-2 h-4 w-4" />
                   Run Now
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => openEditDialog(workflow)}>
-                  <History className="mr-2 h-4 w-4" />
-                  Edit Flow
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void handleCloneWorkflow(workflow)}>
-                  <Copy className="mr-2 h-4 w-4" />
-                  Clone
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => handleExportWorkflow(workflow)}>
-                  <Download className="mr-2 h-4 w-4" />
-                  Export
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void handleDeleteWorkflow(workflow)}>
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete
-                </Button>
+                {isAdmin ? (
+                  <>
+                    <Button size="sm" variant="outline" onClick={() => openEditDialog(workflow)}>
+                      <History className="mr-2 h-4 w-4" />
+                      Edit Flow
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => void handleCloneWorkflow(workflow)}>
+                      <Copy className="mr-2 h-4 w-4" />
+                      Clone
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => handleExportWorkflow(workflow)}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Export
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => void handleDeleteWorkflow(workflow)}>
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete
+                    </Button>
+                  </>
+                ) : null}
               </div>
             </CardContent>
           </Card>
@@ -741,12 +765,16 @@ export function Workflows() {
           <CardContent className="py-12 text-center">
             <div className="mb-3 text-lg font-semibold">No workflows yet</div>
             <p className="mb-4 text-sm text-muted-foreground">
-              Start by generating one with AI text or creating one manually in the visual builder.
+              {isAdmin
+                ? "Start by generating one with AI text or creating one manually in the visual builder."
+                : "No workflows are available to run yet."}
             </p>
-            <Button onClick={openCreateDialog}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create First Workflow
-            </Button>
+            {isAdmin ? (
+              <Button onClick={openCreateDialog}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create First Workflow
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
