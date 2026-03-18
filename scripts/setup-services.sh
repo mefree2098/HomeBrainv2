@@ -360,6 +360,8 @@ update_homebrain() {
   sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapReverseProxyState.js --actor system:update"
   print_status "Bootstrapping identity database state..."
   sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapIdentityState.js --actor system:update"
+  print_status "Bootstrapping default admin state..."
+  sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapAdminState.js --actor system:update"
   print_success "HomeBrain updated."
 }
 

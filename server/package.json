@@ -8,6 +8,7 @@
     "dev": "node server.js",
     "test": "NODE_ENV=test node --test tests/*.test.js",
     "ensure:native": "node scripts/ensureNativeModuleCompatibility.js",
+    "bootstrap:admin": "node scripts/bootstrapAdminState.js",
     "seed:devices": "node scripts/seeds/deviceSeeds.js",
     "seed:all": "npm run seed:devices",
     "check:webhook": "node scripts/checkSmartThingsWebhookHealth.js"
