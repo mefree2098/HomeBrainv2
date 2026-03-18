@@ -9,6 +9,7 @@ const eventStreamService = require('./eventStreamService');
 const caddyAdminService = require('./caddyAdminService');
 const reverseProxyService = require('./reverseProxyService');
 const oidcService = require('./oidcService');
+const adminBootstrapService = require('./adminBootstrapService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
 
@@ -1085,6 +1086,23 @@ class PlatformDeployService {
           + `settingsUpdated=${bootstrapSummary.settingsUpdated.join(',') || 'none'} `
           + `createdClients=${bootstrapSummary.createdClients.join(',') || 'none'} `
           + `updatedClients=${bootstrapSummary.updatedClients.join(',') || 'none'}\n`
+        );
+      });
+
+      await runCustomStep('Bootstrap default admin state', async () => {
+        const bootstrapSummary = await adminBootstrapService.ensureBootstrapState({
+          actor: `platform-deploy:${job.actor || 'unknown'}`
+        });
+
+        await this.appendJobLog(
+          jobId,
+          `[${new Date().toISOString()}] [Bootstrap default admin state] `
+          + `email=${bootstrapSummary.email || 'none'} `
+          + `created=${bootstrapSummary.created ? 'yes' : 'no'} `
+          + `updated=${bootstrapSummary.updated ? 'yes' : 'no'} `
+          + `skipped=${bootstrapSummary.skipped ? 'yes' : 'no'} `
+          + `reason=${bootstrapSummary.reason || 'none'} `
+          + `changes=${bootstrapSummary.changes.join(',') || 'none'}\n`
         );
       });
 

@@ -284,6 +284,8 @@ configure_env() {
   set_env_value_if_missing "${env_file}" "DATABASE_URL" "mongodb://localhost/HomeBrain"
   set_env_value_if_missing "${env_file}" "CADDY_ADMIN_URL" "http://127.0.0.1:2019"
   set_env_value_if_missing "${env_file}" "ACME_ENV" "${default_acme_env}"
+  set_env_value_if_missing "${env_file}" "HOMEBRAIN_DEFAULT_ADMIN_EMAIL" "matt@freestonefamily.com"
+  set_env_value_if_missing "${env_file}" "HOMEBRAIN_DEFAULT_ADMIN_NAME" "Matt Freestone"
 
   if ! grep -q '^JWT_SECRET=' "${env_file}"; then
     set_env_value "${env_file}" "JWT_SECRET" "$(openssl rand -hex 32)"
@@ -299,6 +301,10 @@ configure_env() {
 
   if [[ -n "${HOMEBRAIN_EXPECTED_PUBLIC_IP:-}" ]]; then
     set_env_value "${env_file}" "HOMEBRAIN_EXPECTED_PUBLIC_IP" "${HOMEBRAIN_EXPECTED_PUBLIC_IP}"
+  fi
+
+  if [[ -n "${HOMEBRAIN_DEFAULT_ADMIN_PASSWORD:-}" ]]; then
+    set_env_value "${env_file}" "HOMEBRAIN_DEFAULT_ADMIN_PASSWORD" "${HOMEBRAIN_DEFAULT_ADMIN_PASSWORD}"
   fi
 
   print_warning "Add optional API keys to ${env_file} before enabling cloud providers."
@@ -397,7 +403,9 @@ bootstrap_reverse_proxy_state() {
   node server/scripts/bootstrapReverseProxyState.js --actor system:install
   print_status "Bootstrapping identity database state..."
   node server/scripts/bootstrapIdentityState.js --actor system:install
-  print_success "Reverse proxy and identity database state are ready."
+  print_status "Bootstrapping default admin state..."
+  node server/scripts/bootstrapAdminState.js --actor system:install
+  print_success "Reverse proxy, identity, and admin database state are ready."
 }
 
 print_summary() {

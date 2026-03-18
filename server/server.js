@@ -37,6 +37,7 @@ const whisperRoutes = require("./routes/whisperRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
+const adminBootstrapService = require("./services/adminBootstrapService");
 const { requireUser } = require("./routes/middlewares/auth");
 const DiscoveryService = require("./services/discoveryService");
 const settingsService = require("./services/settingsService");
@@ -48,6 +49,7 @@ const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
 const automationSchedulerService = require("./services/automationSchedulerService");
 const { connectDB } = require("./config/database");
+const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
 const cors = require("cors");
 const http = require("http");
 const fs = require("fs");
@@ -126,7 +128,24 @@ app.use(express.json({
 app.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
 // Database connection
-connectDB();
+const dbReady = connectDB();
+
+void dbReady
+  .then(async () => {
+    const result = await adminBootstrapService.ensureBootstrapState({ actor: 'system:server-startup' });
+    const details = [
+      `email=${result.email || 'none'}`,
+      `created=${result.created ? 'yes' : 'no'}`,
+      `updated=${result.updated ? 'yes' : 'no'}`,
+      `skipped=${result.skipped ? 'yes' : 'no'}`,
+      `reason=${result.reason || 'none'}`,
+      `changes=${result.changes.length > 0 ? result.changes.join(',') : 'none'}`
+    ].join(' ');
+    console.log(`Default admin bootstrap summary: ${details}`);
+  })
+  .catch((error) => {
+    console.warn(`Default admin bootstrap failed: ${error.message}`);
+  });
 
 app.on("error", (error) => {
   console.error(`Server error: ${error.message}`);
@@ -287,14 +306,18 @@ if (fs.existsSync(clientDistPath)) {
 
 // If no routes handled the request, it's a 404
 app.use((req, res, next) => {
-  res.status(404).send("Page not found.");
+  sendNotFound(req, res);
 });
 
 // Error handling
 app.use((err, req, res, next) => {
   console.error(`Unhandled application error: ${err.message}`);
   console.error(err.stack);
-  res.status(500).send("There was an error serving your request.");
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  return sendUnhandledError(err, req, res);
 });
 
 // Create HTTP server
