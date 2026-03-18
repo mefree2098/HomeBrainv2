@@ -1,6 +1,6 @@
 const UserService = require('../../services/userService.js');
 const jwt = require('jsonwebtoken');
-const {ALL_ROLES} = require("../../../shared/config/roles");
+const { ALL_ROLES, ROLES } = require("../../../shared/config/roles");
 
 function extractToken(req) {
   const authorizationHeader = req.headers.authorization;
@@ -50,6 +50,12 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES) {
       throw error;
     }
 
+    if (!user.isActive) {
+      const error = new Error('User account is inactive');
+      error.status = 403;
+      throw error;
+    }
+
     if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
       const error = new Error('Insufficient permissions');
       error.status = 403;
@@ -83,8 +89,11 @@ const requireUser = (allowedRoles = ALL_ROLES) => {
   };
 };
 
+const requireAdmin = () => requireUser([ROLES.ADMIN]);
+
 module.exports = {
   requireUser,
+  requireAdmin,
   verifyAccessToken,
   extractToken
 };

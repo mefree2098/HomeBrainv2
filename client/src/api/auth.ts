@@ -1,4 +1,11 @@
 import api from './api';
+import type { User } from "../../../shared/types/user";
+
+export type RegistrationStatus = {
+  registrationOpen: boolean;
+  userCount: number;
+  hasActiveAdmin: boolean;
+}
 
 // Description: Login user functionality
 // Endpoint: POST /api/auth/login
@@ -34,6 +41,24 @@ export const register = async (email: string, password: string) => {
 export const logout = async () => {
   try {
     return await api.post('/api/auth/logout');
+  } catch (error) {
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+export const getCurrentUser = async (): Promise<User> => {
+  try {
+    const response = await api.get('/api/auth/me');
+    return response.data as User;
+  } catch (error) {
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+export const getRegistrationStatus = async (): Promise<RegistrationStatus> => {
+  try {
+    const response = await api.get('/api/auth/registration-status');
+    return response.data as RegistrationStatus;
   } catch (error) {
     throw new Error(error?.response?.data?.message || error.message);
   }

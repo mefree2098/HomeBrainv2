@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const deviceService = require('../services/deviceService');
-const { requireUser } = require('./middlewares/auth');
+const { requireUser, requireAdmin } = require('./middlewares/auth');
 
 // Apply authentication middleware to all device routes
 router.use(requireUser());
+const admin = requireAdmin();
 
 /**
  * GET /api/devices
@@ -123,7 +124,7 @@ router.get('/:id', async (req, res) => {
  * POST /api/devices
  * Create a new device
  */
-router.post('/', async (req, res) => {
+router.post('/', admin, async (req, res) => {
   try {
     console.log('POST /api/devices - Device data:', req.body);
     
@@ -152,7 +153,7 @@ router.post('/', async (req, res) => {
  * PUT /api/devices/:id
  * Update a device
  */
-router.put('/:id', async (req, res) => {
+router.put('/:id', admin, async (req, res) => {
   try {
     console.log('PUT /api/devices/:id - Device ID:', req.params.id);
     console.log('PUT /api/devices/:id - Update data:', req.body);
@@ -182,7 +183,7 @@ router.put('/:id', async (req, res) => {
  * DELETE /api/devices/:id
  * Delete a device
  */
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', admin, async (req, res) => {
   try {
     console.log('DELETE /api/devices/:id - Device ID:', req.params.id);
     

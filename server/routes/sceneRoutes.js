@@ -1,6 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const sceneService = require('../services/sceneService');
+const { requireUser, requireAdmin } = require('./middlewares/auth');
+
+const auth = requireUser();
+const admin = requireAdmin();
+
+router.use(auth);
 
 /**
  * GET /api/scenes
@@ -98,7 +104,7 @@ router.get('/:id', async (req, res) => {
 // Endpoint: POST /api/scenes
 // Request: { name: string, description?: string, devices?: Array<string>, deviceActions?: Array<object>, category?: string, icon?: string, color?: string }
 // Response: { success: boolean, message: string, scene: object }
-router.post('/', async (req, res) => {
+router.post('/', admin, async (req, res) => {
   try {
     console.log('SceneRoutes: POST /api/scenes - Creating new scene');
     console.log('SceneRoutes: Scene data received:', req.body);
@@ -152,7 +158,7 @@ router.post('/', async (req, res) => {
 // Endpoint: POST /api/scenes/natural-language
 // Request: { description: string }
 // Response: { success: boolean, scene: object, message: string }
-router.post('/natural-language', async (req, res) => {
+router.post('/natural-language', admin, async (req, res) => {
   try {
     console.log('SceneRoutes: POST /api/scenes/natural-language - Creating scene from natural language');
     console.log('SceneRoutes: Description received:', req.body);
@@ -242,7 +248,7 @@ router.post('/activate', async (req, res) => {
  * PUT /api/scenes/:id
  * Update an existing scene
  */
-router.put('/:id', async (req, res) => {
+router.put('/:id', admin, async (req, res) => {
   try {
     const { id } = req.params;
     console.log(`SceneRoutes: PUT /api/scenes/${id} - Updating scene`);
@@ -300,7 +306,7 @@ router.put('/:id', async (req, res) => {
  * DELETE /api/scenes/:id
  * Delete a scene
  */
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', admin, async (req, res) => {
   try {
     const { id } = req.params;
     console.log(`SceneRoutes: DELETE /api/scenes/${id} - Deleting scene`);

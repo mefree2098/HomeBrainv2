@@ -27,6 +27,7 @@ import { getScenes } from "@/api/scenes"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 import { AutomationEditDialog } from "@/components/automations/AutomationEditDialog"
+import { useAuth } from "@/contexts/AuthContext"
 
 interface AutomationTrigger {
   type: string
@@ -47,6 +48,7 @@ interface Automation {
 
 export function Automations() {
   const { toast } = useToast()
+  const { isAdmin } = useAuth()
   const [automations, setAutomations] = useState<Automation[]>([])
   const [devices, setDevices] = useState<any[]>([])
   const [scenes, setScenes] = useState<any[]>([])
@@ -293,10 +295,13 @@ export function Automations() {
             Smart Automations
           </h1>
           <p className="text-muted-foreground mt-2">
-            Create intelligent automations using natural language
+            {isAdmin
+              ? "Create intelligent automations using natural language"
+              : "Review the automation rules your admin has configured"}
           </p>
         </div>
 
+        {isAdmin ? (
         <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
           <DialogTrigger asChild>
             <Button className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-lg">
@@ -349,7 +354,14 @@ export function Automations() {
             </form>
           </DialogContent>
         </Dialog>
+        ) : null}
       </div>
+
+      {!isAdmin ? (
+        <div className="rounded-[1.5rem] border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          Standard users can inspect automation status, but only admins can change rules or schedules.
+        </div>
+      ) : null}
 
       {/* Automation Stats */}
       <div className="grid gap-4 md:grid-cols-4">
@@ -437,6 +449,7 @@ export function Automations() {
                   </Badge>
                   <Switch
                     checked={automation.enabled === true}
+                    disabled={!isAdmin}
                     onCheckedChange={(enabled) => handleToggleAutomation(automation._id, enabled)}
                   />
                 </div>
@@ -465,24 +478,28 @@ export function Automations() {
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleEditAutomation(automation)}
-                      className="flex items-center gap-2 hover:bg-blue-50 dark:hover:bg-blue-950/20"
-                    >
-                      <Edit className="h-4 w-4" />
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleDeleteAutomation(automation._id, automation.name)}
-                      className="flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Delete
-                    </Button>
+                    {isAdmin ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleEditAutomation(automation)}
+                          className="flex items-center gap-2 hover:bg-blue-50 dark:hover:bg-blue-950/20"
+                        >
+                          <Edit className="h-4 w-4" />
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleDeleteAutomation(automation._id, automation.name)}
+                          className="flex items-center gap-2 hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Delete
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
                   <Button
                     size="sm"
@@ -506,15 +523,19 @@ export function Automations() {
             <Zap className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Automations Created</h3>
             <p className="text-muted-foreground text-center mb-4">
-              Create your first automation using natural language commands
+              {isAdmin
+                ? "Create your first automation using natural language commands"
+                : "No automations are configured yet."}
             </p>
-            <Button
-              onClick={() => setIsCreateDialogOpen(true)}
-              className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white"
-            >
-              <MessageSquare className="h-4 w-4 mr-2" />
-              Create Your First Automation
-            </Button>
+            {isAdmin ? (
+              <Button
+                onClick={() => setIsCreateDialogOpen(true)}
+                className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white"
+              >
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Create Your First Automation
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       )}

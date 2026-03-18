@@ -7,10 +7,12 @@ const speechService = require('../services/speechService');
 const Settings = require('../models/Settings');
 const elevenLabsService = require('../services/elevenLabsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
-const { requireUser } = require('./middlewares/auth');
+const { requireUser, requireAdmin } = require('./middlewares/auth');
 const voiceWs = require('../websocket/voiceWebSocket');
 const VoiceDevice = require('../models/VoiceDevice');
 const eventStreamService = require('../services/eventStreamService');
+
+const admin = requireAdmin();
 
 /**
  * @route GET /api/voice/devices
@@ -252,7 +254,8 @@ router.post('/commands/interpret', requireUser(), async (req, res) => {
       room: typeof room === 'string' && room.trim() ? room.trim() : null,
       wakeWord: typeof wakeWord === 'string' && wakeWord.trim() ? wakeWord.trim() : 'dashboard',
       deviceId: typeof deviceId === 'string' && deviceId.trim() ? deviceId.trim() : null,
-      stt: stt || null
+      stt: stt || null,
+      userRole: req.user?.role
     });
 
     const llmProvider = result?.llm?.provider || 'unknown';
@@ -318,7 +321,7 @@ router.post('/commands/interpret', requireUser(), async (req, res) => {
  * @desc Test voice device connectivity and functionality
  * @access Private
  */
-router.post('/test', requireUser(), async (req, res) => {
+router.post('/test', admin, async (req, res) => {
   const { deviceId } = req.body;
   console.log(`POST /api/voice/test - Testing voice device: ${deviceId}`);
   
@@ -358,7 +361,7 @@ router.post('/test', requireUser(), async (req, res) => {
  * @desc Update voice device status
  * @access Private
  */
-router.put('/devices/:id/status', requireUser(), async (req, res) => {
+router.put('/devices/:id/status', admin, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
   console.log(`PUT /api/voice/devices/${id}/status - Updating device status to: ${status}`);
@@ -469,7 +472,7 @@ router.get('/devices/status/:status', requireUser(), async (req, res) => {
 });
 
 // Push updated wake word config to a specific device
-router.post('/devices/:id/push-config', requireUser(), async (req, res) => {
+router.post('/devices/:id/push-config', admin, async (req, res) => {
   const { id } = req.params;
   try {
     const app = req.app;
@@ -491,7 +494,7 @@ router.post('/devices/:id/push-config', requireUser(), async (req, res) => {
 });
 
 // Send a test TTS ping to a specific device
-router.post('/devices/:id/ping-tts', requireUser(), async (req, res) => {
+router.post('/devices/:id/ping-tts', admin, async (req, res) => {
   const { id } = req.params;
   const { text } = req.body || {};
   try {
@@ -514,7 +517,7 @@ router.post('/devices/:id/ping-tts', requireUser(), async (req, res) => {
 });
 
 // Update per-device settings (e.g., wake-word sensitivity)
-router.put('/devices/:id/settings', requireUser(), async (req, res) => {
+router.put('/devices/:id/settings', admin, async (req, res) => {
   const { id } = req.params;
   const updates = req.body || {};
   try {

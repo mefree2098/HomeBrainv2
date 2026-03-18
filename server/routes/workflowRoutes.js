@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const workflowService = require('../services/workflowService');
-const { requireUser } = require('./middlewares/auth');
+const { requireUser, requireAdmin } = require('./middlewares/auth');
 
 router.use(requireUser());
+const admin = requireAdmin();
 
 router.get('/', async (req, res) => {
   try {
@@ -38,7 +39,7 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', admin, async (req, res) => {
   try {
     const workflow = await workflowService.createWorkflow(req.body || {}, {
       source: req.body?.source || 'manual'
@@ -58,7 +59,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.post('/create-from-text', async (req, res) => {
+router.post('/create-from-text', admin, async (req, res) => {
   try {
     const { text, roomContext = null, source = 'chat' } = req.body || {};
     if (!text || !text.trim()) {
@@ -97,7 +98,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', admin, async (req, res) => {
   try {
     const workflow = await workflowService.updateWorkflow(req.params.id, req.body || {});
     return res.status(200).json({
@@ -115,7 +116,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.put('/:id/toggle', async (req, res) => {
+router.put('/:id/toggle', admin, async (req, res) => {
   try {
     const { enabled } = req.body || {};
     const result = await workflowService.toggleWorkflow(req.params.id, enabled);
@@ -155,7 +156,7 @@ router.post('/:id/execute', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', admin, async (req, res) => {
   try {
     const result = await workflowService.deleteWorkflow(req.params.id);
     return res.status(200).json(result);

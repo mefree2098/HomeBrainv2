@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const VoiceDevice = require('../models/VoiceDevice');
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 const settingsService = require('../services/settingsService');
 
 // Import discovery service (will be injected by server.js)
@@ -15,11 +15,13 @@ router.use((req, res, next) => {
   next();
 });
 
+router.use(requireAdmin());
+
 // Description: Enable/disable auto-discovery service
 // Endpoint: POST /api/discovery/toggle
 // Request: { enabled: boolean }
 // Response: { success: boolean, enabled: boolean, message: string }
-router.post('/toggle', requireUser(), async (req, res) => {
+router.post('/toggle', async (req, res) => {
   console.log('POST /api/discovery/toggle - Toggling auto-discovery service');
 
   try {
@@ -99,7 +101,7 @@ router.post('/toggle', requireUser(), async (req, res) => {
 // Endpoint: GET /api/discovery/status
 // Request: {}
 // Response: { success: boolean, stats: object }
-router.get('/status', requireUser(), async (req, res) => {
+router.get('/status', async (req, res) => {
   console.log('GET /api/discovery/status - Getting auto-discovery status');
 
   try {
@@ -140,7 +142,7 @@ router.get('/status', requireUser(), async (req, res) => {
 // Endpoint: GET /api/discovery/pending
 // Request: {}
 // Response: { success: boolean, devices: Array<object>, count: number }
-router.get('/pending', requireUser(), async (req, res) => {
+router.get('/pending', async (req, res) => {
   console.log('GET /api/discovery/pending - Getting pending devices');
 
   try {
@@ -176,7 +178,7 @@ router.get('/pending', requireUser(), async (req, res) => {
 // Endpoint: POST /api/discovery/approve/:deviceId
 // Request: { name: string, room: string, deviceType?: string }
 // Response: { success: boolean, device: object, message: string }
-router.post('/approve/:deviceId', requireUser(), async (req, res) => {
+router.post('/approve/:deviceId', async (req, res) => {
   const { deviceId } = req.params;
   console.log(`POST /api/discovery/approve/${deviceId} - Approving pending device`);
 
@@ -248,7 +250,7 @@ router.post('/approve/:deviceId', requireUser(), async (req, res) => {
 // Endpoint: POST /api/discovery/reject/:deviceId
 // Request: {}
 // Response: { success: boolean, message: string }
-router.post('/reject/:deviceId', requireUser(), async (req, res) => {
+router.post('/reject/:deviceId', async (req, res) => {
   const { deviceId } = req.params;
   console.log(`POST /api/discovery/reject/${deviceId} - Rejecting pending device`);
 
@@ -285,7 +287,7 @@ router.post('/reject/:deviceId', requireUser(), async (req, res) => {
 // Endpoint: POST /api/discovery/clear-pending
 // Request: {}
 // Response: { success: boolean, cleared: number, message: string }
-router.post('/clear-pending', requireUser(), async (req, res) => {
+router.post('/clear-pending', async (req, res) => {
   console.log('POST /api/discovery/clear-pending - Clearing all pending devices');
 
   try {

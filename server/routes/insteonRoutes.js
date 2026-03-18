@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const insteonService = require('../services/insteonService');
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 
 // Apply authentication to all routes
-router.use(requireUser());
+router.use(requireAdmin());
 
 // Description: Test Insteon PLM connection
 // Endpoint: GET /api/insteon/test

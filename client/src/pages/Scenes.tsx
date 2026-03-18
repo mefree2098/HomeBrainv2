@@ -25,9 +25,11 @@ import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 import { SceneEditDialog } from "@/components/scenes/SceneEditDialog"
 import { useFavorites } from "@/hooks/useFavorites"
+import { useAuth } from "@/contexts/AuthContext"
 
 export function Scenes() {
   const { toast } = useToast()
+  const { isAdmin } = useAuth()
   const [scenes, setScenes] = useState([])
   const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
@@ -239,10 +241,13 @@ export function Scenes() {
             Smart Scenes
           </h1>
           <p className="text-muted-foreground mt-2">
-            Create and manage scenes for different occasions
+            {isAdmin
+              ? "Create and manage scenes for different occasions"
+              : "Browse and activate the scenes your admin has already configured"}
           </p>
         </div>
 
+        {isAdmin ? (
         <div className="flex gap-2">
           <Dialog open={isNaturalLanguageDialogOpen} onOpenChange={setIsNaturalLanguageDialogOpen}>
             <DialogTrigger asChild>
@@ -338,7 +343,14 @@ export function Scenes() {
             </DialogContent>
           </Dialog>
         </div>
+        ) : null}
       </div>
+
+      {!isAdmin ? (
+        <div className="rounded-[1.5rem] border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          Standard users can activate scenes but cannot create, edit, or delete them.
+        </div>
+      ) : null}
 
       {/* Scene Stats */}
       <div className="grid gap-4 md:grid-cols-3">
@@ -444,22 +456,26 @@ export function Scenes() {
                     <Play className="h-4 w-4 mr-2" />
                     {scene.active ? "Scene Active" : "Activate Scene"}
                   </Button>
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    onClick={() => handleEditScene(scene)}
-                    className="hover:bg-blue-50 dark:hover:bg-blue-950/20"
-                  >
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    onClick={() => handleDeleteScene(scene._id, scene.name)}
-                    className="hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {isAdmin ? (
+                    <>
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        onClick={() => handleEditScene(scene)}
+                        className="hover:bg-blue-50 dark:hover:bg-blue-950/20"
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        onClick={() => handleDeleteScene(scene._id, scene.name)}
+                        className="hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
 
                 <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
@@ -486,15 +502,19 @@ export function Scenes() {
             <Palette className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Scenes Created</h3>
             <p className="text-muted-foreground text-center mb-4">
-              Create your first scene to control multiple devices with a single command
+              {isAdmin
+                ? "Create your first scene to control multiple devices with a single command"
+                : "No shared scenes are available yet."}
             </p>
-            <Button
-              onClick={() => setIsCreateDialogOpen(true)}
-              className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Create Your First Scene
-            </Button>
+            {isAdmin ? (
+              <Button
+                onClick={() => setIsCreateDialogOpen(true)}
+                className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Create Your First Scene
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       )}

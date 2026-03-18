@@ -1,7 +1,6 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const mongoose = require('mongoose');
@@ -368,10 +367,8 @@ class PlatformDeployService {
       return paths;
     };
     const recreateDistDirectory = async () => {
-      const quarantineDir = path.join(os.tmpdir(), 'homebrain-dist-quarantine');
-      await fsp.mkdir(quarantineDir, { recursive: true });
       const quarantinePath = path.join(
-        quarantineDir,
+        path.dirname(distPath),
         `dist.quarantine.${new Date().toISOString().replace(/[:.]/g, '-')}`
       );
 

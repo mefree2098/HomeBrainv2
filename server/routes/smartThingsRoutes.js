@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 const smartThingsService = require('../services/smartThingsService');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
 
 // Create auth middleware instance
-const auth = requireUser();
+const auth = requireAdmin();
 
 // Description: Get SmartThings integration status
 // Endpoint: GET /api/smartthings/status

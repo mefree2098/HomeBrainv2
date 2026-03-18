@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const maintenanceService = require('../services/maintenanceService');
+const { requireAdmin } = require('./middlewares/auth');
+
+router.use(requireAdmin());
 
 // Description: Clear all fake/demo data from the system
 // Endpoint: DELETE /api/maintenance/fake-data

@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const whisperService = require('../services/whisperService');
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
 
-const auth = requireUser();
+const auth = requireAdmin();
 
 router.get('/status', auth, async (req, res) => {
   try {

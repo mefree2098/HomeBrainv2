@@ -93,9 +93,13 @@ const setupInterceptors = (apiInstance: typeof axios) => {
           if (response.data.data) {
             const newAccessToken = response.data.data.accessToken;
             const newRefreshToken = response.data.data.refreshToken;
+            const userData = { ...response.data.data };
+            delete userData.accessToken;
+            delete userData.refreshToken;
 
             localStorage.setItem('accessToken', newAccessToken);
             localStorage.setItem('refreshToken', newRefreshToken);
+            localStorage.setItem('userData', JSON.stringify(userData));
             accessToken = newAccessToken;
 
             if (originalRequest.headers) {
@@ -114,6 +118,7 @@ const setupInterceptors = (apiInstance: typeof axios) => {
           console.log('Clearing invalid tokens and redirecting to login');
           localStorage.removeItem('refreshToken');
           localStorage.removeItem('accessToken');
+          localStorage.removeItem('userData');
           accessToken = null;
           window.location.href = '/login';
           return Promise.reject(err);

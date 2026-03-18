@@ -4,7 +4,9 @@ const fs = require('fs');
 const fsp = fs.promises;
 const WakeWordModel = require('../models/WakeWordModel');
 const wakeWordTrainingService = require('../services/wakeWordTrainingService');
-const { requireUser } = require('./middlewares/auth');
+const { requireAdmin } = require('./middlewares/auth');
+
+const admin = requireAdmin();
 
 const serializeModel = (model) => ({
   id: model._id,
@@ -26,7 +28,7 @@ const serializeModel = (model) => ({
   lastTrainedAt: model.lastTrainedAt || null
 });
 
-router.get('/', requireUser(), async (req, res) => {
+router.get('/', admin, async (req, res) => {
   try {
     const query = {};
     if (req.query.status) {
@@ -51,7 +53,7 @@ router.get('/', requireUser(), async (req, res) => {
 });
 
 // Broadcast updated wake word configuration to connected devices
-router.post('/broadcast', requireUser(), async (req, res) => {
+router.post('/broadcast', admin, async (req, res) => {
   try {
     const { phrase, slug } = req.body || {};
     const voiceWs = req.app.get('voiceWebSocket');
@@ -82,7 +84,7 @@ router.post('/broadcast', requireUser(), async (req, res) => {
   }
 });
 
-router.get('/queue', requireUser(), async (req, res) => {
+router.get('/queue', admin, async (req, res) => {
   try {
     const queue = await wakeWordTrainingService.getQueueStatus();
     res.status(200).json({
@@ -98,7 +100,7 @@ router.get('/queue', requireUser(), async (req, res) => {
   }
 });
 
-router.get('/:id', requireUser(), async (req, res) => {
+router.get('/:id', admin, async (req, res) => {
   try {
     const model = await WakeWordModel.findById(req.params.id);
     if (!model) {
@@ -120,7 +122,7 @@ router.get('/:id', requireUser(), async (req, res) => {
   }
 });
 
-router.post('/', requireUser(), async (req, res) => {
+router.post('/', admin, async (req, res) => {
   try {
     const { phrase, slug, options, profiles } = req.body || {};
     if (!phrase) {
@@ -148,7 +150,7 @@ router.post('/', requireUser(), async (req, res) => {
   }
 });
 
-router.post('/:id/retrain', requireUser(), async (req, res) => {
+router.post('/:id/retrain', admin, async (req, res) => {
   try {
     const model = await WakeWordModel.findById(req.params.id);
     if (!model) {
@@ -176,7 +178,7 @@ router.post('/:id/retrain', requireUser(), async (req, res) => {
   }
 });
 
-router.delete('/:id', requireUser(), async (req, res) => {
+router.delete('/:id', admin, async (req, res) => {
   try {
     const model = await WakeWordModel.findById(req.params.id);
     if (!model) {
