@@ -191,6 +191,14 @@ enum DashboardSupport {
         )
     }
 
+    static func emptyView(name: String) -> DashboardViewItem {
+        DashboardViewItem(
+            id: createID(prefix: "view"),
+            name: sanitizedTitle(name, fallback: "Untitled Dashboard"),
+            widgets: []
+        )
+    }
+
     static func makeWidget(
         type: DashboardWidgetType,
         title: String? = nil,
