@@ -162,6 +162,11 @@ private final class DashboardLocationManager: NSObject, ObservableObject, CLLoca
 struct DashboardView: View {
     let previewMode: Bool
 
+    private enum DashboardNameAction {
+        case create
+        case rename(String)
+    }
+
     private struct DashboardWidgetRow: Identifiable {
         let id: String
         let items: [DashboardWidgetRowItem]
@@ -176,6 +181,7 @@ struct DashboardView: View {
     }
 
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var dashboardChrome: DashboardChromeState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
@@ -204,6 +210,8 @@ struct DashboardView: View {
     @State private var pendingWidgetDeviceSearch = ""
     @State private var pendingWeatherLocationMode: DashboardWeatherLocationMode = .saved
     @State private var pendingWeatherLocationQuery = ""
+    @State private var dashboardNameAction: DashboardNameAction?
+    @State private var pendingDashboardName = ""
     @State private var infoMessage: String?
     @State private var pendingFavoriteDeviceIds: Set<String> = []
     @State private var thermostatTemperatureDrafts: [String: Double] = [:]
@@ -391,6 +399,27 @@ struct DashboardView: View {
         [.hero, .summary, .security, .favoriteScenes, .weather, .voiceCommand, .device]
     }
 
+    private var dashboardOuterPadding: CGFloat {
+        useLandscapeCompactLayout ? 8 : 12
+    }
+
+    private var dashboardChromeSyncToken: String {
+        let viewToken = dashboardViews
+            .map { "\($0.id):\($0.name):\($0.widgets.count)" }
+            .joined(separator: "|")
+
+        return [
+            favoritesProfileId ?? "none",
+            selectedDashboardViewID,
+            currentDashboardView?.name ?? "Dashboard",
+            String(currentDashboardWidgets.count),
+            String(dashboardDirty),
+            String(isEditingDashboard),
+            String(isSavingDashboard),
+            viewToken
+        ].joined(separator: "||")
+    }
+
     private var heroBadgeTexts: [String] {
         var badges = [
             "\(scenes.count) scenes ready",
@@ -413,17 +442,15 @@ struct DashboardView: View {
             Group {
                 if isLoading {
                     LoadingView(title: "Loading dashboard...")
-                        .padding(useLandscapeCompactLayout ? 10 : 16)
+                        .padding(dashboardOuterPadding)
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 12 : 16) {
+                        VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 14) {
                             if let errorMessage {
                                 InlineErrorView(message: errorMessage) {
                                     Task { await loadDashboard() }
                                 }
                             }
-
-                            dashboardControlDeck
 
                             if let infoMessage, !infoMessage.isEmpty {
                                 HBBadge(
@@ -452,8 +479,8 @@ struct DashboardView: View {
                                 }
                             }
                         }
-                        .padding(useLandscapeCompactLayout ? 10 : 16)
-                        .padding(.bottom, 12)
+                        .padding(dashboardOuterPadding)
+                        .padding(.bottom, 8)
                     }
                     .scrollIndicators(.hidden)
                     .refreshable {
@@ -474,130 +501,29 @@ struct DashboardView: View {
         .sheet(isPresented: $showingAddWidgetSheet) {
             dashboardAddWidgetSheet
         }
-    }
-
-    private var dashboardControlDeck: some View {
-        HBPanel {
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Dashboard Views")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .textCase(.uppercase)
-                        .tracking(2.8)
-                        .foregroundStyle(HBPalette.textMuted)
-
-                    Text(currentDashboardView?.name ?? "Dashboard")
-                        .font(.system(size: useLandscapeCompactLayout ? 24 : 30, weight: .bold, design: .rounded))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-
-                    Text(
-                        favoritesProfileId == nil
-                        ? "Activate a user profile to sync saved layouts."
-                        : "Room-specific command decks with removable, resizable widgets."
-                    )
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-                }
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(dashboardViews) { view in
-                            Button {
-                                selectedDashboardViewID = view.id
-                            } label: {
-                                HBBadge(
-                                    text: view.name,
-                                    foreground: selectedDashboardViewID == view.id ? Color.white : HBPalette.textPrimary,
-                                    background: selectedDashboardViewID == view.id ? HBPalette.accentBlue.opacity(0.96) : HBPalette.panelSoft.opacity(0.96),
-                                    stroke: selectedDashboardViewID == view.id ? HBPalette.accentBlue : HBPalette.panelStrokeStrong
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .center, spacing: 10) {
-                        dashboardControlDeckButtons
-
-                        Spacer(minLength: 10)
-
-                        dashboardControlDeckBadges
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        dashboardControlDeckButtons
-                        dashboardControlDeckBadges
-                    }
-                }
+        .alert(dashboardNameAlertTitle, isPresented: dashboardNameAlertBinding(), actions: {
+            TextField("Dashboard name", text: $pendingDashboardName)
+            Button("Cancel", role: .cancel) {
+                dashboardNameAction = nil
             }
+            Button("Save") {
+                submitDashboardNameAction()
+            }
+            .disabled(pendingDashboardName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }, message: {
+            Text(dashboardNameAlertMessage)
+        })
+        .onAppear {
+            syncDashboardChrome()
         }
-    }
-
-    @ViewBuilder
-    private var dashboardControlDeckButtons: some View {
-        HStack(spacing: 10) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.22)) {
-                    isEditingDashboard.toggle()
-                }
-            } label: {
-                Label(isEditingDashboard ? "Editing Layout" : "Edit Layout", systemImage: "square.grid.3x3")
-            }
-            .buttonStyle(HBSecondaryButtonStyle(compact: true))
-            .disabled(favoritesProfileId == nil)
-
-            if isEditingDashboard {
-                Button {
-                    prepareAddWidgetSheet()
-                } label: {
-                    Label("Add Widget", systemImage: "plus")
-                }
-                .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                .disabled(favoritesProfileId == nil)
-            }
-
-            Button {
-                Task { await saveDashboardViews() }
-            } label: {
-                if isSavingDashboard {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .tint(HBPalette.textPrimary)
-                        Text("Saving...")
-                    }
-                } else {
-                    Label("Save Layout", systemImage: "square.and.arrow.down")
-                }
-            }
-            .buttonStyle(HBPrimaryButtonStyle(compact: true))
-            .disabled(favoritesProfileId == nil || !dashboardDirty || isSavingDashboard)
+        .onChange(of: dashboardChromeSyncToken) { _, _ in
+            syncDashboardChrome()
         }
-    }
-
-    private var dashboardControlDeckBadges: some View {
-        HStack(spacing: 8) {
-            HBBadge(
-                text: "\(currentDashboardWidgets.count) widgets",
-                foreground: HBPalette.textPrimary,
-                background: HBPalette.panelSoft.opacity(0.92),
-                stroke: HBPalette.panelStrokeStrong
-            )
-
-            HBBadge(
-                text: dashboardDirty ? "Unsaved changes" : "Saved",
-                foreground: dashboardDirty ? HBPalette.textPrimary : HBPalette.textSecondary,
-                background: dashboardDirty ? HBPalette.accentOrange.opacity(0.22) : HBPalette.panelSoft.opacity(0.92),
-                stroke: dashboardDirty ? HBPalette.accentOrange : HBPalette.panelStrokeStrong
-            )
+        .onChange(of: dashboardChrome.commandToken) { _, _ in
+            handleDashboardChromeCommand()
+        }
+        .onDisappear {
+            dashboardChrome.reset()
         }
     }
 
@@ -2452,6 +2378,124 @@ struct DashboardView: View {
         default:
             return "switch.2"
         }
+    }
+
+    private func syncDashboardChrome() {
+        dashboardChrome.update(
+            currentViewName: currentDashboardView?.name ?? "Dashboard",
+            currentViewID: selectedDashboardViewID,
+            views: dashboardViews.map { view in
+                DashboardChromeState.ViewSummary(
+                    id: view.id,
+                    name: view.name,
+                    widgetCount: view.widgets.count
+                )
+            },
+            widgetCount: currentDashboardWidgets.count,
+            isEditing: isEditingDashboard,
+            isDirty: dashboardDirty,
+            isSaving: isSavingDashboard,
+            canEdit: favoritesProfileId != nil
+        )
+    }
+
+    private func handleDashboardChromeCommand() {
+        guard let command = dashboardChrome.takePendingCommand() else { return }
+
+        switch command {
+        case .toggleEditing:
+            guard favoritesProfileId != nil else { return }
+            withAnimation(.easeInOut(duration: 0.22)) {
+                isEditingDashboard.toggle()
+            }
+
+        case .save:
+            guard favoritesProfileId != nil, dashboardDirty, !isSavingDashboard else { return }
+            Task { await saveDashboardViews() }
+
+        case .addWidget:
+            guard favoritesProfileId != nil, isEditingDashboard else { return }
+            prepareAddWidgetSheet()
+
+        case .createView:
+            guard favoritesProfileId != nil, isEditingDashboard else { return }
+            pendingDashboardName = ""
+            dashboardNameAction = .create
+
+        case .renameCurrentView:
+            guard favoritesProfileId != nil,
+                  isEditingDashboard,
+                  let currentView = currentDashboardView else { return }
+            pendingDashboardName = currentView.name
+            dashboardNameAction = .rename(currentView.id)
+
+        case .selectView(let viewID):
+            guard dashboardViews.contains(where: { $0.id == viewID }) else { return }
+            selectedDashboardViewID = viewID
+        }
+    }
+
+    private var dashboardNameAlertTitle: String {
+        switch dashboardNameAction {
+        case .create:
+            return "Create Dashboard"
+        case .rename:
+            return "Rename Dashboard"
+        case nil:
+            return "Dashboard"
+        }
+    }
+
+    private var dashboardNameAlertMessage: String {
+        switch dashboardNameAction {
+        case .create:
+            return "Create a new empty dashboard for this profile."
+        case .rename:
+            return "Update the name of the current dashboard."
+        case nil:
+            return ""
+        }
+    }
+
+    private func dashboardNameAlertBinding() -> Binding<Bool> {
+        Binding(
+            get: { dashboardNameAction != nil },
+            set: { if !$0 { dashboardNameAction = nil } }
+        )
+    }
+
+    private func submitDashboardNameAction() {
+        let trimmedName = pendingDashboardName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            return
+        }
+
+        switch dashboardNameAction {
+        case .create:
+            let nextView = DashboardSupport.emptyView(name: trimmedName)
+            dashboardViews.append(nextView)
+            selectedDashboardViewID = nextView.id
+            dashboardDirty = true
+            infoMessage = "\"\(trimmedName)\" created. Add widgets, then save when ready."
+
+        case .rename(let viewID):
+            guard let index = dashboardViews.firstIndex(where: { $0.id == viewID }) else {
+                dashboardNameAction = nil
+                return
+            }
+
+            dashboardViews[index].name = trimmedName
+            if selectedDashboardViewID.isEmpty {
+                selectedDashboardViewID = viewID
+            }
+            dashboardDirty = true
+            infoMessage = "Dashboard renamed to \"\(trimmedName)\"."
+
+        case nil:
+            break
+        }
+
+        dashboardNameAction = nil
     }
 
     private func loadDashboard() async {

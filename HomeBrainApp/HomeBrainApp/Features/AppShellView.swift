@@ -1,4 +1,77 @@
+import Combine
 import SwiftUI
+
+final class DashboardChromeState: ObservableObject {
+    struct ViewSummary: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let widgetCount: Int
+    }
+
+    enum Command: Equatable {
+        case toggleEditing
+        case save
+        case addWidget
+        case createView
+        case renameCurrentView
+        case selectView(String)
+    }
+
+    @Published var currentViewName = "Dashboard"
+    @Published var currentViewID = ""
+    @Published var views: [ViewSummary] = []
+    @Published var widgetCount = 0
+    @Published var isEditing = false
+    @Published var isDirty = false
+    @Published var isSaving = false
+    @Published var canEdit = false
+    @Published private(set) var commandToken = UUID()
+
+    private var pendingCommand: Command?
+
+    func update(
+        currentViewName: String,
+        currentViewID: String,
+        views: [ViewSummary],
+        widgetCount: Int,
+        isEditing: Bool,
+        isDirty: Bool,
+        isSaving: Bool,
+        canEdit: Bool
+    ) {
+        self.currentViewName = currentViewName
+        self.currentViewID = currentViewID
+        self.views = views
+        self.widgetCount = widgetCount
+        self.isEditing = isEditing
+        self.isDirty = isDirty
+        self.isSaving = isSaving
+        self.canEdit = canEdit
+    }
+
+    func send(_ command: Command) {
+        pendingCommand = command
+        commandToken = UUID()
+    }
+
+    func takePendingCommand() -> Command? {
+        defer { pendingCommand = nil }
+        return pendingCommand
+    }
+
+    func reset() {
+        update(
+            currentViewName: "Dashboard",
+            currentViewID: "",
+            views: [],
+            widgetCount: 0,
+            isEditing: false,
+            isDirty: false,
+            isSaving: false,
+            canEdit: false
+        )
+    }
+}
 
 struct AppShellView: View {
     let previewMode: Bool
@@ -140,6 +213,7 @@ struct AppShellView: View {
     @State private var resourceStripRefreshing = false
     @State private var previewVoiceEnabled = false
     @State private var containerWidth: CGFloat = 0
+    @StateObject private var dashboardChrome = DashboardChromeState()
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
@@ -156,7 +230,7 @@ struct AppShellView: View {
         }
         return usesCondensedRegularTopBar || usesSidebarDrawer ? 82 : 86
     }
-    private var shellPadding: CGFloat { isCompactHeight ? 8 : (isCompact ? 14 : 18) }
+    private var shellPadding: CGFloat { isCompactHeight ? 8 : (isCompact ? 12 : 14) }
     private var chromeButtonSide: CGFloat { isCompactHeight ? 38 : 42 }
     private var compactTopBarClearance: CGFloat { 0 }
     private var topBarBottomSpacing: CGFloat {
@@ -202,6 +276,16 @@ struct AppShellView: View {
             return containerWidth < 860 ? 304 : 320
         }
         return 310
+    }
+    private var showsDashboardChrome: Bool { currentSection == .dashboard }
+    private var dashboardChromeStatusText: String {
+        if dashboardChrome.isSaving {
+            return "Saving layout..."
+        }
+        if dashboardChrome.isEditing {
+            return dashboardChrome.isDirty ? "Unsaved changes" : "Edit mode"
+        }
+        return "\(dashboardChrome.widgetCount) widgets"
     }
 
     init(previewMode: Bool = false) {
@@ -275,6 +359,9 @@ struct AppShellView: View {
         .onChange(of: selection) { _, newValue in
             if previewMode, let newValue {
                 uiPreview.updateSection(newValue)
+            }
+            if newValue != .dashboard {
+                dashboardChrome.reset()
             }
         }
         .onChange(of: horizontalSizeClass) { _, sizeClass in
@@ -375,7 +462,11 @@ struct AppShellView: View {
                 HStack(spacing: 8) {
                     compactMenuButton
                     chromeBrandCluster(compact: true)
+                    if showsDashboardChrome {
+                        dashboardViewMenu(compact: true)
+                    }
                     Spacer(minLength: 0)
+                    dashboardTopBarControls(compact: true)
                     voiceToggleButton(compact: true)
                     HBThemeToggleMenu()
                     compactOverflowMenu
@@ -387,9 +478,13 @@ struct AppShellView: View {
                     HStack(spacing: isCompactHeight ? 8 : 10) {
                         compactMenuButton
                         chromeBrandCluster(compact: true)
+                        if showsDashboardChrome {
+                            dashboardViewMenu(compact: true)
+                        }
                         if showsTopBarResourceStrip {
                             resourceUtilizationStrip
                         }
+                        dashboardTopBarControls(compact: true)
                         voiceToggleButton(compact: true)
                         HBThemeToggleMenu()
                         chromeIconButton(systemImage: "gearshape") {
@@ -413,10 +508,14 @@ struct AppShellView: View {
             }
 
             chromeBrandCluster(compact: true)
+            if showsDashboardChrome {
+                dashboardViewMenu(compact: false)
+            }
+            Spacer(minLength: 0)
             if showsTopBarResourceStrip {
                 resourceUtilizationStrip
             }
-            Spacer(minLength: 0)
+            dashboardTopBarControls(compact: useCondensedChromeControls)
             voiceToggleButton(compact: useCondensedChromeControls)
             HBThemeToggleMenu()
             chromeIconButton(systemImage: "gearshape") {
@@ -441,7 +540,6 @@ struct AppShellView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .frame(width: chromeButtonSide, height: chromeButtonSide)
-                    .background(HBGlassBackground(cornerRadius: 14, variant: .panel))
             } else {
                 Label(isCompactSidebarVisible ? "Close" : "Menu", systemImage: isCompactSidebarVisible ? "xmark" : "sidebar.left")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -449,11 +547,6 @@ struct AppShellView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(minHeight: 38)
-                    .background(HBGlassBackground(cornerRadius: 999, variant: .panelSoft))
-                    .overlay(
-                        Capsule()
-                            .stroke(HBPalette.panelStrokeStrong.opacity(0.72), lineWidth: 1)
-                    )
             }
         }
         .buttonStyle(.plain)
@@ -490,8 +583,6 @@ struct AppShellView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: compact ? 22 : 28, height: compact ? 22 : 28)
-                .padding(compact ? 7 : 9)
-                .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
 
             VStack(alignment: .leading, spacing: compact ? 1 : 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
@@ -515,13 +606,92 @@ struct AppShellView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            Spacer(minLength: 0)
         }
         .frame(minWidth: usesPortraitPhoneTopBar ? 142 : (isCompact ? 152 : (compact ? 178 : 208)), alignment: .leading)
-        .padding(.horizontal, compact ? 10 : 12)
-        .padding(.vertical, compact ? 7 : 9)
-        .background(HBGlassBackground(cornerRadius: 20, variant: .panel))
         .layoutPriority(2)
+    }
+
+    private func dashboardViewMenu(compact: Bool) -> some View {
+        Menu {
+            ForEach(dashboardChrome.views) { view in
+                Button {
+                    dashboardChrome.send(.selectView(view.id))
+                } label: {
+                    if view.id == dashboardChrome.currentViewID {
+                        Label("\(view.name) • \(view.widgetCount)", systemImage: "checkmark")
+                    } else {
+                        Text("\(view.name) • \(view.widgetCount)")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: compact ? 6 : 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(dashboardChrome.currentViewName)
+                        .font(.system(size: compact ? 13 : 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+
+                    Text(dashboardChromeStatusText)
+                        .font(.system(size: compact ? 10 : 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(dashboardChrome.isDirty ? HBPalette.accentOrange : HBPalette.textMuted)
+                        .textCase(.uppercase)
+                        .tracking(1.2)
+                        .lineLimit(1)
+                }
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: compact ? 10 : 11, weight: .bold))
+                    .foregroundStyle(HBPalette.textMuted)
+            }
+            .frame(minWidth: compact ? 128 : 156, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func dashboardTopBarControls(compact: Bool) -> some View {
+        if showsDashboardChrome {
+            HStack(spacing: compact ? 8 : 10) {
+                if dashboardChrome.isEditing {
+                    chromeIconButton(
+                        systemImage: "rectangle.badge.plus",
+                        isDisabled: !dashboardChrome.canEdit
+                    ) {
+                        dashboardChrome.send(.createView)
+                    }
+
+                    chromeIconButton(
+                        systemImage: "pencil",
+                        isDisabled: !dashboardChrome.canEdit || dashboardChrome.currentViewID.isEmpty
+                    ) {
+                        dashboardChrome.send(.renameCurrentView)
+                    }
+
+                    chromeIconButton(
+                        systemImage: "plus",
+                        isDisabled: !dashboardChrome.canEdit
+                    ) {
+                        dashboardChrome.send(.addWidget)
+                    }
+
+                    chromeIconButton(
+                        systemImage: "square.and.arrow.down",
+                        isDisabled: !dashboardChrome.canEdit || !dashboardChrome.isDirty || dashboardChrome.isSaving
+                    ) {
+                        dashboardChrome.send(.save)
+                    }
+                }
+
+                chromeIconButton(
+                    systemImage: "square.grid.3x3",
+                    isActive: dashboardChrome.isEditing,
+                    isDisabled: !dashboardChrome.canEdit
+                ) {
+                    dashboardChrome.send(.toggleEditing)
+                }
+            }
+        }
     }
 
     private func chromeSectionCluster(compact: Bool) -> some View {
@@ -610,8 +780,14 @@ struct AppShellView: View {
 
     private func resourceUtilizationStripContent(metrics: [ResourceStripMetric], compact: Bool = false) -> some View {
         HStack(spacing: compact ? 8 : 10) {
-            ForEach(metrics) { metric in
+            ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
                 resourceMetricChip(metric, compact: compact)
+
+                if index < metrics.count - 1 {
+                    Capsule()
+                        .fill(HBPalette.divider.opacity(0.8))
+                        .frame(width: 1, height: compact ? 26 : 30)
+                }
             }
 
             HStack(spacing: 5) {
@@ -626,9 +802,6 @@ struct AppShellView: View {
             }
             .padding(.horizontal, compact ? 4 : 6)
         }
-        .padding(.horizontal, compact ? 6 : 8)
-        .padding(.vertical, compact ? 5 : 6)
-        .background(HBGlassBackground(cornerRadius: 18, variant: .panel))
     }
 
     private func resourceMetricChip(_ metric: ResourceStripMetric, compact: Bool = false) -> some View {
@@ -678,18 +851,43 @@ struct AppShellView: View {
         .frame(width: compact ? 50 : 60)
         .padding(.horizontal, compact ? 5 : 6)
         .padding(.vertical, compact ? 4 : 5)
-        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
     }
 
-    private func chromeIconButton(systemImage: String, action: @escaping () -> Void = {}) -> some View {
+    private func chromeIconButton(
+        systemImage: String,
+        isActive: Bool = false,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void = {}
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(HBPalette.textPrimary)
+                .foregroundStyle(isDisabled ? HBPalette.textMuted : (isActive ? Color.white : HBPalette.textPrimary))
                 .frame(width: chromeButtonSide, height: chromeButtonSide)
-                .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+                .background(
+                    Group {
+                        if isActive {
+                            Circle()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [HBPalette.accentBlue.opacity(0.98), HBPalette.accentPurple.opacity(0.9)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .overlay(
+                                    Circle()
+                                        .stroke(HBPalette.panelStrokeStrong.opacity(0.72), lineWidth: 1)
+                                )
+                        } else {
+                            HBGlassBackground(cornerRadius: 14, variant: .panelSoft)
+                                .opacity(isDisabled ? 0.54 : 1)
+                        }
+                    }
+                )
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
     }
 
     private var compactMenuButton: some View {
@@ -702,7 +900,6 @@ struct AppShellView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .frame(width: chromeButtonSide, height: chromeButtonSide)
-                .background(HBGlassBackground(cornerRadius: 14, variant: .panel))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isCompactSidebarVisible ? "Close main menu" : "Open main menu")
@@ -747,7 +944,6 @@ struct AppShellView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .frame(width: 38, height: 38)
-                        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(isSidebarCollapsed ? "Expand main menu" : "Collapse main menu")
@@ -847,23 +1043,18 @@ struct AppShellView: View {
             HStack(spacing: 12) {
                 Image(systemName: section.icon)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.white : HBPalette.accentBlue)
-                    .frame(width: 22, height: 22)
-                    .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(isSelected ? Color.white.opacity(0.16) : HBPalette.panelSoft.opacity(0.72))
-                    )
+                    .foregroundStyle(isSelected ? HBPalette.accentBlue : HBPalette.textSecondary)
+                    .frame(width: 28, height: 28)
 
                 if !isSidebarCollapsed {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(section.title)
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
-                            .foregroundStyle(isSelected ? Color.white : HBPalette.textPrimary)
+                            .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(1)
                         Text(section.chromeKicker)
                             .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(isSelected ? Color.white.opacity(0.72) : HBPalette.textMuted)
+                            .foregroundStyle(isSelected ? HBPalette.accentBlue : HBPalette.textMuted)
                             .textCase(.uppercase)
                             .tracking(1.6)
                             .lineLimit(1)
@@ -874,57 +1065,51 @@ struct AppShellView: View {
                     if isSelected {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color.white.opacity(0.78))
+                            .foregroundStyle(HBPalette.accentBlue)
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: isSidebarCollapsed ? .center : .leading)
-            .padding(.horizontal, isSidebarCollapsed ? 0 : 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, isSidebarCollapsed ? 0 : 8)
+            .padding(.vertical, 10)
             .background {
                 if isSelected {
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .fill(
                             LinearGradient(
-                                colors: [HBPalette.accentBlue.opacity(0.98), HBPalette.accentPurple.opacity(0.92)],
+                                colors: [HBPalette.accentBlue.opacity(0.16), HBPalette.accentPurple.opacity(0.10)],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
                         )
-                } else {
-                    HBGlassBackground(cornerRadius: 20, variant: .panelSoft)
                 }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(isSelected ? HBPalette.panelStrokeStrong.opacity(0.25) : HBPalette.panelStroke.opacity(0.38), lineWidth: 1)
+                    .stroke(HBPalette.panelStrokeStrong.opacity(isSelected ? 0.46 : 0), lineWidth: 1)
             )
+            .overlay(alignment: .leading) {
+                if isSelected && !isSidebarCollapsed {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 4, height: 34)
+                        .padding(.leading, 2)
+                }
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(section.title)
     }
 
     private var detailStack: some View {
-        let detailShape = RoundedRectangle(cornerRadius: 32, style: .continuous)
-
-        return ZStack {
-            HBGlassBackground(cornerRadius: 32, variant: .panelStrong)
-
-            ZStack {
-                HBGridOverlay(spacing: 42)
-                    .opacity(0.12)
-
-                detailContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(shellPadding)
-            }
-            .clipShape(detailShape)
-
-            detailShape
-                .stroke(HBPalette.panelStroke.opacity(0.24), lineWidth: 1)
-        }
-        .clipShape(detailShape)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        detailContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -945,6 +1130,7 @@ struct AppShellView: View {
         switch section {
         case .dashboard:
             DashboardView(previewMode: previewMode)
+                .environmentObject(dashboardChrome)
         case .views:
             if previewMode {
                 UIPreviewModuleView(section: section)
