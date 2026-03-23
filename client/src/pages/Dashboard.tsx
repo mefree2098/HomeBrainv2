@@ -1,20 +1,16 @@
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Link } from "react-router-dom"
 import {
   ArrowDown,
   ArrowUp,
   CloudSun,
-  Copy,
   Heart,
   Home,
   LayoutGrid,
   Lightbulb,
   Maximize2,
   Mic,
-  PencilLine,
   Play,
-  Plus,
-  Save,
   Shield,
   Trash2,
   Zap
@@ -40,6 +36,7 @@ import {
   SelectValue
 } from "@/components/ui/select"
 import { DashboardWidget } from "@/components/dashboard/DashboardWidget"
+import { useDashboardChromeController } from "@/components/dashboard/DashboardChromeContext"
 import { QuickActions } from "@/components/dashboard/QuickActions"
 import { SecurityAlarmWidget } from "@/components/dashboard/SecurityAlarmWidget"
 import { VoiceCommandPanel } from "@/components/dashboard/VoiceCommandPanel"
@@ -56,6 +53,7 @@ import {
   DASHBOARD_FAVORITE_DEVICE_CARD_SIZES,
   DASHBOARD_WEATHER_LOCATION_MODES,
   createDefaultDashboardView,
+  createEmptyDashboardView,
   createWidgetForType,
   moveArrayItem,
   normalizeDashboardViews,
@@ -93,7 +91,9 @@ interface VoiceDevice {
   status: string
 }
 
-type ViewDialogMode = "create" | "duplicate" | "rename"
+type ViewDialogMode = "create" | "rename"
+
+const DASHBOARD_REMOTE_SYNC_INTERVAL_MS = 45000
 
 const WIDGET_SIZE_OPTIONS: Array<{ value: DashboardWidgetSize; label: string }> = [
   { value: "small", label: "Small" },
@@ -215,18 +215,17 @@ const widgetAccent = (type: DashboardWidgetType) => {
   }
 }
 
-const cloneView = (view: DashboardViewConfig, name: string): DashboardViewConfig => ({
-  ...view,
-  id: createDefaultDashboardView(name).id,
-  name,
-  widgets: view.widgets.map((widget) => ({
-    ...widget,
-    id: createWidgetForType(widget.type, widget).id
-  }))
-})
+const resolveSelectedViewId = (views: DashboardViewConfig[], ...candidateIds: Array<string | null | undefined>) => {
+  const matchingId = candidateIds.find((candidateId) => (
+    Boolean(candidateId) && views.some((view) => view.id === candidateId)
+  ))
+
+  return matchingId ?? views[0]?.id ?? ""
+}
 
 export function Dashboard() {
   const { toast } = useToast()
+  const { setChrome, resetChrome } = useDashboardChromeController()
   const [devices, setDevices] = useState<Device[]>([])
   const [scenes, setScenes] = useState<Scene[]>([])
   const [voiceDevices, setVoiceDevices] = useState<VoiceDevice[]>([])
@@ -247,6 +246,8 @@ export function Dashboard() {
   const [pendingWidgetDeviceSearch, setPendingWidgetDeviceSearch] = useState("")
   const [pendingWeatherLocationMode, setPendingWeatherLocationMode] = useState<DashboardWeatherLocationMode>("saved")
   const [pendingWeatherLocationQuery, setPendingWeatherLocationQuery] = useState("")
+  const dashboardViewsRef = useRef<DashboardViewConfig[]>([createDefaultDashboardView()])
+  const selectedViewIdRef = useRef("")
 
   const {
     loading: favoritesLoading,
@@ -329,6 +330,52 @@ export function Dashboard() {
   }, [toast])
 
   useEffect(() => {
+    dashboardViewsRef.current = dashboardViews
+  }, [dashboardViews])
+
+  useEffect(() => {
+    selectedViewIdRef.current = selectedViewId
+  }, [selectedViewId])
+
+  const loadDashboardViewState = useCallback(async (
+    options: { silent?: boolean; preferredViewIds?: Array<string | null | undefined> } = {}
+  ) => {
+    if (!profileId) {
+      return null
+    }
+
+    try {
+      const response = await getDashboardViews(profileId)
+      const normalizedViews = normalizeDashboardViews(response?.views)
+      const storageKey = getStorageKey(profileId)
+      const storedViewId = storageKey ? window.localStorage.getItem(storageKey) : null
+
+      setDashboardViews(normalizedViews)
+      setDashboardDirty(false)
+      setSelectedViewId((currentViewId) => resolveSelectedViewId(
+        normalizedViews,
+        ...(options.preferredViewIds ?? []),
+        currentViewId,
+        storedViewId
+      ))
+
+      return normalizedViews
+    } catch (error) {
+      console.error("Failed to fetch dashboard views:", error)
+
+      if (!options.silent) {
+        toast({
+          title: "Dashboard Views Unavailable",
+          description: error instanceof Error ? error.message : "Failed to load saved dashboard views",
+          variant: "destructive"
+        })
+      }
+
+      throw error
+    }
+  }, [profileId, toast])
+
+  useEffect(() => {
     if (favoritesLoading) {
       return
     }
@@ -347,28 +394,12 @@ export function Dashboard() {
       setDashboardLoading(true)
 
       try {
-        const response = await getDashboardViews(profileId)
-        if (cancelled) {
-          return
-        }
-
-        const normalizedViews = normalizeDashboardViews(response?.views)
-        setDashboardViews(normalizedViews)
-        setDashboardDirty(false)
-
-        const storageKey = getStorageKey(profileId)
-        const storedViewId = storageKey ? window.localStorage.getItem(storageKey) : null
-        const nextSelectedView = normalizedViews.find((view) => view.id === storedViewId)?.id ?? normalizedViews[0]?.id ?? ""
-        setSelectedViewId(nextSelectedView)
+        await loadDashboardViewState()
       } catch (error) {
-        console.error("Failed to fetch dashboard views:", error)
-        toast({
-          title: "Dashboard Views Unavailable",
-          description: error instanceof Error ? error.message : "Failed to load saved dashboard views",
-          variant: "destructive"
-        })
-        setDashboardViews([createDefaultDashboardView()])
-        setSelectedViewId("")
+        if (!cancelled) {
+          setDashboardViews([createDefaultDashboardView()])
+          setSelectedViewId("")
+        }
       } finally {
         if (!cancelled) {
           setDashboardLoading(false)
@@ -381,7 +412,7 @@ export function Dashboard() {
     return () => {
       cancelled = true
     }
-  }, [favoritesLoading, profileId, toast])
+  }, [favoritesLoading, loadDashboardViewState, profileId])
 
   useEffect(() => {
     const storageKey = getStorageKey(profileId)
@@ -403,10 +434,89 @@ export function Dashboard() {
     }
   }, [dashboardViews, selectedViewId])
 
+  useEffect(() => {
+    if (!profileId || dashboardLoading || dashboardDirty || isSavingDashboard || isEditingLayout) {
+      return
+    }
+
+    let cancelled = false
+
+    const syncDashboardViews = async (notifyOnChange = false) => {
+      try {
+        const response = await getDashboardViews(profileId)
+        if (cancelled) {
+          return
+        }
+
+        const normalizedViews = normalizeDashboardViews(response?.views)
+        const remoteSignature = JSON.stringify(normalizedViews)
+        const localSignature = JSON.stringify(dashboardViewsRef.current)
+
+        if (remoteSignature === localSignature) {
+          return
+        }
+
+        const storageKey = getStorageKey(profileId)
+        const storedViewId = storageKey ? window.localStorage.getItem(storageKey) : null
+
+        setDashboardViews(normalizedViews)
+        setSelectedViewId((currentViewId) => resolveSelectedViewId(
+          normalizedViews,
+          currentViewId,
+          selectedViewIdRef.current,
+          storedViewId
+        ))
+
+        if (notifyOnChange) {
+          toast({
+            title: "Dashboard Synced",
+            description: "Saved layout changes from another device were applied."
+          })
+        }
+      } catch (error) {
+        console.error("Failed to refresh dashboard views:", error)
+      }
+    }
+
+    const handleFocus = () => {
+      void syncDashboardViews(true)
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void syncDashboardViews(true)
+      }
+    }
+
+    window.addEventListener("focus", handleFocus)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void syncDashboardViews(false)
+      }
+    }, DASHBOARD_REMOTE_SYNC_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener("focus", handleFocus)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.clearInterval(interval)
+    }
+  }, [dashboardDirty, dashboardLoading, isEditingLayout, isSavingDashboard, profileId, toast])
+
   const selectedView = useMemo(
     () => dashboardViews.find((view) => view.id === selectedViewId) ?? dashboardViews[0] ?? null,
     [dashboardViews, selectedViewId]
   )
+
+  const dashboardViewSummaries = useMemo(() => (
+    dashboardViews.map((view) => ({
+      id: view.id,
+      name: view.name,
+      widgetCount: view.widgets.length
+    }))
+  ), [dashboardViews])
 
   const favoriteDevices = useMemo(() => {
     return devices
@@ -629,10 +739,6 @@ export function Dashboard() {
       setPendingViewName(selectedView.name)
       return
     }
-    if (mode === "duplicate" && selectedView) {
-      setPendingViewName(`${selectedView.name} Copy`)
-      return
-    }
     setPendingViewName("")
   }
 
@@ -648,13 +754,7 @@ export function Dashboard() {
     }
 
     if (viewDialogMode === "create") {
-      const nextView = createDefaultDashboardView(name)
-      mutateViews((prev) => [...prev, nextView])
-      setSelectedViewId(nextView.id)
-    }
-
-    if (viewDialogMode === "duplicate" && selectedView) {
-      const nextView = cloneView(selectedView, name)
+      const nextView = createEmptyDashboardView(name)
       mutateViews((prev) => [...prev, nextView])
       setSelectedViewId(nextView.id)
     }
@@ -797,6 +897,43 @@ export function Dashboard() {
     setPendingWeatherLocationQuery("")
     setIsAddWidgetOpen(false)
   }
+
+  useEffect(() => {
+    setChrome({
+      visible: true,
+      viewId: selectedView?.id ?? "",
+      viewName: selectedView?.name ?? "Main Dashboard",
+      widgetCount: selectedView?.widgets.length ?? 0,
+      views: dashboardViewSummaries,
+      canEdit: hasProfile,
+      isEditing: isEditingLayout,
+      isDirty: dashboardDirty,
+      isSaving: isSavingDashboard,
+      onSelectView: setSelectedViewId,
+      onToggleEditing: () => setIsEditingLayout((editing) => !editing),
+      onCreateView: () => openViewDialog("create"),
+      onRenameView: () => openViewDialog("rename"),
+      onDeleteView: deleteSelectedView,
+      onAddWidget: () => prepareAddWidget(),
+      onSave: () => {
+        void saveDashboardLayouts()
+      }
+    })
+  }, [
+    dashboardDirty,
+    dashboardViewSummaries,
+    deleteSelectedView,
+    hasProfile,
+    isEditingLayout,
+    isSavingDashboard,
+    openViewDialog,
+    prepareAddWidget,
+    saveDashboardLayouts,
+    selectedView,
+    setChrome
+  ])
+
+  useEffect(() => resetChrome, [resetChrome])
 
   const renderWidgetContent = (widget: DashboardWidgetConfig) => {
     if (widget.type === "hero") {
@@ -996,77 +1133,13 @@ export function Dashboard() {
   }
 
   return (
-    <div className="space-y-6">
-      <section className="glass-panel glass-panel-strong rounded-[1.8rem] p-3.5 lg:p-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-          <div className="space-y-1">
-            <p className="section-kicker">Dashboard Views</p>
-            <h1 className="text-xl font-semibold text-foreground lg:text-[1.7rem]">Room-specific command decks</h1>
-            <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-              Save multiple layouts per profile and keep the current view aligned with iOS.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={selectedView?.id ?? ""} onValueChange={setSelectedViewId}>
-              <SelectTrigger className="min-w-[220px]">
-                <SelectValue placeholder="Select a dashboard view" />
-              </SelectTrigger>
-              <SelectContent>
-                {dashboardViews.map((view) => (
-                  <SelectItem key={view.id} value={view.id}>
-                    {view.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Button variant={isEditingLayout ? "default" : "outline"} onClick={() => setIsEditingLayout((prev) => !prev)} disabled={!hasProfile}>
-              <LayoutGrid className="mr-2 h-4 w-4" />
-              {isEditingLayout ? "Editing Layout" : "Edit Layout"}
-            </Button>
-
-            <Button variant="outline" onClick={() => openViewDialog("create")} disabled={!hasProfile}>
-              <Plus className="mr-2 h-4 w-4" />
-              New View
-            </Button>
-
-            <Button variant="outline" onClick={() => openViewDialog("duplicate")} disabled={!hasProfile || !selectedView}>
-              <Copy className="mr-2 h-4 w-4" />
-              Duplicate
-            </Button>
-
-            <Button variant="outline" onClick={() => openViewDialog("rename")} disabled={!hasProfile || !selectedView}>
-              <PencilLine className="mr-2 h-4 w-4" />
-              Rename
-            </Button>
-
-            <Button variant="outline" onClick={deleteSelectedView} disabled={!hasProfile || dashboardViews.length <= 1}>
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
-            </Button>
-
-            {isEditingLayout && (
-              <Button variant="outline" onClick={() => prepareAddWidget()} disabled={!hasProfile}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Widget
-              </Button>
-            )}
-
-            <Button onClick={saveDashboardLayouts} disabled={!hasProfile || !dashboardDirty || isSavingDashboard}>
-              <Save className="mr-2 h-4 w-4" />
-              {isSavingDashboard ? "Saving..." : "Save Layout"}
-            </Button>
-          </div>
+    <div className="space-y-4">
+      {!hasProfile || dashboardDirty ? (
+        <div className="flex flex-wrap gap-2 px-1">
+          {dashboardDirty ? <Badge variant="secondary">Unsaved changes</Badge> : null}
+          {!hasProfile ? <Badge variant="outline">Profile required to persist layout changes</Badge> : null}
         </div>
-
-        <div className="mt-2.5 flex flex-wrap gap-2">
-          <Badge variant="secondary">{selectedView?.name ?? "Main Dashboard"}</Badge>
-          <Badge variant="outline">{selectedView?.widgets.length ?? 0} widgets</Badge>
-          <Badge variant="outline">{dashboardDirty ? "Unsaved changes" : "Saved"}</Badge>
-          {!hasProfile && <Badge variant="outline">Profile required to persist layout changes</Badge>}
-        </div>
-      </section>
+      ) : null}
 
       {selectedView ? (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-4">
@@ -1168,12 +1241,10 @@ export function Dashboard() {
           <DialogHeader>
             <DialogTitle>
               {viewDialogMode === "create" && "Create Dashboard View"}
-              {viewDialogMode === "duplicate" && "Duplicate Dashboard View"}
               {viewDialogMode === "rename" && "Rename Dashboard View"}
             </DialogTitle>
             <DialogDescription>
-              {viewDialogMode === "create" && "Create a new dashboard canvas for another room, device, or workflow."}
-              {viewDialogMode === "duplicate" && "Clone the current dashboard view so you can tune it for another screen."}
+              {viewDialogMode === "create" && "Create a new empty dashboard canvas for another room, device, or workflow."}
               {viewDialogMode === "rename" && "Give this dashboard view a clearer room or device name."}
             </DialogDescription>
           </DialogHeader>
