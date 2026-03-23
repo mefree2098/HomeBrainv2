@@ -102,8 +102,9 @@ struct DashboardViewItem: Identifiable, Hashable {
 struct DashboardProfileContext {
     var profileId: String?
     var views: [DashboardViewItem]
+    var remoteViewCount: Int?
 
-    static let empty = DashboardProfileContext(profileId: nil, views: [DashboardSupport.defaultView()])
+    static let empty = DashboardProfileContext(profileId: nil, views: [DashboardSupport.defaultView()], remoteViewCount: nil)
 }
 
 enum DashboardSupport {
@@ -188,9 +189,11 @@ enum DashboardSupport {
             return .empty
         }
 
+        let rawDashboardViews = preferredProfile["dashboardViews"] as? [Any]
         return DashboardProfileContext(
             profileId: FavoritesSupport.optionalProfileID(from: preferredProfile),
-            views: normalizeViews(from: preferredProfile["dashboardViews"])
+            views: normalizeViews(from: preferredProfile["dashboardViews"]),
+            remoteViewCount: rawDashboardViews?.count
         )
     }
 
@@ -237,9 +240,40 @@ enum DashboardSupport {
         return DashboardSupport.views(fromDashboardViewsPayload: response)
     }
 
+    static func loadLocalViews(serverURL: String, profileId: String?) -> [DashboardViewItem]? {
+        let key = localViewsKey(serverURL: serverURL, profileId: profileId)
+        guard let data = defaults.data(forKey: key),
+              let json = try? JSONSerialization.jsonObject(with: data, options: []),
+              let array = json as? [Any] else {
+            return nil
+        }
+
+        return normalizeViews(from: array)
+    }
+
+    static func storeLocalViews(_ views: [DashboardViewItem], serverURL: String, profileId: String?) {
+        let key = localViewsKey(serverURL: serverURL, profileId: profileId)
+        let payload = views.map(\.payload)
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []) {
+            defaults.set(data, forKey: key)
+        }
+    }
+
     private static func preferenceKey(forProfileID profileId: String?) -> String {
         let suffix = (profileId?.isEmpty == false ? profileId! : "global")
         return "homebrain.ios.dashboard.default-view.\(suffix)"
+    }
+
+    private static func localViewsKey(serverURL: String, profileId: String?) -> String {
+        let normalizedServer = serverURL
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        let suffix = (profileId?.isEmpty == false ? profileId! : "global")
+        return "homebrain.ios.dashboard.views.\(normalizedServer).\(suffix)"
     }
 
     private static func normalizeView(from raw: Any, index: Int) -> DashboardViewItem? {

@@ -45,6 +45,7 @@ const remoteUpdateService = require("./services/remoteUpdateService");
 const wakeWordTrainingService = require("./services/wakeWordTrainingService");
 const voiceAcknowledgmentService = require("./services/voiceAcknowledgmentService");
 const whisperService = require("./services/whisperService");
+const platformDeployService = require("./services/platformDeployService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
 const automationSchedulerService = require("./services/automationSchedulerService");
@@ -452,6 +453,23 @@ httpServer.listen(port, bindHost, async () => {
   console.log(`HTTP server running at http://${bindHost}:${port}`);
   console.log(`WebSocket server ready for voice devices`);
   console.log('Public 80/443 ingress is expected to be handled by Caddy');
+
+  try {
+    const runtime = await platformDeployService.ensureRuntimeSnapshot();
+    console.log(
+      `Platform deploy runtime snapshot captured: commit=${runtime.loadedShortCommit || 'unknown'} pid=${runtime.pid}`
+    );
+
+    const restartFinalization = await platformDeployService.finalizePendingRestart();
+    if (restartFinalization?.finalized) {
+      console.log(
+        `Platform deploy restart handoff finalized: success=${restartFinalization.success ? 'yes' : 'no'} `
+        + `jobId=${restartFinalization.pendingRestart?.jobId || 'none'}`
+      );
+    }
+  } catch (error) {
+    console.warn(`Platform deploy startup sync failed: ${error.message}`);
+  }
 
   const bootstrapTimer = setTimeout(() => {
     smartThingsService.bootstrapConnectionState({ reason: 'server-startup' })

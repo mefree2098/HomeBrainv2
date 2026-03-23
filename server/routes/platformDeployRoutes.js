@@ -23,15 +23,19 @@ router.get('/presets', async (req, res) => {
 
 router.get('/status', async (req, res) => {
   try {
-    const [repo, latestJob, runningJob] = await Promise.all([
+    const [repo, latestJob, runningJob, pendingRestart] = await Promise.all([
       platformDeployService.getRepoStatus(),
       platformDeployService.getLatestJob(),
-      platformDeployService.getRunningJob()
+      platformDeployService.getRunningJob(),
+      platformDeployService.readPendingRestart()
     ]);
+    const runtime = await platformDeployService.getRuntimeInfo(repo);
 
     return res.status(200).json({
       success: true,
       repo,
+      runtime,
+      pendingRestart,
       latestJob,
       running: Boolean(runningJob)
     });
@@ -118,10 +122,13 @@ router.post('/run', async (req, res) => {
 
 router.post('/restart-services', async (req, res) => {
   try {
-    await platformDeployService.triggerServiceRestart();
+    await platformDeployService.triggerServiceRestart(null, {
+      actor: req.user?.email || req.user?._id || 'unknown',
+      source: 'manual'
+    });
     return res.status(202).json({
       success: true,
-      message: 'Service restart command queued'
+      message: 'Service restart command queued. Status will update after the new backend boots.'
     });
   } catch (error) {
     console.error('POST /api/platform-deploy/restart-services - Error:', error.message);

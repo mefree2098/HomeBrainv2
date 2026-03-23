@@ -15,6 +15,26 @@ export interface DeployRepoStatus {
   projectRoot: string;
 }
 
+export interface DeployRuntimeStatus {
+  pid: number;
+  bootedAt: string;
+  uptimeSeconds: number;
+  loadedBranch: string | null;
+  loadedCommit: string | null;
+  loadedShortCommit: string | null;
+  repoMatchesRuntime: boolean | null;
+}
+
+export interface DeployPendingRestart {
+  jobId: string | null;
+  actor: string;
+  source: string;
+  requestedAt: string;
+  expectedCommit: string | null;
+  expectedShortCommit: string | null;
+  command: string;
+}
+
 export interface DeployStep {
   name: string;
   status: "running" | "completed" | "failed";
@@ -49,6 +69,8 @@ export interface DeployJob {
 export interface DeployStatusResponse {
   success: boolean;
   repo: DeployRepoStatus;
+  runtime: DeployRuntimeStatus;
+  pendingRestart: DeployPendingRestart | null;
   latestJob: DeployJob | null;
   running: boolean;
 }
@@ -78,6 +100,8 @@ export interface DeployHealthResponse {
   success: boolean;
   checkedAt: string;
   overallStatus: "healthy" | "degraded";
+  runtime: DeployRuntimeStatus;
+  pendingRestart: DeployPendingRestart | null;
   checks: {
     api: DeployHealthCheck;
     websocket: DeployHealthCheck & { connectedDevices?: number };
@@ -88,6 +112,17 @@ export interface DeployHealthResponse {
       pendingJobs?: number;
     };
     reverseProxy: DeployHealthCheck;
+    deployment: DeployHealthCheck & {
+      bootedAt?: string;
+      pid?: number;
+      loadedCommit?: string | null;
+      loadedShortCommit?: string | null;
+      repoCommit?: string | null;
+      repoShortCommit?: string | null;
+      restartPending?: boolean;
+      expectedCommit?: string | null;
+      expectedShortCommit?: string | null;
+    };
   };
 }
 

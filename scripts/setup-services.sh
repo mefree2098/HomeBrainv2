@@ -55,6 +55,53 @@ run_modern_npm() {
   sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node scripts/run-with-modern-node.js npm ${quoted_args[*]}"
 }
 
+is_homebrain_path_writable() {
+  local target_path="$1"
+
+  if [[ ! -e "${target_path}" ]]; then
+    return 0
+  fi
+
+  if ! sudo -u "$HOMEBRAIN_USER" test -w "${target_path}"; then
+    return 1
+  fi
+
+  if [[ -d "${target_path}" ]]; then
+    local probe_path="${target_path}/.homebrain-write-probe-$$-$RANDOM"
+    if ! sudo -u "$HOMEBRAIN_USER" bash -lc "touch $(printf '%q' "${probe_path}") && rm -f $(printf '%q' "${probe_path}")"; then
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+normalize_client_dist_permissions() {
+  local dist_path="${HOMEBRAIN_DIR}/client/dist"
+  local assets_path="${dist_path}/assets"
+  local homebrain_group
+  local quarantine_path
+
+  if [[ ! -e "${dist_path}" ]]; then
+    return
+  fi
+
+  homebrain_group="$(id -gn "${HOMEBRAIN_USER}" 2>/dev/null || id -gn)"
+
+  print_status "Normalizing client/dist ownership before build..."
+  sudo chown -R "${HOMEBRAIN_USER}:${homebrain_group}" "${dist_path}" || true
+  sudo chmod -R u+rwX "${dist_path}" || true
+
+  if is_homebrain_path_writable "${dist_path}" && { [[ ! -e "${assets_path}" ]] || is_homebrain_path_writable "${assets_path}"; }; then
+    return
+  fi
+
+  quarantine_path="${HOMEBRAIN_DIR}/client/dist.quarantine.$(date +%Y%m%d-%H%M%S)"
+  print_warning "client/dist is still not writable. Replacing it with a clean directory at ${dist_path} and quarantining the old contents to ${quarantine_path}."
+  sudo mv "${dist_path}" "${quarantine_path}"
+  sudo -u "$HOMEBRAIN_USER" mkdir -p "${dist_path}"
+}
+
 cleanup_orphaned_homebrain_processes() {
   local service_pid="0"
   local stale_pids=()
@@ -342,6 +389,8 @@ update_homebrain() {
 
   print_status "Ensuring native server modules match the active Node.js runtime..."
   run_modern_npm run ensure:native --prefix server
+
+  normalize_client_dist_permissions
 
   print_status "Building client..."
   run_modern_npm run build --prefix client
