@@ -19,6 +19,17 @@ struct DashboardView: View {
     @State private var systemStatus = "Online"
     @State private var favoriteDeviceIds: Set<String> = []
     @State private var favoritesProfileId: String?
+    @State private var dashboardViews: [DashboardViewItem] = [DashboardSupport.defaultView()]
+    @State private var selectedDashboardViewID = ""
+    @State private var dashboardDirty = false
+    @State private var isEditingDashboard = false
+    @State private var isSavingDashboard = false
+    @State private var showingAddWidgetSheet = false
+    @State private var pendingWidgetType: DashboardWidgetType = .hero
+    @State private var pendingWidgetTitle = ""
+    @State private var pendingWidgetSize: DashboardWidgetSize = .medium
+    @State private var pendingWidgetDeviceID = ""
+    @State private var infoMessage: String?
     @State private var pendingFavoriteDeviceIds: Set<String> = []
     @State private var thermostatTemperatureDrafts: [String: Double] = [:]
     @State private var pendingControlDeviceIds: Set<String> = []
@@ -33,6 +44,15 @@ struct DashboardView: View {
     private var useLandscapeCompactLayout: Bool { isCompact && isCompactHeight }
     private var usesHeroSplitLayout: Bool { useLandscapeCompactLayout || contentWidth >= 860 }
     private var supportsTwoColumnCards: Bool { useLandscapeCompactLayout || contentWidth >= 820 }
+    private var currentDashboardView: DashboardViewItem? {
+        dashboardViews.first(where: { $0.id == selectedDashboardViewID }) ?? dashboardViews.first
+    }
+    private var currentDashboardWidgets: [DashboardWidgetItem] {
+        currentDashboardView?.widgets ?? []
+    }
+    private var sortedDevices: [DeviceItem] {
+        devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
 
     private var onlineDevices: Int {
         devices.filter { $0.status }.count
@@ -128,91 +148,29 @@ struct DashboardView: View {
                                 }
                             }
 
-                            dashboardHeader
+                            dashboardControlDeck
 
-                            LazyVGrid(columns: metricColumns, spacing: 12) {
-                                metricCard(
-                                    title: "Live Devices",
-                                    value: "\(onlineDevices)/\(devices.count)",
-                                    subtitle: "Realtime endpoints responding",
-                                    icon: "lightbulb.max",
-                                    colors: [HBPalette.accentBlue.opacity(0.24), HBPalette.accentPurple.opacity(0.14)],
-                                    accent: HBPalette.accentBlue
-                                )
-                                metricCard(
-                                    title: "Voice Mesh",
-                                    value: "\(onlineVoiceDevices)/\(voiceDevices.count)",
-                                    subtitle: "Wake hubs currently connected",
-                                    icon: "mic",
-                                    colors: [HBPalette.accentGreen.opacity(0.22), HBPalette.accentBlue.opacity(0.12)],
-                                    accent: HBPalette.accentGreen
-                                )
-                                metricCard(
-                                    title: "Scene Library",
-                                    value: "\(scenes.count)",
-                                    subtitle: "Pinned atmospheres available",
-                                    icon: "play.fill",
-                                    colors: [HBPalette.accentPurple.opacity(0.24), HBPalette.panelSoft.opacity(0.18)],
-                                    accent: HBPalette.accentPurple
-                                )
-                                metricCard(
-                                    title: "Automation Signal",
-                                    value: systemStatus,
-                                    subtitle: "Residence mesh health",
-                                    icon: "waveform.path.ecg",
-                                    colors: [HBPalette.accentOrange.opacity(0.22), HBPalette.panelSoft.opacity(0.16)],
-                                    accent: HBPalette.accentOrange
+                            if let infoMessage, !infoMessage.isEmpty {
+                                HBBadge(
+                                    text: infoMessage,
+                                    foreground: HBPalette.textPrimary,
+                                    background: HBPalette.panelSoft.opacity(0.96),
+                                    stroke: HBPalette.panelStrokeStrong
                                 )
                             }
 
-                            if supportsTwoColumnCards {
-                                HStack(alignment: .top, spacing: 12) {
-                                    securityPanel
-                                    quickScenePanel
-                                }
+                            if currentDashboardWidgets.isEmpty {
+                                EmptyStateView(
+                                    title: "No widgets in this view",
+                                    subtitle: "Enter layout editing mode and add the controls you want for this screen."
+                                )
                             } else {
-                                VStack(spacing: 12) {
-                                    securityPanel
-                                    quickScenePanel
-                                }
-                            }
-
-                            VStack(alignment: .leading, spacing: 12) {
-                                HBSectionHeader(
-                                    title: "Favorite Devices",
-                                    subtitle: favoritesProfileId == nil
-                                        ? "Activate a user profile to pin favorite controls."
-                                        : "Profile-tuned shortcuts for your most-used devices.",
-                                    eyebrow: "Priority Controls"
-                                )
-
-                                if featuredDevices.isEmpty {
-                                    EmptyStateView(
-                                        title: "No favorite devices yet",
-                                        subtitle: favoritesProfileId == nil
-                                            ? "Create or activate a user profile, then favorite devices to pin them here."
-                                            : "Favorite your go-to devices from the Devices screen to pin them here."
-                                    )
-                                } else {
-                                    VStack(alignment: .leading, spacing: 12) {
-                                        ForEach(featuredFullWidthDevices) { device in
-                                            featuredDeviceCard(device)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                        }
-
-                                        if !featuredHalfWidthDevices.isEmpty {
-                                            LazyVGrid(columns: featuredHalfColumns, spacing: 12) {
-                                                ForEach(featuredHalfWidthDevices) { device in
-                                                    featuredDeviceCard(device)
-                                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                                }
-                                            }
-                                        }
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ForEach(Array(currentDashboardWidgets.enumerated()), id: \.element.id) { entry in
+                                        dashboardWidgetPanel(entry.element, index: entry.offset)
                                     }
                                 }
                             }
-
-                            voiceCommandPanel
                         }
                         .padding(useLandscapeCompactLayout ? 10 : 16)
                         .padding(.bottom, 12)
@@ -232,6 +190,340 @@ struct DashboardView: View {
         }
         .task {
             await loadDashboard()
+        }
+        .sheet(isPresented: $showingAddWidgetSheet) {
+            dashboardAddWidgetSheet
+        }
+    }
+
+    private var dashboardControlDeck: some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                HBSectionHeader(
+                    title: currentDashboardView?.name ?? "Dashboard",
+                    subtitle: favoritesProfileId == nil
+                        ? "Activate a user profile to sync saved dashboard views."
+                        : "Reorder, resize, minimize, remove, and add widgets for this device's current dashboard.",
+                    eyebrow: "Dashboard Views"
+                )
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(dashboardViews) { view in
+                            Button {
+                                selectedDashboardViewID = view.id
+                            } label: {
+                                HBBadge(
+                                    text: view.name,
+                                    foreground: selectedDashboardViewID == view.id ? Color.white : HBPalette.textPrimary,
+                                    background: selectedDashboardViewID == view.id ? HBPalette.accentBlue.opacity(0.96) : HBPalette.panelSoft.opacity(0.96),
+                                    stroke: selectedDashboardViewID == view.id ? HBPalette.accentBlue : HBPalette.panelStrokeStrong
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                HStack(spacing: 10) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            isEditingDashboard.toggle()
+                        }
+                    } label: {
+                        Label(isEditingDashboard ? "Editing Layout" : "Edit Layout", systemImage: "square.grid.3x3")
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle())
+                    .disabled(favoritesProfileId == nil)
+
+                    if isEditingDashboard {
+                        Button {
+                            prepareAddWidgetSheet()
+                        } label: {
+                            Label("Add Widget", systemImage: "plus")
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle())
+                        .disabled(favoritesProfileId == nil)
+                    }
+
+                    Button {
+                        Task { await saveDashboardViews() }
+                    } label: {
+                        if isSavingDashboard {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .tint(HBPalette.textPrimary)
+                                Text("Saving...")
+                            }
+                        } else {
+                            Label("Save Layout", systemImage: "square.and.arrow.down")
+                        }
+                    }
+                    .buttonStyle(HBPrimaryButtonStyle())
+                    .disabled(favoritesProfileId == nil || !dashboardDirty || isSavingDashboard)
+                }
+
+                HStack(spacing: 8) {
+                    HBBadge(
+                        text: "\(currentDashboardWidgets.count) widgets",
+                        foreground: HBPalette.textPrimary,
+                        background: HBPalette.panelSoft.opacity(0.92),
+                        stroke: HBPalette.panelStrokeStrong
+                    )
+
+                    HBBadge(
+                        text: dashboardDirty ? "Unsaved changes" : "Saved",
+                        foreground: dashboardDirty ? HBPalette.textPrimary : HBPalette.textSecondary,
+                        background: dashboardDirty ? HBPalette.accentOrange.opacity(0.22) : HBPalette.panelSoft.opacity(0.92),
+                        stroke: dashboardDirty ? HBPalette.accentOrange : HBPalette.panelStrokeStrong
+                    )
+                }
+            }
+        }
+    }
+
+    private func dashboardWidgetPanel(_ widget: DashboardWidgetItem, index: Int) -> some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    Label(widget.title, systemImage: widgetSystemImage(widget.type))
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+
+                    Spacer(minLength: 8)
+
+                    if isEditingDashboard {
+                        HStack(spacing: 8) {
+                            Menu {
+                                ForEach(DashboardWidgetSize.allCases) { size in
+                                    Button(size.title) {
+                                        updateWidget(widget.id) { current in
+                                            current.size = size
+                                        }
+                                    }
+                                }
+                            } label: {
+                                HBBadge(
+                                    text: widget.size.title,
+                                    foreground: HBPalette.textPrimary,
+                                    background: HBPalette.panelSoft.opacity(0.92),
+                                    stroke: HBPalette.panelStrokeStrong
+                                )
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                updateWidget(widget.id) { current in
+                                    current.minimized.toggle()
+                                }
+                            } label: {
+                                Image(systemName: widget.minimized ? "arrow.down.left.and.arrow.up.right" : "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(HBPalette.textPrimary)
+                                    .frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.plain)
+                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+
+                            Button {
+                                moveWidget(widget.id, offset: -1)
+                            } label: {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(index == 0 ? HBPalette.textMuted : HBPalette.textPrimary)
+                                    .frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.plain)
+                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+                            .disabled(index == 0)
+
+                            Button {
+                                moveWidget(widget.id, offset: 1)
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(index == currentDashboardWidgets.count - 1 ? HBPalette.textMuted : HBPalette.textPrimary)
+                                    .frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.plain)
+                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+                            .disabled(index == currentDashboardWidgets.count - 1)
+
+                            Button {
+                                removeWidget(widget.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(HBPalette.accentRed)
+                                    .frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.plain)
+                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+                        }
+                    } else {
+                        HBBadge(
+                            text: widget.size.title,
+                            foreground: HBPalette.textPrimary,
+                            background: HBPalette.panelSoft.opacity(0.92),
+                            stroke: HBPalette.panelStrokeStrong
+                        )
+                    }
+                }
+
+                if widget.minimized {
+                    Text("This widget is minimized. Turn on layout editing to expand it again.")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .padding(.vertical, 10)
+                } else {
+                    dashboardWidgetContent(widget)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(minHeight: minimumHeight(for: widget.size), alignment: .topLeading)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dashboardWidgetContent(_ widget: DashboardWidgetItem) -> some View {
+        switch widget.type {
+        case .hero:
+            dashboardHeader
+        case .summary:
+            LazyVGrid(columns: metricColumns, spacing: 12) {
+                metricCard(
+                    title: "Live Devices",
+                    value: "\(onlineDevices)/\(devices.count)",
+                    subtitle: "Realtime endpoints responding",
+                    icon: "lightbulb.max",
+                    colors: [HBPalette.accentBlue.opacity(0.24), HBPalette.accentPurple.opacity(0.14)],
+                    accent: HBPalette.accentBlue
+                )
+                metricCard(
+                    title: "Voice Mesh",
+                    value: "\(onlineVoiceDevices)/\(voiceDevices.count)",
+                    subtitle: "Wake hubs currently connected",
+                    icon: "mic",
+                    colors: [HBPalette.accentGreen.opacity(0.22), HBPalette.accentBlue.opacity(0.12)],
+                    accent: HBPalette.accentGreen
+                )
+                metricCard(
+                    title: "Scene Library",
+                    value: "\(scenes.count)",
+                    subtitle: "Pinned atmospheres available",
+                    icon: "play.fill",
+                    colors: [HBPalette.accentPurple.opacity(0.24), HBPalette.panelSoft.opacity(0.18)],
+                    accent: HBPalette.accentPurple
+                )
+                metricCard(
+                    title: "Automation Signal",
+                    value: systemStatus,
+                    subtitle: "Residence mesh health",
+                    icon: "waveform.path.ecg",
+                    colors: [HBPalette.accentOrange.opacity(0.22), HBPalette.panelSoft.opacity(0.16)],
+                    accent: HBPalette.accentOrange
+                )
+            }
+        case .security:
+            securityPanel
+        case .favoriteScenes:
+            quickScenePanel(for: widget)
+        case .favoriteDevices:
+            favoriteDevicesWidget(for: widget)
+        case .voiceCommand:
+            voiceCommandPanel
+        case .device:
+            singleDeviceWidget(for: widget)
+        }
+    }
+
+    private var dashboardAddWidgetSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Widget Type") {
+                    Picker("Type", selection: $pendingWidgetType) {
+                        ForEach(DashboardWidgetType.allCases) { type in
+                            Text(type.title).tag(type)
+                        }
+                    }
+                    .pickerStyle(.navigationLink)
+
+                    Text(pendingWidgetType.details)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                Section("Widget Details") {
+                    TextField("Title", text: $pendingWidgetTitle)
+
+                    Picker("Size", selection: $pendingWidgetSize) {
+                        ForEach(DashboardWidgetSize.allCases) { size in
+                            Text(size.title).tag(size)
+                        }
+                    }
+                }
+
+                if pendingWidgetType == .device {
+                    Section("Device") {
+                        Picker("Device", selection: $pendingWidgetDeviceID) {
+                            Text("Select a device").tag("")
+                            ForEach(sortedDevices) { device in
+                                Text("\(device.name) · \(device.room)").tag(device.id)
+                            }
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(HBPageBackground().ignoresSafeArea())
+            .navigationTitle("Add Widget")
+            .onChange(of: pendingWidgetType) { _, newValue in
+                pendingWidgetTitle = newValue.title
+                if newValue == .hero || newValue == .summary {
+                    pendingWidgetSize = .full
+                } else if pendingWidgetSize == .full {
+                    pendingWidgetSize = .medium
+                }
+                if newValue != .device {
+                    pendingWidgetDeviceID = ""
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        showingAddWidgetSheet = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        addWidgetToCurrentDashboard()
+                    }
+                    .disabled(pendingWidgetType == .device && pendingWidgetDeviceID.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func widgetSystemImage(_ type: DashboardWidgetType) -> String {
+        switch type {
+        case .hero: return "house"
+        case .summary: return "square.grid.2x2"
+        case .security: return "shield"
+        case .favoriteScenes: return "play.fill"
+        case .favoriteDevices: return "heart.fill"
+        case .voiceCommand: return "waveform"
+        case .device: return "lightbulb.max"
+        }
+    }
+
+    private func minimumHeight(for size: DashboardWidgetSize) -> CGFloat? {
+        switch size {
+        case .small: return 150
+        case .medium: return 220
+        case .large: return 300
+        case .full: return nil
         }
     }
 
@@ -854,6 +1146,215 @@ struct DashboardView: View {
         }
     }
 
+    private func quickScenePanel(for widget: DashboardWidgetItem) -> some View {
+        let sceneCount: Int
+        switch widget.size {
+        case .small:
+            sceneCount = 2
+        case .medium:
+            sceneCount = 3
+        case .large:
+            sceneCount = 4
+        case .full:
+            sceneCount = useLandscapeCompactLayout ? 5 : 6
+        }
+
+        let scopedScenes = Array(scenes.prefix(sceneCount))
+
+        return HBPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scene Launchpad")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.6)
+                        .foregroundStyle(HBPalette.textMuted)
+
+                    Label("Quick Scene Actions", systemImage: "play")
+                        .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                }
+
+                if scopedScenes.isEmpty {
+                    EmptyStateView(
+                        title: "No favorite scenes yet",
+                        subtitle: "Pin your most-used scenes and they will appear here for instant launch."
+                    )
+                } else {
+                    ForEach(scopedScenes) { scene in
+                        HBCardRow {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(scene.name)
+                                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                    Text(scene.details)
+                                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .lineLimit(widget.size == .small ? 1 : 2)
+                                }
+
+                                Spacer()
+
+                                Button("Activate") {
+                                    Task { await activateScene(scene) }
+                                }
+                                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func favoriteDevicesWidget(for widget: DashboardWidgetItem) -> some View {
+        let limitedDevices: [DeviceItem]
+        switch widget.size {
+        case .small:
+            limitedDevices = Array(featuredDevices.prefix(1))
+        case .medium:
+            limitedDevices = Array(featuredDevices.prefix(2))
+        case .large:
+            limitedDevices = Array(featuredDevices.prefix(4))
+        case .full:
+            limitedDevices = featuredDevices
+        }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HBSectionHeader(
+                title: "Favorite Devices",
+                subtitle: favoritesProfileId == nil
+                    ? "Activate a user profile to pin favorite controls."
+                    : "Profile-tuned shortcuts for your most-used devices.",
+                eyebrow: "Priority Controls"
+            )
+
+            if limitedDevices.isEmpty {
+                EmptyStateView(
+                    title: "No favorite devices yet",
+                    subtitle: favoritesProfileId == nil
+                        ? "Create or activate a user profile, then favorite devices to pin them here."
+                        : "Favorite your go-to devices from the Devices screen to pin them here."
+                )
+            } else {
+                ForEach(limitedDevices) { device in
+                    featuredDeviceCard(device)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func singleDeviceWidget(for widget: DashboardWidgetItem) -> some View {
+        if let deviceId = widget.settings.deviceId,
+           let device = devices.first(where: { $0.id == deviceId }) {
+            featuredDeviceCard(device)
+        } else {
+            EmptyStateView(
+                title: "Device unavailable",
+                subtitle: "This widget points to a device that is no longer available."
+            )
+        }
+    }
+
+    private func prepareAddWidgetSheet() {
+        pendingWidgetType = .hero
+        pendingWidgetTitle = DashboardWidgetType.hero.title
+        pendingWidgetSize = .full
+        pendingWidgetDeviceID = ""
+        showingAddWidgetSheet = true
+    }
+
+    private func updateWidget(_ widgetID: String, mutate: (inout DashboardWidgetItem) -> Void) {
+        guard let currentView = currentDashboardView else { return }
+
+        if let index = dashboardViews.firstIndex(where: { $0.id == currentView.id }) {
+            var nextView = dashboardViews[index]
+            guard let widgetIndex = nextView.widgets.firstIndex(where: { $0.id == widgetID }) else { return }
+            mutate(&nextView.widgets[widgetIndex])
+            dashboardViews[index] = nextView
+            dashboardDirty = true
+        }
+    }
+
+    private func moveWidget(_ widgetID: String, offset: Int) {
+        guard let currentView = currentDashboardView,
+              let viewIndex = dashboardViews.firstIndex(where: { $0.id == currentView.id }),
+              let widgetIndex = dashboardViews[viewIndex].widgets.firstIndex(where: { $0.id == widgetID }) else {
+            return
+        }
+
+        let destination = widgetIndex + offset
+        guard dashboardViews[viewIndex].widgets.indices.contains(destination) else {
+            return
+        }
+
+        var nextWidgets = dashboardViews[viewIndex].widgets
+        let widget = nextWidgets.remove(at: widgetIndex)
+        nextWidgets.insert(widget, at: destination)
+        dashboardViews[viewIndex].widgets = nextWidgets
+        dashboardDirty = true
+    }
+
+    private func removeWidget(_ widgetID: String) {
+        guard let currentView = currentDashboardView,
+              let viewIndex = dashboardViews.firstIndex(where: { $0.id == currentView.id }) else {
+            return
+        }
+
+        dashboardViews[viewIndex].widgets.removeAll { $0.id == widgetID }
+        dashboardDirty = true
+    }
+
+    private func addWidgetToCurrentDashboard() {
+        guard let currentView = currentDashboardView,
+              let viewIndex = dashboardViews.firstIndex(where: { $0.id == currentView.id }) else {
+            return
+        }
+
+        if pendingWidgetType == .device && pendingWidgetDeviceID.isEmpty {
+            return
+        }
+
+        let widget = DashboardSupport.makeWidget(
+            type: pendingWidgetType,
+            title: pendingWidgetTitle,
+            size: pendingWidgetSize,
+            deviceId: pendingWidgetType == .device ? pendingWidgetDeviceID : nil
+        )
+
+        dashboardViews[viewIndex].widgets.append(widget)
+        dashboardDirty = true
+        showingAddWidgetSheet = false
+    }
+
+    private func saveDashboardViews() async {
+        guard let profileID = favoritesProfileId, !profileID.isEmpty else {
+            errorMessage = "Create or activate a user profile to save dashboard layouts."
+            return
+        }
+
+        isSavingDashboard = true
+        defer { isSavingDashboard = false }
+
+        do {
+            let savedViews = try await DashboardSupport.saveViews(dashboardViews, profileId: profileID, apiClient: session.apiClient)
+            dashboardViews = savedViews
+            selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
+                profileId: profileID,
+                views: savedViews,
+                current: selectedDashboardViewID
+            )
+            dashboardDirty = false
+            infoMessage = "Dashboard layout saved for this profile."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func iconForDevice(_ type: String) -> String {
         switch type.lowercased() {
         case "light":
@@ -876,6 +1377,7 @@ struct DashboardView: View {
     private func loadDashboard() async {
         if previewMode {
             errorMessage = nil
+            infoMessage = nil
             devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             scenes = UIPreviewData.scenes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             voiceDevices = UIPreviewData.voiceDevices
@@ -885,12 +1387,21 @@ struct DashboardView: View {
             systemStatus = "Online"
             favoritesProfileId = UIPreviewData.favoriteProfileId
             favoriteDeviceIds = UIPreviewData.favoriteDeviceIds
+            let previewViews = [DashboardSupport.defaultView(name: "Preview Dashboard")]
+            dashboardViews = previewViews
+            selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
+                profileId: UIPreviewData.favoriteProfileId,
+                views: previewViews,
+                current: selectedDashboardViewID
+            )
+            dashboardDirty = false
             isLoading = false
             return
         }
 
         isLoading = true
         errorMessage = nil
+        infoMessage = nil
 
         do {
             async let devicesTask = session.apiClient.get("/api/devices")
@@ -903,7 +1414,9 @@ struct DashboardView: View {
             let scenesResponse = try await scenesTask
             let voiceResponse = try await voiceTask
             let securityResponse = try await securityTask
-            let favoritesContext = (try? await profilesTask).map(FavoritesSupport.deviceContext(fromProfilesPayload:)) ?? .empty
+            let profilesResponse = try? await profilesTask
+            let favoritesContext = profilesResponse.map(FavoritesSupport.deviceContext(fromProfilesPayload:)) ?? .empty
+            let dashboardContext = profilesResponse.map(DashboardSupport.profileContext(fromProfilesPayload:)) ?? .empty
 
             let devicesObject = JSON.object(devicesResponse)
             let devicesData = JSON.object(devicesObject["data"])
@@ -930,6 +1443,13 @@ struct DashboardView: View {
             securityZonesTotal = totalZones
             systemStatus = alarmState.lowercased() == "error" ? "Degraded" : "Online"
             applyFavoriteContext(favoritesContext)
+            dashboardViews = dashboardContext.views
+            selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
+                profileId: dashboardContext.profileId,
+                views: dashboardContext.views,
+                current: selectedDashboardViewID
+            )
+            dashboardDirty = false
         } catch {
             errorMessage = error.localizedDescription
         }

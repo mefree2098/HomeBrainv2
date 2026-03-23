@@ -41,6 +41,7 @@ export function useFavorites() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [profileId, setProfileId] = useState<string | null>(null)
+  const [activeProfile, setActiveProfile] = useState<any | null>(null)
   const [favoriteDeviceIds, setFavoriteDeviceIds] = useState<IdSet>(new Set())
   const [favoriteSceneIds, setFavoriteSceneIds] = useState<IdSet>(new Set())
   const [pendingDeviceIds, setPendingDeviceIds] = useState<IdSet>(new Set())
@@ -57,10 +58,12 @@ export function useFavorites() {
       const preferredProfile = profiles.find(profile => profile.active) || profiles[0] || null
 
       if (preferredProfile?._id) {
+        setActiveProfile(preferredProfile)
         setProfileId(preferredProfile._id)
         setFavoriteDeviceIds(toIdSet(preferredProfile.favorites?.devices))
         setFavoriteSceneIds(toIdSet(preferredProfile.favorites?.scenes))
       } else {
+        setActiveProfile(null)
         setProfileId(null)
         setFavoriteDeviceIds(new Set())
         setFavoriteSceneIds(new Set())
@@ -169,6 +172,7 @@ export function useFavorites() {
     loading,
     error,
     profileId,
+    activeProfile,
     hasProfile: Boolean(profileId),
     favoriteDeviceIds,
     favoriteDeviceIdList,

@@ -1,4 +1,62 @@
 const mongoose = require('mongoose');
+const { DASHBOARD_WIDGET_SIZES, DASHBOARD_WIDGET_TYPES } = require('../utils/dashboardViews');
+
+const dashboardWidgetSchema = new mongoose.Schema({
+  id: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+  type: {
+    type: String,
+    required: true,
+    enum: DASHBOARD_WIDGET_TYPES,
+  },
+  title: {
+    type: String,
+    required: true,
+    trim: true,
+    maxlength: 80,
+  },
+  size: {
+    type: String,
+    required: true,
+    enum: DASHBOARD_WIDGET_SIZES,
+    default: 'medium',
+  },
+  minimized: {
+    type: Boolean,
+    default: false,
+  },
+  settings: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {},
+  },
+}, {
+  _id: false,
+  versionKey: false,
+});
+
+const dashboardViewSchema = new mongoose.Schema({
+  id: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+  name: {
+    type: String,
+    required: true,
+    trim: true,
+    maxlength: 80,
+  },
+  widgets: {
+    type: [dashboardWidgetSchema],
+    default: [],
+  },
+}, {
+  _id: false,
+  versionKey: false,
+});
 
 const schema = new mongoose.Schema({
   name: {
@@ -102,6 +160,10 @@ const schema = new mongoose.Schema({
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Automation',
     }],
+  },
+  dashboardViews: {
+    type: [dashboardViewSchema],
+    default: [],
   },
   // Advanced settings
   contextMemory: {
