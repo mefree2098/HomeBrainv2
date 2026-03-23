@@ -4,13 +4,19 @@ export type DashboardWidgetType =
   | "security"
   | "favorite-scenes"
   | "favorite-devices"
+  | "weather"
   | "voice-command"
   | "device"
 
 export type DashboardWidgetSize = "small" | "medium" | "large" | "full"
+export type DashboardFavoriteDeviceCardSize = "small" | "medium" | "large"
+export type DashboardWeatherLocationMode = "saved" | "custom" | "auto"
 
 export interface DashboardWidgetSettings {
   deviceId?: string
+  favoriteDeviceSizes?: Record<string, DashboardFavoriteDeviceCardSize>
+  weatherLocationMode?: DashboardWeatherLocationMode
+  weatherLocationQuery?: string
 }
 
 export interface DashboardWidgetConfig {
@@ -34,18 +40,20 @@ export const DASHBOARD_WIDGET_TYPES: DashboardWidgetType[] = [
   "security",
   "favorite-scenes",
   "favorite-devices",
+  "weather",
   "voice-command",
   "device"
 ]
 
 export const DASHBOARD_WIDGET_SIZES: DashboardWidgetSize[] = ["small", "medium", "large", "full"]
+export const DASHBOARD_FAVORITE_DEVICE_CARD_SIZES: DashboardFavoriteDeviceCardSize[] = ["small", "medium", "large"]
+export const DASHBOARD_WEATHER_LOCATION_MODES: DashboardWeatherLocationMode[] = ["saved", "custom", "auto"]
 
 const DEFAULT_WIDGETS: Array<Pick<DashboardWidgetConfig, "type" | "title" | "size">> = [
   { type: "hero", title: "Welcome Home", size: "full" },
   { type: "summary", title: "System Summary", size: "full" },
   { type: "security", title: "Security Center", size: "medium" },
   { type: "favorite-scenes", title: "Quick Scenes", size: "large" },
-  { type: "favorite-devices", title: "Favorite Devices", size: "full" },
   { type: "voice-command", title: "Voice Commands", size: "large" }
 ]
 
@@ -67,19 +75,60 @@ const sanitizeTitle = (value: unknown, fallback: string) => {
 }
 
 const normalizeSettings = (type: DashboardWidgetType, settings: unknown): DashboardWidgetSettings | null => {
-  if (type !== "device") {
-    return {}
+  if (type === "device") {
+    const deviceId = typeof (settings as DashboardWidgetSettings | undefined)?.deviceId === "string"
+      ? (settings as DashboardWidgetSettings).deviceId?.trim()
+      : ""
+
+    if (!deviceId) {
+      return null
+    }
+
+    return { deviceId }
   }
 
-  const deviceId = typeof (settings as DashboardWidgetSettings | undefined)?.deviceId === "string"
-    ? (settings as DashboardWidgetSettings).deviceId?.trim()
-    : ""
+  if (type === "favorite-devices") {
+    const rawSizes = (settings as DashboardWidgetSettings | undefined)?.favoriteDeviceSizes
+    const favoriteDeviceSizes = rawSizes && typeof rawSizes === "object" && !Array.isArray(rawSizes)
+      ? Object.entries(rawSizes).reduce<Record<string, DashboardFavoriteDeviceCardSize>>((accumulator, [deviceId, size]) => {
+          const normalizedDeviceId = typeof deviceId === "string" ? deviceId.trim() : ""
+          const normalizedSize = typeof size === "string" ? size.trim() as DashboardFavoriteDeviceCardSize : null
+          if (!normalizedDeviceId || !normalizedSize || !DASHBOARD_FAVORITE_DEVICE_CARD_SIZES.includes(normalizedSize)) {
+            return accumulator
+          }
 
-  if (!deviceId) {
-    return null
+          accumulator[normalizedDeviceId] = normalizedSize
+          return accumulator
+        }, {})
+      : undefined
+
+    return favoriteDeviceSizes && Object.keys(favoriteDeviceSizes).length > 0
+      ? { favoriteDeviceSizes }
+      : {}
   }
 
-  return { deviceId }
+  if (type === "weather") {
+    const rawMode = typeof (settings as DashboardWidgetSettings | undefined)?.weatherLocationMode === "string"
+      ? (settings as DashboardWidgetSettings).weatherLocationMode?.trim() as DashboardWeatherLocationMode
+      : ""
+    const rawQuery = typeof (settings as DashboardWidgetSettings | undefined)?.weatherLocationQuery === "string"
+      ? (settings as DashboardWidgetSettings).weatherLocationQuery?.trim()
+      : ""
+
+    if (rawMode === "custom") {
+      return rawQuery
+        ? { weatherLocationMode: "custom", weatherLocationQuery: rawQuery }
+        : { weatherLocationMode: "saved" }
+    }
+
+    if (rawMode && DASHBOARD_WEATHER_LOCATION_MODES.includes(rawMode)) {
+      return { weatherLocationMode: rawMode }
+    }
+
+    return { weatherLocationMode: "saved" }
+  }
+
+  return {}
 }
 
 export const createWidgetForType = (

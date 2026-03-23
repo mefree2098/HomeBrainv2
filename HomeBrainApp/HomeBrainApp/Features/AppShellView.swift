@@ -139,7 +139,7 @@ struct AppShellView: View {
     @State private var resourceStripLoading = true
     @State private var resourceStripRefreshing = false
     @State private var previewVoiceEnabled = false
-    @State private var containerWidth: CGFloat = UIScreen.main.bounds.width
+    @State private var containerWidth: CGFloat = 0
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }

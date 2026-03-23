@@ -358,3 +358,50 @@ test('handleToken exchanges a valid PKCE authorization code for signed OIDC toke
   assert.equal(decodedIdToken.email, user.email);
   assert.equal(decodedIdToken.nonce, 'nonce-456');
 });
+
+test('verifyIssuedAccessToken accepts HomeBrain-issued bearer access tokens', async (t) => {
+  const originalGetSettings = OIDCProviderSettings.getSettings;
+  const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+
+  t.after(() => {
+    OIDCProviderSettings.getSettings = originalGetSettings;
+    process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicBaseUrl;
+  });
+
+  process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://freestonefamily.com';
+
+  const providerKeys = generateProviderKeys();
+  OIDCProviderSettings.getSettings = async () => ({
+    ...providerKeys,
+    async save() {
+      return this;
+    }
+  });
+
+  const accessToken = jwt.sign(
+    {
+      sub: '507f1f77bcf86cd799439011',
+      email: 'matt@freestonefamily.com',
+      role: 'admin',
+      token_use: 'access'
+    },
+    providerKeys.signingPrivateKeyPem,
+    {
+      algorithm: 'RS256',
+      keyid: providerKeys.signingKeyId,
+      issuer: 'https://freestonefamily.com',
+      audience: 'homebrain-axiom',
+      expiresIn: 3600
+    }
+  );
+
+  const decoded = await oidcService.verifyIssuedAccessToken({
+    headers: {
+      authorization: `Bearer ${accessToken}`
+    }
+  });
+
+  assert.equal(decoded.sub, '507f1f77bcf86cd799439011');
+  assert.equal(decoded.email, 'matt@freestonefamily.com');
+  assert.equal(decoded.role, 'admin');
+});

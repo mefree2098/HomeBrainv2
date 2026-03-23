@@ -1,17 +1,19 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
+import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
-import { 
-  Lightbulb, 
-  Lock, 
-  Thermometer, 
+import { cn } from "@/lib/utils"
+import type { DashboardFavoriteDeviceCardSize } from "@/lib/dashboard"
+import {
+  Heart,
   Home,
+  Lightbulb,
+  Lock,
   Power,
   PowerOff,
-  Heart
+  Thermometer
 } from "lucide-react"
-import { useEffect, useState } from "react"
 
 interface Device {
   _id: string
@@ -32,6 +34,9 @@ interface DashboardWidgetProps {
   onToggleFavorite: (deviceId: string, nextValue: boolean) => void
   canToggleFavorite: boolean
   isFavoritePending?: boolean
+  cardSize?: DashboardFavoriteDeviceCardSize
+  label?: string
+  className?: string
 }
 
 const THERMOSTAT_MODES = ["auto", "cool", "heat", "off"] as const
@@ -93,7 +98,44 @@ const getPreferredOnMode = (device: Device): string => {
   return fallback || "auto"
 }
 
-export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorite, canToggleFavorite, isFavoritePending = false }: DashboardWidgetProps) {
+const getDeviceIcon = (type: string) => {
+  switch (type) {
+    case "light":
+      return <Lightbulb className="h-5 w-5" />
+    case "lock":
+      return <Lock className="h-5 w-5" />
+    case "thermostat":
+      return <Thermometer className="h-5 w-5" />
+    default:
+      return <Home className="h-5 w-5" />
+  }
+}
+
+const getStatusColor = (status: boolean, type: string) => {
+  if (!status) return "bg-slate-500"
+  switch (type) {
+    case "light":
+      return "bg-yellow-500"
+    case "lock":
+      return "bg-emerald-500"
+    case "thermostat":
+      return "bg-cyan-500"
+    default:
+      return "bg-blue-500"
+  }
+}
+
+export function DashboardWidget({
+  device,
+  onControl,
+  isFavorite,
+  onToggleFavorite,
+  canToggleFavorite,
+  isFavoritePending = false,
+  cardSize = "large",
+  label = "Favorite Device",
+  className
+}: DashboardWidgetProps) {
   const [brightness, setBrightness] = useState(device.brightness || 0)
   const [temperature, setTemperature] = useState(Math.round(device.targetTemperature ?? device.temperature ?? 70))
   const [thermostatMode, setThermostatMode] = useState(getThermostatMode(device))
@@ -110,35 +152,17 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
     setThermostatMode(getThermostatMode(device))
   }, [device.status, device.properties?.smartThingsThermostatMode, device.properties?.ecobeeHvacMode, device.properties?.hvacMode])
 
-  const getDeviceIcon = (type: string) => {
-    switch (type) {
-      case 'light':
-        return <Lightbulb className="h-5 w-5" />
-      case 'lock':
-        return <Lock className="h-5 w-5" />
-      case 'thermostat':
-        return <Thermometer className="h-5 w-5" />
-      default:
-        return <Home className="h-5 w-5" />
-    }
-  }
-
-  const getStatusColor = (status: boolean, type: string) => {
-    if (!status) return "bg-gray-500"
-    switch (type) {
-      case 'light':
-        return "bg-yellow-500"
-      case 'lock':
-        return "bg-green-500"
-      case 'thermostat':
-        return "bg-blue-500"
-      default:
-        return "bg-blue-500"
-    }
-  }
+  const compact = cardSize === "small"
+  const expanded = cardSize === "large"
+  const thermostat = device.type === "thermostat"
+  const showFavoriteKicker = !compact
+  const showRoom = !compact || Boolean(device.room)
+  const showVoiceHint = !compact
+  const showBrightnessSlider = device.type === "light" && device.status && !compact
+  const showDetailedThermostatControls = thermostat && !compact
 
   const handleToggle = () => {
-    if (device.type === "thermostat") {
+    if (thermostat) {
       const mode = thermostatMode === "off" ? getPreferredOnMode(device) : "off"
       setThermostatMode(mode)
       onControl(device._id, "set_mode", mode)
@@ -150,7 +174,7 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
 
   const handleBrightnessChange = (value: number[]) => {
     setBrightness(value[0])
-    onControl(device._id, 'set_brightness', value[0])
+    onControl(device._id, "set_brightness", value[0])
   }
 
   const handleTemperatureChange = (value: number[]) => {
@@ -184,23 +208,35 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
   }
 
   return (
-    <Card className={`rounded-[1.7rem] transition-all duration-300 hover:-translate-y-1 ${device.type === "thermostat" ? "xl:col-span-2" : ""}`}>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 px-5 pt-5">
-        <div className="flex items-center gap-2">
-          <div className={`rounded-[1rem] p-2.5 text-white shadow-lg ${getStatusColor(device.status, device.type)}`}>
-            {getDeviceIcon(device.type)}
+    <Card
+      className={cn(
+        "rounded-[1.55rem] border-white/15 bg-white/85 shadow-lg shadow-black/5 backdrop-blur transition-all duration-300 hover:-translate-y-1 dark:bg-slate-950/30",
+        compact ? "h-full" : "",
+        className
+      )}
+    >
+      <CardHeader className={cn("pb-3", compact ? "px-4 pt-4" : "px-5 pt-5")}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className={cn("rounded-[1rem] p-2.5 text-white shadow-lg", getStatusColor(device.status, device.type))}>
+              {getDeviceIcon(device.type)}
+            </div>
+            <div className="min-w-0">
+              {showFavoriteKicker ? <p className="section-kicker">{label}</p> : null}
+              <CardTitle className={cn("mt-1 font-medium", compact ? "text-[1rem]" : "text-base")}>
+                <span className="line-clamp-2">{device.name}</span>
+              </CardTitle>
+              {showRoom ? <p className="mt-1 text-xs text-muted-foreground line-clamp-1">{device.room || "Unassigned"}</p> : null}
+            </div>
           </div>
-          <div>
-            <p className="section-kicker">Favorite Device</p>
-            <CardTitle className="mt-1 text-base font-medium">{device.name}</CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">{device.room}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
+
           <Button
             variant="ghost"
             size="icon"
-            className={`h-8 w-8 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'} transition-colors`}
+            className={cn(
+              "shrink-0 rounded-full",
+              isFavorite ? "text-red-500 hover:text-red-500" : "text-muted-foreground hover:text-red-500"
+            )}
             onClick={(event) => {
               event.stopPropagation()
               onToggleFavorite(device._id, !isFavorite)
@@ -208,98 +244,159 @@ export function DashboardWidget({ device, onControl, isFavorite, onToggleFavorit
             disabled={!canToggleFavorite || isFavoritePending}
             aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
           >
-            <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
+            <Heart className="h-4 w-4" fill={isFavorite ? "currentColor" : "none"} />
           </Button>
+        </div>
+      </CardHeader>
+
+      <CardContent className={cn("space-y-4", compact ? "px-4 pb-4" : "px-5 pb-5")}>
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant={device.status ? "default" : "secondary"}>
-            {device.type === "thermostat"
+            {thermostat
               ? thermostatMode.toUpperCase()
               : (device.status ? "On" : "Off")}
           </Badge>
+          {thermostat ? (
+            <Badge variant="outline">
+              {temperature}° target
+            </Badge>
+          ) : null}
+          {Number.isFinite(device.temperature) && !thermostat ? (
+            <Badge variant="outline">
+              {Math.round(device.temperature as number)}°F
+            </Badge>
+          ) : null}
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4 px-5 pb-5">
-        <Button
-          onClick={handleToggle}
-          variant={device.status ? "default" : "outline"}
-          className="w-full"
-          size="sm"
-        >
-          {device.status ? (
-            <>
-              <PowerOff className="h-4 w-4 mr-2" />
-              Turn Off
-            </>
-          ) : (
-            <>
-              <Power className="h-4 w-4 mr-2" />
-              Turn On
-            </>
-          )}
-        </Button>
 
-        {device.type === 'light' && device.status && (
-          <div className="space-y-2 rounded-[1.25rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20">
-            <div className="flex justify-between text-sm">
-              <span>Brightness</span>
-              <span>{brightness}%</span>
-            </div>
-            <Slider
-              value={[brightness]}
-              onValueChange={handleBrightnessChange}
-              max={100}
-              step={1}
+        {compact ? (
+          <div className="space-y-3">
+            {thermostat ? (
+              <div className="rounded-[1.15rem] border border-cyan-400/15 bg-cyan-100/30 px-3 py-3 dark:bg-cyan-950/18">
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Setpoint</p>
+                    <p className="text-2xl font-semibold leading-tight text-foreground">{temperature}°F</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Current</p>
+                    <p className="text-sm font-medium text-foreground">
+                      {Number.isFinite(device.temperature) ? `${Math.round(device.temperature as number)}°F` : "--"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <Button
+              onClick={handleToggle}
+              variant={device.status ? "default" : "outline"}
               className="w-full"
-            />
+              size="sm"
+            >
+              {device.status ? (
+                <>
+                  <PowerOff className="mr-2 h-4 w-4" />
+                  Turn Off
+                </>
+              ) : (
+                <>
+                  <Power className="mr-2 h-4 w-4" />
+                  Turn On
+                </>
+              )}
+            </Button>
           </div>
+        ) : (
+          <>
+            <Button
+              onClick={handleToggle}
+              variant={device.status ? "default" : "outline"}
+              className="w-full"
+              size="sm"
+            >
+              {device.status ? (
+                <>
+                  <PowerOff className="mr-2 h-4 w-4" />
+                  Turn Off
+                </>
+              ) : (
+                <>
+                  <Power className="mr-2 h-4 w-4" />
+                  Turn On
+                </>
+              )}
+            </Button>
+
+            {showBrightnessSlider ? (
+              <div className="space-y-2 rounded-[1.2rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20">
+                <div className="flex justify-between text-sm">
+                  <span>Brightness</span>
+                  <span>{brightness}%</span>
+                </div>
+                <Slider
+                  value={[brightness]}
+                  onValueChange={handleBrightnessChange}
+                  max={100}
+                  step={1}
+                  className="w-full"
+                />
+              </div>
+            ) : null}
+
+            {showDetailedThermostatControls ? (
+              <div className={cn("space-y-3 rounded-[1.35rem] border border-cyan-400/15 bg-cyan-100/30 dark:bg-cyan-950/18", expanded ? "p-4" : "p-3")}>
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Setpoint</p>
+                    <p className={cn("font-semibold leading-tight", expanded ? "text-2xl" : "text-xl")}>{temperature}°F</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current</p>
+                    <p className="text-sm font-medium">
+                      {Number.isFinite(device.temperature) ? `${Math.round(device.temperature as number)}°F` : "--"}
+                    </p>
+                  </div>
+                </div>
+                <Slider
+                  value={[temperature]}
+                  onValueChange={handleTemperatureChange}
+                  onValueCommit={handleTemperatureCommit}
+                  min={55}
+                  max={90}
+                  step={1}
+                  className="w-full"
+                />
+                <div className={cn("grid gap-2", expanded ? "grid-cols-4" : "grid-cols-2")}>
+                  {THERMOSTAT_MODES.map((mode) => {
+                    const active = thermostatMode === mode
+                    return (
+                      <Button
+                        key={mode}
+                        variant={active ? "default" : "outline"}
+                        size="sm"
+                        className={cn(
+                          "h-9 w-full px-0 text-[11px] font-semibold uppercase tracking-[0.14em] whitespace-nowrap",
+                          active ? "" : "bg-background/80"
+                        )}
+                        onClick={() => handleThermostatModeChange(mode)}
+                      >
+                        {getModeLabel(mode)}
+                      </Button>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </>
         )}
 
-        {device.type === 'thermostat' && (
-          <div className="space-y-3 rounded-[1.4rem] border border-cyan-400/15 bg-cyan-100/30 p-4 dark:bg-cyan-950/18">
-            <div className="flex items-end justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Setpoint</p>
-                <p className="text-2xl font-semibold leading-tight">{temperature}°F</p>
-              </div>
-              <div className="text-right">
-                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current</p>
-                <p className="text-sm font-medium">
-                  {Number.isFinite(device.temperature) ? `${Math.round(device.temperature as number)}°F` : "--"}
-                </p>
-              </div>
-            </div>
-            <Slider
-              value={[temperature]}
-              onValueChange={handleTemperatureChange}
-              onValueCommit={handleTemperatureCommit}
-              min={55}
-              max={90}
-              step={1}
-              className="w-full"
-            />
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {THERMOSTAT_MODES.map((mode) => {
-                const active = thermostatMode === mode
-                return (
-                  <Button
-                    key={mode}
-                    variant={active ? "default" : "outline"}
-                    size="sm"
-                    className={`h-9 w-full px-0 text-[11px] font-semibold uppercase tracking-[0.14em] whitespace-nowrap ${active ? "" : "bg-background/80"}`}
-                    onClick={() => handleThermostatModeChange(mode)}
-                  >
-                    {getModeLabel(mode)}
-                  </Button>
-                )
-              })}
-            </div>
+        {showVoiceHint ? (
+          <div className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/20">
+            {thermostat
+              ? `Say: "Hey Anna, set ${device.name} to ${thermostatMode} and ${temperature} degrees"`
+              : `Say: "Hey Anna, turn ${device.status ? "off" : "on"} ${device.name}"`}
           </div>
-        )}
-
-        <div className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/20">
-          {device.type === "thermostat"
-            ? `Say: "Hey Anna, set ${device.name} to ${thermostatMode} and ${temperature} degrees"`
-            : `Say: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
-        </div>
+        ) : null}
       </CardContent>
     </Card>
   )

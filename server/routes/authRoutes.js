@@ -46,6 +46,29 @@ router.post('/login', async (req, res) => {
   }
 });
 
+router.post('/oidc/exchange', async (req, res) => {
+  try {
+    const decoded = await oidcService.verifyIssuedAccessToken(req);
+    const user = await UserService.get(decoded.sub);
+
+    if (!user) {
+      return res.status(401).json({ message: 'User not found' });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({ message: 'User account is inactive' });
+    }
+
+    return res.status(200).json({
+      accessToken: generateAccessToken(user)
+    });
+  } catch (error) {
+    return res.status(error.status || 401).json({
+      message: error.description || error.message || 'OIDC token exchange failed'
+    });
+  }
+});
+
 router.post('/register', async (req, res, next) => {
   try {
     const registrationOpen = await UserService.canPublicRegister();

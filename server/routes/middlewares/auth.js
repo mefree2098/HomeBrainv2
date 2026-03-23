@@ -1,6 +1,7 @@
 const UserService = require('../../services/userService.js');
 const jwt = require('jsonwebtoken');
 const { ALL_ROLES, ROLES } = require("../../../shared/config/roles");
+const oidcService = require('../../services/oidcService');
 
 function extractToken(req) {
   const authorizationHeader = req.headers.authorization;
@@ -27,51 +28,69 @@ function extractToken(req) {
   return headerToken || queryToken || cookieToken || null;
 }
 
-async function verifyAccessToken(token, allowedRoles = ALL_ROLES) {
+async function resolveUserFromSubject(subject, allowedRoles = ALL_ROLES) {
+  const user = await UserService.get(subject);
+  if (!user) {
+    const error = new Error('User not found');
+    error.status = 401;
+    throw error;
+  }
+
+  if (!user.isActive) {
+    const error = new Error('User account is inactive');
+    error.status = 403;
+    throw error;
+  }
+
+  if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
+    const error = new Error('Insufficient permissions');
+    error.status = 403;
+    throw error;
+  }
+
+  return user;
+}
+
+async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null) {
   if (!token) {
     const error = new Error('Unauthorized');
     error.status = 401;
     throw error;
   }
 
-  if (!process.env.JWT_SECRET) {
-    console.error('JWT_SECRET environment variable is not set');
-    const error = new Error('Server configuration error');
-    error.status = 500;
-    throw error;
+  let jwtError = null;
+  if (process.env.JWT_SECRET) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      return await resolveUserFromSubject(decoded.sub, allowedRoles);
+    } catch (err) {
+      jwtError = err;
+    }
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await UserService.get(decoded.sub);
-    if (!user) {
-      const error = new Error('User not found');
-      error.status = 401;
-      throw error;
-    }
-
-    if (!user.isActive) {
-      const error = new Error('User account is inactive');
-      error.status = 403;
-      throw error;
-    }
-
-    if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
-      const error = new Error('Insufficient permissions');
-      error.status = 403;
-      throw error;
-    }
-
-    return user;
-  } catch (err) {
-    console.error('Token verification error:', err.message);
-    if (err.name === 'JsonWebTokenError') {
+    const requestForOidc = req || {
+      headers: {
+        authorization: `Bearer ${token}`
+      },
+      get() {
+        return undefined;
+      },
+      protocol: 'https',
+      secure: true
+    };
+    const decoded = await oidcService.verifyIssuedAccessToken(requestForOidc, `Bearer ${token}`);
+    return await resolveUserFromSubject(decoded.sub, allowedRoles);
+  } catch (oidcError) {
+    const error = jwtError || oidcError;
+    console.error('Token verification error:', error.message);
+    if (error.name === 'JsonWebTokenError') {
       console.error('JWT signature verification failed');
-    } else if (err.name === 'TokenExpiredError') {
+    } else if (error.name === 'TokenExpiredError') {
       console.error('Access token has expired');
     }
-    err.status = err.status || 403;
-    throw err;
+    error.status = error.status || 403;
+    throw error;
   }
 }
 
@@ -80,7 +99,7 @@ const requireUser = (allowedRoles = ALL_ROLES) => {
     const token = extractToken(req);
 
     try {
-      const user = await verifyAccessToken(token, allowedRoles);
+      const user = await verifyAccessToken(token, allowedRoles, req);
       req.user = user;
       next();
     } catch (error) {

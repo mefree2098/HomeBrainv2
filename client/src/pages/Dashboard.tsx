@@ -3,6 +3,7 @@ import { Link } from "react-router-dom"
 import {
   ArrowDown,
   ArrowUp,
+  CloudSun,
   Copy,
   Heart,
   Home,
@@ -42,6 +43,7 @@ import { DashboardWidget } from "@/components/dashboard/DashboardWidget"
 import { QuickActions } from "@/components/dashboard/QuickActions"
 import { SecurityAlarmWidget } from "@/components/dashboard/SecurityAlarmWidget"
 import { VoiceCommandPanel } from "@/components/dashboard/VoiceCommandPanel"
+import { WeatherWidget } from "@/components/dashboard/WeatherWidget"
 import { getDevices, controlDevice } from "@/api/devices"
 import { getScenes, activateScene } from "@/api/scenes"
 import { getVoiceDevices } from "@/api/voice"
@@ -51,11 +53,15 @@ import { useDeviceRealtime } from "@/hooks/useDeviceRealtime"
 import { useToast } from "@/hooks/useToast"
 import { cn } from "@/lib/utils"
 import {
+  DASHBOARD_FAVORITE_DEVICE_CARD_SIZES,
+  DASHBOARD_WEATHER_LOCATION_MODES,
   createDefaultDashboardView,
   createWidgetForType,
   moveArrayItem,
   normalizeDashboardViews,
+  type DashboardFavoriteDeviceCardSize,
   type DashboardViewConfig,
+  type DashboardWeatherLocationMode,
   type DashboardWidgetConfig,
   type DashboardWidgetSize,
   type DashboardWidgetType
@@ -101,9 +107,9 @@ const ADDABLE_WIDGETS: Array<{ type: DashboardWidgetType; label: string; descrip
   { type: "summary", label: "System Summary", description: "Live devices, voice mesh, scenes, and automation health." },
   { type: "security", label: "Security Center", description: "Alarm state and control actions." },
   { type: "favorite-scenes", label: "Quick Scenes", description: "Pin favorite scenes and launch them instantly." },
-  { type: "favorite-devices", label: "Favorite Devices", description: "Dock of hearted devices with live controls." },
+  { type: "weather", label: "Weather", description: "Current conditions with saved, custom, or auto-detected location." },
   { type: "voice-command", label: "Voice Command", description: "Natural-language control surface for the home." },
-  { type: "device", label: "Single Device", description: "A dedicated control tile for one specific device." }
+  { type: "device", label: "Device Control", description: "A dedicated control tile for one specific device." }
 ]
 
 const WIDGET_SPAN_CLASSES: Record<DashboardWidgetSize, string> = {
@@ -113,7 +119,78 @@ const WIDGET_SPAN_CLASSES: Record<DashboardWidgetSize, string> = {
   full: "lg:col-span-4"
 }
 
+const FAVORITE_DEVICE_CARD_SIZE_OPTIONS: Array<{ value: DashboardFavoriteDeviceCardSize; label: string }> = [
+  { value: "small", label: "S" },
+  { value: "medium", label: "M" },
+  { value: "large", label: "L" }
+]
+
+const getDefaultFavoriteDeviceCardSize = (device: Device): DashboardFavoriteDeviceCardSize => {
+  if (device.type === "thermostat") {
+    return "medium"
+  }
+
+  return "small"
+}
+
+const getSummaryGridClass = (size: DashboardWidgetSize) => {
+  switch (size) {
+    case "small":
+      return "grid-cols-1"
+    case "medium":
+      return "grid-cols-1 sm:grid-cols-2"
+    case "large":
+      return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-2"
+    case "full":
+      return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
+    default:
+      return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
+  }
+}
+
+const getFavoriteDevicesGridClass = (size: DashboardWidgetSize) => {
+  switch (size) {
+    case "small":
+      return "grid-cols-1"
+    case "medium":
+      return "grid-cols-1 sm:grid-cols-2"
+    case "large":
+      return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3"
+    case "full":
+      return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
+    default:
+      return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
+  }
+}
+
 const getStorageKey = (profileId: string | null) => profileId ? `homebrain.web.dashboard-view.${profileId}` : null
+
+const getDefaultWidgetSize = (type: DashboardWidgetType): DashboardWidgetSize => {
+  switch (type) {
+    case "hero":
+    case "summary":
+      return "full"
+    case "device":
+      return "small"
+    case "weather":
+      return "medium"
+    default:
+      return "medium"
+  }
+}
+
+const getSingleDeviceCardSize = (size: DashboardWidgetSize): DashboardFavoriteDeviceCardSize => {
+  switch (size) {
+    case "small":
+      return "small"
+    case "medium":
+      return "medium"
+    case "large":
+    case "full":
+    default:
+      return "large"
+  }
+}
 
 const widgetAccent = (type: DashboardWidgetType) => {
   switch (type) {
@@ -127,6 +204,8 @@ const widgetAccent = (type: DashboardWidgetType) => {
       return Play
     case "favorite-devices":
       return Heart
+    case "weather":
+      return CloudSun
     case "voice-command":
       return Mic
     case "device":
@@ -162,9 +241,11 @@ export function Dashboard() {
   const [pendingViewName, setPendingViewName] = useState("")
   const [isAddWidgetOpen, setIsAddWidgetOpen] = useState(false)
   const [pendingWidgetType, setPendingWidgetType] = useState<DashboardWidgetType>("hero")
-  const [pendingWidgetTitle, setPendingWidgetTitle] = useState("")
-  const [pendingWidgetSize, setPendingWidgetSize] = useState<DashboardWidgetSize>("medium")
+  const [pendingWidgetTitle, setPendingWidgetTitle] = useState("Welcome Hero")
+  const [pendingWidgetSize, setPendingWidgetSize] = useState<DashboardWidgetSize>("full")
   const [pendingWidgetDeviceId, setPendingWidgetDeviceId] = useState("")
+  const [pendingWeatherLocationMode, setPendingWeatherLocationMode] = useState<DashboardWeatherLocationMode>("saved")
+  const [pendingWeatherLocationQuery, setPendingWeatherLocationQuery] = useState("")
 
   const {
     loading: favoritesLoading,
@@ -587,6 +668,32 @@ export function Dashboard() {
     }))
   }
 
+  const getFavoriteDeviceCardSize = useCallback((widget: DashboardWidgetConfig, device: Device): DashboardFavoriteDeviceCardSize => {
+    const mappedSize = widget.settings.favoriteDeviceSizes?.[device._id]
+    if (mappedSize && DASHBOARD_FAVORITE_DEVICE_CARD_SIZES.includes(mappedSize)) {
+      return mappedSize
+    }
+
+    return getDefaultFavoriteDeviceCardSize(device)
+  }, [])
+
+  const setFavoriteDeviceCardSize = useCallback((widgetId: string, deviceId: string, size: DashboardFavoriteDeviceCardSize) => {
+    updateWidget(widgetId, (current) => {
+      const nextFavoriteDeviceSizes = {
+        ...(current.settings.favoriteDeviceSizes || {}),
+        [deviceId]: size
+      }
+
+      return {
+        ...current,
+        settings: {
+          ...current.settings,
+          favoriteDeviceSizes: nextFavoriteDeviceSizes
+        }
+      }
+    })
+  }, [updateWidget])
+
   const moveWidget = (widgetId: string, direction: -1 | 1) => {
     mutateSelectedView((view) => {
       const index = view.widgets.findIndex((widget) => widget.id === widgetId)
@@ -608,21 +715,51 @@ export function Dashboard() {
     }))
   }
 
+  const prepareAddWidget = (type: DashboardWidgetType = "hero") => {
+    const descriptor = ADDABLE_WIDGETS.find((widget) => widget.type === type)
+    setPendingWidgetType(type)
+    setPendingWidgetTitle(descriptor?.label ?? "")
+    setPendingWidgetSize(getDefaultWidgetSize(type))
+    setPendingWidgetDeviceId("")
+    setPendingWeatherLocationMode("saved")
+    setPendingWeatherLocationQuery("")
+    setIsAddWidgetOpen(true)
+  }
+
   const addWidgetToSelectedView = () => {
     if (!selectedView) {
       return
     }
 
-    const settings = pendingWidgetType === "device"
-      ? { deviceId: pendingWidgetDeviceId }
-      : {}
+    if (pendingWidgetType === "weather" && pendingWeatherLocationMode === "custom" && !pendingWeatherLocationQuery.trim()) {
+      return
+    }
 
     if (pendingWidgetType === "device" && !pendingWidgetDeviceId) {
       return
     }
 
+    const settings = pendingWidgetType === "device"
+      ? { deviceId: pendingWidgetDeviceId }
+      : pendingWidgetType === "weather"
+        ? {
+            weatherLocationMode: pendingWeatherLocationMode,
+            ...(pendingWeatherLocationMode === "custom" && pendingWeatherLocationQuery.trim()
+              ? { weatherLocationQuery: pendingWeatherLocationQuery.trim() }
+              : {})
+          }
+        : {}
+
+    const selectedDevice = pendingWidgetType === "device"
+      ? sortedDevices.find((device) => device._id === pendingWidgetDeviceId)
+      : null
+    const trimmedTitle = pendingWidgetTitle.trim()
+    const resolvedTitle = pendingWidgetType === "device" && (!trimmedTitle || trimmedTitle === "Device Control")
+      ? selectedDevice?.name ?? undefined
+      : trimmedTitle || undefined
+
     const widget = createWidgetForType(pendingWidgetType, {
-      title: pendingWidgetTitle.trim() || undefined,
+      title: resolvedTitle,
       size: pendingWidgetSize,
       settings
     })
@@ -633,28 +770,32 @@ export function Dashboard() {
     }))
 
     setPendingWidgetType("hero")
-    setPendingWidgetTitle("")
-    setPendingWidgetSize("medium")
+    setPendingWidgetTitle("Welcome Hero")
+    setPendingWidgetSize("full")
     setPendingWidgetDeviceId("")
+    setPendingWeatherLocationMode("saved")
+    setPendingWeatherLocationQuery("")
     setIsAddWidgetOpen(false)
   }
 
   const renderWidgetContent = (widget: DashboardWidgetConfig) => {
     if (widget.type === "hero") {
+      const compactHero = widget.size === "small" || widget.size === "medium"
+
       return (
-        <section className="glass-panel glass-panel-strong rounded-[2rem] p-6">
-          <div className="panel-grid absolute inset-0 opacity-40" />
-          <div className="absolute -right-16 top-[-4rem] h-64 w-64 rounded-full bg-cyan-300/25 blur-3xl dark:bg-cyan-500/18" />
-          <div className="absolute bottom-[-5rem] left-[-4rem] h-56 w-56 rounded-full bg-blue-300/20 blur-3xl dark:bg-blue-500/16" />
-          <div className="relative space-y-5">
-            <div className="space-y-4">
+        <section className={cn("relative overflow-hidden rounded-[1.5rem] border border-white/10 bg-white/5 dark:bg-slate-950/12", compactHero ? "p-4" : "p-5")}>
+          <div className="panel-grid absolute inset-0 opacity-30" />
+          <div className={cn("absolute rounded-full blur-3xl dark:bg-cyan-500/18", compactHero ? "right-[-3rem] top-[-3rem] h-36 w-36 bg-cyan-300/18" : "right-[-5rem] top-[-4rem] h-52 w-52 bg-cyan-300/25")} />
+          <div className={cn("absolute rounded-full blur-3xl dark:bg-blue-500/16", compactHero ? "bottom-[-3rem] left-[-2rem] h-28 w-28 bg-blue-300/14" : "bottom-[-5rem] left-[-4rem] h-44 w-44 bg-blue-300/20")} />
+          <div className={cn("relative", compactHero ? "space-y-3" : "space-y-5")}>
+            <div className={cn(compactHero ? "space-y-2" : "space-y-4")}>
               <p className="section-kicker">Residence Control Nexus</p>
-              <div className="max-w-4xl">
-                <h2 className="text-balance text-3xl font-semibold leading-tight text-foreground sm:text-4xl">
-                  <span className="text-signal">Welcome home.</span> This view is tuned for {selectedView?.name ?? "your space"}.
+              <div className={cn(compactHero ? "max-w-2xl" : "max-w-4xl")}>
+                <h2 className={cn("text-balance font-semibold leading-tight text-foreground", compactHero ? "text-2xl sm:text-[2rem]" : "text-[2rem] sm:text-[2.4rem]")}>
+                  <span className="text-signal">Welcome home.</span> {selectedView?.name ?? "Your dashboard"} is ready.
                 </h2>
-                <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground">
-                  Build room-specific command decks by arranging the widgets you actually use and stripping out the rest.
+                <p className={cn("max-w-2xl leading-relaxed text-muted-foreground", compactHero ? "mt-2 text-sm" : "mt-4 text-base")}>
+                  Keep the controls you use, shrink the rest, and tune this deck per room or device.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -670,17 +811,17 @@ export function Dashboard() {
 
     if (widget.type === "summary") {
       return (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className={cn("grid gap-3", getSummaryGridClass(widget.size))}>
           {summaryCards.map((card) => (
-            <div key={card.title} className="card-shell rounded-[1.6rem] p-5">
+            <div key={card.title} className={cn("card-shell rounded-[1.4rem]", widget.size === "small" ? "p-4" : "p-5")}>
               <div className={`absolute inset-0 bg-gradient-to-br ${card.glow}`} />
               <div className="relative flex items-start justify-between gap-3">
                 <div>
                   <p className="section-kicker">{card.title}</p>
-                  <p className="mt-3 text-3xl font-semibold text-foreground">{card.value}</p>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{card.description}</p>
+                  <p className={cn("font-semibold text-foreground", widget.size === "small" ? "mt-2 text-2xl" : "mt-3 text-3xl")}>{card.value}</p>
+                  <p className={cn("leading-relaxed text-muted-foreground", widget.size === "small" ? "mt-1 text-xs" : "mt-2 text-sm")}>{card.description}</p>
                 </div>
-                <div className={`rounded-[1rem] border border-white/20 bg-white/10 p-3 ${card.accent}`}>
+                <div className={cn("rounded-[1rem] border border-white/20 bg-white/10", widget.size === "small" ? "p-2.5" : "p-3", card.accent)}>
                   <card.icon className="h-5 w-5" />
                 </div>
               </div>
@@ -691,7 +832,7 @@ export function Dashboard() {
     }
 
     if (widget.type === "security") {
-      return <SecurityAlarmWidget />
+      return <SecurityAlarmWidget size={widget.size} />
     }
 
     if (widget.type === "favorite-scenes") {
@@ -709,6 +850,16 @@ export function Dashboard() {
 
     if (widget.type === "voice-command") {
       return <VoiceCommandPanel />
+    }
+
+    if (widget.type === "weather") {
+      return (
+        <WeatherWidget
+          size={widget.size}
+          locationMode={widget.settings.weatherLocationMode ?? "saved"}
+          locationQuery={widget.settings.weatherLocationQuery}
+        />
+      )
     }
 
     if (widget.type === "favorite-devices") {
@@ -737,17 +888,43 @@ export function Dashboard() {
       }
 
       return (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className={cn("grid gap-3", getFavoriteDevicesGridClass(widget.size))}>
           {favoriteDevices.map((device) => (
-            <DashboardWidget
-              key={device._id}
-              device={device}
-              onControl={handleDeviceControl}
-              isFavorite
-              onToggleFavorite={toggleDeviceFavorite}
-              canToggleFavorite={hasProfile}
-              isFavoritePending={pendingDeviceIds.has(device._id)}
-            />
+            <div key={device._id} className="space-y-2">
+              {isEditingLayout ? (
+                <div className="flex items-center justify-between rounded-[1rem] border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/10">
+                  <span className="truncate font-medium text-foreground">{device.name}</span>
+                  <div className="flex items-center gap-1">
+                    {FAVORITE_DEVICE_CARD_SIZE_OPTIONS.map((option) => {
+                      const active = getFavoriteDeviceCardSize(widget, device) === option.value
+
+                      return (
+                        <Button
+                          key={option.value}
+                          type="button"
+                          variant={active ? "default" : "outline"}
+                          size="sm"
+                          className="h-7 min-w-7 px-2 text-[10px]"
+                          onClick={() => setFavoriteDeviceCardSize(widget.id, device._id, option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              <DashboardWidget
+                device={device}
+                onControl={handleDeviceControl}
+                isFavorite
+                onToggleFavorite={toggleDeviceFavorite}
+                canToggleFavorite={hasProfile}
+                isFavoritePending={pendingDeviceIds.has(device._id)}
+                cardSize={getFavoriteDeviceCardSize(widget, device)}
+              />
+            </div>
           ))}
         </div>
       )
@@ -777,6 +954,8 @@ export function Dashboard() {
           onToggleFavorite={toggleDeviceFavorite}
           canToggleFavorite={hasProfile}
           isFavoritePending={pendingDeviceIds.has(device._id)}
+          cardSize={getSingleDeviceCardSize(widget.size)}
+          label="Device Control"
         />
       )
     }
@@ -798,13 +977,13 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <section className="glass-panel glass-panel-strong rounded-[2rem] p-5 lg:p-6">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="space-y-2">
+      <section className="glass-panel glass-panel-strong rounded-[1.8rem] p-3.5 lg:p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-1">
             <p className="section-kicker">Dashboard Views</p>
-            <h1 className="text-3xl font-semibold text-foreground">Custom command decks for every room</h1>
-            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-              Remove modules, collapse them, resize them, move them, and save multiple layouts per profile. The current view is shared with iOS.
+            <h1 className="text-xl font-semibold text-foreground lg:text-[1.7rem]">Room-specific command decks</h1>
+            <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              Save multiple layouts per profile and keep the current view aligned with iOS.
             </p>
           </div>
 
@@ -848,7 +1027,7 @@ export function Dashboard() {
             </Button>
 
             {isEditingLayout && (
-              <Button variant="outline" onClick={() => setIsAddWidgetOpen(true)} disabled={!hasProfile}>
+              <Button variant="outline" onClick={() => prepareAddWidget()} disabled={!hasProfile}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add Widget
               </Button>
@@ -861,7 +1040,7 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-2.5 flex flex-wrap gap-2">
           <Badge variant="secondary">{selectedView?.name ?? "Main Dashboard"}</Badge>
           <Badge variant="outline">{selectedView?.widgets.length ?? 0} widgets</Badge>
           <Badge variant="outline">{dashboardDirty ? "Unsaved changes" : "Saved"}</Badge>
@@ -882,7 +1061,7 @@ export function Dashboard() {
                   WIDGET_SPAN_CLASSES[widget.size]
                 )}
               >
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 dark:border-cyan-200/10">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-2.5 dark:border-cyan-200/10">
                   <div className="flex items-center gap-3">
                     <span className="rounded-full border border-white/15 bg-white/10 p-2 text-cyan-600 dark:text-cyan-300">
                       <Icon className="h-4 w-4" />
@@ -943,7 +1122,7 @@ export function Dashboard() {
                   )}
                 </div>
 
-                <div className="p-4">
+                <div className="p-3.5">
                   {widget.minimized ? (
                     <div className="rounded-[1.35rem] border border-dashed border-white/15 bg-white/5 px-4 py-5 text-sm text-muted-foreground dark:bg-slate-950/10">
                       This widget is minimized. Turn on edit mode to expand it again.
@@ -1017,7 +1196,14 @@ export function Dashboard() {
                   setPendingWidgetType(nextType)
                   const defaultDescriptor = ADDABLE_WIDGETS.find((widget) => widget.type === nextType)
                   setPendingWidgetTitle(defaultDescriptor?.label ?? "")
-                  setPendingWidgetSize(nextType === "hero" || nextType === "summary" ? "full" : "medium")
+                  setPendingWidgetSize(getDefaultWidgetSize(nextType))
+                  if (nextType !== "device") {
+                    setPendingWidgetDeviceId("")
+                  }
+                  if (nextType !== "weather") {
+                    setPendingWeatherLocationMode("saved")
+                    setPendingWeatherLocationQuery("")
+                  }
                 }}
               >
                 <SelectTrigger id="widget-type">
@@ -1079,11 +1265,52 @@ export function Dashboard() {
                 </Select>
               </div>
             )}
+
+            {pendingWidgetType === "weather" && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="widget-weather-mode">Location Source</Label>
+                  <Select
+                    value={pendingWeatherLocationMode}
+                    onValueChange={(value) => setPendingWeatherLocationMode(value as DashboardWeatherLocationMode)}
+                  >
+                    <SelectTrigger id="widget-weather-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DASHBOARD_WEATHER_LOCATION_MODES.map((mode) => (
+                        <SelectItem key={mode} value={mode}>
+                          {mode === "saved" ? "Saved Address" : mode === "custom" ? "Specific Address" : "Auto Detect"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {pendingWeatherLocationMode === "custom" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="widget-weather-address">Address</Label>
+                    <Input
+                      id="widget-weather-address"
+                      value={pendingWeatherLocationQuery}
+                      onChange={(event) => setPendingWeatherLocationQuery(event.target.value)}
+                      placeholder="Denver, CO"
+                    />
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsAddWidgetOpen(false)}>Cancel</Button>
-            <Button onClick={addWidgetToSelectedView} disabled={pendingWidgetType === "device" && !pendingWidgetDeviceId}>
+            <Button
+              onClick={addWidgetToSelectedView}
+              disabled={
+                (pendingWidgetType === "device" && !pendingWidgetDeviceId)
+                || (pendingWidgetType === "weather" && pendingWeatherLocationMode === "custom" && !pendingWeatherLocationQuery.trim())
+              }
+            >
               Add Widget
             </Button>
           </DialogFooter>
