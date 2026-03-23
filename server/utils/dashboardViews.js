@@ -6,18 +6,20 @@ const DASHBOARD_WIDGET_TYPES = [
   'security',
   'favorite-scenes',
   'favorite-devices',
+  'weather',
   'voice-command',
   'device'
 ];
 
 const DASHBOARD_WIDGET_SIZES = ['small', 'medium', 'large', 'full'];
+const DASHBOARD_FAVORITE_DEVICE_SIZES = ['small', 'medium', 'large'];
+const DASHBOARD_WEATHER_LOCATION_MODES = ['saved', 'custom', 'auto'];
 
 const DEFAULT_WIDGET_ORDER = [
   { type: 'hero', title: 'Welcome Home', size: 'full' },
   { type: 'summary', title: 'System Summary', size: 'full' },
   { type: 'security', title: 'Security Center', size: 'medium' },
   { type: 'favorite-scenes', title: 'Quick Scenes', size: 'large' },
-  { type: 'favorite-devices', title: 'Favorite Devices', size: 'full' },
   { type: 'voice-command', title: 'Voice Commands', size: 'large' }
 ];
 
@@ -51,6 +53,48 @@ function normalizeWidgetSettings(type, settings) {
     return {
       deviceId: normalized.deviceId.trim()
     };
+  }
+
+  if (type === 'favorite-devices') {
+    const favoriteDeviceSizes = normalized.favoriteDeviceSizes
+      && typeof normalized.favoriteDeviceSizes === 'object'
+      && !Array.isArray(normalized.favoriteDeviceSizes)
+      ? Object.entries(normalized.favoriteDeviceSizes).reduce((accumulator, [deviceId, size]) => {
+        const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
+        const normalizedSize = typeof size === 'string' ? size.trim() : '';
+        if (!normalizedDeviceId || !DASHBOARD_FAVORITE_DEVICE_SIZES.includes(normalizedSize)) {
+          return accumulator;
+        }
+
+        accumulator[normalizedDeviceId] = normalizedSize;
+        return accumulator;
+      }, {})
+      : {};
+
+    return Object.keys(favoriteDeviceSizes).length > 0
+      ? { favoriteDeviceSizes }
+      : {};
+  }
+
+  if (type === 'weather') {
+    const weatherLocationMode = typeof normalized.weatherLocationMode === 'string'
+      ? normalized.weatherLocationMode.trim()
+      : '';
+    const weatherLocationQuery = typeof normalized.weatherLocationQuery === 'string'
+      ? normalized.weatherLocationQuery.trim()
+      : '';
+
+    if (weatherLocationMode === 'custom') {
+      return weatherLocationQuery
+        ? { weatherLocationMode, weatherLocationQuery }
+        : { weatherLocationMode: 'saved' };
+    }
+
+    if (DASHBOARD_WEATHER_LOCATION_MODES.includes(weatherLocationMode)) {
+      return { weatherLocationMode };
+    }
+
+    return { weatherLocationMode: 'saved' };
   }
 
   return {};
@@ -172,6 +216,8 @@ function normalizeDashboardViews(views) {
 }
 
 module.exports = {
+  DASHBOARD_FAVORITE_DEVICE_SIZES,
+  DASHBOARD_WEATHER_LOCATION_MODES,
   DASHBOARD_WIDGET_SIZES,
   DASHBOARD_WIDGET_TYPES,
   createDashboardEntityId,

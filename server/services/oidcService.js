@@ -632,8 +632,8 @@ async function handleToken(req, res) {
   }
 }
 
-async function verifyIssuedAccessToken(req) {
-  const authorizationHeader = trimString(req.headers.authorization);
+async function verifyIssuedAccessToken(req, tokenOverride = '') {
+  const authorizationHeader = trimString(tokenOverride || req.headers.authorization);
   if (!authorizationHeader.toLowerCase().startsWith('bearer ')) {
     throw new OIDCRequestError('invalid_token', 'Bearer access token is required.', 401);
   }
@@ -695,5 +695,6 @@ module.exports = {
   getUserFromSessionToken,
   handleAuthorize,
   handleToken,
-  handleUserInfo
+  handleUserInfo,
+  verifyIssuedAccessToken
 };

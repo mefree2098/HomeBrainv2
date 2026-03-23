@@ -28,7 +28,7 @@ struct DevicesView: View {
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
-    @State private var contentWidth: CGFloat = UIScreen.main.bounds.width
+    @State private var contentWidth: CGFloat = 0
 
     private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "switch", "camera"]
     private let thermostatModes = ["auto", "cool", "heat", "off"]

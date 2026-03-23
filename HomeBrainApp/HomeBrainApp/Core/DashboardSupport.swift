@@ -6,6 +6,7 @@ enum DashboardWidgetType: String, CaseIterable, Identifiable {
     case security
     case favoriteScenes = "favorite-scenes"
     case favoriteDevices = "favorite-devices"
+    case weather
     case voiceCommand = "voice-command"
     case device
 
@@ -18,8 +19,9 @@ enum DashboardWidgetType: String, CaseIterable, Identifiable {
         case .security: return "Security Center"
         case .favoriteScenes: return "Quick Scenes"
         case .favoriteDevices: return "Favorite Devices"
+        case .weather: return "Weather"
         case .voiceCommand: return "Voice Commands"
-        case .device: return "Single Device"
+        case .device: return "Device Control"
         }
     }
 
@@ -30,8 +32,9 @@ enum DashboardWidgetType: String, CaseIterable, Identifiable {
         case .security: return "Alarm state and security control actions."
         case .favoriteScenes: return "Pinned scenes for one-tap launch."
         case .favoriteDevices: return "Dock of favorite devices with live controls."
+        case .weather: return "Current conditions and forecast for a saved or detected location."
         case .voiceCommand: return "Natural-language command surface."
-        case .device: return "A dedicated card for one specific device."
+        case .device: return "A dedicated control card for one specific device."
         }
     }
 }
@@ -54,14 +57,63 @@ enum DashboardWidgetSize: String, CaseIterable, Identifiable {
     }
 }
 
+enum DashboardFavoriteDeviceCardSize: String, CaseIterable, Identifiable {
+    case small
+    case medium
+    case large
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .large: return "Large"
+        }
+    }
+}
+
+enum DashboardWeatherLocationMode: String, CaseIterable, Identifiable {
+    case saved
+    case custom
+    case auto
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .saved: return "Saved Address"
+        case .custom: return "Specific Address"
+        case .auto: return "Auto Detect"
+        }
+    }
+}
+
 struct DashboardWidgetSettings: Hashable {
     var deviceId: String?
+    var favoriteDeviceSizes: [String: DashboardFavoriteDeviceCardSize] = [:]
+    var weatherLocationMode: DashboardWeatherLocationMode = .saved
+    var weatherLocationQuery: String?
 
     var payload: [String: Any] {
+        var result: [String: Any] = [:]
+
         if let deviceId, !deviceId.isEmpty {
-            return ["deviceId": deviceId]
+            result["deviceId"] = deviceId
         }
-        return [:]
+
+        if !favoriteDeviceSizes.isEmpty {
+            result["favoriteDeviceSizes"] = favoriteDeviceSizes.mapValues(\.rawValue)
+        }
+
+        result["weatherLocationMode"] = weatherLocationMode.rawValue
+
+        if let weatherLocationQuery,
+           !weatherLocationQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            result["weatherLocationQuery"] = weatherLocationQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return result
     }
 }
 
@@ -115,7 +167,6 @@ enum DashboardSupport {
         (.summary, "System Summary", .full),
         (.security, "Security Center", .medium),
         (.favoriteScenes, "Quick Scenes", .large),
-        (.favoriteDevices, "Favorite Devices", .full),
         (.voiceCommand, "Voice Commands", .large)
     ]
 
@@ -140,10 +191,22 @@ enum DashboardSupport {
         )
     }
 
-    static func makeWidget(type: DashboardWidgetType, title: String? = nil, size: DashboardWidgetSize? = nil, minimized: Bool = false, deviceId: String? = nil) -> DashboardWidgetItem {
+    static func makeWidget(
+        type: DashboardWidgetType,
+        title: String? = nil,
+        size: DashboardWidgetSize? = nil,
+        minimized: Bool = false,
+        deviceId: String? = nil,
+        settings: DashboardWidgetSettings? = nil
+    ) -> DashboardWidgetItem {
         let descriptor = defaultWidgetDescriptors.first(where: { $0.0 == type })
         let resolvedTitle = sanitizedTitle(title, fallback: descriptor?.1 ?? type.title)
         let resolvedSize = size ?? descriptor?.2 ?? .medium
+        var resolvedSettings = settings ?? DashboardWidgetSettings()
+
+        if let deviceId, !deviceId.isEmpty {
+            resolvedSettings.deviceId = deviceId
+        }
 
         return DashboardWidgetItem(
             id: createID(prefix: "widget"),
@@ -151,7 +214,7 @@ enum DashboardSupport {
             title: resolvedTitle,
             size: resolvedSize,
             minimized: minimized,
-            settings: DashboardWidgetSettings(deviceId: deviceId)
+            settings: resolvedSettings
         )
     }
 
@@ -308,6 +371,19 @@ enum DashboardSupport {
         let size = DashboardWidgetSize(rawValue: JSON.string(object, "size")) ?? defaultWidgetDescriptors.first(where: { $0.0 == type })?.2 ?? .medium
         let settingsObject = JSON.object(object["settings"])
         let deviceId = JSON.optionalString(settingsObject, "deviceId")
+        let weatherLocationMode = DashboardWeatherLocationMode(rawValue: JSON.string(settingsObject, "weatherLocationMode")) ?? .saved
+        let weatherLocationQuery = JSON.optionalString(settingsObject, "weatherLocationQuery")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let favoriteDeviceSizes = JSON.object(settingsObject["favoriteDeviceSizes"]).reduce(into: [String: DashboardFavoriteDeviceCardSize]()) { accumulator, entry in
+            let deviceId = entry.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !deviceId.isEmpty,
+                  let value = entry.value as? String,
+                  let size = DashboardFavoriteDeviceCardSize(rawValue: value.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                return
+            }
+
+            accumulator[deviceId] = size
+        }
+
         if type == .device && (deviceId == nil || deviceId?.isEmpty == true) {
             return nil
         }
@@ -318,7 +394,12 @@ enum DashboardSupport {
             title: sanitizedTitle(JSON.string(object, "title"), fallback: defaultWidgetDescriptors.first(where: { $0.0 == type })?.1 ?? type.title),
             size: size,
             minimized: JSON.bool(object, "minimized"),
-            settings: DashboardWidgetSettings(deviceId: deviceId)
+            settings: DashboardWidgetSettings(
+                deviceId: deviceId,
+                favoriteDeviceSizes: favoriteDeviceSizes,
+                weatherLocationMode: weatherLocationMode,
+                weatherLocationQuery: weatherLocationMode == .custom ? weatherLocationQuery : nil
+            )
         )
     }
 

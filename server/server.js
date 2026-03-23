@@ -14,6 +14,7 @@ const userProfileRoutes = require("./routes/userProfileRoutes");
 const voiceDeviceRoutes = require("./routes/voiceDeviceRoutes");
 const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const weatherRoutes = require("./routes/weatherRoutes");
 const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
 const smartThingsWebhookRoutes = require("./routes/smartThingsWebhookRoutes");
@@ -115,7 +116,7 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), microphone=(self)');
+  res.setHeader('Permissions-Policy', 'camera=(), geolocation=(self), microphone=(self)');
   next();
 });
 app.use(express.json({
@@ -234,6 +235,8 @@ app.use('/api/voice', voiceDeviceRoutes);
 app.use('/api/elevenlabs', elevenLabsRoutes);
 // Settings Routes
 app.use('/api/settings', settingsRoutes);
+// Weather Routes
+app.use('/api/weather', weatherRoutes);
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
