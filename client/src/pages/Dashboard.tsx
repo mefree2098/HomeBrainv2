@@ -733,21 +733,21 @@ export function Dashboard() {
     }
   }, [dashboardViews, profileId, refreshFavorites, selectedViewId, toast])
 
-  const openViewDialog = (mode: ViewDialogMode) => {
+  const openViewDialog = useCallback((mode: ViewDialogMode) => {
     setViewDialogMode(mode)
     if (mode === "rename" && selectedView) {
       setPendingViewName(selectedView.name)
       return
     }
     setPendingViewName("")
-  }
+  }, [selectedView])
 
-  const closeViewDialog = () => {
+  const closeViewDialog = useCallback(() => {
     setViewDialogMode(null)
     setPendingViewName("")
-  }
+  }, [])
 
-  const submitViewDialog = () => {
+  const submitViewDialog = useCallback(() => {
     const name = pendingViewName.trim()
     if (!name) {
       return
@@ -764,9 +764,9 @@ export function Dashboard() {
     }
 
     closeViewDialog()
-  }
+  }, [closeViewDialog, mutateSelectedView, mutateViews, pendingViewName, selectedView, viewDialogMode])
 
-  const deleteSelectedView = () => {
+  const deleteSelectedView = useCallback(() => {
     if (!selectedView || dashboardViews.length <= 1) {
       return
     }
@@ -777,14 +777,14 @@ export function Dashboard() {
     }
 
     mutateViews((prev) => prev.filter((view) => view.id !== selectedView.id))
-  }
+  }, [dashboardViews.length, mutateViews, selectedView])
 
-  const updateWidget = (widgetId: string, mutator: (widget: DashboardWidgetConfig) => DashboardWidgetConfig) => {
+  const updateWidget = useCallback((widgetId: string, mutator: (widget: DashboardWidgetConfig) => DashboardWidgetConfig) => {
     mutateSelectedView((view) => ({
       ...view,
       widgets: view.widgets.map((widget) => widget.id === widgetId ? mutator(widget) : widget)
     }))
-  }
+  }, [mutateSelectedView])
 
   const getFavoriteDeviceCardSize = useCallback((widget: DashboardWidgetConfig, device: Device): DashboardFavoriteDeviceCardSize => {
     const mappedSize = widget.settings.favoriteDeviceSizes?.[device._id]
@@ -812,7 +812,7 @@ export function Dashboard() {
     })
   }, [updateWidget])
 
-  const moveWidget = (widgetId: string, direction: -1 | 1) => {
+  const moveWidget = useCallback((widgetId: string, direction: -1 | 1) => {
     mutateSelectedView((view) => {
       const index = view.widgets.findIndex((widget) => widget.id === widgetId)
       if (index === -1) {
@@ -824,16 +824,16 @@ export function Dashboard() {
         widgets: moveArrayItem(view.widgets, index, index + direction)
       }
     })
-  }
+  }, [mutateSelectedView])
 
-  const removeWidget = (widgetId: string) => {
+  const removeWidget = useCallback((widgetId: string) => {
     mutateSelectedView((view) => ({
       ...view,
       widgets: view.widgets.filter((widget) => widget.id !== widgetId)
     }))
-  }
+  }, [mutateSelectedView])
 
-  const prepareAddWidget = (type: DashboardWidgetType = "hero") => {
+  const prepareAddWidget = useCallback((type: DashboardWidgetType = "hero") => {
     const descriptor = ADDABLE_WIDGETS.find((widget) => widget.type === type)
     setPendingWidgetType(type)
     setPendingWidgetTitle(descriptor?.label ?? "")
@@ -843,7 +843,7 @@ export function Dashboard() {
     setPendingWeatherLocationMode("saved")
     setPendingWeatherLocationQuery("")
     setIsAddWidgetOpen(true)
-  }
+  }, [])
 
   const addWidgetToSelectedView = () => {
     if (!selectedView) {
