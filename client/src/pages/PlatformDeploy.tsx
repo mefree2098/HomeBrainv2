@@ -96,6 +96,38 @@ const getHealthVariant = (status: "healthy" | "degraded" | undefined) => {
   return status === "healthy" ? "secondary" : "destructive";
 };
 
+const formatTimestamp = (value?: string | null) => {
+  if (!value) {
+    return "unknown";
+  }
+
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+
+  return new Date(parsed).toLocaleString();
+};
+
+const formatUptime = (seconds?: number) => {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+    return "unknown";
+  }
+
+  const totalSeconds = Math.floor(seconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSeconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  return `${remainingSeconds}s`;
+};
+
 export function PlatformDeploy() {
   const { toast } = useToast();
   const [status, setStatus] = useState<DeployStatusResponse | null>(null);
@@ -210,6 +242,8 @@ export function PlatformDeploy() {
   const dirtyCount = status?.repo?.dirtyEntries?.length || 0;
   const ignoredDirtyCount = status?.repo?.ignoredDirtyEntries?.length || 0;
   const isDeployRunning = activeJob?.status === "running";
+  const runtimeMismatch = status?.runtime?.repoMatchesRuntime === false;
+  const restartPending = Boolean(status?.pendingRestart);
 
   const stepSummary = useMemo(() => {
     if (!activeJob?.steps || activeJob.steps.length === 0) {
@@ -311,6 +345,12 @@ export function PlatformDeploy() {
       title: "Reverse Proxy",
       message: health?.checks.reverseProxy.message || "Unknown",
       status: health?.checks.reverseProxy.status
+    },
+    {
+      key: "deployment",
+      title: "Backend Runtime",
+      message: health?.checks.deployment.message || "Unknown",
+      status: health?.checks.deployment.status
     }
   ] as const;
 
@@ -322,7 +362,7 @@ export function PlatformDeploy() {
             Platform Deploy
           </h1>
           <p className="mt-2 text-muted-foreground">
-            Pull the latest GitHub code on this HomeBrain host and deploy it from the UI.
+            Pull the latest GitHub code on this HomeBrain host, rebuild the frontend, and roll the backend onto the new commit.
           </p>
         </div>
         <Button variant="outline" onClick={() => void refreshAll()}>
@@ -334,17 +374,27 @@ export function PlatformDeploy() {
       <Card>
         <CardHeader>
           <CardTitle>Repository Status</CardTitle>
-          <CardDescription>Current local repository state on the HomeBrain host.</CardDescription>
+          <CardDescription>Compare code on disk with the backend process currently serving API traffic.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline">Branch: {status?.repo?.branch || "unknown"}</Badge>
-            <Badge variant="outline">Commit: {status?.repo?.shortCommit || "unknown"}</Badge>
+            <Badge variant="outline">Repo commit: {status?.repo?.shortCommit || "unknown"}</Badge>
+            <Badge variant={runtimeMismatch ? "destructive" : "secondary"}>
+              Backend loaded: {status?.runtime?.loadedShortCommit || "unknown"}
+            </Badge>
+            <Badge variant="outline">Backend booted: {formatTimestamp(status?.runtime?.bootedAt)}</Badge>
+            <Badge variant="outline">Uptime: {formatUptime(status?.runtime?.uptimeSeconds)}</Badge>
             <Badge variant={dirtyCount > 0 ? "destructive" : "secondary"}>
               {dirtyCount > 0 ? `Dirty (${dirtyCount})` : "Clean"}
             </Badge>
             {ignoredDirtyCount > 0 ? (
               <Badge variant="outline">Ignored dist artifacts: {ignoredDirtyCount}</Badge>
+            ) : null}
+            {restartPending ? (
+              <Badge variant="destructive">
+                Restart pending: {status?.pendingRestart?.expectedShortCommit || "unknown"}
+              </Badge>
             ) : null}
             {typeof status?.repo?.behind === "number" ? (
               <Badge variant="outline">Behind: {status.repo.behind}</Badge>
@@ -354,6 +404,26 @@ export function PlatformDeploy() {
             ) : null}
           </div>
           <div className="text-xs text-muted-foreground">Remote: {status?.repo?.remote || "unknown"}</div>
+          {runtimeMismatch ? (
+            <div className="rounded-md border border-yellow-300 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-900 dark:bg-yellow-950/40 dark:text-yellow-100">
+              <div className="mb-1 flex items-center gap-2 font-semibold">
+                <AlertTriangle className="h-4 w-4" />
+                Backend restart still required
+              </div>
+              The repo is on {status?.repo?.shortCommit || "unknown"}, but the running backend is still serving {status?.runtime?.loadedShortCommit || "unknown"}.
+              New API routes and backend behavior will not be live until the service finishes restarting.
+            </div>
+          ) : null}
+          {restartPending ? (
+            <div className="rounded-md border border-blue-300 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100">
+              <div className="mb-1 flex items-center gap-2 font-semibold">
+                <RefreshCw className="h-4 w-4" />
+                Restart handoff pending
+              </div>
+              Waiting for a new backend process to boot commit {status?.pendingRestart?.expectedShortCommit || "unknown"}.
+              Requested at {formatTimestamp(status?.pendingRestart?.requestedAt)} by {status?.pendingRestart?.actor || "unknown"}.
+            </div>
+          ) : null}
           {dirtyCount > 0 ? (
             <div className="rounded-md border border-yellow-300 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-900 dark:bg-yellow-950/40 dark:text-yellow-100">
               <div className="mb-1 flex items-center gap-2 font-semibold">
@@ -413,7 +483,7 @@ export function PlatformDeploy() {
       <Card>
         <CardHeader>
           <CardTitle>Deploy Controls</CardTitle>
-          <CardDescription>One-click pull/build/test/restart workflow.</CardDescription>
+          <CardDescription>One-click backend + frontend deploy workflow.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2">
@@ -446,13 +516,19 @@ export function PlatformDeploy() {
               />
             </label>
             <label className="flex items-center justify-between rounded-md border p-3 text-sm">
-              Restart services after deploy
+              Restart backend services after deploy
               <Switch
                 checked={deployOptions.restartServices}
                 onCheckedChange={(checked) => setDeployOptions((prev) => ({ ...prev, restartServices: checked }))}
               />
             </label>
           </div>
+
+          {!deployOptions.restartServices ? (
+            <div className="rounded-md border border-yellow-300 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-900 dark:bg-yellow-950/40 dark:text-yellow-100">
+              Frontend assets and backend files can still update with restart disabled, but the running API will stay on the old commit until services are restarted.
+            </div>
+          ) : null}
 
           <div className="flex flex-wrap gap-2">
             <Button onClick={handleStartDeploy} disabled={isDeployRunning || startingDeploy}>
@@ -461,7 +537,7 @@ export function PlatformDeploy() {
               ) : (
                 <Rocket className="mr-2 h-4 w-4" />
               )}
-              Pull + Deploy Latest
+              Deploy Backend + Frontend
             </Button>
             <Button variant="outline" onClick={handleRestartServices} disabled={restartingServices}>
               {restartingServices ? (
@@ -484,7 +560,7 @@ export function PlatformDeploy() {
             </Badge>
           </CardTitle>
           <CardDescription>
-            API, websocket, database, and wake-word worker verification on the hub.
+            API, runtime commit, websocket, database, and worker verification on the hub.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

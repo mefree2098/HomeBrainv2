@@ -64,13 +64,15 @@ function trimStdout(value) {
 }
 
 class PlatformDeployService {
-  constructor() {
-    this.projectRoot = path.resolve(__dirname, '..', '..');
-    this.dataDir = path.join(__dirname, '..', 'data', 'platform-deploy');
+  constructor(options = {}) {
+    this.projectRoot = options.projectRoot || path.resolve(__dirname, '..', '..');
+    this.dataDir = options.dataDir || path.join(__dirname, '..', 'data', 'platform-deploy');
     this.jobsDir = path.join(this.dataDir, 'jobs');
     this.latestJobRefPath = path.join(this.dataDir, 'latest-job.txt');
+    this.pendingRestartPath = path.join(this.dataDir, 'pending-restart.json');
     this.initialized = false;
     this.startDeployInProgress = false;
+    this.spawnProcess = options.spawnProcess || spawn;
     // Cleaning client/dist can roll back freshly built frontend bundles on systems
     // that serve dist directly. Keep this opt-in only.
     this.autoCleanClientDist = process.env.HOMEBRAIN_DEPLOY_AUTOCLEAN_CLIENT_DIST === 'true';
@@ -81,6 +83,16 @@ class PlatformDeployService {
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
       || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain';
+    this.runtimeSnapshotCaptured = false;
+    this.runtimeSnapshot = {
+      pid: typeof options.runtimePid === 'number' ? options.runtimePid : process.pid,
+      bootedAt: typeof options.runtimeStartedAt === 'string' && options.runtimeStartedAt
+        ? options.runtimeStartedAt
+        : new Date().toISOString(),
+      loadedBranch: null,
+      loadedCommit: null,
+      loadedShortCommit: null
+    };
   }
 
   async initialize() {
@@ -90,6 +102,41 @@ class PlatformDeployService {
 
     await fsp.mkdir(this.jobsDir, { recursive: true });
     this.initialized = true;
+  }
+
+  async ensureRuntimeSnapshot(force = false) {
+    if (this.runtimeSnapshotCaptured && !force) {
+      return this.runtimeSnapshot;
+    }
+
+    try {
+      const repoStatus = await this.getRepoStatus();
+      this.runtimeSnapshot = {
+        ...this.runtimeSnapshot,
+        loadedBranch: repoStatus.branch || null,
+        loadedCommit: repoStatus.commit || null,
+        loadedShortCommit: repoStatus.shortCommit || null
+      };
+      this.runtimeSnapshotCaptured = true;
+    } catch (error) {
+      this.runtimeSnapshotCaptured = false;
+    }
+
+    return this.runtimeSnapshot;
+  }
+
+  async getRuntimeInfo(repoStatus = null) {
+    const snapshot = await this.ensureRuntimeSnapshot();
+    const currentRepoStatus = repoStatus || await this.getRepoStatus().catch(() => null);
+    const repoMatchesRuntime = currentRepoStatus?.commit && snapshot.loadedCommit
+      ? currentRepoStatus.commit === snapshot.loadedCommit
+      : null;
+
+    return {
+      ...snapshot,
+      uptimeSeconds: Math.max(0, Math.floor(process.uptime())),
+      repoMatchesRuntime
+    };
   }
 
   getDeployPresets() {
@@ -117,6 +164,9 @@ class PlatformDeployService {
 
   async getDeployHealth(app) {
     const checkedAt = new Date().toISOString();
+    const repoStatus = await this.getRepoStatus().catch(() => null);
+    const runtime = await this.getRuntimeInfo(repoStatus);
+    const pendingRestart = await this.readPendingRestart();
     const api = {
       status: 'healthy',
       message: 'API process is responding.'
@@ -174,13 +224,32 @@ class PlatformDeployService {
         : `Caddy admin API is unavailable${caddyStatus.error ? `: ${caddyStatus.error}` : '.'}`
     };
 
-    const checks = { api, websocket, database, wakeWordWorker, reverseProxy };
+    const runtimeMatchesRepo = runtime.repoMatchesRuntime === true;
+    const deployment = {
+      status: runtimeMatchesRepo ? 'healthy' : 'degraded',
+      message: runtimeMatchesRepo
+        ? `Running backend matches repo commit ${repoStatus?.shortCommit || runtime.loadedShortCommit || 'unknown'}.`
+        : `Running backend is on ${runtime.loadedShortCommit || 'unknown'} while repo is ${repoStatus?.shortCommit || 'unknown'}. Restart is required for backend changes to go live.`,
+      bootedAt: runtime.bootedAt,
+      pid: runtime.pid,
+      loadedCommit: runtime.loadedCommit,
+      loadedShortCommit: runtime.loadedShortCommit,
+      repoCommit: repoStatus?.commit || null,
+      repoShortCommit: repoStatus?.shortCommit || null,
+      restartPending: Boolean(pendingRestart),
+      expectedCommit: pendingRestart?.expectedCommit || null,
+      expectedShortCommit: pendingRestart?.expectedShortCommit || null
+    };
+
+    const checks = { api, websocket, database, wakeWordWorker, reverseProxy, deployment };
     const hasDegraded = Object.values(checks).some((item) => item.status !== 'healthy');
 
     return {
       checkedAt,
       overallStatus: hasDegraded ? 'degraded' : 'healthy',
-      checks
+      checks,
+      runtime,
+      pendingRestart
     };
   }
 
@@ -190,6 +259,27 @@ class PlatformDeployService {
 
   getLogPath(jobId) {
     return path.join(this.jobsDir, `${jobId}.log`);
+  }
+
+  async writePendingRestart(payload) {
+    await this.initialize();
+    await fsp.writeFile(this.pendingRestartPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    return payload;
+  }
+
+  async readPendingRestart() {
+    await this.initialize();
+    try {
+      const raw = await fsp.readFile(this.pendingRestartPath, 'utf8');
+      return JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async clearPendingRestart() {
+    await this.initialize();
+    await fsp.rm(this.pendingRestartPath, { force: true });
   }
 
   async runCommand(command, args, options = {}) {
@@ -747,6 +837,68 @@ class PlatformDeployService {
     return latest;
   }
 
+  async finalizeJobSuccess(jobId, { job = null, repoAfter = null } = {}) {
+    const currentJob = job || await this.readJobFile(jobId).catch(() => null);
+    if (!currentJob) {
+      return null;
+    }
+
+    const resolvedRepoAfter = repoAfter || await this.getRepoStatus().catch(() => currentJob.repoAfter || null);
+    await this.updateJob(jobId, {
+      status: 'completed',
+      currentStep: 'completed',
+      completedAt: new Date().toISOString(),
+      repoAfter: resolvedRepoAfter,
+      error: null
+    });
+    await this.appendJobLog(jobId, `[${new Date().toISOString()}] Deployment completed successfully\n`);
+
+    void eventStreamService.publishSafe({
+      type: 'deploy.completed',
+      source: 'platform_deploy',
+      category: 'deploy',
+      payload: {
+        jobId,
+        preset: currentJob.options?.preset || 'safe',
+        restartServices: Boolean(currentJob.options?.restartServices),
+        repoCommit: resolvedRepoAfter?.shortCommit || null
+      },
+      tags: ['deploy', 'job']
+    });
+
+    return this.readJob(jobId).catch(() => null);
+  }
+
+  async finalizeJobFailure(jobId, errorMessage, { job = null, repoAfter = null } = {}) {
+    const currentJob = job || await this.readJobFile(jobId).catch(() => null);
+    if (!currentJob) {
+      return null;
+    }
+
+    await this.updateJob(jobId, {
+      status: 'failed',
+      currentStep: 'failed',
+      completedAt: new Date().toISOString(),
+      repoAfter: repoAfter || currentJob.repoAfter || null,
+      error: errorMessage || 'Deployment failed'
+    });
+
+    void eventStreamService.publishSafe({
+      type: 'deploy.failed',
+      source: 'platform_deploy',
+      category: 'deploy',
+      severity: 'error',
+      payload: {
+        jobId,
+        preset: currentJob.options?.preset || 'safe',
+        error: errorMessage || 'Deployment failed'
+      },
+      tags: ['deploy', 'job']
+    });
+
+    return this.readJob(jobId).catch(() => null);
+  }
+
   sanitizeShellCommand(command) {
     if (typeof command !== 'string') {
       return '';
@@ -793,8 +945,25 @@ class PlatformDeployService {
     };
   }
 
-  async triggerServiceRestart(jobId = null) {
+  async triggerServiceRestart(jobId = null, options = {}) {
     const { fullCommand, notes } = this.buildServiceRestartCommand();
+    const repoStatus = options.repoStatus || await this.getRepoStatus().catch(() => null);
+    const actor = typeof options.actor === 'string' && options.actor.trim()
+      ? options.actor.trim()
+      : 'unknown';
+    const source = typeof options.source === 'string' && options.source.trim()
+      ? options.source.trim()
+      : (jobId ? 'deploy' : 'manual');
+    const pendingRestart = await this.writePendingRestart({
+      jobId: jobId || null,
+      actor,
+      source,
+      requestedAt: new Date().toISOString(),
+      expectedCommit: repoStatus?.commit || null,
+      expectedShortCommit: repoStatus?.shortCommit || null,
+      command: fullCommand
+    });
+
     if (jobId) {
       await this.appendJobLog(
         jobId,
@@ -805,13 +974,43 @@ class PlatformDeployService {
       }
     }
 
-    const child = spawn('bash', ['-lc', fullCommand], {
-      cwd: this.projectRoot,
-      env: process.env,
-      detached: true,
-      stdio: 'ignore'
-    });
-    child.unref();
+    try {
+      await new Promise((resolve, reject) => {
+        const child = this.spawnProcess('bash', ['-lc', fullCommand], {
+          cwd: this.projectRoot,
+          env: process.env,
+          detached: true,
+          stdio: 'ignore'
+        });
+        let settled = false;
+        child.once('error', (error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(error);
+        });
+        child.once('spawn', () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (typeof child.unref === 'function') {
+            child.unref();
+          }
+          resolve(child.pid || null);
+        });
+      });
+    } catch (error) {
+      await this.clearPendingRestart().catch(() => {});
+      if (jobId) {
+        await this.appendJobLog(
+          jobId,
+          `[${new Date().toISOString()}] [restart] FAILED: ${error.message}\n`
+        );
+      }
+      throw error;
+    }
 
     void eventStreamService.publishSafe({
       type: 'deploy.services_restart_triggered',
@@ -823,6 +1022,95 @@ class PlatformDeployService {
       },
       tags: ['deploy', 'restart']
     });
+
+    return pendingRestart;
+  }
+
+  async finalizePendingRestart() {
+    const pendingRestart = await this.readPendingRestart();
+    if (!pendingRestart) {
+      return { finalized: false };
+    }
+
+    const runtime = await this.getRuntimeInfo();
+    const repoStatus = await this.getRepoStatus().catch(() => null);
+    const runtimeCommit = runtime.loadedCommit || null;
+    const expectedCommit = pendingRestart.expectedCommit || null;
+    const expectedShortCommit = pendingRestart.expectedShortCommit
+      || (expectedCommit ? expectedCommit.slice(0, 7) : null);
+    const runtimeMatchesExpectedCommit = !expectedCommit
+      || (runtimeCommit && runtimeCommit === expectedCommit);
+
+    if (!pendingRestart.jobId) {
+      await this.clearPendingRestart();
+      return {
+        finalized: true,
+        success: runtimeMatchesExpectedCommit,
+        pendingRestart,
+        runtime,
+        repoStatus
+      };
+    }
+
+    const job = await this.readJobFile(pendingRestart.jobId).catch(() => null);
+    if (!job) {
+      await this.clearPendingRestart();
+      return {
+        finalized: true,
+        success: runtimeMatchesExpectedCommit,
+        pendingRestart,
+        runtime,
+        repoStatus,
+        jobMissing: true
+      };
+    }
+
+    await this.appendJobLog(
+      pendingRestart.jobId,
+      `[${new Date().toISOString()}] [Restart services] Backend process booted: `
+      + `pid=${runtime.pid} commit=${runtime.loadedShortCommit || 'unknown'} `
+      + `bootedAt=${runtime.bootedAt}\n`
+    );
+
+    if (runtimeMatchesExpectedCommit) {
+      await this.markStep(pendingRestart.jobId, 'Restart services', 'completed');
+      await this.finalizeJobSuccess(pendingRestart.jobId, {
+        job,
+        repoAfter: repoStatus || job.repoAfter || null
+      });
+      await this.clearPendingRestart();
+      return {
+        finalized: true,
+        success: true,
+        pendingRestart,
+        runtime,
+        repoStatus
+      };
+    }
+
+    const errorMessage = expectedCommit
+      ? `HomeBrain restarted, but loaded commit ${runtime.loadedShortCommit || 'unknown'} does not match expected ${expectedShortCommit}.`
+      : 'HomeBrain restarted, but the loaded commit could not be verified.';
+
+    await this.markStep(pendingRestart.jobId, 'Restart services', 'failed', errorMessage);
+    await this.appendJobLog(
+      pendingRestart.jobId,
+      `[${new Date().toISOString()}] [Restart services] FAILED: ${errorMessage}\n`
+    );
+    await this.finalizeJobFailure(pendingRestart.jobId, errorMessage, {
+      job,
+      repoAfter: repoStatus || job.repoAfter || null
+    });
+    await this.clearPendingRestart();
+
+    return {
+      finalized: true,
+      success: false,
+      pendingRestart,
+      runtime,
+      repoStatus,
+      error: errorMessage
+    };
   }
 
   async startDeploy(options = {}, actor = 'unknown') {
@@ -1111,55 +1399,31 @@ class PlatformDeployService {
       // revert freshly built assets and can leave the UI running stale code.
 
       const repoAfter = await this.getRepoStatus();
-      await this.updateJob(jobId, {
-        status: 'completed',
-        currentStep: 'completed',
-        completedAt: new Date().toISOString(),
-        repoAfter,
-        error: null
-      });
-      await this.appendJobLog(jobId, `[${new Date().toISOString()}] Deployment completed successfully\n`);
-
-      void eventStreamService.publishSafe({
-        type: 'deploy.completed',
-        source: 'platform_deploy',
-        category: 'deploy',
-        payload: {
-          jobId,
-          preset: job.options?.preset || 'safe',
-          restartServices: Boolean(job.options?.restartServices),
-          repoCommit: repoAfter?.shortCommit || null
-        },
-        tags: ['deploy', 'job']
-      });
 
       if (job.options.restartServices) {
         await this.markStep(jobId, 'Restart services', 'running');
-        await this.triggerServiceRestart(jobId);
-        await this.markStep(jobId, 'Restart services', 'completed');
-      }
-    } catch (error) {
-      await this.updateJob(jobId, {
-        status: 'failed',
-        currentStep: 'failed',
-        completedAt: new Date().toISOString(),
-        error: error.message || 'Deployment failed'
-      });
-
-      void eventStreamService.publishSafe({
-        type: 'deploy.failed',
-        source: 'platform_deploy',
-        category: 'deploy',
-        severity: 'error',
-        payload: {
+        await this.appendJobLog(
           jobId,
-          preset: job.options?.preset || 'safe',
-          error: error.message || 'Deployment failed'
-        },
-        tags: ['deploy', 'job']
-      });
+          `[${new Date().toISOString()}] [Restart services] Waiting for the new backend process to boot and confirm commit ${repoAfter?.shortCommit || 'unknown'}\n`
+        );
+        await this.updateJob(jobId, {
+          repoAfter,
+          error: null
+        });
+        await this.triggerServiceRestart(jobId, {
+          actor: job.actor || 'unknown',
+          source: 'deploy',
+          repoStatus: repoAfter
+        });
+        return;
+      }
+
+      await this.finalizeJobSuccess(jobId, { job, repoAfter });
+    } catch (error) {
+      await this.finalizeJobFailure(jobId, error.message || 'Deployment failed', { job });
     }
   }
 }
 
 module.exports = new PlatformDeployService();
+module.exports.PlatformDeployService = PlatformDeployService;
