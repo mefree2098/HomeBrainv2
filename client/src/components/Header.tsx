@@ -1,7 +1,14 @@
-import { Bug, Copy, Loader2, Menu, Mic, MicOff, Settings, LogOut, X } from "lucide-react"
+import { Bug, LayoutGrid, Loader2, Menu, Mic, MicOff, PencilLine, Plus, Save, Settings, LogOut, Trash2, X } from "lucide-react"
 import { Button } from "./ui/button"
 import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "./ui/select"
 import {
   Dialog,
   DialogContent,
@@ -15,6 +22,7 @@ import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/useToast"
 import { getDeviceStats } from "@/api/devices"
 import { browserVoiceAssistant, type BrowserVoiceStatus } from "@/services/browserVoiceAssistant"
+import { useDashboardChromeState } from "@/components/dashboard/DashboardChromeContext"
 import { HeaderResourceUtilizationStrip } from "@/components/system/SystemResourceUtilization"
 import { cn } from "@/lib/utils"
 
@@ -48,6 +56,7 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
   const navigate = useNavigate()
   const location = useLocation()
   const { toast } = useToast()
+  const dashboardChrome = useDashboardChromeState()
   const [voiceStatus, setVoiceStatus] = useState<BrowserVoiceStatus>(() => browserVoiceAssistant.getStatus())
   const [homeDeviceStats, setHomeDeviceStats] = useState({
     active: 0,
@@ -204,6 +213,7 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
     label: "Command Deck",
     detail: "Residence intelligence mesh"
   }
+  const showsDashboardChrome = dashboardChrome.visible && location.pathname === "/"
   const deviceLabel = homeDeviceStats.loaded
     ? `${homeDeviceStats.active}/${homeDeviceStats.total} devices active`
     : "Syncing device telemetry"
@@ -243,24 +253,117 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
             </div>
           </button>
 
-          <div className="hidden min-w-0 xl:flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-4 py-2 dark:bg-slate-950/20">
-            <span className="status-dot h-2.5 w-2.5 rounded-full bg-emerald-400" />
-            <div className="min-w-0">
-              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-                {activeRoute.detail}
-              </p>
-              <p className="truncate text-sm font-medium text-foreground">{activeRoute.label}</p>
-            </div>
-          </div>
+          {!showsDashboardChrome ? (
+            <>
+              <div className="hidden min-w-0 xl:flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-4 py-2 dark:bg-slate-950/20">
+                <span className="status-dot h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+                    {activeRoute.detail}
+                  </p>
+                  <p className="truncate text-sm font-medium text-foreground">{activeRoute.label}</p>
+                </div>
+              </div>
 
-          <Badge variant="secondary" className={cn("hidden md:inline-flex", homeDeviceStats.loaded ? "" : "animate-pulse")}>
-            {deviceLabel}
-          </Badge>
-
-          <HeaderResourceUtilizationStrip />
+              <Badge variant="secondary" className={cn("hidden md:inline-flex", homeDeviceStats.loaded ? "" : "animate-pulse")}>
+                {deviceLabel}
+              </Badge>
+            </>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <HeaderResourceUtilizationStrip />
+
+          {showsDashboardChrome ? (
+            <>
+              <Select
+                value={dashboardChrome.viewId}
+                onValueChange={(viewId) => dashboardChrome.onSelectView?.(viewId)}
+              >
+                <SelectTrigger className="hidden min-w-[190px] max-w-[240px] rounded-full border-white/15 bg-white/10 md:flex dark:bg-slate-950/20">
+                  <SelectValue placeholder="Select dashboard view" />
+                </SelectTrigger>
+                <SelectContent>
+                  {dashboardChrome.views.map((view) => (
+                    <SelectItem key={view.id} value={view.id}>
+                      {view.name} ({view.widgetCount} widget{view.widgetCount === 1 ? "" : "s"})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              {dashboardChrome.isEditing ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={dashboardChrome.onCreateView}
+                    disabled={!dashboardChrome.canEdit}
+                    title="Create dashboard"
+                    className="hidden md:inline-flex"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={dashboardChrome.onRenameView}
+                    disabled={!dashboardChrome.canEdit || !dashboardChrome.viewId}
+                    title="Rename dashboard"
+                    className="hidden md:inline-flex"
+                  >
+                    <PencilLine className="h-4 w-4" />
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={dashboardChrome.onDeleteView}
+                    disabled={!dashboardChrome.canEdit || dashboardChrome.views.length <= 1 || !dashboardChrome.viewId}
+                    title="Delete dashboard"
+                    className="hidden md:inline-flex"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={dashboardChrome.onAddWidget}
+                    disabled={!dashboardChrome.canEdit}
+                    title="Add widget"
+                    className="hidden md:inline-flex"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+
+                  <Button
+                    variant={dashboardChrome.isDirty ? "default" : "outline"}
+                    size="icon"
+                    onClick={dashboardChrome.onSave}
+                    disabled={!dashboardChrome.canEdit || !dashboardChrome.isDirty || dashboardChrome.isSaving}
+                    title={dashboardChrome.isSaving ? "Saving dashboard" : "Save dashboard"}
+                  >
+                    {dashboardChrome.isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  </Button>
+                </>
+              ) : null}
+
+              <Button
+                variant={dashboardChrome.isEditing ? "default" : "outline"}
+                size="icon"
+                onClick={dashboardChrome.onToggleEditing}
+                disabled={!dashboardChrome.canEdit}
+                title={dashboardChrome.isEditing ? "Exit layout editing" : "Edit layout"}
+                className={cn(dashboardChrome.isEditing && "shadow-cyan-500/20")}
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </Button>
+            </>
+          ) : null}
+
           <Button
             variant="ghost"
             size="icon"

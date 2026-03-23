@@ -155,6 +155,12 @@ export const createDefaultDashboardView = (name = "Main Dashboard"): DashboardVi
   widgets: DEFAULT_WIDGETS.map((widget) => createWidgetForType(widget.type, widget))
 })
 
+export const createEmptyDashboardView = (name = "Untitled Dashboard"): DashboardViewConfig => ({
+  id: createDashboardId("view"),
+  name: sanitizeTitle(name, "Untitled Dashboard"),
+  widgets: []
+})
+
 export const normalizeDashboardViews = (views: unknown): DashboardViewConfig[] => {
   if (!Array.isArray(views) || views.length === 0) {
     return [createDefaultDashboardView()]

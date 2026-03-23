@@ -148,6 +148,14 @@ function createDefaultDashboardView(name = 'Main Dashboard') {
   };
 }
 
+function createEmptyDashboardView(name = 'Untitled Dashboard') {
+  return {
+    id: createDashboardEntityId('view'),
+    name: sanitizeTitle(name, 'Untitled Dashboard'),
+    widgets: []
+  };
+}
+
 function normalizeDashboardView(view, index = 0) {
   if (!view || typeof view !== 'object') {
     return null;
@@ -222,6 +230,7 @@ module.exports = {
   DASHBOARD_WIDGET_TYPES,
   createDashboardEntityId,
   createDefaultDashboardView,
+  createEmptyDashboardView,
   normalizeDashboardView,
   normalizeDashboardViews,
   normalizeWidget

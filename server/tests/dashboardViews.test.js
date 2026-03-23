@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  createEmptyDashboardView,
   createDefaultDashboardView,
   normalizeDashboardViews
 } = require('../utils/dashboardViews');
@@ -68,6 +69,15 @@ test('normalizeDashboardViews drops invalid widgets and preserves valid device w
   assert.deepEqual(view.widgets[1].settings, { deviceId: 'device-123' });
   assert.equal(view.widgets[1].minimized, true);
   assert.notEqual(view.widgets[0].id, fallbackView.widgets[0].id);
+});
+
+test('normalizeDashboardViews preserves explicit empty dashboard views', () => {
+  const [view] = normalizeDashboardViews([
+    createEmptyDashboardView('Kitchen Panel')
+  ]);
+
+  assert.equal(view.name, 'Kitchen Panel');
+  assert.deepEqual(view.widgets, []);
 });
 
 test('normalizeDashboardViews preserves valid favorite device card size overrides', () => {
