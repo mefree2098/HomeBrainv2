@@ -429,6 +429,81 @@ router.patch('/:id/usage', auth, async (req, res) => {
 });
 
 /**
+ * GET /api/profiles/:id/dashboard-views
+ * Get saved dashboard views for a profile
+ */
+router.get('/:id/dashboard-views', auth, async (req, res) => {
+  try {
+    console.log(`GET /api/profiles/${req.params.id}/dashboard-views - Fetching dashboard views`);
+
+    const views = await userProfileService.getDashboardViews(req.params.id);
+
+    res.status(200).json({
+      success: true,
+      views
+    });
+  } catch (error) {
+    console.error(`Error in GET /api/profiles/${req.params.id}/dashboard-views:`, error.message);
+    console.error('Full error:', error);
+
+    if (error.message.includes('not found')) {
+      res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch dashboard views',
+        error: error.message
+      });
+    }
+  }
+});
+
+/**
+ * PUT /api/profiles/:id/dashboard-views
+ * Replace saved dashboard views for a profile
+ */
+router.put('/:id/dashboard-views', auth, async (req, res) => {
+  try {
+    console.log(`PUT /api/profiles/${req.params.id}/dashboard-views - Replacing dashboard views`);
+
+    const { views } = req.body;
+    if (!Array.isArray(views)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Views payload must be an array'
+      });
+    }
+
+    const savedViews = await userProfileService.replaceDashboardViews(req.params.id, views);
+
+    res.status(200).json({
+      success: true,
+      message: 'Dashboard views updated successfully',
+      views: savedViews
+    });
+  } catch (error) {
+    console.error(`Error in PUT /api/profiles/${req.params.id}/dashboard-views:`, error.message);
+    console.error('Full error:', error);
+
+    if (error.message.includes('not found')) {
+      res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update dashboard views',
+        error: error.message
+      });
+    }
+  }
+});
+
+/**
  * POST /api/profiles/:id/favorites/devices
  * Add device to profile favorites
  */

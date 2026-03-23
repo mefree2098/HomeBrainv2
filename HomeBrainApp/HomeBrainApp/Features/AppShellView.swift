@@ -22,6 +22,7 @@ struct AppShellView: View {
 
     enum AppSection: String, CaseIterable, Identifiable {
         case dashboard
+        case views
         case devices
         case scenes
         case workflows
@@ -40,6 +41,7 @@ struct AppShellView: View {
         var title: String {
             switch self {
             case .dashboard: return "Dashboard"
+            case .views: return "Views"
             case .devices: return "Devices"
             case .scenes: return "Scenes"
             case .automations: return "Automations"
@@ -58,6 +60,7 @@ struct AppShellView: View {
         var chromeLabel: String {
             switch self {
             case .dashboard: return "Residence Overview"
+            case .views: return "Device Dashboards"
             case .devices: return "Device Matrix"
             case .scenes: return "Scene Sequencer"
             case .workflows: return "Workflow Studio"
@@ -76,6 +79,7 @@ struct AppShellView: View {
         var chromeKicker: String {
             switch self {
             case .dashboard: return "Live Command Deck"
+            case .views: return "Room Presets"
             case .devices: return "Hardware Orchestration"
             case .scenes: return "Atmosphere Control"
             case .workflows: return "Behavior Programming"
@@ -94,6 +98,7 @@ struct AppShellView: View {
         var icon: String {
             switch self {
             case .dashboard: return "house"
+            case .views: return "rectangle.3.group"
             case .devices: return "lightbulb"
             case .scenes: return "sparkles"
             case .automations: return "bolt"
@@ -940,6 +945,12 @@ struct AppShellView: View {
         switch section {
         case .dashboard:
             DashboardView(previewMode: previewMode)
+        case .views:
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                DashboardViewsView()
+            }
         case .devices:
             DevicesView(previewMode: previewMode)
         case .scenes:

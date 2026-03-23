@@ -1,0 +1,300 @@
+import Foundation
+
+enum DashboardWidgetType: String, CaseIterable, Identifiable {
+    case hero
+    case summary
+    case security
+    case favoriteScenes = "favorite-scenes"
+    case favoriteDevices = "favorite-devices"
+    case voiceCommand = "voice-command"
+    case device
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .hero: return "Welcome Hero"
+        case .summary: return "System Summary"
+        case .security: return "Security Center"
+        case .favoriteScenes: return "Quick Scenes"
+        case .favoriteDevices: return "Favorite Devices"
+        case .voiceCommand: return "Voice Commands"
+        case .device: return "Single Device"
+        }
+    }
+
+    var details: String {
+        switch self {
+        case .hero: return "Top-level residence overview copy and badges."
+        case .summary: return "Live devices, voice mesh, scenes, and automation health."
+        case .security: return "Alarm state and security control actions."
+        case .favoriteScenes: return "Pinned scenes for one-tap launch."
+        case .favoriteDevices: return "Dock of favorite devices with live controls."
+        case .voiceCommand: return "Natural-language command surface."
+        case .device: return "A dedicated card for one specific device."
+        }
+    }
+}
+
+enum DashboardWidgetSize: String, CaseIterable, Identifiable {
+    case small
+    case medium
+    case large
+    case full
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .large: return "Large"
+        case .full: return "Full Width"
+        }
+    }
+}
+
+struct DashboardWidgetSettings: Hashable {
+    var deviceId: String?
+
+    var payload: [String: Any] {
+        if let deviceId, !deviceId.isEmpty {
+            return ["deviceId": deviceId]
+        }
+        return [:]
+    }
+}
+
+struct DashboardWidgetItem: Identifiable, Hashable {
+    var id: String
+    var type: DashboardWidgetType
+    var title: String
+    var size: DashboardWidgetSize
+    var minimized: Bool
+    var settings: DashboardWidgetSettings
+
+    var payload: [String: Any] {
+        [
+            "id": id,
+            "type": type.rawValue,
+            "title": title,
+            "size": size.rawValue,
+            "minimized": minimized,
+            "settings": settings.payload
+        ]
+    }
+}
+
+struct DashboardViewItem: Identifiable, Hashable {
+    var id: String
+    var name: String
+    var widgets: [DashboardWidgetItem]
+
+    var payload: [String: Any] {
+        [
+            "id": id,
+            "name": name,
+            "widgets": widgets.map(\.payload)
+        ]
+    }
+}
+
+struct DashboardProfileContext {
+    var profileId: String?
+    var views: [DashboardViewItem]
+
+    static let empty = DashboardProfileContext(profileId: nil, views: [DashboardSupport.defaultView()])
+}
+
+enum DashboardSupport {
+    private static let defaults = UserDefaults.standard
+
+    private static let defaultWidgetDescriptors: [(DashboardWidgetType, String, DashboardWidgetSize)] = [
+        (.hero, "Welcome Home", .full),
+        (.summary, "System Summary", .full),
+        (.security, "Security Center", .medium),
+        (.favoriteScenes, "Quick Scenes", .large),
+        (.favoriteDevices, "Favorite Devices", .full),
+        (.voiceCommand, "Voice Commands", .large)
+    ]
+
+    static func createID(prefix: String) -> String {
+        "\(prefix)-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(12))"
+    }
+
+    static func defaultView(name: String = "Main Dashboard") -> DashboardViewItem {
+        DashboardViewItem(
+            id: createID(prefix: "view"),
+            name: name,
+            widgets: defaultWidgetDescriptors.map { descriptor in
+                DashboardWidgetItem(
+                    id: createID(prefix: "widget"),
+                    type: descriptor.0,
+                    title: descriptor.1,
+                    size: descriptor.2,
+                    minimized: false,
+                    settings: DashboardWidgetSettings()
+                )
+            }
+        )
+    }
+
+    static func makeWidget(type: DashboardWidgetType, title: String? = nil, size: DashboardWidgetSize? = nil, minimized: Bool = false, deviceId: String? = nil) -> DashboardWidgetItem {
+        let descriptor = defaultWidgetDescriptors.first(where: { $0.0 == type })
+        let resolvedTitle = sanitizedTitle(title, fallback: descriptor?.1 ?? type.title)
+        let resolvedSize = size ?? descriptor?.2 ?? .medium
+
+        return DashboardWidgetItem(
+            id: createID(prefix: "widget"),
+            type: type,
+            title: resolvedTitle,
+            size: resolvedSize,
+            minimized: minimized,
+            settings: DashboardWidgetSettings(deviceId: deviceId)
+        )
+    }
+
+    static func clone(view: DashboardViewItem, named name: String) -> DashboardViewItem {
+        DashboardViewItem(
+            id: createID(prefix: "view"),
+            name: sanitizedTitle(name, fallback: "\(view.name) Copy"),
+            widgets: view.widgets.map { widget in
+                DashboardWidgetItem(
+                    id: createID(prefix: "widget"),
+                    type: widget.type,
+                    title: widget.title,
+                    size: widget.size,
+                    minimized: widget.minimized,
+                    settings: widget.settings
+                )
+            }
+        )
+    }
+
+    static func normalizeViews(from raw: Any?) -> [DashboardViewItem] {
+        guard let rawViews = raw as? [Any], !rawViews.isEmpty else {
+            return [defaultView()]
+        }
+
+        let normalized = rawViews.enumerated().compactMap { normalizeView(from: $0.element, index: $0.offset) }
+        return normalized.isEmpty ? [defaultView()] : normalized
+    }
+
+    static func profileContext(fromProfilesPayload payload: Any) -> DashboardProfileContext {
+        let root = JSON.object(payload)
+        let profiles = JSON.array(root["profiles"])
+
+        guard let preferredProfile = preferredProfile(from: profiles) else {
+            return .empty
+        }
+
+        return DashboardProfileContext(
+            profileId: FavoritesSupport.optionalProfileID(from: preferredProfile),
+            views: normalizeViews(from: preferredProfile["dashboardViews"])
+        )
+    }
+
+    static func views(fromDashboardViewsPayload payload: Any) -> [DashboardViewItem] {
+        let root = JSON.object(payload)
+        let data = JSON.object(root["data"])
+        return normalizeViews(from: root["views"] ?? data["views"])
+    }
+
+    static func resolveSelectedViewID(profileId: String?, views: [DashboardViewItem], current: String? = nil) -> String {
+        if let current, views.contains(where: { $0.id == current }) {
+            return current
+        }
+
+        if let stored = defaultViewID(forProfileID: profileId), views.contains(where: { $0.id == stored }) {
+            return stored
+        }
+
+        return views.first?.id ?? ""
+    }
+
+    static func defaultViewID(forProfileID profileId: String?) -> String? {
+        let key = preferenceKey(forProfileID: profileId)
+        let stored = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let stored, !stored.isEmpty {
+            return stored
+        }
+        return nil
+    }
+
+    static func setDefaultViewID(_ viewId: String?, forProfileID profileId: String?) {
+        let key = preferenceKey(forProfileID: profileId)
+        let trimmed = viewId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(trimmed, forKey: key)
+        }
+    }
+
+    static func saveViews(_ views: [DashboardViewItem], profileId: String, apiClient: APIClient) async throws -> [DashboardViewItem] {
+        let payloadViews = views.map(\.payload)
+        let response = try await apiClient.put("/api/profiles/\(profileId)/dashboard-views", body: ["views": payloadViews])
+        return DashboardSupport.views(fromDashboardViewsPayload: response)
+    }
+
+    private static func preferenceKey(forProfileID profileId: String?) -> String {
+        let suffix = (profileId?.isEmpty == false ? profileId! : "global")
+        return "homebrain.ios.dashboard.default-view.\(suffix)"
+    }
+
+    private static func normalizeView(from raw: Any, index: Int) -> DashboardViewItem? {
+        let object = JSON.object(raw)
+        guard !object.isEmpty else {
+            return nil
+        }
+
+        let fallback = defaultView(name: index == 0 ? "Main Dashboard" : "Dashboard \(index + 1)")
+        let rawWidgets = object["widgets"] as? [Any]
+        let normalizedWidgets = (rawWidgets ?? []).enumerated().compactMap { normalizeWidget(from: $0.element, index: $0.offset) }
+        let resolvedWidgets = rawWidgets == nil ? fallback.widgets : normalizedWidgets
+
+        return DashboardViewItem(
+            id: sanitizedTitle(FavoritesSupport.optionalProfileID(from: object) ?? JSON.string(object, "id"), fallback: fallback.id),
+            name: sanitizedTitle(JSON.string(object, "name"), fallback: index == 0 ? "Main Dashboard" : "Dashboard \(index + 1)"),
+            widgets: resolvedWidgets
+        )
+    }
+
+    private static func normalizeWidget(from raw: Any, index: Int) -> DashboardWidgetItem? {
+        let object = JSON.object(raw)
+        guard !object.isEmpty else {
+            return nil
+        }
+
+        let typeRaw = JSON.string(object, "type")
+        guard let type = DashboardWidgetType(rawValue: typeRaw) else {
+            return nil
+        }
+
+        let size = DashboardWidgetSize(rawValue: JSON.string(object, "size")) ?? defaultWidgetDescriptors.first(where: { $0.0 == type })?.2 ?? .medium
+        let settingsObject = JSON.object(object["settings"])
+        let deviceId = JSON.optionalString(settingsObject, "deviceId")
+        if type == .device && (deviceId == nil || deviceId?.isEmpty == true) {
+            return nil
+        }
+
+        return DashboardWidgetItem(
+            id: sanitizedTitle(JSON.string(object, "id"), fallback: createID(prefix: "widget-\(index + 1)")),
+            type: type,
+            title: sanitizedTitle(JSON.string(object, "title"), fallback: defaultWidgetDescriptors.first(where: { $0.0 == type })?.1 ?? type.title),
+            size: size,
+            minimized: JSON.bool(object, "minimized"),
+            settings: DashboardWidgetSettings(deviceId: deviceId)
+        )
+    }
+
+    private static func preferredProfile(from rawProfiles: [Any]) -> [String: Any]? {
+        let profiles = rawProfiles.map { JSON.object($0) }.filter { !$0.isEmpty }
+        return profiles.first(where: { JSON.bool($0, "active", fallback: false) }) ?? profiles.first
+    }
+
+    private static func sanitizedTitle(_ value: String?, fallback: String) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+}

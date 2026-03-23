@@ -2,6 +2,7 @@ const UserProfile = require('../models/UserProfile');
 const elevenLabsService = require('./elevenLabsService');
 const wakeWordTrainingService = require('./wakeWordTrainingService');
 const voiceAcknowledgmentService = require('./voiceAcknowledgmentService');
+const { normalizeDashboardViews } = require('../utils/dashboardViews');
 
 class UserProfileService {
   /**
@@ -439,6 +440,64 @@ class UserProfileService {
       return profile;
     } catch (error) {
       console.error(`Error removing favorite scene ${sceneId} from profile ${profileId}:`, error.message);
+      console.error('Full error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get saved dashboard views for a profile
+   * @param {string} profileId
+   * @returns {Promise<Array>}
+   */
+  async getDashboardViews(profileId) {
+    try {
+      console.log(`Fetching dashboard views for profile: ${profileId}`);
+
+      const profile = await UserProfile.findById(profileId).select('name dashboardViews');
+      if (!profile) {
+        throw new Error(`Profile with ID ${profileId} not found`);
+      }
+
+      const normalizedViews = normalizeDashboardViews(profile.dashboardViews);
+      const needsPersistence = JSON.stringify(profile.dashboardViews || []) !== JSON.stringify(normalizedViews);
+
+      if (needsPersistence) {
+        profile.dashboardViews = normalizedViews;
+        profile.updatedAt = Date.now();
+        await profile.save();
+      }
+
+      return normalizedViews;
+    } catch (error) {
+      console.error(`Error fetching dashboard views for profile ${profileId}:`, error.message);
+      console.error('Full error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Replace saved dashboard views for a profile
+   * @param {string} profileId
+   * @param {Array} views
+   * @returns {Promise<Array>}
+   */
+  async replaceDashboardViews(profileId, views) {
+    try {
+      console.log(`Replacing dashboard views for profile: ${profileId}`);
+
+      const profile = await UserProfile.findById(profileId).select('name dashboardViews updatedAt');
+      if (!profile) {
+        throw new Error(`Profile with ID ${profileId} not found`);
+      }
+
+      profile.dashboardViews = normalizeDashboardViews(views);
+      profile.updatedAt = Date.now();
+      await profile.save();
+
+      return profile.dashboardViews;
+    } catch (error) {
+      console.error(`Error replacing dashboard views for profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }

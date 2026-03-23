@@ -318,6 +318,37 @@ export const removeFavoriteScene = async (profileId: string, sceneId: string) =>
   }
 }
 
+// Description: Get saved dashboard views by profile ID
+// Endpoint: GET /api/profiles/:id/dashboard-views
+// Request: {}
+// Response: { success: boolean, views: Array<object> }
+export const getDashboardViews = async (profileId: string) => {
+  console.log('Fetching dashboard views:', profileId);
+  try {
+    const response = await api.get(`/api/profiles/${profileId}/dashboard-views`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching dashboard views:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Replace saved dashboard views by profile ID
+// Endpoint: PUT /api/profiles/:id/dashboard-views
+// Request: { views: Array<object> }
+// Response: { success: boolean, message: string, views: Array<object> }
+export const updateDashboardViews = async (profileId: string, views: Array<any>) => {
+  console.log('Updating dashboard views:', profileId, views.length);
+  try {
+    const response = await api.put(`/api/profiles/${profileId}/dashboard-views`, { views });
+    requestCache.delete('user-profiles');
+    return response.data;
+  } catch (error) {
+    console.error('Error updating dashboard views:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
 // Description: Get voice details by ID
 // Endpoint: GET /api/profiles/voices/:voiceId
 // Request: {}
