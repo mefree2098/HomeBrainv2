@@ -2508,20 +2508,10 @@ struct DashboardView: View {
             let voiceObject = JSON.object(voiceResponse)
             let voiceList = JSON.array(voiceObject["devices"]).map(VoiceDeviceItem.from)
 
-            let securityObject = JSON.object(securityResponse)
-            let statusObject = JSON.object(securityObject["status"])
-            let alarmState = JSON.string(statusObject, "alarmState", fallback: "Unknown")
-            let zoneObjects = JSON.array(statusObject["zones"]).map { JSON.object($0) }
-            let activeZones = zoneObjects.filter { JSON.bool($0, "active") }.count
-            let totalZones = zoneObjects.count
-
             devices = deviceList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             scenes = sceneList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             voiceDevices = voiceList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            securityStatus = alarmState
-            securityZonesActive = activeZones
-            securityZonesTotal = totalZones
-            systemStatus = alarmState.lowercased() == "error" ? "Degraded" : "Online"
+            applySecurityStatusResponse(securityResponse)
             applyFavoriteContext(favoritesContext)
             dashboardViews = dashboardContext.views
             selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
@@ -2535,6 +2525,35 @@ struct DashboardView: View {
         }
 
         isLoading = false
+    }
+
+    private func applySecurityStatusResponse(_ response: Any) {
+        let securityObject = JSON.object(response)
+        let statusObject = JSON.object(securityObject["status"])
+        let alarmState = JSON.string(statusObject, "alarmState", fallback: "Unknown")
+        let zoneObjects = JSON.array(statusObject["zones"]).map { JSON.object($0) }
+        let activeZones = zoneObjects.filter { JSON.bool($0, "active") }.count
+        let totalZones = zoneObjects.count
+
+        securityStatus = alarmState
+        securityZonesActive = activeZones
+        securityZonesTotal = totalZones
+        systemStatus = alarmState.lowercased() == "error" ? "Degraded" : "Online"
+    }
+
+    private func refreshSecurityStatus() async {
+        if previewMode {
+            systemStatus = "Online"
+            return
+        }
+
+        do {
+            let response = try await session.apiClient.get("/api/security-alarm/status")
+            applySecurityStatusResponse(response)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func toggleDevice(_ device: DeviceItem) async {
@@ -2840,7 +2859,7 @@ struct DashboardView: View {
         do {
             let endpoint = stay ? "/api/security-alarm/sthm/arm-stay" : "/api/security-alarm/sthm/arm-away"
             _ = try await session.apiClient.post(endpoint, body: [:])
-            await loadDashboard()
+            await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2854,7 +2873,7 @@ struct DashboardView: View {
 
         do {
             _ = try await session.apiClient.post("/api/security-alarm/sync-state", body: [:])
-            await loadDashboard()
+            await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription
         }
