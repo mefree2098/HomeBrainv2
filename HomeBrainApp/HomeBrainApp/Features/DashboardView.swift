@@ -201,6 +201,7 @@ struct DashboardView: View {
     @State private var pendingWidgetTitle = DashboardWidgetType.hero.title
     @State private var pendingWidgetSize: DashboardWidgetSize = .full
     @State private var pendingWidgetDeviceID = ""
+    @State private var pendingWidgetDeviceSearch = ""
     @State private var pendingWeatherLocationMode: DashboardWeatherLocationMode = .saved
     @State private var pendingWeatherLocationQuery = ""
     @State private var infoMessage: String?
@@ -232,6 +233,30 @@ struct DashboardView: View {
     }
     private var sortedDevices: [DeviceItem] {
         devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var filteredPendingDevices: [DeviceItem] {
+        let query = pendingWidgetDeviceSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let matches: [DeviceItem]
+
+        if query.isEmpty {
+            matches = sortedDevices
+        } else {
+            matches = sortedDevices.filter { device in
+                let haystack = "\(device.name) \(device.room) \(device.type)".lowercased()
+                return haystack.contains(query)
+            }
+        }
+
+        if pendingWidgetDeviceID.isEmpty || matches.contains(where: { $0.id == pendingWidgetDeviceID }) {
+            return matches
+        }
+
+        if let selected = sortedDevices.first(where: { $0.id == pendingWidgetDeviceID }) {
+            return [selected] + matches
+        }
+
+        return matches
     }
 
     private var onlineDevices: Int {
@@ -765,11 +790,21 @@ struct DashboardView: View {
 
                 if pendingWidgetType == .device {
                     Section("Device") {
+                        TextField("Search devices", text: $pendingWidgetDeviceSearch)
+                            .textInputAutocapitalization(.never)
+                            .disableAutocorrection(true)
+
                         Picker("Device", selection: $pendingWidgetDeviceID) {
                             Text("Select a device").tag("")
-                            ForEach(sortedDevices) { device in
+                            ForEach(filteredPendingDevices) { device in
                                 Text("\(device.name) · \(device.room)").tag(device.id)
                             }
+                        }
+
+                        if filteredPendingDevices.isEmpty {
+                            Text("No devices match your search.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
                         }
                     }
                 }
@@ -798,6 +833,7 @@ struct DashboardView: View {
                 pendingWidgetSize = defaultWidgetSize(for: newValue)
                 if newValue != .device {
                     pendingWidgetDeviceID = ""
+                    pendingWidgetDeviceSearch = ""
                 }
                 if newValue != .weather {
                     pendingWeatherLocationMode = .saved
@@ -2280,6 +2316,7 @@ struct DashboardView: View {
         pendingWidgetTitle = DashboardWidgetType.hero.title
         pendingWidgetSize = .full
         pendingWidgetDeviceID = ""
+        pendingWidgetDeviceSearch = ""
         pendingWeatherLocationMode = .saved
         pendingWeatherLocationQuery = ""
         showingAddWidgetSheet = true
@@ -2369,6 +2406,7 @@ struct DashboardView: View {
 
         dashboardViews[viewIndex].widgets.append(widget)
         dashboardDirty = true
+        pendingWidgetDeviceSearch = ""
         showingAddWidgetSheet = false
     }
 
