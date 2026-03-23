@@ -244,6 +244,7 @@ export function Dashboard() {
   const [pendingWidgetTitle, setPendingWidgetTitle] = useState("Welcome Hero")
   const [pendingWidgetSize, setPendingWidgetSize] = useState<DashboardWidgetSize>("full")
   const [pendingWidgetDeviceId, setPendingWidgetDeviceId] = useState("")
+  const [pendingWidgetDeviceSearch, setPendingWidgetDeviceSearch] = useState("")
   const [pendingWeatherLocationMode, setPendingWeatherLocationMode] = useState<DashboardWeatherLocationMode>("saved")
   const [pendingWeatherLocationQuery, setPendingWeatherLocationQuery] = useState("")
 
@@ -416,6 +417,23 @@ export function Dashboard() {
   const sortedDevices = useMemo(() => {
     return [...devices].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
   }, [devices])
+
+  const filteredPendingDevices = useMemo(() => {
+    const query = pendingWidgetDeviceSearch.trim().toLowerCase()
+    const matches = query
+      ? sortedDevices.filter((device) => {
+          const haystack = [device.name, device.room, device.type].join(" ").toLowerCase()
+          return haystack.includes(query)
+        })
+      : sortedDevices
+
+    if (!pendingWidgetDeviceId || matches.some((device) => device._id === pendingWidgetDeviceId)) {
+      return matches
+    }
+
+    const selectedDevice = sortedDevices.find((device) => device._id === pendingWidgetDeviceId)
+    return selectedDevice ? [selectedDevice, ...matches] : matches
+  }, [pendingWidgetDeviceId, pendingWidgetDeviceSearch, sortedDevices])
 
   const isLoaded = !loading && !favoritesLoading && !dashboardLoading
   const onlineDevices = devices.filter((device) => device.status).length
@@ -721,6 +739,7 @@ export function Dashboard() {
     setPendingWidgetTitle(descriptor?.label ?? "")
     setPendingWidgetSize(getDefaultWidgetSize(type))
     setPendingWidgetDeviceId("")
+    setPendingWidgetDeviceSearch("")
     setPendingWeatherLocationMode("saved")
     setPendingWeatherLocationQuery("")
     setIsAddWidgetOpen(true)
@@ -773,6 +792,7 @@ export function Dashboard() {
     setPendingWidgetTitle("Welcome Hero")
     setPendingWidgetSize("full")
     setPendingWidgetDeviceId("")
+    setPendingWidgetDeviceSearch("")
     setPendingWeatherLocationMode("saved")
     setPendingWeatherLocationQuery("")
     setIsAddWidgetOpen(false)
@@ -1199,6 +1219,7 @@ export function Dashboard() {
                   setPendingWidgetSize(getDefaultWidgetSize(nextType))
                   if (nextType !== "device") {
                     setPendingWidgetDeviceId("")
+                    setPendingWidgetDeviceSearch("")
                   }
                   if (nextType !== "weather") {
                     setPendingWeatherLocationMode("saved")
@@ -1250,17 +1271,28 @@ export function Dashboard() {
 
             {pendingWidgetType === "device" && (
               <div className="space-y-2">
+                <Label htmlFor="widget-device-search">Search Devices</Label>
+                <Input
+                  id="widget-device-search"
+                  value={pendingWidgetDeviceSearch}
+                  onChange={(event) => setPendingWidgetDeviceSearch(event.target.value)}
+                  placeholder="Search by name, room, or type"
+                />
                 <Label htmlFor="widget-device">Device</Label>
                 <Select value={pendingWidgetDeviceId} onValueChange={setPendingWidgetDeviceId}>
                   <SelectTrigger id="widget-device">
                     <SelectValue placeholder="Select a device" />
                   </SelectTrigger>
                   <SelectContent>
-                    {sortedDevices.map((device) => (
+                    {filteredPendingDevices.length > 0 ? filteredPendingDevices.map((device) => (
                       <SelectItem key={device._id} value={device._id}>
                         {device.name} · {device.room}
                       </SelectItem>
-                    ))}
+                    )) : (
+                      <SelectItem value="__no_device_match__" disabled>
+                        No devices match your search
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
