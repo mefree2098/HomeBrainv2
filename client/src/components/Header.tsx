@@ -1,4 +1,4 @@
-import { Bug, LayoutGrid, Loader2, Menu, Mic, MicOff, PencilLine, Plus, Save, Settings, LogOut, Trash2, X } from "lucide-react"
+import { Bug, Copy, LayoutGrid, Loader2, Menu, Mic, MicOff, PencilLine, Plus, Save, Settings, LogOut, Trash2, X } from "lucide-react"
 import { Button } from "./ui/button"
 import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
