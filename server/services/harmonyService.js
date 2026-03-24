@@ -100,13 +100,17 @@ function mergeHubSources(...sources) {
 }
 
 class HarmonyService {
-  constructor() {
+  constructor(options = {}) {
+    this.ExplorerClass = options.ExplorerClass || Explorer;
+    this.getHarmonyClientImpl = options.getHarmonyClient || getHarmonyClient;
+    this.sleepImpl = options.sleep || sleep;
     this.discoveryCache = [];
     this.discoveryCacheAt = 0;
     this.discoveryCacheMs = Number.isFinite(DEFAULT_DISCOVERY_CACHE_MS) ? DEFAULT_DISCOVERY_CACHE_MS : 15000;
     this.hubMetadata = new Map();
     this.syncPromise = null;
     this.stateSyncPromise = null;
+    this.discoveryPromise = null;
   }
 
   parseConfiguredHubAddresses(rawInput) {
@@ -435,6 +439,27 @@ class HarmonyService {
       return this.discoveryCache.map((hub) => ({ ...hub }));
     }
 
+    if (this.discoveryPromise) {
+      const result = await this.discoveryPromise;
+      return result.map((hub) => ({ ...hub }));
+    }
+
+    const discoveryTask = this.runDiscovery({ timeoutMs, force });
+    this.discoveryPromise = discoveryTask;
+
+    try {
+      const result = await discoveryTask;
+      return result.map((hub) => ({ ...hub }));
+    } finally {
+      if (this.discoveryPromise === discoveryTask) {
+        this.discoveryPromise = null;
+      }
+    }
+  }
+
+  async runDiscovery({ timeoutMs, force }) {
+    const normalizedTimeoutMs = Math.max(1500, Number(timeoutMs) || DEFAULT_DISCOVERY_TIMEOUT_MS);
+
     const [configuredHosts, knownHubs] = await Promise.all([
       this.getConfiguredHubAddresses(),
       this.getKnownHubRegistry()
@@ -462,7 +487,7 @@ class HarmonyService {
       });
     });
 
-    const explorer = new Explorer(
+    const explorer = new this.ExplorerClass(
       DEFAULT_DISCOVERY_INCOMING_PORT,
       {
         address: process.env.HARMONY_DISCOVERY_ADDRESS || '255.255.255.255',
@@ -470,6 +495,16 @@ class HarmonyService {
         interval: DEFAULT_DISCOVERY_INTERVAL_MS
       }
     );
+    let lowLevelError = null;
+
+    const rememberLowLevelError = (error) => {
+      if (lowLevelError) {
+        return;
+      }
+
+      lowLevelError = error instanceof Error ? error : new Error(String(error || 'Unknown Harmony discovery error'));
+      console.warn(`HarmonyService: discovery socket error: ${lowLevelError.message}`);
+    };
 
     const rememberHub = (hub) => {
       const ip = normalizeHost(hub?.ip);
@@ -509,10 +544,38 @@ class HarmonyService {
       }
       hubs.forEach(rememberHub);
     });
+    explorer.on('error', rememberLowLevelError);
 
     try {
       explorer.start();
-      await sleep(Math.max(1500, timeoutMs));
+
+      // The discovery package exposes the underlying TCP/UDP handles after start().
+      // Attach defensive listeners so bind/socket failures become warnings instead of process exits.
+      explorer.responseCollector?.server?.on?.('error', rememberLowLevelError);
+      explorer.ping?.socket?.on?.('error', rememberLowLevelError);
+
+      let errorInterval = null;
+      await Promise.race([
+        this.sleepImpl(normalizedTimeoutMs),
+        new Promise((resolve) => {
+          errorInterval = setInterval(() => {
+            if (!lowLevelError) {
+              return;
+            }
+
+            clearInterval(errorInterval);
+            resolve();
+          }, 25);
+
+          if (typeof errorInterval.unref === 'function') {
+            errorInterval.unref();
+          }
+        })
+      ]);
+
+      if (errorInterval) {
+        clearInterval(errorInterval);
+      }
     } catch (error) {
       console.warn(`HarmonyService: discovery failed: ${error.message}`);
     } finally {
@@ -552,7 +615,7 @@ class HarmonyService {
 
     const metadata = this.hubMetadata.get(normalizedHubIp);
     const options = metadata?.remoteId ? { remoteId: metadata.remoteId } : {};
-    const client = await getHarmonyClient(normalizedHubIp, options);
+    const client = await this.getHarmonyClientImpl(normalizedHubIp, options);
 
     try {
       return await operation(client, normalizedHubIp);
@@ -1291,3 +1354,4 @@ class HarmonyService {
 }
 
 module.exports = new HarmonyService();
+module.exports.HarmonyService = HarmonyService;
