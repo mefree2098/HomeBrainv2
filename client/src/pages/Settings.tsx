@@ -538,8 +538,7 @@ export function Settings() {
     loadSettings();
     loadSmartThingsStatus();
     loadEcobeeStatus();
-    loadHarmonyStatus();
-    loadHarmonyHubs({ includeCommands: false });
+    loadHarmonyOverview();
     loadLLMPriorityList();
   }, [setValue, toast]);
 
@@ -695,6 +694,11 @@ export function Settings() {
     }
   }
 
+  const loadHarmonyOverview = async () => {
+    await loadHarmonyStatus()
+    await loadHarmonyHubs({ includeCommands: false })
+  }
+
   const handleDiscoverHarmony = async () => {
     setDiscoveringHarmony(true)
     try {
@@ -707,10 +711,7 @@ export function Settings() {
           description: `Discovered ${response.count ?? hubs.length} hub${(response.count ?? hubs.length) === 1 ? "" : "s"}.`
         })
       }
-      await Promise.all([
-        loadHarmonyStatus(),
-        loadHarmonyHubs({ includeCommands: false })
-      ])
+      await loadHarmonyOverview()
     } catch (error) {
       console.error('Harmony discovery failed:', error)
       toast({
@@ -736,10 +737,7 @@ export function Settings() {
           description: `Refreshed ${response.refreshed ?? 0} hub${(response.refreshed ?? 0) === 1 ? "" : "s"}.`
         })
       }
-      await Promise.all([
-        loadHarmonyStatus(),
-        loadHarmonyHubs({ includeCommands: false })
-      ])
+      await loadHarmonyOverview()
     } catch (error) {
       console.error('Harmony state sync failed:', error)
       toast({
@@ -762,10 +760,7 @@ export function Settings() {
           description: `${response.created ?? 0} created, ${response.updated ?? 0} updated, ${response.removed ?? 0} removed.`
         })
       }
-      await Promise.all([
-        loadHarmonyStatus(),
-        loadHarmonyHubs({ includeCommands: false })
-      ])
+      await loadHarmonyOverview()
     } catch (error) {
       console.error('Harmony Hub device sync failed:', error)
       toast({
@@ -789,10 +784,7 @@ export function Settings() {
           description: `Started activity ${activityId} on ${hubIp}.`
         })
       }
-      await Promise.all([
-        loadHarmonyStatus(),
-        loadHarmonyHubs({ includeCommands: false })
-      ])
+      await loadHarmonyOverview()
     } catch (error) {
       console.error('Failed to start Harmony activity:', error)
       toast({
@@ -816,10 +808,7 @@ export function Settings() {
           description: `Powered off active activity on ${hubIp}.`
         })
       }
-      await Promise.all([
-        loadHarmonyStatus(),
-        loadHarmonyHubs({ includeCommands: false })
-      ])
+      await loadHarmonyOverview()
     } catch (error) {
       console.error('Failed to turn off Harmony hub:', error)
       toast({
@@ -2394,10 +2383,7 @@ export function Settings() {
           description: response.message || `Harmony Hub sync complete (${response.created ?? 0} created, ${response.updated ?? 0} updated)`
         });
       }
-      await Promise.all([
-        loadHarmonyStatus(),
-        loadHarmonyHubs({ includeCommands: false })
-      ]);
+      await loadHarmonyOverview();
     } catch (error) {
       console.error('Harmony Hub sync failed:', error);
       toast({
@@ -2470,10 +2456,7 @@ export function Settings() {
           description: `Successfully cleared ${response.deletedCount} Harmony Hub activity devices`
         });
       }
-      await Promise.all([
-        loadHarmonyStatus(),
-        loadHarmonyHubs({ includeCommands: false })
-      ]);
+      await loadHarmonyOverview();
     } catch (error) {
       console.error('Clear Harmony Hub activity devices failed:', error);
       toast({
