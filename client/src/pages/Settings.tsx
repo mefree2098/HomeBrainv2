@@ -1,7 +1,7 @@
-import { useState, useEffect, ChangeEvent } from "react"
+import { useState, useEffect, ChangeEvent, forwardRef, type ComponentProps } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Input as BaseInput } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -165,6 +165,19 @@ const isMaskedSecretPlaceholder = (value: unknown): boolean => {
 
   return /^[*•]{4,}[^*•\s]+$/.test(trimmed);
 }
+
+const Input = forwardRef<HTMLInputElement, ComponentProps<typeof BaseInput>>((props, ref) => (
+  <BaseInput
+    ref={ref}
+    autoComplete="off"
+    data-1p-ignore="true"
+    data-bwignore="true"
+    data-form-type="other"
+    data-lpignore="true"
+    {...props}
+  />
+))
+Input.displayName = "SettingsInput"
 
 export function Settings() {
   const { toast } = useToast()
@@ -2685,7 +2698,7 @@ export function Settings() {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit(handleSaveSettings)}>
+      <form onSubmit={handleSubmit(handleSaveSettings)} autoComplete="off">
         <Tabs defaultValue="general" className="space-y-6">
           <TabsList className="h-auto flex-wrap gap-1 bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 p-1">
             <TabsTrigger value="general">General</TabsTrigger>
