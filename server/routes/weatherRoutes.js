@@ -27,4 +27,27 @@ router.get('/current', auth, async (req, res) => {
   }
 });
 
+router.get('/dashboard', auth, async (req, res) => {
+  try {
+    const dashboard = await weatherService.fetchWeatherDashboard({
+      latitude: req.query.latitude,
+      longitude: req.query.longitude,
+      address: req.query.address,
+      label: req.query.label,
+      tempestHistoryHours: req.query.tempestHistoryHours
+    });
+
+    res.status(200).json({
+      success: true,
+      dashboard
+    });
+  } catch (error) {
+    const statusCode = /No weather location|Unable to resolve weather location/i.test(error.message) ? 400 : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to load weather dashboard'
+    });
+  }
+});
+
 module.exports = router;

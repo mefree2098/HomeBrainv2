@@ -110,6 +110,7 @@ import {
 } from "@/api/insteon"
 import { useNavigate } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
+import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
 
 type InsteonSerialPortCandidate = {
   path?: string;
@@ -2981,6 +2982,8 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="integrations" className="space-y-6">
+            <TempestIntegrationCard />
+
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">

@@ -1,5 +1,6 @@
 const axios = require('axios');
 const settingsService = require('./settingsService');
+const tempestService = require('./tempestService');
 
 const WEATHER_LABELS = {
   0: { label: 'Clear', icon: 'sunny' },
@@ -86,9 +87,15 @@ function buildLocationName(result, fallback = 'Saved location') {
 function createWeatherPayload(forecastResponse, location) {
   const current = forecastResponse?.current || {};
   const daily = forecastResponse?.daily || {};
+  const hourly = forecastResponse?.hourly || {};
   const todayCode = Array.isArray(daily.weather_code) ? daily.weather_code[0] : current.weather_code;
   const currentDescriptor = describeWeatherCode(current.weather_code);
   const todayDescriptor = describeWeatherCode(todayCode);
+  const hourlyTimes = Array.isArray(hourly.time) ? hourly.time : [];
+  const hourlyTemperatures = Array.isArray(hourly.temperature_2m) ? hourly.temperature_2m : [];
+  const hourlyPrecipitation = Array.isArray(hourly.precipitation_probability) ? hourly.precipitation_probability : [];
+  const hourlyWind = Array.isArray(hourly.wind_speed_10m) ? hourly.wind_speed_10m : [];
+  const hourlyCodes = Array.isArray(hourly.weather_code) ? hourly.weather_code : [];
 
   return {
     fetchedAt: new Date().toISOString(),
@@ -119,7 +126,19 @@ function createWeatherPayload(forecastResponse, location) {
       weatherCode: toNumber(todayCode),
       condition: todayDescriptor.label,
       icon: todayDescriptor.icon
-    }
+    },
+    hourlyForecast: hourlyTimes.slice(0, 24).map((time, index) => {
+      const descriptor = describeWeatherCode(hourlyCodes[index]);
+      return {
+        time,
+        temperatureF: toNumber(hourlyTemperatures[index]),
+        precipitationChance: toNumber(hourlyPrecipitation[index]),
+        windSpeedMph: toNumber(hourlyWind[index]),
+        weatherCode: toNumber(hourlyCodes[index]),
+        condition: descriptor.label,
+        icon: descriptor.icon
+      };
+    })
   };
 }
 
@@ -174,42 +193,84 @@ async function resolveWeatherLocation({ latitude, longitude, address, label }) {
 
 async function fetchDashboardWeather(options = {}) {
   const location = await resolveWeatherLocation(options);
-  const response = await axios.get('https://api.open-meteo.com/v1/forecast', {
-    params: {
-      latitude: location.latitude,
-      longitude: location.longitude,
-      current: [
-        'temperature_2m',
-        'relative_humidity_2m',
-        'apparent_temperature',
-        'is_day',
-        'precipitation',
-        'weather_code',
-        'wind_speed_10m'
-      ].join(','),
-      daily: [
-        'weather_code',
-        'temperature_2m_max',
-        'temperature_2m_min',
-        'precipitation_probability_max',
-        'sunrise',
-        'sunset'
-      ].join(','),
-      temperature_unit: 'fahrenheit',
-      wind_speed_unit: 'mph',
-      precipitation_unit: 'inch',
-      timezone: 'auto',
-      forecast_days: 1
-    },
-    timeout: 10000
-  });
+  const [response, tempestStation] = await Promise.all([
+    axios.get('https://api.open-meteo.com/v1/forecast', {
+      params: {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        current: [
+          'temperature_2m',
+          'relative_humidity_2m',
+          'apparent_temperature',
+          'is_day',
+          'precipitation',
+          'weather_code',
+          'wind_speed_10m'
+        ].join(','),
+        daily: [
+          'weather_code',
+          'temperature_2m_max',
+          'temperature_2m_min',
+          'precipitation_probability_max',
+          'sunrise',
+          'sunset'
+        ].join(','),
+        hourly: [
+          'temperature_2m',
+          'precipitation_probability',
+          'weather_code',
+          'wind_speed_10m'
+        ].join(','),
+        temperature_unit: 'fahrenheit',
+        wind_speed_unit: 'mph',
+        precipitation_unit: 'inch',
+        timezone: 'auto',
+        forecast_days: 2
+      },
+      timeout: 10000
+    }),
+    tempestService.getSelectedStationSnapshot().catch(() => null)
+  ]);
 
-  return createWeatherPayload(response.data, location);
+  return {
+    ...createWeatherPayload(response.data, location),
+    tempest: tempestStation
+      ? {
+          available: true,
+          station: tempestStation
+        }
+      : {
+          available: false,
+          station: null
+        }
+  };
+}
+
+async function fetchWeatherDashboard(options = {}) {
+  const [forecast, tempest] = await Promise.all([
+    fetchDashboardWeather(options),
+    tempestService.getDashboardData({
+      hours: options.tempestHistoryHours || 24
+    }).catch(() => ({
+      available: false,
+      station: null,
+      observations: [],
+      events: []
+    }))
+  ]);
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    forecast,
+    hourlyForecast: Array.isArray(forecast.hourlyForecast) ? forecast.hourlyForecast : [],
+    tempest
+  };
 }
 
 module.exports = {
   createWeatherPayload,
   describeWeatherCode,
   fetchDashboardWeather,
+  fetchWeatherDashboard,
   normalizeCoordinates
 };

@@ -14,6 +14,7 @@ const userProfileRoutes = require("./routes/userProfileRoutes");
 const voiceDeviceRoutes = require("./routes/voiceDeviceRoutes");
 const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const tempestRoutes = require("./routes/tempestRoutes");
 const weatherRoutes = require("./routes/weatherRoutes");
 const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
@@ -46,6 +47,7 @@ const remoteUpdateService = require("./services/remoteUpdateService");
 const wakeWordTrainingService = require("./services/wakeWordTrainingService");
 const voiceAcknowledgmentService = require("./services/voiceAcknowledgmentService");
 const whisperService = require("./services/whisperService");
+const tempestService = require("./services/tempestService");
 const platformDeployService = require("./services/platformDeployService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
@@ -237,6 +239,7 @@ app.use('/api/elevenlabs', elevenLabsRoutes);
 app.use('/api/settings', settingsRoutes);
 // Weather Routes
 app.use('/api/weather', weatherRoutes);
+app.use('/api/tempest', tempestRoutes);
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
@@ -394,6 +397,16 @@ automationSchedulerService.start();
   }
 })();
 
+// Initialize Tempest weather integration
+(async () => {
+  try {
+    await tempestService.initialize();
+    console.log('Tempest Service initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Tempest Service:', error.message);
+  }
+})();
+
 async function gracefulShutdown(signal) {
   if (isShuttingDown) {
     return;
@@ -440,6 +453,12 @@ async function gracefulShutdown(signal) {
       }
     } catch (error) {
       console.error('Error stopping Ecobee status sync task:', error.message);
+    }
+
+    try {
+      await tempestService.shutdown();
+    } catch (error) {
+      console.error('Error stopping Tempest service:', error.message);
     }
 
   await closeServer(httpServer, 'HTTP server');
