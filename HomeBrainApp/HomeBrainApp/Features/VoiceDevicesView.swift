@@ -2,6 +2,7 @@ import SwiftUI
 
 struct VoiceDevicesView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var voiceDevices: [VoiceDeviceItem] = []
     @State private var voiceStatus: [String: Any] = [:]
@@ -25,9 +26,13 @@ struct VoiceDevicesView: View {
     private let statusOptions = ["online", "offline", "error", "updating"]
     private let registerTypes = ["hub", "speaker", "display", "mobile", "microphone"]
 
+    private var usesCompactLayout: Bool {
+        horizontalSizeClass == .compact
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            LazyVStack(alignment: .leading, spacing: 14) {
                 if isLoading {
                     LoadingView(title: "Loading voice devices...")
                 } else {
@@ -71,6 +76,7 @@ struct VoiceDevicesView: View {
                 }
             }
         }
+        .scrollIndicators(.hidden)
         .groupBoxStyle(HBPanelGroupBoxStyle())
         .padding()
         .sheet(isPresented: $showRegisterSheet) {
@@ -89,7 +95,11 @@ struct VoiceDevicesView: View {
         let active = JSON.int(voiceStatus, "activeDevices", fallback: voiceDevices.filter { $0.status == "online" }.count)
         let connected = JSON.bool(voiceStatus, "connected", fallback: active > 0)
 
-        return HStack(spacing: 12) {
+        return LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: usesCompactLayout ? 110 : 150), spacing: 12, alignment: .leading)],
+            alignment: .leading,
+            spacing: 12
+        ) {
             MetricCard(title: "Voice Devices", value: "\(active)/\(max(total, 1))", subtitle: "Online", tint: .green)
             MetricCard(title: "Transport", value: connected ? "Connected" : "Disconnected", subtitle: "Hub to listeners", tint: .orange)
             MetricCard(title: "Outdated", value: "\(JSON.int(updateStats, "outdated"))", subtitle: "Needs update", tint: .purple)
@@ -105,7 +115,8 @@ struct VoiceDevicesView: View {
                 Button("Send Command") {
                     Task { await sendVoiceCommand() }
                 }
-                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: usesCompactLayout ? .infinity : nil, alignment: .leading)
+                .buttonStyle(HBPrimaryButtonStyle(compact: true))
                 .disabled(commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 if !commandResponse.isEmpty {
@@ -131,21 +142,28 @@ struct VoiceDevicesView: View {
                     .font(.caption)
                     .foregroundStyle(HBPalette.textSecondary)
 
-                HStack {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: usesCompactLayout ? 128 : 156), spacing: 10, alignment: .leading)],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
                     Button("Generate Package") {
                         Task { await generatePackage() }
                     }
-                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
 
                     Button("Update Outdated") {
                         Task { await updateAllOutdatedDevices() }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(HBPrimaryButtonStyle(compact: true))
 
                     Button("Refresh") {
                         Task { await loadVoiceData() }
                     }
-                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
                 }
             }
             .padding(.top, 4)
@@ -154,60 +172,78 @@ struct VoiceDevicesView: View {
 
     private func deviceRow(_ device: VoiceDeviceItem) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(device.name)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
-                    Text("\(device.room) · \(device.deviceType)")
-                        .font(.caption)
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Text("Firmware: \(device.firmwareVersion)")
-                        .font(.caption2)
-                        .foregroundStyle(HBPalette.textSecondary)
+            if usesCompactLayout {
+                VStack(alignment: .leading, spacing: 10) {
+                    deviceIdentity(device)
+                    statusMenu(for: device)
                 }
+            } else {
+                HStack(alignment: .top) {
+                    deviceIdentity(device)
 
-                Spacer()
+                    Spacer()
 
-                Menu {
-                    ForEach(statusOptions, id: \.self) { option in
-                        Button(option.capitalized) {
-                            Task { await updateStatus(device, status: option) }
-                        }
-                    }
-                } label: {
-                    Text(device.status.capitalized)
-                        .font(.caption)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.secondary.opacity(0.15))
-                        .clipShape(Capsule())
+                    statusMenu(for: device)
                 }
             }
 
-            HStack {
-                    TextField("TTS text", text: $ttsText)
-                        .hbPanelTextField()
-            }
+            TextField("TTS text", text: $ttsText)
+                .hbPanelTextField()
 
-            HStack {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: usesCompactLayout ? 120 : 136), spacing: 10, alignment: .leading)],
+                alignment: .leading,
+                spacing: 10
+            ) {
                 Button("Test") {
                     Task { await testDevice(device) }
                 }
-                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
 
                 Button("Push Config") {
                     Task { await pushConfig(device) }
                 }
-                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
 
                 Button("Ping TTS") {
                     Task { await pingTTS(device) }
                 }
-                .buttonStyle(.bordered)
-
-                Spacer()
+                .frame(maxWidth: .infinity)
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
             }
+        }
+    }
+
+    private func deviceIdentity(_ device: VoiceDeviceItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(device.name)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+            Text("\(device.room) · \(device.deviceType)")
+                .font(.caption)
+                .foregroundStyle(HBPalette.textSecondary)
+            Text("Firmware: \(device.firmwareVersion)")
+                .font(.caption2)
+                .foregroundStyle(HBPalette.textSecondary)
+        }
+    }
+
+    private func statusMenu(for device: VoiceDeviceItem) -> some View {
+        Menu {
+            ForEach(statusOptions, id: \.self) { option in
+                Button(option.capitalized) {
+                    Task { await updateStatus(device, status: option) }
+                }
+            }
+        } label: {
+            Text(device.status.capitalized)
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.secondary.opacity(0.15))
+                .clipShape(Capsule())
         }
     }
 

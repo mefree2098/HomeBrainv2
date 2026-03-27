@@ -155,12 +155,63 @@ enum HBGlassVariant {
         }
     }
 
+    var lensFill: LinearGradient {
+        switch self {
+        case .chrome:
+            return LinearGradient(
+                colors: [Color.white.opacity(0.20), HBPalette.panelSoft.opacity(0.12)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .panel:
+            return LinearGradient(
+                colors: [Color.white.opacity(0.11), HBPalette.panelSoft.opacity(0.10)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .panelStrong:
+            return LinearGradient(
+                colors: [Color.white.opacity(0.14), HBPalette.panelSoft.opacity(0.11)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .panelSoft:
+            return LinearGradient(
+                colors: [Color.white.opacity(0.08), HBPalette.panelSoft.opacity(0.08)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+
+    var usesLiveMaterial: Bool {
+        self == .chrome
+    }
+
     var shadowRadius: CGFloat {
         switch self {
-        case .chrome: return 28
-        case .panel: return 26
-        case .panelStrong: return 34
-        case .panelSoft: return 20
+        case .chrome: return 18
+        case .panel: return 14
+        case .panelStrong: return 18
+        case .panelSoft: return 10
+        }
+    }
+
+    var shadowYOffset: CGFloat {
+        switch self {
+        case .chrome: return 12
+        case .panel: return 10
+        case .panelStrong: return 12
+        case .panelSoft: return 8
+        }
+    }
+
+    var shadowOpacity: Double {
+        switch self {
+        case .chrome: return 0.78
+        case .panel: return 0.48
+        case .panelStrong: return 0.62
+        case .panelSoft: return 0.34
         }
     }
 }
@@ -176,9 +227,14 @@ struct HBGlassBackground: View {
             shape
                 .fill(variant.fill)
 
-            shape
-                .fill(.ultraThinMaterial)
-                .opacity(0.78)
+            if variant.usesLiveMaterial {
+                shape
+                    .fill(.thinMaterial)
+                    .opacity(0.32)
+            } else {
+                shape
+                    .fill(variant.lensFill)
+            }
 
             shape
                 .fill(
@@ -193,11 +249,14 @@ struct HBGlassBackground: View {
                 .stroke(variant.stroke, lineWidth: 1)
 
             shape
-                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
-                .blur(radius: 0.2)
-                .padding(1)
+                .stroke(Color.white.opacity(0.06), lineWidth: 0.6)
         }
-        .shadow(color: HBPalette.glow, radius: variant.shadowRadius, x: 0, y: 18)
+        .shadow(
+            color: HBPalette.glow.opacity(variant.shadowOpacity),
+            radius: variant.shadowRadius,
+            x: 0,
+            y: variant.shadowYOffset
+        )
     }
 }
 
@@ -405,6 +464,10 @@ struct HBSectionHeader: View {
         horizontalSizeClass == .compact && verticalSizeClass == .compact
     }
 
+    private var stackedLayout: Bool {
+        horizontalSizeClass == .compact && verticalSizeClass != .compact
+    }
+
     init(
         title: String,
         subtitle: String = "",
@@ -423,51 +486,82 @@ struct HBSectionHeader: View {
         self.buttonAction = buttonAction
     }
 
-    var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(eyebrow ?? title)
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .textCase(.uppercase)
-                    .tracking(3.0)
-                    .foregroundStyle(HBPalette.textMuted)
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(eyebrow ?? title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(3.0)
+                .foregroundStyle(HBPalette.textMuted)
 
-                HStack(spacing: 12) {
-                    if showBrandIcon {
-                        Image("HomeBrainBrandIcon")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: compactLandscape ? 28 : 34, height: compactLandscape ? 28 : 34)
-                            .padding(8)
-                            .background(HBGlassBackground(cornerRadius: 14, variant: .panel))
-                    }
+            HStack(spacing: 12) {
+                if showBrandIcon {
+                    Image("HomeBrainBrandIcon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: compactLandscape ? 28 : 34, height: compactLandscape ? 28 : 34)
+                        .padding(8)
+                        .background(HBGlassBackground(cornerRadius: 14, variant: .panel))
+                }
 
-                    Text(title)
-                        .font(.system(size: compactLandscape ? 26 : 38, weight: .bold, design: .rounded))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
+                Text(title)
+                    .font(.system(size: stackedLayout ? 30 : (compactLandscape ? 26 : 38), weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                            startPoint: .leading,
+                            endPoint: .trailing
                         )
-                        .minimumScaleFactor(0.8)
-                }
-
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.system(size: compactLandscape ? 14 : 17, weight: .medium, design: .rounded))
-                        .foregroundStyle(HBPalette.textSecondary)
-                }
+                    )
+                    .lineLimit(stackedLayout ? 2 : 3)
+                    .minimumScaleFactor(0.76)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer(minLength: 12)
+            if !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.system(size: compactLandscape ? 14 : (stackedLayout ? 15 : 17), weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 
-            if let buttonTitle, let buttonAction {
-                Button(action: buttonAction) {
-                    Label(buttonTitle, systemImage: buttonIcon ?? "plus")
+    @ViewBuilder
+    private var actionButtonView: some View {
+        if let buttonTitle, let buttonAction {
+            Button(action: buttonAction) {
+                Label(buttonTitle, systemImage: buttonIcon ?? "plus")
+                    .frame(maxWidth: stackedLayout ? .infinity : nil)
+            }
+            .buttonStyle(HBPrimaryButtonStyle(compact: compactLandscape || stackedLayout))
+        }
+    }
+
+    private var inlineLayout: some View {
+        HStack(alignment: .center, spacing: 14) {
+            titleBlock
+            Spacer(minLength: 12)
+            actionButtonView
+        }
+    }
+
+    private var stackedHeaderLayout: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            titleBlock
+            actionButtonView
+        }
+    }
+
+    var body: some View {
+        Group {
+            if stackedLayout {
+                stackedHeaderLayout
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    inlineLayout
+                    stackedHeaderLayout
                 }
-                .buttonStyle(HBPrimaryButtonStyle(compact: compactLandscape))
             }
         }
     }
@@ -626,6 +720,8 @@ struct MetricCard: View {
                 .textCase(.uppercase)
                 .tracking(2.2)
                 .foregroundStyle(HBPalette.textMuted)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
 
             Text(value)
                 .font(.title2.weight(.bold))
@@ -636,6 +732,8 @@ struct MetricCard: View {
             Text(subtitle)
                 .font(.caption)
                 .foregroundStyle(HBPalette.textSecondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
 
             Capsule()
                 .fill(

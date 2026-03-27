@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SSLView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var status: [String: Any] = [:]
     @State private var certificates: [SSLCertificateItem] = []
@@ -25,9 +26,13 @@ struct SSLView: View {
     @State private var errorMessage: String?
     @State private var infoMessage = ""
 
+    private var usesCompactLayout: Bool {
+        horizontalSizeClass == .compact
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            LazyVStack(alignment: .leading, spacing: 14) {
                 if isLoading {
                     LoadingView(title: "Loading SSL status...")
                 } else {
@@ -60,6 +65,7 @@ struct SSLView: View {
             }
             .padding()
         }
+        .scrollIndicators(.hidden)
         .groupBoxStyle(HBPanelGroupBoxStyle())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -104,7 +110,11 @@ struct SSLView: View {
                                 .font(.caption)
                                 .foregroundStyle(HBPalette.textSecondary)
 
-                            HStack {
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: usesCompactLayout ? 110 : 132), spacing: 10, alignment: .leading)],
+                                alignment: .leading,
+                                spacing: 10
+                            ) {
                                 actionButton("Activate") {
                                     await performAction(path: "/api/ssl/certificates/\(certificate.id)/activate")
                                 }
@@ -119,7 +129,10 @@ struct SSLView: View {
                                         await deleteCertificate(certificate)
                                     }
                                 }
+                                .frame(maxWidth: .infinity)
                                 .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(.red)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -245,7 +258,8 @@ struct SSLView: View {
                 await action()
             }
         }
-        .buttonStyle(.bordered)
+        .frame(maxWidth: .infinity)
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
         .disabled(isActing)
     }
 
