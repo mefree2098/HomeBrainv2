@@ -7,10 +7,10 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if uiPreview.isEnabled {
-                AppShellView(previewMode: true)
-            } else if session.isAuthenticated {
+            if session.isAuthenticated && !uiPreview.isForcedByLaunch {
                 AppShellView(previewMode: false)
+            } else if uiPreview.isEnabled {
+                AppShellView(previewMode: true)
             } else {
                 AuthView()
             }
@@ -19,6 +19,11 @@ struct RootView: View {
         .tint(HBPalette.accentBlue)
         .task {
             await session.bootstrap()
+        }
+        .onChange(of: session.isAuthenticated) { _, isAuthenticated in
+            if isAuthenticated && uiPreview.isEnabled && !uiPreview.isForcedByLaunch {
+                uiPreview.exit()
+            }
         }
     }
 }

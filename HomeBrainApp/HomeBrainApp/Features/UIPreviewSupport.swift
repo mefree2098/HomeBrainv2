@@ -3,23 +3,22 @@ import Combine
 
 @MainActor
 final class UIPreviewStore: ObservableObject {
-    @Published var isEnabled: Bool {
-        didSet { defaults.set(isEnabled, forKey: enabledKey) }
-    }
+    @Published var isEnabled: Bool
 
     @Published var selectedSectionRaw: String {
         didSet { defaults.set(selectedSectionRaw, forKey: sectionKey) }
     }
 
+    let isForcedByLaunch: Bool
+
     private let defaults = UserDefaults.standard
-    private let enabledKey = "homebrain.ios.ui-preview.enabled"
     private let sectionKey = "homebrain.ios.ui-preview.section"
 
     init() {
         let forcedSection = Self.previewSectionFromLaunch()
-        let forcedEnabled = Self.previewEnabledFromLaunch() || forcedSection != nil
+        isForcedByLaunch = Self.previewEnabledFromLaunch() || forcedSection != nil
 
-        isEnabled = forcedEnabled || defaults.bool(forKey: enabledKey)
+        isEnabled = isForcedByLaunch
         selectedSectionRaw = forcedSection
             ?? defaults.string(forKey: sectionKey)
             ?? AppShellView.AppSection.dashboard.rawValue

@@ -88,7 +88,7 @@ struct DevicesView: View {
                         .padding(useLandscapeCompactLayout ? 10 : 16)
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
+                        LazyVStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
                             deviceHeaderPanel
 
                             if let errorMessage {

@@ -28,7 +28,7 @@ struct WorkflowsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            LazyVStack(alignment: .leading, spacing: 14) {
                 if isLoading {
                     LoadingView(title: "Loading workflows...")
                 } else {

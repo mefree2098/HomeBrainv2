@@ -3,6 +3,7 @@ import Combine
 
 struct OperationsView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var summary: [String: Any] = [:]
     @State private var events: [PlatformEventItem] = []
@@ -13,9 +14,13 @@ struct OperationsView: View {
 
     private let timer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
+    private var usesCompactLayout: Bool {
+        horizontalSizeClass == .compact
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            LazyVStack(alignment: .leading, spacing: 14) {
                 if isLoading {
                     LoadingView(title: "Loading operations data...")
                 } else {
@@ -41,18 +46,7 @@ struct OperationsView: View {
                                 ForEach(events) { event in
                                     HBCardRow {
                                         VStack(alignment: .leading, spacing: 6) {
-                                            HStack {
-                                                Text(event.type)
-                                                    .font(.headline)
-                                                    .foregroundStyle(HBPalette.textPrimary)
-                                                Spacer()
-                                                Text(event.severity.uppercased())
-                                                    .font(.caption2)
-                                                    .padding(.horizontal, 8)
-                                                    .padding(.vertical, 3)
-                                                    .background(severityColor(event.severity).opacity(0.2))
-                                                    .clipShape(Capsule())
-                                            }
+                                            eventHeader(for: event)
 
                                             Text("\(event.source) · #\(event.sequence) · \(event.createdAt)")
                                                 .font(.caption2)
@@ -62,7 +56,7 @@ struct OperationsView: View {
                                                 Text(event.payloadSummary)
                                                     .font(.caption)
                                                     .foregroundStyle(HBPalette.textSecondary)
-                                                    .lineLimit(4)
+                                                    .fixedSize(horizontal: false, vertical: true)
                                             }
                                         }
                                     }
@@ -75,6 +69,7 @@ struct OperationsView: View {
             }
             .padding()
         }
+        .scrollIndicators(.hidden)
         .groupBoxStyle(HBPanelGroupBoxStyle())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -104,7 +99,11 @@ struct OperationsView: View {
         let errorCount = JSON.int(bySeverity, "error")
 
         return GroupBox("Event Summary (\(windowMinutes)m)") {
-            HStack(spacing: 12) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: usesCompactLayout ? 110 : 132), spacing: 12, alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
                 MetricCard(title: "Total", value: "\(total)", subtitle: "All events", tint: .blue)
                 MetricCard(title: "Warnings", value: "\(warnCount)", subtitle: "Warn", tint: .orange)
                 MetricCard(title: "Errors", value: "\(errorCount)", subtitle: "Error", tint: .red)
@@ -120,13 +119,47 @@ struct OperationsView: View {
         let disk = JSON.double(JSON.object(resourceUtilization["disk"]), "usagePercent")
 
         return GroupBox("Resource Utilization") {
-            HStack(spacing: 12) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: usesCompactLayout ? 110 : 152), spacing: 12, alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
                 MetricCard(title: "CPU", value: String(format: "%.1f%%", cpu), subtitle: "Current", tint: .purple)
                 MetricCard(title: "Memory", value: String(format: "%.1f%%", memory), subtitle: "Current", tint: .teal)
                 MetricCard(title: "Disk", value: String(format: "%.1f%%", disk), subtitle: "Current", tint: .indigo)
             }
             .padding(.top, 4)
         }
+    }
+
+    @ViewBuilder
+    private func eventHeader(for event: PlatformEventItem) -> some View {
+        if usesCompactLayout {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(event.type)
+                    .font(.headline)
+                    .foregroundStyle(HBPalette.textPrimary)
+
+                severityBadge(for: event.severity)
+            }
+        } else {
+            HStack {
+                Text(event.type)
+                    .font(.headline)
+                    .foregroundStyle(HBPalette.textPrimary)
+                Spacer()
+                severityBadge(for: event.severity)
+            }
+        }
+    }
+
+    private func severityBadge(for severity: String) -> some View {
+        Text(severity.uppercased())
+            .font(.caption2)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(severityColor(severity).opacity(0.2))
+            .clipShape(Capsule())
     }
 
     private func severityColor(_ severity: String) -> Color {

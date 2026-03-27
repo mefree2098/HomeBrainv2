@@ -2,6 +2,61 @@ import Combine
 import CoreLocation
 import SwiftUI
 
+private struct DashboardTempestStationSnapshot {
+    let name: String
+    let room: String
+    let temperatureF: Double?
+    let feelsLikeF: Double?
+    let humidityPct: Double?
+    let windAvgMph: Double?
+    let windGustMph: Double?
+    let windDirectionDeg: Double?
+    let pressureInHg: Double?
+    let pressureTrend: String
+    let rainTodayIn: Double?
+    let rainRateInPerHr: Double?
+    let websocketConnected: Bool
+
+    static func from(_ payload: Any?) -> DashboardTempestStationSnapshot? {
+        let station = JSON.object(payload)
+        guard !station.isEmpty else {
+            return nil
+        }
+
+        let metrics = JSON.object(station["metrics"])
+        let status = JSON.object(station["status"])
+
+        return DashboardTempestStationSnapshot(
+            name: JSON.string(station, "name", fallback: "Tempest Station"),
+            room: JSON.string(station, "room", fallback: "Outside"),
+            temperatureF: optionalNumber(metrics["temperatureF"]),
+            feelsLikeF: optionalNumber(metrics["feelsLikeF"]),
+            humidityPct: optionalNumber(metrics["humidityPct"]),
+            windAvgMph: optionalNumber(metrics["windAvgMph"]),
+            windGustMph: optionalNumber(metrics["windGustMph"]),
+            windDirectionDeg: optionalNumber(metrics["windDirectionDeg"]),
+            pressureInHg: optionalNumber(metrics["pressureInHg"]),
+            pressureTrend: JSON.string(metrics, "pressureTrend", fallback: "steady"),
+            rainTodayIn: optionalNumber(metrics["rainTodayIn"]),
+            rainRateInPerHr: optionalNumber(metrics["rainRateInPerHr"]),
+            websocketConnected: JSON.bool(status, "websocketConnected")
+        )
+    }
+
+    private static func optionalNumber(_ value: Any?) -> Double? {
+        if let number = value as? Double {
+            return number
+        }
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let string = value as? String, let parsed = Double(string) {
+            return parsed
+        }
+        return nil
+    }
+}
+
 private struct DashboardWeatherSnapshot {
     let locationName: String
     let source: DashboardWeatherLocationMode
@@ -18,12 +73,14 @@ private struct DashboardWeatherSnapshot {
     let precipitationChance: Double?
     let sunrise: String?
     let sunset: String?
+    let tempest: DashboardTempestStationSnapshot?
 
     static func from(_ payload: Any?) -> DashboardWeatherSnapshot? {
         let root = JSON.object(payload)
         let location = JSON.object(root["location"])
         let current = JSON.object(root["current"])
         let today = JSON.object(root["today"])
+        let tempest = JSON.object(root["tempest"])
         let source = DashboardWeatherLocationMode(rawValue: JSON.string(location, "source")) ?? .saved
 
         guard !location.isEmpty, !current.isEmpty, !today.isEmpty else {
@@ -45,7 +102,8 @@ private struct DashboardWeatherSnapshot {
             lowF: Self.optionalNumber(today["lowF"]),
             precipitationChance: Self.optionalNumber(today["precipitationChance"]),
             sunrise: JSON.optionalString(today, "sunrise"),
-            sunset: JSON.optionalString(today, "sunset")
+            sunset: JSON.optionalString(today, "sunset"),
+            tempest: JSON.bool(tempest, "available") ? DashboardTempestStationSnapshot.from(tempest["station"]) : nil
         )
     }
 
@@ -67,7 +125,8 @@ private struct DashboardWeatherSnapshot {
             lowF: 49,
             precipitationChance: 20,
             sunrise: "2026-03-23T07:01:00-06:00",
-            sunset: "2026-03-23T19:14:00-06:00"
+            sunset: "2026-03-23T19:14:00-06:00",
+            tempest: nil
         )
     }
 
@@ -80,6 +139,22 @@ private struct DashboardWeatherSnapshot {
         case .auto:
             return "Auto Detect"
         }
+    }
+
+    var displayTemperatureF: Double? {
+        tempest?.temperatureF ?? temperatureF
+    }
+
+    var displayFeelsLikeF: Double? {
+        tempest?.feelsLikeF ?? apparentTemperatureF
+    }
+
+    var displayHumidityPct: Double? {
+        tempest?.humidityPct ?? humidity
+    }
+
+    var displayWindMph: Double? {
+        tempest?.windAvgMph ?? windSpeedMph
     }
 
     private static func optionalNumber(_ value: Any?) -> Double? {
@@ -231,8 +306,19 @@ struct DashboardView: View {
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
     private var useLandscapeCompactLayout: Bool { isCompact && isCompactHeight }
-    private var usesHeroSplitLayout: Bool { useLandscapeCompactLayout || contentWidth >= 860 }
-    private var supportsTwoColumnCards: Bool { useLandscapeCompactLayout || contentWidth >= 820 }
+    private var usesPortraitCompactLayout: Bool { isCompact && !isCompactHeight }
+    private var dashboardOuterPadding: CGFloat {
+        if usesPortraitCompactLayout {
+            return 10
+        }
+        return useLandscapeCompactLayout ? 8 : 12
+    }
+    private var layoutWidth: CGFloat {
+        max(contentWidth - (dashboardOuterPadding * 2), 0)
+    }
+    private var usesHeroSplitLayout: Bool { !usesPortraitCompactLayout && (useLandscapeCompactLayout || layoutWidth >= 860) }
+    private var supportsTwoColumnCards: Bool { !usesPortraitCompactLayout && (useLandscapeCompactLayout || layoutWidth >= 820) }
+    private var usesCompactWidgetToolbar: Bool { usesPortraitCompactLayout || layoutWidth < 440 }
     private var currentDashboardView: DashboardViewItem? {
         dashboardViews.first(where: { $0.id == selectedDashboardViewID }) ?? dashboardViews.first
     }
@@ -276,10 +362,13 @@ struct DashboardView: View {
     }
 
     private var dashboardGridColumnCount: Int {
+        if usesPortraitCompactLayout {
+            return 1
+        }
         if useLandscapeCompactLayout || contentWidth >= 1160 {
             return 4
         }
-        if contentWidth >= 760 {
+        if layoutWidth >= 760 {
             return 2
         }
         return 1
@@ -289,24 +378,24 @@ struct DashboardView: View {
         if useLandscapeCompactLayout {
             return Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
         }
-        if contentWidth >= 1060 {
+        if layoutWidth >= 1060 {
             return Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
         }
-        if contentWidth >= 620 {
+        if layoutWidth >= 620 {
             return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
         }
         return [GridItem(.flexible(), spacing: 12)]
     }
 
     private var featuredHalfColumns: [GridItem] {
-        if contentWidth >= 720 {
+        if layoutWidth >= 720 {
             return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
         }
         return [GridItem(.flexible(), spacing: 12)]
     }
 
     private var commandSuggestionColumns: [GridItem] {
-        if contentWidth >= 720 {
+        if layoutWidth >= 720 {
             return [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
         }
         return [GridItem(.flexible(), spacing: 8)]
@@ -399,10 +488,6 @@ struct DashboardView: View {
         [.hero, .summary, .security, .favoriteScenes, .weather, .voiceCommand, .device]
     }
 
-    private var dashboardOuterPadding: CGFloat {
-        useLandscapeCompactLayout ? 8 : 12
-    }
-
     private var dashboardChromeSyncToken: String {
         let viewToken = dashboardViews
             .map { "\($0.id):\($0.name):\($0.widgets.count)" }
@@ -445,7 +530,7 @@ struct DashboardView: View {
                         .padding(dashboardOuterPadding)
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 14) {
+                        LazyVStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 14) {
                             if let errorMessage {
                                 InlineErrorView(message: errorMessage) {
                                     Task { await loadDashboard() }
@@ -477,6 +562,7 @@ struct DashboardView: View {
                                         }
                                     }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                         .padding(dashboardOuterPadding)
@@ -530,88 +616,68 @@ struct DashboardView: View {
     private func dashboardWidgetPanel(_ widget: DashboardWidgetItem, index: Int) -> some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
-                    Label(widget.title, systemImage: widgetSystemImage(widget.type))
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
+                if usesCompactWidgetToolbar {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(widget.title, systemImage: widgetSystemImage(widget.type))
+                            .font(.system(size: 17, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    Spacer(minLength: 8)
-
-                    if isEditingDashboard {
                         HStack(spacing: 8) {
-                            Menu {
-                                ForEach(DashboardWidgetSize.allCases) { size in
-                                    Button(size.title) {
-                                        updateWidget(widget.id) { current in
-                                            current.size = size
-                                        }
+                            HBBadge(
+                                text: widget.size.title,
+                                foreground: HBPalette.textPrimary,
+                                background: HBPalette.panelSoft.opacity(0.92),
+                                stroke: HBPalette.panelStrokeStrong
+                            )
+
+                            Spacer(minLength: 8)
+
+                            if isEditingDashboard {
+                                compactWidgetToolbarMenu(widget: widget, index: index)
+                            }
+                        }
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        Label(widget.title, systemImage: widgetSystemImage(widget.type))
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+
+                        Spacer(minLength: 8)
+
+                        if isEditingDashboard {
+                            HStack(spacing: 8) {
+                                widgetSizeMenu(widget)
+
+                                widgetToolbarButton(
+                                    systemImage: widget.minimized ? "arrow.down.left.and.arrow.up.right" : "arrow.up.left.and.arrow.down.right"
+                                ) {
+                                    updateWidget(widget.id) { current in
+                                        current.minimized.toggle()
                                     }
                                 }
-                            } label: {
-                                HBBadge(
-                                    text: widget.size.title,
-                                    foreground: HBPalette.textPrimary,
-                                    background: HBPalette.panelSoft.opacity(0.92),
-                                    stroke: HBPalette.panelStrokeStrong
-                                )
-                            }
-                            .buttonStyle(.plain)
 
-                            Button {
-                                updateWidget(widget.id) { current in
-                                    current.minimized.toggle()
+                                widgetToolbarButton(systemImage: "arrow.up", isDisabled: index == 0) {
+                                    moveWidget(widget.id, offset: -1)
                                 }
-                            } label: {
-                                Image(systemName: widget.minimized ? "arrow.down.left.and.arrow.up.right" : "arrow.up.left.and.arrow.down.right")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(HBPalette.textPrimary)
-                                    .frame(width: 30, height: 30)
-                            }
-                            .buttonStyle(.plain)
-                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
 
-                            Button {
-                                moveWidget(widget.id, offset: -1)
-                            } label: {
-                                Image(systemName: "arrow.up")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(index == 0 ? HBPalette.textMuted : HBPalette.textPrimary)
-                                    .frame(width: 30, height: 30)
-                            }
-                            .buttonStyle(.plain)
-                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
-                            .disabled(index == 0)
+                                widgetToolbarButton(systemImage: "arrow.down", isDisabled: index == currentDashboardWidgets.count - 1) {
+                                    moveWidget(widget.id, offset: 1)
+                                }
 
-                            Button {
-                                moveWidget(widget.id, offset: 1)
-                            } label: {
-                                Image(systemName: "arrow.down")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(index == currentDashboardWidgets.count - 1 ? HBPalette.textMuted : HBPalette.textPrimary)
-                                    .frame(width: 30, height: 30)
+                                widgetToolbarButton(systemImage: "trash", tint: HBPalette.accentRed) {
+                                    removeWidget(widget.id)
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
-                            .disabled(index == currentDashboardWidgets.count - 1)
-
-                            Button {
-                                removeWidget(widget.id)
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(HBPalette.accentRed)
-                                    .frame(width: 30, height: 30)
-                            }
-                            .buttonStyle(.plain)
-                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+                        } else {
+                            HBBadge(
+                                text: widget.size.title,
+                                foreground: HBPalette.textPrimary,
+                                background: HBPalette.panelSoft.opacity(0.92),
+                                stroke: HBPalette.panelStrokeStrong
+                            )
                         }
-                    } else {
-                        HBBadge(
-                            text: widget.size.title,
-                            foreground: HBPalette.textPrimary,
-                            background: HBPalette.panelSoft.opacity(0.92),
-                            stroke: HBPalette.panelStrokeStrong
-                        )
                     }
                 }
 
@@ -627,6 +693,96 @@ struct DashboardView: View {
                 }
             }
         }
+    }
+
+    private func widgetSizeMenu(_ widget: DashboardWidgetItem) -> some View {
+        Menu {
+            ForEach(DashboardWidgetSize.allCases) { size in
+                Button {
+                    updateWidget(widget.id) { current in
+                        current.size = size
+                    }
+                } label: {
+                    if widget.size == size {
+                        Label(size.title, systemImage: "checkmark")
+                    } else {
+                        Text(size.title)
+                    }
+                }
+            }
+        } label: {
+            HBBadge(
+                text: widget.size.title,
+                foreground: HBPalette.textPrimary,
+                background: HBPalette.panelSoft.opacity(0.92),
+                stroke: HBPalette.panelStrokeStrong
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func widgetToolbarButton(
+        systemImage: String,
+        isDisabled: Bool = false,
+        tint: Color = HBPalette.textPrimary,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(isDisabled ? HBPalette.textMuted : tint)
+                .frame(width: 30, height: 30)
+        }
+        .buttonStyle(.plain)
+        .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+        .disabled(isDisabled)
+    }
+
+    private func compactWidgetToolbarMenu(widget: DashboardWidgetItem, index: Int) -> some View {
+        Menu {
+            Section("Widget Size") {
+                ForEach(DashboardWidgetSize.allCases) { size in
+                    Button {
+                        updateWidget(widget.id) { current in
+                            current.size = size
+                        }
+                    } label: {
+                        if widget.size == size {
+                            Label(size.title, systemImage: "checkmark")
+                        } else {
+                            Text(size.title)
+                        }
+                    }
+                }
+            }
+
+            Button(widget.minimized ? "Expand Widget" : "Minimize Widget") {
+                updateWidget(widget.id) { current in
+                    current.minimized.toggle()
+                }
+            }
+
+            Button("Move Up") {
+                moveWidget(widget.id, offset: -1)
+            }
+            .disabled(index == 0)
+
+            Button("Move Down") {
+                moveWidget(widget.id, offset: 1)
+            }
+            .disabled(index == currentDashboardWidgets.count - 1)
+
+            Button("Remove Widget", role: .destructive) {
+                removeWidget(widget.id)
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(HBPalette.textPrimary)
+                .frame(width: 34, height: 34)
+                .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -995,7 +1151,7 @@ struct DashboardView: View {
 
     @ViewBuilder
     private func dashboardHeader(for widget: DashboardWidgetItem) -> some View {
-        let compactHero = widget.size == .small || widget.size == .medium
+        let compactHero = widget.size == .small || widget.size == .medium || usesPortraitCompactLayout
 
         Group {
             if compactHero {
@@ -1032,7 +1188,7 @@ struct DashboardView: View {
             Text("Welcome home. Every room, routine, and wake-word path is online.")
                 .font(
                     .system(
-                        size: compact ? 26 : (useLandscapeCompactLayout ? 28 : (contentWidth < 760 ? 34 : (contentWidth < 960 ? 38 : 42))),
+                        size: compact ? 26 : (useLandscapeCompactLayout ? 28 : (layoutWidth < 520 ? 30 : (layoutWidth < 760 ? 34 : (layoutWidth < 960 ? 38 : 42)))),
                         weight: .bold,
                         design: .rounded
                     )
@@ -1044,6 +1200,7 @@ struct DashboardView: View {
                         endPoint: .trailing
                     )
                 )
+                .fixedSize(horizontal: false, vertical: true)
 
             Text(compact
                 ? "Keep the controls you use, shrink the rest, and tune this deck per room."
@@ -1051,6 +1208,7 @@ struct DashboardView: View {
             )
                 .font(.system(size: compact ? 14 : (useLandscapeCompactLayout ? 14 : 17), weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
@@ -1182,6 +1340,7 @@ struct DashboardView: View {
 
     private func securityPanel(for widget: DashboardWidgetItem) -> some View {
         let compact = widget.size == .small
+        let usesStackedActions = compact || usesPortraitCompactLayout || layoutWidth < 540
         let summaryColumns: [GridItem]
 
         switch widget.size {
@@ -1264,14 +1423,14 @@ struct DashboardView: View {
             .padding(compact ? 12 : 14)
             .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
 
-            if compact {
+            if usesStackedActions {
                 VStack(spacing: 8) {
-                    securityPrimaryActions(compact: true)
+                    securityPrimaryActions(compact: true, stacked: true)
                     securitySyncAction(compact: true)
                 }
             } else {
                 HStack(alignment: .center, spacing: 10) {
-                    securityPrimaryActions(compact: false)
+                    securityPrimaryActions(compact: false, stacked: false)
                     securitySyncAction(compact: true)
                         .frame(maxWidth: 220)
                 }
@@ -1317,23 +1476,45 @@ struct DashboardView: View {
         )
     }
 
-    private func securityPrimaryActions(compact: Bool) -> some View {
-        HStack(spacing: 10) {
-            Button {
-                Task { await armSecurity(stay: true) }
-            } label: {
-                Label("Arm Stay", systemImage: "house")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(HBSecondaryButtonStyle(compact: compact))
+    private func securityPrimaryActions(compact: Bool, stacked: Bool) -> some View {
+        Group {
+            if stacked {
+                VStack(spacing: 8) {
+                    Button {
+                        Task { await armSecurity(stay: true) }
+                    } label: {
+                        Label("Arm Stay", systemImage: "house")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: compact))
 
-            Button {
-                Task { await armSecurity(stay: false) }
-            } label: {
-                Label("Arm Away", systemImage: "car")
-                    .frame(maxWidth: .infinity)
+                    Button {
+                        Task { await armSecurity(stay: false) }
+                    } label: {
+                        Label("Arm Away", systemImage: "car")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: compact))
+                }
+            } else {
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await armSecurity(stay: true) }
+                    } label: {
+                        Label("Arm Stay", systemImage: "house")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: compact))
+
+                    Button {
+                        Task { await armSecurity(stay: false) }
+                    } label: {
+                        Label("Arm Away", systemImage: "car")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: compact))
+                }
             }
-            .buttonStyle(HBSecondaryButtonStyle(compact: compact))
         }
     }
 
@@ -1362,12 +1543,12 @@ struct DashboardView: View {
                             .foregroundStyle(HBPalette.textMuted)
 
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Text(formattedTemperature(snapshot.temperatureF))
+                            Text(formattedTemperature(snapshot.displayTemperatureF))
                                 .font(.system(size: compact ? 34 : 42, weight: .bold, design: .rounded))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             if !compact {
-                                Text("Feels like \(formattedTemperature(snapshot.apparentTemperatureF))")
+                                Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
                                     .font(.system(size: 14, weight: .medium, design: .rounded))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
@@ -1404,6 +1585,15 @@ struct DashboardView: View {
                             background: HBPalette.panelSoft.opacity(0.92),
                             stroke: HBPalette.panelStrokeStrong
                         )
+
+                        if let tempest = snapshot.tempest {
+                            HBBadge(
+                                text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                                foreground: HBPalette.textPrimary,
+                                background: HBPalette.heroCore.opacity(0.22),
+                                stroke: HBPalette.heroCore.opacity(0.42)
+                            )
+                        }
                     }
                 }
 
@@ -1419,9 +1609,19 @@ struct DashboardView: View {
 
                 LazyVGrid(columns: metricColumns, spacing: 10) {
                     weatherMetricTile(title: "Today", value: "\(formattedTemperature(snapshot.highF)) / \(formattedTemperature(snapshot.lowF))", detail: "High / low band", accent: HBPalette.accentBlue)
-                    weatherMetricTile(title: "Humidity", value: formattedPercent(snapshot.humidity), detail: "Current moisture", accent: HBPalette.accentGreen)
-                    weatherMetricTile(title: "Wind", value: formattedWind(snapshot.windSpeedMph), detail: "Surface speed", accent: HBPalette.accentPurple)
-                    weatherMetricTile(title: "Rain Chance", value: formattedPercent(snapshot.precipitationChance), detail: snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precip", accent: HBPalette.accentOrange)
+                    weatherMetricTile(title: "Humidity", value: formattedPercent(snapshot.displayHumidityPct), detail: snapshot.tempest == nil ? "Current moisture" : "Now-cast station humidity", accent: HBPalette.accentGreen)
+                    weatherMetricTile(
+                        title: "Wind",
+                        value: formattedWind(snapshot.displayWindMph),
+                        detail: snapshot.tempest.map { "Gusts \(formattedWind($0.windGustMph)) from \(compassDirection($0.windDirectionDeg))" } ?? "Surface speed",
+                        accent: HBPalette.accentPurple
+                    )
+                    weatherMetricTile(
+                        title: snapshot.tempest == nil ? "Rain Chance" : "Rainfall",
+                        value: snapshot.tempest == nil ? formattedPercent(snapshot.precipitationChance) : formattedRain(snapshot.tempest?.rainTodayIn),
+                        detail: snapshot.tempest.map { "Rate \(formattedRain($0.rainRateInPerHr))/hr" } ?? (snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precip"),
+                        accent: HBPalette.accentOrange
+                    )
                 }
 
                 if !compact {
@@ -1569,6 +1769,18 @@ struct DashboardView: View {
     private func formattedWind(_ value: Double?) -> String {
         guard let value else { return "--" }
         return "\(Int(value.rounded())) mph"
+    }
+
+    private func formattedRain(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return String(format: "%.2f in", value)
+    }
+
+    private func compassDirection(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        let index = Int((value / 45).rounded()) % directions.count
+        return directions[index]
     }
 
     private func formattedWeatherTime(_ value: String?) -> String {

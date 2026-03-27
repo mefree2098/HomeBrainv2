@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DashboardViewsView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var isLoading = true
     @State private var isSaving = false
@@ -20,13 +21,23 @@ struct DashboardViewsView: View {
         case duplicate(String)
     }
 
+    private var usesCompactLayout: Bool {
+        horizontalSizeClass == .compact
+    }
+
+    private var compactProfileLabel: String? {
+        guard let profileID else { return nil }
+        guard profileID.count > 16 else { return "Profile \(profileID)" }
+        return "Profile \(profileID.prefix(6))...\(profileID.suffix(4))"
+    }
+
     var body: some View {
         Group {
             if isLoading {
                 LoadingView(title: "Loading dashboard views...")
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    LazyVStack(alignment: .leading, spacing: 16) {
                         if let errorMessage {
                             InlineErrorView(message: errorMessage) {
                                 Task { await loadViews() }
@@ -50,23 +61,32 @@ struct DashboardViewsView: View {
                                     eyebrow: "Per-Device Defaults"
                                 )
 
-                                HStack(spacing: 10) {
-                                    Button {
-                                        nameAction = .create
-                                        pendingName = ""
-                                    } label: {
-                                        Label("Create View", systemImage: "plus")
-                                    }
-                                    .buttonStyle(HBPrimaryButtonStyle())
-                                    .disabled(profileID == nil || isSaving)
+                                if usesCompactLayout {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        createViewButton
+                                            .frame(maxWidth: .infinity)
 
-                                    if let profileID {
-                                        HBBadge(
-                                            text: "Profile \(profileID)",
-                                            foreground: HBPalette.textPrimary,
-                                            background: HBPalette.panelSoft.opacity(0.92),
-                                            stroke: HBPalette.panelStrokeStrong
-                                        )
+                                        if let compactProfileLabel {
+                                            HBBadge(
+                                                text: compactProfileLabel,
+                                                foreground: HBPalette.textPrimary,
+                                                background: HBPalette.panelSoft.opacity(0.92),
+                                                stroke: HBPalette.panelStrokeStrong
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    HStack(spacing: 10) {
+                                        createViewButton
+
+                                        if let profileID {
+                                            HBBadge(
+                                                text: "Profile \(profileID)",
+                                                foreground: HBPalette.textPrimary,
+                                                background: HBPalette.panelSoft.opacity(0.92),
+                                                stroke: HBPalette.panelStrokeStrong
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -122,33 +142,40 @@ struct DashboardViewsView: View {
                 pendingDeleteView = nil
             }
         } message: { view in
-            Text("This removes the saved layout from the profile. If it is the current device default, another view will become the default on this iPad.")
+            Text("This removes the saved layout from the profile. If it is the current device default, another view will become the default on this device.")
         }
     }
 
     private func dashboardViewCard(_ view: DashboardViewItem) -> some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(view.name)
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
+                if usesCompactLayout {
+                    VStack(alignment: .leading, spacing: 10) {
+                        dashboardViewIdentity(view)
 
-                        Text("\(view.widgets.count) widgets")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
+                        if defaultViewID == view.id {
+                            HBBadge(
+                                text: "Default on this device",
+                                foreground: Color.white,
+                                background: HBPalette.accentBlue.opacity(0.96),
+                                stroke: HBPalette.accentBlue
+                            )
+                        }
                     }
+                } else {
+                    HStack(alignment: .top, spacing: 10) {
+                        dashboardViewIdentity(view)
 
-                    Spacer()
+                        Spacer()
 
-                    if defaultViewID == view.id {
-                        HBBadge(
-                            text: "Default on this iPad",
-                            foreground: Color.white,
-                            background: HBPalette.accentBlue.opacity(0.96),
-                            stroke: HBPalette.accentBlue
-                        )
+                        if defaultViewID == view.id {
+                            HBBadge(
+                                text: "Default on this device",
+                                foreground: Color.white,
+                                background: HBPalette.accentBlue.opacity(0.96),
+                                stroke: HBPalette.accentBlue
+                            )
+                        }
                     }
                 }
 
@@ -172,41 +199,72 @@ struct DashboardViewsView: View {
                     }
                 }
 
-                HStack(spacing: 10) {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: usesCompactLayout ? 124 : 156), spacing: 10, alignment: .leading)],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
                     Button {
                         DashboardSupport.setDefaultViewID(view.id, forProfileID: profileID)
                         defaultViewID = view.id
-                        infoMessage = "\"\(view.name)\" will open by default on this iPad."
+                        infoMessage = "\"\(view.name)\" will open by default on this device."
                     } label: {
-                        Label(defaultViewID == view.id ? "Default Selected" : "Set as Default", systemImage: "ipad.landscape")
+                        Label(defaultViewID == view.id ? "Default Selected" : "Set as Default", systemImage: "rectangle.on.rectangle")
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(HBPrimaryButtonStyle())
+                    .buttonStyle(HBPrimaryButtonStyle(compact: usesCompactLayout))
 
                     Button {
                         nameAction = .duplicate(view.id)
                         pendingName = "\(view.name) Copy"
                     } label: {
                         Label("Duplicate", systemImage: "doc.on.doc")
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(HBSecondaryButtonStyle())
+                    .buttonStyle(HBSecondaryButtonStyle(compact: usesCompactLayout))
 
                     Button {
                         nameAction = .rename(view.id)
                         pendingName = view.name
                     } label: {
                         Label("Rename", systemImage: "pencil")
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(HBSecondaryButtonStyle())
+                    .buttonStyle(HBSecondaryButtonStyle(compact: usesCompactLayout))
 
                     Button {
                         pendingDeleteView = view
                     } label: {
                         Label("Delete", systemImage: "trash")
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(HBGhostButtonStyle())
+                    .buttonStyle(HBGhostButtonStyle(compact: usesCompactLayout))
                     .disabled(dashboardViews.count <= 1)
                 }
             }
+        }
+    }
+
+    private var createViewButton: some View {
+        Button {
+            nameAction = .create
+            pendingName = ""
+        } label: {
+            Label("Create View", systemImage: "plus")
+        }
+        .buttonStyle(HBPrimaryButtonStyle(compact: usesCompactLayout))
+        .disabled(profileID == nil || isSaving)
+    }
+
+    private func dashboardViewIdentity(_ view: DashboardViewItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(view.name)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+
+            Text("\(view.widgets.count) widgets")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
         }
     }
 
