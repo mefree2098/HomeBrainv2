@@ -177,6 +177,46 @@ test('finalizePendingRestart completes the deploy after the new backend boots th
   );
 });
 
+test('finalizePendingRestart waits until a newer runtime boots before resolving the pending restart', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  const repoStatus = createRepoStatus('fedcba9876543210', 'fedcba9');
+  const oldRepoStatus = createRepoStatus('1234567890abcdef', '1234567');
+  const jobId = 'job-3';
+
+  await service.writeJob(createRunningJob(jobId, repoStatus));
+  await service.writePendingRestart({
+    jobId,
+    actor: 'admin@homebrain.test',
+    source: 'deploy',
+    requestedAt: '2026-03-23T12:01:00.000Z',
+    expectedCommit: repoStatus.commit,
+    expectedShortCommit: repoStatus.shortCommit,
+    command: 'sudo -n systemctl restart homebrain'
+  });
+
+  service.getRepoStatus = async () => repoStatus;
+  service.getRuntimeInfo = async () => ({
+    pid: 4242,
+    bootedAt: '2026-03-23T12:00:00.000Z',
+    uptimeSeconds: 120,
+    loadedBranch: 'main',
+    loadedCommit: oldRepoStatus.commit,
+    loadedShortCommit: oldRepoStatus.shortCommit,
+    repoMatchesRuntime: false
+  });
+
+  const result = await service.finalizePendingRestart();
+  const updatedJob = await service.readJob(jobId);
+  const persistedRestart = await service.readPendingRestart();
+
+  assert.equal(result.finalized, false);
+  assert.equal(result.waitingForRuntime, true);
+  assert.equal(updatedJob.status, 'running');
+  assert.equal(updatedJob.currentStep, 'Restart services');
+  assert.equal(updatedJob.steps.find((step) => step.name === 'Restart services')?.status, 'running');
+  assert.equal(persistedRestart?.expectedCommit, repoStatus.commit);
+});
+
 test('buildServiceRestartCommand removes invalid sudo fragments and forces non-interactive sudo', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   service.restartOllamaOnDeploy = true;
