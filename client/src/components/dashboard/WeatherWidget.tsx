@@ -1,26 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
-  Cloud,
-  CloudFog,
-  CloudMoon,
-  CloudRain,
-  CloudSnow,
-  CloudSun,
   Loader2,
   MapPin,
-  MoonStar,
-  Navigation,
   RefreshCw,
   Sunrise,
   Sunset,
-  ThermometerSun,
   Wind,
-  Zap
+  Radar,
+  Droplets,
+  Gauge,
+  Activity
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { getDashboardWeather, type DashboardWeatherPayload } from "@/api/weather"
 import type { DashboardWeatherLocationMode, DashboardWidgetSize } from "@/lib/dashboard"
+import { WeatherGlyph } from "@/components/weather/WeatherGlyph"
 
 interface WeatherWidgetProps {
   size: DashboardWidgetSize
@@ -44,6 +39,8 @@ const resolveCurrentPosition = () => new Promise<GeolocationPosition>((resolve, 
 const formatTemperature = (value: number | null) => value === null ? "--" : `${Math.round(value)}°`
 const formatPercent = (value: number | null) => value === null ? "--" : `${Math.round(value)}%`
 const formatWind = (value: number | null) => value === null ? "--" : `${Math.round(value)} mph`
+const formatRain = (value: number | null) => value === null ? "--" : `${value.toFixed(2)} in`
+const formatPressure = (value: number | null) => value === null ? "--" : `${value.toFixed(2)} inHg`
 
 const formatSunTime = (value: string | null) => {
   if (!value) {
@@ -58,27 +55,6 @@ const formatSunTime = (value: string | null) => {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
 }
 
-const WeatherGlyph = ({ icon, isDay, className }: { icon: string; isDay: boolean; className?: string }) => {
-  switch (icon) {
-    case "sunny":
-      return isDay ? <ThermometerSun className={className} /> : <MoonStar className={className} />
-    case "partly-cloudy":
-      return isDay ? <CloudSun className={className} /> : <CloudMoon className={className} />
-    case "fog":
-      return <CloudFog className={className} />
-    case "drizzle":
-    case "rain":
-      return <CloudRain className={className} />
-    case "sleet":
-    case "snow":
-      return <CloudSnow className={className} />
-    case "storm":
-      return <Zap className={className} />
-    default:
-      return <Cloud className={className} />
-  }
-}
-
 export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidgetProps) {
   const [weather, setWeather] = useState<DashboardWeatherPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -86,6 +62,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const compact = size === "small"
   const condensed = size === "small" || size === "medium"
   const wide = size === "large" || size === "full"
+  const tempestStation = weather?.tempest?.available ? weather.tempest.station : null
 
   const fetchWeather = useCallback(async () => {
     setLoading(true)
@@ -143,6 +120,9 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
     }
   }, [locationMode, weather])
 
+  const headlineTemperature = tempestStation?.metrics.temperatureF ?? weather?.current.temperatureF ?? null
+  const headlineFeelsLike = tempestStation?.metrics.feelsLikeF ?? weather?.current.apparentTemperatureF ?? null
+
   if (loading && !weather) {
     return (
       <div className="flex min-h-[180px] items-center justify-center rounded-[1.5rem] border border-white/10 bg-white/5 dark:bg-slate-950/15">
@@ -191,11 +171,17 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             <p className="section-kicker">Local Forecast</p>
             <div className="flex flex-wrap items-center gap-3">
               <h3 className={cn("font-semibold text-foreground", compact ? "text-2xl" : "text-3xl")}>
-                {formatTemperature(weather.current.temperatureF)}
+                {formatTemperature(headlineTemperature)}
               </h3>
               <span className="text-sm font-medium text-muted-foreground">
-                Feels like {formatTemperature(weather.current.apparentTemperatureF)}
+                Feels like {formatTemperature(headlineFeelsLike)}
               </span>
+              {tempestStation ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-xs font-medium text-cyan-700 dark:text-cyan-300">
+                  <Radar className="h-3.5 w-3.5" />
+                  Tempest Live
+                </span>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
               <span className="font-medium text-foreground">{weather.current.condition}</span>
@@ -220,6 +206,56 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             </Button>
           </div>
         </div>
+
+        {tempestStation ? (
+          <div className={cn("grid gap-3", condensed ? "grid-cols-2" : "grid-cols-4")}>
+            <div className="rounded-[1.2rem] border border-cyan-300/15 bg-cyan-400/10 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="section-kicker">Live Wind</p>
+                <Wind className="h-4 w-4 text-cyan-600 dark:text-cyan-300" />
+              </div>
+              <p className="mt-2 text-lg font-semibold text-foreground">{formatWind(tempestStation.metrics.windAvgMph)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Gust {formatWind(tempestStation.metrics.windGustMph)}
+              </p>
+            </div>
+
+            <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="section-kicker">Rainfall</p>
+                <Droplets className="h-4 w-4 text-blue-500" />
+              </div>
+              <p className="mt-2 text-lg font-semibold text-foreground">{formatRain(tempestStation.metrics.rainTodayIn)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Rate {formatRain(tempestStation.metrics.rainRateInPerHr)}/hr
+              </p>
+            </div>
+
+            {!compact ? (
+              <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="section-kicker">Pressure</p>
+                  <Gauge className="h-4 w-4 text-emerald-500" />
+                </div>
+                <p className="mt-2 text-lg font-semibold text-foreground">{formatPressure(tempestStation.metrics.pressureInHg)}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{tempestStation.metrics.pressureTrend || "Steady"}</p>
+              </div>
+            ) : null}
+
+            {!compact ? (
+              <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="section-kicker">Station</p>
+                  <Activity className="h-4 w-4 text-violet-500" />
+                </div>
+                <p className="mt-2 text-lg font-semibold text-foreground">{tempestStation.name}</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className={cn("grid gap-3", metricGrid)}>
           <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">

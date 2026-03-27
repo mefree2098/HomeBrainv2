@@ -16,7 +16,8 @@ import {
   Workflow,
   Activity,
   Waypoints,
-  Volume2
+  Volume2,
+  CloudSun
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -25,6 +26,7 @@ import { useAuth } from "@/contexts/AuthContext"
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
+  { name: 'Weather', href: '/weather', icon: CloudSun },
   { name: 'Devices', href: '/devices', icon: Lightbulb },
   { name: 'Scenes', href: '/scenes', icon: Palette },
   { name: 'Workflows', href: '/workflows', icon: Workflow },

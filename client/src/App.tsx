@@ -10,6 +10,7 @@ const Login = lazy(() => import("./pages/Login").then((module) => ({ default: mo
 const Register = lazy(() => import("./pages/Register").then((module) => ({ default: module.Register })))
 const BlankPage = lazy(() => import("./pages/BlankPage").then((module) => ({ default: module.BlankPage })))
 const Dashboard = lazy(() => import("./pages/Dashboard").then((module) => ({ default: module.Dashboard })))
+const Weather = lazy(() => import("./pages/Weather"))
 const Devices = lazy(() => import("./pages/Devices").then((module) => ({ default: module.Devices })))
 const Scenes = lazy(() => import("./pages/Scenes").then((module) => ({ default: module.Scenes })))
 const Automations = lazy(() => import("./pages/Automations").then((module) => ({ default: module.Automations })))
@@ -53,6 +54,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/" element={withLayout(<Dashboard />)} />
+            <Route path="/weather" element={withLayout(<Weather />)} />
             <Route path="/devices" element={withLayout(<Devices />)} />
             <Route path="/scenes" element={withLayout(<Scenes />)} />
             <Route path="/workflows" element={withLayout(<Workflows />)} />
