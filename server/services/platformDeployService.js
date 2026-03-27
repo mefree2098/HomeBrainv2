@@ -79,10 +79,10 @@ class PlatformDeployService {
     this.autoRecoverDirtyRepo = process.env.HOMEBRAIN_DEPLOY_AUTO_STASH_DIRTY !== 'false';
     this.restartOllamaOnDeploy = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA !== 'false';
     this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD
-      || 'sudo systemctl restart ollama';
+      || 'sudo -n systemctl restart ollama';
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
-      || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain';
+      || 'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart homebrain';
     this.runtimeSnapshotCaptured = false;
     this.runtimeSnapshot = {
       pid: typeof options.runtimePid === 'number' ? options.runtimePid : process.pid,
@@ -908,6 +908,33 @@ class PlatformDeployService {
       .trim();
   }
 
+  normalizeRestartCommandSegments(command, label = 'restart command') {
+    const sanitized = this.sanitizeShellCommand(command);
+    if (!sanitized) {
+      return { segments: [], notes: [] };
+    }
+
+    const segments = [];
+    const notes = [];
+
+    for (const rawSegment of sanitized.split(';')) {
+      const trimmed = rawSegment.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      if (/^sudo(?:\s+-n)?$/i.test(trimmed)) {
+        notes.push(`Ignored invalid ${label} segment "${trimmed}" because it does not include a command.`);
+        continue;
+      }
+
+      const nonInteractive = trimmed.replace(/\bsudo\s+(?!-n\b)/gi, 'sudo -n ');
+      segments.push(nonInteractive);
+    }
+
+    return { segments, notes };
+  }
+
   commandRestartsHomebrain(command) {
     if (!command) {
       return false;
@@ -920,10 +947,22 @@ class PlatformDeployService {
     const notes = [];
 
     if (this.restartOllamaOnDeploy) {
-      commandParts.push(`${this.defaultOllamaRestartCommand} || true`);
+      const normalizedOllama = this.normalizeRestartCommandSegments(
+        this.defaultOllamaRestartCommand,
+        'HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD'
+      );
+      notes.push(...normalizedOllama.notes);
+      normalizedOllama.segments.forEach((segment) => {
+        commandParts.push(`${segment} || true`);
+      });
     }
 
-    const customRestart = this.sanitizeShellCommand(this.customRestartCommand);
+    const normalizedCustomRestart = this.normalizeRestartCommandSegments(
+      this.customRestartCommand,
+      'HOMEBRAIN_DEPLOY_RESTART_CMD'
+    );
+    notes.push(...normalizedCustomRestart.notes);
+    const customRestart = normalizedCustomRestart.segments.join('; ');
     if (customRestart) {
       if (this.commandRestartsHomebrain(customRestart)) {
         notes.push(
@@ -931,13 +970,23 @@ class PlatformDeployService {
           'Use HOMEBRAIN_DEPLOY_CORE_RESTART_CMD for full restart override.'
         );
       } else {
-        commandParts.push(customRestart);
+        commandParts.push(...normalizedCustomRestart.segments);
       }
     }
 
-    const coreRestart = this.sanitizeShellCommand(this.coreRestartCommand)
-      || 'sudo systemctl daemon-reload || true; sudo systemctl restart homebrain';
-    commandParts.push(coreRestart);
+    let normalizedCoreRestart = this.normalizeRestartCommandSegments(
+      this.coreRestartCommand,
+      'HOMEBRAIN_DEPLOY_CORE_RESTART_CMD'
+    );
+    notes.push(...normalizedCoreRestart.notes);
+    if (normalizedCoreRestart.segments.length === 0) {
+      normalizedCoreRestart = this.normalizeRestartCommandSegments(
+        'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart homebrain',
+        'default core restart command'
+      );
+      notes.push(...normalizedCoreRestart.notes);
+    }
+    commandParts.push(...normalizedCoreRestart.segments);
 
     return {
       fullCommand: commandParts.join('; '),

@@ -176,3 +176,22 @@ test('finalizePendingRestart completes the deploy after the new backend boots th
     true
   );
 });
+
+test('buildServiceRestartCommand removes invalid sudo fragments and forces non-interactive sudo', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  service.restartOllamaOnDeploy = true;
+  service.defaultOllamaRestartCommand = 'sudo systemctl restart ollama';
+  service.customRestartCommand = 'sudo; sudo systemctl daemon-reload';
+  service.coreRestartCommand = 'sudo; sudo systemctl restart homebrain';
+
+  const result = service.buildServiceRestartCommand();
+
+  assert.equal(result.fullCommand.includes('sudo;'), false);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl restart ollama || true'), true);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl daemon-reload'), true);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl restart homebrain'), true);
+  assert.equal(
+    result.notes.some((note) => /does not include a command/i.test(note)),
+    true
+  );
+});
