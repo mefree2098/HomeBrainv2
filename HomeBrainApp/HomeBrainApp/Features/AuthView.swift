@@ -22,7 +22,6 @@ struct AuthView: View {
         .devices,
         .scenes,
         .workflows,
-        .automations,
         .voiceDevices,
         .settings,
         .ollama

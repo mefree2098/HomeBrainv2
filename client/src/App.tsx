@@ -1,5 +1,5 @@
 import { Suspense, lazy, type ReactNode } from "react"
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
+import { BrowserRouter as Router, Navigate, Routes, Route } from "react-router-dom"
 import { ThemeProvider } from "./components/ui/theme-provider"
 import { Toaster } from "./components/ui/toaster"
 import { AuthProvider } from "./contexts/AuthContext"
@@ -13,7 +13,6 @@ const Dashboard = lazy(() => import("./pages/Dashboard").then((module) => ({ def
 const Weather = lazy(() => import("./pages/Weather"))
 const Devices = lazy(() => import("./pages/Devices").then((module) => ({ default: module.Devices })))
 const Scenes = lazy(() => import("./pages/Scenes").then((module) => ({ default: module.Scenes })))
-const Automations = lazy(() => import("./pages/Automations").then((module) => ({ default: module.Automations })))
 const Workflows = lazy(() => import("./pages/Workflows").then((module) => ({ default: module.Workflows })))
 const VoiceDevices = lazy(() => import("./pages/VoiceDevices").then((module) => ({ default: module.VoiceDevices })))
 const UserProfiles = lazy(() => import("./pages/UserProfiles").then((module) => ({ default: module.UserProfiles })))
@@ -58,7 +57,7 @@ function App() {
             <Route path="/devices" element={withLayout(<Devices />)} />
             <Route path="/scenes" element={withLayout(<Scenes />)} />
             <Route path="/workflows" element={withLayout(<Workflows />)} />
-            <Route path="/automations" element={withLayout(<Automations />)} />
+            <Route path="/automations" element={<Navigate to="/workflows" replace />} />
             <Route path="/voice-devices" element={withLayout(<VoiceDevices />, { adminOnly: true })} />
             <Route path="/voice-profiles" element={withLayout(<UserProfiles />)} />
             <Route path="/profiles" element={withLayout(<UserProfiles />)} />

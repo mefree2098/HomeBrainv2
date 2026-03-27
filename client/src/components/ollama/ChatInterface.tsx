@@ -251,7 +251,7 @@ export default function ChatInterface({ activeModel }: ChatInterfaceProps) {
               onKeyDown={handleKeyPress}
               placeholder={
                 activeModel
-                  ? 'Ask anything about your smart home, automations, or local tasks...'
+                  ? 'Ask anything about your smart home, workflows, or local tasks...'
                   : 'Select an active model in the Models tab first'
               }
               className="min-h-[80px] max-h-[220px] flex-1 resize-y rounded-xl border-border/70 bg-background/90"

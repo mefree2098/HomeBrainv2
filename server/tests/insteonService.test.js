@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const Device = require('../models/Device');
 const Settings = require('../models/Settings');
+const Workflow = require('../models/Workflow');
 
 const insteonService = require('../services/insteonService');
+const workflowService = require('../services/workflowService');
 
 test('resolveConnectionTarget supports serial:// scheme for USB PLM endpoints', () => {
   const resolved = insteonService.resolveConnectionTarget('serial:///dev/ttyUSB0');
@@ -1852,6 +1854,90 @@ test('_buildISYProgramWorkflowPayloads embeds ELSE path in primary workflow when
   assert.equal(payloads.mainPayload.actions[0].parameters.edge, 'change');
   assert.ok(Array.isArray(payloads.mainPayload.actions[0].parameters.onFalseActions));
   assert.equal(payloads.mainPayload.actions[0].parameters.onFalseActions.length, 1);
+});
+
+test('importISYProgramsAsWorkflows persists translated ISY programs as workflows', async (t) => {
+  const originalBuildLookup = insteonService._buildISYProgramLookup;
+  const originalFindOne = Workflow.findOne;
+  const originalCreateWorkflow = workflowService.createWorkflow;
+  const originalUpdateWorkflow = workflowService.updateWorkflow;
+
+  t.after(() => {
+    insteonService._buildISYProgramLookup = originalBuildLookup;
+    Workflow.findOne = originalFindOne;
+    workflowService.createWorkflow = originalCreateWorkflow;
+    workflowService.updateWorkflow = originalUpdateWorkflow;
+  });
+
+  insteonService._buildISYProgramLookup = async () => ({
+    devicesByAddress: new Map(),
+    devicesByName: new Map([
+      ['porch light', { _id: 'dev1', name: 'Porch Light', type: 'light' }]
+    ]),
+    devicesById: new Map([
+      ['dev1', { _id: 'dev1', name: 'Porch Light', type: 'light' }]
+    ]),
+    scenesByName: new Map(),
+    programsByName: new Map(),
+    programsById: new Map(),
+    resourcesByName: new Map(),
+    resourcesById: new Map()
+  });
+
+  Workflow.findOne = () => ({
+    lean: async () => null
+  });
+
+  const createdPayloads = [];
+  workflowService.createWorkflow = async (payload, options) => {
+    createdPayloads.push({ payload, options });
+    return {
+      _id: 'workflow-isy-1',
+      name: payload.name
+    };
+  };
+  workflowService.updateWorkflow = async () => {
+    throw new Error('workflowService.updateWorkflow should not be called when no matching workflow exists');
+  };
+
+  const result = await insteonService.importISYProgramsAsWorkflows([
+    {
+      id: '2001',
+      name: 'Porch Routine',
+      enabled: true,
+      runAtStartup: false,
+      status: true,
+      ifLines: ["Status 'Porch Light' is Off"],
+      thenLines: ["Set 'Porch Light' On"],
+      elseLines: []
+    }
+  ], {
+    dryRun: false,
+    enableWorkflows: true
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.created, 1);
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 0);
+  assert.equal(createdPayloads.length, 1);
+  assert.equal(createdPayloads[0].options.source, 'import');
+  assert.equal(createdPayloads[0].payload.source, 'import');
+  assert.equal(createdPayloads[0].payload.enabled, true);
+  assert.equal(createdPayloads[0].payload.name, 'ISY Program 2001: Porch Routine');
+  assert.equal(createdPayloads[0].payload.actions[0].type, 'condition');
+  assert.equal(createdPayloads[0].payload.actions[1].type, 'device_control');
+  assert.equal(createdPayloads[0].payload.actions[1].target, 'dev1');
+  assert.deepEqual(result.workflows, [
+    {
+      programId: '2001',
+      path: 'then',
+      workflowId: 'workflow-isy-1',
+      name: 'ISY Program 2001: Porch Routine',
+      status: 'created'
+    }
+  ]);
+  assert.equal(result.elseSkipped, 1);
 });
 
 test('_buildISYConditionExpression parses variable/program conditions and precedence', () => {

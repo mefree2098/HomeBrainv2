@@ -96,7 +96,7 @@ export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onTogg
             <Heart className="h-5 w-5 text-muted-foreground" />
             <p className="max-w-xs">
               {canModifyFavorites
-                ? 'No favorite scenes yet. Use the list below to pin your most-used automations.'
+                ? 'No favorite scenes yet. Use the list below to pin your most-used workflows and scenes.'
                 : 'Create an active user profile to enable scene favorites.'}
             </p>
           </div>

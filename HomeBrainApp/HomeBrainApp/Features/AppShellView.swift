@@ -100,7 +100,6 @@ struct AppShellView: View {
         case devices
         case scenes
         case workflows
-        case automations
         case voiceDevices
         case userProfiles
         case ollama
@@ -119,7 +118,6 @@ struct AppShellView: View {
             case .views: return "Views"
             case .devices: return "Devices"
             case .scenes: return "Scenes"
-            case .automations: return "Automations"
             case .workflows: return "Workflows"
             case .voiceDevices: return "Voice Devices"
             case .userProfiles: return "User Profiles"
@@ -140,7 +138,6 @@ struct AppShellView: View {
             case .devices: return "Device Matrix"
             case .scenes: return "Scene Sequencer"
             case .workflows: return "Workflow Studio"
-            case .automations: return "Automation Grid"
             case .voiceDevices: return "Voice Nexus"
             case .userProfiles: return "Identity Profiles"
             case .settings: return "System Configuration"
@@ -160,7 +157,6 @@ struct AppShellView: View {
             case .devices: return "Hardware Orchestration"
             case .scenes: return "Atmosphere Control"
             case .workflows: return "Behavior Programming"
-            case .automations: return "Scheduled Intelligence"
             case .voiceDevices: return "Wake Mesh"
             case .userProfiles: return "Identity Layer"
             case .settings: return "Control Core"
@@ -179,7 +175,6 @@ struct AppShellView: View {
             case .views: return "rectangle.3.group"
             case .devices: return "lightbulb"
             case .scenes: return "sparkles"
-            case .automations: return "bolt"
             case .workflows: return "point.3.connected.trianglepath.dotted"
             case .voiceDevices: return "mic"
             case .userProfiles: return "person.2"
@@ -271,8 +266,8 @@ struct AppShellView: View {
     private var shellVoiceDescription: String {
         if previewMode {
             return voiceEnabled
-            ? "Say \"Hey Anna\" or \"Henry\" to orchestrate rooms, scenes, and automations from a single command surface."
-            : "Enable the wake mesh to arm hands-free room, scene, and automation control."
+            ? "Say \"Hey Anna\" or \"Henry\" to orchestrate rooms, scenes, and workflows from a single command surface."
+            : "Enable the wake mesh to arm hands-free room, scene, and workflow control."
         }
         return voiceAssistant.statusText
     }
@@ -1312,12 +1307,6 @@ struct AppShellView: View {
                 UIPreviewModuleView(section: section)
             } else {
                 ScenesView()
-            }
-        case .automations:
-            if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                AutomationsView()
             }
         case .workflows:
             if previewMode {
