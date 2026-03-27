@@ -220,7 +220,7 @@ export function Operations() {
             Operations Center
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Live platform events, service health, and automation activity in one place.
+            Live platform events, service health, and workflow activity in one place.
           </p>
         </div>
         <div className="flex items-center gap-2">

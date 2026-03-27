@@ -134,7 +134,7 @@ export function Register() {
               <p className="mt-2 text-lg font-semibold text-foreground">Adaptive favorites</p>
             </div>
             <div className="card-shell rounded-[1.3rem] p-4">
-              <p className="section-kicker">Automations</p>
+              <p className="section-kicker">Workflows</p>
               <p className="mt-2 text-lg font-semibold text-foreground">Personal routines</p>
             </div>
             <div className="card-shell rounded-[1.3rem] p-4">

@@ -99,7 +99,7 @@ const TEMPLATE_DEFINITIONS: WorkflowTemplateDefinition[] = [
   {
     id: "morning-weekday",
     name: "Weekday Morning Start",
-    description: "Weekday schedule to start morning automations.",
+    description: "Weekday schedule to start a morning workflow.",
     build: ({ firstSceneId, firstDeviceId }) => ({
       name: "Weekday Morning Start",
       description: "Starts key systems on weekdays at 6:30 AM.",
@@ -530,8 +530,8 @@ export function Workflows() {
           <h1 className="text-3xl font-bold text-foreground">Workflow Studio</h1>
           <p className="mt-1 text-muted-foreground">
             {isAdmin
-              ? "Build automations visually, create them with AI chat, and trigger them by voice."
-              : "Review and run existing workflows without changing the underlying automation logic."}
+              ? "Build workflows visually, create them with AI chat, and trigger them by voice."
+              : "Review and run existing workflows without editing their runtime records directly."}
           </p>
         </div>
         {isAdmin ? (

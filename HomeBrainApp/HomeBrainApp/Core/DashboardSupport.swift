@@ -28,7 +28,7 @@ enum DashboardWidgetType: String, CaseIterable, Identifiable {
     var details: String {
         switch self {
         case .hero: return "Top-level residence overview copy and badges."
-        case .summary: return "Live devices, voice mesh, scenes, and automation health."
+        case .summary: return "Live devices, voice mesh, scenes, and workflow activity."
         case .security: return "Alarm state and security control actions."
         case .favoriteScenes: return "Pinned scenes for one-tap launch."
         case .favoriteDevices: return "Dock of favorite devices with live controls."

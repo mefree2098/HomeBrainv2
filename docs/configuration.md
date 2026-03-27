@@ -85,20 +85,20 @@ To add a listener:
 
 The current system supports Raspberry Pi best, but other Debian/Ubuntu-based Linux listeners can also be used.
 
-## 7. Scenes, Automations, And Workflows
+## 7. Scenes And Workflows
 
 Current structure:
 
 - `Scenes`: reusable grouped device actions
-- `Automations`: event or schedule driven automation rules
-- `Workflows`: the most powerful builder, including visual editing and AI generation
+- `Workflows`: the primary builder for triggers, schedules, logic, visual editing, and AI generation
+- `Automations`: internal runtime records generated from workflows for scheduling and execution
 
 Recommended order:
 
 1. Create devices and profiles first
 2. Build scenes second
-3. Use workflows for advanced logic
-4. Use automations for simpler scheduled or event-driven rules
+3. Build routines in `Workflows`
+4. Treat `Automations` as runtime internals rather than a separate user-facing editor
 
 ## 8. Operations And Deploy
 

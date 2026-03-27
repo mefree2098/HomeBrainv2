@@ -1204,7 +1204,7 @@ struct DashboardView: View {
 
             Text(compact
                 ? "Keep the controls you use, shrink the rest, and tune this deck per room."
-                : "Control the home as one responsive system with cinematic visibility across devices, scenes, voice hubs, and automations."
+                : "Control the home as one responsive system with cinematic visibility across devices, scenes, voice hubs, and workflows."
             )
                 .font(.system(size: compact ? 14 : (useLandscapeCompactLayout ? 14 : 17), weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
@@ -1812,7 +1812,7 @@ struct DashboardView: View {
                 if quickScenes.isEmpty {
                     EmptyStateView(
                         title: "No favorite scenes yet",
-                        subtitle: "Pin your most-used automations and they will appear here for instant launch."
+                        subtitle: "Pin your most-used scenes and workflows so they appear here for instant launch."
                     )
                 } else {
                     ForEach(quickScenes) { scene in

@@ -1514,7 +1514,7 @@ export function Settings() {
     const confirmationText = [
       "Run ISY migration now with the current settings?",
       `Scopes: ${scopeSummary}.`,
-      `Program workflows: ${isyMigrationOptions.enableProgramWorkflows ? "enabled" : "disabled"}.`,
+      `Imported workflows enabled: ${isyMigrationOptions.enableProgramWorkflows ? "yes" : "no"}.`,
       `Continue on error: ${isyMigrationOptions.continueOnError ? "yes" : "no"}.`,
       `Device link mode: ${isyMigrationOptions.linkMode}.`,
       "This writes links/scenes to the connected USB PLM."
@@ -2728,7 +2728,7 @@ export function Settings() {
                       className="mt-1"
                     />
                     <p className="text-xs text-muted-foreground mt-1">
-                      Used for sunrise/sunset automations
+                      Used for sunrise/sunset workflows
                     </p>
                   </div>
                   <div>
@@ -2761,7 +2761,7 @@ export function Settings() {
                   <div>
                     <p className="font-medium">Enable Notifications</p>
                     <p className="text-sm text-muted-foreground">
-                      Receive notifications for device status and automations
+                      Receive notifications for device status and workflow activity
                     </p>
                   </div>
                   <Switch checked={watch("enableNotifications")} onCheckedChange={(checked) => setValue("enableNotifications", checked)} />
@@ -3383,7 +3383,7 @@ export function Settings() {
                         />
                       </div>
                       <div className="flex items-center justify-between">
-                        <p className="text-xs text-muted-foreground">Import program stubs</p>
+                        <p className="text-xs text-muted-foreground">Import workflows from ISY programs</p>
                         <Switch
                           checked={isyMigrationOptions.importPrograms}
                           onCheckedChange={(checked) =>
@@ -3392,7 +3392,7 @@ export function Settings() {
                         />
                       </div>
                       <div className="flex items-center justify-between">
-                        <p className="text-xs text-muted-foreground">Enable imported workflow stubs</p>
+                        <p className="text-xs text-muted-foreground">Enable imported workflows immediately</p>
                         <Switch
                           checked={isyMigrationOptions.enableProgramWorkflows}
                           onCheckedChange={(checked) =>
@@ -3652,7 +3652,7 @@ export function Settings() {
                       )}
                       {isyMigrationResult?.programs && (
                         <p className="text-muted-foreground">
-                          Program stubs: {isyMigrationResult.programs.processed ?? 0} processed, {isyMigrationResult.programs.created ?? 0} created, {isyMigrationResult.programs.updated ?? 0} updated, {isyMigrationResult.programs.failed ?? 0} failed.
+                          Imported workflows: {isyMigrationResult.programs.processed ?? 0} processed, {isyMigrationResult.programs.created ?? 0} created, {isyMigrationResult.programs.updated ?? 0} updated, {isyMigrationResult.programs.failed ?? 0} failed.
                         </p>
                       )}
                       {Array.isArray(isyMigrationResult?.errors) && isyMigrationResult.errors.length > 0 && (
@@ -4797,7 +4797,7 @@ export function Settings() {
 
                 <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
                   <p className="text-sm text-blue-800 dark:text-blue-200">
-                    <strong>How it works:</strong> When processing a voice command or automation, the system will try each
+                    <strong>How it works:</strong> When processing a voice command or workflow request, the system will try each
                     provider in order. If the primary provider is unavailable or returns an error, it automatically falls
                     back to the next provider in the list. This ensures your system remains operational even if one provider
                     has issues.
@@ -4853,7 +4853,7 @@ export function Settings() {
                   <div className="space-y-2">
                     <h4 className="font-medium">Clear Fake Data</h4>
                     <p className="text-sm text-muted-foreground">
-                      Remove all demo/fake data from the system (devices, scenes, automations, etc.)
+                      Remove all demo/fake data from the system (devices, scenes, workflow runtime records, etc.)
                     </p>
                     <Button
                       type="button"
@@ -5225,7 +5225,7 @@ export function Settings() {
                         <ul className="text-sm text-muted-foreground mt-1">
                           <li>Devices: {healthData.database?.collections?.devices || 0}</li>
                           <li>Scenes: {healthData.database?.collections?.scenes || 0}</li>
-                          <li>Automations: {healthData.database?.collections?.automations || 0}</li>
+                          <li>Automation Runtime Records: {healthData.database?.collections?.automations || 0}</li>
                           <li>Voice Devices: {healthData.database?.collections?.voiceDevices || 0}</li>
                           <li>User Profiles: {healthData.database?.collections?.userProfiles || 0}</li>
                         </ul>

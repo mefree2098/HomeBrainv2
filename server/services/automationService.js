@@ -22,6 +22,65 @@ const DEVICE_TYPE_HINTS = {
   sensor: ['sensor', 'motion', 'door', 'window', 'temperature', 'humidity']
 };
 
+function standaloneAutomationFilter(extra = {}) {
+  return {
+    ...extra,
+    workflowId: null
+  };
+}
+
+function isWorkflowManagedAutomation(automation) {
+  return Boolean(automation?.workflowId);
+}
+
+function assertStandaloneAutomationForRead(automation, id) {
+  if (!automation || isWorkflowManagedAutomation(automation)) {
+    throw new Error(`Automation with ID ${id} not found`);
+  }
+}
+
+function assertStandaloneAutomationForMutation(automation) {
+  if (isWorkflowManagedAutomation(automation)) {
+    throw new Error('This automation is managed by a workflow. Edit it from Workflows instead.');
+  }
+}
+
+async function listStandaloneAutomationIds() {
+  const automations = await Automation.find(standaloneAutomationFilter())
+    .select('_id')
+    .lean();
+
+  return automations.map((automation) => automation._id);
+}
+
+function buildEmptyExecutionSummary() {
+  return {
+    totalExecutions: 0,
+    successfulExecutions: 0,
+    failedExecutions: 0,
+    partialSuccessExecutions: 0,
+    averageDuration: 0,
+    totalActions: 0,
+    successfulActions: 0,
+    failedActions: 0
+  };
+}
+
+function buildExecutionStatsMatch(automationIds, dateRange = null) {
+  const match = {
+    automationId: { $in: automationIds }
+  };
+
+  if (dateRange) {
+    match.startedAt = {
+      $gte: new Date(dateRange.start),
+      $lte: new Date(dateRange.end)
+    };
+  }
+
+  return match;
+}
+
 /**
  * Get all automations
  */
@@ -29,7 +88,7 @@ async function getAllAutomations() {
   console.log('AutomationService: Fetching all automations');
 
   try {
-    const automations = await Automation.find()
+    const automations = await Automation.find(standaloneAutomationFilter())
       .sort({ createdAt: -1 }) // Sort by newest first
       .lean(); // Use lean for better performance
 
@@ -526,9 +585,7 @@ async function getAutomationById(id) {
 
     const automation = await Automation.findById(id).lean();
 
-    if (!automation) {
-      throw new Error(`Automation with ID ${id} not found`);
-    }
+    assertStandaloneAutomationForRead(automation, id);
 
     console.log(`AutomationService: Successfully retrieved automation: ${automation.name}`);
     return automation;
@@ -618,6 +675,7 @@ async function updateAutomation(id, updateData) {
     if (!existingAutomation) {
       throw new Error(`Automation with ID ${id} not found`);
     }
+    assertStandaloneAutomationForMutation(existingAutomation);
 
     // Validate name if being updated
     if (updateData.name !== undefined) {
@@ -676,11 +734,13 @@ async function deleteAutomation(id) {
       throw new Error('Invalid automation ID format');
     }
 
-    const deletedAutomation = await Automation.findByIdAndDelete(id).lean();
-
-    if (!deletedAutomation) {
+    const existingAutomation = await Automation.findById(id);
+    if (!existingAutomation) {
       throw new Error(`Automation with ID ${id} not found`);
     }
+    assertStandaloneAutomationForMutation(existingAutomation);
+
+    const deletedAutomation = await Automation.findByIdAndDelete(id).lean();
 
     console.log(`AutomationService: Automation deleted successfully: ${deletedAutomation.name}`);
     return {
@@ -713,15 +773,17 @@ async function toggleAutomation(id, enabled) {
       throw new Error('Enabled status must be a boolean value');
     }
 
+    const existingAutomation = await Automation.findById(id);
+    if (!existingAutomation) {
+      throw new Error(`Automation with ID ${id} not found`);
+    }
+    assertStandaloneAutomationForMutation(existingAutomation);
+
     const updatedAutomation = await Automation.findByIdAndUpdate(
       id,
       { enabled, updatedAt: Date.now() },
       { returnDocument: 'after', runValidators: true }
     ).lean();
-
-    if (!updatedAutomation) {
-      throw new Error(`Automation with ID ${id} not found`);
-    }
 
     console.log(`AutomationService: Automation ${enabled ? 'enabled' : 'disabled'} successfully: ${updatedAutomation.name}`);
     return {
@@ -1374,6 +1436,9 @@ function formatSceneList(scenes = []) {
 async function getAutomationStats() {
   console.log('AutomationService: Getting automation statistics');
 
+  const recentExecutionThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const standaloneFilter = standaloneAutomationFilter();
+
   try {
     const [
       totalCount,
@@ -1383,16 +1448,18 @@ async function getAutomationStats() {
       recentExecutions,
       priorityStats
     ] = await Promise.all([
-      Automation.countDocuments(),
-      Automation.countDocuments({ enabled: true }),
-      Automation.countDocuments({ enabled: false }),
+      Automation.countDocuments(standaloneFilter),
+      Automation.countDocuments(standaloneAutomationFilter({ enabled: true })),
+      Automation.countDocuments(standaloneAutomationFilter({ enabled: false })),
       Automation.aggregate([
+        { $match: standaloneFilter },
         { $group: { _id: '$category', count: { $sum: 1 } } }
       ]),
-      Automation.countDocuments({
-        lastRun: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } // Last 7 days
-      }),
+      Automation.countDocuments(standaloneAutomationFilter({
+        lastRun: { $gte: recentExecutionThreshold } // Last 7 days
+      })),
       Automation.aggregate([
+        { $match: standaloneFilter },
         { $group: { _id: '$priority', count: { $sum: 1 } } },
         { $sort: { _id: 1 } }
       ])
@@ -1512,14 +1579,33 @@ async function getAutomationHistory(automationId = null, limit = 50) {
   console.log(`AutomationService: Fetching automation history${automationId ? ` for ${automationId}` : ''}`);
 
   try {
+    const resolvedLimit = Number.isFinite(Number(limit)) ? Number(limit) : 50;
     let history;
     if (automationId) {
       if (!mongoose.Types.ObjectId.isValid(automationId)) {
         throw new Error('Invalid automation ID format');
       }
-      history = await AutomationHistory.getHistoryForAutomation(automationId, limit);
+
+      const automation = await Automation.findById(automationId).lean();
+      assertStandaloneAutomationForRead(automation, automationId);
+
+      history = await AutomationHistory.find({ automationId })
+        .sort({ startedAt: -1 })
+        .limit(resolvedLimit)
+        .lean();
     } else {
-      history = await AutomationHistory.getRecentExecutions(limit);
+      const automationIds = await listStandaloneAutomationIds();
+      if (!automationIds.length) {
+        return [];
+      }
+
+      history = await AutomationHistory.find({
+        automationId: { $in: automationIds }
+      })
+        .sort({ startedAt: -1 })
+        .limit(resolvedLimit)
+        .populate('automationId', 'name category')
+        .lean();
     }
 
     console.log(`AutomationService: Retrieved ${history.length} history entries`);
@@ -1527,6 +1613,9 @@ async function getAutomationHistory(automationId = null, limit = 50) {
   } catch (error) {
     console.error('AutomationService: Error fetching automation history:', error.message);
     console.error('AutomationService: Full error:', error);
+    if (error.message.includes('not found') || error.message.includes('Invalid')) {
+      throw error;
+    }
     throw new Error(`Failed to fetch automation history: ${error.message}`);
   }
 }
@@ -1538,21 +1627,61 @@ async function getExecutionStats(dateRange = null) {
   console.log('AutomationService: Fetching execution statistics');
 
   try {
-    const stats = await AutomationHistory.getExecutionStats(dateRange);
-    const failureAnalysis = await AutomationHistory.getFailureAnalysis(10);
+    const automationIds = await listStandaloneAutomationIds();
+    if (!automationIds.length) {
+      return {
+        execution: buildEmptyExecutionSummary(),
+        failures: []
+      };
+    }
+
+    const statsMatch = buildExecutionStatsMatch(automationIds, dateRange);
+    const failureMatch = {
+      ...buildExecutionStatsMatch(automationIds, dateRange),
+      status: { $in: ['failed', 'partial_success'] }
+    };
+
+    const [stats, failureAnalysis] = await Promise.all([
+      AutomationHistory.aggregate([
+        { $match: statsMatch },
+        {
+          $group: {
+            _id: null,
+            totalExecutions: { $sum: 1 },
+            successfulExecutions: {
+              $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] }
+            },
+            failedExecutions: {
+              $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] }
+            },
+            partialSuccessExecutions: {
+              $sum: { $cond: [{ $eq: ['$status', 'partial_success'] }, 1, 0] }
+            },
+            averageDuration: { $avg: '$durationMs' },
+            totalActions: { $sum: '$totalActions' },
+            successfulActions: { $sum: '$successfulActions' },
+            failedActions: { $sum: '$failedActions' }
+          }
+        }
+      ]),
+      AutomationHistory.aggregate([
+        { $match: failureMatch },
+        {
+          $group: {
+            _id: '$error.message',
+            count: { $sum: 1 },
+            automations: { $addToSet: '$automationName' },
+            lastOccurrence: { $max: '$startedAt' }
+          }
+        },
+        { $sort: { count: -1 } },
+        { $limit: 10 }
+      ])
+    ]);
 
     console.log('AutomationService: Retrieved execution statistics');
     return {
-      execution: stats[0] || {
-        totalExecutions: 0,
-        successfulExecutions: 0,
-        failedExecutions: 0,
-        partialSuccessExecutions: 0,
-        averageDuration: 0,
-        totalActions: 0,
-        successfulActions: 0,
-        failedActions: 0
-      },
+      execution: stats[0] || buildEmptyExecutionSummary(),
       failures: failureAnalysis
     };
   } catch (error) {

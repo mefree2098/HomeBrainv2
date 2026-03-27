@@ -51,15 +51,15 @@ Typical order:
 
 Only add one integration at a time and test after each save.
 
-## Workflows, Automations, And Scenes
+## Workflows And Scenes
 
 Use:
 
 - `Scenes` for grouped device states
-- `Automations` for routine triggers
-- `Workflows` for the most flexible logic and AI-assisted generation
+- `Workflows` for routine triggers, schedules, visual editing, and AI-assisted generation
+- `Automations` as internal runtime records generated from workflows
 
-If something is complicated, build it in `Workflows` first.
+If something is complicated, build it in `Workflows` first. In normal use, treat `Workflows` as the source of truth.
 
 ## Updating HomeBrain
 

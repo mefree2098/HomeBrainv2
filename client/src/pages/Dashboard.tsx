@@ -104,7 +104,7 @@ const WIDGET_SIZE_OPTIONS: Array<{ value: DashboardWidgetSize; label: string }> 
 
 const ADDABLE_WIDGETS: Array<{ type: DashboardWidgetType; label: string; description: string }> = [
   { type: "hero", label: "Welcome Hero", description: "Top-level residence overview copy and badges." },
-  { type: "summary", label: "System Summary", description: "Live devices, voice mesh, scenes, and automation health." },
+  { type: "summary", label: "System Summary", description: "Live devices, voice mesh, scenes, and workflow activity." },
   { type: "security", label: "Security Center", description: "Alarm state and control actions." },
   { type: "favorite-scenes", label: "Quick Scenes", description: "Pin favorite scenes and launch them instantly." },
   { type: "weather", label: "Weather", description: "Current conditions with saved, custom, or auto-detected location." },

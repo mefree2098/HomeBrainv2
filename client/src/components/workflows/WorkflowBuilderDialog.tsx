@@ -256,7 +256,7 @@ export function WorkflowBuilderDialog({
         <DialogHeader>
           <DialogTitle>{initialWorkflow ? "Edit Workflow" : "Create Workflow"}</DialogTitle>
           <DialogDescription>
-            Build an automation workflow visually. These workflows can be voice-triggered, chat-created, or scheduled.
+            Build a workflow visually. These workflows can be voice-triggered, chat-created, or scheduled.
           </DialogDescription>
         </DialogHeader>
 

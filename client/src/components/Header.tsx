@@ -37,7 +37,7 @@ const ROUTE_META: Record<string, { label: string; detail: string }> = {
   "/devices": { label: "Device Matrix", detail: "Hardware orchestration" },
   "/scenes": { label: "Scene Sequencer", detail: "Atmosphere presets" },
   "/workflows": { label: "Workflow Studio", detail: "Behavioral automation" },
-  "/automations": { label: "Automation Grid", detail: "Scheduled intelligence" },
+  "/automations": { label: "Workflow Studio", detail: "Behavioral automation" },
   "/voice-devices": { label: "Voice Nexus", detail: "Wake and response mesh" },
   "/voice-profiles": { label: "Voice Profiles", detail: "Assistant identity tuning" },
   "/profiles": { label: "Voice Profiles", detail: "Assistant identity tuning" },

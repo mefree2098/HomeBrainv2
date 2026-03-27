@@ -6,7 +6,7 @@ HomeBrain is a local-first home automation and voice-assistant platform. It comb
 
 ## What HomeBrain Includes
 
-- A web dashboard for devices, scenes, automations, workflows, voice devices, profiles, settings, reverse proxy/domains, operations, SSL inventory, Whisper, Ollama, and platform deploy
+- A web dashboard for devices, scenes, workflows, voice devices, profiles, settings, reverse proxy/domains, operations, SSL inventory, Whisper, Ollama, and platform deploy
 - Smart home integrations for SmartThings, Ecobee, INSTEON/ISY, and Logitech Harmony Hub
 - Remote listener onboarding and fleet updates for room devices
 - Wake-word training and distribution using OpenWakeWord plus Piper-generated training data
@@ -25,7 +25,7 @@ HomeBrain is no longer Jetson-only.
 
 What changes by hardware:
 
-- Core web app, automations, integrations, and remote listeners work on generic Linux hardware.
+- Core web app, workflow runtime, integrations, and remote listeners work on generic Linux hardware.
 - Jetson is still the best target for local GPU workloads such as Whisper and Ollama.
 - Non-Jetson hosts can still run HomeBrain; local AI workloads may simply run slower or fall back to CPU.
 
