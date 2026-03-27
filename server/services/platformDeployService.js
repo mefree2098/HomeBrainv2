@@ -63,6 +63,15 @@ function trimStdout(value) {
   return (value || '').toString().trim();
 }
 
+function parseTimestampMs(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 class PlatformDeployService {
   constructor(options = {}) {
     this.projectRoot = options.projectRoot || path.resolve(__dirname, '..', '..');
@@ -163,6 +172,8 @@ class PlatformDeployService {
   }
 
   async getDeployHealth(app) {
+    await this.finalizePendingRestart().catch(() => null);
+
     const checkedAt = new Date().toISOString();
     const repoStatus = await this.getRepoStatus().catch(() => null);
     const runtime = await this.getRuntimeInfo(repoStatus);
@@ -942,6 +953,24 @@ class PlatformDeployService {
     return /\bsystemctl\s+(?:restart|try-restart|start)\s+[^;]*\bhomebrain\b/i.test(command);
   }
 
+  runtimeBootedAfterRestartRequest(runtime, pendingRestart) {
+    const requestedAtMs = parseTimestampMs(pendingRestart?.requestedAt);
+    const bootedAtMs = parseTimestampMs(runtime?.bootedAt);
+
+    if (requestedAtMs !== null && bootedAtMs !== null) {
+      return bootedAtMs >= requestedAtMs;
+    }
+
+    if (requestedAtMs !== null) {
+      return false;
+    }
+
+    const uptimeSeconds = typeof runtime?.uptimeSeconds === 'number' && Number.isFinite(runtime.uptimeSeconds)
+      ? runtime.uptimeSeconds
+      : null;
+    return uptimeSeconds !== null && uptimeSeconds <= 300;
+  }
+
   buildServiceRestartCommand() {
     const commandParts = [];
     const notes = [];
@@ -1089,6 +1118,17 @@ class PlatformDeployService {
       || (expectedCommit ? expectedCommit.slice(0, 7) : null);
     const runtimeMatchesExpectedCommit = !expectedCommit
       || (runtimeCommit && runtimeCommit === expectedCommit);
+    const runtimeBootedAfterRequest = this.runtimeBootedAfterRestartRequest(runtime, pendingRestart);
+
+    if (!runtimeBootedAfterRequest) {
+      return {
+        finalized: false,
+        waitingForRuntime: true,
+        pendingRestart,
+        runtime,
+        repoStatus
+      };
+    }
 
     if (!pendingRestart.jobId) {
       await this.clearPendingRestart();

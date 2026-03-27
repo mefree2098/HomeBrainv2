@@ -23,6 +23,8 @@ router.get('/presets', async (req, res) => {
 
 router.get('/status', async (req, res) => {
   try {
+    await platformDeployService.finalizePendingRestart().catch(() => null);
+
     const [repo, latestJob, runningJob, pendingRestart] = await Promise.all([
       platformDeployService.getRepoStatus(),
       platformDeployService.getLatestJob(),
