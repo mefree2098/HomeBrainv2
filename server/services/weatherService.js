@@ -2,6 +2,60 @@ const axios = require('axios');
 const settingsService = require('./settingsService');
 const tempestService = require('./tempestService');
 
+const US_STATE_ABBREVIATIONS = Object.freeze({
+  AL: 'Alabama',
+  AK: 'Alaska',
+  AZ: 'Arizona',
+  AR: 'Arkansas',
+  CA: 'California',
+  CO: 'Colorado',
+  CT: 'Connecticut',
+  DE: 'Delaware',
+  FL: 'Florida',
+  GA: 'Georgia',
+  HI: 'Hawaii',
+  ID: 'Idaho',
+  IL: 'Illinois',
+  IN: 'Indiana',
+  IA: 'Iowa',
+  KS: 'Kansas',
+  KY: 'Kentucky',
+  LA: 'Louisiana',
+  ME: 'Maine',
+  MD: 'Maryland',
+  MA: 'Massachusetts',
+  MI: 'Michigan',
+  MN: 'Minnesota',
+  MS: 'Mississippi',
+  MO: 'Missouri',
+  MT: 'Montana',
+  NE: 'Nebraska',
+  NV: 'Nevada',
+  NH: 'New Hampshire',
+  NJ: 'New Jersey',
+  NM: 'New Mexico',
+  NY: 'New York',
+  NC: 'North Carolina',
+  ND: 'North Dakota',
+  OH: 'Ohio',
+  OK: 'Oklahoma',
+  OR: 'Oregon',
+  PA: 'Pennsylvania',
+  RI: 'Rhode Island',
+  SC: 'South Carolina',
+  SD: 'South Dakota',
+  TN: 'Tennessee',
+  TX: 'Texas',
+  UT: 'Utah',
+  VT: 'Vermont',
+  VA: 'Virginia',
+  WA: 'Washington',
+  WV: 'West Virginia',
+  WI: 'Wisconsin',
+  WY: 'Wyoming',
+  DC: 'District of Columbia'
+});
+
 const WEATHER_LABELS = {
   0: { label: 'Clear', icon: 'sunny' },
   1: { label: 'Mostly Clear', icon: 'partly-cloudy' },
@@ -84,6 +138,66 @@ function buildLocationName(result, fallback = 'Saved location') {
   return [...new Set(pieces)].join(', ');
 }
 
+function normalizeLocationQuery(query) {
+  return typeof query === 'string'
+    ? query
+      .trim()
+      .replace(/\s*,\s*/g, ', ')
+      .replace(/\s{2,}/g, ' ')
+    : '';
+}
+
+function parseUsCityStateQuery(query) {
+  const normalized = normalizeLocationQuery(query);
+  const match = normalized.match(/^([^,]+),\s*([A-Za-z]{2})(?:,\s*(?:US|USA|United States))?$/i);
+  if (!match) {
+    return null;
+  }
+
+  const city = match[1]?.trim();
+  const stateCode = match[2]?.trim().toUpperCase();
+  const stateName = US_STATE_ABBREVIATIONS[stateCode];
+
+  if (!city || !stateName) {
+    return null;
+  }
+
+  return {
+    city,
+    stateCode,
+    stateName,
+    normalizedQuery: `${city}, ${stateName}, United States`
+  };
+}
+
+function pickUsCityStateResult(results, parsedQuery) {
+  if (!Array.isArray(results) || results.length === 0 || !parsedQuery) {
+    return null;
+  }
+
+  const stateName = parsedQuery.stateName.toLowerCase();
+  const stateCode = parsedQuery.stateCode.toLowerCase();
+
+  return results.find((result) => {
+    const admin1 = typeof result?.admin1 === 'string' ? result.admin1.trim().toLowerCase() : '';
+    return admin1 === stateName || admin1 === stateCode;
+  }) || null;
+}
+
+async function fetchGeocodeCandidates(params) {
+  const response = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
+    params: {
+      count: 5,
+      language: 'en',
+      format: 'json',
+      ...params
+    },
+    timeout: 10000
+  });
+
+  return Array.isArray(response?.data?.results) ? response.data.results : [];
+}
+
 function createWeatherPayload(forecastResponse, location) {
   const current = forecastResponse?.current || {};
   const daily = forecastResponse?.daily || {};
@@ -143,26 +257,30 @@ function createWeatherPayload(forecastResponse, location) {
 }
 
 async function geocodeLocation(query, source) {
-  const response = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
-    params: {
-      name: query,
-      count: 1,
-      language: 'en',
-      format: 'json'
-    },
-    timeout: 10000
-  });
+  const normalizedQuery = normalizeLocationQuery(query);
+  const exactMatches = await fetchGeocodeCandidates({ name: normalizedQuery });
+  let result = exactMatches[0] || null;
 
-  const result = Array.isArray(response?.data?.results) ? response.data.results[0] : null;
   if (!result) {
-    throw new Error(`Unable to resolve weather location for "${query}".`);
+    const parsedUsQuery = parseUsCityStateQuery(normalizedQuery);
+    if (parsedUsQuery) {
+      const usMatches = await fetchGeocodeCandidates({
+        name: parsedUsQuery.city,
+        countryCode: 'US'
+      });
+      result = pickUsCityStateResult(usMatches, parsedUsQuery) || usMatches[0] || null;
+    }
+  }
+
+  if (!result) {
+    throw new Error(`Unable to resolve weather location for "${normalizedQuery || query}".`);
   }
 
   return {
     latitude: result.latitude,
     longitude: result.longitude,
     timezone: result.timezone || null,
-    name: buildLocationName(result, query),
+    name: buildLocationName(result, normalizedQuery || query),
     source
   };
 }
@@ -268,9 +386,13 @@ async function fetchWeatherDashboard(options = {}) {
 }
 
 module.exports = {
+  buildLocationName,
   createWeatherPayload,
   describeWeatherCode,
   fetchDashboardWeather,
   fetchWeatherDashboard,
-  normalizeCoordinates
+  normalizeCoordinates,
+  normalizeLocationQuery,
+  parseUsCityStateQuery,
+  pickUsCityStateResult
 };
