@@ -156,26 +156,11 @@ type CodexModelOption = {
   isDefault?: boolean
 }
 
-const DEFAULT_CODEX_AWS_VOLUME_ROOT = "/mnt/efs"
 const DEFAULT_CODEX_MODEL = "gpt-5.4"
 
-function resolveDraftCodexHome(profile: string, customHome: string, awsVolumeRoot: string) {
-  const normalizedProfile = (profile || "auto").trim().toLowerCase()
+function resolveDraftCodexHome(customHome: string) {
   const trimmedCustomHome = (customHome || "").trim()
-  const trimmedAwsVolumeRoot = (awsVolumeRoot || DEFAULT_CODEX_AWS_VOLUME_ROOT).trim() || DEFAULT_CODEX_AWS_VOLUME_ROOT
-
-  switch (normalizedProfile) {
-    case "azure":
-      return "/home/site/.codex/homebrain"
-    case "aws":
-      return `${trimmedAwsVolumeRoot}/.codex/homebrain`
-    case "custom":
-      return trimmedCustomHome
-    case "local":
-    case "auto":
-    default:
-      return ".codex-home"
-  }
+  return trimmedCustomHome || ".codex-home"
 }
 
 function getProviderPriorityLabel(index: number) {
@@ -363,8 +348,8 @@ export function Settings() {
       anthropicModel: "claude-3-sonnet-20240229",
       codexPath: "",
       codexHome: "",
-      codexHomeProfile: "auto",
-      codexAwsVolumeRoot: DEFAULT_CODEX_AWS_VOLUME_ROOT,
+      codexHomeProfile: "local",
+      codexAwsVolumeRoot: "",
       codexModel: DEFAULT_CODEX_MODEL,
       localLlmEndpoint: "http://localhost:11434",
       homebrainLocalLlmModel: "llama2-7b",
@@ -546,11 +531,9 @@ export function Settings() {
   const isyUseHttpsValue = watch("isyUseHttps") !== false
   const isyIgnoreTlsErrorsValue = watch("isyIgnoreTlsErrors") === true
   const codexPathValue = (watch("codexPath") || "").toString()
-  const codexHomeProfileValue = (watch("codexHomeProfile") || "auto").toString()
-  const codexAwsVolumeRootValue = (watch("codexAwsVolumeRoot") || DEFAULT_CODEX_AWS_VOLUME_ROOT).toString()
   const codexCustomHomeValue = (watch("codexHome") || "").toString()
   const codexModelValue = (watch("codexModel") || DEFAULT_CODEX_MODEL).toString()
-  const effectiveCodexHomeValue = resolveDraftCodexHome(codexHomeProfileValue, codexCustomHomeValue, codexAwsVolumeRootValue)
+  const effectiveCodexHomeValue = resolveDraftCodexHome(codexCustomHomeValue)
 
   // Load settings on component mount
   useEffect(() => {
@@ -595,19 +578,19 @@ export function Settings() {
           setValue("homebrainLocalLlmModel", resolvedHomeBrainModel)
           setValue("spamFilterLocalLlmModel", resolvedSpamFilterModel)
 
-          const loadedCodexHomeProfile = (response.settings.codexHomeProfile || "auto").toString()
-          const loadedCodexAwsVolumeRoot = (response.settings.codexAwsVolumeRoot || DEFAULT_CODEX_AWS_VOLUME_ROOT).toString()
-          const loadedCodexHome = resolveDraftCodexHome(
-            loadedCodexHomeProfile,
-            (response.settings.codexHome || "").toString(),
-            loadedCodexAwsVolumeRoot
-          )
+          const loadedCodexHomeProfile = (response.settings.codexHomeProfile || "local").toString().trim().toLowerCase()
+          const loadedCodexHome = loadedCodexHomeProfile === "custom"
+            ? (response.settings.codexHome || "").toString()
+            : ""
+
+          setValue("codexHomeProfile", loadedCodexHomeProfile === "custom" ? "custom" : "local")
+          setValue("codexAwsVolumeRoot", "")
 
           loadCodexModelsForDraft({
             codexPath: (response.settings.codexPath || "").toString(),
             codexHome: loadedCodexHome,
             codexHomeProfile: loadedCodexHomeProfile,
-            codexAwsVolumeRoot: loadedCodexAwsVolumeRoot,
+            codexAwsVolumeRoot: "",
             codexModel: (response.settings.codexModel || DEFAULT_CODEX_MODEL).toString()
           }, { showToast: false }).catch((codexError: any) => {
             console.error("Failed to load Codex models:", codexError)
@@ -985,16 +968,13 @@ export function Settings() {
 
       delete settingsToSave.localLlmModel
 
-      const normalizedCodexHomeProfile = (settingsToSave.codexHomeProfile || "auto").toString().trim().toLowerCase()
+      const normalizedCodexHome = (settingsToSave.codexHome || "").toString().trim()
+      const normalizedCodexHomeProfile = normalizedCodexHome ? "custom" : "local"
       settingsToSave.codexHomeProfile = normalizedCodexHomeProfile
       settingsToSave.codexPath = (settingsToSave.codexPath || "").toString().trim()
       settingsToSave.codexModel = (settingsToSave.codexModel || "").toString().trim()
-      settingsToSave.codexHome = normalizedCodexHomeProfile === "custom"
-        ? (settingsToSave.codexHome || "").toString().trim()
-        : ""
-      settingsToSave.codexAwsVolumeRoot = normalizedCodexHomeProfile === "aws"
-        ? (settingsToSave.codexAwsVolumeRoot || "").toString().trim()
-        : ""
+      settingsToSave.codexHome = normalizedCodexHomeProfile === "custom" ? normalizedCodexHome : ""
+      settingsToSave.codexAwsVolumeRoot = ""
 
       const trimmedIsyPassword = typeof settingsToSave.isyPassword === "string"
         ? settingsToSave.isyPassword.trim()
@@ -1752,13 +1732,18 @@ export function Settings() {
     }
   }
 
-  const buildCurrentCodexDraft = () => ({
-    codexPath: codexPathValue.trim(),
-    codexHome: effectiveCodexHomeValue.trim(),
-    codexHomeProfile: codexHomeProfileValue.trim().toLowerCase(),
-    codexAwsVolumeRoot: codexAwsVolumeRootValue.trim(),
-    codexModel: codexModelValue.trim()
-  })
+  const buildCurrentCodexDraft = () => {
+    const normalizedCodexHome = codexCustomHomeValue.trim()
+    const normalizedCodexHomeProfile = normalizedCodexHome ? "custom" : "local"
+
+    return {
+      codexPath: codexPathValue.trim(),
+      codexHome: normalizedCodexHome,
+      codexHomeProfile: normalizedCodexHomeProfile,
+      codexAwsVolumeRoot: "",
+      codexModel: codexModelValue.trim()
+    }
+  }
 
   const applyCodexModelResponse = (response: any, fallbackModel: string) => {
     const models = Array.isArray(response?.models) ? response.models : []
@@ -1819,13 +1804,14 @@ export function Settings() {
 
   const persistCodexDraftSettings = async (showToastOnSuccess = false) => {
     const values = getValues()
-    const profile = (values.codexHomeProfile || "auto").toString().trim().toLowerCase()
+    const normalizedCodexHome = (values.codexHome || "").toString().trim()
+    const profile = normalizedCodexHome ? "custom" : "local"
     const payload = {
       llmProvider: values.llmProvider,
       codexPath: (values.codexPath || "").toString().trim(),
       codexHomeProfile: profile,
-      codexHome: profile === "custom" ? (values.codexHome || "").toString().trim() : "",
-      codexAwsVolumeRoot: profile === "aws" ? (values.codexAwsVolumeRoot || "").toString().trim() : "",
+      codexHome: profile === "custom" ? normalizedCodexHome : "",
+      codexAwsVolumeRoot: "",
       codexModel: (values.codexModel || "").toString().trim()
     }
 
@@ -4961,53 +4947,27 @@ export function Settings() {
                     <Input
                       {...register("codexPath")}
                       className="mt-1"
-                      placeholder='Leave blank to use bundled "@openai/codex" or "codex" on PATH'
+                      placeholder='Leave blank to use the installed Codex CLI or "codex" on PATH'
                     />
                     <p className="text-xs text-muted-foreground mt-1">
-                      Optional executable or script path. Leave blank to use the bundled Codex runtime first and fall back to <code>codex</code> on the server PATH.
+                      Optional executable or script path. Leave blank and HomeBrain will use the local Codex CLI installation first, then fall back to <code>codex</code> on the server PATH.
                     </p>
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium">Codex Home Profile</label>
-                    <Select value={codexHomeProfileValue} onValueChange={(value) => setValue("codexHomeProfile", value)}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Select Codex home profile" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="auto">Auto</SelectItem>
-                        <SelectItem value="azure">Azure</SelectItem>
-                        <SelectItem value="aws">AWS</SelectItem>
-                        <SelectItem value="local">Local</SelectItem>
-                        <SelectItem value="custom">Custom</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <label className="text-sm font-medium">Optional Codex Home Override</label>
+                    <Input
+                      {...register("codexHome")}
+                      className="mt-1"
+                      placeholder="Leave blank to use HomeBrain's local .codex-home directory"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      HomeBrain stores Codex auth in its local <code>.codex-home</code> directory by default. Only set this if you want to point at a different existing Codex home.
+                    </p>
                   </div>
 
-                  {codexHomeProfileValue === "aws" && (
-                    <div>
-                      <label className="text-sm font-medium">AWS Volume Root</label>
-                      <Input
-                        {...register("codexAwsVolumeRoot")}
-                        className="mt-1"
-                        placeholder={DEFAULT_CODEX_AWS_VOLUME_ROOT}
-                      />
-                    </div>
-                  )}
-
-                  {codexHomeProfileValue === "custom" && (
-                    <div>
-                      <label className="text-sm font-medium">Custom Codex Home</label>
-                      <Input
-                        {...register("codexHome")}
-                        className="mt-1"
-                        placeholder="/path/to/.codex-home"
-                      />
-                    </div>
-                  )}
-
                   <div className="rounded-md border border-sky-200/70 bg-white/70 p-3 text-xs text-muted-foreground dark:border-sky-900/60 dark:bg-slate-950/30">
-                    Codex home used for requests: <code>{effectiveCodexHomeValue || "Not set"}</code>
+                    Codex home used for requests: <code>{effectiveCodexHomeValue || ".codex-home"}</code>
                   </div>
 
                   <div>

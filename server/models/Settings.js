@@ -227,7 +227,7 @@ const SettingsSchema = new mongoose.Schema({
   codexHomeProfile: {
     type: String,
     enum: ['auto', 'azure', 'aws', 'local', 'custom'],
-    default: 'auto'
+    default: 'local'
   },
   codexAwsVolumeRoot: {
     type: String,
@@ -340,7 +340,7 @@ SettingsSchema.statics.getSettings = async function() {
     ? settings.codexHomeProfile.trim().toLowerCase()
     : '';
   if (!codexHomeProfile) {
-    settings.codexHomeProfile = 'auto';
+    settings.codexHomeProfile = 'local';
     updated = true;
   }
 
