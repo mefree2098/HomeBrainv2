@@ -72,11 +72,20 @@ function isAwsRuntime() {
   );
 }
 
+function resolveDefaultLocalCodexHome() {
+  const homeDir = sanitizeString(os.homedir());
+  if (homeDir) {
+    return path.join(homeDir, '.codex', DEFAULT_CODEX_HOME_SLUG);
+  }
+
+  return path.resolve(process.cwd(), '.codex-home');
+}
+
 function resolveDraftCodexHome(profile, customHome = '', awsVolumeRoot = DEFAULT_AWS_VOLUME_ROOT, cwd = process.cwd()) {
   const normalizedProfile = normalizeCodexHomeProfile(profile);
   const trimmedCustomHome = sanitizeString(customHome);
   const trimmedAwsVolumeRoot = sanitizeString(awsVolumeRoot) || DEFAULT_AWS_VOLUME_ROOT;
-  const projectHome = path.resolve(cwd, '.codex-home');
+  const projectHome = resolveDefaultLocalCodexHome();
 
   switch (normalizedProfile) {
     case 'azure':

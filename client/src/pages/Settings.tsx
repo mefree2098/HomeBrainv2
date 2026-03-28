@@ -157,10 +157,11 @@ type CodexModelOption = {
 }
 
 const DEFAULT_CODEX_MODEL = "gpt-5.4"
+const DEFAULT_CODEX_HOME_DISPLAY = "~/.codex/homebrain"
 
 function resolveDraftCodexHome(customHome: string) {
   const trimmedCustomHome = (customHome || "").trim()
-  return trimmedCustomHome || ".codex-home"
+  return trimmedCustomHome || DEFAULT_CODEX_HOME_DISPLAY
 }
 
 function getProviderPriorityLabel(index: number) {
@@ -4959,15 +4960,15 @@ export function Settings() {
                     <Input
                       {...register("codexHome")}
                       className="mt-1"
-                      placeholder="Leave blank to use HomeBrain's local .codex-home directory"
+                      placeholder={`Leave blank to use ${DEFAULT_CODEX_HOME_DISPLAY}`}
                     />
                     <p className="text-xs text-muted-foreground mt-1">
-                      HomeBrain stores Codex auth in its local <code>.codex-home</code> directory by default. Only set this if you want to point at a different existing Codex home.
+                      HomeBrain stores Codex auth outside the repo by default at <code>{DEFAULT_CODEX_HOME_DISPLAY}</code>. Only set this if you want to point at a different existing Codex home.
                     </p>
                   </div>
 
                   <div className="rounded-md border border-sky-200/70 bg-white/70 p-3 text-xs text-muted-foreground dark:border-sky-900/60 dark:bg-slate-950/30">
-                    Codex home used for requests: <code>{effectiveCodexHomeValue || ".codex-home"}</code>
+                    Codex home used for requests: <code>{effectiveCodexHomeValue || DEFAULT_CODEX_HOME_DISPLAY}</code>
                   </div>
 
                   <div>

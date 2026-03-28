@@ -374,8 +374,11 @@ show_logs() {
 update_homebrain() {
   require_repo
 
-  if [[ -n "$(git -C "${HOMEBRAIN_DIR}" status --porcelain)" ]]; then
+  local repo_status
+  repo_status="$(git -C "${HOMEBRAIN_DIR}" status --porcelain)"
+  if [[ -n "${repo_status}" ]]; then
     print_error "Repository has local changes. Commit or stash them before running update."
+    echo "${repo_status}"
     exit 1
   fi
 
