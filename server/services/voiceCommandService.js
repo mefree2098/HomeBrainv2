@@ -1299,7 +1299,7 @@ RULES
 
         if (providerKey === 'local') {
           if (VOICE_COMMAND_ALLOW_CLOUD_FALLBACK && !parsed) {
-            const cloudProviders = ['openai', 'anthropic'];
+            const cloudProviders = ['codex', 'openai', 'anthropic'];
             try {
               const cloudAttempt = await sendLLMRequestWithFallbackDetailed(prompt, cloudProviders);
               response = cloudAttempt.response;

@@ -3,6 +3,7 @@ const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const Settings = require('../models/Settings');
 const OllamaConfig = require('../models/OllamaConfig');
+const { sendRequestToCodex } = require('./codexCliService');
 const dotenv = require('dotenv');
 
 dotenv.config();
@@ -33,6 +34,7 @@ const DEFAULT_OLLAMA_FORMAT = 'json';
 const DEFAULT_OPENAI_MODEL = 'gpt-5.2-codex';
 const OPENAI_MAX_OUTPUT_TOKENS = 1024;
 const DEFAULT_LOCAL_TIMEOUT_MS = 30000;
+const DEFAULT_PROVIDER_PRIORITY = ['local', 'codex', 'openai', 'anthropic'];
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -794,6 +796,14 @@ async function sendLLMRequest(provider, model, message) {
       return sendRequestToOpenAI(model, message);
     case 'anthropic':
       return sendRequestToAnthropic(model, message);
+    case 'codex': {
+      const settings = await Settings.getSettings();
+      const result = await sendRequestToCodex(message, settings, {
+        codexModel: model,
+        developerInstructions: JSON_ONLY_SYSTEM_PROMPT
+      });
+      return result.response;
+    }
     case 'local':
       // Get settings to retrieve local LLM endpoint
       const settings = await Settings.getSettings();
@@ -818,7 +828,7 @@ async function sendLLMRequestWithFallback(message, priorityList = null, requestC
 
   // Get settings to retrieve priority list and API keys
   const settings = await Settings.getSettings();
-  const priorities = priorityList || settings.llmPriorityList || ['local', 'openai', 'anthropic'];
+  const priorities = priorityList || settings.llmPriorityList || DEFAULT_PROVIDER_PRIORITY;
 
   console.log(`LLM Service: Priority list: ${priorities.join(' -> ')}`);
 
@@ -879,6 +889,17 @@ async function sendLLMRequestWithFallback(message, priorityList = null, requestC
           console.log(`LLM Service: Successfully received response from ${provider}`);
           return anthropicResponse;
 
+        case 'codex':
+          model = settings.codexModel;
+
+          const codexResponse = await sendRequestToCodex(message, settings, {
+            ...requestConfig,
+            codexModel: requestConfig.codexModel || model,
+            developerInstructions: JSON_ONLY_SYSTEM_PROMPT
+          });
+          console.log(`LLM Service: Successfully received response from ${provider}`);
+          return codexResponse.response;
+
         default:
           console.log(`LLM Service: Unknown provider ${provider}, skipping`);
           errors.push({ provider, error: `Unknown provider: ${provider}` });
@@ -902,7 +923,7 @@ async function sendLLMRequestWithFallbackDetailed(message, priorityList = null, 
   console.log('LLM Service: Sending request with fallback mechanism (detailed response)');
 
   const settings = await Settings.getSettings();
-  const priorities = priorityList || settings.llmPriorityList || ['local', 'openai', 'anthropic'];
+  const priorities = priorityList || settings.llmPriorityList || DEFAULT_PROVIDER_PRIORITY;
   const errors = [];
 
   for (const provider of priorities) {
@@ -964,6 +985,15 @@ async function sendLLMRequestWithFallbackDetailed(message, priorityList = null, 
             provider: 'anthropic',
             model
           };
+
+        case 'codex':
+          model = settings.codexModel;
+
+          return await sendRequestToCodex(message, settings, {
+            ...requestConfig,
+            codexModel: requestConfig.codexModel || model,
+            developerInstructions: JSON_ONLY_SYSTEM_PROMPT
+          });
 
         default:
           errors.push({ provider, error: `Unknown provider: ${provider}` });

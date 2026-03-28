@@ -142,11 +142,11 @@ async function runTests() {
   }
 
   // Test 3: Update to new priority
-  const test3 = await updateLLMPriority(['openai', 'anthropic', 'local']);
+  const test3 = await updateLLMPriority(['openai', 'codex', 'anthropic', 'local']);
 
   // Test 4: Verify the update
   const updatedPriority = await getLLMPriority();
-  const test4 = updatedPriority && JSON.stringify(updatedPriority) === JSON.stringify(['openai', 'anthropic', 'local']);
+  const test4 = updatedPriority && JSON.stringify(updatedPriority) === JSON.stringify(['openai', 'codex', 'anthropic', 'local']);
 
   if (test4) {
     console.log('✓ Verified priority list was updated correctly');
@@ -155,7 +155,7 @@ async function runTests() {
   }
 
   // Test 5: Update to another priority
-  const test5 = await updateLLMPriority(['anthropic', 'local', 'openai']);
+  const test5 = await updateLLMPriority(['anthropic', 'local', 'codex', 'openai']);
 
   // Test 6: Test invalid priority (should fail)
   const test6 = await testInvalidPriority();

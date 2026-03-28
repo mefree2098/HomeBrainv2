@@ -19,6 +19,7 @@ import {
   Save,
   TestTube,
   Brain,
+  Command,
   Cpu,
   Server,
   ExternalLink,
@@ -47,6 +48,9 @@ import {
   testOpenAIApiKey,
   testAnthropicApiKey,
   testLocalLLM,
+  getCodexModels,
+  getCodexAuthHealth,
+  completeCodexLogin,
   getSetting,
   getLLMPriorityList,
   updateLLMPriorityList
@@ -142,6 +146,42 @@ type InsteonPlmConnectionTestResult = {
     deviceCategory?: string | number;
     subcategory?: string | number;
   };
+}
+
+type CodexModelOption = {
+  id?: string
+  model?: string
+  displayName?: string
+  description?: string
+  isDefault?: boolean
+}
+
+const DEFAULT_CODEX_AWS_VOLUME_ROOT = "/mnt/efs"
+const DEFAULT_CODEX_MODEL = "gpt-5.4"
+
+function resolveDraftCodexHome(profile: string, customHome: string, awsVolumeRoot: string) {
+  const normalizedProfile = (profile || "auto").trim().toLowerCase()
+  const trimmedCustomHome = (customHome || "").trim()
+  const trimmedAwsVolumeRoot = (awsVolumeRoot || DEFAULT_CODEX_AWS_VOLUME_ROOT).trim() || DEFAULT_CODEX_AWS_VOLUME_ROOT
+
+  switch (normalizedProfile) {
+    case "azure":
+      return "/home/site/.codex/homebrain"
+    case "aws":
+      return `${trimmedAwsVolumeRoot}/.codex/homebrain`
+    case "custom":
+      return trimmedCustomHome
+    case "local":
+    case "auto":
+    default:
+      return ".codex-home"
+  }
+}
+
+function getProviderPriorityLabel(index: number) {
+  if (index === 0) return "Primary provider"
+  if (index === 1) return "First fallback"
+  return `Fallback ${index}`
 }
 
 const CONFIGURED_SECRET_PLACEHOLDER = "••••••••••••••••••••••••••••••••••••••••••••••••••";
@@ -279,9 +319,19 @@ export function Settings() {
   const [runningHealthCheck, setRunningHealthCheck] = useState(false)
   const [exportingConfig, setExportingConfig] = useState(false)
   const [healthData, setHealthData] = useState(null)
-  const [llmPriorityList, setLlmPriorityList] = useState<string[]>(['local', 'openai', 'anthropic'])
+  const [llmPriorityList, setLlmPriorityList] = useState<string[]>(['local', 'codex', 'openai', 'anthropic'])
   const [savingPriority, setSavingPriority] = useState(false)
-  const { register, handleSubmit, setValue, watch, reset } = useForm({
+  const [codexModels, setCodexModels] = useState<CodexModelOption[]>([])
+  const [loadingCodexModels, setLoadingCodexModels] = useState(false)
+  const [checkingCodexAuth, setCheckingCodexAuth] = useState(false)
+  const [startingCodexLogin, setStartingCodexLogin] = useState(false)
+  const [completingCodexLogin, setCompletingCodexLogin] = useState(false)
+  const [codexLoginRequired, setCodexLoginRequired] = useState(false)
+  const [codexAuthUrl, setCodexAuthUrl] = useState("")
+  const [codexPendingLoginId, setCodexPendingLoginId] = useState("")
+  const [codexCallbackUrl, setCodexCallbackUrl] = useState("")
+  const [codexAuthSummary, setCodexAuthSummary] = useState("")
+  const { register, handleSubmit, setValue, watch, reset, getValues } = useForm({
     defaultValues: {
       location: "New York, NY",
       timezone: "America/New_York",
@@ -311,6 +361,11 @@ export function Settings() {
       openaiModel: "gpt-5.2-codex",
       anthropicApiKey: "",
       anthropicModel: "claude-3-sonnet-20240229",
+      codexPath: "",
+      codexHome: "",
+      codexHomeProfile: "auto",
+      codexAwsVolumeRoot: DEFAULT_CODEX_AWS_VOLUME_ROOT,
+      codexModel: DEFAULT_CODEX_MODEL,
       localLlmEndpoint: "http://localhost:11434",
       homebrainLocalLlmModel: "llama2-7b",
       spamFilterLocalLlmModel: "llama2-7b",
@@ -490,6 +545,12 @@ export function Settings() {
   const isyPasswordValue = (watch("isyPassword") || "").toString()
   const isyUseHttpsValue = watch("isyUseHttps") !== false
   const isyIgnoreTlsErrorsValue = watch("isyIgnoreTlsErrors") === true
+  const codexPathValue = (watch("codexPath") || "").toString()
+  const codexHomeProfileValue = (watch("codexHomeProfile") || "auto").toString()
+  const codexAwsVolumeRootValue = (watch("codexAwsVolumeRoot") || DEFAULT_CODEX_AWS_VOLUME_ROOT).toString()
+  const codexCustomHomeValue = (watch("codexHome") || "").toString()
+  const codexModelValue = (watch("codexModel") || DEFAULT_CODEX_MODEL).toString()
+  const effectiveCodexHomeValue = resolveDraftCodexHome(codexHomeProfileValue, codexCustomHomeValue, codexAwsVolumeRootValue)
 
   // Load settings on component mount
   useEffect(() => {
@@ -533,6 +594,24 @@ export function Settings() {
 
           setValue("homebrainLocalLlmModel", resolvedHomeBrainModel)
           setValue("spamFilterLocalLlmModel", resolvedSpamFilterModel)
+
+          const loadedCodexHomeProfile = (response.settings.codexHomeProfile || "auto").toString()
+          const loadedCodexAwsVolumeRoot = (response.settings.codexAwsVolumeRoot || DEFAULT_CODEX_AWS_VOLUME_ROOT).toString()
+          const loadedCodexHome = resolveDraftCodexHome(
+            loadedCodexHomeProfile,
+            (response.settings.codexHome || "").toString(),
+            loadedCodexAwsVolumeRoot
+          )
+
+          loadCodexModelsForDraft({
+            codexPath: (response.settings.codexPath || "").toString(),
+            codexHome: loadedCodexHome,
+            codexHomeProfile: loadedCodexHomeProfile,
+            codexAwsVolumeRoot: loadedCodexAwsVolumeRoot,
+            codexModel: (response.settings.codexModel || DEFAULT_CODEX_MODEL).toString()
+          }, { showToast: false }).catch((codexError: any) => {
+            console.error("Failed to load Codex models:", codexError)
+          })
           
           toast({
             title: "Settings Loaded",
@@ -569,7 +648,7 @@ export function Settings() {
     } catch (error) {
       console.error('Failed to load LLM priority list:', error);
       // Use default priority list on error
-      setLlmPriorityList(['local', 'openai', 'anthropic']);
+      setLlmPriorityList(['local', 'codex', 'openai', 'anthropic']);
     }
   };
 
@@ -905,6 +984,17 @@ export function Settings() {
       }
 
       delete settingsToSave.localLlmModel
+
+      const normalizedCodexHomeProfile = (settingsToSave.codexHomeProfile || "auto").toString().trim().toLowerCase()
+      settingsToSave.codexHomeProfile = normalizedCodexHomeProfile
+      settingsToSave.codexPath = (settingsToSave.codexPath || "").toString().trim()
+      settingsToSave.codexModel = (settingsToSave.codexModel || "").toString().trim()
+      settingsToSave.codexHome = normalizedCodexHomeProfile === "custom"
+        ? (settingsToSave.codexHome || "").toString().trim()
+        : ""
+      settingsToSave.codexAwsVolumeRoot = normalizedCodexHomeProfile === "aws"
+        ? (settingsToSave.codexAwsVolumeRoot || "").toString().trim()
+        : ""
 
       const trimmedIsyPassword = typeof settingsToSave.isyPassword === "string"
         ? settingsToSave.isyPassword.trim()
@@ -1659,6 +1749,196 @@ export function Settings() {
       })
     } finally {
       setCancellingIsyMigration(false)
+    }
+  }
+
+  const buildCurrentCodexDraft = () => ({
+    codexPath: codexPathValue.trim(),
+    codexHome: effectiveCodexHomeValue.trim(),
+    codexHomeProfile: codexHomeProfileValue.trim().toLowerCase(),
+    codexAwsVolumeRoot: codexAwsVolumeRootValue.trim(),
+    codexModel: codexModelValue.trim()
+  })
+
+  const applyCodexModelResponse = (response: any, fallbackModel: string) => {
+    const models = Array.isArray(response?.models) ? response.models : []
+    setCodexModels(models)
+    setCodexLoginRequired(response?.loginRequired === true)
+    setCodexAuthUrl((response?.authUrl || "").toString())
+    if (response?.pendingLoginId) {
+      setCodexPendingLoginId(response.pendingLoginId.toString())
+    } else if (!response?.loginRequired) {
+      setCodexPendingLoginId("")
+      setCodexCallbackUrl("")
+    }
+
+    if (models.length > 0) {
+      const selectedModelIds = models
+        .map((model: CodexModelOption) => (model.id || model.model || "").toString())
+        .filter(Boolean)
+      const preferredModel = fallbackModel.trim()
+      const nextModel =
+        (preferredModel && selectedModelIds.includes(preferredModel) ? preferredModel : "") ||
+        (models.find((model: CodexModelOption) => model.isDefault)?.id || models[0]?.id || models[0]?.model || DEFAULT_CODEX_MODEL)
+      setValue("codexModel", nextModel)
+    }
+  }
+
+  const loadCodexModelsForDraft = async (
+    draft: { codexPath?: string; codexHome?: string; codexHomeProfile?: string; codexAwsVolumeRoot?: string; codexModel?: string },
+    options: { showToast?: boolean; startLogin?: boolean } = {}
+  ) => {
+    const { showToast = true, startLogin = false } = options
+    const response = await getCodexModels(draft, { startLogin })
+
+    applyCodexModelResponse(response, (draft.codexModel || "").toString())
+
+    if (response?.loginRequired && response?.pendingLoginId) {
+      setCodexAuthSummary("Login started. Open the returned URL, then paste the localhost callback URL here if the browser cannot reach it directly.")
+    } else if (response?.loginRequired) {
+      setCodexAuthSummary("Codex CLI is not authenticated yet. Use Sign in to OpenAI to start the ChatGPT login flow.")
+    } else if (Array.isArray(response?.models) && response.models.length > 0) {
+      const effectiveHome = response?.effectiveCodexHome || draft.codexHome || effectiveCodexHomeValue
+      setCodexAuthSummary(`Loaded ${response.models.length} Codex model${response.models.length === 1 ? "" : "s"} from ${effectiveHome}.`)
+      if (showToast) {
+        toast({
+          title: "Codex Models Loaded",
+          description: `Loaded ${response.models.length} available Codex model${response.models.length === 1 ? "" : "s"}.`
+        })
+      }
+    } else if (showToast) {
+      toast({
+        title: "No Codex Models",
+        description: "No visible Codex models were returned for this account.",
+        variant: "destructive"
+      })
+    }
+
+    return response
+  }
+
+  const persistCodexDraftSettings = async (showToastOnSuccess = false) => {
+    const values = getValues()
+    const profile = (values.codexHomeProfile || "auto").toString().trim().toLowerCase()
+    const payload = {
+      llmProvider: values.llmProvider,
+      codexPath: (values.codexPath || "").toString().trim(),
+      codexHomeProfile: profile,
+      codexHome: profile === "custom" ? (values.codexHome || "").toString().trim() : "",
+      codexAwsVolumeRoot: profile === "aws" ? (values.codexAwsVolumeRoot || "").toString().trim() : "",
+      codexModel: (values.codexModel || "").toString().trim()
+    }
+
+    const response = await updateSettings(payload)
+    if (response?.success && showToastOnSuccess) {
+      toast({
+        title: "Codex Settings Saved",
+        description: "Codex CLI settings were saved successfully."
+      })
+    }
+
+    return response
+  }
+
+  const handleRefreshCodexModels = async (options: { showToast?: boolean; startLogin?: boolean } = {}) => {
+    const { showToast = true, startLogin = false } = options
+    const draft = buildCurrentCodexDraft()
+    const setBusy = startLogin ? setStartingCodexLogin : setLoadingCodexModels
+
+    setBusy(true)
+    try {
+      const response = await loadCodexModelsForDraft(draft, { showToast, startLogin })
+
+      if (startLogin && response?.authUrl) {
+        window.open(response.authUrl, "_blank", "noopener,noreferrer")
+        if (showToast) {
+          toast({
+            title: "Codex Login Started",
+            description: "OpenAI sign-in opened in a new tab. Paste the localhost callback URL here if login does not complete in the browser."
+          })
+        }
+      }
+    } catch (error: any) {
+      console.error("Failed to load Codex models:", error)
+      toast({
+        title: startLogin ? "Codex Login Failed" : "Failed to Load Codex Models",
+        description: error?.message || "Unable to communicate with the Codex CLI integration.",
+        variant: "destructive"
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleCheckCodexAuth = async () => {
+    setCheckingCodexAuth(true)
+    try {
+      const response = await getCodexAuthHealth(buildCurrentCodexDraft(), { includeModelProbe: true })
+      setCodexLoginRequired(response?.loginRequired === true)
+      setCodexAuthUrl((response?.authUrl || "").toString())
+
+      const summary = response?.authenticated
+        ? `Authenticated as ${response.accountEmail || "unknown account"}${response.planType ? ` (${response.planType})` : ""}. ${response.modelCount || 0} model${response.modelCount === 1 ? "" : "s"} visible.`
+        : "Codex CLI is not authenticated on this server. Use Sign in to OpenAI to complete the ChatGPT login flow."
+      setCodexAuthSummary(summary)
+
+      toast({
+        title: response?.authenticated ? "Codex Auth Healthy" : "Codex Login Required",
+        description: summary,
+        variant: response?.authenticated ? "default" : "destructive"
+      })
+    } catch (error: any) {
+      console.error("Failed to check Codex auth:", error)
+      toast({
+        title: "Codex Auth Check Failed",
+        description: error?.message || "Unable to verify Codex authentication.",
+        variant: "destructive"
+      })
+    } finally {
+      setCheckingCodexAuth(false)
+    }
+  }
+
+  const handleCompleteCodexLogin = async () => {
+    if (!codexPendingLoginId.trim() || !codexCallbackUrl.trim()) {
+      toast({
+        title: "Callback Required",
+        description: "Start a Codex login first, then paste the localhost callback URL before completing login.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setCompletingCodexLogin(true)
+    try {
+      const response = await completeCodexLogin({
+        loginId: codexPendingLoginId.trim(),
+        callbackUrl: codexCallbackUrl.trim()
+      })
+
+      if (response?.success) {
+        setCodexLoginRequired(false)
+        setCodexAuthUrl("")
+        setCodexPendingLoginId("")
+        setCodexCallbackUrl("")
+        setCodexAuthSummary(`Authenticated as ${response.accountEmail || "your OpenAI account"}${response.planType ? ` (${response.planType})` : ""}.`)
+        await loadCodexModelsForDraft(buildCurrentCodexDraft(), { showToast: false })
+        await persistCodexDraftSettings(false)
+
+        toast({
+          title: "Codex Login Complete",
+          description: "Codex CLI authentication completed and the working settings were saved."
+        })
+      }
+    } catch (error: any) {
+      console.error("Failed to complete Codex login:", error)
+      toast({
+        title: "Codex Login Incomplete",
+        description: error?.message || "Unable to complete the Codex login flow.",
+        variant: "destructive"
+      })
+    } finally {
+      setCompletingCodexLogin(false)
     }
   }
 
@@ -2656,20 +2936,22 @@ export function Settings() {
   };
 
   const getProviderDisplayName = (provider: string) => {
-    const names = {
+    const names: Record<string, string> = {
       'openai': 'OpenAI',
       'anthropic': 'Anthropic Claude',
-      'local': 'Local LLM'
-    };
+      'local': 'Local LLM',
+      'codex': 'Codex CLI'
+    }
     return names[provider] || provider;
   };
 
   const getProviderIcon = (provider: string) => {
-    const icons = {
+    const icons: Record<string, JSX.Element> = {
       'openai': <Cpu className="h-4 w-4 text-blue-600" />,
       'anthropic': <Cpu className="h-4 w-4 text-orange-600" />,
-      'local': <Server className="h-4 w-4 text-green-600" />
-    };
+      'local': <Server className="h-4 w-4 text-green-600" />,
+      'codex': <Command className="h-4 w-4 text-sky-600" />
+    }
     return icons[provider] || <Brain className="h-4 w-4" />;
   };
 
@@ -4536,6 +4818,7 @@ export function Settings() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="openai">OpenAI</SelectItem>
+                      <SelectItem value="codex">Codex CLI</SelectItem>
                       <SelectItem value="anthropic">Anthropic</SelectItem>
                       <SelectItem value="local">Local LLM</SelectItem>
                     </SelectContent>
@@ -4667,6 +4950,210 @@ export function Settings() {
                   </div>
                 </div>
 
+                <div className="space-y-4 p-4 border rounded-lg bg-sky-50/60 dark:bg-sky-950/20">
+                  <div className="flex items-center gap-2">
+                    <Command className="h-4 w-4 text-sky-600" />
+                    <h4 className="font-medium text-sky-900 dark:text-sky-100">Codex CLI Configuration</h4>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">Codex Executable Path</label>
+                    <Input
+                      {...register("codexPath")}
+                      className="mt-1"
+                      placeholder='Leave blank to use bundled "@openai/codex" or "codex" on PATH'
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Optional executable or script path. Leave blank to use the bundled Codex runtime first and fall back to <code>codex</code> on the server PATH.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">Codex Home Profile</label>
+                    <Select value={codexHomeProfileValue} onValueChange={(value) => setValue("codexHomeProfile", value)}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select Codex home profile" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">Auto</SelectItem>
+                        <SelectItem value="azure">Azure</SelectItem>
+                        <SelectItem value="aws">AWS</SelectItem>
+                        <SelectItem value="local">Local</SelectItem>
+                        <SelectItem value="custom">Custom</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {codexHomeProfileValue === "aws" && (
+                    <div>
+                      <label className="text-sm font-medium">AWS Volume Root</label>
+                      <Input
+                        {...register("codexAwsVolumeRoot")}
+                        className="mt-1"
+                        placeholder={DEFAULT_CODEX_AWS_VOLUME_ROOT}
+                      />
+                    </div>
+                  )}
+
+                  {codexHomeProfileValue === "custom" && (
+                    <div>
+                      <label className="text-sm font-medium">Custom Codex Home</label>
+                      <Input
+                        {...register("codexHome")}
+                        className="mt-1"
+                        placeholder="/path/to/.codex-home"
+                      />
+                    </div>
+                  )}
+
+                  <div className="rounded-md border border-sky-200/70 bg-white/70 p-3 text-xs text-muted-foreground dark:border-sky-900/60 dark:bg-slate-950/30">
+                    Codex home used for requests: <code>{effectiveCodexHomeValue || "Not set"}</code>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">Codex Model</label>
+                    <Select value={codexModelValue} onValueChange={(value) => setValue("codexModel", value)}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder={loadingCodexModels ? "Loading Codex models..." : "Select Codex model"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {codexModels.map((model) => {
+                          const modelId = (model.id || model.model || "").toString()
+                          if (!modelId) return null
+                          return (
+                            <SelectItem key={modelId} value={modelId}>
+                              {model.displayName || modelId}
+                            </SelectItem>
+                          )
+                        })}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      className="mt-2"
+                      value={codexModelValue}
+                      onChange={(event) => setValue("codexModel", event.target.value)}
+                      placeholder="Or enter any Codex model ID"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Refresh the model list to pull currently available Codex models for the signed-in account.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => handleRefreshCodexModels()}
+                      disabled={loadingCodexModels}
+                    >
+                      {loadingCodexModels ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Refreshing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Refresh Model List
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => handleRefreshCodexModels({ startLogin: true })}
+                      disabled={startingCodexLogin}
+                    >
+                      {startingCodexLogin ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Starting Login...
+                        </>
+                      ) : (
+                        <>
+                          <ExternalLink className="h-4 w-4 mr-2" />
+                          Sign in to OpenAI
+                        </>
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleCheckCodexAuth}
+                      disabled={checkingCodexAuth}
+                    >
+                      {checkingCodexAuth ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Checking...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="h-4 w-4 mr-2" />
+                          Check Auth Persistence
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {(codexAuthSummary || codexLoginRequired) && (
+                    <div className="rounded-md border border-sky-200/70 bg-white/70 p-3 text-sm text-sky-950 dark:border-sky-900/60 dark:bg-slate-950/30 dark:text-sky-100">
+                      <p>{codexAuthSummary || "Codex CLI login is required."}</p>
+                      {codexAuthUrl && (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Login URL:{" "}
+                          <a
+                            href={codexAuthUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline underline-offset-2"
+                          >
+                            Open login URL
+                          </a>
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {codexLoginRequired && (
+                    <div className="space-y-3 rounded-md border border-sky-200/70 bg-white/70 p-3 dark:border-sky-900/60 dark:bg-slate-950/30">
+                      <div>
+                        <label className="text-sm font-medium">Pasted Localhost Callback URL</label>
+                        <Input
+                          className="mt-1"
+                          value={codexCallbackUrl}
+                          onChange={(event) => setCodexCallbackUrl(event.target.value)}
+                          placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Complete login is enabled only after Sign in to OpenAI creates a pending login session.
+                        </p>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleCompleteCodexLogin}
+                        disabled={completingCodexLogin || !codexPendingLoginId.trim() || !codexCallbackUrl.trim()}
+                      >
+                        {completingCodexLogin ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Completing Login...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle className="h-4 w-4 mr-2" />
+                            Complete Login
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Local LLM Settings */}
                 <div className="space-y-4 p-4 border rounded-lg bg-green-50/50 dark:bg-green-950/20">
                   <div className="flex items-center gap-2">
@@ -4742,7 +5229,7 @@ export function Settings() {
                         <div>
                           <p className="font-medium">{getProviderDisplayName(provider)}</p>
                           <p className="text-xs text-muted-foreground">
-                            {index === 0 ? 'Primary provider' : index === 1 ? 'First fallback' : 'Second fallback'}
+                            {getProviderPriorityLabel(index)}
                           </p>
                         </div>
                       </div>

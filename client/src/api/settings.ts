@@ -46,6 +46,11 @@ export const updateSettings = async (settings: {
   openaiModel?: string;
   anthropicApiKey?: string;
   anthropicModel?: string;
+  codexPath?: string;
+  codexHome?: string;
+  codexHomeProfile?: string;
+  codexAwsVolumeRoot?: string;
+  codexModel?: string;
   localLlmEndpoint?: string;
   homebrainLocalLlmModel?: string;
   spamFilterLocalLlmModel?: string;
@@ -124,6 +129,80 @@ export const testAnthropicApiKey = async (apiKey: string, model?: string) => {
 export const testLocalLLM = async (endpoint: string, model?: string) => {
   try {
     const response = await api.post('/api/settings/test-local-llm', { endpoint, model });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+type CodexSettingsDraft = {
+  codexPath?: string;
+  codexHome?: string;
+  codexHomeProfile?: string;
+  codexAwsVolumeRoot?: string;
+  codexModel?: string;
+};
+
+const buildCodexQuery = (draft: CodexSettingsDraft = {}, extra: Record<string, string | number | boolean | undefined> = {}) => {
+  const params = new URLSearchParams();
+
+  const entries = {
+    codexPath: draft.codexPath,
+    codexHome: draft.codexHome,
+    codexHomeProfile: draft.codexHomeProfile,
+    codexAwsVolumeRoot: draft.codexAwsVolumeRoot,
+    codexModel: draft.codexModel,
+    ...extra
+  };
+
+  Object.entries(entries).forEach(([key, value]) => {
+    if (value === undefined || value === null) {
+      return;
+    }
+
+    const normalized = String(value).trim();
+    if (!normalized) {
+      return;
+    }
+
+    params.set(key, normalized);
+  });
+
+  const query = params.toString();
+  return query ? `?${query}` : '';
+};
+
+export const getCodexModels = async (draft: CodexSettingsDraft = {}, options: { includeHidden?: boolean; startLogin?: boolean } = {}) => {
+  try {
+    const query = buildCodexQuery(draft, {
+      includeHidden: options.includeHidden === true ? '1' : undefined,
+      startLogin: options.startLogin === true ? '1' : undefined
+    });
+    const response = await api.get(`/api/settings/codex-models${query}`);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const getCodexAuthHealth = async (draft: CodexSettingsDraft = {}, options: { includeModelProbe?: boolean } = {}) => {
+  try {
+    const query = buildCodexQuery(draft, {
+      includeModelProbe: options.includeModelProbe === true ? '1' : undefined
+    });
+    const response = await api.get(`/api/settings/codex-auth-health${query}`);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const completeCodexLogin = async (payload: { loginId: string; callbackUrl: string }) => {
+  try {
+    const response = await api.post('/api/settings/codex-login/complete', payload);
     return response.data;
   } catch (error) {
     console.error(error);

@@ -197,7 +197,7 @@ const SettingsSchema = new mongoose.Schema({
   // AI/LLM Provider Settings
   llmProvider: {
     type: String,
-    enum: ['openai', 'anthropic', 'local'],
+    enum: ['openai', 'anthropic', 'local', 'codex'],
     default: 'openai'
   },
   openaiApiKey: {
@@ -215,6 +215,27 @@ const SettingsSchema = new mongoose.Schema({
   anthropicModel: {
     type: String,
     default: 'claude-3-sonnet-20240229'
+  },
+  codexPath: {
+    type: String,
+    default: ''
+  },
+  codexHome: {
+    type: String,
+    default: ''
+  },
+  codexHomeProfile: {
+    type: String,
+    enum: ['auto', 'azure', 'aws', 'local', 'custom'],
+    default: 'auto'
+  },
+  codexAwsVolumeRoot: {
+    type: String,
+    default: '/mnt/efs'
+  },
+  codexModel: {
+    type: String,
+    default: 'gpt-5.4'
   },
   localLlmEndpoint: {
     type: String,
@@ -234,11 +255,11 @@ const SettingsSchema = new mongoose.Schema({
   },
   llmPriorityList: {
     type: [String],
-    default: ['local', 'openai', 'anthropic'],
+    default: ['local', 'codex', 'openai', 'anthropic'],
     validate: {
       validator: function(arr) {
         // Ensure array only contains valid provider names
-        const validProviders = ['openai', 'anthropic', 'local'];
+        const validProviders = ['openai', 'anthropic', 'local', 'codex'];
         return arr.every(provider => validProviders.includes(provider));
       },
       message: 'Invalid LLM provider in priority list'
@@ -312,6 +333,30 @@ SettingsSchema.statics.getSettings = async function() {
 
   if (!spamFilterLocalModel && (homebrainLocalModel || legacyLocalModel)) {
     settings.spamFilterLocalLlmModel = homebrainLocalModel || legacyLocalModel;
+    updated = true;
+  }
+
+  const codexHomeProfile = typeof settings.codexHomeProfile === 'string'
+    ? settings.codexHomeProfile.trim().toLowerCase()
+    : '';
+  if (!codexHomeProfile) {
+    settings.codexHomeProfile = 'auto';
+    updated = true;
+  }
+
+  const currentPriorityList = Array.isArray(settings.llmPriorityList)
+    ? settings.llmPriorityList.filter((provider) => typeof provider === 'string' && provider.trim())
+    : [];
+  const hasCodexProvider = currentPriorityList.includes('codex');
+  const isLegacyPriorityOrder = currentPriorityList.length === 3 &&
+    currentPriorityList[0] === 'local' &&
+    currentPriorityList[1] === 'openai' &&
+    currentPriorityList[2] === 'anthropic';
+
+  if (!hasCodexProvider) {
+    settings.llmPriorityList = isLegacyPriorityOrder
+      ? ['local', 'codex', 'openai', 'anthropic']
+      : [...currentPriorityList, 'codex'];
     updated = true;
   }
 

@@ -54,7 +54,7 @@ async function testCustomPriorityList() {
 
   try {
     console.log('Testing with custom priority: [openai, anthropic, local]');
-    const response = await sendLLMRequestWithFallback(TEST_MESSAGE, ['openai', 'anthropic', 'local']);
+    const response = await sendLLMRequestWithFallback(TEST_MESSAGE, ['openai', 'codex', 'anthropic', 'local']);
 
     console.log('✓ Response received:', response.substring(0, 100) + (response.length > 100 ? '...' : ''));
     return true;
@@ -72,7 +72,7 @@ async function testFallbackBehavior() {
     console.log('Testing with priority: [local, openai, anthropic]');
     console.log('(Local LLM will likely fail and fallback to OpenAI)');
 
-    const response = await sendLLMRequestWithFallback(TEST_MESSAGE, ['local', 'openai', 'anthropic']);
+    const response = await sendLLMRequestWithFallback(TEST_MESSAGE, ['local', 'codex', 'openai', 'anthropic']);
 
     console.log('✓ Fallback successful! Response received:', response.substring(0, 100) + (response.length > 100 ? '...' : ''));
     return true;

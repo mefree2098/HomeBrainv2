@@ -51,6 +51,7 @@ const tempestService = require("./services/tempestService");
 const platformDeployService = require("./services/platformDeployService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
+const { shutdownCodexCliService } = require("./services/codexCliService");
 const automationSchedulerService = require("./services/automationSchedulerService");
 const { connectDB } = require("./config/database");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
@@ -459,6 +460,12 @@ async function gracefulShutdown(signal) {
       await tempestService.shutdown();
     } catch (error) {
       console.error('Error stopping Tempest service:', error.message);
+    }
+
+    try {
+      await shutdownCodexCliService();
+    } catch (error) {
+      console.error('Error stopping Codex CLI sessions:', error.message);
     }
 
   await closeServer(httpServer, 'HTTP server');

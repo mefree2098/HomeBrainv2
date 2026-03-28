@@ -122,10 +122,10 @@ const voiceCommandSchema = new mongoose.Schema({
   },
   
   // LLM processing details
-  llmProcessing: {
+    llmProcessing: {
     provider: {
       type: String,
-      enum: ['openai', 'anthropic', 'local'],
+      enum: ['openai', 'anthropic', 'local', 'codex'],
       required: true
     },
     model: {

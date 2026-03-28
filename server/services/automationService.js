@@ -1107,7 +1107,7 @@ async function createAutomationFromText(text, roomContext = null) {
     const settingsDoc = await Settings.getSettings();
     const defaultPriority = Array.isArray(settingsDoc.llmPriorityList) && settingsDoc.llmPriorityList.length
       ? settingsDoc.llmPriorityList
-      : ['local', 'openai', 'anthropic'];
+      : ['local', 'codex', 'openai', 'anthropic'];
     let providerQueue = [...defaultPriority];
     let parsedAutomation = null;
     let lastError = null;
