@@ -216,7 +216,7 @@ export function HeaderResourceUtilizationStrip({ intervalMs = 12000 }: ResourceW
   const { metrics, loading, refreshing } = useSystemResourceMetrics(intervalMs)
 
   return (
-    <div className="hidden lg:flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-2.5 py-1.5 shadow-sm backdrop-blur-xl dark:bg-slate-950/20">
+    <div className="hidden lg:flex items-center gap-2 px-1 py-1">
       {metrics.map((metric) => {
         const tone = getUsageTone(metric.percent)
         const Icon = metric.icon

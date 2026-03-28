@@ -67,6 +67,7 @@ private struct DashboardWeatherSnapshot {
     let humidity: Double?
     let windSpeedMph: Double?
     let precipitationIn: Double?
+    let airQualityIndex: Double?
     let isDay: Bool
     let condition: String
     let icon: String
@@ -98,6 +99,7 @@ private struct DashboardWeatherSnapshot {
             humidity: Self.optionalNumber(current["humidity"]),
             windSpeedMph: Self.optionalNumber(current["windSpeedMph"]),
             precipitationIn: Self.optionalNumber(current["precipitationIn"]),
+            airQualityIndex: Self.optionalNumber(current["airQualityIndex"]),
             isDay: JSON.bool(current, "isDay", fallback: true),
             condition: JSON.string(current, "condition", fallback: "Unknown"),
             icon: JSON.string(current, "icon", fallback: "cloudy"),
@@ -122,6 +124,7 @@ private struct DashboardWeatherSnapshot {
             humidity: 42,
             windSpeedMph: 8,
             precipitationIn: 0,
+            airQualityIndex: 38,
             isDay: true,
             condition: "Partly Cloudy",
             icon: "partly-cloudy",
@@ -263,6 +266,7 @@ struct DashboardView: View {
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var dashboardChrome: DashboardChromeState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var isLoading = true
@@ -329,6 +333,9 @@ struct DashboardView: View {
     }
     private var currentDashboardWidgets: [DashboardWidgetItem] {
         currentDashboardView?.widgets ?? []
+    }
+    private var visibleWeatherWidgets: [DashboardWidgetItem] {
+        currentDashboardWidgets.filter { $0.type == .weather }
     }
     private var sortedDevices: [DeviceItem] {
         devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -510,6 +517,16 @@ struct DashboardView: View {
         ].joined(separator: "||")
     }
 
+    private var dashboardWeatherRefreshTaskKey: String {
+        [
+            String(describing: scenePhase),
+            selectedDashboardViewID,
+            visibleWeatherWidgets
+                .map { "\($0.id):\(weatherTaskKey(for: $0))" }
+                .joined(separator: "|")
+        ].joined(separator: "||")
+    }
+
     private var heroBadgeTexts: [String] {
         var badges = [
             "\(scenes.count) scenes ready",
@@ -588,6 +605,17 @@ struct DashboardView: View {
         }
         .task {
             await loadDashboard()
+        }
+        .task(id: dashboardWeatherRefreshTaskKey) {
+            guard !previewMode, scenePhase == .active, !visibleWeatherWidgets.isEmpty else { return }
+
+            await refreshVisibleWeatherWidgets(force: true)
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled else { break }
+                await refreshVisibleWeatherWidgets(force: true)
+            }
         }
         .sheet(isPresented: $showingAddWidgetSheet) {
             dashboardAddWidgetSheet
@@ -1073,6 +1101,16 @@ struct DashboardView: View {
     private func refreshWeather(for widget: DashboardWidgetItem) async {
         weatherRequestKeyByWidgetID.removeValue(forKey: widget.id)
         await loadWeather(for: widget, force: true)
+    }
+
+    private func refreshVisibleWeatherWidgets(force: Bool) async {
+        for widget in visibleWeatherWidgets {
+            if force {
+                await refreshWeather(for: widget)
+            } else {
+                await loadWeather(for: widget, force: false)
+            }
+        }
     }
 
     private func loadWeather(for widget: DashboardWidgetItem, force: Bool = false) async {
@@ -1770,8 +1808,10 @@ struct DashboardView: View {
 
                     VStack(alignment: .trailing, spacing: 10) {
                         HStack(alignment: .center, spacing: 10) {
+                            weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+
                             if let tempest = snapshot.tempest {
-                                weatherUVIndicator(value: formattedUV(tempest.uvIndex), compact: compact)
+                                weatherUVIndicator(value: tempest.uvIndex, compact: compact)
                             }
 
                             Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
@@ -1824,7 +1864,7 @@ struct DashboardView: View {
                         weatherLiveMetricTile(
                             title: "Live Wind",
                             value: formattedWind(tempest.windAvgMph),
-                            detail: "Gust \(formattedWind(tempest.windGustMph))",
+                            detail: formattedLiveWindDetail(gust: tempest.windGustMph, direction: tempest.windDirectionDeg),
                             accent: HBPalette.accentBlue,
                             iconSystemName: "wind",
                             iconColor: HBPalette.accentBlue,
@@ -1845,7 +1885,7 @@ struct DashboardView: View {
                             weatherLiveMetricTile(
                                 title: "Pressure",
                                 value: formattedPressure(tempest.pressureInHg),
-                                detail: formattedPressureTrend(tempest.pressureTrend),
+                                detail: formattedPressureMeaning(tempest.pressureTrend),
                                 accent: HBPalette.panelStrokeStrong,
                                 iconSystemName: "gauge",
                                 iconColor: HBPalette.accentGreen
@@ -2054,21 +2094,62 @@ struct DashboardView: View {
         )
     }
 
-    private func weatherUVIndicator(value: String, compact: Bool) -> some View {
-        VStack(alignment: .trailing, spacing: 2) {
+    private func weatherUVIndicator(value: Double?, compact: Bool) -> some View {
+        let tone = uvRiskColor(value)
+
+        return VStack(alignment: .trailing, spacing: 2) {
             Text("UV")
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
 
-            Text(value)
+            Text(formattedUV(value))
                 .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
-                .foregroundStyle(HBPalette.textPrimary)
+                .foregroundStyle(tone)
         }
         .padding(.horizontal, compact ? 10 : 12)
         .padding(.vertical, compact ? 8 : 10)
-        .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
+        .background(
+            ZStack {
+                HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft)
+                RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
+                    .fill(tone.opacity(value == nil ? 0 : 0.12))
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
+                .stroke(tone.opacity(value == nil ? 0.18 : 0.34), lineWidth: 1)
+        )
+    }
+
+    private func weatherAQIIndicator(value: Double?, compact: Bool) -> some View {
+        let tone = aqiRiskColor(value)
+
+        return VStack(alignment: .trailing, spacing: 2) {
+            Text("AQI")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(1.8)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text(formattedAQI(value))
+                .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
+                .foregroundStyle(tone)
+        }
+        .padding(.horizontal, compact ? 10 : 12)
+        .padding(.vertical, compact ? 8 : 10)
+        .background(
+            ZStack {
+                HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft)
+                RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
+                    .fill(tone.opacity(value == nil ? 0 : 0.12))
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
+                .stroke(tone.opacity(value == nil ? 0.18 : 0.34), lineWidth: 1)
+        )
     }
 
     private func weatherDetailRow(title: String, value: String, systemImage: String, iconColor: Color) -> some View {
@@ -2143,9 +2224,62 @@ struct DashboardView: View {
         return String(format: "%.1f", value)
     }
 
-    private func formattedPressureTrend(_ value: String) -> String {
+    private func formattedAQI(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return "\(Int(value.rounded()))"
+    }
+
+    private func formattedPressureMeaning(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Steady" : trimmed.capitalized
+        switch trimmed.lowercased() {
+        case "rising":
+            return "Clearing trend"
+        case "falling":
+            return "Unsettled trend"
+        case "steady", "":
+            return "Stable air"
+        default:
+            return trimmed.capitalized
+        }
+    }
+
+    private func formattedLiveWindDetail(gust: Double?, direction: Double?) -> String {
+        let gustText = formattedWind(gust)
+        let directionText = compassDirection(direction)
+        switch (gustText, directionText) {
+        case ("--", "--"):
+            return "Live wind telemetry"
+        case (_, "--"):
+            return "Gust \(gustText)"
+        case ("--", _):
+            return "From \(directionText)"
+        default:
+            return "\(directionText) gust \(gustText)"
+        }
+    }
+
+    private func uvRiskColor(_ value: Double?) -> Color {
+        guard let value else { return HBPalette.textPrimary }
+        switch value {
+        case ..<3:
+            return HBPalette.accentGreen
+        case ..<6:
+            return HBPalette.accentYellow
+        default:
+            return HBPalette.accentRed
+        }
+    }
+
+    private func aqiRiskColor(_ value: Double?) -> Color {
+        guard let value else { return HBPalette.textPrimary }
+        switch value {
+        case ...50:
+            return HBPalette.accentGreen
+        case ...100:
+            return HBPalette.accentYellow
+        default:
+            return HBPalette.accentRed
+        }
     }
 
     private func compassDirection(_ value: Double?) -> String {
