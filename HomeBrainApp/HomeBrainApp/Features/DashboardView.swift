@@ -250,6 +250,12 @@ struct DashboardView: View {
         case rename(String)
     }
 
+    private enum DashboardWeatherInfoTopic: Equatable {
+        case aqi(Double?)
+        case uv(Double?)
+        case pressure(value: Double?, trend: String)
+    }
+
     private struct DashboardWidgetRow: Identifiable {
         let id: String
         let items: [DashboardWidgetRowItem]
@@ -304,6 +310,7 @@ struct DashboardView: View {
     @State private var weatherErrorsByWidgetID: [String: String] = [:]
     @State private var weatherRequestKeyByWidgetID: [String: String] = [:]
     @State private var weatherLoadingWidgetIDs: Set<String> = []
+    @State private var weatherInfoTopic: DashboardWeatherInfoTopic?
 
     @State private var commandText = ""
     @State private var commandResponse = ""
@@ -1808,10 +1815,14 @@ struct DashboardView: View {
 
                     VStack(alignment: .trailing, spacing: 10) {
                         HStack(alignment: .center, spacing: 10) {
-                            weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+                            weatherInfoPopoverTrigger(topic: .aqi(snapshot.airQualityIndex)) {
+                                weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+                            }
 
                             if let tempest = snapshot.tempest {
-                                weatherUVIndicator(value: tempest.uvIndex, compact: compact)
+                                weatherInfoPopoverTrigger(topic: .uv(tempest.uvIndex)) {
+                                    weatherUVIndicator(value: tempest.uvIndex, compact: compact)
+                                }
                             }
 
                             Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
@@ -1882,14 +1893,16 @@ struct DashboardView: View {
                         )
 
                         if !compact {
-                            weatherLiveMetricTile(
-                                title: "Pressure",
-                                value: formattedPressure(tempest.pressureInHg),
-                                detail: formattedPressureMeaning(tempest.pressureTrend),
-                                accent: HBPalette.panelStrokeStrong,
-                                iconSystemName: "gauge",
-                                iconColor: HBPalette.accentGreen
-                            )
+                            weatherInfoPopoverTrigger(topic: .pressure(value: tempest.pressureInHg, trend: tempestsPressureTrend(tempest.pressureTrend))) {
+                                weatherLiveMetricTile(
+                                    title: "Pressure",
+                                    value: formattedPressure(tempest.pressureInHg),
+                                    detail: formattedPressureMeaning(tempest.pressureTrend),
+                                    accent: HBPalette.panelStrokeStrong,
+                                    iconSystemName: "gauge",
+                                    iconColor: HBPalette.accentGreen
+                                )
+                            }
 
                             weatherLiveMetricTile(
                                 title: "Station",
@@ -2152,6 +2165,107 @@ struct DashboardView: View {
         )
     }
 
+    private func weatherInfoPopoverTrigger<Content: View>(
+        topic: DashboardWeatherInfoTopic,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let isPresented = Binding(
+            get: { weatherInfoTopic == topic },
+            set: { presented in
+                if presented {
+                    weatherInfoTopic = topic
+                } else if weatherInfoTopic == topic {
+                    weatherInfoTopic = nil
+                }
+            }
+        )
+
+        return Button {
+            weatherInfoTopic = weatherInfoTopic == topic ? nil : topic
+        } label: {
+            content()
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: isPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+            weatherInfoPopoverCard(for: topic)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private func weatherInfoPopoverCard(for topic: DashboardWeatherInfoTopic) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            switch topic {
+            case let .aqi(value):
+                weatherInfoSectionTitle(
+                    title: "AQI",
+                    summary: "Current \(formattedAQI(value)) • \(formattedAQIMeaning(value))"
+                )
+                weatherInfoRangeRow(range: "0-50", label: "Good", color: HBPalette.accentGreen)
+                weatherInfoRangeRow(range: "51-100", label: "Moderate", color: HBPalette.accentYellow)
+                weatherInfoRangeRow(range: "101+", label: "Unhealthy", color: HBPalette.accentRed)
+                Text("AQI shows how current air pollution may affect breathing comfort outdoors.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .uv(value):
+                weatherInfoSectionTitle(
+                    title: "UV",
+                    summary: "Current \(formattedUV(value)) • \(formattedUVMeaning(value))"
+                )
+                weatherInfoRangeRow(range: "0-2", label: "Low", color: HBPalette.accentGreen)
+                weatherInfoRangeRow(range: "3-5", label: "Moderate", color: HBPalette.accentYellow)
+                weatherInfoRangeRow(range: "6+", label: "High", color: HBPalette.accentRed)
+                Text("Higher UV means faster sun exposure risk and stronger need for shade or sunscreen.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .pressure(value, trend):
+                weatherInfoSectionTitle(
+                    title: "Pressure",
+                    summary: "Current \(formattedPressure(value)) • \(trend)"
+                )
+                weatherInfoRangeRow(range: "Above 30.2 inHg", label: "Usually fair", color: HBPalette.accentGreen)
+                weatherInfoRangeRow(range: "29.8-30.2 inHg", label: "Typical band", color: HBPalette.accentYellow)
+                weatherInfoRangeRow(range: "Below 29.8 inHg", label: "Often unsettled", color: HBPalette.accentRed)
+                Text("Current band: \(formattedPressureBand(value)). Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+        }
+        .frame(width: 280, alignment: .leading)
+        .padding(16)
+        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+    }
+
+    private func weatherInfoSectionTitle(title: String, summary: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(2.2)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text(summary)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+        }
+    }
+
+    private func weatherInfoRangeRow(range: String, label: String, color: Color) -> some View {
+        HStack(spacing: 10) {
+            Text(range)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+
+            Spacer()
+
+            Text(label)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(color)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+    }
+
     private func weatherDetailRow(title: String, value: String, systemImage: String, iconColor: Color) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
@@ -2229,6 +2343,18 @@ struct DashboardView: View {
         return "\(Int(value.rounded()))"
     }
 
+    private func formattedAQIMeaning(_ value: Double?) -> String {
+        guard let value else { return "No live AQI reading" }
+        switch value {
+        case ...50:
+            return "Good air"
+        case ...100:
+            return "Moderate air"
+        default:
+            return "Unhealthy air"
+        }
+    }
+
     private func formattedPressureMeaning(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         switch trimmed.lowercased() {
@@ -2241,6 +2367,33 @@ struct DashboardView: View {
         default:
             return trimmed.capitalized
         }
+    }
+
+    private func tempestsPressureTrend(_ value: String) -> String {
+        formattedPressureMeaning(value)
+    }
+
+    private func formattedUVMeaning(_ value: Double?) -> String {
+        guard let value else { return "No live UV reading" }
+        switch value {
+        case ..<3:
+            return "Low exposure"
+        case ..<6:
+            return "Moderate exposure"
+        default:
+            return "High sunburn risk"
+        }
+    }
+
+    private func formattedPressureBand(_ value: Double?) -> String {
+        guard let value else { return "No local pressure reading" }
+        if value < 29.8 {
+            return "Lower pressure band"
+        }
+        if value <= 30.2 {
+            return "Typical pressure band"
+        }
+        return "Higher pressure band"
     }
 
     private func formattedLiveWindDetail(gust: Double?, direction: Double?) -> String {

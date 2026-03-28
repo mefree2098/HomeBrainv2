@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Loader2,
   MapPin,
@@ -12,6 +12,7 @@ import {
   Activity
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { getDashboardWeather, type DashboardWeatherPayload } from "@/api/weather"
 import type { DashboardWeatherLocationMode, DashboardWidgetSize } from "@/lib/dashboard"
@@ -87,6 +88,45 @@ const formatPressureMeaning = (trend: string | null | undefined) => {
   }
 }
 
+const describeUvLevel = (value: number | null | undefined) => {
+  if (value == null) {
+    return "No live UV reading"
+  }
+  if (value < 3) {
+    return "Low exposure"
+  }
+  if (value < 6) {
+    return "Moderate exposure"
+  }
+  return "High sunburn risk"
+}
+
+const describeAqiLevel = (value: number | null | undefined) => {
+  if (value == null) {
+    return "No live AQI reading"
+  }
+  if (value <= 50) {
+    return "Good air"
+  }
+  if (value <= 100) {
+    return "Moderate air"
+  }
+  return "Unhealthy air"
+}
+
+const describePressureBand = (value: number | null | undefined) => {
+  if (value == null) {
+    return "No local pressure reading"
+  }
+  if (value < 29.8) {
+    return "Lower pressure band"
+  }
+  if (value <= 30.2) {
+    return "Typical pressure band"
+  }
+  return "Higher pressure band"
+}
+
 const uvToneClassName = (value: number | null | undefined) => {
   if (value == null) {
     return {
@@ -143,6 +183,109 @@ const aqiToneClassName = (value: number | null | undefined) => {
   }
 }
 
+function WeatherInfoPopover({
+  label,
+  children,
+  content,
+  align = "end",
+  className
+}: {
+  label: string
+  children: React.ReactNode
+  content: React.ReactNode
+  align?: "start" | "center" | "end"
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const closeTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
+
+  const clearCloseTimer = () => {
+    if (!closeTimerRef.current) {
+      return
+    }
+    window.clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = null
+  }
+
+  const openPopover = () => {
+    clearCloseTimer()
+    setOpen(true)
+  }
+
+  const closePopover = () => {
+    clearCloseTimer()
+    closeTimerRef.current = window.setTimeout(() => {
+      setOpen(false)
+      closeTimerRef.current = null
+    }, 120)
+  }
+
+  useEffect(() => {
+    return () => {
+      clearCloseTimer()
+    }
+  }, [])
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          className={cn("block text-left", className)}
+          onMouseEnter={openPopover}
+          onMouseLeave={closePopover}
+        >
+          {children}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align={align}
+        sideOffset={8}
+        className="w-80 p-0"
+        onMouseEnter={openPopover}
+        onMouseLeave={closePopover}
+      >
+        {content}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function WeatherInfoCard({
+  title,
+  summary,
+  rows,
+  footer
+}: {
+  title: string
+  summary: string
+  rows: Array<{ range: string; detail: string; toneClassName: string }>
+  footer?: string
+}) {
+  return (
+    <div className="space-y-3 p-4">
+      <div className="space-y-1">
+        <p className="section-kicker">{title}</p>
+        <p className="text-sm font-medium text-foreground">{summary}</p>
+      </div>
+
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.range} className="rounded-xl border border-border/60 bg-background/70 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm font-semibold text-foreground">{row.range}</span>
+              <span className={cn("text-sm font-semibold", row.toneClassName)}>{row.detail}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {footer ? <p className="text-xs leading-relaxed text-muted-foreground">{footer}</p> : null}
+    </div>
+  )
+}
+
 const formatSunTime = (value: string | null) => {
   if (!value) {
     return "--"
@@ -164,7 +307,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const condensed = size === "small" || size === "medium"
   const wide = size === "large" || size === "full"
   const tempestStation = weather?.tempest?.available ? weather.tempest.station : null
-  const aqiTone = aqiToneClassName(weather.current.airQualityIndex)
+  const aqiTone = aqiToneClassName(weather?.current.airQualityIndex)
   const uvTone = uvToneClassName(tempestStation?.metrics.uvIndex)
 
   const fetchWeather = useCallback(async () => {
@@ -316,16 +459,48 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
           </div>
 
           <div className={cn("flex items-center gap-3", condensed ? "justify-between" : "justify-end")}>
-            <div className={cn("rounded-[1.2rem] border px-3 py-2 text-right", aqiTone.chrome)}>
-              <p className="section-kicker">AQI</p>
-              <p className={cn("mt-1 text-lg font-semibold", aqiTone.value)}>{formatAqi(weather.current.airQualityIndex)}</p>
-            </div>
+            <WeatherInfoPopover
+              label="AQI details"
+              content={(
+                <WeatherInfoCard
+                  title="AQI"
+                  summary={`Current ${formatAqi(weather.current.airQualityIndex)} · ${describeAqiLevel(weather.current.airQualityIndex)}`}
+                  rows={[
+                    { range: "0-50", detail: "Good", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                    { range: "51-100", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
+                    { range: "101+", detail: "Unhealthy", toneClassName: "text-rose-600 dark:text-rose-300" }
+                  ]}
+                  footer="AQI reflects how current air pollution may affect outdoor breathing comfort."
+                />
+              )}
+            >
+              <div className={cn("rounded-[1.2rem] border px-3 py-2 text-right", aqiTone.chrome)}>
+                <p className="section-kicker">AQI</p>
+                <p className={cn("mt-1 text-lg font-semibold", aqiTone.value)}>{formatAqi(weather.current.airQualityIndex)}</p>
+              </div>
+            </WeatherInfoPopover>
 
             {tempestStation ? (
-              <div className={cn("rounded-[1.2rem] border px-3 py-2 text-right", uvTone.chrome)}>
-                <p className="section-kicker">UV</p>
-                <p className={cn("mt-1 text-lg font-semibold", uvTone.value)}>{formatUv(tempestStation.metrics.uvIndex)}</p>
-              </div>
+              <WeatherInfoPopover
+                label="UV details"
+                content={(
+                  <WeatherInfoCard
+                    title="UV"
+                    summary={`Current ${formatUv(tempestStation.metrics.uvIndex)} · ${describeUvLevel(tempestStation.metrics.uvIndex)}`}
+                    rows={[
+                      { range: "0-2", detail: "Low", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                      { range: "3-5", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
+                      { range: "6+", detail: "High", toneClassName: "text-rose-600 dark:text-rose-300" }
+                    ]}
+                    footer="Higher UV means quicker sun exposure risk and stronger need for shade or sunscreen."
+                  />
+                )}
+              >
+                <div className={cn("rounded-[1.2rem] border px-3 py-2 text-right", uvTone.chrome)}>
+                  <p className="section-kicker">UV</p>
+                  <p className={cn("mt-1 text-lg font-semibold", uvTone.value)}>{formatUv(tempestStation.metrics.uvIndex)}</p>
+                </div>
+              </WeatherInfoPopover>
             ) : null}
 
             <div className="rounded-[1.2rem] border border-white/15 bg-white/10 p-3 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
@@ -364,14 +539,32 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             </div>
 
             {!compact ? (
-              <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="section-kicker">Pressure</p>
-                  <Gauge className="h-4 w-4 text-emerald-500" />
+              <WeatherInfoPopover
+                label="Pressure details"
+                align="center"
+                className="w-full"
+                content={(
+                  <WeatherInfoCard
+                    title="Pressure"
+                    summary={`Current ${formatPressure(tempestStation.metrics.pressureInHg)} · ${formatPressureMeaning(tempestStation.metrics.pressureTrend)}`}
+                    rows={[
+                      { range: "Above 30.2 inHg", detail: "Usually fair", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                      { range: "29.8-30.2 inHg", detail: "Typical band", toneClassName: "text-amber-600 dark:text-amber-300" },
+                      { range: "Below 29.8 inHg", detail: "Often unsettled", toneClassName: "text-rose-600 dark:text-rose-300" }
+                    ]}
+                    footer={`Current band: ${describePressureBand(tempestStation.metrics.pressureInHg)}. Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.`}
+                  />
+                )}
+              >
+                <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="section-kicker">Pressure</p>
+                    <Gauge className="h-4 w-4 text-emerald-500" />
+                  </div>
+                  <p className="mt-2 text-lg font-semibold text-foreground">{formatPressure(tempestStation.metrics.pressureInHg)}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{formatPressureMeaning(tempestStation.metrics.pressureTrend)}</p>
                 </div>
-                <p className="mt-2 text-lg font-semibold text-foreground">{formatPressure(tempestStation.metrics.pressureInHg)}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{formatPressureMeaning(tempestStation.metrics.pressureTrend)}</p>
-              </div>
+              </WeatherInfoPopover>
             ) : null}
 
             {!compact ? (
