@@ -56,6 +56,7 @@ class SettingsService {
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',
         'anthropicApiKey', 'anthropicModel',
+        'codexPath', 'codexHome', 'codexHomeProfile', 'codexAwsVolumeRoot', 'codexModel',
         'localLlmEndpoint', 'localLlmModel', 'homebrainLocalLlmModel', 'spamFilterLocalLlmModel', 'llmPriorityList',
         // SmartThings OAuth Settings
         'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth',
@@ -97,6 +98,31 @@ class SettingsService {
 
       if (typeof sanitizedUpdates.spamFilterLocalLlmModel === 'string') {
         sanitizedUpdates.spamFilterLocalLlmModel = sanitizedUpdates.spamFilterLocalLlmModel.trim();
+      }
+
+      ['codexPath', 'codexHome', 'codexAwsVolumeRoot', 'codexModel', 'openaiModel', 'anthropicModel', 'localLlmEndpoint']
+        .forEach((key) => {
+          if (typeof sanitizedUpdates[key] === 'string') {
+            sanitizedUpdates[key] = sanitizedUpdates[key].trim();
+          }
+        });
+
+      if (typeof sanitizedUpdates.codexHomeProfile === 'string') {
+        const normalizedProfile = sanitizedUpdates.codexHomeProfile.trim().toLowerCase();
+        const validProfiles = new Set(['auto', 'azure', 'aws', 'local', 'custom']);
+        if (validProfiles.has(normalizedProfile)) {
+          sanitizedUpdates.codexHomeProfile = normalizedProfile;
+        } else {
+          delete sanitizedUpdates.codexHomeProfile;
+        }
+      }
+
+      if (
+        typeof sanitizedUpdates.codexHomeProfile === 'string' &&
+        sanitizedUpdates.codexHomeProfile !== 'aws' &&
+        Object.prototype.hasOwnProperty.call(sanitizedUpdates, 'codexAwsVolumeRoot')
+      ) {
+        delete sanitizedUpdates.codexAwsVolumeRoot;
       }
       
       console.log('SettingsService: Sanitized update keys:', Object.keys(sanitizedUpdates));

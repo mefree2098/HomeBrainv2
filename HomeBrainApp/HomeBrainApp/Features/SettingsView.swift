@@ -21,6 +21,7 @@ struct SettingsView: View {
 
     @State private var llmProvider = "openai"
     @State private var openaiModel = "gpt-5.2-codex"
+    @State private var codexModel = "gpt-5.4"
     @State private var anthropicModel = "claude-3-sonnet-20240229"
     @State private var localLlmEndpoint = "http://localhost:11434"
     @State private var localLlmModel = "llama2-7b"
@@ -37,9 +38,9 @@ struct SettingsView: View {
     @State private var elevenLabsApiKey = ""
     @State private var smartThingsToken = ""
 
-    @State private var llmPriority = "local,openai,anthropic"
+    @State private var llmPriority = "local,codex,openai,anthropic"
 
-    private let llmProviders = ["openai", "anthropic", "local"]
+    private let llmProviders = ["openai", "codex", "anthropic", "local"]
     private let sttProviders = ["openai", "local"]
 
     var body: some View {
@@ -136,6 +137,7 @@ struct SettingsView: View {
                         }
 
                         TextField("OpenAI Model", text: $openaiModel)
+                        TextField("Codex Model", text: $codexModel)
                         TextField("Anthropic Model", text: $anthropicModel)
                         TextField("Local LLM Endpoint", text: $localLlmEndpoint)
                             .textInputAutocapitalization(.never)
@@ -234,6 +236,7 @@ struct SettingsView: View {
 
             llmProvider = JSON.string(settings, "llmProvider", fallback: llmProvider)
             openaiModel = JSON.string(settings, "openaiModel", fallback: openaiModel)
+            codexModel = JSON.string(settings, "codexModel", fallback: codexModel)
             anthropicModel = JSON.string(settings, "anthropicModel", fallback: anthropicModel)
             localLlmEndpoint = JSON.string(settings, "localLlmEndpoint", fallback: localLlmEndpoint)
             localLlmModel = JSON.string(settings, "localLlmModel", fallback: localLlmModel)
@@ -276,6 +279,7 @@ struct SettingsView: View {
                 "autoDiscoveryEnabled": autoDiscoveryEnabled,
                 "llmProvider": llmProvider,
                 "openaiModel": openaiModel,
+                "codexModel": codexModel,
                 "anthropicModel": anthropicModel,
                 "localLlmEndpoint": localLlmEndpoint,
                 "localLlmModel": localLlmModel,

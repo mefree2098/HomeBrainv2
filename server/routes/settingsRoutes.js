@@ -2,10 +2,38 @@ const express = require('express');
 const router = express.Router();
 const settingsService = require('../services/settingsService');
 const { testOpenAIModelCompatibility } = require('../services/llmService');
+const {
+  completeCodexLogin,
+  getCodexAuthHealth,
+  getCodexModels
+} = require('../services/codexCliService');
 const { requireAdmin } = require('./middlewares/auth');
 
 // Create auth middleware instance
 const auth = requireAdmin();
+
+function buildCodexOverrides(source = {}) {
+  return {
+    codexPath: source.codexPath,
+    codexHome: source.codexHome,
+    codexHomeProfile: source.codexHomeProfile,
+    codexAwsVolumeRoot: source.codexAwsVolumeRoot,
+    codexModel: source.codexModel
+  };
+}
+
+function parseBooleanQuery(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+function getCodexOwnerId(req) {
+  return String(req.user?.email || req.user?._id || req.user?.id || 'unknown-admin');
+}
 
 /**
  * GET /api/settings
@@ -59,34 +87,6 @@ router.put('/', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update application settings',
-      error: error.message
-    });
-  }
-});
-
-/**
- * GET /api/settings/:key
- * Get specific setting value
- */
-router.get('/:key', auth, async (req, res) => {
-  try {
-    console.log(`GET /api/settings/${req.params.key} - Fetching specific setting`);
-    
-    const value = await settingsService.getSetting(req.params.key);
-    
-    console.log(`Successfully retrieved setting: ${req.params.key}`);
-    res.status(200).json({
-      success: true,
-      key: req.params.key,
-      value: value
-    });
-
-  } catch (error) {
-    console.error(`Error in GET /api/settings/${req.params.key}:`, error.message);
-    console.error('Full error:', error);
-    res.status(500).json({
-      success: false,
-      message: `Failed to fetch setting: ${req.params.key}`,
       error: error.message
     });
   }
@@ -440,6 +440,89 @@ router.post('/test-local-llm', auth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/settings/codex-models
+ * List available Codex models or start a pending ChatGPT login relay
+ */
+router.get('/codex-models', auth, async (req, res) => {
+  try {
+    console.log('GET /api/settings/codex-models - Fetching Codex models');
+
+    const settings = await settingsService.getSettings();
+    const response = await getCodexModels({
+      settings,
+      overrides: buildCodexOverrides(req.query || {}),
+      includeHidden: parseBooleanQuery(req.query?.includeHidden),
+      startLogin: parseBooleanQuery(req.query?.startLogin),
+      ownerId: getCodexOwnerId(req)
+    });
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error('Error in GET /api/settings/codex-models:', error.message);
+    console.error('Full error:', error);
+    res.status(400).json({
+      success: false,
+      message: 'Failed to fetch Codex models',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/settings/codex-auth-health
+ * Check Codex auth persistence and optionally probe model availability
+ */
+router.get('/codex-auth-health', auth, async (req, res) => {
+  try {
+    console.log('GET /api/settings/codex-auth-health - Checking Codex auth health');
+
+    const settings = await settingsService.getSettings();
+    const response = await getCodexAuthHealth({
+      settings,
+      overrides: buildCodexOverrides(req.query || {}),
+      includeModelProbe: parseBooleanQuery(req.query?.includeModelProbe)
+    });
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error('Error in GET /api/settings/codex-auth-health:', error.message);
+    console.error('Full error:', error);
+    res.status(400).json({
+      success: false,
+      message: 'Failed to check Codex auth health',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/settings/codex-login/complete
+ * Complete a pending Codex ChatGPT login by forwarding the pasted localhost callback URL
+ */
+router.post('/codex-login/complete', auth, async (req, res) => {
+  try {
+    console.log('POST /api/settings/codex-login/complete - Completing Codex login');
+
+    const { loginId, callbackUrl } = req.body || {};
+    const response = await completeCodexLogin({
+      ownerId: getCodexOwnerId(req),
+      loginId,
+      callbackUrl
+    });
+
+    res.status(response.success ? 200 : 400).json(response);
+  } catch (error) {
+    console.error('Error in POST /api/settings/codex-login/complete:', error.message);
+    console.error('Full error:', error);
+    res.status(400).json({
+      success: false,
+      message: 'Failed to complete Codex login',
+      error: error.message
+    });
+  }
+});
+
 // Description: Get LLM priority list
 // Endpoint: GET /api/settings/llm-priority
 // Request: {}
@@ -449,7 +532,7 @@ router.get('/llm-priority', auth, async (req, res) => {
     console.log('GET /api/settings/llm-priority - Fetching LLM priority list');
 
     const settings = await settingsService.getSettings();
-    const priorityList = settings.llmPriorityList || ['local', 'openai', 'anthropic'];
+    const priorityList = settings.llmPriorityList || ['local', 'codex', 'openai', 'anthropic'];
 
     console.log('Successfully retrieved LLM priority list:', priorityList);
     res.status(200).json({
@@ -487,7 +570,7 @@ router.put('/llm-priority', auth, async (req, res) => {
     }
 
     // Validate that all providers are valid
-    const validProviders = ['openai', 'anthropic', 'local'];
+    const validProviders = ['openai', 'anthropic', 'local', 'codex'];
     const invalidProviders = priorityList.filter(p => !validProviders.includes(p));
 
     if (invalidProviders.length > 0) {
@@ -515,6 +598,34 @@ router.put('/llm-priority', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update LLM priority list',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/settings/:key
+ * Get specific setting value
+ */
+router.get('/:key', auth, async (req, res) => {
+  try {
+    console.log(`GET /api/settings/${req.params.key} - Fetching specific setting`);
+
+    const value = await settingsService.getSetting(req.params.key);
+
+    console.log(`Successfully retrieved setting: ${req.params.key}`);
+    res.status(200).json({
+      success: true,
+      key: req.params.key,
+      value: value
+    });
+
+  } catch (error) {
+    console.error(`Error in GET /api/settings/${req.params.key}:`, error.message);
+    console.error('Full error:', error);
+    res.status(500).json({
+      success: false,
+      message: `Failed to fetch setting: ${req.params.key}`,
       error: error.message
     });
   }
