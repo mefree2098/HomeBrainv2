@@ -256,7 +256,7 @@ async function resolveCodexHomePath({
     addCandidate('/home/site/.codex');
   }
 
-  addCandidate(path.resolve(cwd, '.codex-home'));
+  addCandidate(resolveDefaultLocalCodexHome());
   addCandidate(path.join(os.tmpdir(), DEFAULT_TEMP_HOME_SLUG));
 
   let lastError = null;

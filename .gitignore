@@ -25,6 +25,7 @@ node_modules/
 package-lock.json
 uploads
 .codex-home/
+**/.codex-home/
 tmp/
 temp_ctranslate2/
 temp_openwakeword/
