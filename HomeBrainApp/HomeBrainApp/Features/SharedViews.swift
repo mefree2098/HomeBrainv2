@@ -71,6 +71,7 @@ enum HBPalette {
     static let accentBlue = dynamic(light: hex(0x46CFFF), dark: hex(0x4AE3FF))
     static let accentPurple = dynamic(light: hex(0x5A86FF), dark: hex(0x8F9BFF))
     static let accentGreen = dynamic(light: hex(0x22C98E), dark: hex(0x33E3AA))
+    static let accentYellow = dynamic(light: hex(0xFFD84A), dark: hex(0xFFE46B))
     static let accentOrange = dynamic(light: hex(0xFFB547), dark: hex(0xFFC764))
     static let accentRed = dynamic(light: hex(0xFF6E61), dark: hex(0xFF8B7F))
     static let accentSlate = dynamic(light: hex(0x5C7396), dark: hex(0x8193B2))
@@ -382,6 +383,34 @@ struct HBPrimaryButtonStyle: ButtonStyle {
                 in: Capsule()
             )
             .shadow(color: HBPalette.accentBlue.opacity(0.24), radius: 18, x: 0, y: 12)
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+    }
+}
+
+struct HBDestructiveButtonStyle: ButtonStyle {
+    var compact: Bool = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, compact ? 14 : 16)
+            .padding(.vertical, compact ? 10 : 12)
+            .frame(minHeight: compact ? 38 : 42)
+            .background(
+                LinearGradient(
+                    colors: [HBPalette.accentRed, Color.red.opacity(0.94)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: Capsule()
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+            )
+            .shadow(color: HBPalette.accentRed.opacity(0.34), radius: 18, x: 0, y: 12)
             .opacity(configuration.isPressed ? 0.92 : 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
     }

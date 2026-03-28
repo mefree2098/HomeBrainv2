@@ -92,11 +92,23 @@ enum JSON {
                 return parsed
             }
 
-            let fallback = DateFormatter()
-            fallback.locale = Locale(identifier: "en_US_POSIX")
-            fallback.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
-            if let parsed = fallback.date(from: stringValue) {
-                return parsed
+            let fallbackFormats = [
+                "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+                "yyyy-MM-dd'T'HH:mm:ss",
+                "yyyy-MM-dd'T'HH:mm",
+                "yyyy-MM-dd HH:mm:ss",
+                "yyyy-MM-dd HH:mm"
+            ]
+
+            for format in fallbackFormats {
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.dateFormat = format
+                formatter.timeZone = .current
+
+                if let parsed = formatter.date(from: stringValue) {
+                    return parsed
+                }
             }
         }
         return nil
