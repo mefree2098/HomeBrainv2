@@ -1,5 +1,8 @@
 import api from './api';
 
+const getApiErrorMessage = (error: any) =>
+  error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Request failed';
+
 // Description: Get application settings
 // Endpoint: GET /api/settings
 // Request: {}
@@ -183,7 +186,7 @@ export const getCodexModels = async (draft: CodexSettingsDraft = {}, options: { 
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+    throw new Error(getApiErrorMessage(error));
   }
 };
 
@@ -196,7 +199,7 @@ export const getCodexAuthHealth = async (draft: CodexSettingsDraft = {}, options
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+    throw new Error(getApiErrorMessage(error));
   }
 };
 
@@ -206,7 +209,7 @@ export const completeCodexLogin = async (payload: { loginId: string; callbackUrl
     return response.data;
   } catch (error) {
     console.error(error);
-    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+    throw new Error(getApiErrorMessage(error));
   }
 };
 

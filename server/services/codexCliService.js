@@ -12,7 +12,7 @@ try {
 }
 
 const DEFAULT_CODEX_MODEL = process.env.CODEX_DEFAULT_MODEL || 'gpt-5.4';
-const DEFAULT_CODEX_PATH = process.env.CODEX_PATH || 'codex';
+const DEFAULT_CODEX_PATH = process.env.CODEX_PATH || '';
 const DEFAULT_AWS_VOLUME_ROOT = '/mnt/efs';
 const DEFAULT_RPC_TIMEOUT_MS = Math.max(5_000, Number(process.env.CODEX_RPC_TIMEOUT_MS || 45_000));
 const DEFAULT_TURN_TIMEOUT_MS = Math.max(DEFAULT_RPC_TIMEOUT_MS, Number(process.env.CODEX_TURN_TIMEOUT_MS || 180_000));
@@ -23,6 +23,10 @@ const DEFAULT_CODEX_HOME_SLUG = 'homebrain';
 const DEFAULT_TEMP_HOME_SLUG = 'homebrain-codex-home';
 const LOGIN_CALLBACK_HINT = 'If login lands on localhost and fails, paste that full URL into Complete login.';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+const KNOWN_CODEX_BINARY_CANDIDATES = [
+  '/Applications/Codex.app/Contents/Resources/codex',
+  process.env.HOME ? path.join(process.env.HOME, 'Applications', 'Codex.app', 'Contents', 'Resources', 'codex') : ''
+].filter(Boolean);
 const DEFAULT_NOTIFICATION_OPTOUT = [
   'mcpServer/startupStatus/updated',
   'account/rateLimits/updated',
@@ -50,7 +54,7 @@ function sanitizeString(value) {
 function normalizeCodexHomeProfile(value) {
   const normalized = sanitizeString(value).toLowerCase();
   if (!normalized || !VALID_CODEX_HOME_PROFILES.has(normalized)) {
-    return 'auto';
+    return 'local';
   }
   return normalized;
 }
@@ -101,14 +105,54 @@ function isJavaScriptEntrypoint(targetPath) {
 
 function resolveBundledCodexEntrypoint() {
   try {
-    return require.resolve('@openai/codex/bin/codex.js');
+    const packageJsonPath = require.resolve('@openai/codex/package.json');
+    const packageDir = path.dirname(packageJsonPath);
+    const launcherPath = path.join(packageDir, 'bin', 'codex.js');
+
+    if (!fs.existsSync(launcherPath)) {
+      return null;
+    }
+
+    const platformPackageName = (() => {
+      if (process.platform === 'darwin' && process.arch === 'arm64') return '@openai/codex-darwin-arm64/package.json';
+      if (process.platform === 'darwin' && process.arch === 'x64') return '@openai/codex-darwin-x64/package.json';
+      if (process.platform === 'linux' && process.arch === 'arm64') return '@openai/codex-linux-arm64/package.json';
+      if (process.platform === 'linux' && process.arch === 'x64') return '@openai/codex-linux-x64/package.json';
+      if (process.platform === 'win32' && process.arch === 'arm64') return '@openai/codex-win32-arm64/package.json';
+      if (process.platform === 'win32' && process.arch === 'x64') return '@openai/codex-win32-x64/package.json';
+      return null;
+    })();
+
+    if (!platformPackageName) {
+      return null;
+    }
+
+    try {
+      require.resolve(platformPackageName);
+    } catch (error) {
+      return null;
+    }
+
+    return launcherPath;
   } catch (error) {
     return null;
   }
 }
 
+function resolveInstalledCodexBinary() {
+  const matchedPath = KNOWN_CODEX_BINARY_CANDIDATES.find((candidate) => {
+    try {
+      return fs.existsSync(candidate);
+    } catch (error) {
+      return false;
+    }
+  });
+
+  return matchedPath || null;
+}
+
 function resolveCodexLaunchSpec(configuredPath = '') {
-  const requestedPath = sanitizeString(configuredPath) || DEFAULT_CODEX_PATH;
+  const requestedPath = sanitizeString(configuredPath) || sanitizeString(DEFAULT_CODEX_PATH);
 
   if (isJavaScriptEntrypoint(requestedPath)) {
     return {
@@ -120,6 +164,16 @@ function resolveCodexLaunchSpec(configuredPath = '') {
   }
 
   if (!requestedPath || requestedPath === 'codex' || requestedPath === '@openai/codex') {
+    const installedBinary = resolveInstalledCodexBinary();
+    if (installedBinary) {
+      return {
+        command: installedBinary,
+        args: ['app-server', '--listen', 'stdio://'],
+        resolvedPath: installedBinary,
+        source: 'installed-app'
+      };
+    }
+
     const bundledEntrypoint = resolveBundledCodexEntrypoint();
     if (bundledEntrypoint) {
       return {
@@ -256,7 +310,7 @@ function createMethodNotFoundError(method) {
 
 function formatSpawnError(error) {
   if (error?.code === 'ENOENT') {
-    return 'Codex CLI executable not found. Install @openai/codex in the server package or set CODEX_PATH to a working codex binary/script.';
+    return 'Codex CLI executable not found. Install the Codex CLI on this machine, or set CODEX_PATH/codexPath to a working codex binary or script.';
   }
 
   return error?.message || 'Unable to start Codex CLI.';

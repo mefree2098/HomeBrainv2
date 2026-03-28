@@ -463,7 +463,7 @@ router.get('/codex-models', auth, async (req, res) => {
     console.error('Full error:', error);
     res.status(400).json({
       success: false,
-      message: 'Failed to fetch Codex models',
+      message: error.message || 'Failed to fetch Codex models',
       error: error.message
     });
   }
@@ -490,7 +490,7 @@ router.get('/codex-auth-health', auth, async (req, res) => {
     console.error('Full error:', error);
     res.status(400).json({
       success: false,
-      message: 'Failed to check Codex auth health',
+      message: error.message || 'Failed to check Codex auth health',
       error: error.message
     });
   }
@@ -517,7 +517,7 @@ router.post('/codex-login/complete', auth, async (req, res) => {
     console.error('Full error:', error);
     res.status(400).json({
       success: false,
-      message: 'Failed to complete Codex login',
+      message: error.message || 'Failed to complete Codex login',
       error: error.message
     });
   }
