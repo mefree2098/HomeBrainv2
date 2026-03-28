@@ -8,6 +8,7 @@ private struct DashboardTempestStationSnapshot {
     let temperatureF: Double?
     let feelsLikeF: Double?
     let humidityPct: Double?
+    let uvIndex: Double?
     let windAvgMph: Double?
     let windGustMph: Double?
     let windDirectionDeg: Double?
@@ -32,6 +33,7 @@ private struct DashboardTempestStationSnapshot {
             temperatureF: optionalNumber(metrics["temperatureF"]),
             feelsLikeF: optionalNumber(metrics["feelsLikeF"]),
             humidityPct: optionalNumber(metrics["humidityPct"]),
+            uvIndex: optionalNumber(metrics["uvIndex"]),
             windAvgMph: optionalNumber(metrics["windAvgMph"]),
             windGustMph: optionalNumber(metrics["windGustMph"]),
             windDirectionDeg: optionalNumber(metrics["windDirectionDeg"]),
@@ -71,6 +73,7 @@ private struct DashboardWeatherSnapshot {
     let highF: Double?
     let lowF: Double?
     let precipitationChance: Double?
+    let todayCondition: String
     let sunrise: String?
     let sunset: String?
     let tempest: DashboardTempestStationSnapshot?
@@ -101,6 +104,7 @@ private struct DashboardWeatherSnapshot {
             highF: Self.optionalNumber(today["highF"]),
             lowF: Self.optionalNumber(today["lowF"]),
             precipitationChance: Self.optionalNumber(today["precipitationChance"]),
+            todayCondition: JSON.string(today, "condition", fallback: JSON.string(current, "condition", fallback: "Unknown")),
             sunrise: JSON.optionalString(today, "sunrise"),
             sunset: JSON.optionalString(today, "sunset"),
             tempest: JSON.bool(tempest, "available") ? DashboardTempestStationSnapshot.from(tempest["station"]) : nil
@@ -124,6 +128,7 @@ private struct DashboardWeatherSnapshot {
             highF: 74,
             lowF: 49,
             precipitationChance: 20,
+            todayCondition: "Overcast",
             sunrise: "2026-03-23T07:01:00-06:00",
             sunset: "2026-03-23T19:14:00-06:00",
             tempest: nil
@@ -1369,10 +1374,10 @@ struct DashboardView: View {
                 Spacer()
 
                 HBBadge(
-                    text: securityStatus.capitalized,
-                    foreground: HBPalette.textPrimary,
-                    background: HBPalette.panelSoft.opacity(0.95),
-                    stroke: HBPalette.panelStrokeStrong
+                    text: securityStatusLabel,
+                    foreground: securityBadgeForeground,
+                    background: securityBadgeBackground,
+                    stroke: securityBadgeStroke
                 )
             }
 
@@ -1393,10 +1398,16 @@ struct DashboardView: View {
                 )
                 securitySummaryTile(
                     title: "Alarm State",
-                    value: securityStatus.capitalized,
-                    detail: securityStatus.lowercased() == "armed" ? "Residence is secured" : "System currently disarmed",
-                    accent: securityStatus.lowercased() == "armed" ? HBPalette.accentPurple : HBPalette.accentSlate,
-                    compact: compact
+                    value: securityStatusLabel,
+                    detail: securityStatusDetail,
+                    accent: securityStatusAccent,
+                    compact: compact,
+                    titleColor: securityStateTitleColor,
+                    valueColor: securityStateValueColor,
+                    detailColor: securityStateDetailColor,
+                    backgroundVariant: securityStateBackgroundVariant,
+                    backgroundTint: securityStateBackgroundTint,
+                    backgroundTintOpacity: securityStateBackgroundOpacity
                 )
             }
 
@@ -1415,7 +1426,7 @@ struct DashboardView: View {
                         .foregroundStyle(HBPalette.textSecondary)
                     Spacer()
                     Text(systemStatus)
-                        .foregroundStyle(HBPalette.accentGreen)
+                        .foregroundStyle(systemStatusAccent)
                         .fontWeight(.semibold)
                 }
             }
@@ -1443,24 +1454,32 @@ struct DashboardView: View {
         value: String,
         detail: String,
         accent: Color,
-        compact: Bool
+        compact: Bool,
+        titleColor: Color = HBPalette.textMuted,
+        valueColor: Color = HBPalette.textPrimary,
+        detailColor: Color = HBPalette.textSecondary,
+        backgroundVariant: HBGlassVariant = .panelSoft,
+        backgroundTint: Color = .clear,
+        backgroundTintOpacity: Double = 0
     ) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+        let shape = RoundedRectangle(cornerRadius: compact ? 16 : 18, style: .continuous)
+
+        return VStack(alignment: .leading, spacing: compact ? 4 : 6) {
             Text(title)
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .textCase(.uppercase)
                 .tracking(2.0)
-                .foregroundStyle(HBPalette.textMuted)
+                .foregroundStyle(titleColor)
 
             Text(value)
                 .font(.system(size: compact ? 24 : 28, weight: .bold, design: .rounded))
-                .foregroundStyle(HBPalette.textPrimary)
+                .foregroundStyle(valueColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
             Text(detail)
                 .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
-                .foregroundStyle(HBPalette.textSecondary)
+                .foregroundStyle(detailColor)
                 .lineLimit(2)
 
             Capsule()
@@ -1469,16 +1488,199 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(compact ? 12 : 14)
-        .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
-        .overlay(
-            RoundedRectangle(cornerRadius: compact ? 16 : 18, style: .continuous)
-                .stroke(accent.opacity(0.22), lineWidth: 1)
+        .background(
+            ZStack {
+                HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: backgroundVariant)
+                shape
+                    .fill(backgroundTint.opacity(backgroundTintOpacity))
+            }
         )
+        .overlay(
+            shape
+                .stroke(accent.opacity(backgroundTintOpacity > 0 ? 0.72 : 0.22), lineWidth: backgroundTintOpacity > 0 ? 1.4 : 1)
+        )
+    }
+
+    private var securityAlarmStateKey: String {
+        securityStatus
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+    }
+
+    private var isSecurityStayArmed: Bool {
+        securityAlarmStateKey == "armedstay" || securityAlarmStateKey == "armedhome"
+    }
+
+    private var isSecurityAwayArmed: Bool {
+        securityAlarmStateKey == "armedaway"
+    }
+
+    private var isSecurityArmed: Bool {
+        isSecurityStayArmed || isSecurityAwayArmed
+    }
+
+    private var isSecurityTriggered: Bool {
+        securityAlarmStateKey == "triggered"
+    }
+
+    private var securityStatusLabel: String {
+        switch securityAlarmStateKey {
+        case "disarmed":
+            return "Disarmed"
+        case "armedstay", "armedhome":
+            return "Armed Stay"
+        case "armedaway":
+            return "Armed Away"
+        case "triggered":
+            return "Triggered"
+        case "arming":
+            return "Arming"
+        case "disarming":
+            return "Disarming"
+        default:
+            let trimmed = securityStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "Unknown" : trimmed
+        }
+    }
+
+    private var securityStatusDetail: String {
+        switch securityAlarmStateKey {
+        case "armedstay", "armedhome":
+            return "Home perimeter mode is active"
+        case "armedaway":
+            return "Away mode is active"
+        case "triggered":
+            return "Immediate attention required"
+        case "arming":
+            return "System is arming"
+        case "disarming":
+            return "System is disarming"
+        default:
+            return "System currently disarmed"
+        }
+    }
+
+    private var securityStatusAccent: Color {
+        switch securityAlarmStateKey {
+        case "armedstay", "armedhome":
+            return HBPalette.accentYellow
+        case "armedaway", "triggered":
+            return HBPalette.accentRed
+        default:
+            return HBPalette.accentSlate
+        }
+    }
+
+    private var securityBadgeForeground: Color {
+        if isSecurityAwayArmed || isSecurityTriggered {
+            return .white
+        }
+        if isSecurityStayArmed {
+            return Color.black.opacity(0.82)
+        }
+        return HBPalette.textPrimary
+    }
+
+    private var securityBadgeBackground: Color {
+        if isSecurityStayArmed {
+            return HBPalette.accentYellow.opacity(0.96)
+        }
+        if isSecurityAwayArmed || isSecurityTriggered {
+            return HBPalette.accentRed.opacity(0.96)
+        }
+        return HBPalette.panelSoft.opacity(0.95)
+    }
+
+    private var securityBadgeStroke: Color {
+        if isSecurityArmed || isSecurityTriggered {
+            return securityStatusAccent
+        }
+        return HBPalette.panelStrokeStrong
+    }
+
+    private var securityStateTitleColor: Color {
+        if isSecurityAwayArmed || isSecurityTriggered {
+            return Color.white.opacity(0.84)
+        }
+        if isSecurityStayArmed {
+            return Color.black.opacity(0.72)
+        }
+        return HBPalette.textMuted
+    }
+
+    private var securityStateValueColor: Color {
+        if isSecurityAwayArmed || isSecurityTriggered {
+            return .white
+        }
+        if isSecurityStayArmed {
+            return Color.black.opacity(0.86)
+        }
+        return HBPalette.textPrimary
+    }
+
+    private var securityStateDetailColor: Color {
+        if isSecurityAwayArmed || isSecurityTriggered {
+            return Color.white.opacity(0.92)
+        }
+        if isSecurityStayArmed {
+            return Color.black.opacity(0.76)
+        }
+        return HBPalette.textSecondary
+    }
+
+    private var securityStateBackgroundVariant: HBGlassVariant {
+        isSecurityArmed || isSecurityTriggered ? .panelStrong : .panelSoft
+    }
+
+    private var securityStateBackgroundTint: Color {
+        if isSecurityStayArmed {
+            return HBPalette.accentYellow
+        }
+        if isSecurityAwayArmed || isSecurityTriggered {
+            return HBPalette.accentRed
+        }
+        return .clear
+    }
+
+    private var securityStateBackgroundOpacity: Double {
+        if isSecurityStayArmed {
+            return 0.5
+        }
+        if isSecurityAwayArmed {
+            return 0.58
+        }
+        if isSecurityTriggered {
+            return 0.62
+        }
+        return 0
+    }
+
+    private var systemStatusAccent: Color {
+        systemStatus.lowercased() == "online" ? HBPalette.accentGreen : HBPalette.accentOrange
     }
 
     private func securityPrimaryActions(compact: Bool, stacked: Bool) -> some View {
         Group {
-            if stacked {
+            if isSecurityTriggered {
+                Button {
+                    Task { await dismissSecurityAlarm() }
+                } label: {
+                    Label("Dismiss Alarm", systemImage: "exclamationmark.triangle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBSecondaryButtonStyle(compact: compact))
+            } else if isSecurityArmed {
+                Button {
+                    Task { await disarmSecurity() }
+                } label: {
+                    Label("Disarm", systemImage: "shield.slash")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBDestructiveButtonStyle(compact: compact))
+            } else if stacked {
                 VStack(spacing: 8) {
                     Button {
                         Task { await armSecurity(stay: true) }
@@ -1567,17 +1769,23 @@ struct DashboardView: View {
                     Spacer(minLength: 10)
 
                     VStack(alignment: .trailing, spacing: 10) {
-                        Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
-                            .font(.system(size: compact ? 28 : 34, weight: .semibold))
-                            .foregroundStyle(
-                                LinearGradient(
-                                    colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
+                        HStack(alignment: .center, spacing: 10) {
+                            if let tempest = snapshot.tempest {
+                                weatherUVIndicator(value: formattedUV(tempest.uvIndex), compact: compact)
+                            }
+
+                            Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
+                                .font(.system(size: compact ? 28 : 34, weight: .semibold))
+                                .foregroundStyle(
+                                    LinearGradient(
+                                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
                                 )
-                            )
-                            .frame(width: compact ? 50 : 58, height: compact ? 50 : 58)
-                            .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+                                .frame(width: compact ? 50 : 58, height: compact ? 50 : 58)
+                                .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+                        }
 
                         HBBadge(
                             text: snapshot.sourceLabel,
@@ -1607,32 +1815,64 @@ struct DashboardView: View {
                     return Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
                 }()
 
-                LazyVGrid(columns: metricColumns, spacing: 10) {
-                    weatherMetricTile(title: "Today", value: "\(formattedTemperature(snapshot.highF)) / \(formattedTemperature(snapshot.lowF))", detail: "High / low band", accent: HBPalette.accentBlue)
-                    weatherMetricTile(title: "Humidity", value: formattedPercent(snapshot.displayHumidityPct), detail: snapshot.tempest == nil ? "Current moisture" : "Now-cast station humidity", accent: HBPalette.accentGreen)
-                    weatherMetricTile(
-                        title: "Wind",
-                        value: formattedWind(snapshot.displayWindMph),
-                        detail: snapshot.tempest.map { "Gusts \(formattedWind($0.windGustMph)) from \(compassDirection($0.windDirectionDeg))" } ?? "Surface speed",
-                        accent: HBPalette.accentPurple
-                    )
-                    weatherMetricTile(
-                        title: snapshot.tempest == nil ? "Rain Chance" : "Rainfall",
-                        value: snapshot.tempest == nil ? formattedPercent(snapshot.precipitationChance) : formattedRain(snapshot.tempest?.rainTodayIn),
-                        detail: snapshot.tempest.map { "Rate \(formattedRain($0.rainRateInPerHr))/hr" } ?? (snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precip"),
-                        accent: HBPalette.accentOrange
-                    )
+                if let tempest = snapshot.tempest {
+                    let tempestColumns: [GridItem] = condensed
+                        ? [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+                        : Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+
+                    LazyVGrid(columns: tempestColumns, spacing: 10) {
+                        weatherLiveMetricTile(
+                            title: "Live Wind",
+                            value: formattedWind(tempest.windAvgMph),
+                            detail: "Gust \(formattedWind(tempest.windGustMph))",
+                            accent: HBPalette.accentBlue,
+                            iconSystemName: "wind",
+                            iconColor: HBPalette.accentBlue,
+                            backgroundTint: HBPalette.heroCore,
+                            backgroundOpacity: 0.22
+                        )
+
+                        weatherLiveMetricTile(
+                            title: "Rainfall",
+                            value: formattedRain(tempest.rainTodayIn),
+                            detail: "Rate \(formattedRain(tempest.rainRateInPerHr))/hr",
+                            accent: HBPalette.panelStrokeStrong,
+                            iconSystemName: "drop",
+                            iconColor: HBPalette.accentBlue
+                        )
+
+                        if !compact {
+                            weatherLiveMetricTile(
+                                title: "Pressure",
+                                value: formattedPressure(tempest.pressureInHg),
+                                detail: formattedPressureTrend(tempest.pressureTrend),
+                                accent: HBPalette.panelStrokeStrong,
+                                iconSystemName: "gauge",
+                                iconColor: HBPalette.accentGreen
+                            )
+
+                            weatherLiveMetricTile(
+                                title: "Station",
+                                value: tempest.name,
+                                detail: tempest.websocketConnected ? "WebSocket live" : "Recent snapshot",
+                                accent: HBPalette.panelStrokeStrong,
+                                iconSystemName: "waveform.path.ecg",
+                                iconColor: HBPalette.accentPurple
+                            )
+                        }
+                    }
                 }
 
-                if !compact {
-                    let solarColumns = widget.size == .full
-                        ? [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-                        : [GridItem(.flexible(), spacing: 10)]
-
-                    LazyVGrid(columns: solarColumns, spacing: 10) {
-                        weatherDetailRow(title: "Sunrise", value: formattedWeatherTime(snapshot.sunrise), systemImage: "sunrise.fill")
-                        weatherDetailRow(title: "Sunset", value: formattedWeatherTime(snapshot.sunset), systemImage: "sunset.fill")
-                    }
+                LazyVGrid(columns: metricColumns, spacing: 10) {
+                    weatherMetricTile(title: "Today", value: "\(formattedTemperature(snapshot.highF)) / \(formattedTemperature(snapshot.lowF))", detail: snapshot.todayCondition, accent: HBPalette.accentBlue)
+                    weatherMetricTile(title: "Humidity", value: formattedPercent(snapshot.humidity), detail: "Indoor comfort check", accent: HBPalette.accentGreen)
+                    weatherSunCycleTile(sunrise: snapshot.sunrise, sunset: snapshot.sunset, accent: HBPalette.accentPurple)
+                    weatherMetricTile(
+                        title: "Rain Chance",
+                        value: formattedPercent(snapshot.precipitationChance),
+                        detail: snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precipitation feed",
+                        accent: HBPalette.accentOrange
+                    )
                 }
             } else if locationManager.isRequesting && widget.settings.weatherLocationMode == .auto {
                 EmptyStateView(
@@ -1712,14 +1952,127 @@ struct DashboardView: View {
         )
     }
 
-    private func weatherDetailRow(title: String, value: String, systemImage: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(HBPalette.accentOrange)
-                .frame(width: 34, height: 34)
-                .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+    private func weatherSunCycleTile(sunrise: String?, sunset: String?, accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                Text("Sun Cycle")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2.0)
+                    .foregroundStyle(HBPalette.textMuted)
 
+                Spacer(minLength: 8)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "sunrise")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(HBPalette.accentYellow)
+                    Image(systemName: "sunset")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(HBPalette.accentOrange)
+                }
+            }
+
+            weatherSunCycleRow(label: "Sunrise", value: formattedWeatherTime(sunrise))
+            weatherSunCycleRow(label: "Sunset", value: formattedWeatherTime(sunset))
+
+            Capsule()
+                .fill(accent)
+                .frame(width: 42, height: 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(accent.opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    private func weatherSunCycleRow(label: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+
+            Spacer()
+
+            Text(value)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+        }
+    }
+
+    private func weatherLiveMetricTile(
+        title: String,
+        value: String,
+        detail: String,
+        accent: Color,
+        iconSystemName: String,
+        iconColor: Color,
+        backgroundTint: Color = .clear,
+        backgroundOpacity: Double = 0
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                Text(title)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2.0)
+                    .foregroundStyle(HBPalette.textMuted)
+
+                Spacer(minLength: 8)
+
+                Image(systemName: iconSystemName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(iconColor)
+            }
+
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            Text(detail)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            ZStack {
+                HBGlassBackground(cornerRadius: 16, variant: .panelSoft)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(backgroundTint.opacity(backgroundOpacity))
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(accent.opacity(backgroundOpacity > 0 ? 0.3 : 0.2), lineWidth: 1)
+        )
+    }
+
+    private func weatherUVIndicator(value: String, compact: Bool) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text("UV")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(1.8)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text(value)
+                .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+        }
+        .padding(.horizontal, compact ? 10 : 12)
+        .padding(.vertical, compact ? 8 : 10)
+        .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
+    }
+
+    private func weatherDetailRow(title: String, value: String, systemImage: String, iconColor: Color) -> some View {
+        HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -1732,6 +2085,10 @@ struct DashboardView: View {
             }
 
             Spacer()
+
+            Image(systemName: systemImage)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(iconColor)
         }
         .padding(12)
         .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
@@ -1776,6 +2133,21 @@ struct DashboardView: View {
         return String(format: "%.2f in", value)
     }
 
+    private func formattedPressure(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return String(format: "%.2f inHg", value)
+    }
+
+    private func formattedUV(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return String(format: "%.1f", value)
+    }
+
+    private func formattedPressureTrend(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Steady" : trimmed.capitalized
+    }
+
     private func compassDirection(_ value: Double?) -> String {
         guard let value else { return "--" }
         let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
@@ -1784,14 +2156,11 @@ struct DashboardView: View {
     }
 
     private func formattedWeatherTime(_ value: String?) -> String {
-        guard let value else { return "--" }
-
-        let isoFormatter = ISO8601DateFormatter()
-        if let date = isoFormatter.date(from: value) {
+        if let date = JSON.date(from: value) {
             return DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)
         }
 
-        return value
+        return "--"
     }
 
     private var quickScenePanel: some View {
@@ -2787,14 +3156,19 @@ struct DashboardView: View {
         let securityObject = JSON.object(response)
         let statusObject = JSON.object(securityObject["status"])
         let alarmState = JSON.string(statusObject, "alarmState", fallback: "Unknown")
-        let zoneObjects = JSON.array(statusObject["zones"]).map { JSON.object($0) }
-        let activeZones = zoneObjects.filter { JSON.bool($0, "active") }.count
-        let totalZones = zoneObjects.count
+        let zoneObjects = JSON.array(statusObject["zones"])
+        let totalZones = JSON.int(statusObject, "zoneCount", fallback: zoneObjects.count)
+        let activeZones = JSON.int(
+            statusObject,
+            "activeZones",
+            fallback: zoneObjects.filter { JSON.bool($0, "active") }.count
+        )
+        let isOnline = JSON.bool(statusObject, "isOnline", fallback: true)
 
         securityStatus = alarmState
         securityZonesActive = activeZones
         securityZonesTotal = totalZones
-        systemStatus = alarmState.lowercased() == "error" ? "Degraded" : "Online"
+        systemStatus = isOnline ? "Online" : "Offline"
     }
 
     private func refreshSecurityStatus() async {
@@ -3107,14 +3481,46 @@ struct DashboardView: View {
 
     private func armSecurity(stay: Bool) async {
         if previewMode {
-            securityStatus = stay ? "Armed Stay" : "Armed Away"
+            securityStatus = stay ? "armedStay" : "armedAway"
             systemStatus = "Online"
             return
         }
 
         do {
-            let endpoint = stay ? "/api/security-alarm/sthm/arm-stay" : "/api/security-alarm/sthm/arm-away"
-            _ = try await session.apiClient.post(endpoint, body: [:])
+            _ = try await session.apiClient.post(
+                "/api/security-alarm/arm",
+                body: ["mode": stay ? "stay" : "away"]
+            )
+            await refreshSecurityStatus()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func disarmSecurity() async {
+        if previewMode {
+            securityStatus = "disarmed"
+            systemStatus = "Online"
+            return
+        }
+
+        do {
+            _ = try await session.apiClient.post("/api/security-alarm/disarm", body: [:])
+            await refreshSecurityStatus()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func dismissSecurityAlarm() async {
+        if previewMode {
+            securityStatus = "disarmed"
+            systemStatus = "Online"
+            return
+        }
+
+        do {
+            _ = try await session.apiClient.post("/api/security-alarm/dismiss", body: [:])
             await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription
@@ -3128,7 +3534,7 @@ struct DashboardView: View {
         }
 
         do {
-            _ = try await session.apiClient.post("/api/security-alarm/sync-state", body: [:])
+            _ = try await session.apiClient.post("/api/security-alarm/sync", body: [:])
             await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription

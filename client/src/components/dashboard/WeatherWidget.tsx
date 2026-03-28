@@ -41,6 +41,7 @@ const formatPercent = (value: number | null) => value === null ? "--" : `${Math.
 const formatWind = (value: number | null) => value === null ? "--" : `${Math.round(value)} mph`
 const formatRain = (value: number | null) => value === null ? "--" : `${value.toFixed(2)} in`
 const formatPressure = (value: number | null) => value === null ? "--" : `${value.toFixed(2)} inHg`
+const formatUv = (value: number | null | undefined) => value == null ? "--" : value.toFixed(1)
 
 const formatSunTime = (value: string | null) => {
   if (!value) {
@@ -196,6 +197,13 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
           </div>
 
           <div className={cn("flex items-center gap-3", condensed ? "justify-between" : "justify-end")}>
+            {tempestStation ? (
+              <div className="rounded-[1.2rem] border border-white/15 bg-white/10 px-3 py-2 text-right">
+                <p className="section-kicker">UV</p>
+                <p className="mt-1 text-lg font-semibold text-foreground">{formatUv(tempestStation.metrics.uvIndex)}</p>
+              </div>
+            ) : null}
+
             <div className="rounded-[1.2rem] border border-white/15 bg-white/10 p-3 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
               <WeatherGlyph icon={weather.current.icon} isDay={weather.current.isDay} className="h-8 w-8" />
             </div>
@@ -271,12 +279,25 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
           </div>
 
           <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="section-kicker">Wind</p>
-              <Wind className="h-4 w-4 text-muted-foreground" />
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="section-kicker">Sun Cycle</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Sunrise className="h-4 w-4 text-amber-400" />
+                <Sunset className="h-4 w-4 text-orange-400" />
+              </div>
             </div>
-            <p className="mt-2 text-lg font-semibold text-foreground">{formatWind(weather.current.windSpeedMph)}</p>
-            <p className="mt-1 text-sm text-muted-foreground">Current gust band</p>
+            <div className="mt-2 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm text-muted-foreground">Sunrise</span>
+                <span className="text-base font-semibold text-foreground">{formatSunTime(weather.today.sunrise)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm text-muted-foreground">Sunset</span>
+                <span className="text-base font-semibold text-foreground">{formatSunTime(weather.today.sunset)}</span>
+              </div>
+            </div>
           </div>
 
           <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
@@ -287,26 +308,6 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             </p>
           </div>
         </div>
-
-        {!compact ? (
-          <div className={cn("grid gap-3", size === "full" ? "lg:grid-cols-2" : "grid-cols-1")}>
-            <div className="flex items-center justify-between rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-              <div>
-                <p className="section-kicker">Sunrise</p>
-                <p className="mt-2 text-base font-semibold text-foreground">{formatSunTime(weather.today.sunrise)}</p>
-              </div>
-              <Sunrise className="h-5 w-5 text-amber-400" />
-            </div>
-
-            <div className="flex items-center justify-between rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-              <div>
-                <p className="section-kicker">Sunset</p>
-                <p className="mt-2 text-base font-semibold text-foreground">{formatSunTime(weather.today.sunset)}</p>
-              </div>
-              <Sunset className="h-5 w-5 text-orange-400" />
-            </div>
-          </div>
-        ) : null}
 
         {error ? (
           <p className="text-xs text-amber-500">{error}</p>
