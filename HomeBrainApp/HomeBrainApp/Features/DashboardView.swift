@@ -251,9 +251,16 @@ struct DashboardView: View {
     }
 
     private enum DashboardWeatherInfoTopic: Equatable {
-        case aqi(Double?)
-        case uv(Double?)
-        case pressure(value: Double?, trend: String)
+        case aqi(widgetID: String, value: Double?)
+        case uv(widgetID: String, value: Double?)
+        case liveWind(widgetID: String, speed: Double?, gust: Double?, direction: Double?)
+        case rainfall(widgetID: String, total: Double?, rate: Double?)
+        case pressure(widgetID: String, value: Double?, trend: String)
+        case station(widgetID: String, name: String, room: String, websocketConnected: Bool)
+        case today(widgetID: String, high: Double?, low: Double?, condition: String)
+        case humidity(widgetID: String, value: Double?)
+        case sunCycle(widgetID: String, sunrise: String?, sunset: String?)
+        case rainChance(widgetID: String, chance: Double?, precipitationNow: Double?)
     }
 
     private struct DashboardWidgetRow: Identifiable {
@@ -1815,12 +1822,18 @@ struct DashboardView: View {
 
                     VStack(alignment: .trailing, spacing: 10) {
                         HStack(alignment: .center, spacing: 10) {
-                            weatherInfoPopoverTrigger(topic: .aqi(snapshot.airQualityIndex)) {
+                            weatherInfoPopoverTrigger(
+                                topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
+                                arrowEdge: .top
+                            ) {
                                 weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
                             }
 
                             if let tempest = snapshot.tempest {
-                                weatherInfoPopoverTrigger(topic: .uv(tempest.uvIndex)) {
+                                weatherInfoPopoverTrigger(
+                                    topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
+                                    arrowEdge: .top
+                                ) {
                                     weatherUVIndicator(value: tempest.uvIndex, compact: compact)
                                 }
                             }
@@ -1872,28 +1885,51 @@ struct DashboardView: View {
                         : Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
 
                     LazyVGrid(columns: tempestColumns, spacing: 10) {
-                        weatherLiveMetricTile(
-                            title: "Live Wind",
-                            value: formattedWind(tempest.windAvgMph),
-                            detail: formattedLiveWindDetail(gust: tempest.windGustMph, direction: tempest.windDirectionDeg),
-                            accent: HBPalette.accentBlue,
-                            iconSystemName: "wind",
-                            iconColor: HBPalette.accentBlue,
-                            backgroundTint: HBPalette.heroCore,
-                            backgroundOpacity: 0.22
-                        )
+                        weatherInfoPopoverTrigger(
+                            topic: .liveWind(
+                                widgetID: widget.id,
+                                speed: tempest.windAvgMph,
+                                gust: tempest.windGustMph,
+                                direction: tempest.windDirectionDeg
+                            )
+                        ) {
+                            weatherLiveMetricTile(
+                                title: "Live Wind",
+                                value: formattedWind(tempest.windAvgMph),
+                                detail: formattedLiveWindDetail(gust: tempest.windGustMph, direction: tempest.windDirectionDeg),
+                                accent: HBPalette.accentBlue,
+                                iconSystemName: "wind",
+                                iconColor: HBPalette.accentBlue,
+                                backgroundTint: HBPalette.heroCore,
+                                backgroundOpacity: 0.22
+                            )
+                        }
 
-                        weatherLiveMetricTile(
-                            title: "Rainfall",
-                            value: formattedRain(tempest.rainTodayIn),
-                            detail: "Rate \(formattedRain(tempest.rainRateInPerHr))/hr",
-                            accent: HBPalette.panelStrokeStrong,
-                            iconSystemName: "drop",
-                            iconColor: HBPalette.accentBlue
-                        )
+                        weatherInfoPopoverTrigger(
+                            topic: .rainfall(
+                                widgetID: widget.id,
+                                total: tempest.rainTodayIn,
+                                rate: tempest.rainRateInPerHr
+                            )
+                        ) {
+                            weatherLiveMetricTile(
+                                title: "Rainfall",
+                                value: formattedRain(tempest.rainTodayIn),
+                                detail: "Rate \(formattedRain(tempest.rainRateInPerHr))/hr",
+                                accent: HBPalette.panelStrokeStrong,
+                                iconSystemName: "drop",
+                                iconColor: HBPalette.accentBlue
+                            )
+                        }
 
                         if !compact {
-                            weatherInfoPopoverTrigger(topic: .pressure(value: tempest.pressureInHg, trend: tempestsPressureTrend(tempest.pressureTrend))) {
+                            weatherInfoPopoverTrigger(
+                                topic: .pressure(
+                                    widgetID: widget.id,
+                                    value: tempest.pressureInHg,
+                                    trend: tempestsPressureTrend(tempest.pressureTrend)
+                                )
+                            ) {
                                 weatherLiveMetricTile(
                                     title: "Pressure",
                                     value: formattedPressure(tempest.pressureInHg),
@@ -1904,28 +1940,74 @@ struct DashboardView: View {
                                 )
                             }
 
-                            weatherLiveMetricTile(
-                                title: "Station",
-                                value: tempest.name,
-                                detail: tempest.websocketConnected ? "WebSocket live" : "Recent snapshot",
-                                accent: HBPalette.panelStrokeStrong,
-                                iconSystemName: "waveform.path.ecg",
-                                iconColor: HBPalette.accentPurple
-                            )
+                            weatherInfoPopoverTrigger(
+                                topic: .station(
+                                    widgetID: widget.id,
+                                    name: tempest.name,
+                                    room: tempest.room,
+                                    websocketConnected: tempest.websocketConnected
+                                )
+                            ) {
+                                weatherLiveMetricTile(
+                                    title: "Station",
+                                    value: tempest.name,
+                                    detail: tempest.websocketConnected ? "WebSocket live" : "Recent snapshot",
+                                    accent: HBPalette.panelStrokeStrong,
+                                    iconSystemName: "waveform.path.ecg",
+                                    iconColor: HBPalette.accentPurple
+                                )
+                            }
                         }
                     }
                 }
 
                 LazyVGrid(columns: metricColumns, spacing: 10) {
-                    weatherMetricTile(title: "Today", value: "\(formattedTemperature(snapshot.highF)) / \(formattedTemperature(snapshot.lowF))", detail: snapshot.todayCondition, accent: HBPalette.accentBlue)
-                    weatherMetricTile(title: "Humidity", value: formattedPercent(snapshot.humidity), detail: "Indoor comfort check", accent: HBPalette.accentGreen)
-                    weatherSunCycleTile(sunrise: snapshot.sunrise, sunset: snapshot.sunset, accent: HBPalette.accentPurple)
-                    weatherMetricTile(
-                        title: "Rain Chance",
-                        value: formattedPercent(snapshot.precipitationChance),
-                        detail: snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precipitation feed",
-                        accent: HBPalette.accentOrange
-                    )
+                    weatherInfoPopoverTrigger(
+                        topic: .today(
+                            widgetID: widget.id,
+                            high: snapshot.highF,
+                            low: snapshot.lowF,
+                            condition: snapshot.todayCondition
+                        )
+                    ) {
+                        weatherMetricTile(
+                            title: "Today",
+                            value: "\(formattedTemperature(snapshot.highF)) / \(formattedTemperature(snapshot.lowF))",
+                            detail: snapshot.todayCondition,
+                            accent: HBPalette.accentBlue
+                        )
+                    }
+                    weatherInfoPopoverTrigger(topic: .humidity(widgetID: widget.id, value: snapshot.humidity)) {
+                        weatherMetricTile(
+                            title: "Humidity",
+                            value: formattedPercent(snapshot.humidity),
+                            detail: "Indoor comfort check",
+                            accent: HBPalette.accentGreen
+                        )
+                    }
+                    weatherInfoPopoverTrigger(
+                        topic: .sunCycle(
+                            widgetID: widget.id,
+                            sunrise: snapshot.sunrise,
+                            sunset: snapshot.sunset
+                        )
+                    ) {
+                        weatherSunCycleTile(sunrise: snapshot.sunrise, sunset: snapshot.sunset, accent: HBPalette.accentPurple)
+                    }
+                    weatherInfoPopoverTrigger(
+                        topic: .rainChance(
+                            widgetID: widget.id,
+                            chance: snapshot.precipitationChance,
+                            precipitationNow: snapshot.precipitationIn
+                        )
+                    ) {
+                        weatherMetricTile(
+                            title: "Rain Chance",
+                            value: formattedPercent(snapshot.precipitationChance),
+                            detail: snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precipitation feed",
+                            accent: HBPalette.accentOrange
+                        )
+                    }
                 }
             } else if locationManager.isRequesting && widget.settings.weatherLocationMode == .auto {
                 EmptyStateView(
@@ -2167,6 +2249,7 @@ struct DashboardView: View {
 
     private func weatherInfoPopoverTrigger<Content: View>(
         topic: DashboardWeatherInfoTopic,
+        arrowEdge: Edge = .bottom,
         @ViewBuilder content: () -> Content
     ) -> some View {
         let isPresented = Binding(
@@ -2186,7 +2269,7 @@ struct DashboardView: View {
             content()
         }
         .buttonStyle(.plain)
-        .popover(isPresented: isPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+        .popover(isPresented: isPresented, attachmentAnchor: .rect(.bounds), arrowEdge: arrowEdge) {
             weatherInfoPopoverCard(for: topic)
                 .presentationCompactAdaptation(.popover)
         }
@@ -2195,7 +2278,7 @@ struct DashboardView: View {
     private func weatherInfoPopoverCard(for topic: DashboardWeatherInfoTopic) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             switch topic {
-            case let .aqi(value):
+            case let .aqi(_, value):
                 weatherInfoSectionTitle(
                     title: "AQI",
                     summary: "Current \(formattedAQI(value)) • \(formattedAQIMeaning(value))"
@@ -2206,7 +2289,7 @@ struct DashboardView: View {
                 Text("AQI shows how current air pollution may affect breathing comfort outdoors.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
-            case let .uv(value):
+            case let .uv(_, value):
                 weatherInfoSectionTitle(
                     title: "UV",
                     summary: "Current \(formattedUV(value)) • \(formattedUVMeaning(value))"
@@ -2217,7 +2300,29 @@ struct DashboardView: View {
                 Text("Higher UV means faster sun exposure risk and stronger need for shade or sunscreen.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
-            case let .pressure(value, trend):
+            case let .liveWind(_, speed, gust, direction):
+                weatherInfoSectionTitle(
+                    title: "Live Wind",
+                    summary: "Current \(formattedWind(speed)) • \(formattedLiveWindDetail(gust: gust, direction: direction))"
+                )
+                weatherInfoValueRow(label: "Average", value: formattedWind(speed), color: HBPalette.accentBlue)
+                weatherInfoValueRow(label: "Direction", value: compassDirection(direction), color: HBPalette.textPrimary)
+                weatherInfoValueRow(label: "Gust", value: formattedWind(gust), color: HBPalette.accentBlue)
+                Text("Direction shows where the wind is coming from, and gust shows the strongest recent burst measured by the Tempest station.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .rainfall(_, total, rate):
+                weatherInfoSectionTitle(
+                    title: "Rainfall",
+                    summary: "Today \(formattedRain(total)) • Rate \(formattedRain(rate))/hr"
+                )
+                weatherInfoValueRow(label: "Today", value: formattedRain(total), color: HBPalette.accentBlue)
+                weatherInfoValueRow(label: "Current Rate", value: "\(formattedRain(rate))/hr", color: HBPalette.accentBlue)
+                weatherInfoValueRow(label: "Meaning", value: formattedRainIntensityMeaning(rate), color: HBPalette.textPrimary)
+                Text("Today's rainfall is total accumulation. Rate shows how quickly rain is falling right now.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .pressure(_, value, trend):
                 weatherInfoSectionTitle(
                     title: "Pressure",
                     summary: "Current \(formattedPressure(value)) • \(trend)"
@@ -2226,6 +2331,61 @@ struct DashboardView: View {
                 weatherInfoRangeRow(range: "29.8-30.2 inHg", label: "Typical band", color: HBPalette.accentYellow)
                 weatherInfoRangeRow(range: "Below 29.8 inHg", label: "Often unsettled", color: HBPalette.accentRed)
                 Text("Current band: \(formattedPressureBand(value)). Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .station(_, name, room, websocketConnected):
+                weatherInfoSectionTitle(
+                    title: "Station",
+                    summary: "\(name) • \(websocketConnected ? "WebSocket live" : "Recent snapshot")"
+                )
+                weatherInfoValueRow(label: "Feed", value: websocketConnected ? "WebSocket live" : "Snapshot only", color: websocketConnected ? HBPalette.accentGreen : HBPalette.accentYellow)
+                weatherInfoValueRow(label: "Station", value: name, color: HBPalette.textPrimary)
+                weatherInfoValueRow(label: "Room", value: room, color: HBPalette.textPrimary)
+                Text("Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .today(_, high, low, condition):
+                weatherInfoSectionTitle(
+                    title: "Today",
+                    summary: "\(formattedTemperature(high)) / \(formattedTemperature(low)) • \(condition)"
+                )
+                weatherInfoValueRow(label: "High", value: formattedTemperature(high), color: HBPalette.accentBlue)
+                weatherInfoValueRow(label: "Low", value: formattedTemperature(low), color: HBPalette.accentPurple)
+                weatherInfoValueRow(label: "Condition", value: condition, color: HBPalette.textPrimary)
+                Text("This card shows today's forecast high and low from the weather service, along with the expected overall condition.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .humidity(_, value):
+                weatherInfoSectionTitle(
+                    title: "Humidity",
+                    summary: "Current \(formattedPercent(value)) • \(formattedHumidityMeaning(value))"
+                )
+                weatherInfoRangeRow(range: "0-30%", label: "Dry air", color: HBPalette.accentYellow)
+                weatherInfoRangeRow(range: "30-60%", label: "Comfort band", color: HBPalette.accentGreen)
+                weatherInfoRangeRow(range: "60%+", label: "Humid", color: HBPalette.accentBlue)
+                Text("Humidity affects skin comfort, indoor dryness, and how heavy the air feels. Mid-range humidity is usually the most comfortable.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .sunCycle(_, sunrise, sunset):
+                weatherInfoSectionTitle(
+                    title: "Sun Cycle",
+                    summary: "Sunrise \(formattedWeatherTime(sunrise)) • Sunset \(formattedWeatherTime(sunset))"
+                )
+                weatherInfoValueRow(label: "Sunrise", value: formattedWeatherTime(sunrise), color: HBPalette.accentYellow)
+                weatherInfoValueRow(label: "Sunset", value: formattedWeatherTime(sunset), color: HBPalette.accentOrange)
+                weatherInfoValueRow(label: "Daylight", value: formattedDaylightDuration(sunrise: sunrise, sunset: sunset), color: HBPalette.textPrimary)
+                Text("Sun cycle helps with planning outdoor light, routines, and automations tied to sunrise or sunset.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .rainChance(_, chance, precipitationNow):
+                weatherInfoSectionTitle(
+                    title: "Rain Chance",
+                    summary: "Current \(formattedPercent(chance)) • \(formattedRainChanceMeaning(chance))"
+                )
+                weatherInfoRangeRow(range: "0-20%", label: "Low risk", color: HBPalette.accentGreen)
+                weatherInfoRangeRow(range: "21-50%", label: "Watch clouds", color: HBPalette.accentYellow)
+                weatherInfoRangeRow(range: "51%+", label: "More likely rain", color: HBPalette.accentRed)
+                Text("Rain chance shows the likelihood of measurable precipitation today. Live precipitation now: \(formattedRain(precipitationNow)).")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
             }
@@ -2260,6 +2420,24 @@ struct DashboardView: View {
             Text(label)
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .foregroundStyle(color)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+    }
+
+    private func weatherInfoValueRow(label: String, value: String, color: Color) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+
+            Spacer()
+
+            Text(value)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(color)
+                .multilineTextAlignment(.trailing)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -2396,6 +2574,41 @@ struct DashboardView: View {
         return "Higher pressure band"
     }
 
+    private func formattedRainIntensityMeaning(_ value: Double?) -> String {
+        guard let value else { return "No live rain rate" }
+        if value <= 0 {
+            return "Dry right now"
+        }
+        if value < 0.1 {
+            return "Light rainfall"
+        }
+        return "Stronger burst"
+    }
+
+    private func formattedHumidityMeaning(_ value: Double?) -> String {
+        guard let value else { return "No live humidity reading" }
+        switch value {
+        case ..<30:
+            return "Dry air"
+        case ..<60:
+            return "Comfortable"
+        default:
+            return "Humid air"
+        }
+    }
+
+    private func formattedRainChanceMeaning(_ value: Double?) -> String {
+        guard let value else { return "No rain forecast" }
+        switch value {
+        case ...20:
+            return "Low rain risk"
+        case ...50:
+            return "Possible showers"
+        default:
+            return "Rain more likely"
+        }
+    }
+
     private func formattedLiveWindDetail(gust: Double?, direction: Double?) -> String {
         let gustText = formattedWind(gust)
         let directionText = compassDirection(direction)
@@ -2448,6 +2661,21 @@ struct DashboardView: View {
         }
 
         return "--"
+    }
+
+    private func formattedDaylightDuration(sunrise: String?, sunset: String?) -> String {
+        guard
+            let sunriseDate = JSON.date(from: sunrise),
+            let sunsetDate = JSON.date(from: sunset),
+            sunsetDate >= sunriseDate
+        else {
+            return "--"
+        }
+
+        let totalMinutes = Int(sunsetDate.timeIntervalSince(sunriseDate) / 60)
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        return "\(hours)h \(minutes)m"
     }
 
     private var quickScenePanel: some View {
