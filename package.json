@@ -8,7 +8,7 @@
     "client": "node scripts/run-with-modern-node.js npm --prefix client run dev",
     "client-install": "node scripts/run-with-modern-node.js npm --prefix client install",
     "server": "node scripts/run-with-modern-node.js cross-env WAKEWORD_PIPER_EXEC=./server/.wakeword-venv/bin/piper npm run dev --prefix server",
-    "server-install": "node scripts/run-with-modern-node.js npm --prefix server install && node scripts/run-with-modern-node.js npm --prefix server run ensure:native",
+    "server-install": "node scripts/run-with-modern-node.js npm --prefix server install --include=optional && node scripts/run-with-modern-node.js npm --prefix server run ensure:native",
     "start": "WAKEWORD_PIPER_EXEC=./server/.wakeword-venv/bin/piper node scripts/run-with-modern-node.js npm --prefix server start",
     "debug": "concurrently -n \"client,server\" \"npm run client\" \"cross-env NODE_OPTIONS=--inspect-brk=9229 npm run server\"",
     "seed": "cd server && node scripts/seedDatabase.js",

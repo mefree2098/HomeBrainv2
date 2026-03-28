@@ -407,6 +407,23 @@ function createPendingLoginKey(ownerId, loginId) {
   return `${ownerId || 'unknown'}:${loginId || 'unknown'}`;
 }
 
+function buildStderrSummary(stderrLines = []) {
+  if (!Array.isArray(stderrLines) || stderrLines.length === 0) {
+    return '';
+  }
+
+  const joined = stderrLines
+    .map((line) => sanitizeString(line))
+    .filter(Boolean)
+    .join(' | ');
+
+  if (!joined) {
+    return '';
+  }
+
+  return joined.length > 600 ? `${joined.slice(0, 597)}...` : joined;
+}
+
 class CodexAppServerSession {
   constructor({
     codexPath = '',
@@ -429,6 +446,7 @@ class CodexAppServerSession {
     this.nextRequestId = 1;
     this.started = false;
     this.closed = false;
+    this.stderrLines = [];
   }
 
   async start() {
@@ -518,14 +536,18 @@ class CodexAppServerSession {
   handleStderr(chunk) {
     const text = chunk.toString().trim();
     if (text) {
+      this.stderrLines.push(text);
+      if (this.stderrLines.length > 8) {
+        this.stderrLines.shift();
+      }
       console.warn(`CodexCliService stderr: ${text}`);
     }
   }
 
   handleClose(code, signal) {
-    const closeError = new Error(
-      `Codex app-server exited${signal ? ` from signal ${signal}` : ''}${code !== null ? ` with code ${code}` : ''}`
-    );
+    const stderrSummary = buildStderrSummary(this.stderrLines);
+    const closeErrorMessage = `Codex app-server exited${signal ? ` from signal ${signal}` : ''}${code !== null ? ` with code ${code}` : ''}${stderrSummary ? `: ${stderrSummary}` : ''}`;
+    const closeError = new Error(closeErrorMessage);
 
     this.closed = true;
     this.child = null;
