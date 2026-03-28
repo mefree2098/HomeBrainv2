@@ -14,7 +14,7 @@ const {
 } = require('../services/codexCliService');
 
 test('resolveDraftCodexHome maps supported profiles to the expected paths', () => {
-  assert.equal(resolveDraftCodexHome('local', '', '/mnt/efs'), path.resolve(process.cwd(), '.codex-home'));
+  assert.equal(resolveDraftCodexHome('local', '', '/mnt/efs'), path.join(os.homedir(), '.codex', 'homebrain'));
   assert.equal(resolveDraftCodexHome('custom', '/srv/codex-home', '/mnt/efs'), '/srv/codex-home');
   assert.equal(resolveDraftCodexHome('aws', '', '/mnt/shared'), '/mnt/shared/.codex/homebrain');
   assert.equal(resolveDraftCodexHome('azure', '', '/mnt/efs'), '/home/site/.codex/homebrain');
@@ -67,7 +67,7 @@ test('buildCodexOutputSchema reuses explicit Codex or Ollama JSON schema payload
   assert.equal(buildCodexOutputSchema({ ollamaFormat: 'json' }), null);
 });
 
-test('resolveSessionOptions ignores non-custom codexHome overrides and resolves local homes from cwd', async (t) => {
+test('resolveSessionOptions ignores non-custom codexHome overrides and resolves local homes outside the repo by default', async (t) => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-test-'));
   t.after(async () => {
     await fs.rm(cwd, { recursive: true, force: true });
@@ -88,5 +88,5 @@ test('resolveSessionOptions ignores non-custom codexHome overrides and resolves 
 
   assert.equal(options.codexHome, '');
   assert.equal(options.codexHomeProfile, 'local');
-  assert.equal(options.effectiveCodexHome, path.resolve(cwd, '.codex-home'));
+  assert.equal(options.effectiveCodexHome, path.join(os.homedir(), '.codex', 'homebrain'));
 });
