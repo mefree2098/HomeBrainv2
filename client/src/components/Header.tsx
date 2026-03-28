@@ -236,7 +236,7 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
 
           <button
             type="button"
-            className="group flex min-w-0 items-center gap-3 rounded-[1.4rem] border border-white/10 bg-white/10 px-2 py-2 transition-transform duration-300 hover:-translate-y-0.5 dark:bg-slate-950/20"
+            className="group flex min-w-0 items-center gap-3 rounded-[1.4rem] px-2 py-2 transition-transform duration-300 hover:-translate-y-0.5"
             onClick={() => navigate("/")}
           >
             <div className="relative flex h-11 w-11 items-center justify-center rounded-[1.05rem] bg-gradient-to-br from-cyan-300/70 via-sky-300/55 to-blue-500/70 shadow-lg shadow-sky-400/20">

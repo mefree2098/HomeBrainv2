@@ -23,6 +23,8 @@ interface WeatherWidgetProps {
   locationQuery?: string
 }
 
+const WEATHER_REFRESH_INTERVAL_MS = 60_000
+
 const resolveCurrentPosition = () => new Promise<GeolocationPosition>((resolve, reject) => {
   if (!("geolocation" in navigator)) {
     reject(new Error("This browser does not support location access for weather widgets."))
@@ -42,6 +44,104 @@ const formatWind = (value: number | null) => value === null ? "--" : `${Math.rou
 const formatRain = (value: number | null) => value === null ? "--" : `${value.toFixed(2)} in`
 const formatPressure = (value: number | null) => value === null ? "--" : `${value.toFixed(2)} inHg`
 const formatUv = (value: number | null | undefined) => value == null ? "--" : value.toFixed(1)
+const formatAqi = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)}`
+
+const toCompass = (degrees: number | null | undefined) => {
+  if (degrees == null) {
+    return "--"
+  }
+
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+  const index = Math.round(degrees / 45) % directions.length
+  return directions[index]
+}
+
+const formatLiveWindDetail = (gustMph: number | null | undefined, directionDeg: number | null | undefined) => {
+  const gust = formatWind(gustMph)
+  const direction = toCompass(directionDeg)
+
+  if (gust === "--" && direction === "--") {
+    return "Live wind telemetry"
+  }
+  if (direction === "--") {
+    return `Gust ${gust}`
+  }
+  if (gust === "--") {
+    return `From ${direction}`
+  }
+  return `${direction} gust ${gust}`
+}
+
+const formatPressureMeaning = (trend: string | null | undefined) => {
+  const normalized = trend?.trim().toLowerCase() ?? ""
+  switch (normalized) {
+    case "rising":
+      return "Clearing trend"
+    case "falling":
+      return "Unsettled trend"
+    case "steady":
+    case "":
+      return "Stable air"
+    default:
+      return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+  }
+}
+
+const uvToneClassName = (value: number | null | undefined) => {
+  if (value == null) {
+    return {
+      chrome: "border-white/15 bg-white/10",
+      value: "text-foreground"
+    }
+  }
+
+  if (value < 3) {
+    return {
+      chrome: "border-emerald-400/30 bg-emerald-400/10",
+      value: "text-emerald-700 dark:text-emerald-300"
+    }
+  }
+
+  if (value < 6) {
+    return {
+      chrome: "border-amber-400/30 bg-amber-400/10",
+      value: "text-amber-700 dark:text-amber-300"
+    }
+  }
+
+  return {
+    chrome: "border-rose-400/30 bg-rose-400/10",
+    value: "text-rose-700 dark:text-rose-300"
+  }
+}
+
+const aqiToneClassName = (value: number | null | undefined) => {
+  if (value == null) {
+    return {
+      chrome: "border-white/15 bg-white/10",
+      value: "text-foreground"
+    }
+  }
+
+  if (value <= 50) {
+    return {
+      chrome: "border-emerald-400/30 bg-emerald-400/10",
+      value: "text-emerald-700 dark:text-emerald-300"
+    }
+  }
+
+  if (value <= 100) {
+    return {
+      chrome: "border-amber-400/30 bg-amber-400/10",
+      value: "text-amber-700 dark:text-amber-300"
+    }
+  }
+
+  return {
+    chrome: "border-rose-400/30 bg-rose-400/10",
+    value: "text-rose-700 dark:text-rose-300"
+  }
+}
 
 const formatSunTime = (value: string | null) => {
   if (!value) {
@@ -64,6 +164,8 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const condensed = size === "small" || size === "medium"
   const wide = size === "large" || size === "full"
   const tempestStation = weather?.tempest?.available ? weather.tempest.station : null
+  const aqiTone = aqiToneClassName(weather.current.airQualityIndex)
+  const uvTone = uvToneClassName(tempestStation?.metrics.uvIndex)
 
   const fetchWeather = useCallback(async () => {
     setLoading(true)
@@ -99,11 +201,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   }, [fetchWeather])
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      void fetchWeather()
-    }, 10 * 60 * 1000)
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") {
+        void fetchWeather()
+      }
+    }
 
-    return () => window.clearInterval(interval)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void fetchWeather()
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      refreshIfVisible()
+    }, WEATHER_REFRESH_INTERVAL_MS)
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
   }, [fetchWeather])
 
   const sourceLabel = useMemo(() => {
@@ -197,10 +316,15 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
           </div>
 
           <div className={cn("flex items-center gap-3", condensed ? "justify-between" : "justify-end")}>
+            <div className={cn("rounded-[1.2rem] border px-3 py-2 text-right", aqiTone.chrome)}>
+              <p className="section-kicker">AQI</p>
+              <p className={cn("mt-1 text-lg font-semibold", aqiTone.value)}>{formatAqi(weather.current.airQualityIndex)}</p>
+            </div>
+
             {tempestStation ? (
-              <div className="rounded-[1.2rem] border border-white/15 bg-white/10 px-3 py-2 text-right">
+              <div className={cn("rounded-[1.2rem] border px-3 py-2 text-right", uvTone.chrome)}>
                 <p className="section-kicker">UV</p>
-                <p className="mt-1 text-lg font-semibold text-foreground">{formatUv(tempestStation.metrics.uvIndex)}</p>
+                <p className={cn("mt-1 text-lg font-semibold", uvTone.value)}>{formatUv(tempestStation.metrics.uvIndex)}</p>
               </div>
             ) : null}
 
@@ -224,7 +348,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               </div>
               <p className="mt-2 text-lg font-semibold text-foreground">{formatWind(tempestStation.metrics.windAvgMph)}</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Gust {formatWind(tempestStation.metrics.windGustMph)}
+                {formatLiveWindDetail(tempestStation.metrics.windGustMph, tempestStation.metrics.windDirectionDeg)}
               </p>
             </div>
 
@@ -246,7 +370,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                   <Gauge className="h-4 w-4 text-emerald-500" />
                 </div>
                 <p className="mt-2 text-lg font-semibold text-foreground">{formatPressure(tempestStation.metrics.pressureInHg)}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{tempestStation.metrics.pressureTrend || "Steady"}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{formatPressureMeaning(tempestStation.metrics.pressureTrend)}</p>
               </div>
             ) : null}
 

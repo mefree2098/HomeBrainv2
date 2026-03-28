@@ -14,6 +14,7 @@ export interface DashboardWeatherCurrent {
   humidity: number | null
   windSpeedMph: number | null
   precipitationIn: number | null
+  airQualityIndex: number | null
   isDay: boolean
   weatherCode: number | null
   condition: string

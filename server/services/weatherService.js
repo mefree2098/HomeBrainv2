@@ -2,6 +2,13 @@ const axios = require('axios');
 const settingsService = require('./settingsService');
 const tempestService = require('./tempestService');
 
+const DEFAULT_FORECAST_CACHE_TTL_MS = 60 * 1000;
+const DEFAULT_AIR_QUALITY_CACHE_TTL_MS = 60 * 1000;
+const DEFAULT_GEOCODE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const forecastCache = new Map();
+const airQualityCache = new Map();
+const geocodeCache = new Map();
+
 const US_STATE_ABBREVIATIONS = Object.freeze({
   AL: 'Alabama',
   AK: 'Alaska',
@@ -100,6 +107,27 @@ const toNumber = (value) => {
   return null;
 };
 
+const parsePositiveInteger = (value, fallback) => {
+  const numeric = Math.trunc(Number(value));
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+  return numeric;
+};
+
+const FORECAST_CACHE_TTL_MS = parsePositiveInteger(
+  process.env.WEATHER_FORECAST_CACHE_TTL_MS,
+  DEFAULT_FORECAST_CACHE_TTL_MS
+);
+const AIR_QUALITY_CACHE_TTL_MS = parsePositiveInteger(
+  process.env.WEATHER_AIR_QUALITY_CACHE_TTL_MS,
+  DEFAULT_AIR_QUALITY_CACHE_TTL_MS
+);
+const GEOCODE_CACHE_TTL_MS = parsePositiveInteger(
+  process.env.WEATHER_GEOCODE_CACHE_TTL_MS,
+  DEFAULT_GEOCODE_CACHE_TTL_MS
+);
+
 function normalizeCoordinates(latitude, longitude) {
   const lat = toNumber(latitude);
   const lon = toNumber(longitude);
@@ -113,6 +141,51 @@ function normalizeCoordinates(latitude, longitude) {
   }
 
   return { latitude: lat, longitude: lon };
+}
+
+function buildForecastCacheKey(location) {
+  const latitude = Number(location?.latitude);
+  const longitude = Number(location?.longitude);
+  return `${latitude.toFixed(4)},${longitude.toFixed(4)}`;
+}
+
+function buildAirQualityCacheKey(location) {
+  return buildForecastCacheKey(location);
+}
+
+async function readThroughCache(cache, key, ttlMs, loader) {
+  const now = Date.now();
+  const cached = cache.get(key);
+
+  if (cached?.value !== undefined && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  if (cached?.promise) {
+    return cached.promise;
+  }
+
+  const promise = Promise.resolve()
+    .then(loader)
+    .then((value) => {
+      cache.set(key, {
+        value,
+        expiresAt: Date.now() + ttlMs
+      });
+      return value;
+    })
+    .catch((error) => {
+      cache.delete(key);
+      throw error;
+    });
+
+  cache.set(key, {
+    expiresAt: cached?.expiresAt || 0,
+    promise,
+    value: cached?.value
+  });
+
+  return promise;
 }
 
 function describeWeatherCode(code) {
@@ -198,10 +271,11 @@ async function fetchGeocodeCandidates(params) {
   return Array.isArray(response?.data?.results) ? response.data.results : [];
 }
 
-function createWeatherPayload(forecastResponse, location) {
+function createWeatherPayload(forecastResponse, airQualityResponse, location) {
   const current = forecastResponse?.current || {};
   const daily = forecastResponse?.daily || {};
   const hourly = forecastResponse?.hourly || {};
+  const airQualityCurrent = airQualityResponse?.current || {};
   const todayCode = Array.isArray(daily.weather_code) ? daily.weather_code[0] : current.weather_code;
   const currentDescriptor = describeWeatherCode(current.weather_code);
   const todayDescriptor = describeWeatherCode(todayCode);
@@ -226,6 +300,7 @@ function createWeatherPayload(forecastResponse, location) {
       humidity: toNumber(current.relative_humidity_2m),
       windSpeedMph: toNumber(current.wind_speed_10m),
       precipitationIn: toNumber(current.precipitation),
+      airQualityIndex: toNumber(airQualityCurrent.us_aqi),
       isDay: current.is_day === 1,
       weatherCode: toNumber(current.weather_code),
       condition: currentDescriptor.label,
@@ -258,29 +333,36 @@ function createWeatherPayload(forecastResponse, location) {
 
 async function geocodeLocation(query, source) {
   const normalizedQuery = normalizeLocationQuery(query);
-  const exactMatches = await fetchGeocodeCandidates({ name: normalizedQuery });
-  let result = exactMatches[0] || null;
+  const cacheKey = normalizedQuery.toLowerCase();
+  const resolvedLocation = await readThroughCache(geocodeCache, cacheKey, GEOCODE_CACHE_TTL_MS, async () => {
+    const exactMatches = await fetchGeocodeCandidates({ name: normalizedQuery });
+    let result = exactMatches[0] || null;
 
-  if (!result) {
-    const parsedUsQuery = parseUsCityStateQuery(normalizedQuery);
-    if (parsedUsQuery) {
-      const usMatches = await fetchGeocodeCandidates({
-        name: parsedUsQuery.city,
-        countryCode: 'US'
-      });
-      result = pickUsCityStateResult(usMatches, parsedUsQuery) || usMatches[0] || null;
+    if (!result) {
+      const parsedUsQuery = parseUsCityStateQuery(normalizedQuery);
+      if (parsedUsQuery) {
+        const usMatches = await fetchGeocodeCandidates({
+          name: parsedUsQuery.city,
+          countryCode: 'US'
+        });
+        result = pickUsCityStateResult(usMatches, parsedUsQuery) || usMatches[0] || null;
+      }
     }
-  }
 
-  if (!result) {
-    throw new Error(`Unable to resolve weather location for "${normalizedQuery || query}".`);
-  }
+    if (!result) {
+      throw new Error(`Unable to resolve weather location for "${normalizedQuery || query}".`);
+    }
+
+    return {
+      latitude: result.latitude,
+      longitude: result.longitude,
+      timezone: result.timezone || null,
+      name: buildLocationName(result, normalizedQuery || query)
+    };
+  });
 
   return {
-    latitude: result.latitude,
-    longitude: result.longitude,
-    timezone: result.timezone || null,
-    name: buildLocationName(result, normalizedQuery || query),
+    ...resolvedLocation,
     source
   };
 }
@@ -311,47 +393,66 @@ async function resolveWeatherLocation({ latitude, longitude, address, label }) {
 
 async function fetchDashboardWeather(options = {}) {
   const location = await resolveWeatherLocation(options);
-  const [response, tempestStation] = await Promise.all([
-    axios.get('https://api.open-meteo.com/v1/forecast', {
-      params: {
-        latitude: location.latitude,
-        longitude: location.longitude,
-        current: [
-          'temperature_2m',
-          'relative_humidity_2m',
-          'apparent_temperature',
-          'is_day',
-          'precipitation',
-          'weather_code',
-          'wind_speed_10m'
-        ].join(','),
-        daily: [
-          'weather_code',
-          'temperature_2m_max',
-          'temperature_2m_min',
-          'precipitation_probability_max',
-          'sunrise',
-          'sunset'
-        ].join(','),
-        hourly: [
-          'temperature_2m',
-          'precipitation_probability',
-          'weather_code',
-          'wind_speed_10m'
-        ].join(','),
-        temperature_unit: 'fahrenheit',
-        wind_speed_unit: 'mph',
-        precipitation_unit: 'inch',
-        timezone: 'auto',
-        forecast_days: 2
-      },
-      timeout: 10000
+  const forecastCacheKey = buildForecastCacheKey(location);
+  const airQualityCacheKey = buildAirQualityCacheKey(location);
+  const [forecastResponse, airQualityResponse, tempestStation] = await Promise.all([
+    readThroughCache(forecastCache, forecastCacheKey, FORECAST_CACHE_TTL_MS, async () => {
+      const response = await axios.get('https://api.open-meteo.com/v1/forecast', {
+        params: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          current: [
+            'temperature_2m',
+            'relative_humidity_2m',
+            'apparent_temperature',
+            'is_day',
+            'precipitation',
+            'weather_code',
+            'wind_speed_10m'
+          ].join(','),
+          daily: [
+            'weather_code',
+            'temperature_2m_max',
+            'temperature_2m_min',
+            'precipitation_probability_max',
+            'sunrise',
+            'sunset'
+          ].join(','),
+          hourly: [
+            'temperature_2m',
+            'precipitation_probability',
+            'weather_code',
+            'wind_speed_10m'
+          ].join(','),
+          temperature_unit: 'fahrenheit',
+          wind_speed_unit: 'mph',
+          precipitation_unit: 'inch',
+          timezone: 'auto',
+          forecast_days: 2
+        },
+        timeout: 10000
+      });
+
+      return response.data;
     }),
+    readThroughCache(airQualityCache, airQualityCacheKey, AIR_QUALITY_CACHE_TTL_MS, async () => {
+      const response = await axios.get('https://air-quality-api.open-meteo.com/v1/air-quality', {
+        params: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          current: 'us_aqi',
+          timezone: 'auto'
+        },
+        timeout: 10000
+      });
+
+      return response.data;
+    }).catch(() => null),
     tempestService.getSelectedStationSnapshot().catch(() => null)
   ]);
 
   return {
-    ...createWeatherPayload(response.data, location),
+    ...createWeatherPayload(forecastResponse, airQualityResponse, location),
     tempest: tempestStation
       ? {
           available: true,
