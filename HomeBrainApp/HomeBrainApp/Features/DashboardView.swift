@@ -1783,88 +1783,213 @@ struct DashboardView: View {
     private func weatherWidget(for widget: DashboardWidgetItem) -> some View {
         let compact = widget.size == .small
         let condensed = widget.size == .small || widget.size == .medium
+        let stackedHeroLayout = usesPortraitCompactLayout
         let snapshot = weatherByWidgetID[widget.id]
         let error = weatherErrorsByWidgetID[widget.id]
 
         return VStack(alignment: .leading, spacing: condensed ? 12 : 14) {
             if let snapshot {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Local Forecast")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .textCase(.uppercase)
-                            .tracking(2.6)
-                            .foregroundStyle(HBPalette.textMuted)
+                Group {
+                    if stackedHeroLayout {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Local Forecast")
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .textCase(.uppercase)
+                                        .tracking(2.6)
+                                        .foregroundStyle(HBPalette.textMuted)
 
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Text(formattedTemperature(snapshot.displayTemperatureF))
-                                .font(.system(size: compact ? 34 : 42, weight: .bold, design: .rounded))
-                                .foregroundStyle(HBPalette.textPrimary)
+                                    Text(formattedTemperature(snapshot.displayTemperatureF))
+                                        .font(.system(size: compact ? 34 : 42, weight: .bold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.78)
 
-                            if !compact {
-                                Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                                    .foregroundStyle(HBPalette.textSecondary)
-                            }
-                        }
+                                    Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
+                                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.82)
+                                }
 
-                        Text(snapshot.condition)
-                            .font(.system(size: compact ? 15 : 17, weight: .semibold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
+                                Spacer(minLength: 10)
 
-                        Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                            .lineLimit(condensed ? 1 : 2)
-                    }
-
-                    Spacer(minLength: 10)
-
-                    VStack(alignment: .trailing, spacing: 10) {
-                        HStack(alignment: .center, spacing: 10) {
-                            weatherInfoPopoverTrigger(
-                                topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
-                                arrowEdge: .top
-                            ) {
-                                weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+                                Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
+                                    .font(.system(size: compact ? 28 : 34, weight: .semibold))
+                                    .foregroundStyle(
+                                        LinearGradient(
+                                            colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: compact ? 50 : 58, height: compact ? 50 : 58)
+                                    .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
                             }
 
-                            if let tempest = snapshot.tempest {
-                                weatherInfoPopoverTrigger(
-                                    topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
-                                    arrowEdge: .top
-                                ) {
-                                    weatherUVIndicator(value: tempest.uvIndex, compact: compact)
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(snapshot.condition)
+                                        .font(.system(size: compact ? 15 : 17, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
+
+                                    Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .lineLimit(2)
+                                }
+
+                                Spacer(minLength: 10)
+
+                                VStack(alignment: .trailing, spacing: 8) {
+                                    HStack(alignment: .center, spacing: 8) {
+                                        weatherInfoPopoverTrigger(
+                                            topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
+                                            arrowEdge: .top
+                                        ) {
+                                            weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+                                        }
+
+                                        if let tempest = snapshot.tempest {
+                                            weatherInfoPopoverTrigger(
+                                                topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
+                                                arrowEdge: .top
+                                            ) {
+                                                weatherUVIndicator(value: tempest.uvIndex, compact: compact)
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
-                            Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
-                                .font(.system(size: compact ? 28 : 34, weight: .semibold))
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 6) {
+                                    Spacer(minLength: 0)
+
+                                    HBBadge(
+                                        text: snapshot.sourceLabel,
+                                        foreground: HBPalette.textPrimary,
+                                        background: HBPalette.panelSoft.opacity(0.92),
+                                        stroke: HBPalette.panelStrokeStrong
                                     )
-                                )
-                                .frame(width: compact ? 50 : 58, height: compact ? 50 : 58)
-                                .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+                                    .fixedSize(horizontal: true, vertical: false)
+
+                                    if let tempest = snapshot.tempest {
+                                        HBBadge(
+                                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                                            foreground: HBPalette.textPrimary,
+                                            background: HBPalette.heroCore.opacity(0.22),
+                                            stroke: HBPalette.heroCore.opacity(0.42)
+                                        )
+                                        .fixedSize(horizontal: true, vertical: false)
+                                    }
+                                }
+
+                                VStack(alignment: .trailing, spacing: 8) {
+                                    HBBadge(
+                                        text: snapshot.sourceLabel,
+                                        foreground: HBPalette.textPrimary,
+                                        background: HBPalette.panelSoft.opacity(0.92),
+                                        stroke: HBPalette.panelStrokeStrong
+                                    )
+                                    .fixedSize(horizontal: true, vertical: false)
+
+                                    if let tempest = snapshot.tempest {
+                                        HBBadge(
+                                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                                            foreground: HBPalette.textPrimary,
+                                            background: HBPalette.heroCore.opacity(0.22),
+                                            stroke: HBPalette.heroCore.opacity(0.42)
+                                        )
+                                        .fixedSize(horizontal: true, vertical: false)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
                         }
+                    } else {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Local Forecast")
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .textCase(.uppercase)
+                                    .tracking(2.6)
+                                    .foregroundStyle(HBPalette.textMuted)
 
-                        HBBadge(
-                            text: snapshot.sourceLabel,
-                            foreground: HBPalette.textPrimary,
-                            background: HBPalette.panelSoft.opacity(0.92),
-                            stroke: HBPalette.panelStrokeStrong
-                        )
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    Text(formattedTemperature(snapshot.displayTemperatureF))
+                                        .font(.system(size: compact ? 34 : 42, weight: .bold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
 
-                        if let tempest = snapshot.tempest {
-                            HBBadge(
-                                text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
-                                foreground: HBPalette.textPrimary,
-                                background: HBPalette.heroCore.opacity(0.22),
-                                stroke: HBPalette.heroCore.opacity(0.42)
-                            )
+                                    if !compact {
+                                        Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
+                                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                                            .foregroundStyle(HBPalette.textSecondary)
+                                    }
+                                }
+
+                                Text(snapshot.condition)
+                                    .font(.system(size: compact ? 15 : 17, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textPrimary)
+
+                                Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                    .lineLimit(condensed ? 1 : 2)
+                            }
+
+                            Spacer(minLength: 10)
+
+                            VStack(alignment: .trailing, spacing: 10) {
+                                HStack(alignment: .center, spacing: 10) {
+                                    weatherInfoPopoverTrigger(
+                                        topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
+                                        arrowEdge: .top
+                                    ) {
+                                        weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+                                    }
+
+                                    if let tempest = snapshot.tempest {
+                                        weatherInfoPopoverTrigger(
+                                            topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
+                                            arrowEdge: .top
+                                        ) {
+                                            weatherUVIndicator(value: tempest.uvIndex, compact: compact)
+                                        }
+                                    }
+
+                                    Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
+                                        .font(.system(size: compact ? 28 : 34, weight: .semibold))
+                                        .foregroundStyle(
+                                            LinearGradient(
+                                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                        )
+                                        .frame(width: compact ? 50 : 58, height: compact ? 50 : 58)
+                                        .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+                                }
+
+                                HBBadge(
+                                    text: snapshot.sourceLabel,
+                                    foreground: HBPalette.textPrimary,
+                                    background: HBPalette.panelSoft.opacity(0.92),
+                                    stroke: HBPalette.panelStrokeStrong
+                                )
+                                .fixedSize(horizontal: true, vertical: false)
+
+                                if let tempest = snapshot.tempest {
+                                    HBBadge(
+                                        text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                                        foreground: HBPalette.textPrimary,
+                                        background: HBPalette.heroCore.opacity(0.22),
+                                        stroke: HBPalette.heroCore.opacity(0.42)
+                                    )
+                                    .fixedSize(horizontal: true, vertical: false)
+                                }
+                            }
                         }
                     }
                 }
@@ -2023,24 +2148,47 @@ struct DashboardView: View {
                 )
             }
 
-            HStack(spacing: 10) {
-                Button {
-                    Task { await refreshWeather(for: widget) }
-                } label: {
-                    Label(weatherLoadingWidgetIDs.contains(widget.id) ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                .disabled(weatherLoadingWidgetIDs.contains(widget.id))
+            Group {
+                if usesPortraitCompactLayout && widget.settings.weatherLocationMode == .auto {
+                    VStack(spacing: 10) {
+                        Button {
+                            Task { await refreshWeather(for: widget) }
+                        } label: {
+                            Label(weatherLoadingWidgetIDs.contains(widget.id) ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(weatherLoadingWidgetIDs.contains(widget.id))
 
-                if widget.settings.weatherLocationMode == .auto {
-                    Button {
-                        locationManager.requestLocation()
-                    } label: {
-                        Label("Use Device Location", systemImage: "location")
-                            .frame(maxWidth: .infinity)
+                        Button {
+                            locationManager.requestLocation()
+                        } label: {
+                            Label("Use Device Location", systemImage: "location")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HBGhostButtonStyle(compact: true))
                     }
-                    .buttonStyle(HBGhostButtonStyle(compact: true))
+                } else {
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await refreshWeather(for: widget) }
+                        } label: {
+                            Label(weatherLoadingWidgetIDs.contains(widget.id) ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(weatherLoadingWidgetIDs.contains(widget.id))
+
+                        if widget.settings.weatherLocationMode == .auto {
+                            Button {
+                                locationManager.requestLocation()
+                            } label: {
+                                Label("Use Device Location", systemImage: "location")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(HBGhostButtonStyle(compact: true))
+                        }
+                    }
                 }
             }
 
@@ -2198,10 +2346,12 @@ struct DashboardView: View {
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
+                .lineLimit(1)
 
             Text(formattedUV(value))
                 .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
                 .foregroundStyle(tone)
+                .lineLimit(1)
         }
         .padding(.horizontal, compact ? 10 : 12)
         .padding(.vertical, compact ? 8 : 10)
@@ -2216,6 +2366,7 @@ struct DashboardView: View {
             RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
                 .stroke(tone.opacity(value == nil ? 0.18 : 0.34), lineWidth: 1)
         )
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func weatherAQIIndicator(value: Double?, compact: Bool) -> some View {
@@ -2227,10 +2378,12 @@ struct DashboardView: View {
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
+                .lineLimit(1)
 
             Text(formattedAQI(value))
                 .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
                 .foregroundStyle(tone)
+                .lineLimit(1)
         }
         .padding(.horizontal, compact ? 10 : 12)
         .padding(.vertical, compact ? 8 : 10)
@@ -2245,6 +2398,7 @@ struct DashboardView: View {
             RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
                 .stroke(tone.opacity(value == nil ? 0.18 : 0.34), lineWidth: 1)
         )
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func weatherInfoPopoverTrigger<Content: View>(
