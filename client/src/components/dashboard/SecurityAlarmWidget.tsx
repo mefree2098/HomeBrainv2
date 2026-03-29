@@ -264,6 +264,10 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
     : size === "medium"
       ? "grid-cols-1 sm:grid-cols-2"
       : "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3"
+  const showLastArmed = Boolean(alarmStatus?.lastArmed && alarmStatus?.isArmed)
+  const showLastDisarmed = Boolean(alarmStatus?.lastDisarmed && !alarmStatus?.isArmed && !alarmStatus?.isTriggered)
+  const showLastTriggered = Boolean(alarmStatus?.isTriggered && alarmStatus?.lastTriggered)
+  const showStatusDetails = showLastArmed || showLastDisarmed || showLastTriggered
 
   if (loading) {
     return (
@@ -314,23 +318,30 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
         </div>
       )}
 
-      {alarmStatus && (
+      {alarmStatus && showStatusDetails ? (
         <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 text-sm dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 text-sm dark:bg-slate-950/20"}>
-          {alarmStatus.lastArmed && alarmStatus.isArmed && (
+          {showLastArmed ? (
             <div className="text-xs text-muted-foreground">
               Armed: {new Date(alarmStatus.lastArmed).toLocaleString()}
               {alarmStatus.armedBy && ` by ${alarmStatus.armedBy}`}
             </div>
-          )}
+          ) : null}
 
-          {alarmStatus.isTriggered && alarmStatus.lastTriggered && (
+          {showLastDisarmed ? (
+            <div className="text-xs text-muted-foreground">
+              Disarmed: {new Date(alarmStatus.lastDisarmed).toLocaleString()}
+              {alarmStatus.disarmedBy && ` by ${alarmStatus.disarmedBy}`}
+            </div>
+          ) : null}
+
+          {showLastTriggered ? (
             <div className="mt-2 text-xs font-medium text-red-600 dark:text-red-300">
               <AlertTriangle className="mr-1 inline h-3 w-3" />
               Triggered: {new Date(alarmStatus.lastTriggered).toLocaleString()}
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       <div className={compact ? "space-y-2" : "space-y-3"}>
         {alarmStatus && alarmStatus.alarmState === 'disarmed' ? (
