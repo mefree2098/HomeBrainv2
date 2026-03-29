@@ -127,6 +127,47 @@ const describePressureBand = (value: number | null | undefined) => {
   return "Higher pressure band"
 }
 
+const describeRainIntensity = (value: number | null | undefined) => {
+  if (value == null) {
+    return "No live rain rate"
+  }
+  if (value <= 0) {
+    return "Dry right now"
+  }
+  if (value < 0.1) {
+    return "Light rainfall"
+  }
+  return "Stronger burst"
+}
+
+const describeHumidityLevel = (value: number | null | undefined) => {
+  if (value == null) {
+    return "No live humidity reading"
+  }
+  if (value < 30) {
+    return "Dry air"
+  }
+  if (value < 60) {
+    return "Comfortable"
+  }
+  return "Humid air"
+}
+
+const describeRainChance = (value: number | null | undefined) => {
+  if (value == null) {
+    return "No rain forecast"
+  }
+  if (value <= 20) {
+    return "Low rain risk"
+  }
+  if (value <= 50) {
+    return "Possible showers"
+  }
+  return "Rain more likely"
+}
+
+const formatStationFeed = (websocketConnected: boolean) => websocketConnected ? "WebSocket live" : "Snapshot only"
+
 const uvToneClassName = (value: number | null | undefined) => {
   if (value == null) {
     return {
@@ -286,6 +327,40 @@ function WeatherInfoCard({
   )
 }
 
+function WeatherInfoValueCard({
+  title,
+  summary,
+  rows,
+  footer
+}: {
+  title: string
+  summary: string
+  rows: Array<{ label: string; value: string; toneClassName: string }>
+  footer?: string
+}) {
+  return (
+    <div className="space-y-3 p-4">
+      <div className="space-y-1">
+        <p className="section-kicker">{title}</p>
+        <p className="text-sm font-medium text-foreground">{summary}</p>
+      </div>
+
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.label} className="rounded-xl border border-border/60 bg-background/70 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm font-semibold text-foreground">{row.label}</span>
+              <span className={cn("text-sm font-semibold text-right", row.toneClassName)}>{row.value}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {footer ? <p className="text-xs leading-relaxed text-muted-foreground">{footer}</p> : null}
+    </div>
+  )
+}
+
 const formatSunTime = (value: string | null) => {
   if (!value) {
     return "--"
@@ -297,6 +372,23 @@ const formatSunTime = (value: string | null) => {
   }
 
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+}
+
+const formatDaylightDuration = (sunrise: string | null, sunset: string | null) => {
+  if (!sunrise || !sunset) {
+    return "--"
+  }
+
+  const sunriseDate = new Date(sunrise)
+  const sunsetDate = new Date(sunset)
+  if (Number.isNaN(sunriseDate.getTime()) || Number.isNaN(sunsetDate.getTime()) || sunsetDate < sunriseDate) {
+    return "--"
+  }
+
+  const totalMinutes = Math.round((sunsetDate.getTime() - sunriseDate.getTime()) / 60000)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return `${hours}h ${minutes}m`
 }
 
 export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidgetProps) {
@@ -516,27 +608,63 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
 
         {tempestStation ? (
           <div className={cn("grid gap-3", condensed ? "grid-cols-2" : "grid-cols-4")}>
-            <div className="rounded-[1.2rem] border border-cyan-300/15 bg-cyan-400/10 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="section-kicker">Live Wind</p>
-                <Wind className="h-4 w-4 text-cyan-600 dark:text-cyan-300" />
+            <WeatherInfoPopover
+              label="Live wind details"
+              align="center"
+              className="w-full"
+              content={(
+                <WeatherInfoValueCard
+                  title="Live Wind"
+                  summary={`Current ${formatWind(tempestStation.metrics.windAvgMph)} · ${formatLiveWindDetail(tempestStation.metrics.windGustMph, tempestStation.metrics.windDirectionDeg)}`}
+                  rows={[
+                    { label: "Average", value: formatWind(tempestStation.metrics.windAvgMph), toneClassName: "text-cyan-600 dark:text-cyan-300" },
+                    { label: "Direction", value: toCompass(tempestStation.metrics.windDirectionDeg), toneClassName: "text-foreground" },
+                    { label: "Gust", value: formatWind(tempestStation.metrics.windGustMph), toneClassName: "text-cyan-600 dark:text-cyan-300" }
+                  ]}
+                  footer="Direction shows where the wind is coming from, and gust shows the strongest recent burst measured by the Tempest station."
+                />
+              )}
+            >
+              <div className="rounded-[1.2rem] border border-cyan-300/15 bg-cyan-400/10 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="section-kicker">Live Wind</p>
+                  <Wind className="h-4 w-4 text-cyan-600 dark:text-cyan-300" />
+                </div>
+                <p className="mt-2 text-lg font-semibold text-foreground">{formatWind(tempestStation.metrics.windAvgMph)}</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {formatLiveWindDetail(tempestStation.metrics.windGustMph, tempestStation.metrics.windDirectionDeg)}
+                </p>
               </div>
-              <p className="mt-2 text-lg font-semibold text-foreground">{formatWind(tempestStation.metrics.windAvgMph)}</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {formatLiveWindDetail(tempestStation.metrics.windGustMph, tempestStation.metrics.windDirectionDeg)}
-              </p>
-            </div>
+            </WeatherInfoPopover>
 
-            <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="section-kicker">Rainfall</p>
-                <Droplets className="h-4 w-4 text-blue-500" />
+            <WeatherInfoPopover
+              label="Rainfall details"
+              align="center"
+              className="w-full"
+              content={(
+                <WeatherInfoValueCard
+                  title="Rainfall"
+                  summary={`Today ${formatRain(tempestStation.metrics.rainTodayIn)} · Rate ${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`}
+                  rows={[
+                    { label: "Today", value: formatRain(tempestStation.metrics.rainTodayIn), toneClassName: "text-blue-600 dark:text-blue-300" },
+                    { label: "Current Rate", value: `${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`, toneClassName: "text-blue-600 dark:text-blue-300" },
+                    { label: "Meaning", value: describeRainIntensity(tempestStation.metrics.rainRateInPerHr), toneClassName: "text-foreground" }
+                  ]}
+                  footer="Today's rainfall is total accumulation. Rate shows how quickly rain is falling right now."
+                />
+              )}
+            >
+              <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="section-kicker">Rainfall</p>
+                  <Droplets className="h-4 w-4 text-blue-500" />
+                </div>
+                <p className="mt-2 text-lg font-semibold text-foreground">{formatRain(tempestStation.metrics.rainTodayIn)}</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Rate {formatRain(tempestStation.metrics.rainRateInPerHr)}/hr
+                </p>
               </div>
-              <p className="mt-2 text-lg font-semibold text-foreground">{formatRain(tempestStation.metrics.rainTodayIn)}</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Rate {formatRain(tempestStation.metrics.rainRateInPerHr)}/hr
-              </p>
-            </div>
+            </WeatherInfoPopover>
 
             {!compact ? (
               <WeatherInfoPopover
@@ -568,62 +696,152 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             ) : null}
 
             {!compact ? (
-              <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="section-kicker">Station</p>
-                  <Activity className="h-4 w-4 text-violet-500" />
+              <WeatherInfoPopover
+                label="Station details"
+                align="center"
+                className="w-full"
+                content={(
+                  <WeatherInfoValueCard
+                    title="Station"
+                    summary={`${tempestStation.name} · ${tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}`}
+                    rows={[
+                      { label: "Feed", value: formatStationFeed(tempestStation.status.websocketConnected), toneClassName: tempestStation.status.websocketConnected ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300" },
+                      { label: "Station", value: tempestStation.name, toneClassName: "text-foreground" },
+                      { label: "Room", value: tempestStation.room, toneClassName: "text-foreground" }
+                    ]}
+                    footer="Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown."
+                  />
+                )}
+              >
+                <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="section-kicker">Station</p>
+                    <Activity className="h-4 w-4 text-violet-500" />
+                  </div>
+                  <p className="mt-2 text-lg font-semibold text-foreground">{tempestStation.name}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}
+                  </p>
                 </div>
-                <p className="mt-2 text-lg font-semibold text-foreground">{tempestStation.name}</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}
-                </p>
-              </div>
+              </WeatherInfoPopover>
             ) : null}
           </div>
         ) : null}
 
         <div className={cn("grid gap-3", metricGrid)}>
-          <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-            <p className="section-kicker">Today</p>
-            <p className="mt-2 text-lg font-semibold text-foreground">{formatTemperature(weather.today.highF)} / {formatTemperature(weather.today.lowF)}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{weather.today.condition}</p>
-          </div>
+          <WeatherInfoPopover
+            label="Today forecast details"
+            align="center"
+            className="w-full"
+            content={(
+              <WeatherInfoValueCard
+                title="Today"
+                summary={`${formatTemperature(weather.today.highF)} / ${formatTemperature(weather.today.lowF)} · ${weather.today.condition}`}
+                rows={[
+                  { label: "High", value: formatTemperature(weather.today.highF), toneClassName: "text-cyan-600 dark:text-cyan-300" },
+                  { label: "Low", value: formatTemperature(weather.today.lowF), toneClassName: "text-violet-600 dark:text-violet-300" },
+                  { label: "Condition", value: weather.today.condition, toneClassName: "text-foreground" }
+                ]}
+                footer="This card shows today's forecast high and low from the weather service, along with the expected overall condition."
+              />
+            )}
+          >
+            <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
+              <p className="section-kicker">Today</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{formatTemperature(weather.today.highF)} / {formatTemperature(weather.today.lowF)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{weather.today.condition}</p>
+            </div>
+          </WeatherInfoPopover>
 
-          <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-            <p className="section-kicker">Humidity</p>
-            <p className="mt-2 text-lg font-semibold text-foreground">{formatPercent(weather.current.humidity)}</p>
-            <p className="mt-1 text-sm text-muted-foreground">Indoor comfort check</p>
-          </div>
+          <WeatherInfoPopover
+            label="Humidity details"
+            align="center"
+            className="w-full"
+            content={(
+              <WeatherInfoCard
+                title="Humidity"
+                summary={`Current ${formatPercent(weather.current.humidity)} · ${describeHumidityLevel(weather.current.humidity)}`}
+                rows={[
+                  { range: "0-30%", detail: "Dry air", toneClassName: "text-amber-600 dark:text-amber-300" },
+                  { range: "30-60%", detail: "Comfort band", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                  { range: "60%+", detail: "Humid", toneClassName: "text-cyan-600 dark:text-cyan-300" }
+                ]}
+                footer="Humidity affects skin comfort, indoor dryness, and how heavy the air feels. Mid-range humidity is usually the most comfortable."
+              />
+            )}
+          >
+            <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
+              <p className="section-kicker">Humidity</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{formatPercent(weather.current.humidity)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">Indoor comfort check</p>
+            </div>
+          </WeatherInfoPopover>
 
-          <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="section-kicker">Sun Cycle</p>
+          <WeatherInfoPopover
+            label="Sun cycle details"
+            align="center"
+            className="w-full"
+            content={(
+              <WeatherInfoValueCard
+                title="Sun Cycle"
+                summary={`Sunrise ${formatSunTime(weather.today.sunrise)} · Sunset ${formatSunTime(weather.today.sunset)}`}
+                rows={[
+                  { label: "Sunrise", value: formatSunTime(weather.today.sunrise), toneClassName: "text-amber-600 dark:text-amber-300" },
+                  { label: "Sunset", value: formatSunTime(weather.today.sunset), toneClassName: "text-orange-600 dark:text-orange-300" },
+                  { label: "Daylight", value: formatDaylightDuration(weather.today.sunrise, weather.today.sunset), toneClassName: "text-foreground" }
+                ]}
+                footer="Sun cycle helps with planning outdoor light, routines, and automations tied to sunrise or sunset."
+              />
+            )}
+          >
+            <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="section-kicker">Sun Cycle</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Sunrise className="h-4 w-4 text-amber-400" />
+                  <Sunset className="h-4 w-4 text-orange-400" />
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Sunrise className="h-4 w-4 text-amber-400" />
-                <Sunset className="h-4 w-4 text-orange-400" />
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-muted-foreground">Sunrise</span>
+                  <span className="text-base font-semibold text-foreground">{formatSunTime(weather.today.sunrise)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-muted-foreground">Sunset</span>
+                  <span className="text-base font-semibold text-foreground">{formatSunTime(weather.today.sunset)}</span>
+                </div>
               </div>
             </div>
-            <div className="mt-2 space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">Sunrise</span>
-                <span className="text-base font-semibold text-foreground">{formatSunTime(weather.today.sunrise)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">Sunset</span>
-                <span className="text-base font-semibold text-foreground">{formatSunTime(weather.today.sunset)}</span>
-              </div>
-            </div>
-          </div>
+          </WeatherInfoPopover>
 
-          <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-            <p className="section-kicker">Rain Chance</p>
-            <p className="mt-2 text-lg font-semibold text-foreground">{formatPercent(weather.today.precipitationChance)}</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {weather.current.precipitationIn === null ? "No live precipitation feed" : `${weather.current.precipitationIn.toFixed(2)} in now`}
-            </p>
-          </div>
+          <WeatherInfoPopover
+            label="Rain chance details"
+            align="center"
+            className="w-full"
+            content={(
+              <WeatherInfoCard
+                title="Rain Chance"
+                summary={`Current ${formatPercent(weather.today.precipitationChance)} · ${describeRainChance(weather.today.precipitationChance)}`}
+                rows={[
+                  { range: "0-20%", detail: "Low risk", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                  { range: "21-50%", detail: "Watch clouds", toneClassName: "text-amber-600 dark:text-amber-300" },
+                  { range: "51%+", detail: "More likely rain", toneClassName: "text-rose-600 dark:text-rose-300" }
+                ]}
+                footer={`Rain chance shows the likelihood of measurable precipitation today. Live precipitation now: ${weather.current.precipitationIn === null ? "No live precipitation feed" : formatRain(weather.current.precipitationIn)}.`}
+              />
+            )}
+          >
+            <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
+              <p className="section-kicker">Rain Chance</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{formatPercent(weather.today.precipitationChance)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {weather.current.precipitationIn === null ? "No live precipitation feed" : `${weather.current.precipitationIn.toFixed(2)} in now`}
+              </p>
+            </div>
+          </WeatherInfoPopover>
         </div>
 
         {error ? (
