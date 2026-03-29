@@ -398,6 +398,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const compact = size === "small"
   const condensed = size === "small" || size === "medium"
   const wide = size === "large" || size === "full"
+  const stackedHero = compact
   const tempestStation = weather?.tempest?.available ? weather.tempest.station : null
   const aqiTone = aqiToneClassName(weather?.current.airQualityIndex)
   const uvTone = uvToneClassName(tempestStation?.metrics.uvIndex)
@@ -521,8 +522,8 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
       <div className="absolute bottom-[-6rem] left-[-4rem] h-44 w-44 rounded-full bg-blue-300/18 blur-3xl dark:bg-blue-500/10" />
 
       <div className="relative space-y-4">
-        <div className={cn("gap-4", condensed ? "space-y-4" : "flex flex-wrap items-start justify-between")}>
-          <div className="space-y-2">
+        <div className={cn("gap-5", stackedHero ? "space-y-4" : "grid gap-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-start")}>
+          <div className="space-y-3">
             <p className="section-kicker">Local Forecast</p>
             <div className="flex flex-wrap items-center gap-3">
               <h3 className={cn("font-semibold text-foreground", compact ? "text-2xl" : "text-3xl")}>
@@ -538,71 +539,81 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 </span>
               ) : null}
             </div>
-            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">{weather.current.condition}</span>
-              <span>•</span>
+            <div className="flex flex-wrap items-center gap-2.5 text-sm text-muted-foreground">
+              <span className="text-base font-semibold text-foreground">{weather.current.condition}</span>
+              <span className="text-muted-foreground/50">•</span>
               <span className="inline-flex items-center gap-1">
                 <MapPin className="h-3.5 w-3.5" />
                 {weather.location.name}
               </span>
-              <span>•</span>
-              <span>{sourceLabel}</span>
+              <span className="inline-flex items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
+                {sourceLabel}
+              </span>
             </div>
           </div>
 
-          <div className={cn("flex items-center gap-3", condensed ? "justify-between" : "justify-end")}>
-            <WeatherInfoPopover
-              label="AQI details"
-              content={(
-                <WeatherInfoCard
-                  title="AQI"
-                  summary={`Current ${formatAqi(weather.current.airQualityIndex)} · ${describeAqiLevel(weather.current.airQualityIndex)}`}
-                  rows={[
-                    { range: "0-50", detail: "Good", toneClassName: "text-emerald-600 dark:text-emerald-300" },
-                    { range: "51-100", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
-                    { range: "101+", detail: "Unhealthy", toneClassName: "text-rose-600 dark:text-rose-300" }
-                  ]}
-                  footer="AQI reflects how current air pollution may affect outdoor breathing comfort."
-                />
-              )}
-            >
-              <div className={cn("rounded-[1.2rem] border px-3 py-2 text-right", aqiTone.chrome)}>
-                <p className="section-kicker">AQI</p>
-                <p className={cn("mt-1 text-lg font-semibold", aqiTone.value)}>{formatAqi(weather.current.airQualityIndex)}</p>
-              </div>
-            </WeatherInfoPopover>
-
-            {tempestStation ? (
+          <div className={cn("flex flex-wrap items-stretch gap-3", stackedHero ? "justify-between" : "justify-start md:justify-end")}>
+            <div className="flex items-stretch gap-3">
               <WeatherInfoPopover
-                label="UV details"
+                label="AQI details"
                 content={(
                   <WeatherInfoCard
-                    title="UV"
-                    summary={`Current ${formatUv(tempestStation.metrics.uvIndex)} · ${describeUvLevel(tempestStation.metrics.uvIndex)}`}
+                    title="AQI"
+                    summary={`Current ${formatAqi(weather.current.airQualityIndex)} · ${describeAqiLevel(weather.current.airQualityIndex)}`}
                     rows={[
-                      { range: "0-2", detail: "Low", toneClassName: "text-emerald-600 dark:text-emerald-300" },
-                      { range: "3-5", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
-                      { range: "6+", detail: "High", toneClassName: "text-rose-600 dark:text-rose-300" }
+                      { range: "0-50", detail: "Good", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                      { range: "51-100", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
+                      { range: "101+", detail: "Unhealthy", toneClassName: "text-rose-600 dark:text-rose-300" }
                     ]}
-                    footer="Higher UV means quicker sun exposure risk and stronger need for shade or sunscreen."
+                    footer="AQI reflects how current air pollution may affect outdoor breathing comfort."
                   />
                 )}
               >
-                <div className={cn("rounded-[1.2rem] border px-3 py-2 text-right", uvTone.chrome)}>
-                  <p className="section-kicker">UV</p>
-                  <p className={cn("mt-1 text-lg font-semibold", uvTone.value)}>{formatUv(tempestStation.metrics.uvIndex)}</p>
+                <div className={cn("min-w-[6rem] rounded-[1.2rem] border px-3 py-2.5 text-right", aqiTone.chrome)}>
+                  <p className="section-kicker">AQI</p>
+                  <p className={cn("mt-1 text-lg font-semibold", aqiTone.value)}>{formatAqi(weather.current.airQualityIndex)}</p>
                 </div>
               </WeatherInfoPopover>
-            ) : null}
 
-            <div className="rounded-[1.2rem] border border-white/15 bg-white/10 p-3 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
-              <WeatherGlyph icon={weather.current.icon} isDay={weather.current.isDay} className="h-8 w-8" />
+              {tempestStation ? (
+                <WeatherInfoPopover
+                  label="UV details"
+                  content={(
+                    <WeatherInfoCard
+                      title="UV"
+                      summary={`Current ${formatUv(tempestStation.metrics.uvIndex)} · ${describeUvLevel(tempestStation.metrics.uvIndex)}`}
+                      rows={[
+                        { range: "0-2", detail: "Low", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                        { range: "3-5", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
+                        { range: "6+", detail: "High", toneClassName: "text-rose-600 dark:text-rose-300" }
+                      ]}
+                      footer="Higher UV means quicker sun exposure risk and stronger need for shade or sunscreen."
+                    />
+                  )}
+                >
+                  <div className={cn("min-w-[6rem] rounded-[1.2rem] border px-3 py-2.5 text-right", uvTone.chrome)}>
+                    <p className="section-kicker">UV</p>
+                    <p className={cn("mt-1 text-lg font-semibold", uvTone.value)}>{formatUv(tempestStation.metrics.uvIndex)}</p>
+                  </div>
+                </WeatherInfoPopover>
+              ) : null}
             </div>
 
-            <Button variant="outline" size="sm" onClick={() => void fetchWeather()}>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Refresh
-            </Button>
+            <div className="flex items-center gap-3">
+              <div className="flex h-16 w-16 items-center justify-center rounded-[1.25rem] border border-white/15 bg-white/10 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
+                <WeatherGlyph icon={weather.current.icon} isDay={weather.current.isDay} className="h-8 w-8" />
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-11 rounded-[1.1rem] px-4"
+                onClick={() => void fetchWeather()}
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Refresh
+              </Button>
+            </div>
           </div>
         </div>
 
