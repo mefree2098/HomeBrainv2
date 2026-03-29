@@ -478,6 +478,19 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
 
   const headlineTemperature = tempestStation?.metrics.temperatureF ?? weather?.current.temperatureF ?? null
   const headlineFeelsLike = tempestStation?.metrics.feelsLikeF ?? weather?.current.apparentTemperatureF ?? null
+  const weatherContextRow = (className?: string) => (
+    <div className={cn("flex min-w-0 items-center gap-2.5 text-sm text-muted-foreground", className)}>
+      <span className="shrink-0 text-base font-semibold text-foreground">{weather.current.condition}</span>
+      <span className="shrink-0 text-muted-foreground/50">•</span>
+      <span className="inline-flex min-w-0 items-center gap-1 truncate">
+        <MapPin className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate">{weather.location.name}</span>
+      </span>
+      <span className="inline-flex shrink-0 items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
+        {sourceLabel}
+      </span>
+    </div>
+  )
 
   if (loading && !weather) {
     return (
@@ -539,17 +552,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 </span>
               ) : null}
             </div>
-            <div className="flex flex-wrap items-center gap-2.5 text-sm text-muted-foreground">
-              <span className="text-base font-semibold text-foreground">{weather.current.condition}</span>
-              <span className="text-muted-foreground/50">•</span>
-              <span className="inline-flex items-center gap-1">
-                <MapPin className="h-3.5 w-3.5" />
-                {weather.location.name}
-              </span>
-              <span className="inline-flex items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
-                {sourceLabel}
-              </span>
-            </div>
+            {stackedHero ? weatherContextRow("flex-wrap") : null}
           </div>
 
           <div className={cn("flex flex-wrap items-stretch gap-3", stackedHero ? "justify-between" : "justify-start md:justify-end")}>
@@ -616,6 +619,8 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             </div>
           </div>
         </div>
+
+        {!stackedHero ? weatherContextRow("flex-nowrap") : null}
 
         {tempestStation ? (
           <div className={cn("grid gap-3", condensed ? "grid-cols-2" : "grid-cols-4")}>
