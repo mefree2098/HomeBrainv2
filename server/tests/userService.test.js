@@ -38,6 +38,22 @@ test('authenticateWithPassword rejects active users that have no enabled platfor
   );
 });
 
+test('user model validation normalizes platforms without requiring callback middleware', async () => {
+  const user = new User({
+    email: 'validation@homebrain.test',
+    password: await generatePasswordHash('ValidPass123!'),
+    role: 'user',
+    isActive: true,
+    platforms: {
+      homebrain: false
+    }
+  });
+
+  await assert.doesNotReject(() => user.validate());
+  assert.equal(user.platforms.homebrain, false);
+  assert.equal(user.platforms.axiom, false);
+});
+
 test('updateUserDetails blocks removing HomeBrain access from the last active HomeBrain admin', async (t) => {
   const originalGet = UserService.get;
   const originalCountActiveAdmins = UserService.countActiveAdmins;

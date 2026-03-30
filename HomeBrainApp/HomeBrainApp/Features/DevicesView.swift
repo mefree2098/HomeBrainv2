@@ -5,6 +5,7 @@ struct DevicesView: View {
     let previewMode: Bool
 
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var deviceFocusState: DeviceFocusState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
@@ -23,6 +24,7 @@ struct DevicesView: View {
     @State private var favoriteDeviceIds: Set<String> = []
     @State private var favoritesProfileId: String?
     @State private var pendingFavoriteDeviceIds: Set<String> = []
+    @State private var highlightedDeviceID: String?
 
     @State private var showCreateSheet = false
     @State private var newName = ""
@@ -82,50 +84,58 @@ struct DevicesView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            Group {
-                if isLoading {
-                    LoadingView(title: "Loading devices...")
-                        .padding(useLandscapeCompactLayout ? 10 : 16)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
-                            deviceHeaderPanel
+            ScrollViewReader { scrollProxy in
+                Group {
+                    if isLoading {
+                        LoadingView(title: "Loading devices...")
+                            .padding(useLandscapeCompactLayout ? 10 : 16)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
+                                deviceHeaderPanel
 
-                            if let errorMessage {
-                                InlineErrorView(message: errorMessage) {
-                                    Task { await loadDevices(showLoading: true) }
-                                }
-                            }
-
-                            if filteredDevices.isEmpty {
-                                EmptyStateView(
-                                    title: "No devices match",
-                                    subtitle: "Adjust filters or create a new device."
-                                )
-                            } else {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    ForEach(thermostatDevices) { device in
-                                        deviceCard(device)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                if let errorMessage {
+                                    InlineErrorView(message: errorMessage) {
+                                        Task { await loadDevices(showLoading: true) }
                                     }
+                                }
 
-                                    if !nonThermostatDevices.isEmpty {
-                                        LazyVGrid(columns: gridColumns, spacing: 12) {
-                                            ForEach(nonThermostatDevices) { device in
-                                                deviceCard(device)
+                                if filteredDevices.isEmpty {
+                                    EmptyStateView(
+                                        title: "No devices match",
+                                        subtitle: "Adjust filters or create a new device."
+                                    )
+                                } else {
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        ForEach(thermostatDevices) { device in
+                                            focusedDeviceCard(device)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+
+                                        if !nonThermostatDevices.isEmpty {
+                                            LazyVGrid(columns: gridColumns, spacing: 12) {
+                                                ForEach(nonThermostatDevices) { device in
+                                                    focusedDeviceCard(device)
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
+                            .padding(useLandscapeCompactLayout ? 10 : 16)
+                            .padding(.bottom, 8)
                         }
-                        .padding(useLandscapeCompactLayout ? 10 : 16)
-                        .padding(.bottom, 8)
+                        .scrollIndicators(.hidden)
+                        .refreshable {
+                            await loadDevices(showLoading: false)
+                        }
                     }
-                    .scrollIndicators(.hidden)
-                    .refreshable {
-                        await loadDevices(showLoading: false)
-                    }
+                }
+                .onChange(of: deviceFocusState.request?.token) { _, _ in
+                    applyPendingDeviceFocus(using: scrollProxy)
+                }
+                .onChange(of: devices.map(\.id)) { _, _ in
+                    applyPendingDeviceFocus(using: scrollProxy)
                 }
             }
             .onAppear {
@@ -141,6 +151,18 @@ struct DevicesView: View {
         .task {
             await loadDevices(showLoading: true)
         }
+    }
+
+    private func focusedDeviceCard(_ device: DeviceItem) -> some View {
+        let isHighlighted = highlightedDeviceID == device.id
+
+        return deviceCard(device)
+            .id(device.id)
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(isHighlighted ? HBPalette.accentBlue.opacity(0.9) : Color.clear, lineWidth: 2)
+            )
+            .shadow(color: isHighlighted ? HBPalette.accentBlue.opacity(0.22) : .clear, radius: 18)
     }
 
     private var deviceHeaderPanel: some View {
@@ -791,6 +813,42 @@ struct DevicesView: View {
     private func applyFavoriteContext(_ context: FavoriteDeviceContext) {
         favoritesProfileId = context.profileId
         favoriteDeviceIds = context.favoriteDeviceIds
+    }
+
+    private func applyPendingDeviceFocus(using scrollProxy: ScrollViewProxy) {
+        guard let request = deviceFocusState.request,
+              let targetDevice = devices.first(where: { $0.id == request.deviceID }) else {
+            return
+        }
+
+        if typeFilter != "all" {
+            typeFilter = "all"
+        }
+
+        let targetSearch = targetDevice.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !targetSearch.isEmpty, searchText != targetSearch {
+            searchText = targetSearch
+        }
+
+        highlightedDeviceID = targetDevice.id
+        let token = request.token
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            withAnimation(.easeInOut(duration: 0.24)) {
+                scrollProxy.scrollTo(targetDevice.id, anchor: .center)
+            }
+            deviceFocusState.clear(token: token)
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            if highlightedDeviceID == targetDevice.id {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    highlightedDeviceID = nil
+                }
+            }
+        }
     }
 
     private func applyFavoriteContext(

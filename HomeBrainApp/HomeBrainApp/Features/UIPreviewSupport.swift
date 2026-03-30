@@ -155,6 +155,38 @@ enum UIPreviewData {
             lastSeen: "3m ago"
         ),
         DeviceItem(
+            id: "preview-front-door-sensor",
+            name: "Front Door Sensor",
+            type: "sensor",
+            room: "Entry",
+            status: false,
+            isOnline: true,
+            brightness: 0,
+            color: "#ffffff",
+            temperature: nil,
+            targetTemperature: nil,
+            properties: [
+                "smartThingsCapabilities": ["contactSensor"]
+            ],
+            lastSeen: "Just now"
+        ),
+        DeviceItem(
+            id: "preview-hall-motion",
+            name: "Hall Motion Sensor",
+            type: "sensor",
+            room: "Upper Hall",
+            status: false,
+            isOnline: true,
+            brightness: 0,
+            color: "#ffffff",
+            temperature: nil,
+            targetTemperature: nil,
+            properties: [
+                "smartThingsCapabilities": ["motionSensor"]
+            ],
+            lastSeen: "1m ago"
+        ),
+        DeviceItem(
             id: "preview-lock",
             name: "Front Door Lock",
             type: "lock",
@@ -167,6 +199,20 @@ enum UIPreviewData {
             targetTemperature: nil,
             properties: [:],
             lastSeen: "5m ago"
+        ),
+        DeviceItem(
+            id: "preview-back-door-lock",
+            name: "Back Door Lock",
+            type: "lock",
+            room: "Kitchen",
+            status: false,
+            isOnline: true,
+            brightness: 0,
+            color: "#ffffff",
+            temperature: nil,
+            targetTemperature: nil,
+            properties: [:],
+            lastSeen: "Just now"
         ),
         DeviceItem(
             id: "preview-speaker",

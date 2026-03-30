@@ -31,12 +31,12 @@ function normalizeUserPlatforms(value, options = {}) {
   }
 
   return {
-    [USER_PLATFORMS.HOMEBRAIN]: Object.prototype.hasOwnProperty.call(source, USER_PLATFORMS.HOMEBRAIN)
-      ? Boolean(source[USER_PLATFORMS.HOMEBRAIN])
-      : defaults[USER_PLATFORMS.HOMEBRAIN],
-    [USER_PLATFORMS.AXIOM]: Object.prototype.hasOwnProperty.call(source, USER_PLATFORMS.AXIOM)
-      ? Boolean(source[USER_PLATFORMS.AXIOM])
-      : defaults[USER_PLATFORMS.AXIOM]
+    [USER_PLATFORMS.HOMEBRAIN]: source[USER_PLATFORMS.HOMEBRAIN] === undefined
+      ? defaults[USER_PLATFORMS.HOMEBRAIN]
+      : Boolean(source[USER_PLATFORMS.HOMEBRAIN]),
+    [USER_PLATFORMS.AXIOM]: source[USER_PLATFORMS.AXIOM] === undefined
+      ? defaults[USER_PLATFORMS.AXIOM]
+      : Boolean(source[USER_PLATFORMS.AXIOM])
   };
 }
 
