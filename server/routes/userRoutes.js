@@ -4,6 +4,7 @@ const router = express.Router();
 
 const UserService = require('../services/userService.js');
 const { requireAdmin } = require('./middlewares/auth.js');
+const { USER_PLATFORMS, normalizeUserPlatforms } = require('../utils/userPlatforms');
 
 router.use(requireAdmin());
 
@@ -84,6 +85,23 @@ router.put('/:id', async (req, res) => {
       });
     }
 
+    if (currentUserId === userId && Object.prototype.hasOwnProperty.call(updateData, 'role') && updateData.role !== req.user?.role) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot change your own role'
+      });
+    }
+
+    if (currentUserId === userId && Object.prototype.hasOwnProperty.call(updateData, 'platforms')) {
+      const nextPlatforms = normalizeUserPlatforms(updateData.platforms);
+      if (!nextPlatforms[USER_PLATFORMS.HOMEBRAIN]) {
+        return res.status(400).json({
+          success: false,
+          message: 'You cannot remove your own HomeBrain access'
+        });
+      }
+    }
+
     const user = await UserService.updateUserDetails(userId, updateData);
     return res.status(200).json({
       success: true,
@@ -98,7 +116,7 @@ router.put('/:id', async (req, res) => {
         || error.message?.includes('required')
         || error.message?.includes('boolean')
         || error.message?.includes('Role must')
-        || error.message?.includes('At least one active admin account is required')
+        || error.message?.includes('At least one active HomeBrain admin account is required')
         ? 400
         : 500;
 
@@ -154,7 +172,7 @@ router.delete('/:id', async (req, res) => {
     });
   } catch (error) {
     console.error(`DELETE /api/users/${req.params.id} - Error:`, error.message);
-    const statusCode = error.message?.includes('At least one active admin account is required') ? 400 : 500;
+    const statusCode = error.message?.includes('At least one active HomeBrain admin account is required') ? 400 : 500;
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to delete user'

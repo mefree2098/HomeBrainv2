@@ -17,7 +17,29 @@ export const getSecurityAlarm = async () => {
 // Description: Get security alarm status
 // Endpoint: GET /api/security-alarm/status
 // Request: {}
-// Response: { success: boolean, status: { alarmState: string, isArmed: boolean, isTriggered: boolean, lastArmed: string, lastDisarmed: string, zoneCount: number, activeZones: number, isOnline: boolean } }
+// Response: {
+//   success: boolean,
+//   status: {
+//     alarmState: string,
+//     isArmed: boolean,
+//     isTriggered: boolean,
+//     lastArmed: string,
+//     lastDisarmed: string,
+//     zoneCount: number,
+//     activeZones: number,
+//     sensorCount?: number,
+//     activeSensorCount?: number,
+//     monitoredSensorCount?: number,
+//     offlineSensorCount?: number,
+//     lowBatterySensorCount?: number,
+//     sensors?: Array,
+//     doorLockCount?: number,
+//     lockedDoorCount?: number,
+//     unlockedDoorCount?: number,
+//     doorLocks?: Array,
+//     isOnline: boolean
+//   }
+// }
 export const getSecurityStatus = async () => {
   try {
     const response = await api.get('/api/security-alarm/status');

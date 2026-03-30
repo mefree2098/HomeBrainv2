@@ -15,6 +15,7 @@ import {
 import { useToast } from "@/hooks/useToast"
 import { useAuth } from "@/contexts/AuthContext"
 import { getRegistrationStatus } from "@/api/auth"
+import { hasPlatformAccess } from "../../../shared/types/user"
 
 type LoginForm = {
   email: string
@@ -72,9 +73,13 @@ export function Login() {
   const onSubmit = async (data: LoginForm) => {
     try {
       setLoading(true)
-      await login(data.email, data.password)
+      const user = await login(data.email, data.password)
       if (returnTo) {
         window.location.assign(returnTo)
+        return
+      }
+      if (!hasPlatformAccess(user, "homebrain") && user.defaultRedirectUrl) {
+        window.location.assign(user.defaultRedirectUrl)
         return
       }
       navigate("/")

@@ -1,5 +1,5 @@
 import api from "./api";
-import type { User, UserRole } from "../../../shared/types/user";
+import type { User, UserPlatforms, UserRole } from "../../../shared/types/user";
 
 export type CreateUserPayload = {
   name?: string;
@@ -7,6 +7,7 @@ export type CreateUserPayload = {
   password: string;
   role: UserRole;
   isActive?: boolean;
+  platforms?: UserPlatforms;
 }
 
 export type UpdateUserPayload = {
@@ -14,6 +15,7 @@ export type UpdateUserPayload = {
   email?: string;
   role?: UserRole;
   isActive?: boolean;
+  platforms?: UserPlatforms;
 }
 
 const getErrorMessage = (error: any, fallback: string) => {
