@@ -46,6 +46,7 @@ const formatRain = (value: number | null) => value === null ? "--" : `${value.to
 const formatPressure = (value: number | null) => value === null ? "--" : `${value.toFixed(2)} inHg`
 const formatUv = (value: number | null | undefined) => value == null ? "--" : value.toFixed(1)
 const formatAqi = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)}`
+const formatBatteryVoltage = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(2)} V`
 
 const toCompass = (degrees: number | null | undefined) => {
   if (degrees == null) {
@@ -167,6 +168,90 @@ const describeRainChance = (value: number | null | undefined) => {
 }
 
 const formatStationFeed = (websocketConnected: boolean) => websocketConnected ? "WebSocket live" : "Snapshot only"
+
+// Approximate charge using Tempest's published low-power voltage bands.
+const TEMPEST_BATTERY_EMPTY_VOLTS = 2.355
+const TEMPEST_BATTERY_FULL_VOLTS = 2.65
+
+const getTempestBatteryPercent = (volts: number | null | undefined) => {
+  if (volts == null) {
+    return null
+  }
+
+  const clamped = Math.min(Math.max(volts, TEMPEST_BATTERY_EMPTY_VOLTS), TEMPEST_BATTERY_FULL_VOLTS)
+  return Math.round(((clamped - TEMPEST_BATTERY_EMPTY_VOLTS) / (TEMPEST_BATTERY_FULL_VOLTS - TEMPEST_BATTERY_EMPTY_VOLTS)) * 100)
+}
+
+const batteryToneClassName = (percent: number | null | undefined) => {
+  if (percent == null) {
+    return {
+      chrome: "border-white/12 bg-white/8",
+      label: "text-foreground/85",
+      iconBorder: "border-white/35",
+      iconTip: "bg-white/35",
+      fill: "bg-white/45"
+    }
+  }
+
+  if (percent >= 75) {
+    return {
+      chrome: "border-emerald-400/25 bg-emerald-400/10",
+      label: "text-emerald-700 dark:text-emerald-300",
+      iconBorder: "border-emerald-500/60 dark:border-emerald-300/55",
+      iconTip: "bg-emerald-500/70 dark:bg-emerald-300/65",
+      fill: "bg-emerald-500 dark:bg-emerald-300"
+    }
+  }
+
+  if (percent >= 40) {
+    return {
+      chrome: "border-amber-400/25 bg-amber-400/10",
+      label: "text-amber-700 dark:text-amber-300",
+      iconBorder: "border-amber-500/60 dark:border-amber-300/55",
+      iconTip: "bg-amber-500/70 dark:bg-amber-300/65",
+      fill: "bg-amber-500 dark:bg-amber-300"
+    }
+  }
+
+  return {
+    chrome: "border-rose-400/25 bg-rose-400/10",
+    label: "text-rose-700 dark:text-rose-300",
+    iconBorder: "border-rose-500/60 dark:border-rose-300/55",
+    iconTip: "bg-rose-500/70 dark:bg-rose-300/65",
+    fill: "bg-rose-500 dark:bg-rose-300"
+  }
+}
+
+function TempestBatteryBadge({ volts }: { volts: number | null | undefined }) {
+  const percent = getTempestBatteryPercent(volts)
+  const tone = batteryToneClassName(percent)
+  const fillWidth = percent == null ? 0 : Math.max(percent, 6)
+  const label = percent == null ? "--" : `${percent}%`
+  const title = percent == null
+    ? "Tempest battery telemetry unavailable"
+    : `Tempest battery ${percent}% (${formatBatteryVoltage(volts)})`
+
+  return (
+    <span
+      className={cn("inline-flex shrink-0 items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium", tone.chrome, tone.label)}
+      aria-label={title}
+      title={title}
+    >
+      <span className="flex shrink-0 items-center" aria-hidden="true">
+        <span className={cn("relative h-3.5 w-5 overflow-hidden rounded-[3px] border", tone.iconBorder)}>
+          <span className="absolute inset-[2px] overflow-hidden rounded-[1px]">
+            <span
+              className={cn("block h-full rounded-[1px] transition-[width] duration-300", tone.fill)}
+              style={{ width: `${fillWidth}%` }}
+            />
+          </span>
+        </span>
+        <span className={cn("ml-0.5 h-2 w-1 rounded-r-sm", tone.iconTip)} />
+      </span>
+      <span className="tabular-nums">{label}</span>
+    </span>
+  )
+}
 
 const uvToneClassName = (value: number | null | undefined) => {
   if (value == null) {
@@ -400,6 +485,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const wide = size === "large" || size === "full"
   const stackedHero = compact
   const tempestStation = weather?.tempest?.available ? weather.tempest.station : null
+  const tempestBatteryPercent = getTempestBatteryPercent(tempestStation?.metrics.batteryVolts)
   const aqiTone = aqiToneClassName(weather?.current.airQualityIndex)
   const uvTone = uvToneClassName(tempestStation?.metrics.uvIndex)
 
@@ -482,12 +568,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
     <div className={cn("flex min-w-0 items-center gap-2.5 text-sm text-muted-foreground", className)}>
       <span className="shrink-0 text-base font-semibold text-foreground">{weather.current.condition}</span>
       <span className="shrink-0 text-muted-foreground/50">•</span>
-      <span className="inline-flex min-w-0 items-center gap-1 truncate">
+      <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate">
         <MapPin className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">{weather.location.name}</span>
       </span>
-      <span className="inline-flex shrink-0 items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
-        {sourceLabel}
+      <span className="flex shrink-0 flex-wrap items-center gap-2">
+        {tempestStation ? <TempestBatteryBadge volts={tempestStation.metrics.batteryVolts} /> : null}
+        {tempestStation ? (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium",
+              tempestBatteryPercent != null && tempestBatteryPercent <= 25
+                ? "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-300"
+                : "border-cyan-400/20 bg-cyan-400/10 text-cyan-700 dark:text-cyan-300"
+            )}
+          >
+            <Radar className="h-3.5 w-3.5" />
+            Tempest Live
+          </span>
+        ) : null}
+        <span className="inline-flex items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
+          {sourceLabel}
+        </span>
       </span>
     </div>
   )
@@ -545,12 +647,6 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               <span className="text-sm font-medium text-muted-foreground">
                 Feels like {formatTemperature(headlineFeelsLike)}
               </span>
-              {tempestStation ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-xs font-medium text-cyan-700 dark:text-cyan-300">
-                  <Radar className="h-3.5 w-3.5" />
-                  Tempest Live
-                </span>
-              ) : null}
             </div>
             {stackedHero ? weatherContextRow("flex-wrap") : null}
           </div>
