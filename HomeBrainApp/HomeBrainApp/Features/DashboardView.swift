@@ -1586,7 +1586,6 @@ struct DashboardView: View {
 
     private func securityPanel(for widget: DashboardWidgetItem) -> some View {
         let compact = widget.size == .small
-        let usesStackedActions = compact || usesPortraitCompactLayout || layoutWidth < 540
         let sensorFooterParts = [
             securityZonesTotal > 0 ? "\(securityZonesActive)/\(securityZonesTotal) active" : "No sensors detected",
             securityMonitoredSensorCount > 0 ? "\(securityMonitoredSensorCount) monitored" : nil,
@@ -1595,6 +1594,8 @@ struct DashboardView: View {
         ].compactMap { $0 }
 
         return VStack(alignment: .leading, spacing: compact ? 10 : 12) {
+            securityAlarmStateTile(compact: compact)
+
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -1710,82 +1711,55 @@ struct DashboardView: View {
             }
             .padding(compact ? 12 : 14)
             .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
-
-            securitySummaryTile(
-                title: "Alarm State",
-                value: securityStatusLabel,
-                detail: "\(securityStatusDetail) • \(systemStatus)",
-                accent: securityStatusAccent,
-                compact: compact,
-                titleColor: securityStateTitleColor,
-                valueColor: securityStateValueColor,
-                detailColor: securityStateDetailColor,
-                backgroundVariant: securityStateBackgroundVariant,
-                backgroundTint: securityStateBackgroundTint,
-                backgroundTintOpacity: securityStateBackgroundOpacity
-            ) {
-                HStack(alignment: .center, spacing: 10) {
-                    securityPrimaryActions(compact: usesStackedActions, stacked: false)
-                    securitySyncAction(compact: true)
-                        .frame(maxWidth: usesStackedActions ? nil : 220)
-                }
-            }
         }
     }
 
-    private func securitySummaryTile<Actions: View>(
-        title: String,
-        value: String,
-        detail: String,
-        accent: Color,
-        compact: Bool,
-        titleColor: Color = HBPalette.textMuted,
-        valueColor: Color = HBPalette.textPrimary,
-        detailColor: Color = HBPalette.textSecondary,
-        backgroundVariant: HBGlassVariant = .panelSoft,
-        backgroundTint: Color = .clear,
-        backgroundTintOpacity: Double = 0,
-        @ViewBuilder actions: () -> Actions
-    ) -> some View {
+    private func securityAlarmStateTile(compact: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: compact ? 16 : 18, style: .continuous)
 
-        return VStack(alignment: .leading, spacing: compact ? 4 : 6) {
-            Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .textCase(.uppercase)
-                .tracking(2.0)
-                .foregroundStyle(titleColor)
+        return VStack(alignment: .leading, spacing: compact ? 2 : 3) {
+            HStack(alignment: .top, spacing: 10) {
+                Text("Alarm State")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2.0)
+                    .foregroundStyle(securityStateTitleColor)
 
-            Text(value)
+                Spacer(minLength: 8)
+
+                securityAlarmHeaderActions(compact: true)
+            }
+
+            Text(securityStatusLabel)
                 .font(.system(size: compact ? 24 : 28, weight: .bold, design: .rounded))
-                .foregroundStyle(valueColor)
+                .foregroundStyle(securityStateValueColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
-            Text(detail)
+            Text("\(securityStatusDetail) • \(systemStatus)")
                 .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
-                .foregroundStyle(detailColor)
+                .foregroundStyle(securityStateDetailColor)
                 .lineLimit(2)
 
-            actions()
-                .padding(.top, compact ? 8 : 10)
-
             Capsule()
-                .fill(accent)
+                .fill(securityStatusAccent)
                 .frame(width: compact ? 38 : 46, height: 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(compact ? 12 : 14)
         .background(
             ZStack {
-                HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: backgroundVariant)
+                HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: securityStateBackgroundVariant)
                 shape
-                    .fill(backgroundTint.opacity(backgroundTintOpacity))
+                    .fill(securityStateBackgroundTint.opacity(securityStateBackgroundOpacity))
             }
         )
         .overlay(
             shape
-                .stroke(accent.opacity(backgroundTintOpacity > 0 ? 0.72 : 0.22), lineWidth: backgroundTintOpacity > 0 ? 1.4 : 1)
+                .stroke(
+                    securityStatusAccent.opacity(securityStateBackgroundOpacity > 0 ? 0.72 : 0.22),
+                    lineWidth: securityStateBackgroundOpacity > 0 ? 1.4 : 1
+                )
         )
     }
 
@@ -1919,72 +1893,155 @@ struct DashboardView: View {
         return 0
     }
 
-    private func securityPrimaryActions(compact: Bool, stacked: Bool) -> some View {
-        Group {
-            if isSecurityTriggered {
-                Button {
-                    Task { await dismissSecurityAlarm() }
-                } label: {
-                    Label("Dismiss Alarm", systemImage: "exclamationmark.triangle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(HBSecondaryButtonStyle(compact: compact))
-            } else if isSecurityArmed {
-                Button {
-                    Task { await disarmSecurity() }
-                } label: {
-                    Label("Disarm", systemImage: "shield.slash")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(HBDestructiveButtonStyle(compact: compact))
-            } else if stacked {
-                VStack(spacing: 8) {
-                    Button {
-                        Task { await armSecurity(stay: true) }
-                    } label: {
-                        Label("Arm Stay", systemImage: "house")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: compact))
+    @ViewBuilder
+    private func securityAlarmHeaderActions(compact: Bool) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                securityAlarmActionButtons(compact: compact)
+            }
 
-                    Button {
-                        Task { await armSecurity(stay: false) }
-                    } label: {
-                        Label("Arm Away", systemImage: "car")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: compact))
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 6) {
+                    securityArmStayAction(compact: compact)
+                    securityArmAwayAction(compact: compact)
                 }
-            } else {
-                HStack(spacing: 10) {
-                    Button {
-                        Task { await armSecurity(stay: true) }
-                    } label: {
-                        Label("Arm Stay", systemImage: "house")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: compact))
 
-                    Button {
-                        Task { await armSecurity(stay: false) }
-                    } label: {
-                        Label("Arm Away", systemImage: "car")
-                            .frame(maxWidth: .infinity)
+                HStack(spacing: 6) {
+                    if isSecurityTriggered {
+                        securityDismissAction(compact: compact)
+                    } else if isSecurityArmed {
+                        securityDisarmAction(compact: compact)
                     }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: compact))
+
+                    securitySyncAction(compact: compact)
                 }
             }
         }
     }
 
-    private func securitySyncAction(compact: Bool) -> some View {
-        Button {
-            Task { await syncSecurity() }
-        } label: {
-            Text("Sync")
+    @ViewBuilder
+    private func securityAlarmActionButtons(compact: Bool) -> some View {
+        securityArmStayAction(compact: compact)
+        securityArmAwayAction(compact: compact)
+
+        if isSecurityTriggered {
+            securityDismissAction(compact: compact)
+        } else if isSecurityArmed {
+            securityDisarmAction(compact: compact)
         }
-        .buttonStyle(HBGhostButtonStyle(compact: compact))
-        .frame(maxWidth: .infinity)
+
+        securitySyncAction(compact: compact)
+    }
+
+    private func securityArmStayAction(compact: Bool) -> some View {
+        securityAlarmActionButton(
+            title: "Arm Stay",
+            systemImage: "house",
+            compact: compact,
+            foreground: isSecurityStayArmed ? Color.black.opacity(0.88) : Color.black.opacity(0.78),
+            background: isSecurityStayArmed ? HBPalette.accentYellow.opacity(0.36) : HBPalette.accentYellow.opacity(0.18),
+            stroke: isSecurityStayArmed ? HBPalette.accentYellow.opacity(0.78) : HBPalette.accentYellow.opacity(0.46),
+            active: isSecurityStayArmed,
+            enabled: securityAlarmStateKey == "disarmed"
+        ) {
+            Task { await armSecurity(stay: true) }
+        }
+    }
+
+    private func securityArmAwayAction(compact: Bool) -> some View {
+        securityAlarmActionButton(
+            title: "Arm Away",
+            systemImage: "car",
+            compact: compact,
+            foreground: .white,
+            background: isSecurityAwayArmed ? HBPalette.accentRed.opacity(0.36) : HBPalette.accentRed.opacity(0.2),
+            stroke: isSecurityAwayArmed ? HBPalette.accentRed.opacity(0.78) : HBPalette.accentRed.opacity(0.46),
+            active: isSecurityAwayArmed,
+            enabled: securityAlarmStateKey == "disarmed"
+        ) {
+            Task { await armSecurity(stay: false) }
+        }
+    }
+
+    private func securityDisarmAction(compact: Bool) -> some View {
+        securityAlarmActionButton(
+            title: "Disarm",
+            systemImage: "shield.slash",
+            compact: compact,
+            foreground: .white,
+            background: HBPalette.accentRed.opacity(0.22),
+            stroke: HBPalette.accentRed.opacity(0.7)
+        ) {
+            Task { await disarmSecurity() }
+        }
+    }
+
+    private func securityDismissAction(compact: Bool) -> some View {
+        securityAlarmActionButton(
+            title: "Dismiss",
+            systemImage: "exclamationmark.triangle",
+            compact: compact,
+            foreground: .white,
+            background: HBPalette.accentRed.opacity(0.22),
+            stroke: HBPalette.accentRed.opacity(0.7)
+        ) {
+            Task { await dismissSecurityAlarm() }
+        }
+    }
+
+    private func securitySyncAction(compact: Bool) -> some View {
+        securityAlarmActionButton(
+            title: "Sync",
+            systemImage: "arrow.clockwise",
+            compact: compact,
+            foreground: HBPalette.textSecondary,
+            background: Color.white.opacity(0.08),
+            stroke: HBPalette.panelStroke.opacity(0.5)
+        ) {
+            Task { await syncSecurity() }
+        }
+    }
+
+    private func securityAlarmActionButton(
+        title: String,
+        systemImage: String,
+        compact: Bool,
+        foreground: Color,
+        background: Color,
+        stroke: Color,
+        active: Bool = false,
+        enabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            guard enabled else { return }
+            action()
+        } label: {
+            HStack(alignment: .center, spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: compact ? 11 : 12, weight: .semibold))
+                    .frame(width: compact ? 12 : 13, height: compact ? 12 : 13, alignment: .center)
+
+                Text(title)
+                    .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .foregroundStyle(foreground)
+            .padding(.horizontal, compact ? 10 : 12)
+            .frame(height: compact ? 30 : 32)
+            .background(
+                Capsule()
+                    .fill(background)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(stroke, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(enabled)
+        .opacity(enabled ? 1 : (active ? 1 : 0.68))
     }
 
     private func securityListHeight(for size: DashboardWidgetSize) -> CGFloat {

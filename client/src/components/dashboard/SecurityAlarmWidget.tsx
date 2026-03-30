@@ -9,6 +9,7 @@ import {
   Lock,
   LockOpen,
   Menu,
+  RefreshCw,
   ShieldX,
 } from "lucide-react"
 
@@ -173,6 +174,29 @@ const compactSensorStatusClassName = (sensor: SecuritySensor) => {
   }
   return "text-emerald-600 dark:text-emerald-300"
 }
+
+const alarmActionButtonClassName = ({
+  tone = "neutral",
+  active = false
+}: {
+  tone?: "neutral" | "stay" | "away" | "sync" | "danger"
+  active?: boolean
+}) => cn(
+  "h-8 min-w-0 justify-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold shadow-none transition-colors sm:px-3 sm:text-[11px] [&_svg]:h-3.5 [&_svg]:w-3.5 disabled:cursor-default disabled:opacity-100",
+  tone === "danger"
+    ? "border-red-500/45 bg-red-500/16 text-red-700 hover:bg-red-500/24 dark:border-red-300/45 dark:bg-red-300/14 dark:text-red-100 dark:hover:bg-red-300/20"
+    : tone === "sync"
+      ? "border-white/10 bg-white/10 text-muted-foreground hover:bg-white/20 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
+      : tone === "stay"
+        ? active
+          ? "border-amber-500/70 bg-amber-500/34 text-amber-900 hover:bg-amber-500/36 dark:border-amber-300/60 dark:bg-amber-300/28 dark:text-amber-50 dark:hover:bg-amber-300/30"
+          : "border-amber-500/45 bg-amber-500/18 text-amber-800 hover:bg-amber-500/24 dark:border-amber-300/38 dark:bg-amber-300/14 dark:text-amber-100 dark:hover:bg-amber-300/18"
+        : tone === "away"
+          ? active
+            ? "border-red-500/70 bg-red-500/34 text-white hover:bg-red-500/38 dark:border-red-300/60 dark:bg-red-300/28 dark:text-red-50 dark:hover:bg-red-300/30"
+            : "border-red-500/45 bg-red-500/18 text-red-700 hover:bg-red-500/24 dark:border-red-300/38 dark:bg-red-300/14 dark:text-red-100 dark:hover:bg-red-300/18"
+          : "border-white/10 bg-white/10 text-muted-foreground hover:bg-white/20 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
+)
 
 export function SecurityAlarmWidget({
   size = "full",
@@ -485,6 +509,11 @@ export function SecurityAlarmWidget({
   const lockedDoorCount = typeof alarmStatus?.lockedDoorCount === "number"
     ? alarmStatus.lockedDoorCount
     : doorLocks.filter((doorLock) => doorLock.isLocked).length
+  const isStayArmed = alarmStatus?.alarmState === "armedStay"
+  const isAwayArmed = alarmStatus?.alarmState === "armedAway"
+  const isTriggered = alarmStatus?.alarmState === "triggered"
+  const canArm = alarmStatus?.alarmState === "disarmed" && !arming && !disarming && !dismissing
+  const canSync = !syncing
 
   const statusHistory = alarmStatus?.isTriggered
     ? formatTimestamp(alarmStatus.lastTriggered)
@@ -546,6 +575,97 @@ export function SecurityAlarmWidget({
     <div className={compact ? "space-y-3" : "space-y-4"}>
       {alarmStatus ? (
         <>
+          <div>
+            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+              <div className="flex items-start justify-between gap-2">
+                <p className="section-kicker">Alarm State</p>
+                <div className="flex max-w-[72%] flex-wrap justify-end gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleArmStay}
+                    disabled={!canArm}
+                    className={alarmActionButtonClassName({ tone: "stay", active: isStayArmed })}
+                  >
+                    <Home />
+                    Arm Stay
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleArmAway}
+                    disabled={!canArm}
+                    className={alarmActionButtonClassName({ tone: "away", active: isAwayArmed })}
+                  >
+                    <Car />
+                    Arm Away
+                  </Button>
+
+                  {isTriggered ? (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={handleDismiss}
+                      disabled={dismissing}
+                      className={alarmActionButtonClassName({ tone: "danger" })}
+                    >
+                      {dismissing ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <AlertTriangle />
+                      )}
+                      Dismiss
+                    </Button>
+                  ) : isStayArmed || isAwayArmed ? (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={handleDisarm}
+                      disabled={disarming}
+                      className={alarmActionButtonClassName({ tone: "danger" })}
+                    >
+                      {disarming ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <ShieldX />
+                      )}
+                      Disarm
+                    </Button>
+                  ) : null}
+
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleSync}
+                    disabled={!canSync}
+                    className={alarmActionButtonClassName({ tone: "sync" })}
+                  >
+                    {syncing ? (
+                      <Loader2 className="animate-spin" />
+                    ) : (
+                      <RefreshCw />
+                    )}
+                    Sync
+                  </Button>
+                </div>
+              </div>
+              <p className={cn(
+                compact ? "mt-1 text-xl font-semibold" : "mt-1 text-2xl font-semibold",
+                alarmStatus.alarmState === "triggered"
+                  ? "text-red-600 dark:text-red-300"
+                  : alarmStatus.alarmState === "disarmed"
+                    ? "text-foreground"
+                    : "text-emerald-600 dark:text-emerald-300"
+              )}>
+                {formatAlarmState(alarmStatus.alarmState)}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {statusDetailParts.join(" • ") || "System state unavailable"}
+              </p>
+            </div>
+          </div>
+
           <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
@@ -794,124 +914,6 @@ export function SecurityAlarmWidget({
             )}
           </div>
 
-          <div>
-            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-              <p className="section-kicker">Alarm State</p>
-              <p className={cn(
-                compact ? "mt-2 text-xl font-semibold" : "mt-2 text-2xl font-semibold",
-                alarmStatus.alarmState === "triggered"
-                  ? "text-red-600 dark:text-red-300"
-                  : alarmStatus.alarmState === "disarmed"
-                    ? "text-foreground"
-                    : "text-emerald-600 dark:text-emerald-300"
-              )}>
-                {formatAlarmState(alarmStatus.alarmState)}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {statusDetailParts.join(" • ") || "System state unavailable"}
-              </p>
-
-              <div className="mt-3">
-                {alarmStatus.alarmState === "disarmed" ? (
-                  <div className="grid grid-cols-3 gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleArmStay}
-                      disabled={arming}
-                      className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
-                    >
-                      {arming ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <Home className="h-3 w-3" />
-                      )}
-                      Arm Stay
-                    </Button>
-
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleArmAway}
-                      disabled={arming}
-                      className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
-                    >
-                      {arming ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <Car className="h-3 w-3" />
-                      )}
-                      Arm Away
-                    </Button>
-
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={handleSync}
-                      disabled={syncing}
-                      className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
-                    >
-                      {syncing ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        "Sync"
-                      )}
-                    </Button>
-                  </div>
-                ) : (
-                  (alarmStatus.alarmState === "armedStay" || alarmStatus.alarmState === "armedAway" || alarmStatus.alarmState === "triggered") && (
-                    <div className="grid grid-cols-2 gap-2">
-                      {alarmStatus.alarmState === "triggered" ? (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={handleDismiss}
-                          disabled={dismissing}
-                          className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
-                        >
-                          {dismissing ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <AlertTriangle className="h-3 w-3" />
-                          )}
-                          Dismiss Alarm
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={handleDisarm}
-                          disabled={disarming}
-                          className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
-                        >
-                          {disarming ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <ShieldX className="h-3 w-3" />
-                          )}
-                          Disarm
-                        </Button>
-                      )}
-
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={handleSync}
-                        disabled={syncing}
-                        className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
-                      >
-                        {syncing ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          "Sync"
-                        )}
-                      </Button>
-                    </div>
-                  )
-                )}
-              </div>
-            </div>
-          </div>
         </>
       ) : null}
     </div>
