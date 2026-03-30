@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Battery,
   Car,
+  Check,
   Droplets,
   Home,
   Loader2,
@@ -20,15 +21,7 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from "@/components/ui/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { controlDevice } from "@/api/devices"
@@ -260,6 +253,7 @@ export function SecurityAlarmWidget({
   const [syncing, setSyncing] = useState(false)
   const [lockingDoorIds, setLockingDoorIds] = useState<string[]>([])
   const [selectedSensorKeys, setSelectedSensorKeys] = useState<string[] | null>(() => readStoredSensorSelection())
+  const [sensorSelectorOpen, setSensorSelectorOpen] = useState(false)
 
   const fetchAlarmStatus = async () => {
     try {
@@ -610,35 +604,6 @@ export function SecurityAlarmWidget({
 
       {alarmStatus ? (
         <>
-          <div className={["grid gap-3", summaryGridClass].join(" ")}>
-            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-              <p className="section-kicker">Sensors</p>
-              <p className={compact ? "mt-2 text-xl font-semibold text-foreground" : "mt-2 text-2xl font-semibold text-foreground"}>
-                {sensorCount > 0 ? `${activeSensorCount}/${sensorCount}` : "0"}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {sensorCount > 0 ? "Active security sensors" : "No security sensors detected"}
-              </p>
-            </div>
-
-            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-              <p className="section-kicker">Status</p>
-              <p className={cn(
-                compact ? "mt-2 text-xl font-semibold" : "mt-2 text-2xl font-semibold",
-                alarmStatus.alarmState === "triggered"
-                  ? "text-red-600 dark:text-red-300"
-                  : alarmStatus.alarmState === "disarmed"
-                    ? "text-foreground"
-                    : "text-emerald-600 dark:text-emerald-300"
-              )}>
-                {formatAlarmState(alarmStatus.alarmState)}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {statusDetailParts.join(" • ") || "System state unavailable"}
-              </p>
-            </div>
-          </div>
-
           <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
@@ -656,42 +621,97 @@ export function SecurityAlarmWidget({
                     {alarmStatus.attentionSensorCount} attention
                   </Badge>
                 ) : null}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
+                <Popover open={sensorSelectorOpen} onOpenChange={setSensorSelectorOpen}>
+                  <PopoverTrigger asChild>
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 rounded-full border border-white/10 bg-white/10 text-muted-foreground hover:bg-white/20 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
                       aria-label="Choose visible security sensors"
+                      aria-expanded={sensorSelectorOpen}
                     >
                       <Menu className="h-4 w-4" />
                     </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-64">
-                    <DropdownMenuLabel>Visible Sensors</DropdownMenuLabel>
-                    <DropdownMenuItem onSelect={resetSensorSelection}>
-                      Show all security sensors
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    {sensors.length > 0 ? sensors.map((sensor) => {
-                      const sensorKey = getSensorSelectionKey(sensor)
-                      const isChecked = selectedSensorKeySet === null ? true : selectedSensorKeySet.has(sensorKey)
-
-                      return (
-                        <DropdownMenuCheckboxItem
-                          key={sensorKey}
-                          checked={isChecked}
-                          onCheckedChange={() => toggleSensorSelection(sensor)}
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    sideOffset={8}
+                    className="w-72 rounded-[1rem] border border-white/10 bg-background/95 p-3 shadow-2xl backdrop-blur"
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                            Visible Sensors
+                          </p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Toggle sensors without closing the picker.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-3 text-[11px]"
+                          onClick={() => setSensorSelectorOpen(false)}
                         >
-                          {sensor.name}
-                        </DropdownMenuCheckboxItem>
-                      )
-                    }) : (
-                      <DropdownMenuItem disabled>No security sensors available</DropdownMenuItem>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                          Done
+                        </Button>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-full justify-start px-3 text-[11px]"
+                        onClick={resetSensorSelection}
+                      >
+                        Show all security sensors
+                      </Button>
+
+                      {sensors.length > 0 ? (
+                        <ScrollArea className="max-h-64">
+                          <div className="space-y-1 pr-2">
+                            {sensors.map((sensor) => {
+                              const sensorKey = getSensorSelectionKey(sensor)
+                              const isChecked = selectedSensorKeySet === null ? true : selectedSensorKeySet.has(sensorKey)
+
+                              return (
+                                <button
+                                  key={sensorKey}
+                                  type="button"
+                                  onClick={() => toggleSensorSelection(sensor)}
+                                  className="flex w-full items-center gap-3 rounded-[0.85rem] px-2 py-2 text-left transition-colors hover:bg-white/10 dark:hover:bg-slate-950/20"
+                                  aria-pressed={isChecked}
+                                >
+                                  <span className={cn(
+                                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                                    isChecked
+                                      ? "border-cyan-500/30 bg-cyan-500/15 text-cyan-600 dark:text-cyan-300"
+                                      : "border-white/15 text-transparent"
+                                  )}>
+                                    <Check className="h-3 w-3" />
+                                  </span>
+                                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                                    {sensor.name}
+                                  </span>
+                                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                                    {getCompactSensorStatus(sensor)}
+                                  </span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </ScrollArea>
+                      ) : (
+                        <p className="rounded-[0.85rem] border border-dashed border-white/10 bg-white/10 px-3 py-3 text-sm text-muted-foreground dark:bg-slate-950/10">
+                          No security sensors available.
+                        </p>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
 
@@ -851,6 +871,35 @@ export function SecurityAlarmWidget({
 
             <div className="mt-3 rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-[11px] text-muted-foreground dark:bg-slate-950/10">
               {sensorSummaryParts.join(" • ")}
+            </div>
+          </div>
+
+          <div className={["grid gap-3", summaryGridClass].join(" ")}>
+            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+              <p className="section-kicker">Sensors</p>
+              <p className={compact ? "mt-2 text-xl font-semibold text-foreground" : "mt-2 text-2xl font-semibold text-foreground"}>
+                {sensorCount > 0 ? `${activeSensorCount}/${sensorCount}` : "0"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {sensorCount > 0 ? "Active security sensors" : "No security sensors detected"}
+              </p>
+            </div>
+
+            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+              <p className="section-kicker">Status</p>
+              <p className={cn(
+                compact ? "mt-2 text-xl font-semibold" : "mt-2 text-2xl font-semibold",
+                alarmStatus.alarmState === "triggered"
+                  ? "text-red-600 dark:text-red-300"
+                  : alarmStatus.alarmState === "disarmed"
+                    ? "text-foreground"
+                    : "text-emerald-600 dark:text-emerald-300"
+              )}>
+                {formatAlarmState(alarmStatus.alarmState)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {statusDetailParts.join(" • ") || "System state unavailable"}
+              </p>
             </div>
           </div>
         </>

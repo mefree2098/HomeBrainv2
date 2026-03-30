@@ -450,6 +450,7 @@ struct DashboardView: View {
     @State private var isSendingCommand = false
     @State private var contentWidth: CGFloat = 0
     @AppStorage("homebrain.ios.security.visible-sensor-ids") private var securityVisibleSensorIDsRaw = ""
+    @State private var isPresentingSecuritySensorPicker = false
 
     @StateObject private var locationManager = DashboardLocationManager()
 
@@ -1614,52 +1615,6 @@ struct DashboardView: View {
                 )
             }
 
-            LazyVGrid(columns: summaryColumns, spacing: 10) {
-                securitySummaryTile(
-                    title: "Sensors",
-                    value: sensorSummaryValue,
-                    detail: sensorSummaryDetail,
-                    accent: HBPalette.accentBlue,
-                    compact: compact
-                )
-                securitySummaryTile(
-                    title: "Alarm State",
-                    value: securityStatusLabel,
-                    detail: "\(securityStatusDetail) • \(systemStatus)",
-                    accent: securityStatusAccent,
-                    compact: compact,
-                    titleColor: securityStateTitleColor,
-                    valueColor: securityStateValueColor,
-                    detailColor: securityStateDetailColor,
-                    backgroundVariant: securityStateBackgroundVariant,
-                    backgroundTint: securityStateBackgroundTint,
-                    backgroundTintOpacity: securityStateBackgroundOpacity
-                )
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Sensors:")
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Spacer()
-                    Text(securityZonesTotal > 0 ? "\(securityZonesActive)/\(securityZonesTotal) active" : "No sensors detected")
-                        .foregroundStyle(HBPalette.textPrimary)
-                        .fontWeight(.semibold)
-                }
-
-                HStack {
-                    Text("Status:")
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Spacer()
-                    Text(systemStatus)
-                        .foregroundStyle(systemStatusAccent)
-                        .fontWeight(.semibold)
-                }
-            }
-            .font(.system(size: compact ? 14 : 15, weight: .medium, design: .rounded))
-            .padding(compact ? 12 : 14)
-            .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
-
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -1695,35 +1650,7 @@ struct DashboardView: View {
                             )
                         }
 
-                        Menu {
-                            Button {
-                                resetVisibleSecuritySensors()
-                            } label: {
-                                Label("Show all security sensors", systemImage: "line.3.horizontal.decrease.circle")
-                            }
-
-                            if !securitySensors.isEmpty {
-                                Divider()
-
-                                ForEach(securitySensors) { sensor in
-                                    let sensorKey = securitySensorSelectionKey(sensor)
-                                    let isVisible = selectedSecuritySensorIDSet?.contains(sensorKey) ?? true
-
-                                    Button {
-                                        toggleVisibleSecuritySensor(sensor)
-                                    } label: {
-                                        Label(sensor.name, systemImage: isVisible ? "checkmark.circle.fill" : "circle")
-                                    }
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(HBPalette.textSecondary)
-                                .frame(width: 32, height: 32)
-                                .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
-                        }
-                        .buttonStyle(.plain)
+                        securitySensorPickerButton()
                     }
                 }
 
@@ -1798,6 +1725,29 @@ struct DashboardView: View {
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
+            }
+
+            LazyVGrid(columns: summaryColumns, spacing: 10) {
+                securitySummaryTile(
+                    title: "Sensors",
+                    value: sensorSummaryValue,
+                    detail: sensorSummaryDetail,
+                    accent: HBPalette.accentBlue,
+                    compact: compact
+                )
+                securitySummaryTile(
+                    title: "Alarm State",
+                    value: securityStatusLabel,
+                    detail: "\(securityStatusDetail) • \(systemStatus)",
+                    accent: securityStatusAccent,
+                    compact: compact,
+                    titleColor: securityStateTitleColor,
+                    valueColor: securityStateValueColor,
+                    detailColor: securityStateDetailColor,
+                    backgroundVariant: securityStateBackgroundVariant,
+                    backgroundTint: securityStateBackgroundTint,
+                    backgroundTintOpacity: securityStateBackgroundOpacity
+                )
             }
 
             HStack(alignment: .center, spacing: 10) {
@@ -2017,10 +1967,6 @@ struct DashboardView: View {
         return 0
     }
 
-    private var systemStatusAccent: Color {
-        systemStatus.lowercased() == "online" ? HBPalette.accentGreen : HBPalette.accentOrange
-    }
-
     private func securityPrimaryActions(compact: Bool, stacked: Bool) -> some View {
         Group {
             if isSecurityTriggered {
@@ -2107,6 +2053,90 @@ struct DashboardView: View {
         case .full:
             return 360
         }
+    }
+
+    private func securitySensorPickerButton() -> some View {
+        Button {
+            isPresentingSecuritySensorPicker.toggle()
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(HBPalette.textSecondary)
+                .frame(width: 32, height: 32)
+                .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresentingSecuritySensorPicker, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+            securitySensorPickerCard()
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private func securitySensorPickerCard() -> some View {
+        let preferredWidth = min(max(contentWidth > 0 ? contentWidth * 0.44 : 300, 280), 340)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Visible Sensors")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.0)
+                        .foregroundStyle(HBPalette.textMuted)
+
+                    Text("Toggle sensors without closing the picker.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Button("Done") {
+                    isPresentingSecuritySensorPicker = false
+                }
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.accentBlue)
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                resetVisibleSecuritySensors()
+            } label: {
+                Text("Show all security sensors")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(HBPalette.panelStrokeStrong, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+
+            if securitySensors.isEmpty {
+                Text("No security sensors available.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(securitySensors) { sensor in
+                            securitySensorPickerRow(sensor)
+                        }
+                    }
+                }
+                .frame(maxHeight: 260)
+            }
+        }
+        .frame(width: preferredWidth, alignment: .leading)
+        .padding(14)
     }
 
     private func securitySensorSelectionKey(_ sensor: DashboardSecuritySensorItem) -> String {
@@ -2260,6 +2290,42 @@ struct DashboardView: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+    }
+
+    private func securitySensorPickerRow(_ sensor: DashboardSecuritySensorItem) -> some View {
+        let sensorKey = securitySensorSelectionKey(sensor)
+        let isVisible = selectedSecuritySensorIDSet?.contains(sensorKey) ?? true
+
+        return Button {
+            toggleVisibleSecuritySensor(sensor)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isVisible ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isVisible ? HBPalette.accentBlue : HBPalette.textMuted)
+
+                Text(sensor.name)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Text(compactSecurityStatusText(for: sensor))
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isVisible ? HBPalette.accentBlue.opacity(0.45) : HBPalette.panelStrokeStrong, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func securitySensorRow(_ sensor: DashboardSecuritySensorItem, compact: Bool) -> some View {
