@@ -58,6 +58,46 @@ const dashboardViewSchema = new mongoose.Schema({
   versionKey: false,
 });
 
+const normalizeVisibleSensorIds = (value) => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const seen = new Set();
+  const normalized = [];
+
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      continue;
+    }
+
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+};
+
+const securityPreferencesSchema = new mongoose.Schema({
+  visibleSensorIds: {
+    type: [String],
+    default: undefined,
+    set: normalizeVisibleSensorIds,
+  },
+}, {
+  _id: false,
+  versionKey: false,
+});
+
 const schema = new mongoose.Schema({
   name: {
     type: String,
@@ -164,6 +204,10 @@ const schema = new mongoose.Schema({
   dashboardViews: {
     type: [dashboardViewSchema],
     default: [],
+  },
+  securityPreferences: {
+    type: securityPreferencesSchema,
+    default: () => ({}),
   },
   // Advanced settings
   contextMemory: {

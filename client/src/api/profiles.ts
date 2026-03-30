@@ -349,6 +349,37 @@ export const updateDashboardViews = async (profileId: string, views: Array<any>)
   }
 }
 
+// Description: Get synced security sensor visibility by profile ID
+// Endpoint: GET /api/profiles/:id/security-visible-sensors
+// Request: {}
+// Response: { success: boolean, sensorIds: Array<string> | null }
+export const getSecurityVisibleSensors = async (profileId: string) => {
+  console.log('Fetching synced security sensor visibility:', profileId);
+  try {
+    const response = await api.get(`/api/profiles/${profileId}/security-visible-sensors`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching synced security sensor visibility:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
+// Description: Replace synced security sensor visibility by profile ID
+// Endpoint: PUT /api/profiles/:id/security-visible-sensors
+// Request: { sensorIds: Array<string> | null }
+// Response: { success: boolean, message: string, sensorIds: Array<string> | null }
+export const updateSecurityVisibleSensors = async (profileId: string, sensorIds: Array<string> | null) => {
+  console.log('Updating synced security sensor visibility:', profileId, sensorIds?.length ?? 'all');
+  try {
+    const response = await api.put(`/api/profiles/${profileId}/security-visible-sensors`, { sensorIds });
+    requestCache.delete('user-profiles');
+    return response.data;
+  } catch (error) {
+    console.error('Error updating synced security sensor visibility:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+}
+
 // Description: Get voice details by ID
 // Endpoint: GET /api/profiles/voices/:voiceId
 // Request: {}

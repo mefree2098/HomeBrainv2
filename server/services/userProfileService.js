@@ -4,6 +4,35 @@ const wakeWordTrainingService = require('./wakeWordTrainingService');
 const voiceAcknowledgmentService = require('./voiceAcknowledgmentService');
 const { normalizeDashboardViews } = require('../utils/dashboardViews');
 
+const normalizeVisibleSensorIds = (sensorIds) => {
+  if (sensorIds === undefined || sensorIds === null) {
+    return null;
+  }
+
+  if (!Array.isArray(sensorIds)) {
+    throw new Error('Sensor IDs payload must be an array or null');
+  }
+
+  const seen = new Set();
+  const normalized = [];
+
+  for (const entry of sensorIds) {
+    if (typeof entry !== 'string') {
+      continue;
+    }
+
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+};
+
 class UserProfileService {
   /**
    * Get all user profiles
@@ -498,6 +527,80 @@ class UserProfileService {
       return profile.dashboardViews;
     } catch (error) {
       console.error(`Error replacing dashboard views for profile ${profileId}:`, error.message);
+      console.error('Full error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get synced security sensor visibility preferences for a profile
+   * @param {string} profileId
+   * @returns {Promise<Array<string> | null>}
+   */
+  async getSecurityVisibleSensorIds(profileId) {
+    try {
+      console.log(`Fetching security visible sensor IDs for profile: ${profileId}`);
+
+      const profile = await UserProfile.findById(profileId).select('name securityPreferences updatedAt');
+      if (!profile) {
+        throw new Error(`Profile with ID ${profileId} not found`);
+      }
+
+      const storedSensorIds = normalizeVisibleSensorIds(profile.securityPreferences?.visibleSensorIds);
+      const persistedSensorIds = profile.securityPreferences?.visibleSensorIds;
+      const storedValueChanged = (
+        (storedSensorIds === null && Array.isArray(persistedSensorIds) && persistedSensorIds.length > 0) ||
+        (storedSensorIds !== null && JSON.stringify(persistedSensorIds || []) !== JSON.stringify(storedSensorIds))
+      );
+
+      if (storedValueChanged) {
+        if (!profile.securityPreferences) {
+          profile.securityPreferences = {};
+        }
+
+        profile.securityPreferences.visibleSensorIds = storedSensorIds ?? undefined;
+        profile.updatedAt = Date.now();
+        profile.markModified('securityPreferences');
+        await profile.save();
+      }
+
+      return storedSensorIds;
+    } catch (error) {
+      console.error(`Error fetching security visible sensor IDs for profile ${profileId}:`, error.message);
+      console.error('Full error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Replace synced security sensor visibility preferences for a profile
+   * @param {string} profileId
+   * @param {Array<string> | null} sensorIds
+   * @returns {Promise<Array<string> | null>}
+   */
+  async replaceSecurityVisibleSensorIds(profileId, sensorIds) {
+    try {
+      console.log(`Replacing security visible sensor IDs for profile: ${profileId}`);
+
+      const profile = await UserProfile.findById(profileId).select('name securityPreferences updatedAt');
+      if (!profile) {
+        throw new Error(`Profile with ID ${profileId} not found`);
+      }
+
+      const normalizedSensorIds = normalizeVisibleSensorIds(sensorIds);
+
+      if (!profile.securityPreferences) {
+        profile.securityPreferences = {};
+      }
+
+      profile.securityPreferences.visibleSensorIds = normalizedSensorIds ?? undefined;
+      profile.updatedAt = Date.now();
+      profile.markModified('securityPreferences');
+      await profile.save();
+
+      return normalizedSensorIds;
+    } catch (error) {
+      console.error(`Error replacing security visible sensor IDs for profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }

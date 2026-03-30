@@ -4,19 +4,15 @@ import {
   Battery,
   Car,
   Check,
-  Droplets,
   Home,
   Loader2,
   Lock,
   LockOpen,
   Menu,
-  Radar,
   Shield,
   ShieldAlert,
   ShieldCheck,
   ShieldX,
-  WifiOff,
-  Zap
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -25,6 +21,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { controlDevice } from "@/api/devices"
+import { getSecurityVisibleSensors, updateSecurityVisibleSensors } from "@/api/profiles"
 import {
   armSecuritySystem,
   disarmSecuritySystem,
@@ -99,47 +96,19 @@ type AlarmStatus = {
 }
 
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === "true"
-const SECURITY_SENSOR_SELECTION_STORAGE_KEY = "homebrain:web:security-visible-sensors"
 
-const readStoredSensorSelection = (): string[] | null => {
-  if (typeof window === "undefined") {
+const normalizeSensorSelection = (sensorKeys: string[] | null | undefined) => {
+  if (sensorKeys === undefined || sensorKeys === null) {
     return null
   }
 
-  try {
-    const rawValue = window.localStorage.getItem(SECURITY_SENSOR_SELECTION_STORAGE_KEY)
-    if (!rawValue) {
-      return null
-    }
-
-    const parsed = JSON.parse(rawValue)
-    if (!Array.isArray(parsed)) {
-      return null
-    }
-
-    return parsed
+  const normalizedKeys = Array.from(new Set(
+    sensorKeys
       .map((entry) => typeof entry === "string" ? entry.trim() : "")
       .filter((entry) => entry.length > 0)
-  } catch {
-    return null
-  }
-}
+  ))
 
-const writeStoredSensorSelection = (sensorKeys: string[] | null) => {
-  if (typeof window === "undefined") {
-    return
-  }
-
-  try {
-    if (sensorKeys === null) {
-      window.localStorage.removeItem(SECURITY_SENSOR_SELECTION_STORAGE_KEY)
-      return
-    }
-
-    window.localStorage.setItem(SECURITY_SENSOR_SELECTION_STORAGE_KEY, JSON.stringify(sensorKeys))
-  } catch {
-    // Ignore storage write failures and keep the widget interactive.
-  }
+  return normalizedKeys
 }
 
 const formatAlarmState = (alarmState?: string | null) => {
@@ -172,25 +141,6 @@ const formatTimestamp = (value?: string | null) => {
   }
 
   return parsed.toLocaleString()
-}
-
-const getSensorIcon = (sensorType: string) => {
-  switch (sensorType) {
-    case "motion":
-      return <Radar className="h-3.5 w-3.5" />
-    case "flood":
-      return <Droplets className="h-3.5 w-3.5" />
-    case "co":
-      return <Zap className="h-3.5 w-3.5" />
-    case "smoke":
-    case "glass":
-    case "panic":
-      return <AlertTriangle className="h-3.5 w-3.5" />
-    case "doorWindow":
-    case "security":
-    default:
-      return <Shield className="h-3.5 w-3.5" />
-  }
 }
 
 const batteryClassName = (sensor: SecuritySensor) => {
@@ -227,21 +177,13 @@ const compactSensorStatusClassName = (sensor: SecuritySensor) => {
   return "text-emerald-600 dark:text-emerald-300"
 }
 
-const doorLockBadgeClassName = (doorLock: DoorLock) => {
-  if (!doorLock.isOnline) {
-    return "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300"
-  }
-  if (!doorLock.isLocked) {
-    return "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
-  }
-  return "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
-}
-
 export function SecurityAlarmWidget({
   size = "full",
+  profileId = null,
   onOpenDevice
 }: {
   size?: SecurityWidgetSize
+  profileId?: string | null
   onOpenDevice?: (deviceId: string) => void
 }) {
   const { toast } = useToast()
@@ -251,8 +193,8 @@ export function SecurityAlarmWidget({
   const [disarming, setDisarming] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [syncing, setSyncing] = useState(false)
-  const [lockingDoorIds, setLockingDoorIds] = useState<string[]>([])
-  const [selectedSensorKeys, setSelectedSensorKeys] = useState<string[] | null>(() => readStoredSensorSelection())
+  const [pendingDoorIds, setPendingDoorIds] = useState<string[]>([])
+  const [selectedSensorKeys, setSelectedSensorKeys] = useState<string[] | null>(null)
   const [sensorSelectorOpen, setSensorSelectorOpen] = useState(false)
 
   const fetchAlarmStatus = async () => {
@@ -284,8 +226,59 @@ export function SecurityAlarmWidget({
   }, [])
 
   useEffect(() => {
-    writeStoredSensorSelection(selectedSensorKeys)
-  }, [selectedSensorKeys])
+    let cancelled = false
+
+    const loadSyncedSensorSelection = async () => {
+      if (!profileId) {
+        setSelectedSensorKeys(null)
+        return
+      }
+
+      try {
+        const response = await getSecurityVisibleSensors(profileId)
+        if (cancelled) {
+          return
+        }
+
+        setSelectedSensorKeys(normalizeSensorSelection(response.sensorIds))
+      } catch (error: any) {
+        if (cancelled) {
+          return
+        }
+
+        console.error("Failed to load synced security sensor visibility:", error)
+        setSelectedSensorKeys(null)
+        toast({
+          title: "Sync error",
+          description: error.message || "Failed to load synced security sensor visibility",
+          variant: "destructive"
+        })
+      }
+    }
+
+    void loadSyncedSensorSelection()
+
+    return () => {
+      cancelled = true
+    }
+  }, [profileId, toast])
+
+  const persistSensorSelection = async (sensorKeys: string[] | null) => {
+    if (!profileId) {
+      return
+    }
+
+    try {
+      await updateSecurityVisibleSensors(profileId, sensorKeys)
+    } catch (error: any) {
+      console.error("Failed to update synced security sensor visibility:", error)
+      toast({
+        title: "Sync error",
+        description: error.message || "Failed to update synced security sensor visibility",
+        variant: "destructive"
+      })
+    }
+  }
 
   const handleArmStay = async () => {
     setArming(true)
@@ -429,35 +422,38 @@ export function SecurityAlarmWidget({
     onOpenDevice?.(sensor.localDeviceId)
   }
 
-  const handleLockDoor = async (doorLock: DoorLock) => {
+  const handleToggleDoorLock = async (doorLock: DoorLock) => {
     const deviceId = doorLock.localDeviceId
 
-    if (!deviceId || doorLock.isLocked || !doorLock.isOnline) {
+    if (!deviceId || !doorLock.isOnline) {
       return
     }
 
-    setLockingDoorIds((current) => (
+    const action = doorLock.isLocked ? "unlock" : "lock"
+    const completionLabel = doorLock.isLocked ? "unlocked" : "locked"
+
+    setPendingDoorIds((current) => (
       current.includes(deviceId)
         ? current
         : [...current, deviceId]
     ))
 
     try {
-      await controlDevice({ deviceId, action: "lock" })
+      await controlDevice({ deviceId, action })
       toast({
-        title: "Door locked",
-        description: `${doorLock.name} is now locked`
+        title: `Door ${completionLabel}`,
+        description: `${doorLock.name} is now ${completionLabel}`
       })
       await fetchAlarmStatus()
     } catch (error: any) {
-      console.error("Failed to lock door:", error)
+      console.error(`Failed to ${action} door:`, error)
       toast({
-        title: "Lock failed",
-        description: error.message || `Failed to lock ${doorLock.name}`,
+        title: `${action === "unlock" ? "Unlock" : "Lock"} failed`,
+        description: error.message || `Failed to ${action} ${doorLock.name}`,
         variant: "destructive"
       })
     } finally {
-      setLockingDoorIds((current) => current.filter((activeDeviceId) => activeDeviceId !== deviceId))
+      setPendingDoorIds((current) => current.filter((activeDeviceId) => activeDeviceId !== deviceId))
     }
   }
 
@@ -533,7 +529,6 @@ export function SecurityAlarmWidget({
     ? alarmStatus.lockedDoorCount
     : doorLocks.filter((doorLock) => doorLock.isLocked).length
 
-  const summaryGridClass = compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2"
   const statusHistory = alarmStatus?.isTriggered
     ? formatTimestamp(alarmStatus.lastTriggered)
     : alarmStatus?.isArmed
@@ -558,27 +553,28 @@ export function SecurityAlarmWidget({
 
   const resetSensorSelection = () => {
     setSelectedSensorKeys(null)
+    void persistSensorSelection(null)
   }
 
   const toggleSensorSelection = (sensor: SecuritySensor) => {
     const sensorKey = getSensorSelectionKey(sensor)
     const allSensorKeys = Array.from(new Set(sensors.map(getSensorSelectionKey)))
+    const currentSet = selectedSensorKeys === null ? new Set(allSensorKeys) : new Set(selectedSensorKeys)
 
-    setSelectedSensorKeys((current) => {
-      const currentSet = current === null ? new Set(allSensorKeys) : new Set(current)
+    if (currentSet.has(sensorKey)) {
+      currentSet.delete(sensorKey)
+    } else {
+      currentSet.add(sensorKey)
+    }
 
-      if (currentSet.has(sensorKey)) {
-        currentSet.delete(sensorKey)
-      } else {
-        currentSet.add(sensorKey)
-      }
+    const nextSelection = (
+      currentSet.size === allSensorKeys.length && allSensorKeys.every((key) => currentSet.has(key))
+    )
+      ? null
+      : allSensorKeys.filter((key) => currentSet.has(key))
 
-      if (currentSet.size === allSensorKeys.length && allSensorKeys.every((key) => currentSet.has(key))) {
-        return null
-      }
-
-      return allSensorKeys.filter((key) => currentSet.has(key))
-    })
+    setSelectedSensorKeys(nextSelection)
+    void persistSensorSelection(nextSelection)
   }
 
   if (loading) {
@@ -716,51 +712,48 @@ export function SecurityAlarmWidget({
             </div>
 
             <ScrollArea className={compact ? "max-h-44" : "max-h-52"}>
-              <div className="space-y-4 pr-3">
+              <div className="space-y-2 pr-3">
                 <div className="space-y-2">
                   {visibleSensors.length > 0 ? (
-                    visibleSensors.map((sensor) => (
-                      <button
-                        key={getSensorSelectionKey(sensor)}
-                        type="button"
-                        onClick={() => handleOpenSensor(sensor)}
-                        disabled={!sensor.localDeviceId}
-                        title={[
-                          sensor.name,
-                          getCompactSensorStatus(sensor),
-                          sensor.batteryLevel != null ? `${sensor.batteryLevel}% battery` : null
-                        ].filter(Boolean).join(" • ")}
-                        className={cn(
-                          "flex w-full items-center gap-2.5 rounded-[0.95rem] border border-white/10 bg-white/10 px-2.5 py-2 text-left transition-colors dark:bg-slate-950/10",
-                          sensor.localDeviceId
-                            ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
-                            : "cursor-default opacity-80"
-                        )}
-                      >
-                        <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                          <div className={cn(
-                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border",
+                    <div className="grid grid-cols-3 gap-2">
+                      {visibleSensors.map((sensor) => (
+                        <button
+                          key={getSensorSelectionKey(sensor)}
+                          type="button"
+                          onClick={() => handleOpenSensor(sensor)}
+                          disabled={!sensor.localDeviceId}
+                          title={[
+                            sensor.name,
+                            getCompactSensorStatus(sensor),
+                            sensor.batteryLevel != null ? `${sensor.batteryLevel}% battery` : null
+                          ].filter(Boolean).join(" • ")}
+                          className={cn(
+                            "flex min-h-[70px] flex-col justify-between rounded-[0.95rem] border bg-white/10 px-2.5 py-2 text-left transition-colors dark:bg-slate-950/10",
                             sensor.isActive
-                              ? "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                              ? "border-amber-500/25"
                               : sensor.requiresAttention
-                                ? "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300"
-                                : "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
-                          )}>
-                            {getSensorIcon(sensor.sensorType)}
+                                ? "border-red-500/25"
+                                : "border-white/10",
+                            sensor.localDeviceId
+                              ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
+                              : "cursor-default opacity-80"
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="line-clamp-2 min-w-0 text-[11px] font-semibold leading-tight text-foreground">
+                              {sensor.name}
+                            </p>
+
+                            {sensor.batteryLevel != null ? (
+                              <Battery className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", batteryClassName(sensor))} aria-hidden="true" />
+                            ) : null}
                           </div>
-
-                          <p className="truncate text-[13px] font-medium text-foreground">{sensor.name}</p>
-                        </div>
-
-                        <span className={cn("shrink-0 text-[11px] font-semibold", compactSensorStatusClassName(sensor))}>
-                          {getCompactSensorStatus(sensor)}
-                        </span>
-
-                        {sensor.batteryLevel != null ? (
-                          <Battery className={cn("h-3.5 w-3.5 shrink-0", batteryClassName(sensor))} aria-hidden="true" />
-                        ) : null}
-                      </button>
-                    ))
+                          <span className={cn("mt-2 line-clamp-1 min-w-0 text-[10px] font-semibold", compactSensorStatusClassName(sensor))}>
+                            {getCompactSensorStatus(sensor)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   ) : sensors.length > 0 ? (
                     <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
                       No sensors are selected. Use the sensor menu to choose which security sensors appear here.
@@ -768,101 +761,6 @@ export function SecurityAlarmWidget({
                   ) : (
                     <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
                       No security sensors found yet. Add security sensors or sync SmartThings devices to populate this panel.
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t border-white/10 pt-3">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="section-kicker">Door Locks</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">Unlocked doors can be locked directly from here.</p>
-                    </div>
-
-                    {doorLockCount > 0 ? (
-                      <Badge variant="outline" className="border-white/10 bg-white/10 text-muted-foreground dark:bg-slate-950/10">
-                        {lockedDoorCount}/{doorLockCount} locked
-                      </Badge>
-                    ) : null}
-                  </div>
-
-                  {doorLocks.length > 0 ? (
-                    <div className="space-y-2">
-                      {doorLocks.map((doorLock) => {
-                        const rowId = doorLock.localDeviceId || doorLock.deviceId
-                        const isLocking = rowId ? lockingDoorIds.includes(rowId) : false
-                        const canLock = Boolean(doorLock.localDeviceId && !doorLock.isLocked && doorLock.isOnline && !isLocking)
-
-                        return (
-                          <button
-                            key={rowId}
-                            type="button"
-                            onClick={() => handleLockDoor(doorLock)}
-                            disabled={!canLock}
-                            className={cn(
-                              "flex w-full items-start justify-between gap-3 rounded-[1rem] border border-white/10 bg-white/10 px-3 py-3 text-left transition-colors dark:bg-slate-950/10",
-                              canLock
-                                ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
-                                : "cursor-default opacity-90"
-                            )}
-                          >
-                            <div className="flex min-w-0 items-start gap-3">
-                              <div className={cn(
-                                "mt-0.5 rounded-lg border p-2",
-                                !doorLock.isOnline
-                                  ? "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300"
-                                  : doorLock.isLocked
-                                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
-                                    : "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
-                              )}>
-                                {doorLock.isLocked ? (
-                                  <Lock className="h-3.5 w-3.5" />
-                                ) : (
-                                  <LockOpen className="h-3.5 w-3.5" />
-                                )}
-                              </div>
-
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="truncate text-sm font-medium text-foreground">{doorLock.name}</p>
-                                  <Badge variant="outline" className={doorLockBadgeClassName(doorLock)}>
-                                    {doorLock.stateLabel}
-                                  </Badge>
-                                </div>
-
-                                <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                                  {doorLock.room || "Unassigned"}
-                                </p>
-
-                                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-                                  {!doorLock.isOnline ? (
-                                    <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-300">
-                                      <WifiOff className="h-3 w-3" />
-                                      Offline
-                                    </span>
-                                  ) : null}
-
-                                  {!doorLock.isLocked && doorLock.isOnline ? (
-                                    <span className="text-amber-600 dark:text-amber-300">Tap to lock</span>
-                                  ) : null}
-                                </div>
-                              </div>
-                            </div>
-
-                            {isLocking ? (
-                              <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-                            ) : !doorLock.isLocked && doorLock.isOnline ? (
-                              <Badge variant="outline" className="mt-0.5 border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300">
-                                Lock
-                              </Badge>
-                            ) : null}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  ) : (
-                    <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
-                      No door locks found yet. Add lock devices or sync SmartThings to populate this section.
                     </div>
                   )}
                 </div>
@@ -874,17 +772,83 @@ export function SecurityAlarmWidget({
             </div>
           </div>
 
-          <div className={["grid gap-3", summaryGridClass].join(" ")}>
-            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-              <p className="section-kicker">Sensors</p>
-              <p className={compact ? "mt-2 text-xl font-semibold text-foreground" : "mt-2 text-2xl font-semibold text-foreground"}>
-                {sensorCount > 0 ? `${activeSensorCount}/${sensorCount}` : "0"}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {sensorCount > 0 ? "Active security sensors" : "No security sensors detected"}
-              </p>
+          <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="section-kicker">Door Locks</p>
+                <p className="mt-1 text-xs text-muted-foreground">Tap a lock tile to toggle locked or unlocked.</p>
+              </div>
+
+              {doorLockCount > 0 ? (
+                <Badge variant="outline" className="border-white/10 bg-white/10 text-muted-foreground dark:bg-slate-950/10">
+                  {lockedDoorCount}/{doorLockCount} locked
+                </Badge>
+              ) : null}
             </div>
 
+            {doorLocks.length > 0 ? (
+              <ScrollArea className={compact ? "max-h-36" : "max-h-40"}>
+                <div className={cn(
+                  "grid gap-2 pr-3",
+                  "grid-cols-4"
+                )}>
+                  {doorLocks.map((doorLock) => {
+                    const rowId = doorLock.localDeviceId || doorLock.deviceId
+                    const isPending = rowId ? pendingDoorIds.includes(rowId) : false
+                    const canToggle = Boolean(doorLock.localDeviceId && doorLock.isOnline && !isPending)
+                    const toggleLabel = doorLock.isLocked ? "unlock" : "lock"
+
+                    return (
+                      <button
+                        key={rowId}
+                        type="button"
+                        onClick={() => handleToggleDoorLock(doorLock)}
+                        disabled={!canToggle}
+                        title={`${doorLock.name} • ${doorLock.isOnline ? doorLock.stateLabel : "Offline"}${canToggle ? ` • Tap to ${toggleLabel}` : ""}`}
+                        className={cn(
+                          "rounded-[1rem] border border-white/10 bg-white/10 px-2.5 py-2.5 text-left transition-colors dark:bg-slate-950/10",
+                          canToggle
+                            ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
+                            : "cursor-default opacity-90"
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="line-clamp-2 min-w-0 text-[11px] font-medium leading-tight text-foreground">
+                            {doorLock.name}
+                          </p>
+
+                          {isPending ? (
+                            <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+                          ) : doorLock.isLocked ? (
+                            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-300" />
+                          ) : (
+                            <LockOpen className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-300" />
+                          )}
+                        </div>
+
+                        <p className={cn(
+                          "mt-2 text-[10px] font-semibold",
+                          !doorLock.isOnline
+                            ? "text-red-600 dark:text-red-300"
+                            : doorLock.isLocked
+                              ? "text-emerald-600 dark:text-emerald-300"
+                              : "text-amber-600 dark:text-amber-300"
+                        )}>
+                          {!doorLock.isOnline ? "Offline" : doorLock.stateLabel}
+                        </p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </ScrollArea>
+            ) : (
+              <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
+                No door locks found yet. Add lock devices or sync SmartThings to populate this section.
+              </div>
+            )}
+          </div>
+
+          <div>
             <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
               <p className="section-kicker">Status</p>
               <p className={cn(

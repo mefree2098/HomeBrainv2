@@ -504,6 +504,93 @@ router.put('/:id/dashboard-views', auth, async (req, res) => {
 });
 
 /**
+ * GET /api/profiles/:id/security-visible-sensors
+ * Get synced security sensor visibility preferences for a profile
+ */
+router.get('/:id/security-visible-sensors', auth, async (req, res) => {
+  try {
+    console.log(`GET /api/profiles/${req.params.id}/security-visible-sensors - Fetching synced security sensor visibility`);
+
+    const sensorIds = await userProfileService.getSecurityVisibleSensorIds(req.params.id);
+
+    res.status(200).json({
+      success: true,
+      sensorIds
+    });
+  } catch (error) {
+    console.error(`Error in GET /api/profiles/${req.params.id}/security-visible-sensors:`, error.message);
+    console.error('Full error:', error);
+
+    if (error.message.includes('not found')) {
+      res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch synced security sensor visibility',
+        error: error.message
+      });
+    }
+  }
+});
+
+/**
+ * PUT /api/profiles/:id/security-visible-sensors
+ * Replace synced security sensor visibility preferences for a profile
+ */
+router.put('/:id/security-visible-sensors', auth, async (req, res) => {
+  try {
+    console.log(`PUT /api/profiles/${req.params.id}/security-visible-sensors - Replacing synced security sensor visibility`);
+
+    if (!Object.prototype.hasOwnProperty.call(req.body ?? {}, 'sensorIds')) {
+      return res.status(400).json({
+        success: false,
+        message: 'sensorIds is required and must be an array or null'
+      });
+    }
+
+    const { sensorIds } = req.body;
+    if (sensorIds !== null && !Array.isArray(sensorIds)) {
+      return res.status(400).json({
+        success: false,
+        message: 'sensorIds must be an array or null'
+      });
+    }
+
+    const savedSensorIds = await userProfileService.replaceSecurityVisibleSensorIds(req.params.id, sensorIds);
+
+    res.status(200).json({
+      success: true,
+      message: 'Synced security sensor visibility updated successfully',
+      sensorIds: savedSensorIds
+    });
+  } catch (error) {
+    console.error(`Error in PUT /api/profiles/${req.params.id}/security-visible-sensors:`, error.message);
+    console.error('Full error:', error);
+
+    if (error.message.includes('not found')) {
+      res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    } else if (error.message.includes('array or null')) {
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update synced security sensor visibility',
+        error: error.message
+      });
+    }
+  }
+});
+
+/**
  * POST /api/profiles/:id/favorites/devices
  * Add device to profile favorites
  */
