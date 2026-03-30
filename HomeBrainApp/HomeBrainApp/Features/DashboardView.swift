@@ -1706,7 +1706,7 @@ struct DashboardView: View {
                             }
                         }
                     }
-                    .frame(maxHeight: securityDoorLockListHeight(for: widget.size))
+                    .frame(height: securityDoorLockContentHeight(for: widget.size, compact: compact))
                 }
             }
             .padding(compact ? 12 : 14)
@@ -1897,40 +1897,38 @@ struct DashboardView: View {
     private func securityAlarmHeaderActions(compact: Bool) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
-                securityAlarmActionButtons(compact: compact)
+                securityPrimaryActionSlot(compact: compact)
+                securitySyncAction(compact: compact)
             }
 
             VStack(alignment: .trailing, spacing: 6) {
-                HStack(spacing: 6) {
-                    securityArmStayAction(compact: compact)
-                    securityArmAwayAction(compact: compact)
-                }
-
-                HStack(spacing: 6) {
-                    if isSecurityTriggered {
-                        securityDismissAction(compact: compact)
-                    } else if isSecurityArmed {
-                        securityDisarmAction(compact: compact)
-                    }
-
-                    securitySyncAction(compact: compact)
-                }
+                securityPrimaryActionSlot(compact: compact)
+                securitySyncAction(compact: compact)
             }
         }
     }
 
     @ViewBuilder
-    private func securityAlarmActionButtons(compact: Bool) -> some View {
-        securityArmStayAction(compact: compact)
-        securityArmAwayAction(compact: compact)
-
+    private func securityPrimaryActionSlot(compact: Bool) -> some View {
         if isSecurityTriggered {
             securityDismissAction(compact: compact)
+                .frame(width: securityPrimaryActionSlotWidth(compact: compact))
         } else if isSecurityArmed {
             securityDisarmAction(compact: compact)
+                .frame(width: securityPrimaryActionSlotWidth(compact: compact))
+        } else {
+            HStack(spacing: 6) {
+                securityArmStayAction(compact: compact)
+                    .frame(maxWidth: .infinity)
+                securityArmAwayAction(compact: compact)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(width: securityPrimaryActionSlotWidth(compact: compact))
         }
+    }
 
-        securitySyncAction(compact: compact)
+    private func securityPrimaryActionSlotWidth(compact: Bool) -> CGFloat {
+        compact ? 178 : 194
     }
 
     private func securityArmStayAction(compact: Bool) -> some View {
@@ -1938,7 +1936,7 @@ struct DashboardView: View {
             title: "Arm Stay",
             systemImage: "house",
             compact: compact,
-            foreground: isSecurityStayArmed ? Color.black.opacity(0.88) : Color.black.opacity(0.78),
+            foreground: .white,
             background: isSecurityStayArmed ? HBPalette.accentYellow.opacity(0.36) : HBPalette.accentYellow.opacity(0.18),
             stroke: isSecurityStayArmed ? HBPalette.accentYellow.opacity(0.78) : HBPalette.accentYellow.opacity(0.46),
             active: isSecurityStayArmed,
@@ -2070,13 +2068,24 @@ struct DashboardView: View {
         }
     }
 
+    private var securityDoorLockColumnCount: Int {
+        (usesPortraitCompactLayout && layoutWidth < 360) ? 3 : 4
+    }
+
+    private func securityDoorLockContentHeight(for size: DashboardWidgetSize, compact: Bool) -> CGFloat {
+        let maxHeight = securityDoorLockListHeight(for: size)
+        let rowCount = max(1, Int(ceil(Double(max(securityDoorLocks.count, 1)) / Double(securityDoorLockColumnCount))))
+        let rowHeight = compact ? 66.0 : 72.0
+        let contentHeight = (Double(rowCount) * rowHeight) + (Double(max(0, rowCount - 1)) * 8.0)
+        return min(maxHeight, CGFloat(contentHeight))
+    }
+
     private func securitySensorColumns() -> [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 3)
     }
 
     private func securityDoorLockColumns() -> [GridItem] {
-        let columnCount = (usesPortraitCompactLayout && layoutWidth < 360) ? 3 : 4
-        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: columnCount)
+        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: securityDoorLockColumnCount)
     }
 
     private func securitySensorPickerButton() -> some View {

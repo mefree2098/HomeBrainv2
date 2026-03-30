@@ -189,8 +189,8 @@ const alarmActionButtonClassName = ({
       ? "border-white/10 bg-white/10 text-muted-foreground hover:bg-white/20 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
       : tone === "stay"
         ? active
-          ? "border-amber-500/70 bg-amber-500/34 text-amber-900 hover:bg-amber-500/36 dark:border-amber-300/60 dark:bg-amber-300/28 dark:text-amber-50 dark:hover:bg-amber-300/30"
-          : "border-amber-500/45 bg-amber-500/18 text-amber-800 hover:bg-amber-500/24 dark:border-amber-300/38 dark:bg-amber-300/14 dark:text-amber-100 dark:hover:bg-amber-300/18"
+          ? "border-amber-500/70 bg-amber-500/34 text-white hover:bg-amber-500/36 dark:border-amber-300/60 dark:bg-amber-300/28 dark:text-white dark:hover:bg-amber-300/30"
+          : "border-amber-500/45 bg-amber-500/18 text-white hover:bg-amber-500/24 dark:border-amber-300/38 dark:bg-amber-300/14 dark:text-white dark:hover:bg-amber-300/18"
         : tone === "away"
           ? active
             ? "border-red-500/70 bg-red-500/34 text-white hover:bg-red-500/38 dark:border-red-300/60 dark:bg-red-300/28 dark:text-red-50 dark:hover:bg-red-300/30"
@@ -580,59 +580,75 @@ export function SecurityAlarmWidget({
               <div className="flex items-start justify-between gap-2">
                 <p className="section-kicker">Alarm State</p>
                 <div className="flex max-w-[72%] flex-wrap justify-end gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleArmStay}
-                    disabled={!canArm}
-                    className={alarmActionButtonClassName({ tone: "stay", active: isStayArmed })}
-                  >
-                    <Home />
-                    Arm Stay
-                  </Button>
+                  <div className="grid w-full max-w-[15rem] grid-cols-2 gap-2">
+                    {isTriggered ? (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={handleDismiss}
+                        disabled={dismissing}
+                        className={cn(
+                          "col-span-2 w-full",
+                          alarmActionButtonClassName({ tone: "danger" })
+                        )}
+                      >
+                        {dismissing ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <AlertTriangle />
+                        )}
+                        Dismiss
+                      </Button>
+                    ) : isStayArmed || isAwayArmed ? (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={handleDisarm}
+                        disabled={disarming}
+                        className={cn(
+                          "col-span-2 w-full",
+                          alarmActionButtonClassName({ tone: "danger" })
+                        )}
+                      >
+                        {disarming ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <ShieldX />
+                        )}
+                        Disarm
+                      </Button>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleArmStay}
+                          disabled={!canArm}
+                          className={cn(
+                            "w-full",
+                            alarmActionButtonClassName({ tone: "stay", active: isStayArmed })
+                          )}
+                        >
+                          <Home />
+                          Arm Stay
+                        </Button>
 
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleArmAway}
-                    disabled={!canArm}
-                    className={alarmActionButtonClassName({ tone: "away", active: isAwayArmed })}
-                  >
-                    <Car />
-                    Arm Away
-                  </Button>
-
-                  {isTriggered ? (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={handleDismiss}
-                      disabled={dismissing}
-                      className={alarmActionButtonClassName({ tone: "danger" })}
-                    >
-                      {dismissing ? (
-                        <Loader2 className="animate-spin" />
-                      ) : (
-                        <AlertTriangle />
-                      )}
-                      Dismiss
-                    </Button>
-                  ) : isStayArmed || isAwayArmed ? (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={handleDisarm}
-                      disabled={disarming}
-                      className={alarmActionButtonClassName({ tone: "danger" })}
-                    >
-                      {disarming ? (
-                        <Loader2 className="animate-spin" />
-                      ) : (
-                        <ShieldX />
-                      )}
-                      Disarm
-                    </Button>
-                  ) : null}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleArmAway}
+                          disabled={!canArm}
+                          className={cn(
+                            "w-full",
+                            alarmActionButtonClassName({ tone: "away", active: isAwayArmed })
+                          )}
+                        >
+                          <Car />
+                          Arm Away
+                        </Button>
+                      </>
+                    )}
+                  </div>
 
                   <Button
                     size="sm"
