@@ -1123,6 +1123,9 @@ struct WeatherView: View {
                             )
 
                             HStack(spacing: 8) {
+                                if let station {
+                                    HBTempestBatteryBadge(volts: station.metrics.batteryVolts)
+                                }
                                 HBBadge(text: stationLive ? "Live Telemetry" : "Forecast Only")
                                 if let trend = station?.metrics.pressureTrend, stationLive {
                                     HBBadge(
@@ -1221,6 +1224,9 @@ struct WeatherView: View {
                                     .background(HBGlassBackground(cornerRadius: 24, variant: .panelSoft))
 
                                 HStack(spacing: 8) {
+                                    if let station {
+                                        HBTempestBatteryBadge(volts: station.metrics.batteryVolts)
+                                    }
                                     HBBadge(text: stationLive ? "Live Telemetry" : "Forecast Only")
                                     if let trend = station?.metrics.pressureTrend, stationLive {
                                         HBBadge(

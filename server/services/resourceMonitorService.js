@@ -296,6 +296,7 @@ class ResourceMonitorService {
           detected: true,
           usagePercent: 0,
           type: systemInfo.jetsonModel || 'NVIDIA Jetson GPU',
+          source: 'detected-only',
           message: 'GPU detected, but utilization telemetry is unavailable'
         };
       }

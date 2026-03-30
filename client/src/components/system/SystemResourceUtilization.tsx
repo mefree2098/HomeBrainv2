@@ -51,7 +51,8 @@ interface ResourceMetric {
   icon: LucideIcon
   percent: number
   detail: string
-  available: boolean
+  detected: boolean
+  telemetryAvailable: boolean
 }
 
 interface ResourceWidgetProps {
@@ -114,7 +115,8 @@ function buildMetrics(snapshot: ResourceSnapshot | null): ResourceMetric[] {
       icon: Cpu,
       percent: cpuPercent,
       detail: `${snapshot?.cpu?.cores ?? 0} cores`,
-      available: true
+      detected: true,
+      telemetryAvailable: true
     },
     {
       key: "gpu",
@@ -127,7 +129,8 @@ function buildMetrics(snapshot: ResourceSnapshot | null): ResourceMetric[] {
         : gpuDetected
           ? snapshot?.gpu?.message || snapshot?.gpu?.type || "GPU detected"
           : snapshot?.gpu?.message || "Monitoring unavailable",
-      available: gpuDetected
+      detected: gpuDetected,
+      telemetryAvailable: gpuAvailable
     },
     {
       key: "memory",
@@ -136,7 +139,8 @@ function buildMetrics(snapshot: ResourceSnapshot | null): ResourceMetric[] {
       icon: Database,
       percent: memoryPercent,
       detail: formatCapacity(snapshot?.memory?.usedGB, snapshot?.memory?.totalGB),
-      available: true
+      detected: true,
+      telemetryAvailable: true
     },
     {
       key: "disk",
@@ -145,7 +149,8 @@ function buildMetrics(snapshot: ResourceSnapshot | null): ResourceMetric[] {
       icon: HardDrive,
       percent: diskPercent,
       detail: formatCapacity(snapshot?.disk?.usedGB, snapshot?.disk?.totalGB),
-      available: true
+      detected: true,
+      telemetryAvailable: true
     }
   ]
 }
@@ -226,7 +231,7 @@ export function HeaderResourceUtilizationStrip({ intervalMs = 12000 }: ResourceW
       {metrics.map((metric) => {
         const tone = getUsageTone(metric.percent)
         const Icon = metric.icon
-        const percentLabel = metric.available ? `${Math.round(metric.percent)}%` : "N/A"
+        const percentLabel = metric.telemetryAvailable ? `${Math.round(metric.percent)}%` : metric.detected ? "DET" : "N/A"
 
         return (
           <div
@@ -240,10 +245,10 @@ export function HeaderResourceUtilizationStrip({ intervalMs = 12000 }: ResourceW
             <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200/70 dark:bg-slate-700/70">
               <div
                 className={cn("h-full rounded-full bg-gradient-to-r transition-all duration-500", tone.bar)}
-                style={{ width: `${metric.available ? metric.percent : 0}%` }}
+                style={{ width: `${metric.telemetryAvailable ? metric.percent : 0}%` }}
               />
             </div>
-            <div className={cn("mt-1 text-right text-[10px] font-semibold", metric.available ? tone.value : "text-muted-foreground")}>
+            <div className={cn("mt-1 text-right text-[10px] font-semibold", metric.telemetryAvailable ? tone.value : "text-muted-foreground")}>
               {percentLabel}
             </div>
           </div>
@@ -317,14 +322,14 @@ export function SettingsResourceUtilizationTab({ intervalMs = 8000 }: ResourceWi
               {metrics.map((metric) => {
                 const tone = getUsageTone(metric.percent)
                 const Icon = metric.icon
-                const percentLabel = metric.available ? `${Math.round(metric.percent)}%` : "N/A"
+                const percentLabel = metric.telemetryAvailable ? `${Math.round(metric.percent)}%` : metric.detected ? "DET" : "N/A"
 
                 return (
                   <div
                     key={metric.key}
                     className={cn(
                       "rounded-2xl border border-border/50 bg-background/75 p-4 shadow-lg shadow-slate-300/15 transition-transform duration-200 hover:-translate-y-0.5 hover:shadow-xl dark:shadow-black/20",
-                      metric.available ? tone.glow : ""
+                      metric.telemetryAvailable ? tone.glow : ""
                     )}
                   >
                     <div className="flex items-center justify-between">
@@ -337,7 +342,7 @@ export function SettingsResourceUtilizationTab({ intervalMs = 8000 }: ResourceWi
                           <p className="text-[11px] text-muted-foreground">{metric.detail}</p>
                         </div>
                       </div>
-                      <span className={cn("text-lg font-semibold", metric.available ? tone.value : "text-muted-foreground")}>
+                      <span className={cn("text-lg font-semibold", metric.telemetryAvailable ? tone.value : "text-muted-foreground")}>
                         {percentLabel}
                       </span>
                     </div>
@@ -345,7 +350,7 @@ export function SettingsResourceUtilizationTab({ intervalMs = 8000 }: ResourceWi
                     <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-200/80 dark:bg-slate-700/70">
                       <div
                         className={cn("h-full rounded-full bg-gradient-to-r transition-all duration-500", tone.bar)}
-                        style={{ width: `${metric.available ? metric.percent : 0}%` }}
+                        style={{ width: `${metric.telemetryAvailable ? metric.percent : 0}%` }}
                       />
                     </div>
                   </div>

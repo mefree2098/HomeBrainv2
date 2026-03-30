@@ -16,6 +16,7 @@ private struct DashboardTempestStationSnapshot {
     let pressureTrend: String
     let rainTodayIn: Double?
     let rainRateInPerHr: Double?
+    let batteryVolts: Double?
     let websocketConnected: Bool
 
     static func from(_ payload: Any?) -> DashboardTempestStationSnapshot? {
@@ -41,6 +42,7 @@ private struct DashboardTempestStationSnapshot {
             pressureTrend: JSON.string(metrics, "pressureTrend", fallback: "steady"),
             rainTodayIn: optionalNumber(metrics["rainTodayIn"]),
             rainRateInPerHr: optionalNumber(metrics["rainRateInPerHr"]),
+            batteryVolts: optionalNumber(metrics["batteryVolts"]),
             websocketConnected: JSON.bool(status, "websocketConnected")
         )
     }
@@ -146,6 +148,17 @@ private struct DashboardWeatherSnapshot {
             return "Custom Address"
         case .auto:
             return "Auto Detect"
+        }
+    }
+
+    var sourceBadgeLabel: String {
+        switch source {
+        case .saved:
+            return "Saved"
+        case .custom:
+            return "Custom"
+        case .auto:
+            return "Auto"
         }
     }
 
@@ -1863,50 +1876,7 @@ struct DashboardView: View {
                                 }
                             }
 
-                            ViewThatFits(in: .horizontal) {
-                                HStack(spacing: 6) {
-                                    Spacer(minLength: 0)
-
-                                    HBBadge(
-                                        text: snapshot.sourceLabel,
-                                        foreground: HBPalette.textPrimary,
-                                        background: HBPalette.panelSoft.opacity(0.92),
-                                        stroke: HBPalette.panelStrokeStrong
-                                    )
-                                    .fixedSize(horizontal: true, vertical: false)
-
-                                    if let tempest = snapshot.tempest {
-                                        HBBadge(
-                                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
-                                            foreground: HBPalette.textPrimary,
-                                            background: HBPalette.heroCore.opacity(0.22),
-                                            stroke: HBPalette.heroCore.opacity(0.42)
-                                        )
-                                        .fixedSize(horizontal: true, vertical: false)
-                                    }
-                                }
-
-                                VStack(alignment: .trailing, spacing: 8) {
-                                    HBBadge(
-                                        text: snapshot.sourceLabel,
-                                        foreground: HBPalette.textPrimary,
-                                        background: HBPalette.panelSoft.opacity(0.92),
-                                        stroke: HBPalette.panelStrokeStrong
-                                    )
-                                    .fixedSize(horizontal: true, vertical: false)
-
-                                    if let tempest = snapshot.tempest {
-                                        HBBadge(
-                                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
-                                            foreground: HBPalette.textPrimary,
-                                            background: HBPalette.heroCore.opacity(0.22),
-                                            stroke: HBPalette.heroCore.opacity(0.42)
-                                        )
-                                        .fixedSize(horizontal: true, vertical: false)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                            }
+                            weatherStatusBadges(snapshot: snapshot)
                         }
                     } else {
                         HStack(alignment: .top, spacing: 12) {
@@ -1972,23 +1942,7 @@ struct DashboardView: View {
                                         .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
                                 }
 
-                                HBBadge(
-                                    text: snapshot.sourceLabel,
-                                    foreground: HBPalette.textPrimary,
-                                    background: HBPalette.panelSoft.opacity(0.92),
-                                    stroke: HBPalette.panelStrokeStrong
-                                )
-                                .fixedSize(horizontal: true, vertical: false)
-
-                                if let tempest = snapshot.tempest {
-                                    HBBadge(
-                                        text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
-                                        foreground: HBPalette.textPrimary,
-                                        background: HBPalette.heroCore.opacity(0.22),
-                                        stroke: HBPalette.heroCore.opacity(0.42)
-                                    )
-                                    .fixedSize(horizontal: true, vertical: false)
-                                }
+                                weatherStatusBadges(snapshot: snapshot)
                             }
                         }
                     }
@@ -2201,6 +2155,42 @@ struct DashboardView: View {
         .task(id: weatherTaskKey(for: widget)) {
             await loadWeather(for: widget)
         }
+    }
+
+    private func weatherStatusBadges(snapshot: DashboardWeatherSnapshot) -> some View {
+        HStack(spacing: 6) {
+            if let tempest = snapshot.tempest {
+                HBTempestBatteryBadge(volts: tempest.batteryVolts)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                HBBadge(
+                    text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                    foreground: HBPalette.textPrimary,
+                    background: HBPalette.heroCore.opacity(0.22),
+                    stroke: HBPalette.heroCore.opacity(0.42)
+                )
+                .fixedSize(horizontal: true, vertical: false)
+            }
+
+            weatherSourceBadge(text: snapshot.sourceBadgeLabel)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func weatherSourceBadge(text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .textCase(.uppercase)
+            .tracking(0.8)
+            .foregroundStyle(HBPalette.textPrimary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(HBPalette.panelSoft.opacity(0.92), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(HBPalette.panelStrokeStrong.opacity(0.9), lineWidth: 1)
+            )
     }
 
     private func weatherMetricTile(title: String, value: String, detail: String, accent: Color) -> some View {
