@@ -26,6 +26,7 @@ interface ResourceSnapshot {
   }
   gpu?: {
     available?: boolean
+    detected?: boolean
     usagePercent?: number
     type?: string
     message?: string
@@ -102,7 +103,8 @@ function buildMetrics(snapshot: ResourceSnapshot | null): ResourceMetric[] {
   const memoryPercent = normalizePercent(snapshot?.memory?.usagePercent)
   const diskPercent = normalizePercent(snapshot?.disk?.usagePercent)
   const gpuAvailable = Boolean(snapshot?.gpu?.available)
-  const gpuPercent = gpuAvailable ? normalizePercent(snapshot?.gpu?.usagePercent) : 0
+  const gpuDetected = Boolean(snapshot?.gpu?.detected ?? gpuAvailable)
+  const gpuPercent = gpuDetected ? normalizePercent(snapshot?.gpu?.usagePercent) : 0
 
   return [
     {
@@ -120,8 +122,12 @@ function buildMetrics(snapshot: ResourceSnapshot | null): ResourceMetric[] {
       shortLabel: "GPU",
       icon: Activity,
       percent: gpuPercent,
-      detail: gpuAvailable ? snapshot?.gpu?.type || "GPU active" : snapshot?.gpu?.message || "Monitoring unavailable",
-      available: gpuAvailable
+      detail: gpuAvailable
+        ? snapshot?.gpu?.type || "GPU active"
+        : gpuDetected
+          ? snapshot?.gpu?.message || snapshot?.gpu?.type || "GPU detected"
+          : snapshot?.gpu?.message || "Monitoring unavailable",
+      available: gpuDetected
     },
     {
       key: "memory",

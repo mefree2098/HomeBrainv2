@@ -1426,13 +1426,14 @@ struct AppShellView: View {
 
         let cpuPercent = normalizedResourcePercent(JSON.double(cpu, "usagePercent"))
         let gpuAvailable = JSON.bool(gpu, "available")
+        let gpuDetected = JSON.bool(gpu, "detected", fallback: gpuAvailable)
         let gpuPercent = normalizedResourcePercent(JSON.double(gpu, "usagePercent"))
         let memoryPercent = normalizedResourcePercent(JSON.double(memory, "usagePercent"))
         let diskPercent = normalizedResourcePercent(JSON.double(disk, "usagePercent"))
 
         resourceStripMetrics = [
             ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: cpuPercent, available: true),
-            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: gpuPercent, available: gpuAvailable),
+            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: gpuPercent, available: gpuDetected),
             ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: memoryPercent, available: true),
             ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: diskPercent, available: true)
         ]

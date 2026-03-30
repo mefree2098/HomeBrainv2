@@ -1,13 +1,70 @@
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const os = require('os');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 
 const execAsync = promisify(exec);
+const DEFAULT_GPU_LOAD_PATHS = [
+  '/sys/devices/gpu.0/load',
+  '/sys/devices/platform/17000000.ga10b/load',
+  '/sys/devices/platform/17000000.gv11b/load',
+  '/sys/class/devfreq/17000000.ga10b/device/load',
+  '/sys/class/devfreq/17000000.gv11b/device/load'
+];
+
+function clampPercent(value) {
+  return parseFloat(Math.max(0, Math.min(100, value)).toFixed(2));
+}
+
+function parseJetsonGpuLoad(rawValue) {
+  const trimmed = String(rawValue || '').trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return clampPercent(parsed > 100 ? parsed / 10 : parsed);
+}
+
+function parseTegrastatsGpuPercent(rawOutput) {
+  const output = String(rawOutput || '');
+  const gpuMatch = output.match(/GR3D_FREQ\s+(\d+)%/i);
+  if (!gpuMatch) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(gpuMatch[1], 10);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return clampPercent(parsed);
+}
+
+function inferJetsonGpuTypeFromPath(filePath) {
+  if (/ga10b/i.test(filePath)) {
+    return 'NVIDIA Jetson Orin GPU';
+  }
+
+  if (/gv11b/i.test(filePath)) {
+    return 'NVIDIA Jetson Xavier GPU';
+  }
+
+  return 'NVIDIA Jetson GPU';
+}
 
 class ResourceMonitorService {
-  constructor() {
+  constructor(dependencies = {}) {
     this.history = [];
     this.maxHistorySize = 100; // Keep last 100 readings
+    this.execAsync = dependencies.execAsync || execAsync;
+    this.readFile = dependencies.readFile || fs.readFile.bind(fs);
+    this.readdir = dependencies.readdir || fs.readdir.bind(fs);
   }
 
   /**
@@ -91,7 +148,7 @@ class ResourceMonitorService {
   async getDiskUsage() {
     try {
       // Use df command to get disk usage
-      const { stdout } = await execAsync('df -h / | tail -1');
+      const { stdout } = await this.execAsync('df -h / | tail -1');
       const parts = stdout.trim().split(/\s+/);
 
       // Parse df output: Filesystem Size Used Avail Use% Mounted
@@ -103,7 +160,7 @@ class ResourceMonitorService {
       // Get more detailed disk info
       let diskDetails = {};
       try {
-        const { stdout: dfBytes } = await execAsync('df -B1 / | tail -1');
+        const { stdout: dfBytes } = await this.execAsync('df -B1 / | tail -1');
         const bytesParts = dfBytes.trim().split(/\s+/);
         diskDetails = {
           totalBytes: parseInt(bytesParts[1]),
@@ -139,38 +196,113 @@ class ResourceMonitorService {
   /**
    * Get GPU utilization (for Jetson devices)
    */
-  async getGPUUsage() {
+  async getJetsonGpuLoadPaths() {
+    const candidates = new Set(DEFAULT_GPU_LOAD_PATHS);
+
     try {
-      // Try to get Jetson GPU stats
+      const devfreqEntries = await this.readdir('/sys/class/devfreq');
+      devfreqEntries
+        .filter((entry) => /(ga10b|gv11b|gpu)/i.test(entry))
+        .forEach((entry) => {
+          candidates.add(path.join('/sys/class/devfreq', entry, 'device', 'load'));
+          candidates.add(path.join('/sys/class/devfreq', entry, 'load'));
+        });
+    } catch (_error) {
+      // Ignore missing devfreq directories on non-Jetson systems.
+    }
+
+    return Array.from(candidates);
+  }
+
+  async readGPUUsageFromSysfs() {
+    const candidatePaths = await this.getJetsonGpuLoadPaths();
+
+    for (const candidatePath of candidatePaths) {
       try {
-        const { stdout } = await execAsync('cat /sys/devices/gpu.0/load');
-        const gpuLoad = parseInt(stdout.trim()) / 10; // Convert to percentage
+        const rawValue = await this.readFile(candidatePath, 'utf8');
+        const usagePercent = parseJetsonGpuLoad(rawValue);
+        if (usagePercent === null) {
+          continue;
+        }
 
         return {
-          available: true,
-          usagePercent: parseFloat(gpuLoad.toFixed(2)),
-          type: 'NVIDIA Jetson'
+          usagePercent,
+          type: inferJetsonGpuTypeFromPath(candidatePath),
+          source: candidatePath
         };
-      } catch (err) {
-        // Try tegrastats for Jetson
-        try {
-          const { stdout } = await execAsync('tegrastats --interval 500 | head -1', { timeout: 1000 });
-          // Parse tegrastats output - this is a simplified parser
-          const gpuMatch = stdout.match(/GR3D_FREQ\s+(\d+)%/);
-          if (gpuMatch) {
-            return {
-              available: true,
-              usagePercent: parseFloat(gpuMatch[1]),
-              type: 'NVIDIA Jetson (Tegra)'
-            };
-          }
-        } catch (tegraErr) {
-          // GPU stats not available
-        }
+      } catch (_error) {
+        // Ignore missing or unreadable probe paths and continue probing.
+      }
+    }
+
+    return null;
+  }
+
+  async readGPUUsageFromTegrastats() {
+    try {
+      const { stdout } = await this.execAsync(
+        `sh -lc 'for bin in /usr/bin/tegrastats /bin/tegrastats "$(command -v tegrastats 2>/dev/null)"; do
+          if [ -n "$bin" ] && [ -x "$bin" ]; then
+            "$bin" --interval 500 2>&1 | head -n 1
+            exit 0
+          fi
+        done'`,
+        { timeout: 2000 }
+      );
+
+      const usagePercent = parseTegrastatsGpuPercent(stdout);
+      if (usagePercent === null) {
+        return null;
+      }
+
+      return {
+        usagePercent,
+        type: 'NVIDIA Jetson (tegrastats)',
+        source: 'tegrastats'
+      };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async getGPUUsage() {
+    try {
+      const sysfsGpu = await this.readGPUUsageFromSysfs();
+      if (sysfsGpu) {
+        return {
+          available: true,
+          detected: true,
+          usagePercent: sysfsGpu.usagePercent,
+          type: sysfsGpu.type,
+          source: sysfsGpu.source
+        };
+      }
+
+      const tegrastatsGpu = await this.readGPUUsageFromTegrastats();
+      if (tegrastatsGpu) {
+        return {
+          available: true,
+          detected: true,
+          usagePercent: tegrastatsGpu.usagePercent,
+          type: tegrastatsGpu.type,
+          source: tegrastatsGpu.source
+        };
+      }
+
+      const systemInfo = await this.getSystemInfo();
+      if (systemInfo.isJetson) {
+        return {
+          available: false,
+          detected: true,
+          usagePercent: 0,
+          type: systemInfo.jetsonModel || 'NVIDIA Jetson GPU',
+          message: 'GPU detected, but utilization telemetry is unavailable'
+        };
       }
 
       return {
         available: false,
+        detected: false,
         usagePercent: 0,
         type: 'N/A',
         message: 'GPU monitoring not available'
@@ -179,6 +311,7 @@ class ResourceMonitorService {
       console.error('Error getting GPU usage:', error);
       return {
         available: false,
+        detected: false,
         usagePercent: 0,
         type: 'N/A',
         error: error.message
@@ -196,8 +329,8 @@ class ResourceMonitorService {
 
       for (let i = 0; i < 10; i++) {
         try {
-          const { stdout: type } = await execAsync(`cat /sys/class/thermal/thermal_zone${i}/type 2>/dev/null`);
-          const { stdout: temp } = await execAsync(`cat /sys/class/thermal/thermal_zone${i}/temp 2>/dev/null`);
+          const { stdout: type } = await this.execAsync(`cat /sys/class/thermal/thermal_zone${i}/type 2>/dev/null`);
+          const { stdout: temp } = await this.execAsync(`cat /sys/class/thermal/thermal_zone${i}/temp 2>/dev/null`);
 
           thermalZones.push({
             name: type.trim(),
@@ -281,27 +414,42 @@ class ResourceMonitorService {
       if (platform === 'linux') {
         try {
           // Get OS info
-          const { stdout: osInfo } = await execAsync('cat /etc/os-release 2>/dev/null || echo ""');
+          const { stdout: osInfo } = await this.execAsync('cat /etc/os-release 2>/dev/null || echo ""');
           const osLines = osInfo.split('\n');
           const osName = osLines.find(l => l.startsWith('PRETTY_NAME='))?.split('=')[1]?.replace(/"/g, '') || 'Linux';
 
           // Check if Jetson
           let isJetson = false;
           let jetsonModel = null;
+          let jetsonRelease = null;
+
           try {
-            const { stdout } = await execAsync('cat /etc/nv_tegra_release 2>/dev/null || cat /proc/device-tree/model 2>/dev/null || echo ""');
-            if (stdout.toLowerCase().includes('jetson')) {
-              isJetson = true;
-              jetsonModel = stdout.trim();
+            const model = (await this.readFile('/proc/device-tree/model', 'utf8')).replace(/\0/g, '').trim();
+            if (model) {
+              jetsonModel = model;
             }
-          } catch (err) {
-            // Not a Jetson
+          } catch (_error) {
+            // Model file is not available on this platform.
+          }
+
+          try {
+            const release = (await this.readFile('/etc/nv_tegra_release', 'utf8')).trim();
+            if (release) {
+              jetsonRelease = release;
+            }
+          } catch (_error) {
+            // Release file is not available on this platform.
+          }
+
+          if (jetsonModel?.toLowerCase().includes('jetson') || jetsonModel || jetsonRelease) {
+            isJetson = true;
           }
 
           detailedInfo = {
             osName,
             isJetson,
-            jetsonModel
+            jetsonModel,
+            jetsonRelease
           };
         } catch (err) {
           console.error('Error getting detailed system info:', err);
@@ -418,4 +566,9 @@ class ResourceMonitorService {
   }
 }
 
-module.exports = new ResourceMonitorService();
+const resourceMonitorService = new ResourceMonitorService();
+
+module.exports = resourceMonitorService;
+module.exports.ResourceMonitorService = ResourceMonitorService;
+module.exports.parseJetsonGpuLoad = parseJetsonGpuLoad;
+module.exports.parseTegrastatsGpuPercent = parseTegrastatsGpuPercent;

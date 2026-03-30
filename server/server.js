@@ -33,6 +33,7 @@ const insteonRoutes = require("./routes/insteonRoutes");
 const piperVoiceRoutes = require("./routes/piperVoiceRoutes");
 const sslRoutes = require("./routes/sslRoutes");
 const internalCaddyRoutes = require("./routes/internalCaddyRoutes");
+const internalAxiomRoutes = require("./routes/internalAxiomRoutes");
 const ollamaRoutes = require("./routes/ollamaRoutes");
 const resourceRoutes = require("./routes/resourceRoutes");
 const whisperRoutes = require("./routes/whisperRoutes");
@@ -51,6 +52,7 @@ const tempestService = require("./services/tempestService");
 const platformDeployService = require("./services/platformDeployService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
+const axiomIngressSyncService = require("./services/axiomIngressSyncService");
 const { shutdownCodexCliService } = require("./services/codexCliService");
 const automationSchedulerService = require("./services/automationSchedulerService");
 const { connectDB } = require("./config/database");
@@ -60,7 +62,25 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS = Math.max(0, Number(process.env.SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS || 5000));
+const AXIOM_STARTUP_SYNC_DELAY_MS = Math.max(0, Number(process.env.AXIOM_STARTUP_SYNC_DELAY_MS || 7000));
 let isShuttingDown = false;
+
+function envFlagEnabled(value, fallback = true) {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  return fallback;
+}
 
 function closeServer(server, name) {
   return new Promise((resolve) => {
@@ -277,10 +297,12 @@ app.use('/api/insteon', insteonRoutes);
   app.use('/api/ollama', ollamaRoutes);
   // Whisper Routes
   app.use('/api/whisper', whisperRoutes);
-  // Resource Monitor Routes
+// Resource Monitor Routes
   app.use('/api/resources', resourceRoutes);
 // Internal Caddy Policy Routes
 app.use('/internal/caddy', internalCaddyRoutes);
+// Internal Axiom Sync Routes
+app.use('/internal/axiom', internalAxiomRoutes);
 
 // Serve update packages from server/public/downloads so devices can fetch them
 const updatesPath = path.join(__dirname, 'public', 'downloads');
@@ -518,5 +540,29 @@ httpServer.listen(port, bindHost, async () => {
 
   if (typeof bootstrapTimer?.unref === 'function') {
     bootstrapTimer.unref();
+  }
+
+  if (envFlagEnabled(process.env.AXIOM_STARTUP_SYNC, true)) {
+    const axiomSyncTimer = setTimeout(() => {
+      axiomIngressSyncService.sync({
+        actor: 'system:server-startup',
+        reason: 'server-startup'
+      })
+        .then((result) => {
+          console.log(
+            `Axiom ingress startup sync completed: hosts=${result.manifest.mailHosts.join(',') || 'none'} `
+            + `routesCreated=${result.routes.created.join(',') || 'none'} `
+            + `routesUpdated=${result.routes.updated.join(',') || 'none'} `
+            + `routesDeleted=${result.routes.deleted.join(',') || 'none'}`
+          );
+        })
+        .catch((error) => {
+          console.warn(`Axiom ingress startup sync failed: ${error.message}`);
+        });
+    }, AXIOM_STARTUP_SYNC_DELAY_MS);
+
+    if (typeof axiomSyncTimer?.unref === 'function') {
+      axiomSyncTimer.unref();
+    }
   }
 });
