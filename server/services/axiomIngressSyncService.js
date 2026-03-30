@@ -3,8 +3,9 @@ const ReverseProxyRoute = require('../models/ReverseProxyRoute');
 const oidcService = require('./oidcService');
 const reverseProxyService = require('./reverseProxyService');
 
-const DEFAULT_AXIOM_UPSTREAM_PORT = Number(process.env.AXIOM_UPSTREAM_PORT || 3001);
-const DEFAULT_AXIOM_MANIFEST_URL = `http://127.0.0.1:${DEFAULT_AXIOM_UPSTREAM_PORT}/internal/deployment/homebrain-manifest`;
+const DEFAULT_AXIOM_UPSTREAM_PORT = Number(process.env.AXIOM_UPSTREAM_PORT || 4174);
+const DEFAULT_AXIOM_MANIFEST_PORT = Number(process.env.AXIOM_HOMEBRAIN_MANIFEST_PORT || process.env.AXIOM_API_PORT || 3001);
+const DEFAULT_AXIOM_MANIFEST_URL = `http://127.0.0.1:${DEFAULT_AXIOM_MANIFEST_PORT}/internal/deployment/homebrain-manifest`;
 const MANAGED_AXIOM_ROUTE_NOTES = 'Managed automatically from Axiom mail domains.';
 
 function trimString(value, fallback = '') {
@@ -53,7 +54,7 @@ function buildFallbackAxiomPreset() {
     upstreamProtocol: 'http',
     upstreamHost: trimString(process.env.AXIOM_UPSTREAM_HOST, '127.0.0.1'),
     upstreamPort: DEFAULT_AXIOM_UPSTREAM_PORT,
-    healthCheckPath: '/',
+    healthCheckPath: '/healthz',
     websocketSupport: true,
     tlsMode: 'automatic'
   };
@@ -73,7 +74,7 @@ function buildManagedAxiomRoute(hostname, preset) {
       : 'automatic',
     allowOnDemandTls: false,
     allowPublicUpstream: false,
-    healthCheckPath: trimString(preset.healthCheckPath, '/'),
+    healthCheckPath: trimString(preset.healthCheckPath, '/healthz'),
     websocketSupport: typeof preset.websocketSupport === 'boolean' ? preset.websocketSupport : true,
     stripPrefix: '',
     notes: MANAGED_AXIOM_ROUTE_NOTES

@@ -121,6 +121,39 @@ test('buildDesiredConfig pins production ACME to Let\'s Encrypt', async (t) => {
   assert.doesNotMatch(result.caddyfile, /acme-staging-v02/);
 });
 
+test('getRoutePresets defaults Axiom to the public gateway health endpoint', async (t) => {
+  const servicePath = require.resolve('../services/reverseProxyService');
+  const originalAxiomUpstreamHost = process.env.AXIOM_UPSTREAM_HOST;
+  const originalAxiomUpstreamPort = process.env.AXIOM_UPSTREAM_PORT;
+
+  delete process.env.AXIOM_UPSTREAM_HOST;
+  delete process.env.AXIOM_UPSTREAM_PORT;
+  delete require.cache[servicePath];
+
+  t.after(() => {
+    if (typeof originalAxiomUpstreamHost === 'string') {
+      process.env.AXIOM_UPSTREAM_HOST = originalAxiomUpstreamHost;
+    } else {
+      delete process.env.AXIOM_UPSTREAM_HOST;
+    }
+
+    if (typeof originalAxiomUpstreamPort === 'string') {
+      process.env.AXIOM_UPSTREAM_PORT = originalAxiomUpstreamPort;
+    } else {
+      delete process.env.AXIOM_UPSTREAM_PORT;
+    }
+
+    delete require.cache[servicePath];
+  });
+
+  const freshReverseProxyService = require('../services/reverseProxyService');
+  const axiomPreset = (await freshReverseProxyService.getRoutePresets()).find((preset) => preset.platformKey === 'axiom');
+
+  assert.equal(axiomPreset.upstreamHost, '127.0.0.1');
+  assert.equal(axiomPreset.upstreamPort, 4174);
+  assert.equal(axiomPreset.healthCheckPath, '/healthz');
+});
+
 test('updateSettings requires confirmation before switching ACME from staging to production', async (t) => {
   const originalGetSettings = ReverseProxySettings.getSettings;
   const originalAuditCreate = ReverseProxyAuditLog.create;

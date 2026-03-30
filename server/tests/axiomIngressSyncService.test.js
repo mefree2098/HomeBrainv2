@@ -332,3 +332,105 @@ test('sync rejects an empty Axiom manifest instead of removing managed routes', 
 
   assert.equal(routeLookupAttempted, false);
 });
+
+test('sync fallback keeps the manifest on the API port while creating Axiom routes for the web gateway', async (t) => {
+  const servicePath = require.resolve('../services/axiomIngressSyncService');
+  const originalFetch = global.fetch;
+  const originalFindRoutes = ReverseProxyRoute.find;
+  const originalOidcFindOne = OIDCClient.findOne;
+  const originalOidcCreate = OIDCClient.create;
+  const originalGetRoutePresets = reverseProxyService.getRoutePresets;
+  const originalCreateRoute = reverseProxyService.createRoute;
+  const originalApplyConfig = reverseProxyService.applyConfig;
+  const originalEnsureBootstrapState = oidcService.ensureBootstrapState;
+  const originalAxiomUpstreamPort = process.env.AXIOM_UPSTREAM_PORT;
+  const originalAxiomApiPort = process.env.AXIOM_API_PORT;
+  const originalManifestPort = process.env.AXIOM_HOMEBRAIN_MANIFEST_PORT;
+
+  delete process.env.AXIOM_UPSTREAM_PORT;
+  delete process.env.AXIOM_API_PORT;
+  delete process.env.AXIOM_HOMEBRAIN_MANIFEST_PORT;
+  delete require.cache[servicePath];
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    ReverseProxyRoute.find = originalFindRoutes;
+    OIDCClient.findOne = originalOidcFindOne;
+    OIDCClient.create = originalOidcCreate;
+    reverseProxyService.getRoutePresets = originalGetRoutePresets;
+    reverseProxyService.createRoute = originalCreateRoute;
+    reverseProxyService.applyConfig = originalApplyConfig;
+    oidcService.ensureBootstrapState = originalEnsureBootstrapState;
+
+    if (typeof originalAxiomUpstreamPort === 'string') {
+      process.env.AXIOM_UPSTREAM_PORT = originalAxiomUpstreamPort;
+    } else {
+      delete process.env.AXIOM_UPSTREAM_PORT;
+    }
+
+    if (typeof originalAxiomApiPort === 'string') {
+      process.env.AXIOM_API_PORT = originalAxiomApiPort;
+    } else {
+      delete process.env.AXIOM_API_PORT;
+    }
+
+    if (typeof originalManifestPort === 'string') {
+      process.env.AXIOM_HOMEBRAIN_MANIFEST_PORT = originalManifestPort;
+    } else {
+      delete process.env.AXIOM_HOMEBRAIN_MANIFEST_PORT;
+    }
+
+    delete require.cache[servicePath];
+  });
+
+  const freshAxiomIngressSyncService = require('../services/axiomIngressSyncService');
+
+  let fetchedUrl = '';
+  global.fetch = async (url) => {
+    fetchedUrl = String(url);
+    return {
+      ok: true,
+      async json() {
+        return {
+          generatedAt: '2026-03-30T19:00:00.000Z',
+          mailHosts: ['mail.freestonefamily.com'],
+          homeBrainRedirectUris: ['https://mail.freestonefamily.com/api/identity/homebrain/callback']
+        };
+      }
+    };
+  };
+
+  ReverseProxyRoute.find = () => ({
+    sort: async () => []
+  });
+
+  reverseProxyService.getRoutePresets = async () => [];
+
+  let createdRoute = null;
+  reverseProxyService.createRoute = async (payload) => {
+    createdRoute = payload;
+    return { hostname: payload.hostname };
+  };
+  reverseProxyService.applyConfig = async () => ({
+    appliedAt: new Date('2026-03-30T19:01:00.000Z'),
+    appliedRoutes: ['mail.freestonefamily.com']
+  });
+  oidcService.ensureBootstrapState = async () => ({
+    settingsUpdated: [],
+    createdClients: [],
+    updatedClients: []
+  });
+
+  OIDCClient.findOne = async () => null;
+  OIDCClient.create = async (payload) => payload;
+
+  await freshAxiomIngressSyncService.sync({
+    actor: 'system:test-fallback-ports',
+    reason: 'manual'
+  });
+
+  assert.equal(fetchedUrl, 'http://127.0.0.1:3001/internal/deployment/homebrain-manifest');
+  assert.equal(createdRoute.upstreamHost, '127.0.0.1');
+  assert.equal(createdRoute.upstreamPort, 4174);
+  assert.equal(createdRoute.healthCheckPath, '/healthz');
+});
