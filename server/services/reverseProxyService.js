@@ -23,6 +23,7 @@ const DEFAULT_EDGE_HTTP_PORT = Number(process.env.CADDY_EDGE_HTTP_PORT || 80);
 const DEFAULT_EDGE_HTTPS_PORT = Number(process.env.CADDY_EDGE_HTTPS_PORT || 443);
 const DEFAULT_BIND_PORT = Number(process.env.PORT || 3000);
 const DEFAULT_ASK_URL = `http://127.0.0.1:${DEFAULT_BIND_PORT}/internal/caddy/can-issue-cert`;
+const DEFAULT_AXIOM_PUBLIC_UPSTREAM_PORT = Number(process.env.AXIOM_UPSTREAM_PORT || 4174);
 
 const ROUTE_PRESETS = Object.freeze({
   homebrain: Object.freeze({
@@ -40,8 +41,8 @@ const ROUTE_PRESETS = Object.freeze({
     displayName: 'Axiom',
     upstreamProtocol: 'http',
     upstreamHost: process.env.AXIOM_UPSTREAM_HOST || '127.0.0.1',
-    upstreamPort: Number(process.env.AXIOM_UPSTREAM_PORT || 3001),
-    healthCheckPath: '/',
+    upstreamPort: DEFAULT_AXIOM_PUBLIC_UPSTREAM_PORT,
+    healthCheckPath: '/healthz',
     websocketSupport: true,
     tlsMode: 'automatic'
   })
