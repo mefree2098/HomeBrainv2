@@ -268,27 +268,41 @@ private func dashboardOptionalInt(_ value: Any?) -> Int? {
     return nil
 }
 
-private func dashboardStoredStringArray(from rawValue: String) -> [String]? {
-    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else {
+private func dashboardNormalizeStringArray(_ values: [String]?) -> [String]? {
+    guard let values else {
         return nil
     }
 
-    guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String] else {
-        return nil
+    var seen = Set<String>()
+    var normalized: [String] = []
+    normalized.reserveCapacity(values.count)
+
+    for value in values {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !seen.contains(trimmed) else {
+            continue
+        }
+
+        seen.insert(trimmed)
+        normalized.append(trimmed)
     }
 
-    return parsed
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
+    return normalized
 }
 
-private func dashboardEncodeStringArray(_ values: [String]) -> String {
-    guard let data = try? JSONSerialization.data(withJSONObject: values, options: []),
-          let encoded = String(data: data, encoding: .utf8) else {
-        return "[]"
+private func dashboardStringArray(from rawValue: Any?) -> [String]? {
+    guard let rawArray = rawValue as? [Any] else {
+        return nil
     }
-    return encoded
+
+    let values = rawArray.compactMap { value -> String? in
+        guard let stringValue = value as? String else {
+            return nil
+        }
+        return stringValue
+    }
+
+    return dashboardNormalizeStringArray(values)
 }
 
 private struct DashboardSecuritySensorItem: Identifiable {
@@ -449,7 +463,8 @@ struct DashboardView: View {
     @State private var commandResponse = ""
     @State private var isSendingCommand = false
     @State private var contentWidth: CGFloat = 0
-    @AppStorage("homebrain.ios.security.visible-sensor-ids") private var securityVisibleSensorIDsRaw = ""
+    @State private var securityVisibleSensorIDs: [String]? = nil
+    @State private var securitySensorSelectionProfileId: String? = nil
     @State private var isPresentingSecuritySensorPicker = false
 
     @StateObject private var locationManager = DashboardLocationManager()
@@ -525,7 +540,7 @@ struct DashboardView: View {
     }
 
     private var selectedSecuritySensorIDs: [String]? {
-        dashboardStoredStringArray(from: securityVisibleSensorIDsRaw)
+        dashboardNormalizeStringArray(securityVisibleSensorIDs)
     }
 
     private var selectedSecuritySensorIDSet: Set<String>? {
@@ -1572,24 +1587,12 @@ struct DashboardView: View {
     private func securityPanel(for widget: DashboardWidgetItem) -> some View {
         let compact = widget.size == .small
         let usesStackedActions = compact || usesPortraitCompactLayout || layoutWidth < 540
-        let summaryColumns: [GridItem]
-        let sensorSummaryValue = securityZonesTotal > 0 ? "\(securityZonesActive)/\(securityZonesTotal)" : "0"
-        let sensorSummaryDetail = securityZonesTotal > 0 ? "Active security sensors" : "No security sensors detected"
         let sensorFooterParts = [
             securityZonesTotal > 0 ? "\(securityZonesActive)/\(securityZonesTotal) active" : "No sensors detected",
             securityMonitoredSensorCount > 0 ? "\(securityMonitoredSensorCount) monitored" : nil,
             securityOfflineSensorCount > 0 ? "\(securityOfflineSensorCount) offline" : nil,
             securityLowBatterySensorCount > 0 ? "\(securityLowBatterySensorCount) low battery" : nil
         ].compactMap { $0 }
-
-        switch widget.size {
-        case .small:
-            summaryColumns = [GridItem(.flexible(), spacing: 10)]
-        case .medium:
-            summaryColumns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-        case .large, .full:
-            summaryColumns = Array(repeating: GridItem(.flexible(), spacing: 10), count: min(3, max(2, dashboardGridColumnCount)))
-        }
 
         return VStack(alignment: .leading, spacing: compact ? 10 : 12) {
             HStack(alignment: .top, spacing: 12) {
@@ -1655,7 +1658,7 @@ struct DashboardView: View {
                 }
 
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 10) {
                         if visibleSecuritySensors.isEmpty && !securitySensors.isEmpty {
                             securityEmptyStateRow(
                                 title: "No sensors selected",
@@ -1667,53 +1670,12 @@ struct DashboardView: View {
                                 subtitle: "Add security sensors or sync SmartThings devices to populate this panel."
                             )
                         } else {
-                            VStack(alignment: .leading, spacing: 10) {
+                            LazyVGrid(columns: securitySensorColumns(), spacing: 8) {
                                 ForEach(visibleSecuritySensors) { sensor in
                                     securitySensorRow(sensor, compact: compact)
                                 }
                             }
                         }
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(alignment: .top, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Door Locks")
-                                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                                        .textCase(.uppercase)
-                                        .tracking(2.4)
-                                        .foregroundStyle(HBPalette.textMuted)
-
-                                    Text("Unlocked doors can be locked directly from here.")
-                                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                                        .foregroundStyle(HBPalette.textSecondary)
-                                }
-
-                                Spacer(minLength: 8)
-
-                                if securityDoorLockCount > 0 {
-                                    HBBadge(
-                                        text: "\(securityLockedDoorCount)/\(securityDoorLockCount) locked",
-                                        foreground: HBPalette.textPrimary,
-                                        background: HBPalette.panelSoft.opacity(0.9),
-                                        stroke: HBPalette.panelStrokeStrong
-                                    )
-                                }
-                            }
-
-                            if securityDoorLocks.isEmpty {
-                                securityEmptyStateRow(
-                                    title: "No door locks found yet",
-                                    subtitle: "Add lock devices or sync SmartThings to populate this section."
-                                )
-                            } else {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    ForEach(securityDoorLocks) { doorLock in
-                                        securityDoorLockRow(doorLock, compact: compact)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.top, 2)
                     }
                 }
                 .frame(maxHeight: securityListHeight(for: widget.size))
@@ -1727,28 +1689,64 @@ struct DashboardView: View {
                     .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
             }
 
-            LazyVGrid(columns: summaryColumns, spacing: 10) {
-                securitySummaryTile(
-                    title: "Sensors",
-                    value: sensorSummaryValue,
-                    detail: sensorSummaryDetail,
-                    accent: HBPalette.accentBlue,
-                    compact: compact
-                )
-                securitySummaryTile(
-                    title: "Alarm State",
-                    value: securityStatusLabel,
-                    detail: "\(securityStatusDetail) • \(systemStatus)",
-                    accent: securityStatusAccent,
-                    compact: compact,
-                    titleColor: securityStateTitleColor,
-                    valueColor: securityStateValueColor,
-                    detailColor: securityStateDetailColor,
-                    backgroundVariant: securityStateBackgroundVariant,
-                    backgroundTint: securityStateBackgroundTint,
-                    backgroundTintOpacity: securityStateBackgroundOpacity
-                )
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Door Locks")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .textCase(.uppercase)
+                            .tracking(2.4)
+                            .foregroundStyle(HBPalette.textMuted)
+
+                        Text("Tap a lock tile to toggle locked or unlocked.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if securityDoorLockCount > 0 {
+                        HBBadge(
+                            text: "\(securityLockedDoorCount)/\(securityDoorLockCount) locked",
+                            foreground: HBPalette.textPrimary,
+                            background: HBPalette.panelSoft.opacity(0.9),
+                            stroke: HBPalette.panelStrokeStrong
+                        )
+                    }
+                }
+
+                if securityDoorLocks.isEmpty {
+                    securityEmptyStateRow(
+                        title: "No door locks found yet",
+                        subtitle: "Add lock devices or sync SmartThings to populate this section."
+                    )
+                } else {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVGrid(columns: securityDoorLockColumns(), spacing: 8) {
+                            ForEach(securityDoorLocks) { doorLock in
+                                securityDoorLockTile(doorLock, compact: compact)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: securityDoorLockListHeight(for: widget.size))
+                }
             }
+            .padding(compact ? 12 : 14)
+            .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+
+            securitySummaryTile(
+                title: "Alarm State",
+                value: securityStatusLabel,
+                detail: "\(securityStatusDetail) • \(systemStatus)",
+                accent: securityStatusAccent,
+                compact: compact,
+                titleColor: securityStateTitleColor,
+                valueColor: securityStateValueColor,
+                detailColor: securityStateDetailColor,
+                backgroundVariant: securityStateBackgroundVariant,
+                backgroundTint: securityStateBackgroundTint,
+                backgroundTintOpacity: securityStateBackgroundOpacity
+            )
 
             HStack(alignment: .center, spacing: 10) {
                 securityPrimaryActions(compact: usesStackedActions, stacked: false)
@@ -2055,6 +2053,28 @@ struct DashboardView: View {
         }
     }
 
+    private func securityDoorLockListHeight(for size: DashboardWidgetSize) -> CGFloat {
+        switch size {
+        case .small:
+            return 104
+        case .medium:
+            return 120
+        case .large:
+            return 146
+        case .full:
+            return 170
+        }
+    }
+
+    private func securitySensorColumns() -> [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 3)
+    }
+
+    private func securityDoorLockColumns() -> [GridItem] {
+        let columnCount = (usesPortraitCompactLayout && layoutWidth < 360) ? 3 : 4
+        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: columnCount)
+    }
+
     private func securitySensorPickerButton() -> some View {
         Button {
             isPresentingSecuritySensorPicker.toggle()
@@ -2144,7 +2164,10 @@ struct DashboardView: View {
     }
 
     private func resetVisibleSecuritySensors() {
-        securityVisibleSensorIDsRaw = ""
+        securityVisibleSensorIDs = nil
+        Task {
+            await persistVisibleSecuritySensors(nil)
+        }
     }
 
     private func toggleVisibleSecuritySensor(_ sensor: DashboardSecuritySensorItem) {
@@ -2159,11 +2182,18 @@ struct DashboardView: View {
         }
 
         if currentSelection.count == allSensorKeys.count && allSensorKeys.allSatisfy({ currentSelection.contains($0) }) {
-            securityVisibleSensorIDsRaw = ""
+            securityVisibleSensorIDs = nil
+            Task {
+                await persistVisibleSecuritySensors(nil)
+            }
             return
         }
 
-        securityVisibleSensorIDsRaw = dashboardEncodeStringArray(allSensorKeys.filter { currentSelection.contains($0) })
+        let nextSelection = allSensorKeys.filter { currentSelection.contains($0) }
+        securityVisibleSensorIDs = nextSelection
+        Task {
+            await persistVisibleSecuritySensors(nextSelection)
+        }
     }
 
     private func securitySensorIconName(_ sensorType: String) -> String {
@@ -2329,48 +2359,46 @@ struct DashboardView: View {
     }
 
     private func securitySensorRow(_ sensor: DashboardSecuritySensorItem, compact: Bool) -> some View {
-        let iconColors = securitySensorIconColors(for: sensor)
         let canOpenDevice = sensor.localDeviceId != nil
 
         return Button {
             guard let deviceID = sensor.localDeviceId else { return }
             onOpenDevice?(deviceID)
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: securitySensorIconName(sensor.sensorType))
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(iconColors.foreground)
-                    .frame(width: 28, height: 28)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(iconColors.background)
-                    )
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 6) {
+                    Text(sensor.name)
+                        .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
 
-                Text(sensor.name)
-                    .font(.system(size: compact ? 13 : 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(HBPalette.textPrimary)
-                    .lineLimit(1)
+                    Spacer(minLength: 4)
 
-                Spacer(minLength: 8)
+                    if sensor.batteryLevel != nil {
+                        Image(systemName: compactSecurityBatterySymbolName(for: sensor))
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(securityBatteryTint(sensor))
+                    }
+                }
 
                 Text(compactSecurityStatusText(for: sensor))
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(compactSecurityStatusTint(for: sensor))
                     .lineLimit(1)
-
-                if sensor.batteryLevel != nil {
-                    Image(systemName: compactSecurityBatterySymbolName(for: sensor))
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(securityBatteryTint(sensor))
-                }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 9)
             .padding(.vertical, compact ? 8 : 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: compact ? 64 : 70, alignment: .leading)
             .background(HBGlassBackground(cornerRadius: compact ? 12 : 14, variant: .panelSoft))
             .overlay(
                 RoundedRectangle(cornerRadius: compact ? 12 : 14, style: .continuous)
-                    .stroke(canOpenDevice ? HBPalette.panelStrokeStrong : HBPalette.panelStroke.opacity(0.45), lineWidth: 1)
+                    .stroke(
+                        canOpenDevice
+                            ? compactSecurityStatusTint(for: sensor).opacity(0.32)
+                            : HBPalette.panelStroke.opacity(0.45),
+                        lineWidth: 1
+                    )
             )
             .opacity(canOpenDevice ? 1 : 0.84)
         }
@@ -2378,84 +2406,54 @@ struct DashboardView: View {
         .disabled(!canOpenDevice)
     }
 
-    private func securityDoorLockRow(_ doorLock: DashboardSecurityDoorLockItem, compact: Bool) -> some View {
+    private func securityDoorLockTile(_ doorLock: DashboardSecurityDoorLockItem, compact: Bool) -> some View {
         let badgeColors = securityDoorLockBadgeColors(for: doorLock)
-        let canLock = (doorLock.localDeviceId != nil) && !doorLock.isLocked && doorLock.isOnline
-        let isPending = pendingControlDeviceIds.contains(doorLock.id)
+        let controlDeviceID = doorLock.localDeviceId ?? doorLock.id
+        let isPending = pendingControlDeviceIds.contains(controlDeviceID)
+        let canToggle = (doorLock.localDeviceId != nil) && doorLock.isOnline && !isPending
+        let action = doorLock.isLocked ? "unlock" : "lock"
 
         return Button {
-            guard canLock, let deviceID = doorLock.localDeviceId else { return }
-            Task { await handleDeviceControl(deviceId: deviceID, action: "lock") }
+            guard canToggle, let deviceID = doorLock.localDeviceId else { return }
+            Task { await handleDeviceControl(deviceId: deviceID, action: action) }
         } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: doorLock.isLocked ? "lock.fill" : "lock.open.fill")
-                    .font(.system(size: 14, weight: .bold))
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(doorLock.name)
+                        .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    Spacer(minLength: 4)
+
+                    if isPending {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: doorLock.isLocked ? "lock.fill" : "lock.open.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(badgeColors.foreground)
+                    }
+                }
+
+                Text(!doorLock.isOnline ? "Offline" : doorLock.stateLabel)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(badgeColors.foreground)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(badgeColors.background)
-                    )
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(doorLock.name)
-                            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
-                            .multilineTextAlignment(.leading)
-
-                        HBBadge(
-                            text: doorLock.stateLabel,
-                            foreground: badgeColors.foreground,
-                            background: badgeColors.background,
-                            stroke: badgeColors.stroke
-                        )
-                    }
-
-                    Text(doorLock.room ?? "Unassigned")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(HBPalette.textSecondary)
-
-                    HStack(spacing: 10) {
-                        if !doorLock.isOnline {
-                            Label("Offline", systemImage: "wifi.slash")
-                                .foregroundStyle(.red.opacity(0.92))
-                        } else if canLock {
-                            Text("Tap to lock")
-                                .foregroundStyle(HBPalette.accentOrange)
-                        }
-                    }
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                }
-
-                Spacer(minLength: 8)
-
-                if isPending {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.top, 3)
-                } else if canLock {
-                    HBBadge(
-                        text: "Lock",
-                        foreground: HBPalette.accentOrange,
-                        background: HBPalette.accentOrange.opacity(0.14),
-                        stroke: HBPalette.accentOrange.opacity(0.6)
-                    )
-                    .padding(.top, 2)
-                }
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 9)
+            .padding(.vertical, compact ? 9 : 10)
+            .frame(maxWidth: .infinity, minHeight: compact ? 66 : 72, alignment: .leading)
             .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
             .overlay(
                 RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
-                    .stroke(canLock ? HBPalette.panelStrokeStrong : HBPalette.panelStroke.opacity(0.45), lineWidth: 1)
+                    .stroke(canToggle ? HBPalette.panelStrokeStrong : HBPalette.panelStroke.opacity(0.45), lineWidth: 1)
             )
-            .opacity(canLock || (!doorLock.isOnline || doorLock.isLocked) ? 1 : 0.9)
+            .opacity(canToggle || !doorLock.isOnline || isPending ? 1 : 0.9)
         }
         .buttonStyle(.plain)
-        .disabled(!canLock)
+        .disabled(!canToggle)
     }
 
     private func weatherWidget(for widget: DashboardWidgetItem) -> some View {
@@ -4549,6 +4547,7 @@ struct DashboardView: View {
                 views: dashboardContext.views,
                 current: selectedDashboardViewID
             )
+            await loadVisibleSecuritySensorSelection(profileId: dashboardContext.profileId ?? favoritesContext.profileId)
             dashboardDirty = false
         } catch {
             errorMessage = error.localizedDescription
@@ -4817,6 +4816,58 @@ struct DashboardView: View {
     private func applyFavoriteContext(_ context: FavoriteDeviceContext) {
         favoritesProfileId = context.profileId
         favoriteDeviceIds = context.favoriteDeviceIds
+    }
+
+    private func applyVisibleSecuritySensorSelection(from response: Any?) {
+        let root = JSON.object(response)
+        let data = JSON.object(root["data"])
+        securityVisibleSensorIDs = dashboardStringArray(from: root["sensorIds"] ?? data["sensorIds"])
+    }
+
+    private func loadVisibleSecuritySensorSelection(profileId: String?) async {
+        guard !previewMode else {
+            securitySensorSelectionProfileId = nil
+            securityVisibleSensorIDs = nil
+            return
+        }
+
+        guard let profileId, !profileId.isEmpty else {
+            securitySensorSelectionProfileId = nil
+            securityVisibleSensorIDs = nil
+            return
+        }
+
+        securitySensorSelectionProfileId = profileId
+
+        do {
+            let response = try await session.apiClient.get("/api/profiles/\(profileId)/security-visible-sensors")
+            applyVisibleSecuritySensorSelection(from: response)
+        } catch {
+            securityVisibleSensorIDs = nil
+        }
+    }
+
+    private func persistVisibleSecuritySensors(_ sensorIds: [String]?) async {
+        guard !previewMode else {
+            return
+        }
+
+        guard let profileId = securitySensorSelectionProfileId, !profileId.isEmpty else {
+            return
+        }
+
+        var payload: [String: Any] = [:]
+        if let normalizedSensorIds = dashboardNormalizeStringArray(sensorIds) {
+            payload["sensorIds"] = normalizedSensorIds
+        } else {
+            payload["sensorIds"] = NSNull()
+        }
+
+        do {
+            _ = try await session.apiClient.put("/api/profiles/\(profileId)/security-visible-sensors", body: payload)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func applyFavoriteContext(

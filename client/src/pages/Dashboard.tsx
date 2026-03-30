@@ -1000,7 +1000,7 @@ export function Dashboard() {
     }
 
     if (widget.type === "security") {
-      return <SecurityAlarmWidget size={widget.size} onOpenDevice={openSecurityDeviceDialog} />
+      return <SecurityAlarmWidget size={widget.size} profileId={profileId} onOpenDevice={openSecurityDeviceDialog} />
     }
 
     if (widget.type === "favorite-scenes") {
