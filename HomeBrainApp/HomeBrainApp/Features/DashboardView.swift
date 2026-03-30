@@ -255,8 +255,96 @@ private final class DashboardLocationManager: NSObject, ObservableObject, CLLoca
     }
 }
 
+private func dashboardOptionalInt(_ value: Any?) -> Int? {
+    if let raw = value as? Int {
+        return raw
+    }
+    if let raw = value as? NSNumber {
+        return raw.intValue
+    }
+    if let raw = value as? String, let parsed = Int(raw) {
+        return parsed
+    }
+    return nil
+}
+
+private struct DashboardSecuritySensorItem: Identifiable {
+    let id: String
+    var localDeviceId: String?
+    var name: String
+    var room: String?
+    var sensorType: String
+    var sensorTypeLabel: String
+    var stateLabel: String
+    var isActive: Bool
+    var isAvailable: Bool
+    var isOnline: Bool
+    var isMonitored: Bool
+    var isBypassed: Bool
+    var monitorState: String
+    var batteryLevel: Int?
+    var batteryState: String
+    var lastSeen: String
+    var requiresAttention: Bool
+
+    static func from(_ payload: [String: Any]) -> DashboardSecuritySensorItem? {
+        let resolvedID = JSON.optionalString(payload, "localDeviceId")
+            ?? JSON.optionalString(payload, "deviceId")
+            ?? JSON.id(payload)
+
+        return DashboardSecuritySensorItem(
+            id: resolvedID,
+            localDeviceId: JSON.optionalString(payload, "localDeviceId"),
+            name: JSON.string(payload, "name", fallback: "Unnamed security sensor"),
+            room: JSON.optionalString(payload, "room"),
+            sensorType: JSON.string(payload, "sensorType", fallback: "security"),
+            sensorTypeLabel: JSON.string(payload, "sensorTypeLabel", fallback: "Security"),
+            stateLabel: JSON.string(payload, "stateLabel", fallback: "Unknown"),
+            isActive: JSON.bool(payload, "isActive"),
+            isAvailable: JSON.bool(payload, "isAvailable", fallback: true),
+            isOnline: JSON.bool(payload, "isOnline", fallback: true),
+            isMonitored: JSON.bool(payload, "isMonitored"),
+            isBypassed: JSON.bool(payload, "isBypassed"),
+            monitorState: JSON.string(payload, "monitorState", fallback: "Available"),
+            batteryLevel: dashboardOptionalInt(payload["batteryLevel"]),
+            batteryState: JSON.string(payload, "batteryState", fallback: "unknown"),
+            lastSeen: JSON.displayDate(from: payload["lastSeen"]),
+            requiresAttention: JSON.bool(payload, "requiresAttention")
+        )
+    }
+}
+
+private struct DashboardSecurityDoorLockItem: Identifiable {
+    let id: String
+    var localDeviceId: String?
+    var name: String
+    var room: String?
+    var isLocked: Bool
+    var isOnline: Bool
+    var stateLabel: String
+    var lastSeen: String
+
+    static func from(_ payload: [String: Any]) -> DashboardSecurityDoorLockItem? {
+        let resolvedID = JSON.optionalString(payload, "localDeviceId")
+            ?? JSON.optionalString(payload, "deviceId")
+            ?? JSON.id(payload)
+
+        return DashboardSecurityDoorLockItem(
+            id: resolvedID,
+            localDeviceId: JSON.optionalString(payload, "localDeviceId"),
+            name: JSON.string(payload, "name", fallback: "Unnamed door lock"),
+            room: JSON.optionalString(payload, "room"),
+            isLocked: JSON.bool(payload, "isLocked"),
+            isOnline: JSON.bool(payload, "isOnline", fallback: true),
+            stateLabel: JSON.string(payload, "stateLabel", fallback: "Unknown"),
+            lastSeen: JSON.displayDate(from: payload["lastSeen"])
+        )
+    }
+}
+
 struct DashboardView: View {
     let previewMode: Bool
+    let onOpenDevice: ((String) -> Void)?
 
     private enum DashboardNameAction {
         case create
@@ -304,6 +392,8 @@ struct DashboardView: View {
     @State private var securityStatus = "Unknown"
     @State private var securityZonesTotal = 0
     @State private var securityZonesActive = 0
+    @State private var securitySensors: [DashboardSecuritySensorItem] = []
+    @State private var securityDoorLocks: [DashboardSecurityDoorLockItem] = []
     @State private var systemStatus = "Online"
     @State private var favoriteDeviceIds: Set<String> = []
     @State private var favoritesProfileId: String?
@@ -338,6 +428,11 @@ struct DashboardView: View {
     @State private var contentWidth: CGFloat = 0
 
     @StateObject private var locationManager = DashboardLocationManager()
+
+    init(previewMode: Bool = false, onOpenDevice: ((String) -> Void)? = nil) {
+        self.previewMode = previewMode
+        self.onOpenDevice = onOpenDevice
+    }
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
@@ -398,6 +493,30 @@ struct DashboardView: View {
 
     private var onlineVoiceDevices: Int {
         voiceDevices.filter { $0.status == "online" }.count
+    }
+
+    private var securityAttentionSensorCount: Int {
+        securitySensors.filter(\.requiresAttention).count
+    }
+
+    private var securityMonitoredSensorCount: Int {
+        securitySensors.filter { $0.isMonitored && !$0.isBypassed }.count
+    }
+
+    private var securityOfflineSensorCount: Int {
+        securitySensors.filter { !$0.isOnline }.count
+    }
+
+    private var securityLowBatterySensorCount: Int {
+        securitySensors.filter { $0.batteryState == "low" || $0.batteryState == "critical" }.count
+    }
+
+    private var securityDoorLockCount: Int {
+        securityDoorLocks.count
+    }
+
+    private var securityLockedDoorCount: Int {
+        securityDoorLocks.filter(\.isLocked).count
     }
 
     private var dashboardGridColumnCount: Int {
@@ -565,10 +684,6 @@ struct DashboardView: View {
         }
 
         return badges
-    }
-
-    init(previewMode: Bool = false) {
-        self.previewMode = previewMode
     }
 
     var body: some View {
@@ -1412,6 +1527,14 @@ struct DashboardView: View {
         let compact = widget.size == .small
         let usesStackedActions = compact || usesPortraitCompactLayout || layoutWidth < 540
         let summaryColumns: [GridItem]
+        let sensorSummaryValue = securityZonesTotal > 0 ? "\(securityZonesActive)/\(securityZonesTotal)" : "0"
+        let sensorSummaryDetail = securityZonesTotal > 0 ? "Active security sensors" : "No security sensors detected"
+        let sensorFooterParts = [
+            securityZonesTotal > 0 ? "\(securityZonesActive)/\(securityZonesTotal) active" : "No sensors detected",
+            securityMonitoredSensorCount > 0 ? "\(securityMonitoredSensorCount) monitored" : nil,
+            securityOfflineSensorCount > 0 ? "\(securityOfflineSensorCount) offline" : nil,
+            securityLowBatterySensorCount > 0 ? "\(securityLowBatterySensorCount) low battery" : nil
+        ].compactMap { $0 }
 
         switch widget.size {
         case .small:
@@ -1449,8 +1572,8 @@ struct DashboardView: View {
             LazyVGrid(columns: summaryColumns, spacing: 10) {
                 securitySummaryTile(
                     title: "Sensors",
-                    value: "\(securityZonesActive)/\(securityZonesTotal)",
-                    detail: "Active security sensors",
+                    value: sensorSummaryValue,
+                    detail: sensorSummaryDetail,
                     accent: HBPalette.accentBlue,
                     compact: compact
                 )
@@ -1474,7 +1597,7 @@ struct DashboardView: View {
                     Text("Sensors:")
                         .foregroundStyle(HBPalette.textSecondary)
                     Spacer()
-                    Text("\(securityZonesActive)/\(securityZonesTotal) active")
+                    Text(securityZonesTotal > 0 ? "\(securityZonesActive)/\(securityZonesTotal) active" : "No sensors detected")
                         .foregroundStyle(HBPalette.textPrimary)
                         .fontWeight(.semibold)
                 }
@@ -1491,6 +1614,100 @@ struct DashboardView: View {
             .font(.system(size: compact ? 14 : 15, weight: .medium, design: .rounded))
             .padding(compact ? 12 : 14)
             .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Security Sensors")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .textCase(.uppercase)
+                            .tracking(2.4)
+                            .foregroundStyle(HBPalette.textMuted)
+
+                        Text("Tap a sensor to open its device page.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if securityAttentionSensorCount > 0 {
+                        HBBadge(
+                            text: "\(securityAttentionSensorCount) attention",
+                            foreground: HBPalette.accentOrange,
+                            background: HBPalette.accentOrange.opacity(0.14),
+                            stroke: HBPalette.accentOrange.opacity(0.65)
+                        )
+                    }
+                }
+
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if securitySensors.isEmpty {
+                            securityEmptyStateRow(
+                                title: "No security sensors found yet",
+                                subtitle: "Add security sensors or sync SmartThings devices to populate this panel."
+                            )
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(securitySensors) { sensor in
+                                    securitySensorRow(sensor, compact: compact)
+                                }
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Door Locks")
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .textCase(.uppercase)
+                                        .tracking(2.4)
+                                        .foregroundStyle(HBPalette.textMuted)
+
+                                    Text("Unlocked doors can be locked directly from here.")
+                                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                }
+
+                                Spacer(minLength: 8)
+
+                                if securityDoorLockCount > 0 {
+                                    HBBadge(
+                                        text: "\(securityLockedDoorCount)/\(securityDoorLockCount) locked",
+                                        foreground: HBPalette.textPrimary,
+                                        background: HBPalette.panelSoft.opacity(0.9),
+                                        stroke: HBPalette.panelStrokeStrong
+                                    )
+                                }
+                            }
+
+                            if securityDoorLocks.isEmpty {
+                                securityEmptyStateRow(
+                                    title: "No door locks found yet",
+                                    subtitle: "Add lock devices or sync SmartThings to populate this section."
+                                )
+                            } else {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    ForEach(securityDoorLocks) { doorLock in
+                                        securityDoorLockRow(doorLock, compact: compact)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
+                }
+                .frame(maxHeight: securityListHeight(for: widget.size))
+
+                Text(sensorFooterParts.joined(separator: " • "))
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
+            }
 
             HStack(alignment: .center, spacing: 10) {
                 securityPrimaryActions(compact: usesStackedActions, stacked: false)
@@ -1786,6 +2003,280 @@ struct DashboardView: View {
         }
         .buttonStyle(HBGhostButtonStyle(compact: compact))
         .frame(maxWidth: .infinity)
+    }
+
+    private func securityListHeight(for size: DashboardWidgetSize) -> CGFloat {
+        switch size {
+        case .small:
+            return 220
+        case .medium:
+            return 250
+        case .large:
+            return 300
+        case .full:
+            return 360
+        }
+    }
+
+    private func securitySensorIconName(_ sensorType: String) -> String {
+        switch sensorType {
+        case "motion":
+            return "waveform.path.ecg"
+        case "flood":
+            return "drop.fill"
+        case "co":
+            return "bolt.fill"
+        case "smoke", "glass", "panic":
+            return "exclamationmark.triangle.fill"
+        case "doorWindow":
+            return "door.left.hand.open"
+        default:
+            return "shield"
+        }
+    }
+
+    private func securityStateLabel(sensorType: String, isActive: Bool, isAvailable: Bool) -> String {
+        guard isAvailable else {
+            return "Unavailable"
+        }
+
+        switch sensorType {
+        case "doorWindow":
+            return isActive ? "Open" : "Closed"
+        case "motion":
+            return isActive ? "Motion" : "Clear"
+        case "flood":
+            return isActive ? "Wet" : "Dry"
+        case "glass":
+            return isActive ? "Alert" : "Clear"
+        default:
+            return isActive ? "Alert" : "Normal"
+        }
+    }
+
+    private func securitySensorBadgeColors(for sensor: DashboardSecuritySensorItem) -> (foreground: Color, background: Color, stroke: Color) {
+        if !sensor.isAvailable || !sensor.isOnline {
+            return (.red.opacity(0.95), Color.red.opacity(0.12), Color.red.opacity(0.58))
+        }
+        if sensor.isActive {
+            return (HBPalette.accentOrange, HBPalette.accentOrange.opacity(0.14), HBPalette.accentOrange.opacity(0.6))
+        }
+        return (HBPalette.accentGreen, HBPalette.accentGreen.opacity(0.14), HBPalette.accentGreen.opacity(0.58))
+    }
+
+    private func securitySensorIconColors(for sensor: DashboardSecuritySensorItem) -> (foreground: Color, background: Color) {
+        let badgeColors = securitySensorBadgeColors(for: sensor)
+        return (badgeColors.foreground, badgeColors.background)
+    }
+
+    private func securityMonitorTint(_ sensor: DashboardSecuritySensorItem) -> Color {
+        switch sensor.monitorState {
+        case "Bypassed":
+            return HBPalette.accentOrange
+        case "Monitored":
+            return HBPalette.accentGreen
+        case "Missing":
+            return .red.opacity(0.92)
+        default:
+            return HBPalette.textSecondary
+        }
+    }
+
+    private func securityBatteryTint(_ sensor: DashboardSecuritySensorItem) -> Color {
+        switch sensor.batteryState {
+        case "critical":
+            return .red.opacity(0.92)
+        case "low":
+            return HBPalette.accentOrange
+        default:
+            return HBPalette.textSecondary
+        }
+    }
+
+    private func securityDoorLockBadgeColors(for doorLock: DashboardSecurityDoorLockItem) -> (foreground: Color, background: Color, stroke: Color) {
+        if !doorLock.isOnline {
+            return (.red.opacity(0.95), Color.red.opacity(0.12), Color.red.opacity(0.58))
+        }
+        if doorLock.isLocked {
+            return (HBPalette.accentGreen, HBPalette.accentGreen.opacity(0.14), HBPalette.accentGreen.opacity(0.58))
+        }
+        return (HBPalette.accentOrange, HBPalette.accentOrange.opacity(0.14), HBPalette.accentOrange.opacity(0.6))
+    }
+
+    private func securityEmptyStateRow(title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+            Text(subtitle)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+    }
+
+    private func securitySensorRow(_ sensor: DashboardSecuritySensorItem, compact: Bool) -> some View {
+        let badgeColors = securitySensorBadgeColors(for: sensor)
+        let iconColors = securitySensorIconColors(for: sensor)
+        let canOpenDevice = sensor.localDeviceId != nil
+
+        return Button {
+            guard let deviceID = sensor.localDeviceId else { return }
+            onOpenDevice?(deviceID)
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: securitySensorIconName(sensor.sensorType))
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(iconColors.foreground)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(iconColors.background)
+                    )
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(sensor.name)
+                            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .multilineTextAlignment(.leading)
+
+                        HBBadge(
+                            text: sensor.stateLabel,
+                            foreground: badgeColors.foreground,
+                            background: badgeColors.background,
+                            stroke: badgeColors.stroke
+                        )
+                    }
+
+                    let descriptor = [sensor.room, sensor.sensorTypeLabel].compactMap { $0 }.joined(separator: " • ")
+                    if !descriptor.isEmpty {
+                        Text(descriptor)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+
+                    HStack(spacing: 10) {
+                        Text(sensor.monitorState)
+                            .foregroundStyle(securityMonitorTint(sensor))
+
+                        if !sensor.isOnline {
+                            Label("Offline", systemImage: "wifi.slash")
+                                .foregroundStyle(.red.opacity(0.92))
+                        }
+
+                        if let batteryLevel = sensor.batteryLevel {
+                            Label("\(batteryLevel)%", systemImage: "battery.50")
+                                .foregroundStyle(securityBatteryTint(sensor))
+                        }
+                    }
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+
+                Spacer(minLength: 8)
+
+                if canOpenDevice {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(HBPalette.textMuted)
+                        .padding(.top, 3)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
+            .overlay(
+                RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
+                    .stroke(canOpenDevice ? HBPalette.panelStrokeStrong : HBPalette.panelStroke.opacity(0.45), lineWidth: 1)
+            )
+            .opacity(canOpenDevice ? 1 : 0.84)
+        }
+        .buttonStyle(.plain)
+        .disabled(!canOpenDevice)
+    }
+
+    private func securityDoorLockRow(_ doorLock: DashboardSecurityDoorLockItem, compact: Bool) -> some View {
+        let badgeColors = securityDoorLockBadgeColors(for: doorLock)
+        let canLock = (doorLock.localDeviceId != nil) && !doorLock.isLocked && doorLock.isOnline
+        let isPending = pendingControlDeviceIds.contains(doorLock.id)
+
+        return Button {
+            guard canLock, let deviceID = doorLock.localDeviceId else { return }
+            Task { await handleDeviceControl(deviceId: deviceID, action: "lock") }
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: doorLock.isLocked ? "lock.fill" : "lock.open.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(badgeColors.foreground)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(badgeColors.background)
+                    )
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(doorLock.name)
+                            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .multilineTextAlignment(.leading)
+
+                        HBBadge(
+                            text: doorLock.stateLabel,
+                            foreground: badgeColors.foreground,
+                            background: badgeColors.background,
+                            stroke: badgeColors.stroke
+                        )
+                    }
+
+                    Text(doorLock.room ?? "Unassigned")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+
+                    HStack(spacing: 10) {
+                        if !doorLock.isOnline {
+                            Label("Offline", systemImage: "wifi.slash")
+                                .foregroundStyle(.red.opacity(0.92))
+                        } else if canLock {
+                            Text("Tap to lock")
+                                .foregroundStyle(HBPalette.accentOrange)
+                        }
+                    }
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+
+                Spacer(minLength: 8)
+
+                if isPending {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.top, 3)
+                } else if canLock {
+                    HBBadge(
+                        text: "Lock",
+                        foreground: HBPalette.accentOrange,
+                        background: HBPalette.accentOrange.opacity(0.14),
+                        stroke: HBPalette.accentOrange.opacity(0.6)
+                    )
+                    .padding(.top, 2)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
+            .overlay(
+                RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
+                    .stroke(canLock ? HBPalette.panelStrokeStrong : HBPalette.panelStroke.opacity(0.45), lineWidth: 1)
+            )
+            .opacity(canLock || (!doorLock.isOnline || doorLock.isLocked) ? 1 : 0.9)
+        }
+        .buttonStyle(.plain)
+        .disabled(!canLock)
     }
 
     private func weatherWidget(for widget: DashboardWidgetItem) -> some View {
@@ -3741,8 +4232,89 @@ struct DashboardView: View {
             scenes = UIPreviewData.scenes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             voiceDevices = UIPreviewData.voiceDevices
             securityStatus = "Disarmed"
-            securityZonesActive = 0
-            securityZonesTotal = 9
+            securitySensors = [
+                DashboardSecuritySensorItem(
+                    id: "preview-front-door-sensor",
+                    localDeviceId: "preview-front-door-sensor",
+                    name: "Front Door Sensor",
+                    room: "Entry",
+                    sensorType: "doorWindow",
+                    sensorTypeLabel: "Door / Window",
+                    stateLabel: "Closed",
+                    isActive: false,
+                    isAvailable: true,
+                    isOnline: true,
+                    isMonitored: true,
+                    isBypassed: false,
+                    monitorState: "Monitored",
+                    batteryLevel: 76,
+                    batteryState: "ok",
+                    lastSeen: "Just now",
+                    requiresAttention: false
+                ),
+                DashboardSecuritySensorItem(
+                    id: "preview-hall-motion",
+                    localDeviceId: "preview-hall-motion",
+                    name: "Hall Motion Sensor",
+                    room: "Upper Hall",
+                    sensorType: "motion",
+                    sensorTypeLabel: "Motion",
+                    stateLabel: "Clear",
+                    isActive: false,
+                    isAvailable: true,
+                    isOnline: true,
+                    isMonitored: true,
+                    isBypassed: false,
+                    monitorState: "Monitored",
+                    batteryLevel: 31,
+                    batteryState: "ok",
+                    lastSeen: "1m ago",
+                    requiresAttention: false
+                ),
+                DashboardSecuritySensorItem(
+                    id: "preview-garage-contact",
+                    localDeviceId: nil,
+                    name: "Garage Entry Contact",
+                    room: "Garage",
+                    sensorType: "doorWindow",
+                    sensorTypeLabel: "Door / Window",
+                    stateLabel: "Unavailable",
+                    isActive: false,
+                    isAvailable: false,
+                    isOnline: false,
+                    isMonitored: true,
+                    isBypassed: false,
+                    monitorState: "Missing",
+                    batteryLevel: nil,
+                    batteryState: "unknown",
+                    lastSeen: "Never",
+                    requiresAttention: true
+                )
+            ]
+            securityDoorLocks = [
+                DashboardSecurityDoorLockItem(
+                    id: "preview-lock",
+                    localDeviceId: "preview-lock",
+                    name: "Front Door Lock",
+                    room: "Entry",
+                    isLocked: true,
+                    isOnline: true,
+                    stateLabel: "Locked",
+                    lastSeen: "5m ago"
+                ),
+                DashboardSecurityDoorLockItem(
+                    id: "preview-back-door-lock",
+                    localDeviceId: "preview-back-door-lock",
+                    name: "Back Door Lock",
+                    room: "Kitchen",
+                    isLocked: false,
+                    isOnline: true,
+                    stateLabel: "Unlocked",
+                    lastSeen: "Just now"
+                )
+            ]
+            securityZonesActive = securitySensors.filter(\.isActive).count
+            securityZonesTotal = securitySensors.count
             systemStatus = "Online"
             favoritesProfileId = UIPreviewData.favoriteProfileId
             favoriteDeviceIds = UIPreviewData.favoriteDeviceIds
@@ -3811,6 +4383,8 @@ struct DashboardView: View {
         let statusObject = JSON.object(securityObject["status"])
         let alarmState = JSON.string(statusObject, "alarmState", fallback: "Unknown")
         let zoneObjects = JSON.array(statusObject["zones"])
+        let sensorObjects = JSON.array(statusObject["sensors"])
+        let doorLockObjects = JSON.array(statusObject["doorLocks"])
         let totalSensors = JSON.int(statusObject, "sensorCount", fallback: JSON.int(statusObject, "zoneCount", fallback: zoneObjects.count))
         let activeSensors = JSON.int(
             statusObject,
@@ -3822,6 +4396,8 @@ struct DashboardView: View {
         securityStatus = alarmState
         securityZonesActive = activeSensors
         securityZonesTotal = totalSensors
+        securitySensors = sensorObjects.compactMap { DashboardSecuritySensorItem.from($0) }
+        securityDoorLocks = doorLockObjects.compactMap { DashboardSecurityDoorLockItem.from($0) }
         systemStatus = isOnline ? "Online" : "Offline"
     }
 
@@ -3904,6 +4480,12 @@ struct DashboardView: View {
         case "turn_off":
             updated.status = false
 
+        case "lock":
+            updated.status = true
+
+        case "unlock":
+            updated.status = false
+
         case "set_temperature":
             if let target = numberValue(from: value) {
                 updated.targetTemperature = clampThermostatTemperature(target)
@@ -3925,6 +4507,7 @@ struct DashboardView: View {
         }
 
         devices[index] = updated
+        syncSecuritySummaries(with: updated)
     }
 
     private func upsertDevice(_ updated: DeviceItem) {
@@ -3934,6 +4517,37 @@ struct DashboardView: View {
             devices.append(updated)
         }
         devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        syncSecuritySummaries(with: updated)
+    }
+
+    private func syncSecuritySummaries(with device: DeviceItem) {
+        if let sensorIndex = securitySensors.firstIndex(where: { $0.localDeviceId == device.id }) {
+            securitySensors[sensorIndex].name = device.name
+            securitySensors[sensorIndex].room = device.room
+            securitySensors[sensorIndex].isAvailable = true
+            securitySensors[sensorIndex].isOnline = device.isOnline
+            securitySensors[sensorIndex].isActive = device.status
+            securitySensors[sensorIndex].stateLabel = securityStateLabel(
+                sensorType: securitySensors[sensorIndex].sensorType,
+                isActive: device.status,
+                isAvailable: true
+            )
+            securitySensors[sensorIndex].lastSeen = device.lastSeen
+            let batteryState = securitySensors[sensorIndex].batteryState
+            securitySensors[sensorIndex].requiresAttention = !device.isOnline || batteryState == "low" || batteryState == "critical"
+        }
+
+        if let doorLockIndex = securityDoorLocks.firstIndex(where: { $0.localDeviceId == device.id }) {
+            securityDoorLocks[doorLockIndex].name = device.name
+            securityDoorLocks[doorLockIndex].room = device.room
+            securityDoorLocks[doorLockIndex].isLocked = device.status
+            securityDoorLocks[doorLockIndex].isOnline = device.isOnline
+            securityDoorLocks[doorLockIndex].stateLabel = device.status ? "Locked" : "Unlocked"
+            securityDoorLocks[doorLockIndex].lastSeen = device.lastSeen
+        }
+
+        securityZonesActive = securitySensors.filter(\.isActive).count
+        securityZonesTotal = securitySensors.count
     }
 
     private func numberValue(from value: Any?) -> Double? {

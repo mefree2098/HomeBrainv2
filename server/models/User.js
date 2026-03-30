@@ -70,9 +70,8 @@ const schema = new mongoose.Schema({
   versionKey: false,
 });
 
-schema.pre('validate', function normalizePlatforms(next) {
+schema.pre('validate', function normalizePlatforms() {
   this.platforms = normalizeUserPlatforms(this.platforms);
-  next();
 });
 
 function sanitizeUserDocument(_doc, ret) {

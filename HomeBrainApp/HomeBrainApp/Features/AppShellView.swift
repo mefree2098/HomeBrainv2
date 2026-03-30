@@ -73,6 +73,25 @@ final class DashboardChromeState: ObservableObject {
     }
 }
 
+@MainActor
+final class DeviceFocusState: ObservableObject {
+    struct Request: Equatable {
+        let deviceID: String
+        let token = UUID()
+    }
+
+    @Published private(set) var request: Request?
+
+    func focus(_ deviceID: String) {
+        request = Request(deviceID: deviceID)
+    }
+
+    func clear(token: UUID) {
+        guard request?.token == token else { return }
+        request = nil
+    }
+}
+
 struct AppShellView: View {
     let previewMode: Bool
 
@@ -215,6 +234,7 @@ struct AppShellView: View {
     @State private var previewVoiceEnabled = false
     @State private var containerWidth: CGFloat = 0
     @StateObject private var dashboardChrome = DashboardChromeState()
+    @StateObject private var deviceFocusState = DeviceFocusState()
     @AppStorage("homebrain.ios.theme-mode") private var themeModeRaw = HBThemeMode.system.rawValue
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
@@ -1265,6 +1285,11 @@ struct AppShellView: View {
         selection = section
     }
 
+    private func openDeviceFromDashboard(_ deviceID: String) {
+        deviceFocusState.focus(deviceID)
+        selectSection(.devices)
+    }
+
     private var detailStack: some View {
         detailContent
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1287,7 +1312,7 @@ struct AppShellView: View {
     private func sectionView(_ section: AppSection) -> some View {
         switch section {
         case .dashboard:
-            DashboardView(previewMode: previewMode)
+            DashboardView(previewMode: previewMode, onOpenDevice: openDeviceFromDashboard)
                 .environmentObject(dashboardChrome)
         case .weather:
             if previewMode {
@@ -1303,6 +1328,7 @@ struct AppShellView: View {
             }
         case .devices:
             DevicesView(previewMode: previewMode)
+                .environmentObject(deviceFocusState)
         case .scenes:
             if previewMode {
                 UIPreviewModuleView(section: section)
