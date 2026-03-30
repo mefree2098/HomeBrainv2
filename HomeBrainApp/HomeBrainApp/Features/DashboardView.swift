@@ -1719,27 +1719,28 @@ struct DashboardView: View {
 
         return VStack(alignment: .leading, spacing: compact ? 2 : 3) {
             HStack(alignment: .top, spacing: 10) {
-                Text("Alarm State")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .textCase(.uppercase)
-                    .tracking(2.0)
-                    .foregroundStyle(securityStateTitleColor)
+                VStack(alignment: .leading, spacing: compact ? 0 : 1) {
+                    Text("Alarm State")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.0)
+                        .foregroundStyle(securityStateTitleColor)
 
-                Spacer(minLength: 8)
+                    Text(securityStatusLabel)
+                        .font(.system(size: compact ? 24 : 28, weight: .bold, design: .rounded))
+                        .foregroundStyle(securityStateValueColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+
+                    Text("\(securityStatusDetail) • \(systemStatus)")
+                        .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(securityStateDetailColor)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 securityAlarmHeaderActions(compact: true)
             }
-
-            Text(securityStatusLabel)
-                .font(.system(size: compact ? 24 : 28, weight: .bold, design: .rounded))
-                .foregroundStyle(securityStateValueColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-
-            Text("\(securityStatusDetail) • \(systemStatus)")
-                .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
-                .foregroundStyle(securityStateDetailColor)
-                .lineLimit(2)
 
             Capsule()
                 .fill(securityStatusAccent)
