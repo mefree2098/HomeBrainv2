@@ -22,8 +22,10 @@ interface ResourceData {
   };
   gpu?: {
     available: boolean;
+    detected?: boolean;
     usagePercent: number;
     type: string;
+    message?: string;
   };
   temperature?: {
     available: boolean;
@@ -77,11 +79,7 @@ export default function ResourceMonitor() {
     return 'text-green-500';
   };
 
-  const getProgressColor = (percent: number) => {
-    if (percent >= 90) return 'bg-red-500';
-    if (percent >= 70) return 'bg-yellow-500';
-    return 'bg-green-500';
-  };
+  const gpuDetected = Boolean(resources?.gpu?.detected ?? resources?.gpu?.available);
 
   if (loading) {
     return (
@@ -174,8 +172,8 @@ export default function ResourceMonitor() {
           </p>
         </div>
 
-        {/* GPU (if available) */}
-        {resources.gpu?.available && (
+        {/* GPU */}
+        {gpuDetected && resources.gpu && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -187,7 +185,9 @@ export default function ResourceMonitor() {
               </span>
             </div>
             <Progress value={resources.gpu.usagePercent} className="h-2" />
-            <p className="text-xs text-muted-foreground">{resources.gpu.type}</p>
+            <p className="text-xs text-muted-foreground">
+              {resources.gpu.available ? resources.gpu.type : resources.gpu.message || resources.gpu.type}
+            </p>
           </div>
         )}
 
