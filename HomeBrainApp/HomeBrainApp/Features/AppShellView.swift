@@ -88,7 +88,8 @@ struct AppShellView: View {
         let shortLabel: String
         let icon: String
         let percent: Double
-        let available: Bool
+        let detected: Bool
+        let telemetryAvailable: Bool
 
         var id: String { key.rawValue }
     }
@@ -950,7 +951,7 @@ struct AppShellView: View {
 
     private func resourceMetricChip(_ metric: ResourceStripMetric, compact: Bool = false) -> some View {
         let barColors = resourceBarGradient(for: metric.percent)
-        let percentLabel = metric.available ? "\(Int(metric.percent.rounded()))%" : "N/A"
+        let percentLabel = metric.telemetryAvailable ? "\(Int(metric.percent.rounded()))%" : (metric.detected ? "DET" : "N/A")
 
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 2) {
@@ -979,7 +980,7 @@ struct AppShellView: View {
                             )
                         )
                         .frame(
-                            width: geometry.size.width * CGFloat(metric.available ? metric.percent / 100 : 0)
+                            width: geometry.size.width * CGFloat(metric.telemetryAvailable ? metric.percent / 100 : 0)
                         )
                 }
             }
@@ -989,7 +990,7 @@ struct AppShellView: View {
                 Spacer(minLength: 0)
                 Text(percentLabel)
                     .font(.system(size: compact ? 9 : 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(metric.available ? resourceValueColor(for: metric.percent) : HBPalette.textSecondary)
+                    .foregroundStyle(metric.telemetryAvailable ? resourceValueColor(for: metric.percent) : HBPalette.textSecondary)
             }
         }
         .frame(width: compact ? 50 : 60)
@@ -1432,10 +1433,10 @@ struct AppShellView: View {
         let diskPercent = normalizedResourcePercent(JSON.double(disk, "usagePercent"))
 
         resourceStripMetrics = [
-            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: cpuPercent, available: true),
-            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: gpuPercent, available: gpuDetected),
-            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: memoryPercent, available: true),
-            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: diskPercent, available: true)
+            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: cpuPercent, detected: true, telemetryAvailable: true),
+            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: gpuPercent, detected: gpuDetected, telemetryAvailable: gpuAvailable),
+            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: memoryPercent, detected: true, telemetryAvailable: true),
+            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: diskPercent, detected: true, telemetryAvailable: true)
         ]
     }
 
@@ -1465,19 +1466,19 @@ struct AppShellView: View {
 
     private static func defaultResourceStripMetrics() -> [ResourceStripMetric] {
         [
-            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: 0, available: true),
-            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: 0, available: false),
-            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: 0, available: true),
-            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: 0, available: true)
+            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: 0, detected: true, telemetryAvailable: true),
+            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: 0, detected: false, telemetryAvailable: false),
+            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: 0, detected: true, telemetryAvailable: true),
+            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: 0, detected: true, telemetryAvailable: true)
         ]
     }
 
     private func previewResourceStripMetrics() -> [ResourceStripMetric] {
         [
-            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: 9, available: true),
-            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: 0, available: false),
-            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: 37, available: true),
-            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: 42, available: true)
+            ResourceStripMetric(key: .cpu, shortLabel: "CPU", icon: "cpu", percent: 9, detected: true, telemetryAvailable: true),
+            ResourceStripMetric(key: .gpu, shortLabel: "GPU", icon: "dial.medium", percent: 0, detected: false, telemetryAvailable: false),
+            ResourceStripMetric(key: .ram, shortLabel: "RAM", icon: "memorychip", percent: 37, detected: true, telemetryAvailable: true),
+            ResourceStripMetric(key: .disk, shortLabel: "DSK", icon: "externaldrive", percent: 42, detected: true, telemetryAvailable: true)
         ]
     }
 

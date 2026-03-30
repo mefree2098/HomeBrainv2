@@ -90,6 +90,7 @@ test('getGPUUsage still reports GPU presence on Jetson when telemetry is unavail
   assert.equal(gpu.detected, true);
   assert.equal(gpu.usagePercent, 0);
   assert.equal(gpu.type, 'NVIDIA Jetson Orin Nano Developer Kit');
+  assert.equal(gpu.source, 'detected-only');
   assert.equal(gpu.message, 'GPU detected, but utilization telemetry is unavailable');
 });
 

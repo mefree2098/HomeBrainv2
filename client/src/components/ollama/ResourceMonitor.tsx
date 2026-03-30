@@ -180,11 +180,11 @@ export default function ResourceMonitor() {
                 <CpuChipIcon className="h-5 w-5 text-green-500" />
                 <span className="font-medium">GPU</span>
               </div>
-              <span className={`font-semibold ${getUsageColor(resources.gpu.usagePercent)}`}>
-                {resources.gpu.usagePercent}%
+              <span className={`font-semibold ${resources.gpu.available ? getUsageColor(resources.gpu.usagePercent) : 'text-muted-foreground'}`}>
+                {resources.gpu.available ? `${resources.gpu.usagePercent}%` : 'Detected'}
               </span>
             </div>
-            <Progress value={resources.gpu.usagePercent} className="h-2" />
+            <Progress value={resources.gpu.available ? resources.gpu.usagePercent : 0} className="h-2" />
             <p className="text-xs text-muted-foreground">
               {resources.gpu.available ? resources.gpu.type : resources.gpu.message || resources.gpu.type}
             </p>

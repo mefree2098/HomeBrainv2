@@ -478,6 +478,113 @@ struct HBBadge: View {
     }
 }
 
+// Approximate charge using Tempest's published low-power voltage bands.
+func tempestBatteryPercent(for volts: Double?) -> Int? {
+    guard let volts else { return nil }
+    let emptyVolts = 2.355
+    let fullVolts = 2.65
+    let clamped = min(max(volts, emptyVolts), fullVolts)
+    return Int((((clamped - emptyVolts) / (fullVolts - emptyVolts)) * 100).rounded())
+}
+
+struct HBTempestBatteryBadge: View {
+    let volts: Double?
+
+    private var percent: Int? {
+        tempestBatteryPercent(for: volts)
+    }
+
+    private var label: String {
+        guard let percent else { return "--" }
+        return "\(percent)%"
+    }
+
+    private var symbolName: String {
+        guard let percent else { return "battery.0" }
+        switch percent {
+        case 88...:
+            return "battery.100"
+        case 63...87:
+            return "battery.75"
+        case 38...62:
+            return "battery.50"
+        case 13...37:
+            return "battery.25"
+        default:
+            return "battery.0"
+        }
+    }
+
+    private var foreground: Color {
+        guard let percent else { return HBPalette.textPrimary }
+        switch percent {
+        case 75...:
+            return HBPalette.accentGreen
+        case 40...74:
+            return HBPalette.accentOrange
+        default:
+            return HBPalette.accentRed
+        }
+    }
+
+    private var background: Color {
+        guard let percent else { return HBPalette.panelSoft.opacity(0.92) }
+        switch percent {
+        case 75...:
+            return HBPalette.accentGreen.opacity(0.18)
+        case 40...74:
+            return HBPalette.accentOrange.opacity(0.18)
+        default:
+            return HBPalette.accentRed.opacity(0.18)
+        }
+    }
+
+    private var stroke: Color {
+        guard let percent else { return HBPalette.panelStrokeStrong }
+        switch percent {
+        case 75...:
+            return HBPalette.accentGreen.opacity(0.7)
+        case 40...74:
+            return HBPalette.accentOrange.opacity(0.7)
+        default:
+            return HBPalette.accentRed.opacity(0.7)
+        }
+    }
+
+    private var accessibilityLabelText: String {
+        guard let percent else {
+            return "Tempest battery unavailable"
+        }
+        if let volts {
+            return "Tempest battery \(percent) percent, \(String(format: "%.2f", volts)) volts"
+        }
+        return "Tempest battery \(percent) percent"
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbolName)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(foreground)
+
+            Text(label)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .tracking(0.6)
+                .monospacedDigit()
+                .foregroundStyle(foreground)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(background, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(stroke.opacity(0.9), lineWidth: 1)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabelText)
+    }
+}
+
 struct HBSectionHeader: View {
     let title: String
     let subtitle: String
