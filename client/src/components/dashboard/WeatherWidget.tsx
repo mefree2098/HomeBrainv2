@@ -169,6 +169,72 @@ const describeRainChance = (value: number | null | undefined) => {
 
 const formatStationFeed = (websocketConnected: boolean) => websocketConnected ? "WebSocket live" : "Snapshot only"
 
+const formatLastSyncedTime = (value: string | null | undefined) => {
+  if (!value) {
+    return "--"
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "--"
+  }
+
+  const elapsedMs = Date.now() - date.getTime()
+  const includeDate = elapsedMs >= 24 * 60 * 60 * 1000
+
+  return date.toLocaleString([], includeDate
+    ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+    : { hour: "numeric", minute: "2-digit" }
+  )
+}
+
+const formatLastSyncedAgo = (value: string | null | undefined) => {
+  if (!value) {
+    return ""
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ""
+  }
+
+  const diffMs = Math.max(0, Date.now() - date.getTime())
+  const diffMinutes = Math.floor(diffMs / 60000)
+
+  if (diffMinutes < 1) {
+    return "Just now"
+  }
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60)
+  if (diffHours < 24) {
+    return `${diffHours}h ago`
+  }
+
+  return `${Math.floor(diffHours / 24)}d ago`
+}
+
+const formatLastSyncedTitle = (value: string | null | undefined) => {
+  if (!value) {
+    return "Last synced time unavailable"
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "Last synced time unavailable"
+  }
+
+  return `Last synced ${date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit"
+  })}`
+}
+
 // Approximate charge using Tempest's published low-power voltage bands.
 const TEMPEST_BATTERY_EMPTY_VOLTS = 2.355
 const TEMPEST_BATTERY_FULL_VOLTS = 2.65
@@ -564,33 +630,49 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
 
   const headlineTemperature = tempestStation?.metrics.temperatureF ?? weather?.current.temperatureF ?? null
   const headlineFeelsLike = tempestStation?.metrics.feelsLikeF ?? weather?.current.apparentTemperatureF ?? null
+  const lastSyncedAt = tempestStation?.observedAt ?? weather?.fetchedAt ?? null
+  const lastSyncedTime = formatLastSyncedTime(lastSyncedAt)
+  const lastSyncedAgo = formatLastSyncedAgo(lastSyncedAt)
   const weatherContextRow = (className?: string) => (
-    <div className={cn("flex min-w-0 items-center gap-2.5 text-sm text-muted-foreground", className)}>
-      <span className="shrink-0 text-base font-semibold text-foreground">{weather.current.condition}</span>
-      <span className="shrink-0 text-muted-foreground/50">•</span>
-      <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate">
-        <MapPin className="h-3.5 w-3.5 shrink-0" />
-        <span className="truncate">{weather.location.name}</span>
-      </span>
-      <span className="flex shrink-0 flex-wrap items-center gap-2">
-        {tempestStation ? <TempestBatteryBadge volts={tempestStation.metrics.batteryVolts} /> : null}
-        {tempestStation ? (
-          <span
-            className={cn(
-              "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium",
-              tempestBatteryPercent != null && tempestBatteryPercent <= 25
-                ? "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-300"
-                : "border-cyan-400/20 bg-cyan-400/10 text-cyan-700 dark:text-cyan-300"
-            )}
-          >
-            <Radar className="h-3.5 w-3.5" />
-            Tempest Live
-          </span>
-        ) : null}
-        <span className="inline-flex items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
-          {sourceLabel}
+    <div className={cn("flex min-w-0 items-start justify-between gap-3", className)}>
+      <div className="flex min-w-0 flex-1 items-center gap-2.5 text-sm text-muted-foreground">
+        <span className="shrink-0 text-base font-semibold text-foreground">{weather.current.condition}</span>
+        <span className="shrink-0 text-muted-foreground/50">•</span>
+        <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate">
+          <MapPin className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{weather.location.name}</span>
         </span>
-      </span>
+      </div>
+
+      <div className="ml-auto flex shrink-0 flex-col items-end gap-1 text-right">
+        <span className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {tempestStation ? <TempestBatteryBadge volts={tempestStation.metrics.batteryVolts} /> : null}
+          {tempestStation ? (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium",
+                tempestBatteryPercent != null && tempestBatteryPercent <= 25
+                  ? "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-300"
+                  : "border-cyan-400/20 bg-cyan-400/10 text-cyan-700 dark:text-cyan-300"
+              )}
+            >
+              <Radar className="h-3.5 w-3.5" />
+              Tempest Live
+            </span>
+          ) : null}
+          <span className="inline-flex items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
+            {sourceLabel}
+          </span>
+        </span>
+
+        <span
+          className="text-[0.68rem] font-medium text-muted-foreground/85"
+          title={formatLastSyncedTitle(lastSyncedAt)}
+        >
+          <span className="text-foreground/70">Last synced</span> {lastSyncedTime}
+          {lastSyncedAgo ? <span className="text-muted-foreground/60"> • {lastSyncedAgo}</span> : null}
+        </span>
+      </div>
     </div>
   )
 

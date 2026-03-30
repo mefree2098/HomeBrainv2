@@ -577,10 +577,26 @@ export function SecurityAlarmWidget({
         <>
           <div>
             <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-              <div className="flex items-start justify-between gap-2">
-                <p className="section-kicker">Alarm State</p>
-                <div className="flex max-w-[72%] flex-wrap justify-end gap-2">
-                  <div className="grid w-full max-w-[15rem] grid-cols-2 gap-2">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="section-kicker">Alarm State</p>
+                  <p className={cn(
+                    compact ? "mt-0.5 text-xl font-semibold" : "mt-0.5 text-2xl font-semibold",
+                    alarmStatus.alarmState === "triggered"
+                      ? "text-red-600 dark:text-red-300"
+                      : alarmStatus.alarmState === "disarmed"
+                        ? "text-foreground"
+                        : "text-emerald-600 dark:text-emerald-300"
+                  )}>
+                    {formatAlarmState(alarmStatus.alarmState)}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {statusDetailParts.join(" • ") || "System state unavailable"}
+                  </p>
+                </div>
+
+                <div className="flex w-full max-w-[15rem] shrink-0 flex-col items-end gap-2">
+                  <div className="grid w-full grid-cols-2 gap-2">
                     {isTriggered ? (
                       <Button
                         size="sm"
@@ -655,7 +671,7 @@ export function SecurityAlarmWidget({
                     variant="ghost"
                     onClick={handleSync}
                     disabled={!canSync}
-                    className={alarmActionButtonClassName({ tone: "sync" })}
+                    className={cn("self-end", alarmActionButtonClassName({ tone: "sync" }))}
                   >
                     {syncing ? (
                       <Loader2 className="animate-spin" />
@@ -666,19 +682,6 @@ export function SecurityAlarmWidget({
                   </Button>
                 </div>
               </div>
-              <p className={cn(
-                compact ? "mt-1 text-xl font-semibold" : "mt-1 text-2xl font-semibold",
-                alarmStatus.alarmState === "triggered"
-                  ? "text-red-600 dark:text-red-300"
-                  : alarmStatus.alarmState === "disarmed"
-                    ? "text-foreground"
-                    : "text-emerald-600 dark:text-emerald-300"
-              )}>
-                {formatAlarmState(alarmStatus.alarmState)}
-              </p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {statusDetailParts.join(" • ") || "System state unavailable"}
-              </p>
             </div>
           </div>
 
