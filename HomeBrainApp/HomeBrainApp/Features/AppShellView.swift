@@ -235,6 +235,7 @@ struct AppShellView: View {
     @State private var containerWidth: CGFloat = 0
     @StateObject private var dashboardChrome = DashboardChromeState()
     @StateObject private var deviceFocusState = DeviceFocusState()
+    @State private var presentedDashboardDeviceID: String?
     @AppStorage("homebrain.ios.theme-mode") private var themeModeRaw = HBThemeMode.system.rawValue
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
@@ -426,6 +427,25 @@ struct AppShellView: View {
                 resourceStripMetrics = Self.defaultResourceStripMetrics()
                 resourceStripLoading = false
                 resourceStripRefreshing = false
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { presentedDashboardDeviceID != nil },
+            set: { isPresented in
+                if !isPresented {
+                    presentedDashboardDeviceID = nil
+                }
+            }
+        )) {
+            if let deviceID = presentedDashboardDeviceID {
+                DevicesView(
+                    previewMode: previewMode,
+                    embeddedFocusDeviceID: deviceID,
+                    onClose: { presentedDashboardDeviceID = nil }
+                )
+                .environmentObject(deviceFocusState)
+                .presentationDragIndicator(.visible)
+                .presentationDetents([.large])
             }
         }
     }
@@ -1286,8 +1306,7 @@ struct AppShellView: View {
     }
 
     private func openDeviceFromDashboard(_ deviceID: String) {
-        deviceFocusState.focus(deviceID)
-        selectSection(.devices)
+        presentedDashboardDeviceID = deviceID
     }
 
     private var detailStack: some View {

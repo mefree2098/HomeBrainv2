@@ -268,6 +268,29 @@ private func dashboardOptionalInt(_ value: Any?) -> Int? {
     return nil
 }
 
+private func dashboardStoredStringArray(from rawValue: String) -> [String]? {
+    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else {
+        return nil
+    }
+
+    guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String] else {
+        return nil
+    }
+
+    return parsed
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+}
+
+private func dashboardEncodeStringArray(_ values: [String]) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: values, options: []),
+          let encoded = String(data: data, encoding: .utf8) else {
+        return "[]"
+    }
+    return encoded
+}
+
 private struct DashboardSecuritySensorItem: Identifiable {
     let id: String
     var localDeviceId: String?
@@ -426,6 +449,7 @@ struct DashboardView: View {
     @State private var commandResponse = ""
     @State private var isSendingCommand = false
     @State private var contentWidth: CGFloat = 0
+    @AppStorage("homebrain.ios.security.visible-sensor-ids") private var securityVisibleSensorIDsRaw = ""
 
     @StateObject private var locationManager = DashboardLocationManager()
 
@@ -497,6 +521,27 @@ struct DashboardView: View {
 
     private var securityAttentionSensorCount: Int {
         securitySensors.filter(\.requiresAttention).count
+    }
+
+    private var selectedSecuritySensorIDs: [String]? {
+        dashboardStoredStringArray(from: securityVisibleSensorIDsRaw)
+    }
+
+    private var selectedSecuritySensorIDSet: Set<String>? {
+        guard let selectedSecuritySensorIDs else { return nil }
+        return Set(selectedSecuritySensorIDs)
+    }
+
+    private var hasCustomSecuritySensorSelection: Bool {
+        selectedSecuritySensorIDs != nil
+    }
+
+    private var visibleSecuritySensors: [DashboardSecuritySensorItem] {
+        guard let selectedSecuritySensorIDSet else {
+            return securitySensors
+        }
+
+        return securitySensors.filter { selectedSecuritySensorIDSet.contains(securitySensorSelectionKey($0)) }
     }
 
     private var securityMonitoredSensorCount: Int {
@@ -1631,26 +1676,72 @@ struct DashboardView: View {
 
                     Spacer(minLength: 8)
 
-                    if securityAttentionSensorCount > 0 {
-                        HBBadge(
-                            text: "\(securityAttentionSensorCount) attention",
-                            foreground: HBPalette.accentOrange,
-                            background: HBPalette.accentOrange.opacity(0.14),
-                            stroke: HBPalette.accentOrange.opacity(0.65)
-                        )
+                    HStack(spacing: 8) {
+                        if hasCustomSecuritySensorSelection {
+                            HBBadge(
+                                text: "\(visibleSecuritySensors.count)/\(securitySensors.count) shown",
+                                foreground: HBPalette.textPrimary,
+                                background: HBPalette.panelSoft.opacity(0.9),
+                                stroke: HBPalette.panelStrokeStrong
+                            )
+                        }
+
+                        if securityAttentionSensorCount > 0 {
+                            HBBadge(
+                                text: "\(securityAttentionSensorCount) attention",
+                                foreground: HBPalette.accentOrange,
+                                background: HBPalette.accentOrange.opacity(0.14),
+                                stroke: HBPalette.accentOrange.opacity(0.65)
+                            )
+                        }
+
+                        Menu {
+                            Button {
+                                resetVisibleSecuritySensors()
+                            } label: {
+                                Label("Show all security sensors", systemImage: "line.3.horizontal.decrease.circle")
+                            }
+
+                            if !securitySensors.isEmpty {
+                                Divider()
+
+                                ForEach(securitySensors) { sensor in
+                                    let sensorKey = securitySensorSelectionKey(sensor)
+                                    let isVisible = selectedSecuritySensorIDSet?.contains(sensorKey) ?? true
+
+                                    Button {
+                                        toggleVisibleSecuritySensor(sensor)
+                                    } label: {
+                                        Label(sensor.name, systemImage: isVisible ? "checkmark.circle.fill" : "circle")
+                                    }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .frame(width: 32, height: 32)
+                                .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 12) {
-                        if securitySensors.isEmpty {
+                        if visibleSecuritySensors.isEmpty && !securitySensors.isEmpty {
+                            securityEmptyStateRow(
+                                title: "No sensors selected",
+                                subtitle: "Use the sensor menu to choose which security sensors appear here."
+                            )
+                        } else if securitySensors.isEmpty {
                             securityEmptyStateRow(
                                 title: "No security sensors found yet",
                                 subtitle: "Add security sensors or sync SmartThings devices to populate this panel."
                             )
                         } else {
                             VStack(alignment: .leading, spacing: 10) {
-                                ForEach(securitySensors) { sensor in
+                                ForEach(visibleSecuritySensors) { sensor in
                                     securitySensorRow(sensor, compact: compact)
                                 }
                             }
@@ -2018,6 +2109,33 @@ struct DashboardView: View {
         }
     }
 
+    private func securitySensorSelectionKey(_ sensor: DashboardSecuritySensorItem) -> String {
+        sensor.localDeviceId ?? sensor.id
+    }
+
+    private func resetVisibleSecuritySensors() {
+        securityVisibleSensorIDsRaw = ""
+    }
+
+    private func toggleVisibleSecuritySensor(_ sensor: DashboardSecuritySensorItem) {
+        let sensorKey = securitySensorSelectionKey(sensor)
+        let allSensorKeys = Array(Set(securitySensors.map(securitySensorSelectionKey))).sorted()
+        var currentSelection = Set(selectedSecuritySensorIDs ?? allSensorKeys)
+
+        if currentSelection.contains(sensorKey) {
+            currentSelection.remove(sensorKey)
+        } else {
+            currentSelection.insert(sensorKey)
+        }
+
+        if currentSelection.count == allSensorKeys.count && allSensorKeys.allSatisfy({ currentSelection.contains($0) }) {
+            securityVisibleSensorIDsRaw = ""
+            return
+        }
+
+        securityVisibleSensorIDsRaw = dashboardEncodeStringArray(allSensorKeys.filter { currentSelection.contains($0) })
+    }
+
     private func securitySensorIconName(_ sensorType: String) -> String {
         switch sensorType {
         case "motion":
@@ -2032,6 +2150,45 @@ struct DashboardView: View {
             return "door.left.hand.open"
         default:
             return "shield"
+        }
+    }
+
+    private func compactSecurityStatusText(for sensor: DashboardSecuritySensorItem) -> String {
+        if !sensor.isOnline {
+            return "Offline"
+        }
+        if sensor.isBypassed {
+            return "Bypassed"
+        }
+        return sensor.stateLabel
+    }
+
+    private func compactSecurityStatusTint(for sensor: DashboardSecuritySensorItem) -> Color {
+        if !sensor.isOnline || !sensor.isAvailable {
+            return .red.opacity(0.95)
+        }
+        if sensor.isBypassed || sensor.isActive {
+            return HBPalette.accentOrange
+        }
+        return HBPalette.accentGreen
+    }
+
+    private func compactSecurityBatterySymbolName(for sensor: DashboardSecuritySensorItem) -> String {
+        guard let batteryLevel = sensor.batteryLevel else {
+            return "battery.0"
+        }
+
+        switch batteryLevel {
+        case 88...:
+            return "battery.100"
+        case 63...87:
+            return "battery.75"
+        case 38...62:
+            return "battery.50"
+        case 13...37:
+            return "battery.25"
+        default:
+            return "battery.0"
         }
     }
 
@@ -2067,19 +2224,6 @@ struct DashboardView: View {
     private func securitySensorIconColors(for sensor: DashboardSecuritySensorItem) -> (foreground: Color, background: Color) {
         let badgeColors = securitySensorBadgeColors(for: sensor)
         return (badgeColors.foreground, badgeColors.background)
-    }
-
-    private func securityMonitorTint(_ sensor: DashboardSecuritySensorItem) -> Color {
-        switch sensor.monitorState {
-        case "Bypassed":
-            return HBPalette.accentOrange
-        case "Monitored":
-            return HBPalette.accentGreen
-        case "Missing":
-            return .red.opacity(0.92)
-        default:
-            return HBPalette.textSecondary
-        }
     }
 
     private func securityBatteryTint(_ sensor: DashboardSecuritySensorItem) -> Color {
@@ -2119,7 +2263,6 @@ struct DashboardView: View {
     }
 
     private func securitySensorRow(_ sensor: DashboardSecuritySensorItem, compact: Bool) -> some View {
-        let badgeColors = securitySensorBadgeColors(for: sensor)
         let iconColors = securitySensorIconColors(for: sensor)
         let canOpenDevice = sensor.localDeviceId != nil
 
@@ -2127,70 +2270,40 @@ struct DashboardView: View {
             guard let deviceID = sensor.localDeviceId else { return }
             onOpenDevice?(deviceID)
         } label: {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(spacing: 10) {
                 Image(systemName: securitySensorIconName(sensor.sensorType))
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(iconColors.foreground)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 28, height: 28)
                     .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(iconColors.background)
                     )
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(sensor.name)
-                            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
-                            .multilineTextAlignment(.leading)
-
-                        HBBadge(
-                            text: sensor.stateLabel,
-                            foreground: badgeColors.foreground,
-                            background: badgeColors.background,
-                            stroke: badgeColors.stroke
-                        )
-                    }
-
-                    let descriptor = [sensor.room, sensor.sensorTypeLabel].compactMap { $0 }.joined(separator: " • ")
-                    if !descriptor.isEmpty {
-                        Text(descriptor)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                    }
-
-                    HStack(spacing: 10) {
-                        Text(sensor.monitorState)
-                            .foregroundStyle(securityMonitorTint(sensor))
-
-                        if !sensor.isOnline {
-                            Label("Offline", systemImage: "wifi.slash")
-                                .foregroundStyle(.red.opacity(0.92))
-                        }
-
-                        if let batteryLevel = sensor.batteryLevel {
-                            Label("\(batteryLevel)%", systemImage: "battery.50")
-                                .foregroundStyle(securityBatteryTint(sensor))
-                        }
-                    }
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                }
+                Text(sensor.name)
+                    .font(.system(size: compact ? 13 : 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .lineLimit(1)
 
                 Spacer(minLength: 8)
 
-                if canOpenDevice {
-                    Image(systemName: "chevron.right")
+                Text(compactSecurityStatusText(for: sensor))
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(compactSecurityStatusTint(for: sensor))
+                    .lineLimit(1)
+
+                if sensor.batteryLevel != nil {
+                    Image(systemName: compactSecurityBatterySymbolName(for: sensor))
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(HBPalette.textMuted)
-                        .padding(.top, 3)
+                        .foregroundStyle(securityBatteryTint(sensor))
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 10)
+            .padding(.vertical, compact ? 8 : 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
+            .background(HBGlassBackground(cornerRadius: compact ? 12 : 14, variant: .panelSoft))
             .overlay(
-                RoundedRectangle(cornerRadius: compact ? 14 : 16, style: .continuous)
+                RoundedRectangle(cornerRadius: compact ? 12 : 14, style: .continuous)
                     .stroke(canOpenDevice ? HBPalette.panelStrokeStrong : HBPalette.panelStroke.opacity(0.45), lineWidth: 1)
             )
             .opacity(canOpenDevice ? 1 : 0.84)
