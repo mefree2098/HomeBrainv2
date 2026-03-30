@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Slider } from "@/components/ui/slider"
 import { 
+  ArrowLeft,
   Search, 
   Filter, 
   Grid3X3, 
@@ -256,7 +257,17 @@ const formatSourceLabel = (source: string): string => {
     .join(' ')
 }
 
-export function Devices() {
+interface DevicesProps {
+  embedded?: boolean
+  initialFocusDeviceId?: string | null
+  onClose?: () => void
+}
+
+export function Devices({
+  embedded = false,
+  initialFocusDeviceId = null,
+  onClose
+}: DevicesProps = {}) {
   const [searchParams, setSearchParams] = useSearchParams()
   const { toast } = useToast()
   const [devices, setDevices] = useState([])
@@ -936,6 +947,10 @@ export function Devices() {
       )
     }))
     .filter((room: any) => Array.isArray(room?.devices) && room.devices.length > 0)
+  const isEmbeddedFocusMode = embedded && Boolean(initialFocusDeviceId)
+  const embeddedFocusedDevice = initialFocusDeviceId
+    ? devices.find((device: any) => device?._id === initialFocusDeviceId) ?? null
+    : null
   const focusDeviceId = searchParams.get("focus")
 
   useEffect(() => {
@@ -980,10 +995,143 @@ export function Devices() {
     return () => clearTimeout(timeout)
   }, [highlightedDeviceId, activeTab, viewMode, sortedFilteredDevices.length])
 
+  const renderGridDeviceCard = (device: any) => {
+    const isFavorite = favoriteDeviceIds.has(device._id)
+    const isPendingFavorite = pendingDeviceIds.has(device._id)
+
+    return (
+      <Card
+        key={device._id}
+        ref={(node) => {
+          deviceCardRefs.current[device._id] = node
+        }}
+        className={`rounded-[1.7rem] transition-all duration-300 hover:-translate-y-1 ${
+          highlightedDeviceId === device._id
+            ? 'ring-2 ring-cyan-400/80 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]'
+            : ''
+        }`}
+      >
+        <CardHeader className="space-y-4 pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className={`mt-1 rounded-[1rem] p-2.5 ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
+                {getDeviceIcon(device)}
+              </div>
+              <div className="min-w-0">
+                <CardTitle className="break-words text-lg leading-snug">{device.name}</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">{device.room}</p>
+              </div>
+            </div>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className={`h-9 w-9 shrink-0 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'}`}
+              onClick={() => toggleDeviceFavorite(device._id, !isFavorite)}
+              disabled={!hasProfile || isPendingFavorite}
+              aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
+            >
+              <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={device.status ? "default" : "secondary"}>
+              {device.type === 'thermostat'
+                ? getThermostatMode(device).toUpperCase()
+                : (device.status ? "On" : "Off")}
+            </Badge>
+            <Badge variant="outline">
+              {formatSourceLabel(getDeviceSource(device))}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {device.type === 'thermostat' ? (
+            renderThermostatControls(device)
+          ) : supportsLightFade(device) ? (
+            renderLightControls(device)
+          ) : (
+            <Button
+              onClick={() => handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')}
+              variant={device.status ? "default" : "outline"}
+              className="w-full"
+              size="sm"
+              disabled={!!pendingControls[device._id]}
+            >
+              {device.status ? (
+                <>
+                  <PowerOff className="h-4 w-4 mr-2" />
+                  Turn Off
+                </>
+              ) : (
+                <>
+                  <Power className="h-4 w-4 mr-2" />
+                  Turn On
+                </>
+              )}
+            </Button>
+          )}
+          {renderControlFeedback(device)}
+          <div className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/20">
+            {device.type === 'thermostat'
+              ? `Voice: "Hey Anna, set ${device.name} to ${getThermostatTargetTemperature(device)} degrees"`
+              : supportsLightFade(device)
+                ? `Voice: "Hey Anna, fade ${device.name} to 30 percent" or "set ${device.name} to blue"`
+                : `Voice: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    )
+  }
+
+  if (isEmbeddedFocusMode) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden">
+        <div className="border-b border-border/60 px-5 py-5 pr-14">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="section-kicker">Security Device</p>
+              <h1 className="mt-2 text-2xl font-semibold text-foreground">
+                {embeddedFocusedDevice?.name ?? "Device unavailable"}
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+                {embeddedFocusedDevice
+                  ? "Close this panel to return to the Security Center exactly where you left it."
+                  : "This security sensor is not currently available in the device catalog."}
+              </p>
+            </div>
+
+            {onClose ? (
+              <Button variant="outline" onClick={onClose} className="shrink-0">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back
+              </Button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+          {embeddedFocusedDevice ? (
+            <div className="grid gap-4">
+              {renderGridDeviceCard(embeddedFocusedDevice)}
+            </div>
+          ) : (
+            <Card className="rounded-[1.7rem]">
+              <CardContent className="p-6 text-sm text-muted-foreground">
+                The selected security device could not be found.
+              </CardContent>
+            </Card>
+          )}
+        </div>
       </div>
     )
   }
@@ -1081,95 +1229,7 @@ export function Devices() {
         <TabsContent value="all" className="space-y-4">
           {viewMode === "grid" ? (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {sortedFilteredDevices.map((device) => {
-                const isFavorite = favoriteDeviceIds.has(device._id)
-                const isPendingFavorite = pendingDeviceIds.has(device._id)
-
-                return (
-                  <Card
-                    key={device._id}
-                    ref={(node) => {
-                      deviceCardRefs.current[device._id] = node
-                    }}
-                    className={`rounded-[1.7rem] transition-all duration-300 hover:-translate-y-1 ${
-                      highlightedDeviceId === device._id
-                        ? 'ring-2 ring-cyan-400/80 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]'
-                        : ''
-                    }`}
-                  >
-                    <CardHeader className="space-y-4 pb-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex min-w-0 items-start gap-3">
-                          <div className={`mt-1 rounded-[1rem] p-2.5 ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
-                            {getDeviceIcon(device)}
-                          </div>
-                          <div className="min-w-0">
-                            <CardTitle className="break-words text-lg leading-snug">{device.name}</CardTitle>
-                            <p className="mt-1 text-sm text-muted-foreground">{device.room}</p>
-                          </div>
-                        </div>
-
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className={`h-9 w-9 shrink-0 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'}`}
-                          onClick={() => toggleDeviceFavorite(device._id, !isFavorite)}
-                          disabled={!hasProfile || isPendingFavorite}
-                          aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
-                        >
-                          <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
-                        </Button>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={device.status ? "default" : "secondary"}>
-                          {device.type === 'thermostat'
-                            ? getThermostatMode(device).toUpperCase()
-                            : (device.status ? "On" : "Off")}
-                        </Badge>
-                        <Badge variant="outline">
-                          {formatSourceLabel(getDeviceSource(device))}
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      {device.type === 'thermostat' ? (
-                        renderThermostatControls(device)
-                      ) : supportsLightFade(device) ? (
-                        renderLightControls(device)
-                      ) : (
-                        <Button
-                          onClick={() => handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')}
-                          variant={device.status ? "default" : "outline"}
-                          className="w-full"
-                          size="sm"
-                          disabled={!!pendingControls[device._id]}
-                        >
-                          {device.status ? (
-                            <>
-                              <PowerOff className="h-4 w-4 mr-2" />
-                              Turn Off
-                            </>
-                          ) : (
-                            <>
-                              <Power className="h-4 w-4 mr-2" />
-                              Turn On
-                            </>
-                          )}
-                        </Button>
-                      )}
-                      {renderControlFeedback(device)}
-                      <div className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/20">
-                        {device.type === 'thermostat'
-                          ? `Voice: "Hey Anna, set ${device.name} to ${getThermostatTargetTemperature(device)} degrees"`
-                          : supportsLightFade(device)
-                            ? `Voice: "Hey Anna, fade ${device.name} to 30 percent" or "set ${device.name} to blue"`
-                          : `Voice: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )
-              })}
+              {sortedFilteredDevices.map((device) => renderGridDeviceCard(device))}
             </div>
           ) : (
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">

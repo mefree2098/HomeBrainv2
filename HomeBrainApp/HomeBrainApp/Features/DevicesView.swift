@@ -3,6 +3,8 @@ import UIKit
 
 struct DevicesView: View {
     let previewMode: Bool
+    let embeddedFocusDeviceID: String?
+    let onClose: (() -> Void)?
 
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var deviceFocusState: DeviceFocusState
@@ -45,6 +47,11 @@ struct DevicesView: View {
     private var useLandscapeCompactLayout: Bool { isCompact && isCompactHeight }
     private var useTwoColumnLayout: Bool { useLandscapeCompactLayout || contentWidth >= 860 }
     private var usesStackedFilterLayout: Bool { contentWidth < 620 }
+    private var isEmbeddedFocusMode: Bool { embeddedFocusDeviceID?.isEmpty == false }
+    private var embeddedFocusedDevice: DeviceItem? {
+        guard let embeddedFocusDeviceID else { return nil }
+        return devices.first(where: { $0.id == embeddedFocusDeviceID })
+    }
 
     private var gridColumns: [GridItem] {
         if useTwoColumnLayout {
@@ -78,8 +85,10 @@ struct DevicesView: View {
         filteredDevices.filter { $0.type != "thermostat" }
     }
 
-    init(previewMode: Bool = false) {
+    init(previewMode: Bool = false, embeddedFocusDeviceID: String? = nil, onClose: (() -> Void)? = nil) {
         self.previewMode = previewMode
+        self.embeddedFocusDeviceID = embeddedFocusDeviceID
+        self.onClose = onClose
     }
 
     var body: some View {
@@ -89,6 +98,34 @@ struct DevicesView: View {
                     if isLoading {
                         LoadingView(title: "Loading devices...")
                             .padding(useLandscapeCompactLayout ? 10 : 16)
+                    } else if isEmbeddedFocusMode {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                embeddedDeviceHeaderPanel
+
+                                if let errorMessage {
+                                    InlineErrorView(message: errorMessage) {
+                                        Task { await loadDevices(showLoading: true) }
+                                    }
+                                }
+
+                                if let embeddedFocusedDevice {
+                                    focusedDeviceCard(embeddedFocusedDevice)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                } else {
+                                    EmptyStateView(
+                                        title: "Device unavailable",
+                                        subtitle: "This security sensor is not currently available in the device catalog."
+                                    )
+                                }
+                            }
+                            .padding(useLandscapeCompactLayout ? 10 : 16)
+                            .padding(.bottom, 8)
+                        }
+                        .scrollIndicators(.hidden)
+                        .refreshable {
+                            await loadDevices(showLoading: false)
+                        }
                     } else {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
@@ -163,6 +200,37 @@ struct DevicesView: View {
                     .stroke(isHighlighted ? HBPalette.accentBlue.opacity(0.9) : Color.clear, lineWidth: 2)
             )
             .shadow(color: isHighlighted ? HBPalette.accentBlue.opacity(0.22) : .clear, radius: 18)
+    }
+
+    private var embeddedDeviceHeaderPanel: some View {
+        HBPanel {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Security Device")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.2)
+                        .foregroundStyle(HBPalette.textMuted)
+
+                    Text(embeddedFocusedDevice?.name ?? "Device unavailable")
+                        .font(.system(size: useLandscapeCompactLayout ? 20 : 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+
+                    Text(embeddedFocusedDevice?.room ?? "Close this panel to return to the Security Center exactly where you left it.")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                Spacer(minLength: 12)
+
+                if let onClose {
+                    Button(action: onClose) {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                }
+            }
+        }
     }
 
     private var deviceHeaderPanel: some View {

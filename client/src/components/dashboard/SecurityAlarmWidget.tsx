@@ -1,15 +1,14 @@
-import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useEffect, useMemo, useState } from "react"
 import {
   AlertTriangle,
   Battery,
   Car,
-  ChevronRight,
   Droplets,
   Home,
   Loader2,
   Lock,
   LockOpen,
+  Menu,
   Radar,
   Shield,
   ShieldAlert,
@@ -21,6 +20,15 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { controlDevice } from "@/api/devices"
@@ -98,6 +106,48 @@ type AlarmStatus = {
 }
 
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === "true"
+const SECURITY_SENSOR_SELECTION_STORAGE_KEY = "homebrain:web:security-visible-sensors"
+
+const readStoredSensorSelection = (): string[] | null => {
+  if (typeof window === "undefined") {
+    return null
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(SECURITY_SENSOR_SELECTION_STORAGE_KEY)
+    if (!rawValue) {
+      return null
+    }
+
+    const parsed = JSON.parse(rawValue)
+    if (!Array.isArray(parsed)) {
+      return null
+    }
+
+    return parsed
+      .map((entry) => typeof entry === "string" ? entry.trim() : "")
+      .filter((entry) => entry.length > 0)
+  } catch {
+    return null
+  }
+}
+
+const writeStoredSensorSelection = (sensorKeys: string[] | null) => {
+  if (typeof window === "undefined") {
+    return
+  }
+
+  try {
+    if (sensorKeys === null) {
+      window.localStorage.removeItem(SECURITY_SENSOR_SELECTION_STORAGE_KEY)
+      return
+    }
+
+    window.localStorage.setItem(SECURITY_SENSOR_SELECTION_STORAGE_KEY, JSON.stringify(sensorKeys))
+  } catch {
+    // Ignore storage write failures and keep the widget interactive.
+  }
+}
 
 const formatAlarmState = (alarmState?: string | null) => {
   switch (alarmState) {
@@ -150,29 +200,6 @@ const getSensorIcon = (sensorType: string) => {
   }
 }
 
-const sensorBadgeClassName = (sensor: SecuritySensor) => {
-  if (!sensor.isAvailable || !sensor.isOnline) {
-    return "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300"
-  }
-  if (sensor.isActive) {
-    return "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
-  }
-  return "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
-}
-
-const monitorStateClassName = (sensor: SecuritySensor) => {
-  switch (sensor.monitorState) {
-    case "Bypassed":
-      return "text-amber-600 dark:text-amber-300"
-    case "Monitored":
-      return "text-emerald-600 dark:text-emerald-300"
-    case "Missing":
-      return "text-red-600 dark:text-red-300"
-    default:
-      return "text-muted-foreground"
-  }
-}
-
 const batteryClassName = (sensor: SecuritySensor) => {
   if (sensor.batteryState === "critical") {
     return "text-red-600 dark:text-red-300"
@@ -181,6 +208,30 @@ const batteryClassName = (sensor: SecuritySensor) => {
     return "text-amber-600 dark:text-amber-300"
   }
   return "text-muted-foreground"
+}
+
+const getSensorSelectionKey = (sensor: SecuritySensor) => (
+  sensor.localDeviceId || sensor.zoneDeviceId || sensor.deviceId
+)
+
+const getCompactSensorStatus = (sensor: SecuritySensor) => {
+  if (!sensor.isOnline) {
+    return "Offline"
+  }
+  if (sensor.isBypassed) {
+    return "Bypassed"
+  }
+  return sensor.stateLabel
+}
+
+const compactSensorStatusClassName = (sensor: SecuritySensor) => {
+  if (!sensor.isOnline || !sensor.isAvailable) {
+    return "text-red-600 dark:text-red-300"
+  }
+  if (sensor.isBypassed || sensor.isActive) {
+    return "text-amber-600 dark:text-amber-300"
+  }
+  return "text-emerald-600 dark:text-emerald-300"
 }
 
 const doorLockBadgeClassName = (doorLock: DoorLock) => {
@@ -193,8 +244,13 @@ const doorLockBadgeClassName = (doorLock: DoorLock) => {
   return "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
 }
 
-export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSize }) {
-  const navigate = useNavigate()
+export function SecurityAlarmWidget({
+  size = "full",
+  onOpenDevice
+}: {
+  size?: SecurityWidgetSize
+  onOpenDevice?: (deviceId: string) => void
+}) {
   const { toast } = useToast()
   const [alarmStatus, setAlarmStatus] = useState<AlarmStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -203,6 +259,7 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
   const [dismissing, setDismissing] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [lockingDoorIds, setLockingDoorIds] = useState<string[]>([])
+  const [selectedSensorKeys, setSelectedSensorKeys] = useState<string[] | null>(() => readStoredSensorSelection())
 
   const fetchAlarmStatus = async () => {
     try {
@@ -231,6 +288,10 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
     const interval = setInterval(fetchAlarmStatus, 30000)
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    writeStoredSensorSelection(selectedSensorKeys)
+  }, [selectedSensorKeys])
 
   const handleArmStay = async () => {
     setArming(true)
@@ -371,7 +432,7 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
       return
     }
 
-    navigate(`/devices?focus=${encodeURIComponent(sensor.localDeviceId)}`)
+    onOpenDevice?.(sensor.localDeviceId)
   }
 
   const handleLockDoor = async (doorLock: DoorLock) => {
@@ -449,6 +510,17 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
   const compact = size === "small"
   const sensors = Array.isArray(alarmStatus?.sensors) ? alarmStatus.sensors : []
   const doorLocks = Array.isArray(alarmStatus?.doorLocks) ? alarmStatus.doorLocks : []
+  const hasCustomSensorSelection = selectedSensorKeys !== null
+  const selectedSensorKeySet = useMemo(() => (
+    selectedSensorKeys === null ? null : new Set(selectedSensorKeys)
+  ), [selectedSensorKeys])
+  const visibleSensors = useMemo(() => {
+    if (selectedSensorKeySet === null) {
+      return sensors
+    }
+
+    return sensors.filter((sensor) => selectedSensorKeySet.has(getSensorSelectionKey(sensor)))
+  }, [selectedSensorKeySet, sensors])
   const sensorCount = typeof alarmStatus?.sensorCount === "number" ? alarmStatus.sensorCount : sensors.length
   const activeSensorCount = typeof alarmStatus?.activeSensorCount === "number"
     ? alarmStatus.activeSensorCount
@@ -489,6 +561,31 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
     offlineSensorCount > 0 ? `${offlineSensorCount} offline` : null,
     lowBatterySensorCount > 0 ? `${lowBatterySensorCount} low battery` : null
   ].filter(Boolean)
+
+  const resetSensorSelection = () => {
+    setSelectedSensorKeys(null)
+  }
+
+  const toggleSensorSelection = (sensor: SecuritySensor) => {
+    const sensorKey = getSensorSelectionKey(sensor)
+    const allSensorKeys = Array.from(new Set(sensors.map(getSensorSelectionKey)))
+
+    setSelectedSensorKeys((current) => {
+      const currentSet = current === null ? new Set(allSensorKeys) : new Set(current)
+
+      if (currentSet.has(sensorKey)) {
+        currentSet.delete(sensorKey)
+      } else {
+        currentSet.add(sensorKey)
+      }
+
+      if (currentSet.size === allSensorKeys.length && allSensorKeys.every((key) => currentSet.has(key))) {
+        return null
+      }
+
+      return allSensorKeys.filter((key) => currentSet.has(key))
+    })
+  }
 
   if (loading) {
     return (
@@ -548,33 +645,81 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
                 <p className="section-kicker">Security Sensors</p>
                 <p className="mt-1 text-xs text-muted-foreground">Tap a sensor to open its device page.</p>
               </div>
-              {alarmStatus.attentionSensorCount ? (
-                <Badge variant="outline" className="border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300">
-                  {alarmStatus.attentionSensorCount} attention
-                </Badge>
-              ) : null}
+              <div className="flex items-center gap-2">
+                {hasCustomSensorSelection ? (
+                  <Badge variant="outline" className="border-white/10 bg-white/10 text-muted-foreground dark:bg-slate-950/10">
+                    {visibleSensors.length}/{sensorCount} shown
+                  </Badge>
+                ) : null}
+                {alarmStatus.attentionSensorCount ? (
+                  <Badge variant="outline" className="border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300">
+                    {alarmStatus.attentionSensorCount} attention
+                  </Badge>
+                ) : null}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 rounded-full border border-white/10 bg-white/10 text-muted-foreground hover:bg-white/20 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
+                      aria-label="Choose visible security sensors"
+                    >
+                      <Menu className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64">
+                    <DropdownMenuLabel>Visible Sensors</DropdownMenuLabel>
+                    <DropdownMenuItem onSelect={resetSensorSelection}>
+                      Show all security sensors
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {sensors.length > 0 ? sensors.map((sensor) => {
+                      const sensorKey = getSensorSelectionKey(sensor)
+                      const isChecked = selectedSensorKeySet === null ? true : selectedSensorKeySet.has(sensorKey)
+
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={sensorKey}
+                          checked={isChecked}
+                          onCheckedChange={() => toggleSensorSelection(sensor)}
+                        >
+                          {sensor.name}
+                        </DropdownMenuCheckboxItem>
+                      )
+                    }) : (
+                      <DropdownMenuItem disabled>No security sensors available</DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
 
             <ScrollArea className={compact ? "max-h-44" : "max-h-52"}>
               <div className="space-y-4 pr-3">
                 <div className="space-y-2">
-                  {sensors.length > 0 ? (
-                    sensors.map((sensor) => (
+                  {visibleSensors.length > 0 ? (
+                    visibleSensors.map((sensor) => (
                       <button
-                        key={sensor.localDeviceId || sensor.zoneDeviceId || sensor.deviceId}
+                        key={getSensorSelectionKey(sensor)}
                         type="button"
                         onClick={() => handleOpenSensor(sensor)}
                         disabled={!sensor.localDeviceId}
+                        title={[
+                          sensor.name,
+                          getCompactSensorStatus(sensor),
+                          sensor.batteryLevel != null ? `${sensor.batteryLevel}% battery` : null
+                        ].filter(Boolean).join(" • ")}
                         className={cn(
-                          "flex w-full items-start justify-between gap-3 rounded-[1rem] border border-white/10 bg-white/10 px-3 py-3 text-left transition-colors dark:bg-slate-950/10",
+                          "flex w-full items-center gap-2.5 rounded-[0.95rem] border border-white/10 bg-white/10 px-2.5 py-2 text-left transition-colors dark:bg-slate-950/10",
                           sensor.localDeviceId
                             ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
                             : "cursor-default opacity-80"
                         )}
                       >
-                        <div className="flex min-w-0 items-start gap-3">
+                        <div className="flex min-w-0 flex-1 items-center gap-2.5">
                           <div className={cn(
-                            "mt-0.5 rounded-lg border p-2",
+                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border",
                             sensor.isActive
                               ? "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
                               : sensor.requiresAttention
@@ -584,43 +729,22 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
                             {getSensorIcon(sensor.sensorType)}
                           </div>
 
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="truncate text-sm font-medium text-foreground">{sensor.name}</p>
-                              <Badge variant="outline" className={sensorBadgeClassName(sensor)}>
-                                {sensor.stateLabel}
-                              </Badge>
-                            </div>
-
-                            <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                              {[sensor.room, sensor.sensorTypeLabel].filter(Boolean).join(" • ")}
-                            </p>
-
-                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-                              <span className={monitorStateClassName(sensor)}>{sensor.monitorState}</span>
-
-                              {!sensor.isOnline ? (
-                                <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-300">
-                                  <WifiOff className="h-3 w-3" />
-                                  Offline
-                                </span>
-                              ) : null}
-
-                              {sensor.batteryLevel != null ? (
-                                <span className={cn("inline-flex items-center gap-1", batteryClassName(sensor))}>
-                                  <Battery className="h-3 w-3" />
-                                  {sensor.batteryLevel}%
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
+                          <p className="truncate text-[13px] font-medium text-foreground">{sensor.name}</p>
                         </div>
 
-                        {sensor.localDeviceId ? (
-                          <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className={cn("shrink-0 text-[11px] font-semibold", compactSensorStatusClassName(sensor))}>
+                          {getCompactSensorStatus(sensor)}
+                        </span>
+
+                        {sensor.batteryLevel != null ? (
+                          <Battery className={cn("h-3.5 w-3.5 shrink-0", batteryClassName(sensor))} aria-hidden="true" />
                         ) : null}
                       </button>
                     ))
+                  ) : sensors.length > 0 ? (
+                    <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
+                      No sensors are selected. Use the sensor menu to choose which security sensors appear here.
+                    </div>
                   ) : (
                     <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
                       No security sensors found yet. Add security sensors or sync SmartThings devices to populate this panel.

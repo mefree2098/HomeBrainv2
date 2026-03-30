@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react"
+import { Suspense, lazy, useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Link } from "react-router-dom"
 import {
   ArrowDown,
@@ -64,6 +64,8 @@ import {
   type DashboardWidgetSize,
   type DashboardWidgetType
 } from "@/lib/dashboard"
+
+const EmbeddedDevices = lazy(() => import("./Devices").then((module) => ({ default: module.Devices })))
 
 interface Device {
   _id: string
@@ -246,6 +248,7 @@ export function Dashboard() {
   const [pendingWidgetDeviceSearch, setPendingWidgetDeviceSearch] = useState("")
   const [pendingWeatherLocationMode, setPendingWeatherLocationMode] = useState<DashboardWeatherLocationMode>("saved")
   const [pendingWeatherLocationQuery, setPendingWeatherLocationQuery] = useState("")
+  const [selectedSecurityDeviceId, setSelectedSecurityDeviceId] = useState<string | null>(null)
   const dashboardViewsRef = useRef<DashboardViewConfig[]>([createDefaultDashboardView()])
   const selectedViewIdRef = useRef("")
 
@@ -747,6 +750,14 @@ export function Dashboard() {
     setPendingViewName("")
   }, [])
 
+  const openSecurityDeviceDialog = useCallback((deviceId: string) => {
+    setSelectedSecurityDeviceId(deviceId)
+  }, [])
+
+  const closeSecurityDeviceDialog = useCallback(() => {
+    setSelectedSecurityDeviceId(null)
+  }, [])
+
   const submitViewDialog = useCallback(() => {
     const name = pendingViewName.trim()
     if (!name) {
@@ -989,7 +1000,7 @@ export function Dashboard() {
     }
 
     if (widget.type === "security") {
-      return <SecurityAlarmWidget size={widget.size} />
+      return <SecurityAlarmWidget size={widget.size} onOpenDevice={openSecurityDeviceDialog} />
     }
 
     if (widget.type === "favorite-scenes") {
@@ -1417,6 +1428,29 @@ export function Dashboard() {
               Add Widget
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(selectedSecurityDeviceId)} onOpenChange={(open) => !open && closeSecurityDeviceDialog()}>
+        <DialogContent className="h-[90vh] w-[min(96vw,84rem)] max-w-none overflow-hidden border border-border/60 bg-background/95 p-0 dark:bg-slate-950/95">
+          <Suspense
+            fallback={(
+              <div className="flex h-full items-center justify-center">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-500/30 border-t-cyan-500" />
+                  Loading device detail...
+                </div>
+              </div>
+            )}
+          >
+            {selectedSecurityDeviceId ? (
+              <EmbeddedDevices
+                embedded
+                initialFocusDeviceId={selectedSecurityDeviceId}
+                onClose={closeSecurityDeviceDialog}
+              />
+            ) : null}
+          </Suspense>
         </DialogContent>
       </Dialog>
     </div>
