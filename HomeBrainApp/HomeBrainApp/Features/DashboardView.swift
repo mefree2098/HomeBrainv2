@@ -5,6 +5,7 @@ import SwiftUI
 private struct DashboardTempestStationSnapshot {
     let name: String
     let room: String
+    let observedAt: String?
     let temperatureF: Double?
     let feelsLikeF: Double?
     let humidityPct: Double?
@@ -31,6 +32,7 @@ private struct DashboardTempestStationSnapshot {
         return DashboardTempestStationSnapshot(
             name: JSON.string(station, "name", fallback: "Tempest Station"),
             room: JSON.string(station, "room", fallback: "Outside"),
+            observedAt: JSON.optionalString(station, "observedAt"),
             temperatureF: optionalNumber(metrics["temperatureF"]),
             feelsLikeF: optionalNumber(metrics["feelsLikeF"]),
             humidityPct: optionalNumber(metrics["humidityPct"]),
@@ -62,6 +64,7 @@ private struct DashboardTempestStationSnapshot {
 }
 
 private struct DashboardWeatherSnapshot {
+    let fetchedAt: String
     let locationName: String
     let source: DashboardWeatherLocationMode
     let temperatureF: Double?
@@ -94,6 +97,7 @@ private struct DashboardWeatherSnapshot {
         }
 
         return DashboardWeatherSnapshot(
+            fetchedAt: JSON.string(root, "fetchedAt"),
             locationName: JSON.string(location, "name", fallback: "Saved location"),
             source: source,
             temperatureF: Self.optionalNumber(current["temperatureF"]),
@@ -119,6 +123,7 @@ private struct DashboardWeatherSnapshot {
         let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         return DashboardWeatherSnapshot(
+            fetchedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-5 * 60)),
             locationName: mode == .custom ? (trimmedQuery.isEmpty ? "Denver, CO" : trimmedQuery) : (mode == .auto ? "Current location" : "Saved location"),
             source: mode,
             temperatureF: 67,
@@ -176,6 +181,10 @@ private struct DashboardWeatherSnapshot {
 
     var displayWindMph: Double? {
         tempest?.windAvgMph ?? windSpeedMph
+    }
+
+    var lastSyncedAt: String? {
+        tempest?.observedAt ?? (fetchedAt.isEmpty ? nil : fetchedAt)
     }
 
     private static func optionalNumber(_ value: Any?) -> Double? {
@@ -1929,7 +1938,7 @@ struct DashboardView: View {
     }
 
     private func securityPrimaryActionSlotWidth(compact: Bool) -> CGFloat {
-        compact ? 178 : 194
+        compact ? 188 : 214
     }
 
     private func securityArmStayAction(compact: Bool) -> some View {
@@ -1941,6 +1950,7 @@ struct DashboardView: View {
             background: isSecurityStayArmed ? HBPalette.accentYellow.opacity(0.36) : HBPalette.accentYellow.opacity(0.18),
             stroke: isSecurityStayArmed ? HBPalette.accentYellow.opacity(0.78) : HBPalette.accentYellow.opacity(0.46),
             active: isSecurityStayArmed,
+            fillsWidth: true,
             enabled: securityAlarmStateKey == "disarmed"
         ) {
             Task { await armSecurity(stay: true) }
@@ -1956,6 +1966,7 @@ struct DashboardView: View {
             background: isSecurityAwayArmed ? HBPalette.accentRed.opacity(0.36) : HBPalette.accentRed.opacity(0.2),
             stroke: isSecurityAwayArmed ? HBPalette.accentRed.opacity(0.78) : HBPalette.accentRed.opacity(0.46),
             active: isSecurityAwayArmed,
+            fillsWidth: true,
             enabled: securityAlarmStateKey == "disarmed"
         ) {
             Task { await armSecurity(stay: false) }
@@ -1968,8 +1979,10 @@ struct DashboardView: View {
             systemImage: "shield.slash",
             compact: compact,
             foreground: .white,
-            background: HBPalette.accentRed.opacity(0.22),
-            stroke: HBPalette.accentRed.opacity(0.7)
+            background: HBPalette.accentRed,
+            stroke: Color.white.opacity(0.22),
+            fillsWidth: true,
+            prominent: true
         ) {
             Task { await disarmSecurity() }
         }
@@ -1981,8 +1994,10 @@ struct DashboardView: View {
             systemImage: "exclamationmark.triangle",
             compact: compact,
             foreground: .white,
-            background: HBPalette.accentRed.opacity(0.22),
-            stroke: HBPalette.accentRed.opacity(0.7)
+            background: HBPalette.accentRed,
+            stroke: Color.white.opacity(0.22),
+            fillsWidth: true,
+            prominent: true
         ) {
             Task { await dismissSecurityAlarm() }
         }
@@ -2009,6 +2024,8 @@ struct DashboardView: View {
         background: Color,
         stroke: Color,
         active: Bool = false,
+        fillsWidth: Bool = false,
+        prominent: Bool = false,
         enabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
@@ -2028,15 +2045,35 @@ struct DashboardView: View {
             }
             .foregroundStyle(foreground)
             .padding(.horizontal, compact ? 10 : 12)
-            .frame(height: compact ? 30 : 32)
+            .frame(maxWidth: fillsWidth ? .infinity : nil, minHeight: prominent ? (compact ? 34 : 36) : (compact ? 30 : 32))
             .background(
                 Capsule()
-                    .fill(background)
+                    .fill(
+                        prominent
+                            ? LinearGradient(
+                                colors: [
+                                    background.opacity(0.98),
+                                    background.opacity(0.86)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                            : LinearGradient(
+                                colors: [background, background],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                    )
             )
             .overlay(
                 Capsule()
                     .stroke(stroke, lineWidth: 1)
             )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(prominent ? 0.16 : 0), lineWidth: prominent ? 1 : 0)
+            )
+            .shadow(color: prominent ? background.opacity(0.44) : .clear, radius: prominent ? 14 : 0, x: 0, y: prominent ? 8 : 0)
         }
         .buttonStyle(.plain)
         .allowsHitTesting(enabled)
@@ -2835,22 +2872,26 @@ struct DashboardView: View {
     }
 
     private func weatherStatusBadges(snapshot: DashboardWeatherSnapshot) -> some View {
-        HStack(spacing: 6) {
-            if let tempest = snapshot.tempest {
-                HBTempestBatteryBadge(volts: tempest.batteryVolts)
-                    .fixedSize(horizontal: true, vertical: false)
+        VStack(alignment: .trailing, spacing: 6) {
+            HStack(spacing: 6) {
+                if let tempest = snapshot.tempest {
+                    HBTempestBatteryBadge(volts: tempest.batteryVolts)
+                        .fixedSize(horizontal: true, vertical: false)
 
-                HBBadge(
-                    text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
-                    foreground: HBPalette.textPrimary,
-                    background: HBPalette.heroCore.opacity(0.22),
-                    stroke: HBPalette.heroCore.opacity(0.42)
-                )
-                .fixedSize(horizontal: true, vertical: false)
+                    HBBadge(
+                        text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                        foreground: HBPalette.textPrimary,
+                        background: HBPalette.heroCore.opacity(0.22),
+                        stroke: HBPalette.heroCore.opacity(0.42)
+                    )
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+
+                weatherSourceBadge(text: snapshot.sourceBadgeLabel)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
-            weatherSourceBadge(text: snapshot.sourceBadgeLabel)
-                .fixedSize(horizontal: true, vertical: false)
+            HBWeatherSyncCaption(value: snapshot.lastSyncedAt)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }

@@ -1068,6 +1068,7 @@ struct WeatherView: View {
         let headlineTemperature = forecast.headlineTemperatureF
         let headlineFeelsLike = forecast.headlineFeelsLikeF
         let stationLive = dashboard.tempestAvailable && station != nil
+        let lastSyncedAt = station?.observedAt ?? forecast.fetchedAt
 
         return HBDeckSurface(cornerRadius: 30) {
             Group {
@@ -1122,37 +1123,38 @@ struct WeatherView: View {
                                 stroke: HBPalette.panelStrokeStrong
                             )
 
-                            HStack(spacing: 8) {
-                                if let station {
-                                    HBTempestBatteryBadge(volts: station.metrics.batteryVolts)
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Label(forecast.locationName, systemImage: "mappin.and.ellipse")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .lineLimit(2)
+
+                                    Text(forecast.condition)
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
                                 }
-                                HBBadge(text: stationLive ? "Live Telemetry" : "Forecast Only")
-                                if let trend = station?.metrics.pressureTrend, stationLive {
-                                    HBBadge(
-                                        text: trend,
-                                        foreground: HBPalette.textPrimary,
-                                        background: HBPalette.panel.opacity(0.94),
-                                        stroke: HBPalette.panelStroke
-                                    )
+
+                                Spacer(minLength: 12)
+
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    HStack(spacing: 8) {
+                                        if let station {
+                                            HBTempestBatteryBadge(volts: station.metrics.batteryVolts)
+                                        }
+                                        HBBadge(text: stationLive ? "Live Telemetry" : "Forecast Only")
+                                        if let trend = station?.metrics.pressureTrend, stationLive {
+                                            HBBadge(
+                                                text: trend,
+                                                foreground: HBPalette.textPrimary,
+                                                background: HBPalette.panel.opacity(0.94),
+                                                stroke: HBPalette.panelStroke
+                                            )
+                                        }
+                                    }
+
+                                    HBWeatherSyncCaption(value: lastSyncedAt)
                                 }
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Label(forecast.locationName, systemImage: "mappin.and.ellipse")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundStyle(HBPalette.textSecondary)
-                                .lineLimit(2)
-
-                            Text(forecast.condition)
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(HBPalette.textPrimary)
-
-                            if let observedAt = station?.observedAt {
-                                Text("Station sync \(formatTimestamp(observedAt))")
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                                    .foregroundStyle(HBPalette.textSecondary)
-                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
@@ -1199,12 +1201,6 @@ struct WeatherView: View {
                                     Text(forecast.condition)
                                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                                         .foregroundStyle(HBPalette.textPrimary)
-                                    if let observedAt = station?.observedAt {
-                                        Text("Station sync \(formatTimestamp(observedAt))")
-                                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                                            .foregroundStyle(HBPalette.textSecondary)
-                                            .lineLimit(1)
-                                    }
                                 }
                             }
 
@@ -1237,6 +1233,8 @@ struct WeatherView: View {
                                         )
                                     }
                                 }
+
+                                HBWeatherSyncCaption(value: lastSyncedAt)
                             }
                         }
                     }

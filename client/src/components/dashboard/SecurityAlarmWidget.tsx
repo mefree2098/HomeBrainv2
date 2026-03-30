@@ -177,14 +177,20 @@ const compactSensorStatusClassName = (sensor: SecuritySensor) => {
 
 const alarmActionButtonClassName = ({
   tone = "neutral",
-  active = false
+  active = false,
+  prominent = false
 }: {
   tone?: "neutral" | "stay" | "away" | "sync" | "danger"
   active?: boolean
+  prominent?: boolean
 }) => cn(
-  "h-8 min-w-0 justify-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold shadow-none transition-colors sm:px-3 sm:text-[11px] [&_svg]:h-3.5 [&_svg]:w-3.5 disabled:cursor-default disabled:opacity-100",
+  prominent
+    ? "h-9 min-w-0 justify-center gap-1.5 rounded-full border px-3 text-[10px] font-semibold transition-all sm:h-10 sm:px-3.5 sm:text-[11px] [&_svg]:h-3.5 [&_svg]:w-3.5 disabled:cursor-default disabled:opacity-100"
+    : "h-8 min-w-0 justify-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold shadow-none transition-colors sm:px-3 sm:text-[11px] [&_svg]:h-3.5 [&_svg]:w-3.5 disabled:cursor-default disabled:opacity-100",
   tone === "danger"
-    ? "border-red-500/45 bg-red-500/16 text-red-700 hover:bg-red-500/24 dark:border-red-300/45 dark:bg-red-300/14 dark:text-red-100 dark:hover:bg-red-300/20"
+    ? prominent
+      ? "border-red-200/65 bg-gradient-to-br from-rose-500 via-red-500 to-red-700 text-white shadow-[0_10px_24px_-10px_rgba(220,38,38,0.9)] ring-1 ring-white/15 hover:brightness-110 dark:border-red-100/45 dark:from-rose-400 dark:via-red-500 dark:to-red-700"
+      : "border-red-500/45 bg-red-500/16 text-red-700 hover:bg-red-500/24 dark:border-red-300/45 dark:bg-red-300/14 dark:text-red-100 dark:hover:bg-red-300/20"
     : tone === "sync"
       ? "border-white/10 bg-white/10 text-muted-foreground hover:bg-white/20 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
       : tone === "stay"
@@ -595,7 +601,10 @@ export function SecurityAlarmWidget({
                   </p>
                 </div>
 
-                <div className="flex w-full max-w-[15rem] shrink-0 flex-col items-end gap-2">
+                <div className={cn(
+                  "flex w-full shrink-0 flex-col items-end gap-2",
+                  compact ? "max-w-[15rem]" : "max-w-[16.75rem]"
+                )}>
                   <div className="grid w-full grid-cols-2 gap-2">
                     {isTriggered ? (
                       <Button
@@ -605,7 +614,7 @@ export function SecurityAlarmWidget({
                         disabled={dismissing}
                         className={cn(
                           "col-span-2 w-full",
-                          alarmActionButtonClassName({ tone: "danger" })
+                          alarmActionButtonClassName({ tone: "danger", prominent: true })
                         )}
                       >
                         {dismissing ? (
@@ -623,7 +632,7 @@ export function SecurityAlarmWidget({
                         disabled={disarming}
                         className={cn(
                           "col-span-2 w-full",
-                          alarmActionButtonClassName({ tone: "danger" })
+                          alarmActionButtonClassName({ tone: "danger", prominent: true })
                         )}
                       >
                         {disarming ? (

@@ -585,6 +585,85 @@ struct HBTempestBatteryBadge: View {
     }
 }
 
+private func weatherLastSyncedDate(from value: String?) -> Date? {
+    JSON.date(from: value)
+}
+
+private func weatherLastSyncedTimeText(from value: String?) -> String {
+    guard let date = weatherLastSyncedDate(from: value) else {
+        return "--"
+    }
+
+    let includeDate = Date().timeIntervalSince(date) >= 24 * 60 * 60
+    return DateFormatter.localizedString(
+        from: date,
+        dateStyle: includeDate ? .medium : .none,
+        timeStyle: .short
+    )
+}
+
+private func weatherLastSyncedAgoText(from value: String?) -> String {
+    guard let date = weatherLastSyncedDate(from: value) else {
+        return ""
+    }
+
+    let elapsed = max(0, Int(Date().timeIntervalSince(date)))
+    if elapsed < 60 {
+        return "Just now"
+    }
+
+    let minutes = elapsed / 60
+    if minutes < 60 {
+        return "\(minutes)m ago"
+    }
+
+    let hours = minutes / 60
+    if hours < 24 {
+        return "\(hours)h ago"
+    }
+
+    return "\(hours / 24)d ago"
+}
+
+private func weatherLastSyncedAccessibilityText(from value: String?, label: String) -> String {
+    guard let date = weatherLastSyncedDate(from: value) else {
+        return "\(label) unavailable"
+    }
+
+    let timestamp = DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .medium)
+    let ago = weatherLastSyncedAgoText(from: value)
+    return ago.isEmpty ? "\(label) \(timestamp)" : "\(label) \(timestamp), \(ago)"
+}
+
+struct HBWeatherSyncCaption: View {
+    let value: String?
+    var label: String = "Last synced"
+
+    var body: some View {
+        let timeText = weatherLastSyncedTimeText(from: value)
+        let agoText = weatherLastSyncedAgoText(from: value)
+
+        HStack(spacing: 4) {
+            Text(label)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text(timeText)
+                .foregroundStyle(HBPalette.textSecondary)
+
+            if !agoText.isEmpty {
+                Text("• \(agoText)")
+                    .foregroundStyle(HBPalette.textMuted)
+            }
+        }
+        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.82)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(weatherLastSyncedAccessibilityText(from: value, label: label))
+    }
+}
+
 struct HBSectionHeader: View {
     let title: String
     let subtitle: String
