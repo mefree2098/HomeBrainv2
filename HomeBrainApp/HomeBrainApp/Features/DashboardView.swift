@@ -1595,29 +1595,6 @@ struct DashboardView: View {
         ].compactMap { $0 }
 
         return VStack(alignment: .leading, spacing: compact ? 10 : 12) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Security Envelope")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .textCase(.uppercase)
-                        .tracking(2.6)
-                        .foregroundStyle(HBPalette.textMuted)
-
-                    Label("Security Alarm", systemImage: "shield")
-                        .font(.system(size: compact ? 18 : 22, weight: .bold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
-                }
-
-                Spacer()
-
-                HBBadge(
-                    text: securityStatusLabel,
-                    foreground: securityBadgeForeground,
-                    background: securityBadgeBackground,
-                    stroke: securityBadgeStroke
-                )
-            }
-
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -1746,17 +1723,17 @@ struct DashboardView: View {
                 backgroundVariant: securityStateBackgroundVariant,
                 backgroundTint: securityStateBackgroundTint,
                 backgroundTintOpacity: securityStateBackgroundOpacity
-            )
-
-            HStack(alignment: .center, spacing: 10) {
-                securityPrimaryActions(compact: usesStackedActions, stacked: false)
-                securitySyncAction(compact: true, abbreviated: usesStackedActions)
-                    .frame(maxWidth: usesStackedActions ? nil : 220)
+            ) {
+                HStack(alignment: .center, spacing: 10) {
+                    securityPrimaryActions(compact: usesStackedActions, stacked: false)
+                    securitySyncAction(compact: true)
+                        .frame(maxWidth: usesStackedActions ? nil : 220)
+                }
             }
         }
     }
 
-    private func securitySummaryTile(
+    private func securitySummaryTile<Actions: View>(
         title: String,
         value: String,
         detail: String,
@@ -1767,7 +1744,8 @@ struct DashboardView: View {
         detailColor: Color = HBPalette.textSecondary,
         backgroundVariant: HBGlassVariant = .panelSoft,
         backgroundTint: Color = .clear,
-        backgroundTintOpacity: Double = 0
+        backgroundTintOpacity: Double = 0,
+        @ViewBuilder actions: () -> Actions
     ) -> some View {
         let shape = RoundedRectangle(cornerRadius: compact ? 16 : 18, style: .continuous)
 
@@ -1788,6 +1766,9 @@ struct DashboardView: View {
                 .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
                 .foregroundStyle(detailColor)
                 .lineLimit(2)
+
+            actions()
+                .padding(.top, compact ? 8 : 10)
 
             Capsule()
                 .fill(accent)
@@ -1879,33 +1860,6 @@ struct DashboardView: View {
         default:
             return HBPalette.accentSlate
         }
-    }
-
-    private var securityBadgeForeground: Color {
-        if isSecurityAwayArmed || isSecurityTriggered {
-            return .white
-        }
-        if isSecurityStayArmed {
-            return Color.black.opacity(0.82)
-        }
-        return HBPalette.textPrimary
-    }
-
-    private var securityBadgeBackground: Color {
-        if isSecurityStayArmed {
-            return HBPalette.accentYellow.opacity(0.96)
-        }
-        if isSecurityAwayArmed || isSecurityTriggered {
-            return HBPalette.accentRed.opacity(0.96)
-        }
-        return HBPalette.panelSoft.opacity(0.95)
-    }
-
-    private var securityBadgeStroke: Color {
-        if isSecurityArmed || isSecurityTriggered {
-            return securityStatusAccent
-        }
-        return HBPalette.panelStrokeStrong
     }
 
     private var securityStateTitleColor: Color {
@@ -2023,18 +1977,11 @@ struct DashboardView: View {
         }
     }
 
-    private func securitySyncAction(compact: Bool, abbreviated: Bool = false) -> some View {
+    private func securitySyncAction(compact: Bool) -> some View {
         Button {
             Task { await syncSecurity() }
         } label: {
-            if abbreviated {
-                ViewThatFits(in: .horizontal) {
-                    Text("Sync with SmartThings")
-                    Text("Sync")
-                }
-            } else {
-                Text("Sync with SmartThings")
-            }
+            Text("Sync")
         }
         .buttonStyle(HBGhostButtonStyle(compact: compact))
         .frame(maxWidth: .infinity)
