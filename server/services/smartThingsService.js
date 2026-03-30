@@ -1096,6 +1096,12 @@ class SmartThingsService {
       changed = true;
     }
 
+    const batteryLevel = this.mapSmartThingsBattery(statusRoot);
+    if ((existingDevice?.properties?.smartThingsBatteryLevel ?? null) !== batteryLevel) {
+      updates['properties.smartThingsBatteryLevel'] = batteryLevel;
+      changed = true;
+    }
+
     const thermostatModeValue = detectedType === 'thermostat'
       ? this.mapSmartThingsThermostatMode(statusRoot)
       : undefined;
@@ -1473,6 +1479,25 @@ class SmartThingsService {
     }
 
     return numeric;
+  }
+
+  mapSmartThingsBattery(statusRoot) {
+    const value = this.getStatusValue(statusRoot, [
+      ['battery', 'battery', 'value'],
+      ['battery', 'battery'],
+      ['battery']
+    ]);
+
+    if (value === undefined || value === null) {
+      return null;
+    }
+
+    const numeric = Number(value);
+    if (Number.isNaN(numeric)) {
+      return null;
+    }
+
+    return Math.min(Math.max(Math.round(numeric), 0), 100);
   }
 
   mapSmartThingsThermostatMode(statusRoot) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -24,7 +25,14 @@ import {
 import { useToast } from "@/hooks/useToast";
 import { createUser, deleteUser, getUsers, resetUserPassword, updateUser } from "@/api/users";
 import { useAuth } from "@/contexts/AuthContext";
-import { isAdminRole, type User, type UserRole } from "../../../shared/types/user";
+import {
+  DEFAULT_USER_PLATFORMS,
+  isAdminRole,
+  normalizeUserPlatforms,
+  type User,
+  type UserPlatforms,
+  type UserRole
+} from "../../../shared/types/user";
 import { KeyRound, Pencil, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 
 type UserFormState = {
@@ -33,6 +41,7 @@ type UserFormState = {
   password: string;
   role: UserRole;
   isActive: boolean;
+  platforms: UserPlatforms;
 }
 
 const DEFAULT_FORM_STATE: UserFormState = {
@@ -40,8 +49,14 @@ const DEFAULT_FORM_STATE: UserFormState = {
   email: "",
   password: "",
   role: "user",
-  isActive: true
+  isActive: true,
+  platforms: DEFAULT_USER_PLATFORMS
 };
+
+const buildDefaultFormState = (): UserFormState => ({
+  ...DEFAULT_FORM_STATE,
+  platforms: { ...DEFAULT_USER_PLATFORMS }
+});
 
 const formatDateTime = (value?: string | null) => {
   if (!value) {
@@ -66,7 +81,7 @@ export function Users() {
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [passwordTargetUser, setPasswordTargetUser] = useState<User | null>(null);
-  const [formState, setFormState] = useState<UserFormState>(DEFAULT_FORM_STATE);
+  const [formState, setFormState] = useState<UserFormState>(() => buildDefaultFormState());
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [saving, setSaving] = useState(false);
@@ -104,7 +119,9 @@ export function Users() {
       return [
         user.name || "",
         user.email || "",
-        user.role || ""
+        user.role || "",
+        normalizeUserPlatforms(user.platforms).homebrain ? "homebrain" : "",
+        normalizeUserPlatforms(user.platforms).axiom ? "axiom" : ""
       ].some((value) => value.toLowerCase().includes(query));
     });
   }, [searchQuery, users]);
@@ -130,7 +147,7 @@ export function Users() {
 
   const openCreateDialog = () => {
     setEditingUser(null);
-    setFormState(DEFAULT_FORM_STATE);
+    setFormState(buildDefaultFormState());
     setIsUserDialogOpen(true);
   };
 
@@ -141,14 +158,15 @@ export function Users() {
       email: user.email,
       password: "",
       role: user.role,
-      isActive: user.isActive
+      isActive: user.isActive,
+      platforms: normalizeUserPlatforms(user.platforms)
     });
     setIsUserDialogOpen(true);
   };
 
   const closeUserDialog = () => {
     setEditingUser(null);
-    setFormState(DEFAULT_FORM_STATE);
+    setFormState(buildDefaultFormState());
     setIsUserDialogOpen(false);
   };
 
@@ -178,7 +196,8 @@ export function Users() {
           name: formState.name.trim(),
           email: formState.email.trim(),
           role: formState.role,
-          isActive: formState.isActive
+          isActive: formState.isActive,
+          platforms: formState.platforms
         });
 
         setUsers((prev) => prev.map((user) => (
@@ -195,7 +214,8 @@ export function Users() {
           email: formState.email.trim(),
           password: formState.password,
           role: formState.role,
-          isActive: formState.isActive
+          isActive: formState.isActive,
+          platforms: formState.platforms
         });
 
         setUsers((prev) => [...prev, response.user]);
@@ -407,6 +427,7 @@ export function Users() {
               <TableRow>
                 <TableHead>User</TableHead>
                 <TableHead>Role</TableHead>
+                <TableHead>Platforms</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Last Login</TableHead>
                 <TableHead>Created</TableHead>
@@ -416,6 +437,7 @@ export function Users() {
             <TableBody>
               {filteredUsers.map((user) => {
                 const isSelf = user._id === currentUserId;
+                const platforms = normalizeUserPlatforms(user.platforms);
 
                 return (
                   <TableRow key={user._id}>
@@ -427,6 +449,19 @@ export function Users() {
                       <Badge variant={isAdminRole(user.role) ? "default" : "secondary"}>
                         {isAdminRole(user.role) ? "Admin" : "User"}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-2">
+                        {platforms.homebrain ? (
+                          <Badge variant="secondary">HomeBrain</Badge>
+                        ) : null}
+                        {platforms.axiom ? (
+                          <Badge variant="secondary">Axiom</Badge>
+                        ) : null}
+                        {!platforms.homebrain && !platforms.axiom ? (
+                          <Badge variant="outline">No Platforms</Badge>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-3">
@@ -489,8 +524,8 @@ export function Users() {
             <DialogTitle>{editingUser ? "Edit User" : "Create User"}</DialogTitle>
             <DialogDescription>
               {editingUser
-                ? "Update the account details and role for this HomeBrain user."
-                : "Create a new user account and choose whether it should have admin access."}
+                ? "Update account details, platform access, and role assignments for this user."
+                : "Create a new user account, choose the allowed platforms, and decide whether it should have admin access."}
             </DialogDescription>
           </DialogHeader>
 
@@ -541,6 +576,50 @@ export function Users() {
             </div>
           </div>
 
+          <div className="rounded-[1.25rem] border border-border/70 px-4 py-4">
+            <div className="mb-3">
+              <div className="text-sm font-medium text-foreground">Platform Access</div>
+              <div className="text-xs text-muted-foreground">
+                Users can only access the platforms checked here. Admin applies only within the enabled platforms.
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label htmlFor="platform-homebrain" className="flex items-start gap-3 rounded-[1rem] border border-border/70 px-4 py-3">
+                <Checkbox
+                  id="platform-homebrain"
+                  checked={formState.platforms.homebrain}
+                  disabled={editingUser?._id === currentUserId}
+                  onCheckedChange={(checked) => updateForm("platforms", {
+                    ...formState.platforms,
+                    homebrain: Boolean(checked)
+                  })}
+                />
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-foreground">HomeBrain</div>
+                  <p className="text-xs text-muted-foreground">
+                    Required to access the HomeBrain dashboard, APIs, and admin tools.
+                  </p>
+                </div>
+              </label>
+              <label htmlFor="platform-axiom" className="flex items-start gap-3 rounded-[1rem] border border-border/70 px-4 py-3">
+                <Checkbox
+                  id="platform-axiom"
+                  checked={formState.platforms.axiom}
+                  onCheckedChange={(checked) => updateForm("platforms", {
+                    ...formState.platforms,
+                    axiom: Boolean(checked)
+                  })}
+                />
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-foreground">Axiom</div>
+                  <p className="text-xs text-muted-foreground">
+                    Required for Axiom sign-in through HomeBrain SSO.
+                  </p>
+                </div>
+              </label>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between rounded-[1.25rem] border border-border/70 px-4 py-3">
             <div>
               <div className="text-sm font-medium text-foreground">Account Active</div>
@@ -557,7 +636,7 @@ export function Users() {
 
           {editingUser?._id === currentUserId ? (
             <div className="rounded-[1.25rem] border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-              Your current session cannot demote, deactivate, or delete itself. Use another admin account for that.
+              Your current session cannot demote itself, deactivate itself, or remove its own HomeBrain access. Use another admin account for that.
             </div>
           ) : null}
 

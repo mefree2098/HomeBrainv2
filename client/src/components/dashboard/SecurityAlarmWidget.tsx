@@ -1,50 +1,220 @@
-import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { 
-  Shield, 
-  ShieldAlert, 
-  ShieldCheck, 
-  ShieldX,
-  Home,
-  Car,
+import { useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import {
   AlertTriangle,
-  Loader2
+  Battery,
+  Car,
+  ChevronRight,
+  Droplets,
+  Home,
+  Loader2,
+  Lock,
+  LockOpen,
+  Radar,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldX,
+  WifiOff,
+  Zap
 } from "lucide-react"
-import { 
-  getSecurityStatus, 
-  armSecuritySystem, 
+
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { cn } from "@/lib/utils"
+import { controlDevice } from "@/api/devices"
+import {
+  armSecuritySystem,
   disarmSecuritySystem,
   dismissTriggeredAlarm,
-  syncSecurityWithSmartThings 
+  getSecurityStatus,
+  syncSecurityWithSmartThings
 } from "@/api/security"
 import { useToast } from "@/hooks/useToast"
 
 type SecurityWidgetSize = "small" | "medium" | "large" | "full"
 
-// Debug mode controlled by environment variable
-const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === 'true';
+type SecuritySensor = {
+  deviceId: string
+  localDeviceId: string | null
+  zoneDeviceId: string | null
+  name: string
+  room: string | null
+  sensorType: string
+  sensorTypeLabel: string
+  stateLabel: string
+  isActive: boolean
+  isAvailable: boolean
+  isOnline: boolean
+  isMonitored: boolean
+  isBypassed: boolean
+  monitorState: string
+  batteryLevel: number | null
+  batteryState: "ok" | "low" | "critical" | "unknown"
+  lastSeen: string | null
+  attentionFlags: string[]
+  requiresAttention: boolean
+}
+
+type DoorLock = {
+  deviceId: string
+  localDeviceId: string | null
+  name: string
+  room: string | null
+  isLocked: boolean
+  isOnline: boolean
+  stateLabel: string
+  lastSeen: string | null
+}
+
+type AlarmStatus = {
+  alarmState: string
+  isArmed: boolean
+  isTriggered: boolean
+  lastArmed?: string | null
+  lastDisarmed?: string | null
+  lastTriggered?: string | null
+  armedBy?: string | null
+  disarmedBy?: string | null
+  zoneCount: number
+  activeZones: number
+  bypassedZones: number
+  sensorCount?: number
+  activeSensorCount?: number
+  monitoredSensorCount?: number
+  offlineSensorCount?: number
+  lowBatterySensorCount?: number
+  attentionSensorCount?: number
+  sensors?: SecuritySensor[]
+  doorLockCount?: number
+  lockedDoorCount?: number
+  unlockedDoorCount?: number
+  doorLocks?: DoorLock[]
+  isOnline: boolean
+  lastSyncWithSmartThings?: string | null
+  batteryLevel?: number | null
+  signalStrength?: number | null
+}
+
+const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === "true"
+
+const formatAlarmState = (alarmState?: string | null) => {
+  switch (alarmState) {
+    case "disarmed":
+      return "Disarmed"
+    case "armedStay":
+      return "Armed Stay"
+    case "armedAway":
+      return "Armed Away"
+    case "triggered":
+      return "Triggered"
+    case "arming":
+      return "Arming..."
+    case "disarming":
+      return "Disarming..."
+    default:
+      return "Unknown"
+  }
+}
+
+const formatTimestamp = (value?: string | null) => {
+  if (!value) {
+    return null
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return null
+  }
+
+  return parsed.toLocaleString()
+}
+
+const getSensorIcon = (sensorType: string) => {
+  switch (sensorType) {
+    case "motion":
+      return <Radar className="h-3.5 w-3.5" />
+    case "flood":
+      return <Droplets className="h-3.5 w-3.5" />
+    case "co":
+      return <Zap className="h-3.5 w-3.5" />
+    case "smoke":
+    case "glass":
+    case "panic":
+      return <AlertTriangle className="h-3.5 w-3.5" />
+    case "doorWindow":
+    case "security":
+    default:
+      return <Shield className="h-3.5 w-3.5" />
+  }
+}
+
+const sensorBadgeClassName = (sensor: SecuritySensor) => {
+  if (!sensor.isAvailable || !sensor.isOnline) {
+    return "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300"
+  }
+  if (sensor.isActive) {
+    return "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+  }
+  return "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+}
+
+const monitorStateClassName = (sensor: SecuritySensor) => {
+  switch (sensor.monitorState) {
+    case "Bypassed":
+      return "text-amber-600 dark:text-amber-300"
+    case "Monitored":
+      return "text-emerald-600 dark:text-emerald-300"
+    case "Missing":
+      return "text-red-600 dark:text-red-300"
+    default:
+      return "text-muted-foreground"
+  }
+}
+
+const batteryClassName = (sensor: SecuritySensor) => {
+  if (sensor.batteryState === "critical") {
+    return "text-red-600 dark:text-red-300"
+  }
+  if (sensor.batteryState === "low") {
+    return "text-amber-600 dark:text-amber-300"
+  }
+  return "text-muted-foreground"
+}
+
+const doorLockBadgeClassName = (doorLock: DoorLock) => {
+  if (!doorLock.isOnline) {
+    return "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300"
+  }
+  if (!doorLock.isLocked) {
+    return "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+  }
+  return "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+}
 
 export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSize }) {
+  const navigate = useNavigate()
   const { toast } = useToast()
-  const [alarmStatus, setAlarmStatus] = useState(null)
+  const [alarmStatus, setAlarmStatus] = useState<AlarmStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [arming, setArming] = useState(false)
   const [disarming, setDisarming] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [lockingDoorIds, setLockingDoorIds] = useState<string[]>([])
 
   const fetchAlarmStatus = async () => {
     try {
-      if (DEBUG_MODE) console.log('Fetching security alarm status')
+      if (DEBUG_MODE) console.log("Fetching security alarm status")
       const response = await getSecurityStatus()
 
       if (response.success && response.status) {
-        if (DEBUG_MODE) console.log('Loaded alarm status:', response.status)
-        setAlarmStatus(response.status)
+        if (DEBUG_MODE) console.log("Loaded alarm status:", response.status)
+        setAlarmStatus(response.status as AlarmStatus)
       }
-    } catch (error) {
-      console.error('Failed to fetch alarm status:', error)
+    } catch (error: any) {
+      console.error("Failed to fetch alarm status:", error)
       toast({
         title: "Error",
         description: "Failed to load security alarm status",
@@ -57,8 +227,7 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
 
   useEffect(() => {
     fetchAlarmStatus()
-    
-    // Poll for status updates every 30 seconds
+
     const interval = setInterval(fetchAlarmStatus, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -66,9 +235,9 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
   const handleArmStay = async () => {
     setArming(true)
     try {
-      if (DEBUG_MODE) console.log('Arming security system in stay mode')
-      const response = await armSecuritySystem('stay')
-      
+      if (DEBUG_MODE) console.log("Arming security system in stay mode")
+      const response = await armSecuritySystem("stay")
+
       if (response.success) {
         toast({
           title: "Armed Stay",
@@ -76,8 +245,8 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
         })
         await fetchAlarmStatus()
       }
-    } catch (error) {
-      console.error('Failed to arm security system:', error)
+    } catch (error: any) {
+      console.error("Failed to arm security system:", error)
       toast({
         title: "Error",
         description: error.message || "Failed to arm security system",
@@ -91,9 +260,9 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
   const handleArmAway = async () => {
     setArming(true)
     try {
-      if (DEBUG_MODE) console.log('Arming security system in away mode')
-      const response = await armSecuritySystem('away')
-      
+      if (DEBUG_MODE) console.log("Arming security system in away mode")
+      const response = await armSecuritySystem("away")
+
       if (response.success) {
         toast({
           title: "Armed Away",
@@ -101,8 +270,8 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
         })
         await fetchAlarmStatus()
       }
-    } catch (error) {
-      console.error('Failed to arm security system:', error)
+    } catch (error: any) {
+      console.error("Failed to arm security system:", error)
       toast({
         title: "Error",
         description: error.message || "Failed to arm security system",
@@ -116,9 +285,9 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
   const handleDisarm = async () => {
     setDisarming(true)
     try {
-      if (DEBUG_MODE) console.log('Disarming security system')
+      if (DEBUG_MODE) console.log("Disarming security system")
       const response = await disarmSecuritySystem()
-      
+
       if (response.success) {
         toast({
           title: "Disarmed",
@@ -126,8 +295,8 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
         })
         await fetchAlarmStatus()
       }
-    } catch (error) {
-      console.error('Failed to disarm security system:', error)
+    } catch (error: any) {
+      console.error("Failed to disarm security system:", error)
       toast({
         title: "Error",
         description: error.message || "Failed to disarm security system",
@@ -141,9 +310,9 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
   const handleSync = async () => {
     setSyncing(true)
     try {
-      if (DEBUG_MODE) console.log('Syncing with SmartThings')
+      if (DEBUG_MODE) console.log("Syncing with SmartThings")
       const response = await syncSecurityWithSmartThings()
-      
+
       if (response.success) {
         toast({
           title: "Synced",
@@ -151,11 +320,10 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
         })
         await fetchAlarmStatus()
       }
-    } catch (error) {
-      console.error('Failed to sync with SmartThings:', error)
-      
-      // Handle specific SmartThings configuration errors
-      if (error.message === 'SmartThings token not configured') {
+    } catch (error: any) {
+      console.error("Failed to sync with SmartThings:", error)
+
+      if (error.message === "SmartThings token not configured") {
         toast({
           title: "Configuration Required",
           description: "Please configure your SmartThings token in system settings to enable sync functionality.",
@@ -163,7 +331,7 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
         })
       } else {
         toast({
-          title: "Sync Error", 
+          title: "Sync Error",
           description: error.message || "Failed to sync with SmartThings",
           variant: "destructive"
         })
@@ -176,7 +344,7 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
   const handleDismiss = async () => {
     setDismissing(true)
     try {
-      if (DEBUG_MODE) console.log('Dismissing triggered alarm')
+      if (DEBUG_MODE) console.log("Dismissing triggered alarm")
       const response = await dismissTriggeredAlarm()
 
       if (response.success) {
@@ -186,8 +354,8 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
         })
         await fetchAlarmStatus()
       }
-    } catch (error) {
-      console.error('Failed to dismiss triggered alarm:', error)
+    } catch (error: any) {
+      console.error("Failed to dismiss triggered alarm:", error)
       toast({
         title: "Error",
         description: error.message || "Failed to dismiss triggered alarm",
@@ -198,16 +366,56 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
     }
   }
 
+  const handleOpenSensor = (sensor: SecuritySensor) => {
+    if (!sensor.localDeviceId) {
+      return
+    }
+
+    navigate(`/devices?focus=${encodeURIComponent(sensor.localDeviceId)}`)
+  }
+
+  const handleLockDoor = async (doorLock: DoorLock) => {
+    const deviceId = doorLock.localDeviceId
+
+    if (!deviceId || doorLock.isLocked || !doorLock.isOnline) {
+      return
+    }
+
+    setLockingDoorIds((current) => (
+      current.includes(deviceId)
+        ? current
+        : [...current, deviceId]
+    ))
+
+    try {
+      await controlDevice({ deviceId, action: "lock" })
+      toast({
+        title: "Door locked",
+        description: `${doorLock.name} is now locked`
+      })
+      await fetchAlarmStatus()
+    } catch (error: any) {
+      console.error("Failed to lock door:", error)
+      toast({
+        title: "Lock failed",
+        description: error.message || `Failed to lock ${doorLock.name}`,
+        variant: "destructive"
+      })
+    } finally {
+      setLockingDoorIds((current) => current.filter((activeDeviceId) => activeDeviceId !== deviceId))
+    }
+  }
+
   const getAlarmIcon = () => {
     if (!alarmStatus) return <Shield className="h-5 w-5" />
-    
+
     switch (alarmStatus.alarmState) {
-      case 'disarmed':
+      case "disarmed":
         return <ShieldX className="h-5 w-5 text-gray-500" />
-      case 'armedStay':
-      case 'armedAway':
+      case "armedStay":
+      case "armedAway":
         return <ShieldCheck className="h-5 w-5 text-green-600" />
-      case 'triggered':
+      case "triggered":
         return <ShieldAlert className="h-5 w-5 text-red-600" />
       default:
         return <Shield className="h-5 w-5" />
@@ -216,58 +424,71 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
 
   const getAlarmStatusBadge = () => {
     if (!alarmStatus) return null
-    
+
     const getVariant = () => {
       switch (alarmStatus.alarmState) {
-        case 'disarmed':
-          return 'secondary'
-        case 'armedStay':
-        case 'armedAway':
-          return 'default'
-        case 'triggered':
-          return 'destructive'
+        case "disarmed":
+          return "secondary"
+        case "armedStay":
+        case "armedAway":
+          return "default"
+        case "triggered":
+          return "destructive"
         default:
-          return 'outline'
+          return "outline"
       }
     }
-    
-    const getLabel = () => {
-      switch (alarmStatus.alarmState) {
-        case 'disarmed':
-          return 'Disarmed'
-        case 'armedStay':
-          return 'Armed Stay'
-        case 'armedAway':
-          return 'Armed Away'
-        case 'triggered':
-          return 'TRIGGERED'
-        case 'arming':
-          return 'Arming...'
-        case 'disarming':
-          return 'Disarming...'
-        default:
-          return 'Unknown'
-      }
-    }
-    
+
     return (
       <Badge variant={getVariant()} className="text-xs">
-        {getLabel()}
+        {formatAlarmState(alarmStatus.alarmState)}
       </Badge>
     )
   }
 
   const compact = size === "small"
-  const relaxed = size === "large" || size === "full"
-  const summaryGridClass = compact
-    ? "grid-cols-1"
-    : size === "medium"
-      ? "grid-cols-1 sm:grid-cols-2"
-      : "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3"
-  const showLastArmed = Boolean(alarmStatus?.lastArmed && alarmStatus?.isArmed)
-  const showLastDisarmed = Boolean(alarmStatus?.lastDisarmed && !alarmStatus?.isArmed && !alarmStatus?.isTriggered)
-  const showLastTriggered = Boolean(alarmStatus?.isTriggered && alarmStatus?.lastTriggered)
-  const showStatusDetails = showLastArmed || showLastDisarmed || showLastTriggered
+  const sensors = Array.isArray(alarmStatus?.sensors) ? alarmStatus.sensors : []
+  const doorLocks = Array.isArray(alarmStatus?.doorLocks) ? alarmStatus.doorLocks : []
+  const sensorCount = typeof alarmStatus?.sensorCount === "number" ? alarmStatus.sensorCount : sensors.length
+  const activeSensorCount = typeof alarmStatus?.activeSensorCount === "number"
+    ? alarmStatus.activeSensorCount
+    : sensors.filter((sensor) => sensor.isActive).length
+  const monitoredSensorCount = typeof alarmStatus?.monitoredSensorCount === "number"
+    ? alarmStatus.monitoredSensorCount
+    : sensors.filter((sensor) => sensor.isMonitored && !sensor.isBypassed).length
+  const offlineSensorCount = typeof alarmStatus?.offlineSensorCount === "number"
+    ? alarmStatus.offlineSensorCount
+    : sensors.filter((sensor) => !sensor.isOnline).length
+  const lowBatterySensorCount = typeof alarmStatus?.lowBatterySensorCount === "number"
+    ? alarmStatus.lowBatterySensorCount
+    : sensors.filter((sensor) => sensor.batteryState === "low" || sensor.batteryState === "critical").length
+  const doorLockCount = typeof alarmStatus?.doorLockCount === "number" ? alarmStatus.doorLockCount : doorLocks.length
+  const lockedDoorCount = typeof alarmStatus?.lockedDoorCount === "number"
+    ? alarmStatus.lockedDoorCount
+    : doorLocks.filter((doorLock) => doorLock.isLocked).length
+
+  const summaryGridClass = compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2"
+  const statusHistory = alarmStatus?.isTriggered
+    ? formatTimestamp(alarmStatus.lastTriggered)
+    : alarmStatus?.isArmed
+      ? formatTimestamp(alarmStatus.lastArmed)
+      : formatTimestamp(alarmStatus?.lastDisarmed)
+
+  const statusDetailParts = [
+    statusHistory
+      ? `${alarmStatus?.isTriggered ? "Triggered" : alarmStatus?.isArmed ? "Armed" : "Last disarmed"} ${statusHistory}`
+      : null,
+    alarmStatus ? (alarmStatus.isOnline ? "Online" : "Offline") : null,
+    alarmStatus?.bypassedZones ? `${alarmStatus.bypassedZones} bypassed` : null
+  ].filter(Boolean)
+
+  const sensorSummaryParts = [
+    sensorCount > 0 ? `${activeSensorCount}/${sensorCount} active` : "No sensors detected",
+    monitoredSensorCount > 0 ? `${monitoredSensorCount} monitored` : null,
+    alarmStatus?.bypassedZones ? `${alarmStatus.bypassedZones} bypassed` : null,
+    offlineSensorCount > 0 ? `${offlineSensorCount} offline` : null,
+    lowBatterySensorCount > 0 ? `${lowBatterySensorCount} low battery` : null
+  ].filter(Boolean)
 
   if (loading) {
     return (
@@ -290,68 +511,236 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
         {getAlarmStatusBadge()}
       </div>
 
-      {alarmStatus && (
-        <div className={["grid gap-3", summaryGridClass].join(" ")}>
-          <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-            <p className="section-kicker">Zones</p>
-            <p className={compact ? "mt-2 text-xl font-semibold text-foreground" : "mt-2 text-2xl font-semibold text-foreground"}>{alarmStatus.activeZones}/{alarmStatus.zoneCount}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Active perimeter points</p>
+      {alarmStatus ? (
+        <>
+          <div className={["grid gap-3", summaryGridClass].join(" ")}>
+            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+              <p className="section-kicker">Sensors</p>
+              <p className={compact ? "mt-2 text-xl font-semibold text-foreground" : "mt-2 text-2xl font-semibold text-foreground"}>
+                {sensorCount > 0 ? `${activeSensorCount}/${sensorCount}` : "0"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {sensorCount > 0 ? "Active security sensors" : "No security sensors detected"}
+              </p>
+            </div>
+
+            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+              <p className="section-kicker">Status</p>
+              <p className={cn(
+                compact ? "mt-2 text-xl font-semibold" : "mt-2 text-2xl font-semibold",
+                alarmStatus.alarmState === "triggered"
+                  ? "text-red-600 dark:text-red-300"
+                  : alarmStatus.alarmState === "disarmed"
+                    ? "text-foreground"
+                    : "text-emerald-600 dark:text-emerald-300"
+              )}>
+                {formatAlarmState(alarmStatus.alarmState)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {statusDetailParts.join(" • ") || "System state unavailable"}
+              </p>
+            </div>
           </div>
 
-          <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-            <p className="section-kicker">Link State</p>
-            <p className={`${compact ? 'mt-2 text-xl' : 'mt-2 text-2xl'} font-semibold ${alarmStatus.isOnline ? 'text-emerald-600 dark:text-emerald-300' : 'text-red-600 dark:text-red-300'}`}>
-              {alarmStatus.isOnline ? 'Online' : 'Offline'}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {alarmStatus.bypassedZones > 0 ? `${alarmStatus.bypassedZones} bypassed zones` : 'No bypassed zones'}
-            </p>
+          <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="section-kicker">Security Sensors</p>
+                <p className="mt-1 text-xs text-muted-foreground">Tap a sensor to open its device page.</p>
+              </div>
+              {alarmStatus.attentionSensorCount ? (
+                <Badge variant="outline" className="border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300">
+                  {alarmStatus.attentionSensorCount} attention
+                </Badge>
+              ) : null}
+            </div>
+
+            <ScrollArea className={compact ? "max-h-44" : "max-h-52"}>
+              <div className="space-y-4 pr-3">
+                <div className="space-y-2">
+                  {sensors.length > 0 ? (
+                    sensors.map((sensor) => (
+                      <button
+                        key={sensor.localDeviceId || sensor.zoneDeviceId || sensor.deviceId}
+                        type="button"
+                        onClick={() => handleOpenSensor(sensor)}
+                        disabled={!sensor.localDeviceId}
+                        className={cn(
+                          "flex w-full items-start justify-between gap-3 rounded-[1rem] border border-white/10 bg-white/10 px-3 py-3 text-left transition-colors dark:bg-slate-950/10",
+                          sensor.localDeviceId
+                            ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
+                            : "cursor-default opacity-80"
+                        )}
+                      >
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className={cn(
+                            "mt-0.5 rounded-lg border p-2",
+                            sensor.isActive
+                              ? "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                              : sensor.requiresAttention
+                                ? "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300"
+                                : "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                          )}>
+                            {getSensorIcon(sensor.sensorType)}
+                          </div>
+
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="truncate text-sm font-medium text-foreground">{sensor.name}</p>
+                              <Badge variant="outline" className={sensorBadgeClassName(sensor)}>
+                                {sensor.stateLabel}
+                              </Badge>
+                            </div>
+
+                            <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                              {[sensor.room, sensor.sensorTypeLabel].filter(Boolean).join(" • ")}
+                            </p>
+
+                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                              <span className={monitorStateClassName(sensor)}>{sensor.monitorState}</span>
+
+                              {!sensor.isOnline ? (
+                                <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-300">
+                                  <WifiOff className="h-3 w-3" />
+                                  Offline
+                                </span>
+                              ) : null}
+
+                              {sensor.batteryLevel != null ? (
+                                <span className={cn("inline-flex items-center gap-1", batteryClassName(sensor))}>
+                                  <Battery className="h-3 w-3" />
+                                  {sensor.batteryLevel}%
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+
+                        {sensor.localDeviceId ? (
+                          <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+                        ) : null}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
+                      No security sensors found yet. Add security sensors or sync SmartThings devices to populate this panel.
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-white/10 pt-3">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="section-kicker">Door Locks</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Unlocked doors can be locked directly from here.</p>
+                    </div>
+
+                    {doorLockCount > 0 ? (
+                      <Badge variant="outline" className="border-white/10 bg-white/10 text-muted-foreground dark:bg-slate-950/10">
+                        {lockedDoorCount}/{doorLockCount} locked
+                      </Badge>
+                    ) : null}
+                  </div>
+
+                  {doorLocks.length > 0 ? (
+                    <div className="space-y-2">
+                      {doorLocks.map((doorLock) => {
+                        const rowId = doorLock.localDeviceId || doorLock.deviceId
+                        const isLocking = rowId ? lockingDoorIds.includes(rowId) : false
+                        const canLock = Boolean(doorLock.localDeviceId && !doorLock.isLocked && doorLock.isOnline && !isLocking)
+
+                        return (
+                          <button
+                            key={rowId}
+                            type="button"
+                            onClick={() => handleLockDoor(doorLock)}
+                            disabled={!canLock}
+                            className={cn(
+                              "flex w-full items-start justify-between gap-3 rounded-[1rem] border border-white/10 bg-white/10 px-3 py-3 text-left transition-colors dark:bg-slate-950/10",
+                              canLock
+                                ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
+                                : "cursor-default opacity-90"
+                            )}
+                          >
+                            <div className="flex min-w-0 items-start gap-3">
+                              <div className={cn(
+                                "mt-0.5 rounded-lg border p-2",
+                                !doorLock.isOnline
+                                  ? "border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300"
+                                  : doorLock.isLocked
+                                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                                    : "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                              )}>
+                                {doorLock.isLocked ? (
+                                  <Lock className="h-3.5 w-3.5" />
+                                ) : (
+                                  <LockOpen className="h-3.5 w-3.5" />
+                                )}
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-sm font-medium text-foreground">{doorLock.name}</p>
+                                  <Badge variant="outline" className={doorLockBadgeClassName(doorLock)}>
+                                    {doorLock.stateLabel}
+                                  </Badge>
+                                </div>
+
+                                <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                                  {doorLock.room || "Unassigned"}
+                                </p>
+
+                                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                                  {!doorLock.isOnline ? (
+                                    <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-300">
+                                      <WifiOff className="h-3 w-3" />
+                                      Offline
+                                    </span>
+                                  ) : null}
+
+                                  {!doorLock.isLocked && doorLock.isOnline ? (
+                                    <span className="text-amber-600 dark:text-amber-300">Tap to lock</span>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+
+                            {isLocking ? (
+                              <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                            ) : !doorLock.isLocked && doorLock.isOnline ? (
+                              <Badge variant="outline" className="mt-0.5 border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300">
+                                Lock
+                              </Badge>
+                            ) : null}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
+                      No door locks found yet. Add lock devices or sync SmartThings to populate this section.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </ScrollArea>
+
+            <div className="mt-3 rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-[11px] text-muted-foreground dark:bg-slate-950/10">
+              {sensorSummaryParts.join(" • ")}
+            </div>
           </div>
-
-          <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-            <p className="section-kicker">State</p>
-            <p className={compact ? "mt-2 text-xl font-semibold text-foreground" : "mt-2 text-2xl font-semibold text-foreground"}>{alarmStatus.alarmState}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {alarmStatus.isArmed ? 'System currently armed' : 'System currently disarmed'}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {alarmStatus && showStatusDetails ? (
-        <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 text-sm dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 text-sm dark:bg-slate-950/20"}>
-          {showLastArmed ? (
-            <div className="text-xs text-muted-foreground">
-              Armed: {new Date(alarmStatus.lastArmed).toLocaleString()}
-              {alarmStatus.armedBy && ` by ${alarmStatus.armedBy}`}
-            </div>
-          ) : null}
-
-          {showLastDisarmed ? (
-            <div className="text-xs text-muted-foreground">
-              Disarmed: {new Date(alarmStatus.lastDisarmed).toLocaleString()}
-              {alarmStatus.disarmedBy && ` by ${alarmStatus.disarmedBy}`}
-            </div>
-          ) : null}
-
-          {showLastTriggered ? (
-            <div className="mt-2 text-xs font-medium text-red-600 dark:text-red-300">
-              <AlertTriangle className="mr-1 inline h-3 w-3" />
-              Triggered: {new Date(alarmStatus.lastTriggered).toLocaleString()}
-            </div>
-          ) : null}
-        </div>
+        </>
       ) : null}
 
       <div className={compact ? "space-y-2" : "space-y-3"}>
-        {alarmStatus && alarmStatus.alarmState === 'disarmed' ? (
-          <div className={relaxed ? "grid grid-cols-2 gap-2" : "grid grid-cols-1 gap-2 sm:grid-cols-2"}>
+        {alarmStatus && alarmStatus.alarmState === "disarmed" ? (
+          <div className="grid grid-cols-3 gap-2">
             <Button
               size="sm"
               variant="outline"
               onClick={handleArmStay}
               disabled={arming}
-              className="flex items-center gap-1"
+              className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
             >
               {arming ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -366,7 +755,7 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
               variant="outline"
               onClick={handleArmAway}
               disabled={arming}
-              className="flex items-center gap-1"
+              className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
             >
               {arming ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -375,56 +764,78 @@ export function SecurityAlarmWidget({ size = "full" }: { size?: SecurityWidgetSi
               )}
               Arm Away
             </Button>
+
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleSync}
+              disabled={syncing}
+              className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
+            >
+              {syncing ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <>
+                  <span className="sm:hidden">Sync</span>
+                  <span className="hidden sm:inline">Sync SmartThings</span>
+                </>
+              )}
+            </Button>
           </div>
         ) : (
-          alarmStatus && (alarmStatus.alarmState === 'armedStay' || alarmStatus.alarmState === 'armedAway' || alarmStatus.alarmState === 'triggered') && (
-            alarmStatus.alarmState === 'triggered' ? (
+          alarmStatus && (alarmStatus.alarmState === "armedStay" || alarmStatus.alarmState === "armedAway" || alarmStatus.alarmState === "triggered") && (
+            <div className="grid grid-cols-2 gap-2">
+              {alarmStatus.alarmState === "triggered" ? (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleDismiss}
+                  disabled={dismissing}
+                  className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
+                >
+                  {dismissing ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <AlertTriangle className="h-3 w-3" />
+                  )}
+                  Dismiss Alarm
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleDisarm}
+                  disabled={disarming}
+                  className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
+                >
+                  {disarming ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ShieldX className="h-3 w-3" />
+                  )}
+                  Disarm
+                </Button>
+              )}
+
               <Button
                 size="sm"
-                variant="destructive"
-                onClick={handleDismiss}
-                disabled={dismissing}
-                className="w-full flex items-center gap-1"
+                variant="ghost"
+                onClick={handleSync}
+                disabled={syncing}
+                className="flex min-w-0 items-center gap-1 px-2 text-[11px] sm:text-xs"
               >
-                {dismissing ? (
+                {syncing ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
-                  <AlertTriangle className="h-3 w-3" />
+                  <>
+                    <span className="sm:hidden">Sync</span>
+                    <span className="hidden sm:inline">Sync SmartThings</span>
+                  </>
                 )}
-                Dismiss Alarm
               </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={handleDisarm}
-                disabled={disarming}
-                className="w-full flex items-center gap-1"
-              >
-                {disarming ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <ShieldX className="h-3 w-3" />
-                )}
-                Disarm
-              </Button>
-            )
+            </div>
           )
         )}
-
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={handleSync}
-          disabled={syncing}
-          className="w-full flex items-center gap-1 text-xs"
-        >
-          {syncing ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            'Sync with SmartThings'
-          )}
-        </Button>
       </div>
     </div>
   )

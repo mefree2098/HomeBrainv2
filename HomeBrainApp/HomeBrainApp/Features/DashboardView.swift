@@ -1448,23 +1448,16 @@ struct DashboardView: View {
 
             LazyVGrid(columns: summaryColumns, spacing: 10) {
                 securitySummaryTile(
-                    title: "Zones",
+                    title: "Sensors",
                     value: "\(securityZonesActive)/\(securityZonesTotal)",
-                    detail: "Active perimeter points",
+                    detail: "Active security sensors",
                     accent: HBPalette.accentBlue,
-                    compact: compact
-                )
-                securitySummaryTile(
-                    title: "Link State",
-                    value: systemStatus,
-                    detail: systemStatus.lowercased() == "online" ? "Security services responding" : "Security services degraded",
-                    accent: systemStatus.lowercased() == "online" ? HBPalette.accentGreen : HBPalette.accentOrange,
                     compact: compact
                 )
                 securitySummaryTile(
                     title: "Alarm State",
                     value: securityStatusLabel,
-                    detail: securityStatusDetail,
+                    detail: "\(securityStatusDetail) • \(systemStatus)",
                     accent: securityStatusAccent,
                     compact: compact,
                     titleColor: securityStateTitleColor,
@@ -1478,7 +1471,7 @@ struct DashboardView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Zones:")
+                    Text("Sensors:")
                         .foregroundStyle(HBPalette.textSecondary)
                     Spacer()
                     Text("\(securityZonesActive)/\(securityZonesTotal) active")
@@ -1499,17 +1492,10 @@ struct DashboardView: View {
             .padding(compact ? 12 : 14)
             .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
 
-            if usesStackedActions {
-                VStack(spacing: 8) {
-                    securityPrimaryActions(compact: true, stacked: true)
-                    securitySyncAction(compact: true)
-                }
-            } else {
-                HStack(alignment: .center, spacing: 10) {
-                    securityPrimaryActions(compact: false, stacked: false)
-                    securitySyncAction(compact: true)
-                        .frame(maxWidth: 220)
-                }
+            HStack(alignment: .center, spacing: 10) {
+                securityPrimaryActions(compact: usesStackedActions, stacked: false)
+                securitySyncAction(compact: true, abbreviated: usesStackedActions)
+                    .frame(maxWidth: usesStackedActions ? nil : 220)
             }
         }
     }
@@ -1785,9 +1771,18 @@ struct DashboardView: View {
         }
     }
 
-    private func securitySyncAction(compact: Bool) -> some View {
-        Button("Sync with SmartThings") {
+    private func securitySyncAction(compact: Bool, abbreviated: Bool = false) -> some View {
+        Button {
             Task { await syncSecurity() }
+        } label: {
+            if abbreviated {
+                ViewThatFits(in: .horizontal) {
+                    Text("Sync with SmartThings")
+                    Text("Sync")
+                }
+            } else {
+                Text("Sync with SmartThings")
+            }
         }
         .buttonStyle(HBGhostButtonStyle(compact: compact))
         .frame(maxWidth: .infinity)
@@ -3816,17 +3811,17 @@ struct DashboardView: View {
         let statusObject = JSON.object(securityObject["status"])
         let alarmState = JSON.string(statusObject, "alarmState", fallback: "Unknown")
         let zoneObjects = JSON.array(statusObject["zones"])
-        let totalZones = JSON.int(statusObject, "zoneCount", fallback: zoneObjects.count)
-        let activeZones = JSON.int(
+        let totalSensors = JSON.int(statusObject, "sensorCount", fallback: JSON.int(statusObject, "zoneCount", fallback: zoneObjects.count))
+        let activeSensors = JSON.int(
             statusObject,
-            "activeZones",
+            "activeSensorCount",
             fallback: zoneObjects.filter { JSON.bool($0, "active") }.count
         )
         let isOnline = JSON.bool(statusObject, "isOnline", fallback: true)
 
         securityStatus = alarmState
-        securityZonesActive = activeZones
-        securityZonesTotal = totalZones
+        securityZonesActive = activeSensors
+        securityZonesTotal = totalSensors
         systemStatus = isOnline ? "Online" : "Offline"
     }
 

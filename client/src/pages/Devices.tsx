@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { useSearchParams } from "react-router-dom"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -256,6 +257,7 @@ const formatSourceLabel = (source: string): string => {
 }
 
 export function Devices() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const { toast } = useToast()
   const [devices, setDevices] = useState([])
   const [roomDevices, setRoomDevices] = useState([])
@@ -265,11 +267,14 @@ export function Devices() {
   const [filterSource, setFilterSource] = useState("all")
   const [sortMode, setSortMode] = useState("default")
   const [viewMode, setViewMode] = useState("grid")
+  const [activeTab, setActiveTab] = useState("all")
+  const [highlightedDeviceId, setHighlightedDeviceId] = useState<string | null>(null)
   const [lightBrightnessDrafts, setLightBrightnessDrafts] = useState<Record<string, number>>({})
   const [lightColorDrafts, setLightColorDrafts] = useState<Record<string, string>>({})
   const [pendingControls, setPendingControls] = useState<Record<string, boolean>>({})
   const [controlFeedback, setControlFeedback] = useState<Record<string, 'success' | 'error'>>({})
   const [controlErrorMessages, setControlErrorMessages] = useState<Record<string, string>>({})
+  const deviceCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const {
     favoriteDeviceIds,
     toggleDeviceFavorite,
@@ -931,6 +936,49 @@ export function Devices() {
       )
     }))
     .filter((room: any) => Array.isArray(room?.devices) && room.devices.length > 0)
+  const focusDeviceId = searchParams.get("focus")
+
+  useEffect(() => {
+    if (!focusDeviceId || !Array.isArray(devices) || devices.length === 0) {
+      return
+    }
+
+    const targetDevice = devices.find((device: any) => device?._id === focusDeviceId)
+    if (!targetDevice) {
+      return
+    }
+
+    setSearchTerm(targetDevice.name || "")
+    setFilterType("all")
+    setFilterSource("all")
+    setSortMode("default")
+    setViewMode("grid")
+    setActiveTab("all")
+    setHighlightedDeviceId(focusDeviceId)
+
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete("focus")
+    setSearchParams(nextParams, { replace: true })
+  }, [devices, focusDeviceId, searchParams, setSearchParams])
+
+  useEffect(() => {
+    if (!highlightedDeviceId || activeTab !== "all" || viewMode !== "grid") {
+      return
+    }
+
+    const targetNode = deviceCardRefs.current[highlightedDeviceId]
+    if (!targetNode) {
+      return
+    }
+
+    targetNode.scrollIntoView({ behavior: "smooth", block: "center" })
+
+    const timeout = setTimeout(() => {
+      setHighlightedDeviceId((current) => current === highlightedDeviceId ? null : current)
+    }, 3200)
+
+    return () => clearTimeout(timeout)
+  }, [highlightedDeviceId, activeTab, viewMode, sortedFilteredDevices.length])
 
   if (loading) {
     return (
@@ -1024,7 +1072,7 @@ export function Devices() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="all" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50">
           <TabsTrigger value="all">All Devices</TabsTrigger>
           <TabsTrigger value="rooms">By Room</TabsTrigger>
@@ -1038,7 +1086,17 @@ export function Devices() {
                 const isPendingFavorite = pendingDeviceIds.has(device._id)
 
                 return (
-                  <Card key={device._id} className="rounded-[1.7rem] transition-all duration-300 hover:-translate-y-1">
+                  <Card
+                    key={device._id}
+                    ref={(node) => {
+                      deviceCardRefs.current[device._id] = node
+                    }}
+                    className={`rounded-[1.7rem] transition-all duration-300 hover:-translate-y-1 ${
+                      highlightedDeviceId === device._id
+                        ? 'ring-2 ring-cyan-400/80 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]'
+                        : ''
+                    }`}
+                  >
                     <CardHeader className="space-y-4 pb-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex min-w-0 items-start gap-3">

@@ -2,6 +2,7 @@ const User = require('../models/User');
 const UserService = require('./userService');
 const { generatePasswordHash, validatePassword } = require('../utils/password');
 const { ROLES } = require('../../shared/config/roles');
+const { USER_PLATFORMS, hasPlatformAccess } = require('../utils/userPlatforms');
 
 const DEFAULT_ADMIN_EMAIL = 'matt@freestonefamily.com';
 const DEFAULT_ADMIN_NAME = 'Matt Freestone';
@@ -89,6 +90,14 @@ class AdminBootstrapService {
         changes.push('isActive');
       }
 
+      if (!hasPlatformAccess(existingUser, USER_PLATFORMS.HOMEBRAIN)) {
+        existingUser.platforms = {
+          ...(existingUser.platforms || {}),
+          [USER_PLATFORMS.HOMEBRAIN]: true
+        };
+        changes.push('platforms.homebrain');
+      }
+
       if (name && existingUser.name !== name) {
         existingUser.name = name;
         changes.push('name');
@@ -127,7 +136,11 @@ class AdminBootstrapService {
       password,
       name,
       role: ROLES.ADMIN,
-      isActive: true
+      isActive: true,
+      platforms: {
+        homebrain: true,
+        axiom: false
+      }
     });
 
     return createSummary({

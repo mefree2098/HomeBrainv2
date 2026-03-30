@@ -1,10 +1,38 @@
 import Foundation
 
+struct AppUserPlatforms: Codable {
+    let homebrain: Bool
+    let axiom: Bool
+
+    init(homebrain: Bool = true, axiom: Bool = false) {
+        self.homebrain = homebrain
+        self.axiom = axiom
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        homebrain = try container.decodeIfPresent(Bool.self, forKey: .homebrain) ?? true
+        axiom = try container.decodeIfPresent(Bool.self, forKey: .axiom) ?? false
+    }
+
+    static func from(_ object: [String: Any]) -> AppUserPlatforms {
+        AppUserPlatforms(
+            homebrain: JSON.bool(object, "homebrain", fallback: true),
+            axiom: JSON.bool(object, "axiom", fallback: false)
+        )
+    }
+}
+
 struct AppUser: Codable, Identifiable {
     let id: String
     let name: String
     let email: String
     let role: String
+    let platforms: AppUserPlatforms
+
+    var hasHomeBrainAccess: Bool {
+        platforms.homebrain
+    }
 
     static func from(_ object: [String: Any]) -> AppUser? {
         let id = JSON.id(object)
@@ -17,7 +45,8 @@ struct AppUser: Codable, Identifiable {
             id: id,
             name: JSON.string(object, "name", fallback: email),
             email: email,
-            role: JSON.string(object, "role", fallback: "user")
+            role: JSON.string(object, "role", fallback: "user"),
+            platforms: AppUserPlatforms.from(JSON.object(object["platforms"]))
         )
     }
 }

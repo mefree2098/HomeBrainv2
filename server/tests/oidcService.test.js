@@ -164,6 +164,10 @@ test('handleAuthorize redirects an authenticated HomeBrain session back to the c
     _id: '507f1f77bcf86cd799439011',
     email: 'matt@freestonefamily.com',
     role: 'admin',
+    platforms: {
+      homebrain: true,
+      axiom: true
+    },
     lastLoginAt: new Date('2026-03-12T19:00:00.000Z')
   };
   UserService.get = async () => user;
@@ -271,6 +275,85 @@ test('handleAuthorize returns login_required when prompt=none has no active Home
   assert.equal(redirectUrl.searchParams.get('state'), 'state-123');
 });
 
+test('handleAuthorize returns access_denied when the signed-in user lacks Axiom access', async (t) => {
+  const originalGetSettings = OIDCProviderSettings.getSettings;
+  const originalFindOne = OIDCClient.findOne;
+  const originalUserGet = UserService.get;
+  const originalJwtSecret = process.env.JWT_SECRET;
+  const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+
+  t.after(() => {
+    OIDCProviderSettings.getSettings = originalGetSettings;
+    OIDCClient.findOne = originalFindOne;
+    UserService.get = originalUserGet;
+    process.env.JWT_SECRET = originalJwtSecret;
+    process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicBaseUrl;
+  });
+
+  process.env.JWT_SECRET = 'test-jwt-secret';
+  process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://freestonefamily.com';
+
+  const providerKeys = generateProviderKeys();
+  OIDCProviderSettings.getSettings = async () => ({
+    ...providerKeys,
+    async save() {
+      return this;
+    }
+  });
+
+  OIDCClient.findOne = async () => ({
+    clientId: 'homebrain-axiom',
+    name: 'Axiom',
+    platform: 'axiom',
+    enabled: true,
+    redirectUris: ['https://mail.freestonefamily.com/api/identity/homebrain/callback'],
+    scopes: ['openid', 'profile', 'email'],
+    requirePkce: true,
+    tokenEndpointAuthMethod: 'none',
+    async save() {
+      return this;
+    }
+  });
+
+  const user = {
+    _id: '507f1f77bcf86cd799439011',
+    email: 'matt@freestonefamily.com',
+    role: 'admin',
+    platforms: {
+      homebrain: true,
+      axiom: false
+    },
+    lastLoginAt: new Date('2026-03-12T19:00:00.000Z')
+  };
+  UserService.get = async () => user;
+
+  const accessToken = jwt.sign({ sub: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
+  const req = {
+    query: {
+      response_type: 'code',
+      client_id: 'homebrain-axiom',
+      redirect_uri: 'https://mail.freestonefamily.com/api/identity/homebrain/callback',
+      scope: 'openid profile email',
+      state: 'state-123',
+      nonce: 'nonce-456',
+      code_challenge: crypto.createHash('sha256').update('verifier-123').digest('base64url'),
+      code_challenge_method: 'S256'
+    },
+    headers: {
+      cookie: `hbAccessToken=${encodeURIComponent(accessToken)}`
+    },
+    originalUrl: '/oauth/authorize?response_type=code'
+  };
+  const res = createMockResponse();
+
+  await oidcService.handleAuthorize(req, res);
+
+  assert.equal(res.statusCode, 302);
+  const redirectUrl = new URL(res.redirectUrl);
+  assert.equal(redirectUrl.searchParams.get('error'), 'access_denied');
+  assert.equal(redirectUrl.searchParams.get('state'), 'state-123');
+});
+
 test('handleToken exchanges a valid PKCE authorization code for signed OIDC tokens', async (t) => {
   const originalGetSettings = OIDCProviderSettings.getSettings;
   const originalFindOne = OIDCClient.findOne;
@@ -325,6 +408,10 @@ test('handleToken exchanges a valid PKCE authorization code for signed OIDC toke
     _id: '507f1f77bcf86cd799439011',
     email: 'matt@freestonefamily.com',
     role: 'admin',
+    platforms: {
+      homebrain: true,
+      axiom: true
+    },
     lastLoginAt: new Date('2026-03-12T19:00:00.000Z')
   };
   UserService.get = async () => user;

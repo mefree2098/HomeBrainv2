@@ -6,6 +6,8 @@ const { generateAccessToken, generateRefreshToken } = require('../utils/auth.js'
 const jwt = require('jsonwebtoken');
 const { ALL_ROLES, ROLES } = require('../../shared/config/roles.js');
 const oidcService = require('../services/oidcService');
+const { getAxiomPublicOrigin } = require('../utils/platformUrls');
+const { USER_PLATFORMS, hasPlatformAccess } = require('../utils/userPlatforms');
 const {
   SESSION_TOKEN_COOKIE_NAME,
   clearAuthCookies,
@@ -14,6 +16,23 @@ const {
 } = require('../utils/authCookies');
 
 const router = express.Router();
+
+function buildAuthenticatedUserPayload(user, req, tokens = {}) {
+  const serializedUser = typeof user?.toJSON === 'function'
+    ? user.toJSON()
+    : (typeof user?.toObject === 'function' ? user.toObject() : { ...user });
+
+  const defaultRedirectUrl = !hasPlatformAccess(serializedUser, USER_PLATFORMS.HOMEBRAIN)
+    && hasPlatformAccess(serializedUser, USER_PLATFORMS.AXIOM)
+    ? getAxiomPublicOrigin(req)
+    : null;
+
+  return {
+    ...serializedUser,
+    defaultRedirectUrl,
+    ...tokens
+  };
+}
 
 router.post('/login', async (req, res) => {
   const sendError = msg => res.status(400).json({ message: msg });
@@ -39,7 +58,10 @@ router.post('/login', async (req, res) => {
     user.refreshToken = refreshToken;
     await user.save();
     setAuthCookies(res, accessToken, refreshToken);
-    return res.json({...user.toObject(), accessToken, refreshToken});
+    return res.json(buildAuthenticatedUserPayload(user, req, {
+      accessToken,
+      refreshToken
+    }));
   } else {
     return sendError('Email or password is incorrect');
 
@@ -90,11 +112,10 @@ router.post('/register', async (req, res, next) => {
     await user.save();
     setAuthCookies(res, accessToken, refreshToken);
 
-    return res.status(200).json({
-      ...user.toObject(),
+    return res.status(200).json(buildAuthenticatedUserPayload(user, req, {
       accessToken,
       refreshToken
-    });
+    }));
   } catch (error) {
     console.error(`Error while registering user: ${error}`);
     return res.status(400).json({ message: error.message || 'Registration failed' });
@@ -201,7 +222,7 @@ router.post('/refresh', async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        ...user.toObject(),
+        ...buildAuthenticatedUserPayload(user, req),
         accessToken: newAccessToken,
         refreshToken: newRefreshToken
       }
@@ -236,8 +257,8 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-router.get('/me', requireUser(ALL_ROLES), async (req, res) => {
-  return res.status(200).json(req.user);
+router.get('/me', requireUser(ALL_ROLES, { platform: null }), async (req, res) => {
+  return res.status(200).json(buildAuthenticatedUserPayload(req.user, req));
 });
 
 router.get('/registration-status', async (_req, res) => {

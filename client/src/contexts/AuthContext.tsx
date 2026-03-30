@@ -1,17 +1,19 @@
 import { createContext, useContext, useEffect, useMemo, useState, ReactNode } from "react";
 import { getCurrentUser as apiGetCurrentUser, login as apiLogin, logout as apiLogout, register as apiRegister } from "../api/auth";
-import { isAdminRole, type User, type UserRole } from "../../../shared/types/user";
+import { hasPlatformAccess, isAdminRole, type User, type UserPlatform, type UserRole } from "../../../shared/types/user";
 
 type AuthContextType = {
   isAuthenticated: boolean;
   isLoading: boolean;
   isAdmin: boolean;
+  hasHomeBrainAccess: boolean;
   currentUser: User | null;
   login: (email: string, password: string) => Promise<User>;
   register: (email: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
   refreshCurrentUser: () => Promise<User | null>;
   hasRole: (role: UserRole) => boolean;
+  hasPlatform: (platform: UserPlatform) => boolean;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -158,6 +160,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAdmin = useMemo(() => isAdminRole(currentUser?.role), [currentUser?.role]);
   const hasRole = (role: UserRole) => currentUser?.role === role;
+  const hasPlatform = (platform: UserPlatform) => hasPlatformAccess(currentUser, platform);
+  const hasHomeBrainAccess = hasPlatform("homebrain");
 
   return (
       <AuthContext.Provider value={{
@@ -165,11 +169,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated,
         isLoading,
         isAdmin,
+        hasHomeBrainAccess,
         login,
         register,
         logout,
         refreshCurrentUser,
-        hasRole
+        hasRole,
+        hasPlatform
       }}>
         {children}
       </AuthContext.Provider>

@@ -19,6 +19,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext"
 import { ThemeToggle } from "@/components/ui/theme-toggle"
 import { getRegistrationStatus } from "@/api/auth"
+import { hasPlatformAccess } from "../../../shared/types/user"
 
 type RegisterForm = {
   email: string
@@ -76,12 +77,20 @@ export function Register() {
   const onSubmit = async (data: RegisterForm) => {
     try {
       setLoading(true)
-      await registerUser(data.email, data.password);
+      const user = await registerUser(data.email, data.password);
       toast({
         title: "Success",
         description: "Account created successfully",
       })
-      navigate(returnTo || "/")
+      if (returnTo) {
+        window.location.assign(returnTo)
+        return
+      }
+      if (!hasPlatformAccess(user, "homebrain") && user.defaultRedirectUrl) {
+        window.location.assign(user.defaultRedirectUrl)
+        return
+      }
+      navigate("/")
     } catch (error) {
       console.log("Register error:", error)
       toast({

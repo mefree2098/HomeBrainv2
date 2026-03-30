@@ -3,6 +3,20 @@ const mongoose = require('mongoose');
 const { validatePassword, isPasswordHash } = require('../utils/password.js');
 const {randomUUID} = require("crypto");
 const { ROLES } = require('../../shared/config/roles.js');
+const { DEFAULT_USER_PLATFORMS, normalizeUserPlatforms } = require('../utils/userPlatforms');
+
+const platformsSchema = new mongoose.Schema({
+  homebrain: {
+    type: Boolean,
+    default: DEFAULT_USER_PLATFORMS.homebrain,
+  },
+  axiom: {
+    type: Boolean,
+    default: DEFAULT_USER_PLATFORMS.axiom,
+  },
+}, {
+  _id: false,
+});
 
 const schema = new mongoose.Schema({
   name: {
@@ -37,6 +51,10 @@ const schema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  platforms: {
+    type: platformsSchema,
+    default: () => ({ ...DEFAULT_USER_PLATFORMS }),
+  },
   role: {
     type: String,
     enum: [ROLES.ADMIN, ROLES.USER],
@@ -52,13 +70,23 @@ const schema = new mongoose.Schema({
   versionKey: false,
 });
 
+schema.pre('validate', function normalizePlatforms(next) {
+  this.platforms = normalizeUserPlatforms(this.platforms);
+  next();
+});
+
+function sanitizeUserDocument(_doc, ret) {
+  delete ret.password;
+  ret.platforms = normalizeUserPlatforms(ret.platforms);
+  return ret;
+}
+
 schema.set('toJSON', {
-  /* eslint-disable */
-  transform: (doc, ret, options) => {
-    delete ret.password;
-    return ret;
-  },
-  /* eslint-enable */
+  transform: sanitizeUserDocument,
+});
+
+schema.set('toObject', {
+  transform: sanitizeUserDocument,
 });
 
 const User = mongoose.model('User', schema);

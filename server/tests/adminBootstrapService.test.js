@@ -26,6 +26,10 @@ test('ensureBootstrapState promotes and reactivates the configured admin account
     email: 'matt@freestonefamily.com',
     role: ROLES.USER,
     isActive: false,
+    platforms: {
+      homebrain: false,
+      axiom: false
+    },
     name: '',
     password: await generatePasswordHash('CurrentPass123!'),
     saved: false,
@@ -43,9 +47,10 @@ test('ensureBootstrapState promotes and reactivates the configured admin account
 
   assert.equal(result.created, false);
   assert.equal(result.updated, true);
-  assert.deepEqual(result.changes, ['role', 'isActive', 'name']);
+  assert.deepEqual(result.changes, ['role', 'isActive', 'platforms.homebrain', 'name']);
   assert.equal(user.role, ROLES.ADMIN);
   assert.equal(user.isActive, true);
+  assert.equal(user.platforms.homebrain, true);
   assert.equal(user.name, 'Matt Freestone');
   assert.equal(user.saved, true);
 });
@@ -119,6 +124,10 @@ test('ensureBootstrapState creates the configured admin when password bootstrap 
   assert.equal(createdPayload.name, 'Matt Freestone');
   assert.equal(createdPayload.role, ROLES.ADMIN);
   assert.equal(createdPayload.isActive, true);
+  assert.deepEqual(createdPayload.platforms, {
+    homebrain: true,
+    axiom: false
+  });
 });
 
 test('ensureBootstrapState updates the configured admin password when the bootstrap password changes', async (t) => {

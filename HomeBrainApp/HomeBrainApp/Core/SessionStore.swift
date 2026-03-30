@@ -14,7 +14,7 @@ final class SessionStore: ObservableObject {
     lazy var apiClient = APIClient(sessionStore: self)
 
     var isAuthenticated: Bool {
-        accessToken != nil && currentUser != nil
+        accessToken != nil && currentUser?.hasHomeBrainAccess == true
     }
 
     private let defaults = UserDefaults.standard
@@ -23,6 +23,7 @@ final class SessionStore: ObservableObject {
     private let refreshTokenKey = "homebrain.refreshToken"
     private let currentUserKey = "homebrain.currentUser"
     private static let defaultServerURL = "https://freestonefamily.com"
+    private static let homeBrainAccessDeniedMessage = "This account does not have HomeBrain access."
 
     init() {
         let storedServerURL = defaults.string(forKey: serverURLKey)?
@@ -66,8 +67,13 @@ final class SessionStore: ObservableObject {
             let response = try await apiClient.get("/api/auth/me")
             let object = JSON.object(response)
             if let user = AppUser.from(object) {
-                currentUser = user
-                persistCurrentUser(user)
+                if user.hasHomeBrainAccess {
+                    currentUser = user
+                    persistCurrentUser(user)
+                } else {
+                    authError = Self.homeBrainAccessDeniedMessage
+                    clearAuthData()
+                }
             } else {
                 clearAuthData()
             }
@@ -164,6 +170,11 @@ final class SessionStore: ObservableObject {
         }
 
         let user = AppUser.from(rootObject) ?? AppUser.from(dataObject)
+
+        if let user, !user.hasHomeBrainAccess {
+            clearAuthData()
+            throw APIError.server(statusCode: 403, message: Self.homeBrainAccessDeniedMessage)
+        }
 
         accessToken = access
         self.refreshToken = refresh

@@ -7,7 +7,9 @@ const OIDCClient = require('../models/OIDCClient');
 const OIDCAuthorizationCode = require('../models/OIDCAuthorizationCode');
 const UserService = require('./userService');
 const { generateAccessToken } = require('../utils/auth');
+const { getAxiomCallbackUrl } = require('../utils/platformUrls');
 const { getRequestOrigin } = require('../utils/publicOrigin');
+const { ALL_USER_PLATFORMS, hasPlatformAccess } = require('../utils/userPlatforms');
 const {
   ACCESS_TOKEN_COOKIE_NAME,
   SESSION_TOKEN_COOKIE_NAME,
@@ -77,32 +79,7 @@ function getDefaultClientId() {
 }
 
 function deriveAxiomRedirectUri() {
-  const explicit = trimString(process.env.OIDC_AXIOM_REDIRECT_URI || process.env.AXIOM_OIDC_REDIRECT_URI);
-  if (explicit) {
-    return explicit;
-  }
-
-  const axiomBase = trimString(process.env.AXIOM_PUBLIC_BASE_URL);
-  if (axiomBase) {
-    try {
-      const parsed = new URL(axiomBase);
-      return `${parsed.origin}/api/identity/homebrain/callback`;
-    } catch (_error) {
-      return '';
-    }
-  }
-
-  const homeBrainBase = trimString(process.env.HOMEBRAIN_PUBLIC_BASE_URL);
-  if (!homeBrainBase) {
-    return '';
-  }
-
-  try {
-    const parsed = new URL(homeBrainBase);
-    return `${parsed.protocol}//mail.${parsed.hostname}/api/identity/homebrain/callback`;
-  } catch (_error) {
-    return '';
-  }
+  return getAxiomCallbackUrl();
 }
 
 function buildStandardClaims(user) {
@@ -448,6 +425,17 @@ async function handleAuthorize(req, res) {
 
     const returnTo = req.originalUrl || req.url || '/';
     return res.redirect(302, `/login?returnTo=${encodeURIComponent(returnTo)}`);
+  }
+
+  const clientPlatform = trimString(client.platform).toLowerCase();
+  if (ALL_USER_PLATFORMS.includes(clientPlatform) && !hasPlatformAccess(user, clientPlatform)) {
+    const target = trimString(client.name) || clientPlatform;
+    return res.redirect(302, buildAuthorizeErrorRedirect(
+      redirectUri,
+      'access_denied',
+      `The signed-in user does not have access to ${target}.`,
+      state
+    ));
   }
 
   const code = await createAuthorizationCode({

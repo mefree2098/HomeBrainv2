@@ -1,6 +1,14 @@
 const User = require('../models/User.js');
 const { generatePasswordHash, validatePassword } = require('../utils/password.js');
 const { ALL_ROLES, ROLES } = require('../../shared/config/roles.js');
+const {
+  DEFAULT_USER_PLATFORMS,
+  USER_PLATFORMS,
+  buildPlatformAccessQuery,
+  getEnabledPlatforms,
+  hasPlatformAccess,
+  normalizeUserPlatforms
+} = require('../utils/userPlatforms');
 
 const normalizeEmail = (email) => {
   if (typeof email !== 'string') {
@@ -58,9 +66,13 @@ class UserService {
     }
   }
 
-  static async countActiveAdmins() {
+  static async countActiveAdmins(platform = USER_PLATFORMS.HOMEBRAIN) {
     try {
-      return User.countDocuments({ role: ROLES.ADMIN, isActive: true }).exec();
+      return User.countDocuments({
+        role: ROLES.ADMIN,
+        isActive: true,
+        ...buildPlatformAccessQuery(platform)
+      }).exec();
     } catch (err) {
       throw new Error(`Database error while counting active admins: ${err}`);
     }
@@ -86,10 +98,10 @@ class UserService {
         return false;
       }
 
-      if (user.role === ROLES.ADMIN && user.isActive) {
-        const activeAdminCount = await UserService.countActiveAdmins();
+      if (user.role === ROLES.ADMIN && user.isActive && hasPlatformAccess(user, USER_PLATFORMS.HOMEBRAIN)) {
+        const activeAdminCount = await UserService.countActiveAdmins(USER_PLATFORMS.HOMEBRAIN);
         if (activeAdminCount <= 1) {
-          throw new Error('At least one active admin account is required');
+          throw new Error('At least one active HomeBrain admin account is required');
         }
       }
 
@@ -104,20 +116,33 @@ class UserService {
     if (!email) throw new Error('Email is required');
     if (!password) throw new Error('Password is required');
 
+    const normalizedEmail = normalizeEmail(email);
+
+    let user = null;
     try {
-      const normalizedEmail = normalizeEmail(email);
-      const user = await User.findOne({ email: normalizedEmail }).exec();
-      if (!user) return null;
+      user = await User.findOne({ email: normalizedEmail }).exec();
+    } catch (err) {
+      throw new Error(`Database error while looking up user ${email}: ${err}`);
+    }
 
-      if (!user.isActive) {
-        const error = new Error('User account is inactive');
-        error.status = 403;
-        throw error;
-      }
+    if (!user) return null;
 
-      const passwordValid = await validatePassword(password, user.password);
-      if (!passwordValid) return null;
+    if (!user.isActive) {
+      const error = new Error('User account is inactive');
+      error.status = 403;
+      throw error;
+    }
 
+    const passwordValid = await validatePassword(password, user.password);
+    if (!passwordValid) return null;
+
+    if (getEnabledPlatforms(user).length === 0) {
+      const error = new Error('User account has no platform access');
+      error.status = 403;
+      throw error;
+    }
+
+    try {
       user.lastLoginAt = Date.now();
       const updatedUser = await user.save();
       return updatedUser;
@@ -126,7 +151,14 @@ class UserService {
     }
   }
 
-  static async create({ email, password, name = '', role = ROLES.USER, isActive = true }) {
+  static async create({
+    email,
+    password,
+    name = '',
+    role = ROLES.USER,
+    isActive = true,
+    platforms = DEFAULT_USER_PLATFORMS
+  }) {
     if (!email) throw new Error('Email is required');
     if (!password) throw new Error('Password is required');
 
@@ -149,6 +181,7 @@ class UserService {
         name: sanitizeName(name),
         role,
         isActive: typeof isActive === 'boolean' ? isActive : true,
+        platforms: normalizeUserPlatforms(platforms),
       });
 
       await user.save();
@@ -189,6 +222,35 @@ class UserService {
     }
 
     const updates = {};
+    if (Object.prototype.hasOwnProperty.call(data, 'role')) {
+      ensureAllowedRole(data.role);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(data, 'isActive') && typeof data.isActive !== 'boolean') {
+      throw new Error('isActive must be a boolean');
+    }
+
+    const nextRole = Object.prototype.hasOwnProperty.call(data, 'role') ? data.role : user.role;
+    const nextIsActive = Object.prototype.hasOwnProperty.call(data, 'isActive') ? data.isActive : user.isActive;
+    const nextPlatforms = Object.prototype.hasOwnProperty.call(data, 'platforms')
+      ? normalizeUserPlatforms(data.platforms)
+      : normalizeUserPlatforms(user.platforms);
+
+    if (
+      user.role === ROLES.ADMIN
+      && user.isActive
+      && hasPlatformAccess(user, USER_PLATFORMS.HOMEBRAIN)
+      && (
+        nextRole !== ROLES.ADMIN
+        || nextIsActive !== true
+        || !nextPlatforms[USER_PLATFORMS.HOMEBRAIN]
+      )
+    ) {
+      const activeAdminCount = await UserService.countActiveAdmins(USER_PLATFORMS.HOMEBRAIN);
+      if (activeAdminCount <= 1) {
+        throw new Error('At least one active HomeBrain admin account is required');
+      }
+    }
 
     if (Object.prototype.hasOwnProperty.call(data, 'name')) {
       updates.name = sanitizeName(data.name);
@@ -213,31 +275,15 @@ class UserService {
     }
 
     if (Object.prototype.hasOwnProperty.call(data, 'role')) {
-      ensureAllowedRole(data.role);
-
-      if (user.role === ROLES.ADMIN && data.role !== ROLES.ADMIN && user.isActive) {
-        const activeAdminCount = await UserService.countActiveAdmins();
-        if (activeAdminCount <= 1) {
-          throw new Error('At least one active admin account is required');
-        }
-      }
-
       updates.role = data.role;
     }
 
     if (Object.prototype.hasOwnProperty.call(data, 'isActive')) {
-      if (typeof data.isActive !== 'boolean') {
-        throw new Error('isActive must be a boolean');
-      }
-
-      if (user.role === ROLES.ADMIN && user.isActive && data.isActive === false) {
-        const activeAdminCount = await UserService.countActiveAdmins();
-        if (activeAdminCount <= 1) {
-          throw new Error('At least one active admin account is required');
-        }
-      }
-
       updates.isActive = data.isActive;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(data, 'platforms')) {
+      updates.platforms = nextPlatforms;
     }
 
     if (Object.keys(updates).length === 0) {
