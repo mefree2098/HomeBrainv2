@@ -76,6 +76,7 @@ interface Device {
   room: string
   status: boolean
   brightness?: number
+  color?: string
   temperature?: number
   targetTemperature?: number
   properties?: Record<string, any>
@@ -169,6 +170,19 @@ const getFavoriteDevicesGridClass = (size: DashboardWidgetSize) => {
 }
 
 const getStorageKey = (profileId: string | null) => profileId ? `homebrain.web.dashboard-view.${profileId}` : null
+
+const normalizeHexColor = (value: unknown): string => {
+  if (typeof value !== "string") {
+    return "#ffffff"
+  }
+
+  const normalized = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(normalized)) {
+    return normalized.toLowerCase()
+  }
+
+  return "#ffffff"
+}
 
 const getDefaultWidgetSize = (type: DashboardWidgetType): DashboardWidgetSize => {
   switch (type) {
@@ -696,6 +710,13 @@ export function Dashboard() {
           const nextBrightness = Number(value)
           if (Number.isFinite(nextBrightness)) {
             return { ...device, brightness: Math.round(nextBrightness), status: nextBrightness > 0 }
+          }
+        }
+        if (action === "set_color") {
+          return {
+            ...device,
+            status: true,
+            color: normalizeHexColor(value)
           }
         }
 

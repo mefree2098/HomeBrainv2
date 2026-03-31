@@ -2,6 +2,7 @@ import Charts
 import Combine
 import CoreLocation
 import SwiftUI
+import UIKit
 
 private struct DashboardTempestStationSnapshot {
     let name: String
@@ -547,6 +548,7 @@ struct DashboardView: View {
     @State private var infoMessage: String?
     @State private var pendingFavoriteDeviceIds: Set<String> = []
     @State private var dashboardLightBrightnessDrafts: [String: Double] = [:]
+    @State private var dashboardLightColorDrafts: [String: String] = [:]
     @State private var thermostatTemperatureDrafts: [String: Double] = [:]
     @State private var pendingControlDeviceIds: Set<String> = []
     @State private var deviceEnergySamplesByDeviceID: [String: [DashboardDeviceEnergySample]] = [:]
@@ -4979,47 +4981,23 @@ struct DashboardView: View {
 
         return HBPanel {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: iconForDevice(device.type))
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Color.white)
-                        .frame(width: 30, height: 30)
-                        .background(
-                            LinearGradient(
-                                colors: device.status
-                                    ? [HBPalette.accentBlue, HBPalette.accentGreen]
-                                    : [HBPalette.accentSlate, HBPalette.panelSoft],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            in: Circle()
-                        )
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(device.name)
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
-                            .lineLimit(2)
-                        Text(device.room)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 0)
-
-                    HBBadge(
-                        text: shortDeviceStatusBadge(for: device),
-                        foreground: device.status ? HBPalette.textPrimary : HBPalette.textSecondary,
-                        background: device.status ? HBPalette.accentBlue.opacity(0.18) : HBPalette.panelSoft.opacity(0.88),
-                        stroke: device.status ? HBPalette.accentBlue.opacity(0.32) : HBPalette.panelStrokeStrong
-                    )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(device.name)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(3)
+                    Text(device.room)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .lineLimit(1)
                 }
 
-                Text(statusText)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-                    .lineLimit(2)
+                if let statusText {
+                    Text(statusText)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .lineLimit(2)
+                }
 
                 if energySnapshot.supportsEnergyMonitoring {
                     VStack(alignment: .leading, spacing: 8) {
@@ -5114,6 +5092,45 @@ struct DashboardView: View {
                     }
                 }
 
+                if supportsLightColor(device) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .center) {
+                            Text("Color")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                            Spacer()
+                            Text(currentDashboardLightColor(for: device).uppercased())
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(HBPalette.textPrimary)
+                        }
+
+                        HStack(spacing: 8) {
+                            ColorPicker("", selection: dashboardColorBinding(for: device), supportsOpacity: false)
+                                .labelsHidden()
+                                .frame(width: 40, height: 30)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+                                .disabled(pending)
+
+                            Button {
+                                Task {
+                                    await handleDeviceControl(
+                                        deviceId: device.id,
+                                        action: "set_color",
+                                        value: currentDashboardLightColor(for: device)
+                                    )
+                                }
+                            } label: {
+                                Text("Apply Color")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                            .disabled(pending)
+                        }
+                    }
+                }
+
                 if thermostat {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                         ForEach(["auto", "cool", "heat", "off"], id: \.self) { mode in
@@ -5128,14 +5145,25 @@ struct DashboardView: View {
                     }
                 }
 
-                Button {
-                    Task { await handleDenseDeviceToggle(device) }
-                } label: {
-                    Label(denseDeviceToggleLabel(for: device), systemImage: device.status ? "power.circle" : "power.circle.fill")
-                        .frame(maxWidth: .infinity)
+                if device.status {
+                    Button {
+                        Task { await handleDenseDeviceToggle(device) }
+                    } label: {
+                        Label(denseDeviceToggleLabel(for: device), systemImage: "power.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                    .disabled(pending)
+                } else {
+                    Button {
+                        Task { await handleDenseDeviceToggle(device) }
+                    } label: {
+                        Label(denseDeviceToggleLabel(for: device), systemImage: "power.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                    .disabled(pending)
                 }
-                .buttonStyle(device.status ? HBSecondaryButtonStyle(compact: true) : HBPrimaryButtonStyle(compact: true))
-                .disabled(pending)
             }
         }
     }
@@ -5844,6 +5872,9 @@ struct DashboardView: View {
             if action == "set_brightness" {
                 dashboardLightBrightnessDrafts.removeValue(forKey: deviceId)
             }
+            if action == "set_color" {
+                dashboardLightColorDrafts.removeValue(forKey: deviceId)
+            }
             if action == "set_temperature" {
                 thermostatTemperatureDrafts.removeValue(forKey: deviceId)
             }
@@ -5873,6 +5904,9 @@ struct DashboardView: View {
 
             if action == "set_brightness" {
                 dashboardLightBrightnessDrafts.removeValue(forKey: deviceId)
+            }
+            if action == "set_color" {
+                dashboardLightColorDrafts.removeValue(forKey: deviceId)
             }
             if action == "set_temperature" {
                 thermostatTemperatureDrafts.removeValue(forKey: deviceId)
@@ -5908,6 +5942,13 @@ struct DashboardView: View {
                 updated.brightness = clamped
                 updated.status = clamped > 0
                 dashboardLightBrightnessDrafts[deviceId] = clamped
+            }
+
+        case "set_color":
+            if let color = normalizedDashboardHexColor(stringValue(value)) {
+                updated.color = color
+                updated.status = true
+                dashboardLightColorDrafts[deviceId] = color
             }
 
         case "set_temperature":
@@ -6113,11 +6154,41 @@ struct DashboardView: View {
         min(100, max(0, value)).rounded()
     }
 
+    private func normalizedDashboardHexColor(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
+              regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil else {
+            return nil
+        }
+        return trimmed.lowercased()
+    }
+
     private func currentDashboardLightBrightness(for device: DeviceItem) -> Double {
         if let draft = dashboardLightBrightnessDrafts[device.id] {
             return clampDashboardLightBrightness(draft)
         }
         return clampDashboardLightBrightness(device.brightness)
+    }
+
+    private func currentDashboardLightColor(for device: DeviceItem) -> String {
+        if let draft = dashboardLightColorDrafts[device.id],
+           let normalized = normalizedDashboardHexColor(draft) {
+            return normalized
+        }
+        if let normalized = normalizedDashboardHexColor(device.color) {
+            return normalized
+        }
+        return "#ffffff"
+    }
+
+    private func dashboardColorBinding(for device: DeviceItem) -> Binding<Color> {
+        Binding {
+            dashboardColor(from: currentDashboardLightColor(for: device))
+        } set: { newColor in
+            if let hex = dashboardHexColor(from: newColor) {
+                dashboardLightColorDrafts[device.id] = hex.lowercased()
+            }
+        }
     }
 
     private func devicesForWidget(_ widget: DashboardWidgetItem) -> [DeviceItem] {
@@ -6163,17 +6234,7 @@ struct DashboardView: View {
         return device.status ? "Turn Off" : "Turn On"
     }
 
-    private func shortDeviceStatusBadge(for device: DeviceItem) -> String {
-        if device.type == "thermostat" {
-            return thermostatMode(for: device).uppercased()
-        }
-        if device.type == "lock" {
-            return device.status ? "LOCKED" : "UNLOCKED"
-        }
-        return device.status ? "ON" : "OFF"
-    }
-
-    private func dashboardDeviceStatusText(for device: DeviceItem) -> String {
+    private func dashboardDeviceStatusText(for device: DeviceItem) -> String? {
         if device.type == "thermostat" {
             let mode = thermostatMode(for: device).uppercased()
             let current = device.temperature.map { "\(Int($0.rounded()))°F" } ?? "--"
@@ -6181,11 +6242,7 @@ struct DashboardView: View {
             return "\(mode) • \(current) now • \(target) target"
         }
 
-        if device.type == "lock" {
-            return device.status ? "Currently locked" : "Currently unlocked"
-        }
-
-        return device.status ? "Currently on" : "Currently off"
+        return nil
     }
 
     private func formatDashboardPowerValue(_ value: Double?, unit: String) -> String {
@@ -6357,6 +6414,23 @@ struct DashboardView: View {
         return boolValue(device.properties["supportsBrightness"])
     }
 
+    private func supportsLightColor(_ device: DeviceItem) -> Bool {
+        if isSmartThingsBackedDevice(device) {
+            let capabilities = smartThingsCapabilities(for: device)
+            if capabilities.contains("colorControl") {
+                return true
+            }
+
+            return boolValue(device.properties["supportsColor"]) && supportsLightFade(device)
+        }
+
+        if device.type == "light" {
+            return true
+        }
+
+        return boolValue(device.properties["supportsColor"])
+    }
+
     private func supportsEnergyMonitoring(_ device: DeviceItem) -> Bool {
         let capabilities = smartThingsCapabilities(for: device)
         if capabilities.contains("powerMeter") || capabilities.contains("energyMeter") {
@@ -6366,6 +6440,42 @@ struct DashboardView: View {
         let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
         return dashboardOptionalDouble(JSON.object(attributeValues["powerMeter"])["power"]) != nil
             || dashboardOptionalDouble(JSON.object(attributeValues["energyMeter"])["energy"]) != nil
+    }
+
+    private func dashboardColor(from hex: String) -> Color {
+        let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("#"), trimmed.count == 7 else {
+            return .white
+        }
+
+        let hexValue = String(trimmed.dropFirst())
+        guard let intValue = Int(hexValue, radix: 16) else {
+            return .white
+        }
+
+        let red = Double((intValue >> 16) & 0xFF) / 255.0
+        let green = Double((intValue >> 8) & 0xFF) / 255.0
+        let blue = Double(intValue & 0xFF) / 255.0
+        return Color(red: red, green: green, blue: blue)
+    }
+
+    private func dashboardHexColor(from color: Color) -> String? {
+        let uiColor = UIColor(color)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return nil
+        }
+
+        return String(
+            format: "#%02X%02X%02X",
+            Int(red * 255.0),
+            Int(green * 255.0),
+            Int(blue * 255.0)
+        )
     }
 
     private func stringValue(_ value: Any?) -> String {

@@ -355,6 +355,43 @@ enum DashboardSupport {
         return "homebrain.ios.dashboard.views.\(normalizedServer).\(suffix)"
     }
 
+    private static func normalizeStringArray(_ values: [String]?) -> [String]? {
+        guard let values else {
+            return nil
+        }
+
+        var seen = Set<String>()
+        var normalized: [String] = []
+        normalized.reserveCapacity(values.count)
+
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else {
+                continue
+            }
+
+            seen.insert(trimmed)
+            normalized.append(trimmed)
+        }
+
+        return normalized
+    }
+
+    private static func stringArray(from rawValue: Any?) -> [String]? {
+        guard let rawArray = rawValue as? [Any] else {
+            return nil
+        }
+
+        let values = rawArray.compactMap { value -> String? in
+            guard let stringValue = value as? String else {
+                return nil
+            }
+            return stringValue
+        }
+
+        return normalizeStringArray(values)
+    }
+
     private static func normalizeView(from raw: Any, index: Int) -> DashboardViewItem? {
         let object = JSON.object(raw)
         guard !object.isEmpty else {
@@ -387,7 +424,7 @@ enum DashboardSupport {
         let size = DashboardWidgetSize(rawValue: JSON.string(object, "size")) ?? defaultWidgetDescriptors.first(where: { $0.0 == type })?.2 ?? .medium
         let settingsObject = JSON.object(object["settings"])
         let deviceId = JSON.optionalString(settingsObject, "deviceId")
-        let deviceIds = dashboardStringArray(from: settingsObject["deviceIds"]) ?? []
+        let deviceIds = stringArray(from: settingsObject["deviceIds"]) ?? []
         let weatherLocationMode = DashboardWeatherLocationMode(rawValue: JSON.string(settingsObject, "weatherLocationMode")) ?? .saved
         let weatherLocationQuery = JSON.optionalString(settingsObject, "weatherLocationQuery")?.trimmingCharacters(in: .whitespacesAndNewlines)
         let favoriteDeviceSizes = JSON.object(settingsObject["favoriteDeviceSizes"]).reduce(into: [String: DashboardFavoriteDeviceCardSize]()) { accumulator, entry in
