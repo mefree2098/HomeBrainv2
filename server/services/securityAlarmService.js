@@ -203,6 +203,16 @@ const inferStateLabel = (sensorType, isActive, isAvailable) => {
   }
 };
 
+const requestSecurityAlarmAutomationEvaluation = (reason) => {
+  try {
+    const automationSchedulerService = require('./automationSchedulerService');
+    console.log(`SecurityAlarmService: Requesting automation scheduler evaluation after ${reason}`);
+    void automationSchedulerService.tick();
+  } catch (error) {
+    console.warn(`SecurityAlarmService: Failed to request automation evaluation after ${reason}: ${error.message}`);
+  }
+};
+
 const looksLikeSecuritySensor = (device) => {
   if (!device || typeof device !== 'object') {
     return false;
@@ -662,6 +672,7 @@ class SecurityAlarmService {
       console.log(`SecurityAlarmService: Arming alarm in ${mode} mode`);
 
       const alarm = await SecurityAlarm.getMainAlarm();
+      const previousState = alarm.alarmState;
 
       // Check if already armed
       if (alarm.alarmState === 'armedStay' || alarm.alarmState === 'armedAway') {
@@ -683,6 +694,9 @@ class SecurityAlarmService {
 
       // Update local alarm state
       await alarm.arm(mode, userId);
+      if (alarm.alarmState !== previousState) {
+        requestSecurityAlarmAutomationEvaluation(`arm to ${alarm.alarmState}`);
+      }
 
       console.log(`SecurityAlarmService: Successfully armed alarm in ${mode} mode`);
       return alarm;
@@ -702,6 +716,7 @@ class SecurityAlarmService {
       console.log('SecurityAlarmService: Disarming alarm');
 
       const alarm = await SecurityAlarm.getMainAlarm();
+      const previousState = alarm.alarmState;
       const alarmWasTriggered = alarm.alarmState === 'triggered';
 
       // Check if already disarmed
@@ -727,6 +742,9 @@ class SecurityAlarmService {
 
       // Update local alarm state
       await alarm.disarm(userId);
+      if (alarm.alarmState !== previousState) {
+        requestSecurityAlarmAutomationEvaluation(`disarm to ${alarm.alarmState}`);
+      }
 
       console.log('SecurityAlarmService: Successfully disarmed alarm');
       return alarm;
@@ -929,6 +947,7 @@ class SecurityAlarmService {
       const alarm = await SecurityAlarm.getMainAlarm();
 
       let synced = false;
+      let alarmStateChanged = false;
 
       if (await this.isSmartThingsConfiguredForSthm()) {
         try {
@@ -937,6 +956,7 @@ class SecurityAlarmService {
             const mappedState = this.mapSmartThingsArmState(securityState.armState);
             if (mappedState && mappedState !== alarm.alarmState) {
               alarm.alarmState = mappedState;
+              alarmStateChanged = true;
             }
             if (securityState.deviceId && alarm.smartthingsDeviceId !== securityState.deviceId) {
               console.log(`SecurityAlarmService: Tracking SmartThings security device ${securityState.deviceId}`);
@@ -964,6 +984,7 @@ class SecurityAlarmService {
 
           if (mappedState && mappedState !== alarm.alarmState) {
             alarm.alarmState = mappedState;
+            alarmStateChanged = true;
           }
 
           alarm.lastSyncWithSmartThings = new Date();
@@ -985,6 +1006,9 @@ class SecurityAlarmService {
       }
 
       console.log('SecurityAlarmService: SmartThings sync complete');
+      if (alarmStateChanged) {
+        requestSecurityAlarmAutomationEvaluation(`SmartThings sync to ${alarm.alarmState}`);
+      }
       return alarm;
     } catch (error) {
       console.error('SecurityAlarmService: Error syncing with SmartThings:', error.message);

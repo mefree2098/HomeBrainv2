@@ -37,7 +37,7 @@ const automationHistorySchema = new mongoose.Schema({
   triggerType: {
     type: String,
     required: true,
-    enum: ['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual', 'voice']
+    enum: ['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual', 'voice', 'security_alarm_status']
   },
   triggerSource: {
     type: String, // 'system', 'voice_command', 'manual', 'scene'

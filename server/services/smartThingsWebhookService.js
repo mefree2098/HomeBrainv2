@@ -27,6 +27,19 @@ const toDateOrNull = (value) => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const requestSecurityAlarmAutomationEvaluation = (reason, log) => {
+  try {
+    const automationSchedulerService = require('./automationSchedulerService');
+    log('info', 'Requesting automation scheduler evaluation after alarm state change', { reason });
+    void automationSchedulerService.tick();
+  } catch (error) {
+    log('warn', 'Failed to request automation scheduler evaluation after alarm state change', {
+      reason,
+      error: error.message
+    });
+  }
+};
+
 class SmartThingsWebhookService {
   constructor() {
     this.configurationPageId = 'homebrain-main';
@@ -1242,12 +1255,16 @@ class SmartThingsWebhookService {
       try {
         const alarm = await SecurityAlarm.getMainAlarm();
         const mappedState = this.mapNormalizedArmStateToLocalAlarm(latestSecurityArmState.normalizedArmState);
+        const alarmStateChanged = Boolean(mappedState && mappedState !== alarm.alarmState);
         if (mappedState) {
           alarm.alarmState = mappedState;
         }
         alarm.isOnline = true;
         alarm.lastSyncWithSmartThings = new Date(latestSecurityArmState.timestampMs || Date.now());
         await alarm.save();
+        if (alarmStateChanged) {
+          requestSecurityAlarmAutomationEvaluation(`webhook to ${alarm.alarmState}`, this.log.bind(this));
+        }
       } catch (error) {
         this.log('warn', 'Failed to mirror SmartThings security arm state into local alarm model', {
           armState: latestSecurityArmState.normalizedArmState,
@@ -1517,5 +1534,4 @@ class SmartThingsWebhookService {
 }
 
 module.exports = new SmartThingsWebhookService();
-
 
