@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const Device = require('../models/Device');
 const deviceService = require('../services/deviceService');
+const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
 const insteonService = require('../services/insteonService');
 
 test('controlDevice routes Insteon turn_on through insteon service and skips generic DB write path', async (t) => {
@@ -104,4 +105,76 @@ test('controlDevice routes Insteon toggle to turnOff when current status is on',
   assert.equal(receivedDeviceId, 'device-2');
   assert.equal(updated.status, false);
   assert.equal(updated.brightness, 0);
+});
+
+test('getAllDevices can force-refresh SmartThings lock devices before returning them', async (t) => {
+  const originalFind = Device.find;
+  const originalBulkWrite = Device.bulkWrite;
+  const originalPollSmartThingsState = deviceService.pollSmartThingsState;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.bulkWrite = originalBulkWrite;
+    deviceService.pollSmartThingsState = originalPollSmartThingsState;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const staleLock = {
+    _id: 'device-3',
+    name: 'Front Door Lock',
+    type: 'lock',
+    room: 'Entry',
+    status: true,
+    isOnline: true,
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-lock-1'
+    }
+  };
+
+  const refreshedLock = {
+    ...staleLock,
+    status: false,
+    lastSeen: new Date('2026-03-30T12:05:00.000Z')
+  };
+
+  const queries = [];
+  let bulkOps = null;
+  const emitted = [];
+
+  Device.find = (query = {}) => {
+    queries.push(query);
+    if (query && query._id && query._id.$in) {
+      const result = [refreshedLock];
+      return Promise.resolve(result);
+    }
+
+    return {
+      sort: async () => [queries.length === 1 ? staleLock : refreshedLock]
+    };
+  };
+  Device.bulkWrite = async (ops) => {
+    bulkOps = ops;
+  };
+  deviceService.pollSmartThingsState = async () => ({
+    status: false,
+    lastSeen: refreshedLock.lastSeen
+  });
+  deviceUpdateEmitter.emit = (eventName, payload) => {
+    emitted.push({ eventName, payload });
+  };
+
+  const devices = await deviceService.getAllDevices({ type: 'lock' }, { refreshSmartThings: true });
+
+  assert.equal(queries.length, 3);
+  assert.equal(queries[0].type, 'lock');
+  assert.equal(queries[1]._id.$in[0], 'device-3');
+  assert.equal(queries[2].type, 'lock');
+  assert.ok(Array.isArray(bulkOps));
+  assert.equal(bulkOps.length, 1);
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].eventName, 'devices:update');
+  assert.equal(devices.length, 1);
+  assert.equal(devices[0].status, false);
 });

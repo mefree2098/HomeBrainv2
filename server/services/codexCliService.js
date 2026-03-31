@@ -72,8 +72,15 @@ function isAwsRuntime() {
   );
 }
 
-function resolveDefaultLocalCodexHome() {
-  const homeDir = sanitizeString(os.homedir());
+function resolveSharedCodexHome(homeDir = sanitizeString(os.homedir())) {
+  if (homeDir) {
+    return path.join(homeDir, '.codex');
+  }
+
+  return '';
+}
+
+function resolveDefaultLocalCodexHome(homeDir = sanitizeString(os.homedir())) {
   if (homeDir) {
     return path.join(homeDir, '.codex', DEFAULT_CODEX_HOME_SLUG);
   }
@@ -81,11 +88,65 @@ function resolveDefaultLocalCodexHome() {
   return path.resolve(process.cwd(), '.codex-home');
 }
 
-function resolveDraftCodexHome(profile, customHome = '', awsVolumeRoot = DEFAULT_AWS_VOLUME_ROOT, cwd = process.cwd()) {
+function hasCodexCredentialArtifacts(candidatePath) {
+  const normalizedPath = sanitizeString(candidatePath);
+  if (!normalizedPath) {
+    return false;
+  }
+
+  try {
+    const authPath = path.join(normalizedPath, 'auth.json');
+    const stats = fs.statSync(authPath);
+    return stats.isFile() && stats.size > 0;
+  } catch (error) {
+    return false;
+  }
+}
+
+function resolveLocalCodexHomeCandidates(homeDir = sanitizeString(os.homedir())) {
+  const sharedHome = resolveSharedCodexHome(homeDir);
+  const isolatedHome = resolveDefaultLocalCodexHome(homeDir);
+  const candidates = [];
+
+  const addCandidate = (candidate) => {
+    const normalizedCandidate = sanitizeString(candidate);
+    if (!normalizedCandidate || candidates.includes(normalizedCandidate)) {
+      return;
+    }
+    candidates.push(normalizedCandidate);
+  };
+
+  const sharedHasAuth = hasCodexCredentialArtifacts(sharedHome);
+  const isolatedHasAuth = hasCodexCredentialArtifacts(isolatedHome);
+
+  if (isolatedHasAuth) {
+    addCandidate(isolatedHome);
+    addCandidate(sharedHome);
+    return candidates;
+  }
+
+  if (sharedHasAuth) {
+    addCandidate(sharedHome);
+    addCandidate(isolatedHome);
+    return candidates;
+  }
+
+  addCandidate(isolatedHome);
+  addCandidate(sharedHome);
+  return candidates;
+}
+
+function resolveDraftCodexHome(
+  profile,
+  customHome = '',
+  awsVolumeRoot = DEFAULT_AWS_VOLUME_ROOT,
+  cwd = process.cwd(),
+  homeDir = sanitizeString(os.homedir())
+) {
   const normalizedProfile = normalizeCodexHomeProfile(profile);
   const trimmedCustomHome = sanitizeString(customHome);
   const trimmedAwsVolumeRoot = sanitizeString(awsVolumeRoot) || DEFAULT_AWS_VOLUME_ROOT;
-  const projectHome = resolveDefaultLocalCodexHome();
+  const projectHome = resolveDefaultLocalCodexHome(homeDir);
 
   switch (normalizedProfile) {
     case 'azure':
@@ -228,7 +289,8 @@ async function resolveCodexHomePath({
   requestedHome = '',
   profile = 'auto',
   awsVolumeRoot = DEFAULT_AWS_VOLUME_ROOT,
-  cwd = process.cwd()
+  cwd = process.cwd(),
+  homeDir = sanitizeString(os.homedir())
 } = {}) {
   const normalizedProfile = normalizeCodexHomeProfile(profile);
   const trimmedRequestedHome = sanitizeString(requestedHome);
@@ -248,7 +310,6 @@ async function resolveCodexHomePath({
   };
 
   addCandidate(trimmedRequestedHome);
-  addCandidate(resolveDraftCodexHome(normalizedProfile, trimmedRequestedHome, trimmedAwsVolumeRoot, cwd));
   addCandidate(process.env.CODEX_HOME);
 
   if (isAzureRuntime()) {
@@ -256,7 +317,16 @@ async function resolveCodexHomePath({
     addCandidate('/home/site/.codex');
   }
 
-  addCandidate(resolveDefaultLocalCodexHome());
+  const shouldUseLocalCandidatesFirst = normalizedProfile === 'local' ||
+    (normalizedProfile === 'auto' && !isAzureRuntime() && !isAwsRuntime());
+
+  if (shouldUseLocalCandidatesFirst) {
+    resolveLocalCodexHomeCandidates(homeDir).forEach(addCandidate);
+  } else {
+    addCandidate(resolveDraftCodexHome(normalizedProfile, trimmedRequestedHome, trimmedAwsVolumeRoot, cwd, homeDir));
+    resolveLocalCodexHomeCandidates(homeDir).forEach(addCandidate);
+  }
+
   addCandidate(path.join(os.tmpdir(), DEFAULT_TEMP_HOME_SLUG));
 
   let lastError = null;
@@ -986,7 +1056,8 @@ class CodexAppServerSession {
 async function resolveSessionOptions({
   settings = null,
   overrides = {},
-  cwd = process.cwd()
+  cwd = process.cwd(),
+  homeDir = sanitizeString(os.homedir())
 } = {}) {
   const effectiveSettings = settings || {};
   const resolvedProfile = normalizeCodexHomeProfile(overrides.codexHomeProfile || effectiveSettings.codexHomeProfile);
@@ -1007,7 +1078,8 @@ async function resolveSessionOptions({
     requestedHome: merged.codexHome,
     profile: merged.codexHomeProfile,
     awsVolumeRoot: merged.codexAwsVolumeRoot,
-    cwd
+    cwd,
+    homeDir
   });
 
   return {
@@ -1351,6 +1423,7 @@ module.exports = {
   getCodexAuthHealth,
   getCodexModels,
   pickCodexModel,
+  resolveLocalCodexHomeCandidates,
   resolveCodexHomePath,
   resolveCodexLaunchSpec,
   resolveDraftCodexHome,
