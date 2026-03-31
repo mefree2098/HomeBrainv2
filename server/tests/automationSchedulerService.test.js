@@ -149,6 +149,67 @@ test('device_state triggers capture the triggering device context for later acti
   });
 });
 
+test('device_state triggers prime current truthy state on scheduler startup without firing immediately', async (t) => {
+  const automationId = new mongoose.Types.ObjectId().toString();
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  let deviceStatus = true;
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Theater Bathroom Fan',
+      room: 'Theater Bathroom',
+      status: deviceStatus
+    })
+  });
+
+  automationSchedulerService.triggerStateCache.clear();
+  automationSchedulerService.pendingTriggerContexts.clear();
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    automationSchedulerService.triggerStateCache.clear();
+    automationSchedulerService.pendingTriggerContexts.clear();
+  });
+
+  const automation = {
+    _id: { toString: () => automationId },
+    enabled: true,
+    cooldown: 0,
+    trigger: {
+      type: 'device_state',
+      conditions: {
+        deviceId,
+        property: 'status',
+        operator: 'eq',
+        value: true
+      }
+    }
+  };
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T23:10:00.000Z'), { source: 'scheduler_startup' }),
+    false
+  );
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T23:11:00.000Z'), { source: 'scheduler_interval' }),
+    false
+  );
+
+  deviceStatus = false;
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T23:12:00.000Z'), { source: 'scheduler_interval' }),
+    false
+  );
+
+  deviceStatus = true;
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T23:13:00.000Z'), { source: 'scheduler_interval' }),
+    true
+  );
+});
+
 test('device_state triggers can evaluate SmartThings power thresholds with hold times', async (t) => {
   const automationId = new mongoose.Types.ObjectId().toString();
   const deviceId = new mongoose.Types.ObjectId().toString();
@@ -278,6 +339,52 @@ test('schedule triggers can fire at sunset using weather-derived solar time', as
   assert.equal(context.triggeringScheduleEvent, 'sunset');
   assert.equal(context.triggeringScheduleOffsetMinutes, 15);
   assert.match(context.triggeringScheduleTime, /^2026-03-31T18:55:00\.000Z$/);
+});
+
+test('security alarm triggers prime matched startup state without rerunning until the state changes again', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  let alarmState = 'armedStay';
+
+  SecurityAlarm.getMainAlarm = async () => ({ alarmState });
+  automationSchedulerService.triggerStateCache.clear();
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    automationSchedulerService.triggerStateCache.clear();
+  });
+
+  const automation = {
+    _id: { toString: () => 'automation-startup-prime' },
+    enabled: true,
+    cooldown: 0,
+    trigger: {
+      type: 'security_alarm_status',
+      conditions: {
+        states: ['armedStay']
+      }
+    }
+  };
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date(), { source: 'scheduler_startup' }),
+    false
+  );
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date(), { source: 'scheduler_interval' }),
+    false
+  );
+
+  alarmState = 'disarmed';
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date(), { source: 'scheduler_interval' }),
+    false
+  );
+
+  alarmState = 'armedStay';
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date(), { source: 'scheduler_interval' }),
+    true
+  );
 });
 
 test('tick launches matching automations without waiting for long-running executions to finish', async (t) => {

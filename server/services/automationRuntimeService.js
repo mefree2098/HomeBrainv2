@@ -14,6 +14,11 @@ function sanitizeLevel(level) {
   return ['info', 'warn', 'error'].includes(level) ? level : 'info';
 }
 
+function formatInterruptionReason(reason = '') {
+  const normalized = String(reason || '').trim().replace(/[_-]+/g, ' ');
+  return normalized || 'server restart';
+}
+
 function buildExecutionPayload(context = {}, extra = {}) {
   return {
     automationId: context.automationId || null,
@@ -100,6 +105,23 @@ function buildExecutionContext({
     triggerContext: triggerContext || history?.triggerContext || {},
     totalActions: totalActions ?? history?.totalActions ?? 0
   };
+}
+
+function buildExecutionContextFromHistory(history, overrides = {}) {
+  return buildExecutionContext({
+    automation: {
+      _id: history?.automationId,
+      name: history?.automationName
+    },
+    history,
+    workflowId: overrides.workflowId || toObjectIdString(history?.workflowId),
+    workflowName: overrides.workflowName || history?.workflowName || null,
+    correlationId: overrides.correlationId || history?.correlationId || null,
+    triggerType: overrides.triggerType || history?.triggerType || null,
+    triggerSource: overrides.triggerSource || history?.triggerSource || null,
+    triggerContext: overrides.triggerContext || history?.triggerContext || {},
+    totalActions: overrides.totalActions ?? history?.totalActions ?? 0
+  });
 }
 
 async function recordTriggerMatched(context, details = {}) {
@@ -303,8 +325,56 @@ async function getRunningWorkflowExecutions(limit = 25) {
     .lean();
 }
 
+async function reconcileRunningExecutions({ reason = 'server_restart' } = {}) {
+  const running = await AutomationHistory.find({ status: 'running' });
+  if (!Array.isArray(running) || running.length === 0) {
+    return {
+      cancelledCount: 0,
+      histories: []
+    };
+  }
+
+  const interruptionReason = formatInterruptionReason(reason);
+  const message = `Automation execution cancelled after ${interruptionReason}`;
+  const histories = [];
+
+  for (const history of running) {
+    // Preserve any existing action results while closing out the stale execution.
+    if (!Array.isArray(history.actionResults)) {
+      history.actionResults = [];
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    await history.markCompleted('cancelled', new Error(message));
+
+    const context = buildExecutionContextFromHistory(history);
+    // eslint-disable-next-line no-await-in-loop
+    await recordExecutionCompleted(context, {
+      status: 'cancelled',
+      successfulActions: history.successfulActions ?? 0,
+      failedActions: history.failedActions ?? 0,
+      durationMs: history.durationMs ?? null,
+      message
+    });
+
+    histories.push({
+      historyId: toObjectIdString(history?._id),
+      automationId: toObjectIdString(history?.automationId),
+      workflowId: toObjectIdString(history?.workflowId),
+      automationName: history?.automationName || null,
+      workflowName: history?.workflowName || null
+    });
+  }
+
+  return {
+    cancelledCount: histories.length,
+    histories
+  };
+}
+
 module.exports = {
   buildExecutionContext,
+  buildExecutionContextFromHistory,
   publishAutomationEvent,
   recordTriggerMatched,
   recordExecutionStarted,
@@ -313,5 +383,6 @@ module.exports = {
   recordExecutionCompleted,
   recordSchedulerSecurityAlarmEvaluation,
   getWorkflowExecutionHistory,
-  getRunningWorkflowExecutions
+  getRunningWorkflowExecutions,
+  reconcileRunningExecutions
 };

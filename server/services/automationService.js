@@ -8,7 +8,7 @@ const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
 const deviceService = require('./deviceService');
 const mongoose = require('mongoose');
 const Settings = require('../models/Settings');
-const { executeActionSequence } = require('./workflowExecutionService');
+const { executeActionSequence, getActionTargetCandidate } = require('./workflowExecutionService');
 const automationRuntimeService = require('./automationRuntimeService');
 
 const MAX_LLM_RETRIES = 3;
@@ -2028,7 +2028,7 @@ async function executeAutomation(id, options = {}) {
             actionIndex,
             parentActionIndex,
             actionType: action?.type || 'unknown',
-            target: Object.prototype.hasOwnProperty.call(action || {}, 'target') ? action?.target : null,
+            target: getActionTargetCandidate(action, ['deviceId', 'sceneId']),
             message: `Starting ${action?.type || 'action'} action`
           });
         },
@@ -2037,7 +2037,7 @@ async function executeAutomation(id, options = {}) {
             actionIndex,
             parentActionIndex,
             actionType: action?.type || result?.actionType || 'unknown',
-            target: result?.target ?? action?.target ?? null,
+            target: result?.target ?? getActionTargetCandidate(action, ['deviceId', 'sceneId']),
             durationMs: result?.durationMs ?? null,
             message: result?.message || `Completed ${action?.type || 'action'} action`,
             startedAt,
@@ -2049,7 +2049,7 @@ async function executeAutomation(id, options = {}) {
             actionIndex,
             parentActionIndex,
             actionType: action?.type || result?.actionType || 'unknown',
-            target: result?.target ?? action?.target ?? null,
+            target: result?.target ?? getActionTargetCandidate(action, ['deviceId', 'sceneId']),
             durationMs: result?.durationMs ?? null,
             message: error?.message || `Failed ${action?.type || 'action'} action`,
             error: error?.message || 'Action failed',

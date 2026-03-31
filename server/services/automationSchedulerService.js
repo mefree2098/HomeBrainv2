@@ -272,6 +272,14 @@ class AutomationSchedulerService {
     ].includes(source);
   }
 
+  isStartupPrimeSource(runtimeContext = {}) {
+    const source = typeof runtimeContext?.source === 'string'
+      ? runtimeContext.source.trim().toLowerCase()
+      : '';
+
+    return source === 'scheduler_startup';
+  }
+
   launchAutomationExecution(automation, triggerContext = {}) {
     void automationService.executeAutomation(automation._id.toString(), {
       triggerType: automation.trigger.type,
@@ -570,7 +578,7 @@ class AutomationSchedulerService {
     }
   }
 
-  async evaluateDeviceStateTrigger(automation, now = new Date()) {
+  async evaluateDeviceStateTrigger(automation, now = new Date(), runtimeContext = {}) {
     const conditions = automation?.trigger?.conditions || {};
     const deviceId = conditions.deviceId;
     if (!deviceId) {
@@ -630,6 +638,10 @@ class AutomationSchedulerService {
       eligible,
       matchedSince
     });
+
+    if (this.isStartupPrimeSource(runtimeContext)) {
+      return false;
+    }
 
     // Run on edge transition false -> true so we don't fire repeatedly every tick.
     const shouldRun = eligible && previous.eligible !== true;
@@ -705,6 +717,24 @@ class AutomationSchedulerService {
     const lastMatchedState = this.triggerStateCache.get(cacheKey) || null;
     this.triggerStateCache.set(cacheKey, matchedState);
 
+    if (this.isStartupPrimeSource(runtimeContext)) {
+      if (this.shouldLogSecurityAlarmEvaluation(runtimeContext)) {
+        await automationRuntimeService.recordSchedulerSecurityAlarmEvaluation({
+          automationId: automation?._id?.toString?.() || null,
+          automationName: automation?.name || null,
+          workflowId: automation?.workflowId?.toString?.() || null,
+          workflowName: automation?.name || null,
+          currentState,
+          configuredStates: states,
+          matchedState,
+          previousMatchedState: lastMatchedState,
+          willRun: false,
+          reason: runtimeContext.reason || 'startup_prime'
+        });
+      }
+      return false;
+    }
+
     const shouldRun = Boolean(matchedState && lastMatchedState !== matchedState);
     if (this.shouldLogSecurityAlarmEvaluation(runtimeContext)) {
       await automationRuntimeService.recordSchedulerSecurityAlarmEvaluation({
@@ -752,7 +782,7 @@ class AutomationSchedulerService {
       return this.shouldRunScheduleTrigger(automation, now);
     }
     if (triggerType === 'device_state' || triggerType === 'sensor') {
-      return this.evaluateDeviceStateTrigger(automation, now);
+      return this.evaluateDeviceStateTrigger(automation, now, runtimeContext);
     }
     if (triggerType === 'security_alarm_status') {
       return this.evaluateSecurityAlarmTrigger(automation, runtimeContext);
