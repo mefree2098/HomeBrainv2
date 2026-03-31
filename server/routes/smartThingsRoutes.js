@@ -428,11 +428,11 @@ router.post('/scenes/:sceneId/execute', auth, async (req, res) => {
 
 // Description: Configure STHM virtual switches
 // Endpoint: POST /api/smartthings/sthm/configure
-// Request: { armAwayDeviceId?: string, armStayDeviceId?: string, disarmDeviceId?: string, dismissDeviceId?: string, locationId?: string }
+// Request: { armAwayDeviceId?: string, armStayDeviceId?: string, disarmDeviceId?: string, silenceDeviceId?: string, locationId?: string }
 // Response: { success: boolean, message: string }
 router.post('/sthm/configure', auth, async (req, res) => {
   try {
-    const { armAwayDeviceId, armStayDeviceId, disarmDeviceId, dismissDeviceId, locationId } = req.body;
+    const { armAwayDeviceId, armStayDeviceId, disarmDeviceId, silenceDeviceId, locationId } = req.body;
 
     console.log('SmartThings Routes: Configuring STHM virtual switches');
 
@@ -440,7 +440,7 @@ router.post('/sthm/configure', auth, async (req, res) => {
       armAwayDeviceId,
       armStayDeviceId,
       disarmDeviceId,
-      dismissDeviceId,
+      silenceDeviceId,
       locationId
     });
 

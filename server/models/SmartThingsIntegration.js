@@ -111,7 +111,7 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
       type: String,
       default: ''
     },
-    dismissDeviceId: {
+    silenceDeviceId: {
       type: String,
       default: ''
     },
@@ -264,7 +264,7 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
           armAwayDeviceId: '',
           armStayDeviceId: '',
           disarmDeviceId: '',
-          dismissDeviceId: '',
+          silenceDeviceId: '',
           locationId: '',
           lastArmState: '',
           lastArmStateUpdatedAt: null,
