@@ -195,6 +195,14 @@ const looksLikeSmartThingsDimmer = (device: DeviceLike) => {
   return /\bdimmer\b/.test(descriptor)
 }
 
+const hasSmartThingsLevelState = (device: DeviceLike) => {
+  const levelValue = device?.properties?.smartThingsAttributeValues?.switchLevel?.level
+  const levelMetadata = device?.properties?.smartThingsAttributeMetadata?.switchLevel?.level
+
+  return levelValue !== undefined && levelValue !== null
+    || Boolean(levelMetadata && typeof levelMetadata === "object" && Object.keys(levelMetadata).length > 0)
+}
+
 const supportsLightFade = (device: DeviceLike) => {
   if (device.type === "light") {
     return true
@@ -208,9 +216,26 @@ const supportsLightFade = (device: DeviceLike) => {
     if (device.type === "switch" && (hasSmartThingsCategory(device, "light") || looksLikeSmartThingsDimmer(device))) {
       return true
     }
+
+    if (hasSmartThingsLevelState(device)) {
+      return true
+    }
   }
 
   return Boolean(device?.properties?.supportsBrightness)
+}
+
+const getDenseDeviceNameClass = (name: string) => {
+  const length = name.trim().length
+
+  if (length >= 30) {
+    return "text-[12px]"
+  }
+  if (length >= 22) {
+    return "text-[13px]"
+  }
+
+  return "text-[15px]"
 }
 
 const supportsLightColor = (device: DeviceLike) => {
@@ -489,11 +514,16 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
   }
 
   return (
-    <Card className="rounded-[1.25rem] border-white/10 bg-white/80 shadow-sm backdrop-blur dark:bg-slate-950/28">
-      <CardContent className="space-y-2.5 p-3">
-        <div className="flex items-start gap-2">
+    <Card className="h-full rounded-[1.25rem] border-white/10 bg-white/80 shadow-sm backdrop-blur dark:bg-slate-950/28">
+      <CardContent className="flex h-full min-h-[188px] flex-col p-3">
+        <div className="mb-2 flex min-h-[3.25rem] items-start gap-2">
           <div className="min-w-0 flex-1 space-y-1">
-            <p className="line-clamp-3 text-[15px] font-semibold leading-tight text-foreground">{device.name}</p>
+            <p className={cn(
+              "min-h-[2.35rem] line-clamp-2 font-semibold leading-tight text-foreground",
+              getDenseDeviceNameClass(device.name)
+            )}>
+              {device.name}
+            </p>
             <p className="line-clamp-1 text-[11px] text-muted-foreground">{device.room || "Unassigned"}</p>
           </div>
           {supportsColor ? (
@@ -512,11 +542,11 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
         </div>
 
         {isThermostat ? (
-          <p className="text-[11px] text-muted-foreground">{getStatusLabel(device)}</p>
+          <p className="mb-2 text-[11px] text-muted-foreground">{getStatusLabel(device)}</p>
         ) : null}
 
         {energySnapshot.supportsEnergyMonitoring ? (
-          <div className="space-y-2 rounded-[0.9rem] border border-emerald-500/15 bg-emerald-500/5 p-2.5">
+          <div className="mb-2 space-y-2 rounded-[0.9rem] border border-emerald-500/15 bg-emerald-500/5 p-2.5">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Current Draw</p>
@@ -575,7 +605,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
         ) : null}
 
         {supportsFade ? (
-          <div className="space-y-1.5">
+          <div className="mb-2 space-y-1.5">
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
               <span>Fade</span>
               <span className="font-medium text-foreground">{brightness}%</span>
@@ -599,7 +629,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
           onClick={handleToggle}
           variant={device.status ? "default" : "outline"}
           size="sm"
-          className="w-full"
+          className={cn("w-full", !isThermostat && "mt-auto")}
         >
           {device.status ? (
             <>
@@ -659,7 +689,7 @@ export function DashboardDevicesWidget({ devices, size, onControl }: Props) {
         <Badge variant="secondary">Dense control grid</Badge>
       </div>
 
-      <div className={cn("grid gap-2.5", getGridClass(size))}>
+      <div className={cn("grid auto-rows-fr gap-2.5", getGridClass(size))}>
         {devices.map((device) => (
           <DeviceGridCard key={device._id} device={device} onControl={onControl} />
         ))}

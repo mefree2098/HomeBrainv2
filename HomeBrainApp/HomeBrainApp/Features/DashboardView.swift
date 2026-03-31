@@ -992,6 +992,9 @@ struct DashboardView: View {
         .onChange(of: dashboardChromeSyncToken) { _, _ in
             syncDashboardChrome()
         }
+        .onChange(of: selectedDashboardViewID) { _, _ in
+            persistSelectedDashboardViewPreference()
+        }
         .onChange(of: dashboardChrome.commandToken) { _, _ in
             handleDashboardChromeCommand()
         }
@@ -4984,14 +4987,18 @@ struct DashboardView: View {
                 HStack(alignment: .top, spacing: 8) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(device.name)
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .font(.system(size: denseDeviceTitleFontSize(for: device.name), weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
-                            .lineLimit(3)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.68)
+                            .frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
                         Text(device.room)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
+                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
 
                     Spacer(minLength: 0)
 
@@ -5105,6 +5112,10 @@ struct DashboardView: View {
                     }
                 }
 
+                if !thermostat {
+                    Spacer(minLength: 0)
+                }
+
                 if thermostat {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                         ForEach(["auto", "cool", "heat", "off"], id: \.self) { mode in
@@ -5139,6 +5150,7 @@ struct DashboardView: View {
                     .disabled(pending)
                 }
             }
+            .frame(maxWidth: .infinity, minHeight: useLandscapeCompactLayout ? 180 : 190, alignment: .topLeading)
         }
     }
 
@@ -5387,6 +5399,18 @@ struct DashboardView: View {
             isSaving: isSavingDashboard,
             canEdit: favoritesProfileId != nil
         )
+    }
+
+    private func persistSelectedDashboardViewPreference() {
+        guard !previewMode else {
+            return
+        }
+
+        guard let profileID = favoritesProfileId, !profileID.isEmpty else {
+            return
+        }
+
+        DashboardSupport.setDefaultViewID(currentDashboardView?.id, forProfileID: profileID)
     }
 
     private func handleDashboardChromeCommand() {
@@ -6128,6 +6152,18 @@ struct DashboardView: View {
         min(100, max(0, value)).rounded()
     }
 
+    private func denseDeviceTitleFontSize(for name: String) -> CGFloat {
+        let length = name.trimmingCharacters(in: .whitespacesAndNewlines).count
+        switch length {
+        case 0..<20:
+            return 14
+        case 20..<30:
+            return 13
+        default:
+            return 12
+        }
+    }
+
     private func normalizedDashboardHexColor(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
@@ -6372,6 +6408,19 @@ struct DashboardView: View {
         return descriptor.contains("dimmer")
     }
 
+    private func hasSmartThingsLevelState(_ device: DeviceItem) -> Bool {
+        let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
+        let attributeMetadata = JSON.object(device.properties["smartThingsAttributeMetadata"])
+        let levelValue = JSON.object(attributeValues["switchLevel"])["level"]
+        let levelObject = JSON.object(levelValue)
+        let levelMetadata = JSON.object(JSON.object(attributeMetadata["switchLevel"])["level"])
+
+        return levelValue is NSNumber
+            || levelValue is String
+            || !levelObject.isEmpty
+            || !levelMetadata.isEmpty
+    }
+
     private func isSmartThingsBackedDevice(_ device: DeviceItem) -> Bool {
         let source = stringValue(device.properties["source"]).lowercased()
         let hasDeviceId = !stringValue(device.properties["smartThingsDeviceId"]).isEmpty
@@ -6394,6 +6443,10 @@ struct DashboardView: View {
                 if categories.contains("light") || looksLikeSmartThingsDimmer(device) {
                     return true
                 }
+            }
+
+            if hasSmartThingsLevelState(device) {
+                return true
             }
         }
 

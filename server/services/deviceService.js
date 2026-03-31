@@ -678,6 +678,16 @@ class DeviceService {
     return /\bdimmer\b/.test(descriptor);
   }
 
+  hasSmartThingsLevelState(device) {
+    const attributeValues = device?.properties?.smartThingsAttributeValues || {};
+    const attributeMetadata = device?.properties?.smartThingsAttributeMetadata || {};
+    const levelValue = attributeValues?.switchLevel?.level;
+    const levelMetadata = attributeMetadata?.switchLevel?.level;
+
+    return levelValue !== undefined && levelValue !== null
+      || (levelMetadata && typeof levelMetadata === 'object' && Object.keys(levelMetadata).length > 0);
+  }
+
   supportsBrightnessControl(device) {
     if (!device) {
       return false;
@@ -698,6 +708,10 @@ class DeviceService {
         if (categories.has('light') || this.looksLikeSmartThingsDimmer(device)) {
           return true;
         }
+      }
+
+      if (this.hasSmartThingsLevelState(device)) {
+        return true;
       }
     }
 
@@ -1233,7 +1247,7 @@ class DeviceService {
         break;
 
       case 'setbrightness':
-        if (hasDeclaredCapabilities && !capabilities.has('switchLevel')) {
+        if (hasDeclaredCapabilities && !(capabilities.has('switchLevel') || this.hasSmartThingsLevelState(device))) {
           throw new Error('Brightness control is not supported for this SmartThings device');
         }
         await smartThingsService.setDeviceLevel(smartThingsId, commandValue);
