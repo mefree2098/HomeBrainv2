@@ -35,6 +35,7 @@ import { getDevices } from "@/api/devices";
 import { getScenes } from "@/api/scenes";
 import { interpretVoiceCommand } from "@/api/voice";
 import { useAuth } from "@/contexts/AuthContext";
+import { cn } from "@/lib/utils";
 
 type DeviceLite = {
   _id: string;
@@ -679,7 +680,13 @@ export function Workflows() {
 
       <div className="space-y-4">
         {workflows.map((workflow) => (
-          <Card key={workflow._id}>
+          <Card
+            key={workflow._id}
+            className={cn(
+              "transition-all duration-200",
+              workflow.enabled && "border-cyan-300/35 shadow-[0_0_0_1px_rgba(103,232,249,0.18),0_20px_48px_rgba(34,211,238,0.08)]"
+            )}
+          >
             <CardHeader>
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -687,10 +694,23 @@ export function Workflows() {
                   <CardDescription>{workflow.description || "No description provided."}</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant={workflow.enabled ? "secondary" : "outline"}>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "min-w-[112px] justify-center",
+                      workflow.enabled
+                        ? "border-cyan-300/80 bg-cyan-400 text-slate-950 shadow-[0_10px_30px_rgba(34,211,238,0.24)]"
+                        : "border-white/15 bg-transparent text-muted-foreground"
+                    )}
+                  >
                     {workflow.enabled ? "Enabled" : "Disabled"}
                   </Badge>
                   <Switch
+                    className={cn(
+                      workflow.enabled
+                        ? "border-cyan-300/80 data-[state=checked]:bg-cyan-400 shadow-[0_10px_24px_rgba(34,211,238,0.2)]"
+                        : "border-white/20"
+                    )}
                     checked={workflow.enabled}
                     disabled={!isAdmin}
                     onCheckedChange={(value) => void handleToggleWorkflow(workflow, value)}
