@@ -133,6 +133,75 @@ cleanup_orphaned_homebrain_processes() {
   sudo kill -9 "${stale_pids[@]}" 2>/dev/null || true
 }
 
+homebrain_service_unit_exists() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -qx "${SERVICE_NAME}.service"
+}
+
+get_homebrain_service_state() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  sudo systemctl show -p ActiveState --value "${SERVICE_NAME}" 2>/dev/null || true
+}
+
+stop_homebrain_service() {
+  local reason="${1:-Stopping HomeBrain...}"
+  local wait_seconds="${2:-15}"
+  local elapsed=0
+  local state=""
+
+  cleanup_orphaned_homebrain_processes
+
+  if ! homebrain_service_unit_exists; then
+    return 0
+  fi
+
+  state="$(get_homebrain_service_state)"
+  if [[ -z "${state}" || "${state}" == "inactive" || "${state}" == "failed" ]]; then
+    print_success "HomeBrain service is already stopped."
+    return 0
+  fi
+
+  print_status "${reason} (waiting up to ${wait_seconds}s)..."
+  sudo systemctl stop "${SERVICE_NAME}" --no-block || true
+
+  while true; do
+    state="$(get_homebrain_service_state)"
+
+    if [[ -z "${state}" || "${state}" == "inactive" || "${state}" == "failed" ]]; then
+      break
+    fi
+
+    if (( elapsed >= wait_seconds )); then
+      print_warning "HomeBrain service is still ${state} after ${wait_seconds}s. Forcing it down."
+      sudo systemctl kill --kill-who=all --signal=SIGKILL "${SERVICE_NAME}" 2>/dev/null || true
+      sudo systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+      break
+    fi
+
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  cleanup_orphaned_homebrain_processes
+
+  state="$(get_homebrain_service_state)"
+  if [[ -z "${state}" || "${state}" == "inactive" || "${state}" == "failed" ]]; then
+    print_success "HomeBrain service stopped."
+    return 0
+  fi
+
+  print_warning "HomeBrain service state after stop attempt: ${state}"
+  return 0
+}
+
 print_port_listener_summary() {
   sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
 }
@@ -181,6 +250,8 @@ Environment=NODE_ENV=production
 ExecStart=${node_bin} scripts/run-with-modern-node.js npm start
 Restart=always
 RestartSec=5
+TimeoutStopSec=15s
+KillMode=mixed
 NoNewPrivileges=true
 
 [Install]
@@ -200,15 +271,13 @@ start_services() {
 }
 
 stop_services() {
-  print_status "Stopping HomeBrain..."
-  sudo systemctl stop "${SERVICE_NAME}"
-  cleanup_orphaned_homebrain_processes
-  print_success "HomeBrain stopped."
+  stop_homebrain_service "Stopping HomeBrain"
 }
 
 restart_services() {
   print_status "Restarting HomeBrain..."
-  sudo systemctl restart "${SERVICE_NAME}"
+  stop_homebrain_service "Stopping HomeBrain before restart"
+  sudo systemctl start "${SERVICE_NAME}"
   print_success "HomeBrain restarted."
 }
 
@@ -382,9 +451,9 @@ update_homebrain() {
     exit 1
   fi
 
-  print_status "Updating HomeBrain from Git..."
-  sudo systemctl stop "${SERVICE_NAME}" || true
-  cleanup_orphaned_homebrain_processes
+  print_status "Preparing HomeBrain for update..."
+  stop_homebrain_service "Stopping HomeBrain service before Git update"
+  print_status "Pulling latest HomeBrain code from Git..."
   sudo -u "$HOMEBRAIN_USER" git -C "${HOMEBRAIN_DIR}" pull --ff-only
 
   print_status "Installing dependencies..."
