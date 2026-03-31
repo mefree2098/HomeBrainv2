@@ -482,15 +482,21 @@ class SecurityAlarmService {
   async isSmartThingsConfiguredForSthm(options = {}) {
     try {
       const requireAllMappings = options.requireAllMappings !== false;
+      const mappingKeys = {
+        disarm: 'disarmDeviceId',
+        armStay: 'armStayDeviceId',
+        armAway: 'armAwayDeviceId',
+        dismiss: 'dismissDeviceId'
+      };
+      const requestedMappings = Array.isArray(options.requiredMappings)
+        ? options.requiredMappings
+          .map((mapping) => (typeof mapping === 'string' ? mapping.trim() : ''))
+          .filter((mapping) => mappingKeys[mapping])
+        : null;
       const integration = await SmartThingsIntegration.getIntegration();
       const settings = await Settings.getSettings();
-      const hasSthmMapping = requireAllMappings
-        ? Boolean(
-          integration?.sthm?.disarmDeviceId &&
-          integration?.sthm?.armStayDeviceId &&
-          integration?.sthm?.armAwayDeviceId
-        )
-        : Boolean(integration?.sthm?.disarmDeviceId);
+      const requiredMappings = requestedMappings || (requireAllMappings ? ['disarm', 'armStay', 'armAway'] : ['disarm']);
+      const hasSthmMapping = requiredMappings.every((mapping) => Boolean(integration?.sthm?.[mappingKeys[mapping]]));
 
       if (!hasSthmMapping) {
         return false;
@@ -588,17 +594,32 @@ class SecurityAlarmService {
 
   async clearTriggeredSmartThingsAlarm() {
     const result = {
+      disarmedInSmartThings: false,
       dismissedInSmartThings: false,
       silencedOutputs: [],
       failedOutputs: []
     };
 
-    const canDismissInSmartThings = await this.isSmartThingsConfiguredForSthm({ requireAllMappings: false });
-    if (canDismissInSmartThings) {
+    const canDisarmInSmartThings = await this.isSmartThingsConfiguredForSthm({ requireAllMappings: false });
+    if (canDisarmInSmartThings) {
       try {
         await smartThingsService.setSecurityArmState('Disarmed');
+        result.disarmedInSmartThings = true;
+        console.log('SecurityAlarmService: SmartThings disarm command sent successfully');
+      } catch (smartThingsError) {
+        console.warn(
+          'SecurityAlarmService: SmartThings disarm command failed, continuing with local dismiss:',
+          smartThingsError.message
+        );
+      }
+    }
+
+    const canDismissInSmartThings = await this.isSmartThingsConfiguredForSthm({ requiredMappings: ['dismiss'] });
+    if (canDismissInSmartThings) {
+      try {
+        await smartThingsService.dismissSthmAlert();
         result.dismissedInSmartThings = true;
-        console.log('SecurityAlarmService: SmartThings dismiss/disarm command sent successfully');
+        console.log('SecurityAlarmService: SmartThings dismiss command sent successfully');
       } catch (smartThingsError) {
         console.warn(
           'SecurityAlarmService: SmartThings dismiss command failed, continuing with local dismiss:',

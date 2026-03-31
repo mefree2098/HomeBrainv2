@@ -1647,9 +1647,28 @@ class SmartThingsService {
     await integration.save();
   }
 
-  async getSthmVirtualSwitchConfig({ requireAll = true } = {}) {
+  async getSthmVirtualSwitchConfig(options = {}) {
     const integration = await SmartThingsIntegration.getIntegration();
     const rawConfig = integration?.sthm || {};
+    const requireAll = options.requireAll !== false;
+    const supportedMappings = {
+      disarm: {
+        key: 'disarmDeviceId',
+        label: 'Disarm'
+      },
+      armStay: {
+        key: 'armStayDeviceId',
+        label: 'Arm Stay'
+      },
+      armAway: {
+        key: 'armAwayDeviceId',
+        label: 'Arm Away'
+      },
+      dismiss: {
+        key: 'dismissDeviceId',
+        label: 'Dismiss'
+      }
+    };
 
     const sanitize = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -1657,24 +1676,25 @@ class SmartThingsService {
       armAwayDeviceId: sanitize(rawConfig.armAwayDeviceId),
       armStayDeviceId: sanitize(rawConfig.armStayDeviceId),
       disarmDeviceId: sanitize(rawConfig.disarmDeviceId),
+      dismissDeviceId: sanitize(rawConfig.dismissDeviceId),
       locationId: sanitize(rawConfig.locationId),
       lastArmState: sanitize(rawConfig.lastArmState)
     };
 
-    if (requireAll) {
-      const missing = [];
-      if (!config.disarmDeviceId) {
-        missing.push('Disarm');
-      }
-      if (!config.armStayDeviceId) {
-        missing.push('Arm Stay');
-      }
-      if (!config.armAwayDeviceId) {
-        missing.push('Arm Away');
-      }
+    const requestedMappings = Array.isArray(options.requiredMappings)
+      ? options.requiredMappings
+        .map((mapping) => (typeof mapping === 'string' ? mapping.trim() : ''))
+        .filter((mapping) => supportedMappings[mapping])
+      : null;
+    const requiredMappings = requestedMappings || (requireAll ? ['disarm', 'armStay', 'armAway'] : []);
 
+    if (requiredMappings.length > 0) {
+      const missing = requiredMappings
+        .filter((mapping) => !config[supportedMappings[mapping].key])
+        .map((mapping) => supportedMappings[mapping].label);
       if (missing.length > 0) {
-        const error = new Error(`SmartThings STHM virtual switches are not fully configured. Missing: ${missing.join(', ')}. Please assign the devices named "STHM Disarm", "STHM Arm Stay", and "STHM Arm Away" in integration settings.`);
+        const requiredSwitchNames = requiredMappings.map((mapping) => `"STHM ${supportedMappings[mapping].label}"`);
+        const error = new Error(`SmartThings STHM virtual switches are not fully configured. Missing: ${missing.join(', ')}. Please assign ${requiredSwitchNames.join(', ')} in integration settings.`);
         error.code = 'SMARTTHINGS_STHM_UNCONFIGURED';
         error.status = 400;
         throw error;
@@ -1817,6 +1837,7 @@ class SmartThingsService {
       armAwayDeviceId: '',
       armStayDeviceId: '',
       disarmDeviceId: '',
+      dismissDeviceId: '',
       locationId: '',
       lastArmState: ''
     };
@@ -1827,6 +1848,14 @@ class SmartThingsService {
     const switchStatuses = {
       disarm: {
         label: 'Disarm',
+        deviceId: '',
+        mapped: false,
+        deviceLabel: '',
+        switchState: 'unknown',
+        error: ''
+      },
+      dismiss: {
+        label: 'Dismiss',
         deviceId: '',
         mapped: false,
         deviceLabel: '',
@@ -1881,6 +1910,7 @@ class SmartThingsService {
 
       const switchEntries = [
         { key: 'disarm', label: 'Disarm', armState: 'Disarmed', deviceId: config.disarmDeviceId },
+        { key: 'dismiss', label: 'Dismiss', armState: null, deviceId: config.dismissDeviceId },
         { key: 'armStay', label: 'Arm Stay', armState: 'ArmedStay', deviceId: config.armStayDeviceId },
         { key: 'armAway', label: 'Arm Away', armState: 'ArmedAway', deviceId: config.armAwayDeviceId }
       ];
@@ -1978,6 +2008,7 @@ class SmartThingsService {
         isConfigured: Boolean(integration?.isConfigured),
         isConnected: Boolean(integration?.isConnected),
         hasFullMapping: Boolean(config.disarmDeviceId && config.armStayDeviceId && config.armAwayDeviceId),
+        hasDismissMapping: Boolean(config.dismissDeviceId),
         locationId: config.locationId || null
       },
       auth: {
@@ -2377,6 +2408,51 @@ class SmartThingsService {
     }
   }
 
+  async dismissSthmAlert() {
+    let integration = null;
+    let targetDeviceId = '';
+
+    try {
+      const resolved = await this.getSthmVirtualSwitchConfig({
+        requireAll: false,
+        requiredMappings: ['dismiss']
+      });
+      integration = resolved.integration;
+      targetDeviceId = resolved.config.dismissDeviceId;
+
+      console.log(`SmartThingsService: Triggering STHM dismiss switch ${targetDeviceId}`);
+      await this.pulseVirtualSwitch(targetDeviceId, { ensureReset: true, delayMs: 300 });
+
+      await this.updateSthmCommandLog({
+        integration,
+        requestedState: 'DismissAlert',
+        result: 'success',
+        deviceId: targetDeviceId,
+        errorMessage: ''
+      });
+
+      return {
+        dismissed: true,
+        triggeredDeviceId: targetDeviceId,
+        via: 'virtualSwitch'
+      };
+    } catch (error) {
+      try {
+        await this.updateSthmCommandLog({
+          integration,
+          requestedState: 'DismissAlert',
+          result: 'failed',
+          deviceId: targetDeviceId,
+          errorMessage: error.message
+        });
+      } catch (logError) {
+        console.warn(`SmartThingsService: Failed to record STHM dismiss error telemetry: ${logError.message}`);
+      }
+
+      throw error;
+    }
+  }
+
   async silenceAlarmDevice(deviceId, options = {}) {
     const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
     if (!normalizedDeviceId) {
@@ -2646,14 +2722,21 @@ class SmartThingsService {
       }
 
       const sanitize = (value) => (typeof value === 'string' ? value.trim() : '');
+      const hasOwnValue = (key) => Object.prototype.hasOwnProperty.call(sthm || {}, key);
+      const pickConfiguredValue = (key) => sanitize(
+        hasOwnValue(key)
+          ? sthm[key]
+          : integration.sthm?.[key] || ''
+      );
 
-      const nextArmAwayId = sanitize(sthm.armAwayDeviceId || integration.sthm?.armAwayDeviceId || '');
-      const nextArmStayId = sanitize(sthm.armStayDeviceId || integration.sthm?.armStayDeviceId || '');
-      const nextDisarmId = sanitize(sthm.disarmDeviceId || integration.sthm?.disarmDeviceId || '');
+      const nextArmAwayId = pickConfiguredValue('armAwayDeviceId');
+      const nextArmStayId = pickConfiguredValue('armStayDeviceId');
+      const nextDisarmId = pickConfiguredValue('disarmDeviceId');
+      const nextDismissId = pickConfiguredValue('dismissDeviceId');
 
-      let nextLocationId = sanitize(sthm.locationId || integration.sthm?.locationId || '');
+      let nextLocationId = pickConfiguredValue('locationId');
       if (!nextLocationId) {
-        const probeDeviceId = nextDisarmId || nextArmStayId || nextArmAwayId;
+        const probeDeviceId = nextDisarmId || nextArmStayId || nextArmAwayId || nextDismissId;
         if (probeDeviceId) {
           try {
             const deviceDetails = await this.getDevice(probeDeviceId);
@@ -2674,6 +2757,7 @@ class SmartThingsService {
         armAwayDeviceId: nextArmAwayId,
         armStayDeviceId: nextArmStayId,
         disarmDeviceId: nextDisarmId,
+        dismissDeviceId: nextDismissId,
         locationId: nextLocationId
       };
 

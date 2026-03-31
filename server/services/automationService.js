@@ -1691,7 +1691,7 @@ async function getExecutionStats(dateRange = null) {
   }
 }
 
-module.exports = {
+Object.assign(module.exports, {
   getAllAutomations,
   getAutomationById,
   createAutomation,
@@ -1703,4 +1703,4 @@ module.exports = {
   executeAutomation,
   getAutomationHistory,
   getExecutionStats
-};
+});
