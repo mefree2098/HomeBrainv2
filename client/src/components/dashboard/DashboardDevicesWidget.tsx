@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
-import { Input } from "@/components/ui/input"
 import { Slider } from "@/components/ui/slider"
 import { cn } from "@/lib/utils"
 
@@ -492,9 +491,24 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
   return (
     <Card className="rounded-[1.25rem] border-white/10 bg-white/80 shadow-sm backdrop-blur dark:bg-slate-950/28">
       <CardContent className="space-y-2.5 p-3">
-        <div className="space-y-1">
-          <p className="line-clamp-3 text-[15px] font-semibold leading-tight text-foreground">{device.name}</p>
-          <p className="line-clamp-1 text-[11px] text-muted-foreground">{device.room || "Unassigned"}</p>
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="line-clamp-3 text-[15px] font-semibold leading-tight text-foreground">{device.name}</p>
+            <p className="line-clamp-1 text-[11px] text-muted-foreground">{device.room || "Unassigned"}</p>
+          </div>
+          {supportsColor ? (
+            <input
+              type="color"
+              value={color}
+              aria-label={`Set color for ${device.name}`}
+              onChange={(event) => {
+                const nextColor = normalizeHexColor(event.target.value)
+                setColor(nextColor)
+                onControl(device._id, "set_color", nextColor)
+              }}
+              className="mt-0.5 h-8 w-8 shrink-0 cursor-pointer appearance-none rounded-full border-0 bg-transparent p-0 shadow-none outline-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border-0"
+            />
+          ) : null}
         </div>
 
         {isThermostat ? (
@@ -578,33 +592,6 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
               step={1}
               className="w-full"
             />
-          </div>
-        ) : null}
-
-        {supportsColor ? (
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span>Color</span>
-              <span className="font-mono text-[10px] uppercase text-foreground/80">{color}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Input
-                type="color"
-                value={color}
-                onChange={(event) => {
-                  setColor(normalizeHexColor(event.target.value))
-                }}
-                className="h-8 w-11 cursor-pointer p-1"
-              />
-              <Button
-                onClick={() => onControl(device._id, "set_color", color)}
-                variant="outline"
-                size="sm"
-                className="flex-1"
-              >
-                Apply Color
-              </Button>
-            </div>
           </div>
         ) : null}
 

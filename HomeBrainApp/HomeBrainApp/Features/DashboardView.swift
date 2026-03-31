@@ -4981,15 +4981,28 @@ struct DashboardView: View {
 
         return HBPanel {
             VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(device.name)
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
-                        .lineLimit(3)
-                    Text(device.room)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(HBPalette.textSecondary)
-                        .lineLimit(1)
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(device.name)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .lineLimit(3)
+                        Text(device.room)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if supportsLightColor(device) {
+                        ColorPicker("", selection: dashboardColorBinding(for: device), supportsOpacity: false)
+                            .labelsHidden()
+                            .scaleEffect(0.82)
+                            .frame(width: 24, height: 24)
+                            .padding(.top, 1)
+                            .disabled(pending)
+                    }
                 }
 
                 if let statusText {
@@ -5089,45 +5102,6 @@ struct DashboardView: View {
                         )
                         .tint(HBPalette.accentBlue)
                         .disabled(pending)
-                    }
-                }
-
-                if supportsLightColor(device) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(alignment: .center) {
-                            Text("Color")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundStyle(HBPalette.textSecondary)
-                            Spacer()
-                            Text(currentDashboardLightColor(for: device).uppercased())
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(HBPalette.textPrimary)
-                        }
-
-                        HStack(spacing: 8) {
-                            ColorPicker("", selection: dashboardColorBinding(for: device), supportsOpacity: false)
-                                .labelsHidden()
-                                .frame(width: 40, height: 30)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
-                                .disabled(pending)
-
-                            Button {
-                                Task {
-                                    await handleDeviceControl(
-                                        deviceId: device.id,
-                                        action: "set_color",
-                                        value: currentDashboardLightColor(for: device)
-                                    )
-                                }
-                            } label: {
-                                Text("Apply Color")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                            .disabled(pending)
-                        }
                     }
                 }
 
@@ -6186,7 +6160,19 @@ struct DashboardView: View {
             dashboardColor(from: currentDashboardLightColor(for: device))
         } set: { newColor in
             if let hex = dashboardHexColor(from: newColor) {
-                dashboardLightColorDrafts[device.id] = hex.lowercased()
+                let normalized = hex.lowercased()
+                let current = currentDashboardLightColor(for: device)
+                dashboardLightColorDrafts[device.id] = normalized
+                guard normalized != current else {
+                    return
+                }
+                Task {
+                    await handleDeviceControl(
+                        deviceId: device.id,
+                        action: "set_color",
+                        value: normalized
+                    )
+                }
             }
         }
     }
