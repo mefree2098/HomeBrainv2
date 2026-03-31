@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const { executeActionSequence } = require('../services/workflowExecutionService');
 const Device = require('../models/Device');
 const insteonService = require('../services/insteonService');
+const Automation = require('../models/Automation');
 
 test('condition edge=change executes onFalseActions when condition transitions to false', async () => {
   const stateKey = `test-condition-false-${Date.now()}`;
@@ -257,6 +258,55 @@ test('device_control action can target the triggering device from execution cont
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].success, true);
   assert.match(result.actionResults[0].message, /Laundry Room Fan/);
+});
+
+test('device_control action resolves direct targets from mongoose action subdocuments', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalTurnOff = insteonService.turnOff;
+  let receivedTarget = null;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Theater Bathroom Fan',
+      type: 'switch',
+      properties: {
+        source: 'insteon'
+      }
+    })
+  });
+
+  insteonService.turnOff = async (target) => {
+    receivedTarget = target;
+  };
+
+  const automation = new Automation({
+    name: 'Theater Bathroom Fan Auto Off',
+    trigger: {
+      type: 'manual',
+      conditions: {}
+    },
+    actions: [
+      {
+        type: 'device_control',
+        target: deviceId,
+        parameters: { action: 'turn_off' }
+      }
+    ]
+  });
+
+  const result = await executeActionSequence(automation.actions, { context: {} });
+
+  assert.equal(receivedTarget, deviceId);
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, true);
+  assert.equal(result.actionResults[0].target, deviceId);
 });
 
 test('condition expressions can read nested SmartThings property paths', async (t) => {

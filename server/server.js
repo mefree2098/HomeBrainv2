@@ -55,6 +55,7 @@ const ecobeeService = require("./services/ecobeeService");
 const axiomIngressSyncService = require("./services/axiomIngressSyncService");
 const { shutdownCodexCliService } = require("./services/codexCliService");
 const automationSchedulerService = require("./services/automationSchedulerService");
+const automationRuntimeService = require("./services/automationRuntimeService");
 const { connectDB } = require("./config/database");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
 const cors = require("cors");
@@ -388,6 +389,15 @@ async function initializeDiscoveryService() {
 }
 
 void initializeDiscoveryService();
+automationRuntimeService.reconcileRunningExecutions({ reason: 'server_startup' })
+  .then((result) => {
+    if (result?.cancelledCount > 0) {
+      console.warn(`Automation runtime reconciliation cancelled ${result.cancelledCount} stale execution(s) on startup`);
+    }
+  })
+  .catch((error) => {
+    console.warn(`Automation runtime startup reconciliation failed: ${error.message}`);
+  });
 automationSchedulerService.start();
 
 // Initialize Remote Update Service
@@ -454,6 +464,15 @@ async function gracefulShutdown(signal) {
     automationSchedulerService.stop();
   } catch (error) {
     console.error('Error stopping automation scheduler service:', error.message);
+  }
+
+  try {
+    const reconciliation = await automationRuntimeService.reconcileRunningExecutions({ reason: 'server_shutdown' });
+    if (reconciliation?.cancelledCount > 0) {
+      console.warn(`Automation runtime reconciliation cancelled ${reconciliation.cancelledCount} execution(s) during shutdown`);
+    }
+  } catch (error) {
+    console.error('Error reconciling automation runtime executions during shutdown:', error.message);
   }
 
   try {

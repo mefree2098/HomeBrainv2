@@ -389,7 +389,36 @@ function resolveValueReference(rawValue, context = {}) {
   return parseScalar(rawValue);
 }
 
+function getActionTargetCandidate(action, fallbackKeys = []) {
+  if (!action || typeof action !== 'object') {
+    return null;
+  }
+
+  const candidates = [
+    action.target,
+    ...fallbackKeys.map((key) => action?.[key])
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) {
+      continue;
+    }
+
+    if (typeof candidate === 'string' && !candidate.trim()) {
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return null;
+}
+
 function resolveActionTargetReference(rawTarget, context = {}) {
+  if (rawTarget === undefined || rawTarget === null) {
+    return null;
+  }
+
   const resolved = resolveValueReference(rawTarget, context);
   if (resolved == null) {
     return null;
@@ -490,7 +519,7 @@ async function resolveWorkflowReference(parameters = {}, options = {}) {
 
 async function executeDeviceControl(action, context = {}) {
   const target = resolveActionTargetReference(
-    Object.prototype.hasOwnProperty.call(action || {}, 'target') ? action?.target : action?.deviceId,
+    getActionTargetCandidate(action, ['deviceId']),
     context
   );
   if (!target) {
@@ -537,7 +566,7 @@ async function executeDeviceControl(action, context = {}) {
 
 async function executeSceneActivate(action, context = {}) {
   const sceneId = resolveActionTargetReference(
-    Object.prototype.hasOwnProperty.call(action || {}, 'target') ? action?.target : action?.sceneId,
+    getActionTargetCandidate(action, ['sceneId']),
     context
   );
   if (!sceneId) {
@@ -1409,5 +1438,6 @@ async function executeActionSequence(actions = [], options = {}) {
 }
 
 module.exports = {
-  executeActionSequence
+  executeActionSequence,
+  getActionTargetCandidate
 };
