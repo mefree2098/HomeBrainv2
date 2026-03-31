@@ -3,7 +3,7 @@ import api from "./api";
 const getApiErrorMessage = (error: any) =>
   error?.response?.data?.message || error?.response?.data?.error || error?.message || "Request failed";
 
-export type WorkflowTriggerType = "manual" | "time" | "schedule" | "device_state" | "sensor";
+export type WorkflowTriggerType = "manual" | "time" | "schedule" | "device_state" | "sensor" | "security_alarm_status";
 export type WorkflowActionType =
   | "device_control"
   | "scene_activate"
