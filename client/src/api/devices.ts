@@ -8,6 +8,21 @@ type DeviceFilters = {
   source?: string;
 }
 
+export type DeviceEnergySample = {
+  recordedAt: string;
+  source: string;
+  power: {
+    value: number;
+    unit: string;
+    timestamp: string;
+  } | null;
+  energy: {
+    value: number;
+    unit: string;
+    timestamp: string;
+  } | null;
+}
+
 // Description: Get all smart home devices
 // Endpoint: GET /api/devices
 // Request: {}
@@ -83,6 +98,37 @@ export const getDeviceById = async (deviceId: string) => {
     return response.data.data;
   } catch (error) {
     console.error('Error fetching device by ID:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+// Description: Get recent device energy history
+// Endpoint: GET /api/devices/:id/energy-history
+// Request: { hours?: number, limit?: number }
+// Response: { success: boolean, data: { deviceId: string, hours: number, count: number, samples: Array<DeviceEnergySample> } }
+export const getDeviceEnergyHistory = async (
+  deviceId: string,
+  options: { hours?: number; limit?: number } = {}
+) => {
+  try {
+    console.log('Fetching device energy history from API:', deviceId, options);
+    const params = new URLSearchParams();
+    if (options.hours !== undefined) params.append('hours', String(options.hours));
+    if (options.limit !== undefined) params.append('limit', String(options.limit));
+    const queryString = params.toString();
+    const url = queryString
+      ? `/api/devices/${deviceId}/energy-history?${queryString}`
+      : `/api/devices/${deviceId}/energy-history`;
+    const response = await api.get(url);
+    console.log('Successfully fetched device energy history from API');
+    return response.data.data as {
+      deviceId: string;
+      hours: number;
+      count: number;
+      samples: DeviceEnergySample[];
+    };
+  } catch (error) {
+    console.error('Error fetching device energy history:', error);
     throw new Error(error?.response?.data?.error || error.message);
   }
 }

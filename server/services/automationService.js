@@ -297,6 +297,21 @@ function getSmartThingsWorkflowPropertyHints(device) {
   return hints;
 }
 
+function getSmartThingsEnergyMonitoringHints(device) {
+  const hints = [];
+  const attributeRoot = device?.properties?.smartThingsAttributeValues || {};
+
+  if (Object.prototype.hasOwnProperty.call(attributeRoot?.powerMeter || {}, 'power')) {
+    hints.push('power level via smartThingsAttributeValues.powerMeter.power');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(attributeRoot?.energyMeter || {}, 'energy')) {
+    hints.push('energy total via smartThingsAttributeValues.energyMeter.energy');
+  }
+
+  return hints;
+}
+
 /**
  * Get all automations
  */
@@ -1069,7 +1084,8 @@ async function buildDeviceContext() {
         activityId: device?.properties?.harmonyActivityId || null,
         activityLabel: device?.properties?.harmonyActivityLabel || null,
         capabilities: [],
-        workflowProperties: getSmartThingsWorkflowPropertyHints(device)
+        workflowProperties: getSmartThingsWorkflowPropertyHints(device),
+        energyMonitoringHints: getSmartThingsEnergyMonitoringHints(device)
       };
 
       if (source === 'harmony') {
@@ -1749,6 +1765,7 @@ IMPORTANT RULES:
 15. When the request refers to sunrise or sunset, use trigger type "schedule" with conditions like {"event":"sunrise","offset":0} or {"event":"sunset","offset":0}. Offsets are in minutes and may be negative or positive.
 16. For numeric SmartThings triggers such as power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path (for example "smartThingsAttributeValues.powerMeter.power") with an explicit operator and numeric value.
 17. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
+18. When the request says "greater than", "above", "over", or "more than", use operator "gt". When it says "less than", "below", or "under", use operator "lt". For energy-monitoring devices, prefer threshold operators over exact numeric equality unless the user explicitly asks for an exact value.
 
 AVAILABLE DEVICES:
 ${deviceList}
@@ -1770,6 +1787,7 @@ REQUIRED JSON STRUCTURE:
           // For time: {"hour": 7, "minute": 0, "days": ["monday", "tuesday", ...]}
           // For schedule: {"cron": "0 7 * * 1-5"} or {"event": "sunrise", "offset": 0}
           // For device_state: {"deviceId": "ID", "property": "status" or "smartThingsAttributeValues.powerMeter.power", "operator": "eq"/"gt"/"lt"/..., "value": true or 25, "state": "on" or "off" (optional legacy alias), "forSeconds": 600 (optional)}
+          // Prefer gt/lt for power or energy level thresholds instead of exact equality.
           // For sensor: {"sensorType": "<sensor_type>", "deviceId": "ID", "condition": "<condition>", "value": 25}
           // For security_alarm_status: {"states": ["armedStay", "armedAway"]}
           //   sensor_type options: motion, temperature, humidity
@@ -1812,7 +1830,9 @@ TRIGGER TYPE EXAMPLES:
 - "when temperature above 75" -> type: "sensor", conditions: {"sensorType": "temperature", "condition": "above", "value": 75}
 - "when front door unlocked" -> type: "device_state", conditions: {"state": "off"}
 - "when dryer power goes above 25 watts" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "gt", "value": 25}
+- "when dryer energy level is greater than 25 watts" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "gt", "value": 25}
 - "when dryer power stays below 5 watts for 10 minutes" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "lt", "value": 5, "forSeconds": 600}
+- "when dryer energy level stays less than 5 watts for 10 minutes" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "lt", "value": 5, "forSeconds": 600}
 - "when the security alarm is armed stay or armed away" -> type: "security_alarm_status", conditions: {"states": ["armedStay", "armedAway"]}
 - "at sunset" -> type: "schedule", conditions: {"event": "sunset", "offset": 0}
 - "30 minutes before sunrise" -> type: "schedule", conditions: {"event": "sunrise", "offset": -30}
@@ -1842,10 +1862,13 @@ function formatDeviceList(devicesByRoom = {}) {
       const harmonyDetails = source === 'harmony'
         ? `, Hub: ${device.hubIp || 'unknown'}, Activity: ${device.activityLabel || device.activityId || 'unknown'}`
         : '';
+      const energyMonitoring = Array.isArray(device.energyMonitoringHints) && device.energyMonitoringHints.length > 0
+        ? `, Energy monitoring: ${device.energyMonitoringHints.join(', ')}`
+        : '';
       const workflowProperties = Array.isArray(device.workflowProperties) && device.workflowProperties.length > 0
         ? `, Trigger properties: ${device.workflowProperties.slice(0, 10).join(', ')}`
         : '';
-      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Source: ${source}, Actions: ${actions}${harmonyDetails}${workflowProperties})`;
+      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Source: ${source}, Actions: ${actions}${harmonyDetails}${energyMonitoring}${workflowProperties})`;
     }).join('\n');
 
     return `Room: ${room}\n${deviceLines}`;

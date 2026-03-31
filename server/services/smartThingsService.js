@@ -2,6 +2,7 @@ const axios = require('axios');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
 const Device = require('../models/Device');
+const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 const SHOULD_LOG_SMARTTHINGS_SYNC = process.env.SMARTTHINGS_SYNC_LOGGING === 'true';
@@ -1156,6 +1157,11 @@ class SmartThingsService {
             const ids = Array.from(updatedDeviceIds);
             if (ids.length > 0) {
               const refreshedDevices = await Device.find({ _id: { $in: ids } }).lean();
+              try {
+                await deviceEnergySampleService.recordSamplesForDevices(refreshedDevices);
+              } catch (sampleError) {
+                console.warn('SmartThingsService: Failed to persist SmartThings energy samples:', sampleError.message);
+              }
               const payload = deviceUpdateEmitter.normalizeDevices(refreshedDevices);
               if (payload.length > 0) {
                 deviceUpdateEmitter.emit('devices:update', payload);

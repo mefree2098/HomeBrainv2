@@ -114,6 +114,29 @@ test('normalizeDashboardViews preserves valid favorite device card size override
   });
 });
 
+test('normalizeDashboardViews preserves normalized multi-device widget selections', () => {
+  const [view] = normalizeDashboardViews([
+    {
+      name: 'Wall Panel',
+      widgets: [
+        {
+          id: 'dense-devices',
+          type: 'devices',
+          title: 'Dense Controls',
+          size: 'full',
+          settings: {
+            deviceIds: ['device-1', ' device-2 ', '', 'device-1', 'device-3']
+          }
+        }
+      ]
+    }
+  ]);
+
+  assert.deepEqual(view.widgets[0].settings, {
+    deviceIds: ['device-1', 'device-2', 'device-3']
+  });
+});
+
 test('normalizeDashboardViews preserves valid weather settings and falls back from invalid custom payloads', () => {
   const [view] = normalizeDashboardViews([
     {

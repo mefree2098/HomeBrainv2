@@ -6,6 +6,7 @@ export type DashboardWidgetType =
   | "favorite-devices"
   | "weather"
   | "voice-command"
+  | "devices"
   | "device"
 
 export type DashboardWidgetSize = "small" | "medium" | "large" | "full"
@@ -14,6 +15,7 @@ export type DashboardWeatherLocationMode = "saved" | "custom" | "auto"
 
 export interface DashboardWidgetSettings {
   deviceId?: string
+  deviceIds?: string[]
   favoriteDeviceSizes?: Record<string, DashboardFavoriteDeviceCardSize>
   weatherLocationMode?: DashboardWeatherLocationMode
   weatherLocationQuery?: string
@@ -42,6 +44,7 @@ export const DASHBOARD_WIDGET_TYPES: DashboardWidgetType[] = [
   "favorite-devices",
   "weather",
   "voice-command",
+  "devices",
   "device"
 ]
 
@@ -85,6 +88,22 @@ const normalizeSettings = (type: DashboardWidgetType, settings: unknown): Dashbo
     }
 
     return { deviceId }
+  }
+
+  if (type === "devices") {
+    const deviceIds = Array.isArray((settings as DashboardWidgetSettings | undefined)?.deviceIds)
+      ? Array.from(new Set(
+          ((settings as DashboardWidgetSettings).deviceIds || [])
+            .map((deviceId) => typeof deviceId === "string" ? deviceId.trim() : "")
+            .filter(Boolean)
+        ))
+      : []
+
+    if (deviceIds.length === 0) {
+      return null
+    }
+
+    return { deviceIds }
   }
 
   if (type === "favorite-devices") {

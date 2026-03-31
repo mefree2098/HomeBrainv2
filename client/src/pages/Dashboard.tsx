@@ -26,8 +26,10 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { DashboardDevicesWidget } from "@/components/dashboard/DashboardDevicesWidget"
 import {
   Select,
   SelectContent,
@@ -111,6 +113,7 @@ const ADDABLE_WIDGETS: Array<{ type: DashboardWidgetType; label: string; descrip
   { type: "favorite-scenes", label: "Quick Scenes", description: "Pin favorite scenes and launch them instantly." },
   { type: "weather", label: "Weather", description: "Current conditions with saved, custom, or auto-detected location." },
   { type: "voice-command", label: "Voice Command", description: "Natural-language control surface for the home." },
+  { type: "devices", label: "Devices", description: "A dense control grid for a selected set of devices." },
   { type: "device", label: "Device Control", description: "A dedicated control tile for one specific device." }
 ]
 
@@ -172,6 +175,8 @@ const getDefaultWidgetSize = (type: DashboardWidgetType): DashboardWidgetSize =>
     case "hero":
     case "summary":
       return "full"
+    case "devices":
+      return "full"
     case "device":
       return "small"
     case "weather":
@@ -210,6 +215,7 @@ const widgetAccent = (type: DashboardWidgetType) => {
       return CloudSun
     case "voice-command":
       return Mic
+    case "devices":
     case "device":
       return Lightbulb
     default:
@@ -245,6 +251,7 @@ export function Dashboard() {
   const [pendingWidgetTitle, setPendingWidgetTitle] = useState("Welcome Hero")
   const [pendingWidgetSize, setPendingWidgetSize] = useState<DashboardWidgetSize>("full")
   const [pendingWidgetDeviceId, setPendingWidgetDeviceId] = useState("")
+  const [pendingWidgetDeviceIds, setPendingWidgetDeviceIds] = useState<string[]>([])
   const [pendingWidgetDeviceSearch, setPendingWidgetDeviceSearch] = useState("")
   const [pendingWeatherLocationMode, setPendingWeatherLocationMode] = useState<DashboardWeatherLocationMode>("saved")
   const [pendingWeatherLocationQuery, setPendingWeatherLocationQuery] = useState("")
@@ -540,13 +547,37 @@ export function Dashboard() {
         })
       : sortedDevices
 
-    if (!pendingWidgetDeviceId || matches.some((device) => device._id === pendingWidgetDeviceId)) {
+    const pinnedDeviceIds = new Set([
+      ...(pendingWidgetDeviceId ? [pendingWidgetDeviceId] : []),
+      ...pendingWidgetDeviceIds
+    ])
+
+    if (pinnedDeviceIds.size === 0) {
       return matches
     }
 
-    const selectedDevice = sortedDevices.find((device) => device._id === pendingWidgetDeviceId)
-    return selectedDevice ? [selectedDevice, ...matches] : matches
-  }, [pendingWidgetDeviceId, pendingWidgetDeviceSearch, sortedDevices])
+    const pinnedDevices = sortedDevices.filter((device) => (
+      pinnedDeviceIds.has(device._id) && !matches.some((candidate) => candidate._id === device._id)
+    ))
+
+    return [...pinnedDevices, ...matches]
+  }, [pendingWidgetDeviceId, pendingWidgetDeviceIds, pendingWidgetDeviceSearch, sortedDevices])
+
+  const togglePendingWidgetDeviceSelection = useCallback((deviceId: string, nextValue: boolean) => {
+    setPendingWidgetDeviceIds((previous) => {
+      const selected = new Set(previous)
+
+      if (nextValue) {
+        selected.add(deviceId)
+      } else {
+        selected.delete(deviceId)
+      }
+
+      return sortedDevices
+        .map((device) => device._id)
+        .filter((candidateId) => selected.has(candidateId))
+    })
+  }, [sortedDevices])
 
   const isLoaded = !loading && !favoritesLoading && !dashboardLoading
   const onlineDevices = devices.filter((device) => device.status).length
@@ -850,6 +881,7 @@ export function Dashboard() {
     setPendingWidgetTitle(descriptor?.label ?? "")
     setPendingWidgetSize(getDefaultWidgetSize(type))
     setPendingWidgetDeviceId("")
+    setPendingWidgetDeviceIds([])
     setPendingWidgetDeviceSearch("")
     setPendingWeatherLocationMode("saved")
     setPendingWeatherLocationQuery("")
@@ -869,8 +901,14 @@ export function Dashboard() {
       return
     }
 
+    if (pendingWidgetType === "devices" && pendingWidgetDeviceIds.length === 0) {
+      return
+    }
+
     const settings = pendingWidgetType === "device"
       ? { deviceId: pendingWidgetDeviceId }
+      : pendingWidgetType === "devices"
+        ? { deviceIds: pendingWidgetDeviceIds }
       : pendingWidgetType === "weather"
         ? {
             weatherLocationMode: pendingWeatherLocationMode,
@@ -903,6 +941,7 @@ export function Dashboard() {
     setPendingWidgetTitle("Welcome Hero")
     setPendingWidgetSize("full")
     setPendingWidgetDeviceId("")
+    setPendingWidgetDeviceIds([])
     setPendingWidgetDeviceSearch("")
     setPendingWeatherLocationMode("saved")
     setPendingWeatherLocationQuery("")
@@ -1128,6 +1167,21 @@ export function Dashboard() {
       )
     }
 
+    if (widget.type === "devices") {
+      const selectedDeviceIds = Array.isArray(widget.settings.deviceIds) ? widget.settings.deviceIds : []
+      const selectedDevices = selectedDeviceIds
+        .map((deviceId) => devices.find((candidate) => candidate._id === deviceId))
+        .filter((device): device is Device => Boolean(device))
+
+      return (
+        <DashboardDevicesWidget
+          devices={selectedDevices}
+          size={widget.size}
+          onControl={handleDeviceControl}
+        />
+      )
+    }
+
     return null
   }
 
@@ -1302,8 +1356,11 @@ export function Dashboard() {
                   setPendingWidgetSize(getDefaultWidgetSize(nextType))
                   if (nextType !== "device") {
                     setPendingWidgetDeviceId("")
-                    setPendingWidgetDeviceSearch("")
                   }
+                  if (nextType !== "devices") {
+                    setPendingWidgetDeviceIds([])
+                  }
+                  setPendingWidgetDeviceSearch("")
                   if (nextType !== "weather") {
                     setPendingWeatherLocationMode("saved")
                     setPendingWeatherLocationQuery("")
@@ -1381,6 +1438,54 @@ export function Dashboard() {
               </div>
             )}
 
+            {pendingWidgetType === "devices" && (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="widget-devices-search">Search Devices</Label>
+                  <Input
+                    id="widget-devices-search"
+                    value={pendingWidgetDeviceSearch}
+                    onChange={(event) => setPendingWidgetDeviceSearch(event.target.value)}
+                    placeholder="Search by name, room, or type"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{pendingWidgetDeviceIds.length} selected</Badge>
+                  <Badge variant="secondary">Dense layout scales to 6 across at full width</Badge>
+                </div>
+
+                <div className="max-h-72 space-y-2 overflow-y-auto rounded-[1rem] border border-border/60 p-2">
+                  {filteredPendingDevices.length > 0 ? filteredPendingDevices.map((device) => {
+                    const checked = pendingWidgetDeviceIds.includes(device._id)
+
+                    return (
+                      <label
+                        key={device._id}
+                        className="flex cursor-pointer items-start gap-3 rounded-[0.9rem] border border-white/10 bg-white/5 px-3 py-2.5 transition-colors hover:bg-white/10"
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) => togglePendingWidgetDeviceSelection(device._id, value === true)}
+                          className="mt-0.5"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground">{device.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {device.room || "Unassigned"} · {device.type}
+                          </p>
+                        </div>
+                      </label>
+                    )
+                  }) : (
+                    <div className="rounded-[0.9rem] border border-dashed border-border/60 px-3 py-5 text-center text-sm text-muted-foreground">
+                      No devices match your search
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {pendingWidgetType === "weather" && (
               <>
                 <div className="space-y-2">
@@ -1423,6 +1528,7 @@ export function Dashboard() {
               onClick={addWidgetToSelectedView}
               disabled={
                 (pendingWidgetType === "device" && !pendingWidgetDeviceId)
+                || (pendingWidgetType === "devices" && pendingWidgetDeviceIds.length === 0)
                 || (pendingWidgetType === "weather" && pendingWeatherLocationMode === "custom" && !pendingWeatherLocationQuery.trim())
               }
             >

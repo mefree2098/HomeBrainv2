@@ -3,6 +3,7 @@ const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const Device = require('../models/Device');
 const smartThingsService = require('./smartThingsService');
+const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 const DEFAULT_PERMISSIONS = [
@@ -1476,6 +1477,13 @@ class SmartThingsWebhookService {
     if (updatedDeviceIdArray.length > 0) {
       try {
         const refreshedDevices = await Device.find({ _id: { $in: updatedDeviceIdArray } }).lean();
+        try {
+          await deviceEnergySampleService.recordSamplesForDevices(refreshedDevices);
+        } catch (sampleError) {
+          this.log('warn', 'Failed to persist SmartThings energy samples after webhook processing', {
+            error: sampleError.message
+          });
+        }
         const payloadUpdates = deviceUpdateEmitter.normalizeDevices(refreshedDevices);
         if (payloadUpdates.length > 0) {
           this.log('info', 'Emitting SmartThings device updates', {
@@ -1534,4 +1542,3 @@ class SmartThingsWebhookService {
 }
 
 module.exports = new SmartThingsWebhookService();
-

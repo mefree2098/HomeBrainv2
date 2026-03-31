@@ -3,6 +3,7 @@ const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
 const ecobeeService = require('./ecobeeService');
+const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -118,6 +119,11 @@ class DeviceService {
     await Device.bulkWrite(bulkOps, { ordered: false });
 
     const refreshedDevices = await Device.find({ _id: { $in: Array.from(updatedDeviceIds) } });
+    try {
+      await deviceEnergySampleService.recordSamplesForDevices(refreshedDevices);
+    } catch (error) {
+      console.warn(`DeviceService: Failed to persist SmartThings energy samples: ${error.message}`);
+    }
     const payload = deviceUpdateEmitter.normalizeDevices(refreshedDevices);
     if (payload.length > 0) {
       deviceUpdateEmitter.emit('devices:update', payload);
@@ -576,6 +582,14 @@ class DeviceService {
       );
 
       if (updatedDevice) {
+        if (isSmartThings) {
+          try {
+            await deviceEnergySampleService.recordSamplesForDevices([updatedDevice]);
+          } catch (error) {
+            console.warn(`DeviceService: Failed to persist SmartThings energy sample after control: ${error.message}`);
+          }
+        }
+
         const payload = deviceUpdateEmitter.normalizeDevices([updatedDevice]);
         if (payload.length > 0) {
           deviceUpdateEmitter.emit('devices:update', payload);
