@@ -2284,7 +2284,7 @@ class SmartThingsService {
     let targetDeviceId = '';
 
     try {
-      const resolved = await this.getSthmVirtualSwitchConfig({ requireAll: true });
+      const resolved = await this.getSthmVirtualSwitchConfig({ requireAll: normalizedState !== 'Disarmed' });
       integration = resolved.integration;
       const { config } = resolved;
 
@@ -2375,6 +2375,83 @@ class SmartThingsService {
 
       throw error;
     }
+  }
+
+  async silenceAlarmDevice(deviceId, options = {}) {
+    const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
+    if (!normalizedDeviceId) {
+      throw new Error('SmartThings alarm device ID is required');
+    }
+
+    const normalizeValues = (values, transform = (value) => value) => (
+      Array.isArray(values)
+        ? values
+          .map((value) => (typeof value === 'string' ? transform(value.trim()) : ''))
+          .filter(Boolean)
+        : []
+    );
+
+    const capabilities = new Set(normalizeValues(options.capabilities));
+    const categories = new Set(normalizeValues(options.categories, (value) => value.toLowerCase()));
+    const commandCandidates = [];
+
+    if (capabilities.has('alarm')) {
+      commandCandidates.push({
+        capability: 'alarm',
+        command: 'off',
+        via: 'alarm.off'
+      });
+    }
+
+    if (capabilities.has('switch') || categories.has('siren')) {
+      commandCandidates.push({
+        capability: 'switch',
+        command: 'off',
+        via: 'switch.off'
+      });
+    }
+
+    if (commandCandidates.length === 0) {
+      commandCandidates.push(
+        {
+          capability: 'alarm',
+          command: 'off',
+          via: 'alarm.off'
+        },
+        {
+          capability: 'switch',
+          command: 'off',
+          via: 'switch.off'
+        }
+      );
+    }
+
+    let lastRecoverableError = null;
+    for (const candidate of commandCandidates) {
+      try {
+        await this.sendDeviceCommand(normalizedDeviceId, [{
+          component: 'main',
+          capability: candidate.capability,
+          command: candidate.command
+        }]);
+
+        console.log(`SmartThingsService: Silenced alarm device ${normalizedDeviceId} via ${candidate.via}`);
+        return {
+          deviceId: normalizedDeviceId,
+          via: candidate.via
+        };
+      } catch (error) {
+        if (error?.status && [400, 404, 409, 422].includes(error.status)) {
+          lastRecoverableError = error;
+          console.debug(`SmartThingsService: Alarm silence command ${candidate.via} failed for ${normalizedDeviceId}; trying fallback if available (${error.message})`);
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw lastRecoverableError || new Error(`Unable to silence SmartThings alarm device ${normalizedDeviceId}`);
   }
 
   /**

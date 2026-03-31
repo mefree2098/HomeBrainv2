@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const deviceService = require('../services/deviceService');
+const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
 const securityAlarmService = require('../services/securityAlarmService');
+const smartThingsService = require('../services/smartThingsService');
 
 test('getAlarmStatus returns security sensors and door lock summaries', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
@@ -104,7 +106,9 @@ test('getAlarmStatus returns security sensors and door lock summaries', async (t
         status: false,
         isOnline: true,
         lastSeen: now,
-        properties: {}
+        properties: {
+          smartThingsDeviceId: 'smartthings-lock-1'
+        }
       },
       {
         _id: 'device-5',
@@ -114,7 +118,9 @@ test('getAlarmStatus returns security sensors and door lock summaries', async (t
         status: true,
         isOnline: true,
         lastSeen: now,
-        properties: {}
+        properties: {
+          smartThingsDeviceId: 'smartthings-lock-2'
+        }
       }
     ])
   });
@@ -154,9 +160,287 @@ test('getAlarmStatus returns security sensors and door lock summaries', async (t
   assert.ok(frontDoorLock);
   assert.equal(frontDoorLock.stateLabel, 'Unlocked');
   assert.equal(frontDoorLock.isLocked, false);
+  assert.equal(frontDoorLock.smartThingsDeviceId, 'smartthings-lock-1');
 
   const garageLock = status.doorLocks.find((lock) => lock.deviceId === 'device-5');
   assert.ok(garageLock);
   assert.equal(garageLock.stateLabel, 'Locked');
   assert.equal(garageLock.isLocked, true);
+  assert.equal(garageLock.smartThingsDeviceId, 'smartthings-lock-2');
+});
+
+test('getAlarmStatus can force-refresh SmartThings door locks for dashboard consumers', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalBulkWrite = Device.bulkWrite;
+  const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+  const originalGetDevice = smartThingsService.getDevice;
+  const originalGetDeviceStatus = smartThingsService.getDeviceStatus;
+  const originalBuildUpdate = smartThingsService.buildSmartThingsDeviceUpdate;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    Device.bulkWrite = originalBulkWrite;
+    deviceService.ensureSmartThingsState = originalEnsureSmartThingsState;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+    smartThingsService.getDevice = originalGetDevice;
+    smartThingsService.getDeviceStatus = originalGetDeviceStatus;
+    smartThingsService.buildSmartThingsDeviceUpdate = originalBuildUpdate;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const now = new Date('2026-03-30T12:00:00.000Z');
+  const refreshedAt = new Date('2026-03-30T12:05:00.000Z');
+  const alarm = {
+    alarmState: 'disarmed',
+    lastArmed: null,
+    lastDisarmed: now,
+    lastTriggered: null,
+    armedBy: null,
+    disarmedBy: 'user-1',
+    zones: [],
+    isOnline: true,
+    lastSyncWithSmartThings: now,
+    batteryLevel: null,
+    signalStrength: null,
+    save: async function save() {
+      return this;
+    }
+  };
+
+  const initialDevices = [
+    {
+      _id: 'device-4',
+      name: 'Front Door Lock',
+      type: 'lock',
+      room: 'Entry',
+      status: true,
+      isOnline: true,
+      lastSeen: now,
+      properties: {
+        smartThingsDeviceId: 'smartthings-lock-1'
+      }
+    }
+  ];
+
+  const refreshedDevices = [
+    {
+      _id: 'device-4',
+      name: 'Front Door Lock',
+      type: 'lock',
+      room: 'Entry',
+      status: false,
+      isOnline: true,
+      lastSeen: refreshedAt,
+      properties: {
+        smartThingsDeviceId: 'smartthings-lock-1'
+      }
+    }
+  ];
+
+  let capturedBulkOps = null;
+  const emittedUpdates = [];
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.isSmartThingsConfiguredForSthm = async () => false;
+  deviceService.ensureSmartThingsState = async () => {};
+  smartThingsService.getDevice = async () => ({
+    deviceId: 'smartthings-lock-1',
+    healthState: {
+      state: 'ONLINE',
+      lastUpdatedDate: refreshedAt.toISOString()
+    }
+  });
+  smartThingsService.getDeviceStatus = async () => ({
+    components: {
+      main: {
+        lock: {
+          value: 'unlocked',
+          lock: {
+            value: 'unlocked'
+          }
+        }
+      }
+    }
+  });
+  smartThingsService.buildSmartThingsDeviceUpdate = async () => ({
+    status: false,
+    isOnline: true,
+    lastSeen: refreshedAt,
+    updatedAt: refreshedAt
+  });
+  Device.bulkWrite = async (ops) => {
+    capturedBulkOps = ops;
+  };
+  Device.find = (query) => {
+    if (query && query._id && query._id.$in) {
+      return {
+        lean: async () => refreshedDevices
+      };
+    }
+
+    return {
+      lean: async () => initialDevices
+    };
+  };
+  deviceUpdateEmitter.emit = (eventName, payload) => {
+    emittedUpdates.push({ eventName, payload });
+  };
+
+  const status = await securityAlarmService.getAlarmStatus({ refreshDoorLocks: true });
+
+  assert.ok(Array.isArray(capturedBulkOps));
+  assert.equal(capturedBulkOps.length, 1);
+  assert.equal(emittedUpdates.length, 1);
+  assert.equal(emittedUpdates[0].eventName, 'devices:update');
+
+  assert.equal(status.doorLockCount, 1);
+  assert.equal(status.lockedDoorCount, 0);
+  assert.equal(status.unlockedDoorCount, 1);
+  assert.equal(status.doorLocks[0].deviceId, 'device-4');
+  assert.equal(status.doorLocks[0].smartThingsDeviceId, 'smartthings-lock-1');
+  assert.equal(status.doorLocks[0].isLocked, false);
+  assert.equal(status.doorLocks[0].stateLabel, 'Unlocked');
+});
+
+test('dismissAlarm clears the triggered alarm and silences SmartThings alarm outputs', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+  const originalSetSecurityArmState = smartThingsService.setSecurityArmState;
+  const originalSilenceAlarmDevice = smartThingsService.silenceAlarmDevice;
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+    smartThingsService.setSecurityArmState = originalSetSecurityArmState;
+    smartThingsService.silenceAlarmDevice = originalSilenceAlarmDevice;
+  });
+
+  const captured = {
+    states: [],
+    silenced: []
+  };
+
+  const alarm = {
+    alarmState: 'triggered',
+    disarmedBy: null,
+    disarm: async function disarm(userId) {
+      this.alarmState = 'disarmed';
+      this.disarmedBy = userId;
+      return this;
+    }
+  };
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'siren-1',
+        name: 'Hall Siren',
+        properties: {
+          smartThingsDeviceId: 'smartthings-siren-1',
+          smartThingsCapabilities: ['alarm', 'switch'],
+          smartThingsCategories: ['siren']
+        }
+      },
+      {
+        _id: 'lock-1',
+        name: 'Front Door Lock',
+        properties: {
+          smartThingsDeviceId: 'smartthings-lock-1',
+          smartThingsCapabilities: ['lock']
+        }
+      }
+    ])
+  });
+  securityAlarmService.isSmartThingsConfiguredForSthm = async (options = {}) => options.requireAllMappings === false;
+  smartThingsService.setSecurityArmState = async (state) => {
+    captured.states.push(state);
+    return { armState: state };
+  };
+  smartThingsService.silenceAlarmDevice = async (deviceId, options = {}) => {
+    captured.silenced.push({
+      deviceId,
+      capabilities: options.capabilities,
+      categories: options.categories
+    });
+    return { deviceId, via: 'alarm.off' };
+  };
+
+  const result = await securityAlarmService.dismissAlarm('user-dismiss');
+
+  assert.equal(result.alarmState, 'disarmed');
+  assert.equal(result.disarmedBy, 'user-dismiss');
+  assert.deepEqual(captured.states, ['Disarmed']);
+  assert.deepEqual(captured.silenced, [{
+    deviceId: 'smartthings-siren-1',
+    capabilities: ['alarm', 'switch'],
+    categories: ['siren']
+  }]);
+});
+
+test('disarmAlarm also silences SmartThings alarm outputs when the alarm is triggered', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+  const originalSetSecurityArmState = smartThingsService.setSecurityArmState;
+  const originalSilenceAlarmDevice = smartThingsService.silenceAlarmDevice;
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+    smartThingsService.setSecurityArmState = originalSetSecurityArmState;
+    smartThingsService.silenceAlarmDevice = originalSilenceAlarmDevice;
+  });
+
+  const captured = {
+    states: [],
+    silenced: []
+  };
+
+  const alarm = {
+    alarmState: 'triggered',
+    disarmedBy: null,
+    disarm: async function disarm(userId) {
+      this.alarmState = 'disarmed';
+      this.disarmedBy = userId;
+      return this;
+    }
+  };
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'siren-2',
+        name: 'Garage Siren',
+        properties: {
+          smartThingsDeviceId: 'smartthings-siren-2',
+          smartThingsCapabilities: ['alarm']
+        }
+      }
+    ])
+  });
+  securityAlarmService.isSmartThingsConfiguredForSthm = async (options = {}) => options.requireAllMappings === false;
+  smartThingsService.setSecurityArmState = async (state) => {
+    captured.states.push(state);
+    return { armState: state };
+  };
+  smartThingsService.silenceAlarmDevice = async (deviceId) => {
+    captured.silenced.push(deviceId);
+    return { deviceId, via: 'alarm.off' };
+  };
+
+  const result = await securityAlarmService.disarmAlarm('user-disarm');
+
+  assert.equal(result.alarmState, 'disarmed');
+  assert.equal(result.disarmedBy, 'user-disarm');
+  assert.deepEqual(captured.states, ['Disarmed']);
+  assert.deepEqual(captured.silenced, ['smartthings-siren-2']);
 });
