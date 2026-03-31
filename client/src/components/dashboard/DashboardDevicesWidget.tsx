@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react"
-import { Activity, Loader2, Lock, Power, PowerOff, Thermometer, Zap } from "lucide-react"
+import { Loader2, Power, PowerOff, Zap } from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { getDeviceEnergyHistory, type DeviceEnergySample } from "@/api/devices"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
+import { Input } from "@/components/ui/input"
 import { Slider } from "@/components/ui/slider"
 import { cn } from "@/lib/utils"
 
@@ -16,6 +17,7 @@ type DeviceLike = {
   room: string
   status: boolean
   brightness?: number
+  color?: string
   temperature?: number
   targetTemperature?: number
   isOnline?: boolean
@@ -49,6 +51,23 @@ const clampBrightness = (value: number) => {
   }
 
   return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+const normalizeHexColor = (value: unknown): string => {
+  if (typeof value !== "string") {
+    return "#ffffff"
+  }
+
+  const normalized = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(normalized)) {
+    return normalized.toLowerCase()
+  }
+
+  return "#ffffff"
+}
+
+const getLightColor = (device: DeviceLike) => {
+  return normalizeHexColor(device?.color)
 }
 
 const normalizeThermostatMode = (value: unknown): string => {
@@ -193,6 +212,22 @@ const supportsLightFade = (device: DeviceLike) => {
   }
 
   return Boolean(device?.properties?.supportsBrightness)
+}
+
+const supportsLightColor = (device: DeviceLike) => {
+  if (isSmartThingsBackedDevice(device)) {
+    if (hasSmartThingsCapability(device, "colorControl")) {
+      return true
+    }
+
+    return Boolean(device?.properties?.supportsColor && supportsLightFade(device))
+  }
+
+  if (device.type === "light") {
+    return true
+  }
+
+  return Boolean(device?.properties?.supportsColor)
 }
 
 const toFiniteNumber = (value: unknown): number | null => {
@@ -358,15 +393,21 @@ const getGridClass = (size: Props["size"]) => {
 
 function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: Props["onControl"] }) {
   const [brightness, setBrightness] = useState(clampBrightness(Number(device.brightness)))
+  const [color, setColor] = useState(getLightColor(device))
   const [samples, setSamples] = useState<DeviceEnergySample[]>([])
   const [loading, setLoading] = useState(false)
   const energySnapshot = useMemo(() => getLiveEnergySnapshot(device), [device])
   const isThermostat = device.type === "thermostat"
   const supportsFade = supportsLightFade(device)
+  const supportsColor = supportsLightColor(device)
 
   useEffect(() => {
     setBrightness(clampBrightness(Number(device.brightness)))
   }, [device.brightness])
+
+  useEffect(() => {
+    setColor(getLightColor(device))
+  }, [device._id, device.color])
 
   useEffect(() => {
     if (!energySnapshot.supportsEnergyMonitoring || !device._id) {
@@ -450,27 +491,15 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
 
   return (
     <Card className="rounded-[1.25rem] border-white/10 bg-white/80 shadow-sm backdrop-blur dark:bg-slate-950/28">
-      <CardContent className="space-y-3 p-3">
+      <CardContent className="space-y-2.5 p-3">
         <div className="space-y-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="line-clamp-2 text-sm font-semibold text-foreground">{device.name}</p>
-              <p className="line-clamp-1 text-[11px] text-muted-foreground">{device.room || "Unassigned"}</p>
-            </div>
-            <Badge variant={device.status ? "default" : "secondary"} className="shrink-0 text-[10px]">
-              {device.type === "thermostat"
-                ? getThermostatMode(device).toUpperCase()
-                : device.type === "lock"
-                ? (device.status ? "Locked" : "Unlocked")
-                : (device.status ? "On" : "Off")}
-            </Badge>
-          </div>
-
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            {device.type === "thermostat" ? <Thermometer className="h-3.5 w-3.5" /> : device.type === "lock" ? <Lock className="h-3.5 w-3.5" /> : <Activity className="h-3.5 w-3.5" />}
-            <span className="line-clamp-2">{getStatusLabel(device)}</span>
-          </div>
+          <p className="line-clamp-3 text-[15px] font-semibold leading-tight text-foreground">{device.name}</p>
+          <p className="line-clamp-1 text-[11px] text-muted-foreground">{device.room || "Unassigned"}</p>
         </div>
+
+        {isThermostat ? (
+          <p className="text-[11px] text-muted-foreground">{getStatusLabel(device)}</p>
+        ) : null}
 
         {energySnapshot.supportsEnergyMonitoring ? (
           <div className="space-y-2 rounded-[0.9rem] border border-emerald-500/15 bg-emerald-500/5 p-2.5">
@@ -549,6 +578,33 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
               step={1}
               className="w-full"
             />
+          </div>
+        ) : null}
+
+        {supportsColor ? (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Color</span>
+              <span className="font-mono text-[10px] uppercase text-foreground/80">{color}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                type="color"
+                value={color}
+                onChange={(event) => {
+                  setColor(normalizeHexColor(event.target.value))
+                }}
+                className="h-8 w-11 cursor-pointer p-1"
+              />
+              <Button
+                onClick={() => onControl(device._id, "set_color", color)}
+                variant="outline"
+                size="sm"
+                className="flex-1"
+              >
+                Apply Color
+              </Button>
+            </div>
           </div>
         ) : null}
 
