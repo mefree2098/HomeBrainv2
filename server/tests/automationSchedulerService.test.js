@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationSchedulerService = require('../services/automationSchedulerService');
+const weatherService = require('../services/weatherService');
 
 test('shouldRunAutomation triggers on security alarm state changes that match configured states', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
@@ -96,4 +97,60 @@ test('device_state triggers capture the triggering device context for later acti
     triggerProperty: 'status',
     triggerValue: true
   });
+});
+
+test('schedule triggers can fire at sunset using weather-derived solar time', async (t) => {
+  const originalFetchDashboardWeather = weatherService.fetchDashboardWeather;
+  const automationId = new mongoose.Types.ObjectId().toString();
+
+  weatherService.fetchDashboardWeather = async () => ({
+    location: {
+      timezone: 'UTC'
+    },
+    today: {
+      sunrise: '2026-03-31T06:14',
+      sunset: '2026-03-31T18:40'
+    }
+  });
+
+  automationSchedulerService.pendingTriggerContexts.clear();
+  automationSchedulerService.solarContextCache = {
+    key: null,
+    value: null,
+    promise: null
+  };
+  automationSchedulerService.lastSolarWarningAt = 0;
+
+  t.after(() => {
+    weatherService.fetchDashboardWeather = originalFetchDashboardWeather;
+    automationSchedulerService.pendingTriggerContexts.clear();
+    automationSchedulerService.solarContextCache = {
+      key: null,
+      value: null,
+      promise: null
+    };
+    automationSchedulerService.lastSolarWarningAt = 0;
+  });
+
+  const automation = {
+    _id: { toString: () => automationId },
+    name: 'Exterior lights at sunset',
+    enabled: true,
+    cooldown: 0,
+    trigger: {
+      type: 'schedule',
+      conditions: {
+        event: 'sunset',
+        offset: 15
+      }
+    }
+  };
+
+  assert.equal(await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T18:54:00Z')), false);
+  assert.equal(await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T18:55:00Z')), true);
+
+  const context = automationSchedulerService.consumePendingTriggerContext(automationId);
+  assert.equal(context.triggeringScheduleEvent, 'sunset');
+  assert.equal(context.triggeringScheduleOffsetMinutes, 15);
+  assert.match(context.triggeringScheduleTime, /^2026-03-31T18:55:00\.000Z$/);
 });
