@@ -1664,9 +1664,9 @@ class SmartThingsService {
         key: 'armAwayDeviceId',
         label: 'Arm Away'
       },
-      dismiss: {
-        key: 'dismissDeviceId',
-        label: 'Dismiss'
+      silence: {
+        key: 'silenceDeviceId',
+        label: 'Silence'
       }
     };
 
@@ -1676,7 +1676,7 @@ class SmartThingsService {
       armAwayDeviceId: sanitize(rawConfig.armAwayDeviceId),
       armStayDeviceId: sanitize(rawConfig.armStayDeviceId),
       disarmDeviceId: sanitize(rawConfig.disarmDeviceId),
-      dismissDeviceId: sanitize(rawConfig.dismissDeviceId),
+      silenceDeviceId: sanitize(rawConfig.silenceDeviceId),
       locationId: sanitize(rawConfig.locationId),
       lastArmState: sanitize(rawConfig.lastArmState)
     };
@@ -1837,7 +1837,7 @@ class SmartThingsService {
       armAwayDeviceId: '',
       armStayDeviceId: '',
       disarmDeviceId: '',
-      dismissDeviceId: '',
+      silenceDeviceId: '',
       locationId: '',
       lastArmState: ''
     };
@@ -1854,8 +1854,8 @@ class SmartThingsService {
         switchState: 'unknown',
         error: ''
       },
-      dismiss: {
-        label: 'Dismiss',
+      silence: {
+        label: 'Silence',
         deviceId: '',
         mapped: false,
         deviceLabel: '',
@@ -1910,7 +1910,7 @@ class SmartThingsService {
 
       const switchEntries = [
         { key: 'disarm', label: 'Disarm', armState: 'Disarmed', deviceId: config.disarmDeviceId },
-        { key: 'dismiss', label: 'Dismiss', armState: null, deviceId: config.dismissDeviceId },
+        { key: 'silence', label: 'Silence', armState: null, deviceId: config.silenceDeviceId },
         { key: 'armStay', label: 'Arm Stay', armState: 'ArmedStay', deviceId: config.armStayDeviceId },
         { key: 'armAway', label: 'Arm Away', armState: 'ArmedAway', deviceId: config.armAwayDeviceId }
       ];
@@ -2008,7 +2008,7 @@ class SmartThingsService {
         isConfigured: Boolean(integration?.isConfigured),
         isConnected: Boolean(integration?.isConnected),
         hasFullMapping: Boolean(config.disarmDeviceId && config.armStayDeviceId && config.armAwayDeviceId),
-        hasDismissMapping: Boolean(config.dismissDeviceId),
+        hasSilenceMapping: Boolean(config.silenceDeviceId),
         locationId: config.locationId || null
       },
       auth: {
@@ -2408,31 +2408,31 @@ class SmartThingsService {
     }
   }
 
-  async dismissSthmAlert() {
+  async triggerSthmSilenceSwitch() {
     let integration = null;
     let targetDeviceId = '';
 
     try {
       const resolved = await this.getSthmVirtualSwitchConfig({
         requireAll: false,
-        requiredMappings: ['dismiss']
+        requiredMappings: ['silence']
       });
       integration = resolved.integration;
-      targetDeviceId = resolved.config.dismissDeviceId;
+      targetDeviceId = resolved.config.silenceDeviceId;
 
-      console.log(`SmartThingsService: Triggering STHM dismiss switch ${targetDeviceId}`);
+      console.log(`SmartThingsService: Triggering STHM silence switch ${targetDeviceId}`);
       await this.pulseVirtualSwitch(targetDeviceId, { ensureReset: true, delayMs: 300 });
 
       await this.updateSthmCommandLog({
         integration,
-        requestedState: 'DismissAlert',
+        requestedState: 'SilenceRoutine',
         result: 'success',
         deviceId: targetDeviceId,
         errorMessage: ''
       });
 
       return {
-        dismissed: true,
+        silenced: true,
         triggeredDeviceId: targetDeviceId,
         via: 'virtualSwitch'
       };
@@ -2440,13 +2440,13 @@ class SmartThingsService {
       try {
         await this.updateSthmCommandLog({
           integration,
-          requestedState: 'DismissAlert',
+          requestedState: 'SilenceRoutine',
           result: 'failed',
           deviceId: targetDeviceId,
           errorMessage: error.message
         });
       } catch (logError) {
-        console.warn(`SmartThingsService: Failed to record STHM dismiss error telemetry: ${logError.message}`);
+        console.warn(`SmartThingsService: Failed to record STHM silence error telemetry: ${logError.message}`);
       }
 
       throw error;
@@ -2732,11 +2732,11 @@ class SmartThingsService {
       const nextArmAwayId = pickConfiguredValue('armAwayDeviceId');
       const nextArmStayId = pickConfiguredValue('armStayDeviceId');
       const nextDisarmId = pickConfiguredValue('disarmDeviceId');
-      const nextDismissId = pickConfiguredValue('dismissDeviceId');
+      const nextSilenceId = pickConfiguredValue('silenceDeviceId');
 
       let nextLocationId = pickConfiguredValue('locationId');
       if (!nextLocationId) {
-        const probeDeviceId = nextDisarmId || nextArmStayId || nextArmAwayId || nextDismissId;
+        const probeDeviceId = nextDisarmId || nextArmStayId || nextArmAwayId || nextSilenceId;
         if (probeDeviceId) {
           try {
             const deviceDetails = await this.getDevice(probeDeviceId);
@@ -2757,7 +2757,7 @@ class SmartThingsService {
         armAwayDeviceId: nextArmAwayId,
         armStayDeviceId: nextArmStayId,
         disarmDeviceId: nextDisarmId,
-        dismissDeviceId: nextDismissId,
+        silenceDeviceId: nextSilenceId,
         locationId: nextLocationId
       };
 

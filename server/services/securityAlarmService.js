@@ -486,7 +486,7 @@ class SecurityAlarmService {
         disarm: 'disarmDeviceId',
         armStay: 'armStayDeviceId',
         armAway: 'armAwayDeviceId',
-        dismiss: 'dismissDeviceId'
+        silence: 'silenceDeviceId'
       };
       const requestedMappings = Array.isArray(options.requiredMappings)
         ? options.requiredMappings
@@ -595,7 +595,7 @@ class SecurityAlarmService {
   async clearTriggeredSmartThingsAlarm() {
     const result = {
       disarmedInSmartThings: false,
-      dismissedInSmartThings: false,
+      silenceSwitchTriggered: false,
       silencedOutputs: [],
       failedOutputs: []
     };
@@ -614,15 +614,15 @@ class SecurityAlarmService {
       }
     }
 
-    const canDismissInSmartThings = await this.isSmartThingsConfiguredForSthm({ requiredMappings: ['dismiss'] });
-    if (canDismissInSmartThings) {
+    const canSilenceInSmartThings = await this.isSmartThingsConfiguredForSthm({ requiredMappings: ['silence'] });
+    if (canSilenceInSmartThings) {
       try {
-        await smartThingsService.dismissSthmAlert();
-        result.dismissedInSmartThings = true;
-        console.log('SecurityAlarmService: SmartThings dismiss command sent successfully');
+        await smartThingsService.triggerSthmSilenceSwitch();
+        result.silenceSwitchTriggered = true;
+        console.log('SecurityAlarmService: SmartThings silence routine trigger sent successfully');
       } catch (smartThingsError) {
         console.warn(
-          'SecurityAlarmService: SmartThings dismiss command failed, continuing with local dismiss:',
+          'SecurityAlarmService: SmartThings silence routine trigger failed, continuing with local dismiss:',
           smartThingsError.message
         );
       }

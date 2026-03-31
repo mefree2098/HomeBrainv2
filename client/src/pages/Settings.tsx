@@ -282,13 +282,13 @@ export function Settings() {
     armAwayDeviceId: string;
     armStayDeviceId: string;
     disarmDeviceId: string;
-    dismissDeviceId: string;
+    silenceDeviceId: string;
     locationId: string;
   }>({
     armAwayDeviceId: "",
     armStayDeviceId: "",
     disarmDeviceId: "",
-    dismissDeviceId: "",
+    silenceDeviceId: "",
     locationId: ""
   })
 
@@ -523,7 +523,7 @@ export function Settings() {
   const ecobeeThermostatCount = ecobeeDevices.filter((device: any) => device?.type === "thermostat").length
   const ecobeeSensorCount = ecobeeDevices.filter((device: any) => device?.type === "sensor").length
   const disarmSelectValue = sthmConfig.disarmDeviceId || STHM_NOT_CONFIGURED
-  const dismissSelectValue = sthmConfig.dismissDeviceId || STHM_NOT_CONFIGURED
+  const silenceSelectValue = sthmConfig.silenceDeviceId || STHM_NOT_CONFIGURED
   const armStaySelectValue = sthmConfig.armStayDeviceId || STHM_NOT_CONFIGURED
   const armAwaySelectValue = sthmConfig.armAwayDeviceId || STHM_NOT_CONFIGURED
   const insteonPortValue = (watch("insteonPort") || "").toString()
@@ -655,7 +655,7 @@ export function Settings() {
           armAwayDeviceId: nextSthm.armAwayDeviceId || "",
           armStayDeviceId: nextSthm.armStayDeviceId || "",
           disarmDeviceId: nextSthm.disarmDeviceId || "",
-          dismissDeviceId: nextSthm.dismissDeviceId || "",
+          silenceDeviceId: nextSthm.silenceDeviceId || "",
           locationId: nextSthm.locationId || ""
         });
 
@@ -688,7 +688,7 @@ export function Settings() {
         armAwayDeviceId: "",
         armStayDeviceId: "",
         disarmDeviceId: "",
-        dismissDeviceId: "",
+        silenceDeviceId: "",
         locationId: ""
       });
       setSmartThingsDevices([]);
@@ -2401,7 +2401,7 @@ export function Settings() {
       return
     }
 
-    const { disarmDeviceId, dismissDeviceId, armStayDeviceId, armAwayDeviceId, locationId } = sthmConfig
+    const { disarmDeviceId, silenceDeviceId, armStayDeviceId, armAwayDeviceId, locationId } = sthmConfig
     if (!disarmDeviceId || !armStayDeviceId || !armAwayDeviceId) {
       toast({
         title: "Missing Virtual Switches",
@@ -2415,13 +2415,13 @@ export function Settings() {
     try {
       const payload: {
         disarmDeviceId: string
-        dismissDeviceId: string
+        silenceDeviceId: string
         armStayDeviceId: string
         armAwayDeviceId: string
         locationId?: string
       } = {
         disarmDeviceId,
-        dismissDeviceId,
+        silenceDeviceId,
         armStayDeviceId,
         armAwayDeviceId
       }
@@ -2443,7 +2443,7 @@ export function Settings() {
             armAwayDeviceId: updated.armAwayDeviceId || "",
             armStayDeviceId: updated.armStayDeviceId || "",
             disarmDeviceId: updated.disarmDeviceId || "",
-            dismissDeviceId: updated.dismissDeviceId || "",
+            silenceDeviceId: updated.silenceDeviceId || "",
             locationId: updated.locationId || payload.locationId || ""
           })
           if (Array.isArray(response.integration.connectedDevices)) {
@@ -4361,15 +4361,15 @@ export function Settings() {
                   <div className="bg-white/70 dark:bg-slate-900/40 border border-blue-100 dark:border-blue-900 rounded-md p-3 text-xs text-muted-foreground space-y-1">
                     <p className="font-medium text-blue-900 dark:text-blue-200">Setup checklist</p>
                     <ol className="list-decimal list-inside space-y-1">
-                      <li>Create SmartThings virtual switches for Disarm, Arm Stay, Arm Away, and Dismiss.</li>
+                      <li>Create SmartThings virtual switches for Disarm, Arm Stay, Arm Away, and optionally Silence.</li>
                       <li>
                         Make routines so changing STHM mode turns on its matching switch and turns the others off.
                       </li>
                       <li>
                         Create inverse routines so switching one of these devices on sets the corresponding STHM mode.
                       </li>
-                      <li>Create a routine so turning on the dismiss switch clears the active Home Monitor alert.</li>
-                      <li>Select the switches below and save. The dismiss switch is optional unless you want HomeBrain to clear triggered alarms in SmartThings.</li>
+                      <li>Create a routine so turning on the silence switch turns off sirens, lights, or other response devices you want HomeBrain to quiet.</li>
+                      <li>SmartThings does not expose a programmable STHM alert dismiss. The silence switch is only a workaround for your own automations.</li>
                     </ol>
                   </div>
 
@@ -4433,13 +4433,13 @@ export function Settings() {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-sm font-medium">Dismiss Switch</label>
+                      <label className="text-sm font-medium">Silence Switch</label>
                       <Select
-                        value={dismissSelectValue}
+                        value={silenceSelectValue}
                         onValueChange={(value) =>
                           setSthmConfig((prev) => ({
                             ...prev,
-                            dismissDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
+                            silenceDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
                           }))
                         }
                         disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
@@ -4457,7 +4457,7 @@ export function Settings() {
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">
-                        Optional. Link to the switch that dismisses an active SmartThings Home Monitor alert after disarming.
+                        Optional. Link to a switch that triggers your SmartThings silence/reset routine after HomeBrain disarms and quiets alarm outputs.
                       </p>
                     </div>
 
@@ -4572,11 +4572,11 @@ export function Settings() {
                           {sthmDiagnostics?.switchStatuses?.disarm?.error ? ` (error: ${sthmDiagnostics.switchStatuses.disarm.error})` : ""}
                         </p>
                         <p>
-                          Dismiss switch:{" "}
+                          Silence switch:{" "}
                           <span className="font-medium text-foreground">
-                            {sthmDiagnostics?.switchStatuses?.dismiss?.switchState || "unknown"}
+                            {sthmDiagnostics?.switchStatuses?.silence?.switchState || "unknown"}
                           </span>
-                          {sthmDiagnostics?.switchStatuses?.dismiss?.error ? ` (error: ${sthmDiagnostics.switchStatuses.dismiss.error})` : ""}
+                          {sthmDiagnostics?.switchStatuses?.silence?.error ? ` (error: ${sthmDiagnostics.switchStatuses.silence.error})` : ""}
                         </p>
                         <p>
                           Arm Stay switch:{" "}

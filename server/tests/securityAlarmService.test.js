@@ -311,7 +311,7 @@ test('dismissAlarm clears the triggered alarm and silences SmartThings alarm out
   const originalDeviceFind = Device.find;
   const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
   const originalSetSecurityArmState = smartThingsService.setSecurityArmState;
-  const originalDismissSthmAlert = smartThingsService.dismissSthmAlert;
+  const originalTriggerSthmSilenceSwitch = smartThingsService.triggerSthmSilenceSwitch;
   const originalSilenceAlarmDevice = smartThingsService.silenceAlarmDevice;
 
   t.after(() => {
@@ -319,13 +319,13 @@ test('dismissAlarm clears the triggered alarm and silences SmartThings alarm out
     Device.find = originalDeviceFind;
     securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
     smartThingsService.setSecurityArmState = originalSetSecurityArmState;
-    smartThingsService.dismissSthmAlert = originalDismissSthmAlert;
+    smartThingsService.triggerSthmSilenceSwitch = originalTriggerSthmSilenceSwitch;
     smartThingsService.silenceAlarmDevice = originalSilenceAlarmDevice;
   });
 
   const captured = {
     states: [],
-    dismisses: 0,
+    silenceTriggers: 0,
     silenced: []
   };
 
@@ -363,15 +363,15 @@ test('dismissAlarm clears the triggered alarm and silences SmartThings alarm out
   });
   securityAlarmService.isSmartThingsConfiguredForSthm = async (options = {}) => (
     options.requireAllMappings === false
-      || (Array.isArray(options.requiredMappings) && options.requiredMappings.includes('dismiss'))
+      || (Array.isArray(options.requiredMappings) && options.requiredMappings.includes('silence'))
   );
   smartThingsService.setSecurityArmState = async (state) => {
     captured.states.push(state);
     return { armState: state };
   };
-  smartThingsService.dismissSthmAlert = async () => {
-    captured.dismisses += 1;
-    return { dismissed: true };
+  smartThingsService.triggerSthmSilenceSwitch = async () => {
+    captured.silenceTriggers += 1;
+    return { silenced: true };
   };
   smartThingsService.silenceAlarmDevice = async (deviceId, options = {}) => {
     captured.silenced.push({
@@ -387,7 +387,7 @@ test('dismissAlarm clears the triggered alarm and silences SmartThings alarm out
   assert.equal(result.alarmState, 'disarmed');
   assert.equal(result.disarmedBy, 'user-dismiss');
   assert.deepEqual(captured.states, ['Disarmed']);
-  assert.equal(captured.dismisses, 1);
+  assert.equal(captured.silenceTriggers, 1);
   assert.deepEqual(captured.silenced, [{
     deviceId: 'smartthings-siren-1',
     capabilities: ['alarm', 'switch'],
@@ -395,12 +395,12 @@ test('dismissAlarm clears the triggered alarm and silences SmartThings alarm out
   }]);
 });
 
-test('disarmAlarm also dismisses and silences SmartThings alarm outputs when the alarm is triggered', async (t) => {
+test('disarmAlarm also triggers silence automations and silences SmartThings alarm outputs when the alarm is triggered', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;
   const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
   const originalSetSecurityArmState = smartThingsService.setSecurityArmState;
-  const originalDismissSthmAlert = smartThingsService.dismissSthmAlert;
+  const originalTriggerSthmSilenceSwitch = smartThingsService.triggerSthmSilenceSwitch;
   const originalSilenceAlarmDevice = smartThingsService.silenceAlarmDevice;
 
   t.after(() => {
@@ -408,13 +408,13 @@ test('disarmAlarm also dismisses and silences SmartThings alarm outputs when the
     Device.find = originalDeviceFind;
     securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
     smartThingsService.setSecurityArmState = originalSetSecurityArmState;
-    smartThingsService.dismissSthmAlert = originalDismissSthmAlert;
+    smartThingsService.triggerSthmSilenceSwitch = originalTriggerSthmSilenceSwitch;
     smartThingsService.silenceAlarmDevice = originalSilenceAlarmDevice;
   });
 
   const captured = {
     states: [],
-    dismisses: 0,
+    silenceTriggers: 0,
     silenced: []
   };
 
@@ -443,15 +443,15 @@ test('disarmAlarm also dismisses and silences SmartThings alarm outputs when the
   });
   securityAlarmService.isSmartThingsConfiguredForSthm = async (options = {}) => (
     options.requireAllMappings === false
-      || (Array.isArray(options.requiredMappings) && options.requiredMappings.includes('dismiss'))
+      || (Array.isArray(options.requiredMappings) && options.requiredMappings.includes('silence'))
   );
   smartThingsService.setSecurityArmState = async (state) => {
     captured.states.push(state);
     return { armState: state };
   };
-  smartThingsService.dismissSthmAlert = async () => {
-    captured.dismisses += 1;
-    return { dismissed: true };
+  smartThingsService.triggerSthmSilenceSwitch = async () => {
+    captured.silenceTriggers += 1;
+    return { silenced: true };
   };
   smartThingsService.silenceAlarmDevice = async (deviceId) => {
     captured.silenced.push(deviceId);
@@ -463,6 +463,6 @@ test('disarmAlarm also dismisses and silences SmartThings alarm outputs when the
   assert.equal(result.alarmState, 'disarmed');
   assert.equal(result.disarmedBy, 'user-disarm');
   assert.deepEqual(captured.states, ['Disarmed']);
-  assert.equal(captured.dismisses, 1);
+  assert.equal(captured.silenceTriggers, 1);
   assert.deepEqual(captured.silenced, ['smartthings-siren-2']);
 });
