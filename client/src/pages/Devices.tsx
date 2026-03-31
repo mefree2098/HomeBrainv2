@@ -202,6 +202,14 @@ const looksLikeSmartThingsDimmer = (device: any): boolean => {
   return /\bdimmer\b/.test(descriptor)
 }
 
+const hasSmartThingsLevelState = (device: any): boolean => {
+  const levelValue = device?.properties?.smartThingsAttributeValues?.switchLevel?.level
+  const levelMetadata = device?.properties?.smartThingsAttributeMetadata?.switchLevel?.level
+
+  return levelValue !== undefined && levelValue !== null
+    || Boolean(levelMetadata && typeof levelMetadata === 'object' && Object.keys(levelMetadata).length > 0)
+}
+
 const supportsLightFade = (device: any): boolean => {
   if (!device) {
     return false
@@ -217,6 +225,10 @@ const supportsLightFade = (device: any): boolean => {
     }
 
     if (device.type === 'switch' && (hasSmartThingsCategory(device, 'light') || looksLikeSmartThingsDimmer(device))) {
+      return true
+    }
+
+    if (hasSmartThingsLevelState(device)) {
       return true
     }
   }

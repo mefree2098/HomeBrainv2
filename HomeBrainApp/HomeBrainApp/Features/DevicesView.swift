@@ -1400,6 +1400,19 @@ struct DevicesView: View {
         return descriptor.contains("dimmer")
     }
 
+    private func hasSmartThingsLevelState(_ device: DeviceItem) -> Bool {
+        let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
+        let attributeMetadata = JSON.object(device.properties["smartThingsAttributeMetadata"])
+        let levelValue = JSON.object(attributeValues["switchLevel"])["level"]
+        let levelObject = JSON.object(levelValue)
+        let levelMetadata = JSON.object(JSON.object(attributeMetadata["switchLevel"])["level"])
+
+        return levelValue is NSNumber
+            || levelValue is String
+            || !levelObject.isEmpty
+            || !levelMetadata.isEmpty
+    }
+
     private func isSmartThingsBackedDevice(_ device: DeviceItem) -> Bool {
         let source = stringValue(device.properties["source"]).lowercased()
         let hasDeviceId = !stringValue(device.properties["smartThingsDeviceId"]).isEmpty
@@ -1422,6 +1435,10 @@ struct DevicesView: View {
                 if categories.contains("light") || looksLikeSmartThingsDimmer(device) {
                     return true
                 }
+            }
+
+            if hasSmartThingsLevelState(device) {
+                return true
             }
         }
 
