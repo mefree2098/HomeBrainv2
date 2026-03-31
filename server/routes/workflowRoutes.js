@@ -39,6 +39,61 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+router.get('/runtime-history', async (req, res) => {
+  try {
+    const limit = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const history = await workflowService.getWorkflowRuntimeHistory(null, limit);
+    return res.status(200).json({
+      success: true,
+      history,
+      count: history.length
+    });
+  } catch (error) {
+    console.error('GET /api/workflows/runtime-history - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch workflow runtime history'
+    });
+  }
+});
+
+router.get('/runtime-history/:id', async (req, res) => {
+  try {
+    const limit = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const history = await workflowService.getWorkflowRuntimeHistory(req.params.id, limit);
+    return res.status(200).json({
+      success: true,
+      history,
+      count: history.length
+    });
+  } catch (error) {
+    const statusCode = error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
+    console.error(`GET /api/workflows/runtime-history/${req.params.id} - Error:`, error.message);
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to fetch workflow runtime history'
+    });
+  }
+});
+
+router.get('/running', async (req, res) => {
+  try {
+    const limit = Number.parseInt(String(req.query.limit ?? '25'), 10);
+    const executions = await workflowService.getRunningWorkflowExecutions(limit);
+    return res.status(200).json({
+      success: true,
+      executions,
+      count: executions.length
+    });
+  } catch (error) {
+    console.error('GET /api/workflows/running - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch running workflows'
+    });
+  }
+});
+
 router.post('/', admin, async (req, res) => {
   try {
     const workflow = await workflowService.createWorkflow(req.body || {}, {

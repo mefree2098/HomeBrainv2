@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom"
 import { Header } from "./Header"
 import { Sidebar } from "./Sidebar"
 import { Footer } from "./Footer"
+import { AutomationRuntimeToasts } from "@/components/automation/AutomationRuntimeToasts"
 import { DashboardChromeProvider } from "@/components/dashboard/DashboardChromeContext"
 import { useIsMobile } from "@/hooks/useMobile"
 import { cn } from "@/lib/utils"
@@ -120,6 +121,7 @@ export function Layout({ children }: LayoutProps) {
   return (
     <DashboardChromeProvider>
       <div className="relative min-h-screen overflow-hidden">
+        <AutomationRuntimeToasts />
         <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
           <div className="drift-slow absolute -left-24 top-20 h-[28rem] w-[28rem] rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/20" />
           <div className="drift-slow absolute right-[-10rem] top-[8rem] h-[30rem] w-[30rem] rounded-full bg-blue-300/25 blur-3xl dark:bg-blue-500/20" />

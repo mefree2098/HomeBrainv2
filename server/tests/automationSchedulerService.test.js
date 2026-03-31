@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationSchedulerService = require('../services/automationSchedulerService');
+const automationRuntimeService = require('../services/automationRuntimeService');
 const deviceService = require('../services/deviceService');
 const weatherService = require('../services/weatherService');
 
@@ -43,6 +44,52 @@ test('shouldRunAutomation triggers on security alarm state changes that match co
 
   alarmState = 'disarmed';
   assert.equal(await automationSchedulerService.shouldRunAutomation(automation, new Date()), false);
+});
+
+test('security alarm trigger evaluation publishes runtime activity when invoked from an alarm update', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalRecordEvaluation = automationRuntimeService.recordSchedulerSecurityAlarmEvaluation;
+  const evaluations = [];
+
+  SecurityAlarm.getMainAlarm = async () => ({ alarmState: 'armedStay' });
+  automationRuntimeService.recordSchedulerSecurityAlarmEvaluation = async (payload) => {
+    evaluations.push(payload);
+  };
+  automationSchedulerService.triggerStateCache.clear();
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    automationRuntimeService.recordSchedulerSecurityAlarmEvaluation = originalRecordEvaluation;
+    automationSchedulerService.triggerStateCache.clear();
+  });
+
+  const automation = {
+    _id: { toString: () => 'automation-2' },
+    name: 'Arm Stay Shutdown',
+    workflowId: { toString: () => 'workflow-1' },
+    enabled: true,
+    cooldown: 0,
+    trigger: {
+      type: 'security_alarm_status',
+      conditions: {
+        states: ['armedStay']
+      }
+    }
+  };
+
+  const shouldRun = await automationSchedulerService.shouldRunAutomation(
+    automation,
+    new Date(),
+    { source: 'security_alarm', reason: 'alarm state changed' }
+  );
+
+  assert.equal(shouldRun, true);
+  assert.equal(evaluations.length, 1);
+  assert.equal(evaluations[0].automationName, 'Arm Stay Shutdown');
+  assert.equal(evaluations[0].currentState, 'armedStay');
+  assert.equal(evaluations[0].matchedState, 'armedStay');
+  assert.equal(evaluations[0].willRun, true);
+  assert.equal(evaluations[0].reason, 'alarm state changed');
 });
 
 test('device_state triggers capture the triggering device context for later actions', async (t) => {

@@ -1,12 +1,15 @@
+const crypto = require('crypto');
 const Automation = require('../models/Automation');
 const AutomationHistory = require('../models/AutomationHistory');
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
+const Workflow = require('../models/Workflow');
 const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
 const deviceService = require('./deviceService');
 const mongoose = require('mongoose');
 const Settings = require('../models/Settings');
 const { executeActionSequence } = require('./workflowExecutionService');
+const automationRuntimeService = require('./automationRuntimeService');
 
 const MAX_LLM_RETRIES = 3;
 const MAX_DEVICE_PROMPT_ENTRIES = 40;
@@ -1950,6 +1953,9 @@ async function getAutomationStats() {
 async function executeAutomation(id, options = {}) {
   console.log(`AutomationService: Manually executing automation with ID: ${id}`);
 
+  let history = null;
+  let runtimeContext = null;
+
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new Error('Invalid automation ID format');
@@ -1967,21 +1973,91 @@ async function executeAutomation(id, options = {}) {
 
     const triggerType = options.triggerType || automation.trigger?.type || 'manual';
     const triggerSource = options.triggerSource || 'manual';
+    const triggerContext = options.context && typeof options.context === 'object'
+      ? { ...options.context }
+      : {};
+    const workflowId = automation.workflowId?._id?.toString?.()
+      || automation.workflowId?.toString?.()
+      || null;
+    const correlationId = options.correlationId || crypto.randomUUID();
 
     // Create history entry
-    const history = new AutomationHistory({
+    history = new AutomationHistory({
       automationId: automation._id,
       automationName: automation.name,
+      workflowId: automation.workflowId || null,
+      workflowName: workflowId ? automation.name : null,
       triggerType,
       triggerSource,
+      correlationId,
+      triggerContext,
       ...(options.voiceCommandId ? { voiceCommandId: options.voiceCommandId } : {}),
       totalActions: automation.actions.length,
+      environment: {
+        triggerType,
+        triggerSource,
+        context: triggerContext
+      },
       status: 'running'
     });
     await history.save();
 
+    runtimeContext = automationRuntimeService.buildExecutionContext({
+      automation,
+      history,
+      workflowId,
+      workflowName: workflowId ? automation.name : null,
+      correlationId,
+      triggerType,
+      triggerSource,
+      triggerContext,
+      totalActions: automation.actions.length
+    });
+
+    await automationRuntimeService.recordTriggerMatched(runtimeContext, {
+      message: `Trigger matched for "${automation.name}"`,
+      triggerContext
+    });
+    await automationRuntimeService.recordExecutionStarted(runtimeContext);
+
     const execution = await executeActionSequence(automation.actions, {
-      context: options.context || {}
+      context: triggerContext,
+      runtime: {
+        onActionStart: async ({ actionIndex, parentActionIndex, action }) => {
+          await automationRuntimeService.recordActionStarted(runtimeContext, {
+            actionIndex,
+            parentActionIndex,
+            actionType: action?.type || 'unknown',
+            target: Object.prototype.hasOwnProperty.call(action || {}, 'target') ? action?.target : null,
+            message: `Starting ${action?.type || 'action'} action`
+          });
+        },
+        onActionComplete: async ({ actionIndex, parentActionIndex, action, result, startedAt }) => {
+          await automationRuntimeService.recordActionCompleted(runtimeContext, {
+            actionIndex,
+            parentActionIndex,
+            actionType: action?.type || result?.actionType || 'unknown',
+            target: result?.target ?? action?.target ?? null,
+            durationMs: result?.durationMs ?? null,
+            message: result?.message || `Completed ${action?.type || 'action'} action`,
+            startedAt,
+            success: true
+          });
+        },
+        onActionError: async ({ actionIndex, parentActionIndex, action, error, result, startedAt }) => {
+          await automationRuntimeService.recordActionCompleted(runtimeContext, {
+            actionIndex,
+            parentActionIndex,
+            actionType: action?.type || result?.actionType || 'unknown',
+            target: result?.target ?? action?.target ?? null,
+            durationMs: result?.durationMs ?? null,
+            message: error?.message || `Failed ${action?.type || 'action'} action`,
+            error: error?.message || 'Action failed',
+            startedAt,
+            success: false
+          });
+        }
+      }
     });
     const actionResults = execution.actionResults || [];
     const finalStatus = execution.status || 'failed';
@@ -1989,6 +2065,12 @@ async function executeAutomation(id, options = {}) {
 
     history.actionResults = actionResults;
     await history.markCompleted(finalStatus);
+    await automationRuntimeService.recordExecutionCompleted(runtimeContext, {
+      status: finalStatus,
+      successfulActions: execution.successfulActions,
+      failedActions: execution.failedActions,
+      durationMs: history.durationMs
+    });
 
     // Update execution tracking
     automation.lastRun = new Date();
@@ -2005,6 +2087,23 @@ async function executeAutomation(id, options = {}) {
 
     await automation.save();
 
+    if (automation.workflowId) {
+      const workflow = await Workflow.findById(automation.workflowId);
+      if (workflow) {
+        workflow.lastRun = automation.lastRun;
+        workflow.executionCount = (workflow.executionCount || 0) + 1;
+        if (!allSuccess) {
+          workflow.lastError = {
+            message: automation.lastError?.message || execution.message || 'Workflow execution had errors',
+            timestamp: new Date()
+          };
+        } else {
+          workflow.lastError = undefined;
+        }
+        await workflow.save();
+      }
+    }
+
     console.log(`AutomationService: Automation "${automation.name}" executed with status: ${finalStatus}`);
     return {
       success: allSuccess,
@@ -2016,6 +2115,21 @@ async function executeAutomation(id, options = {}) {
       history: history.toObject()
     };
   } catch (error) {
+    if (history && runtimeContext && history.status === 'running') {
+      try {
+        await history.markCompleted('failed', error);
+        await automationRuntimeService.recordExecutionCompleted(runtimeContext, {
+          status: 'failed',
+          successfulActions: 0,
+          failedActions: 1,
+          durationMs: history.durationMs,
+          message: error.message || 'Automation execution failed'
+        });
+      } catch (loggingError) {
+        console.warn(`AutomationService: failed to persist runtime failure for ${id}: ${loggingError.message}`);
+      }
+    }
+
     console.error(`AutomationService: Error executing automation ${id}:`, error.message);
     console.error('AutomationService: Full error:', error);
 

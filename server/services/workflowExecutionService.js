@@ -289,6 +289,14 @@ function clearWorkflowStopRequest(workflowId) {
   workflowStopRequests.delete(String(workflowId));
 }
 
+async function invokeRuntimeHook(runtime, hookName, payload) {
+  if (!runtime || typeof runtime[hookName] !== 'function') {
+    return;
+  }
+
+  await runtime[hookName](payload);
+}
+
 function ensureWorkflowNotStopped(context = {}) {
   if (resolveWorkflowStopRequest(context.workflowId)) {
     throw new Error(`Workflow ${context.workflowId} was stopped`);
@@ -956,7 +964,9 @@ async function executeRepeat(action, context = {}, options = {}) {
       const nested = await executeActionSequence(rawActions, {
         context: nestedContext,
         depth: Number(options.depth || 0) + 1,
-        workflowControlDepth: Number(options.workflowControlDepth || 0)
+        workflowControlDepth: Number(options.workflowControlDepth || 0),
+        runtime: options.runtime,
+        parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex
       });
       nested.actionResults.forEach((result) => {
         nestedResults.push({
@@ -989,7 +999,9 @@ async function executeRepeat(action, context = {}, options = {}) {
       const nested = await executeActionSequence(rawActions, {
         context: nestedContext,
         depth: Number(options.depth || 0) + 1,
-        workflowControlDepth: Number(options.workflowControlDepth || 0)
+        workflowControlDepth: Number(options.workflowControlDepth || 0),
+        runtime: options.runtime,
+        parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex
       });
       nested.actionResults.forEach((result) => {
         nestedResults.push({
@@ -1119,7 +1131,9 @@ async function executeWorkflowControl(action, context = {}, options = {}) {
     const nested = await executeActionSequence(branchActions, {
       context: targetContext,
       depth: Number(options.depth || 0) + 1,
-      workflowControlDepth: nextControlDepth
+      workflowControlDepth: nextControlDepth,
+      runtime: options.runtime,
+      parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex
     });
 
     const branchState = !(operation === 'run_else' || operation === 'else');
@@ -1141,7 +1155,9 @@ async function executeWorkflowControl(action, context = {}, options = {}) {
     const nested = await executeActionSequence(Array.isArray(workflow.actions) ? workflow.actions : [], {
       context: targetContext,
       depth: Number(options.depth || 0) + 1,
-      workflowControlDepth: nextControlDepth
+      workflowControlDepth: nextControlDepth,
+      runtime: options.runtime,
+      parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex
     });
 
     return {
@@ -1239,6 +1255,12 @@ async function executeActionSequence(actions = [], options = {}) {
 
   const depth = Number(options.depth || 0);
   const workflowControlDepth = Number(options.workflowControlDepth || 0);
+  const runtime = options.runtime && typeof options.runtime === 'object'
+    ? options.runtime
+    : null;
+  const parentActionIndex = Number.isInteger(options.parentActionIndex)
+    ? options.parentActionIndex
+    : null;
   const results = [];
   let halt = false;
 
@@ -1249,14 +1271,32 @@ async function executeActionSequence(actions = [], options = {}) {
 
     const action = actions[index];
     const startedAt = Date.now();
+    const startedAtDate = new Date(startedAt);
 
     try {
       ensureWorkflowNotStopped(context);
-      const details = await executeAction(action, context, { depth, workflowControlDepth });
+      await invokeRuntimeHook(runtime, 'onActionStart', {
+        actionIndex: index,
+        parentActionIndex,
+        action,
+        context,
+        depth,
+        workflowControlDepth,
+        startedAt: startedAtDate
+      });
+
+      const details = await executeAction(action, context, {
+        depth,
+        workflowControlDepth,
+        runtime,
+        actionIndex: index,
+        parentActionIndex
+      });
       const conditionMet = details?.conditionMet;
 
-      results.push({
+      const resultEntry = {
         actionIndex: index,
+        parentActionIndex,
         actionType: action?.type || 'unknown',
         target: details?.target ?? action?.target ?? null,
         parameters: action?.parameters || {},
@@ -1264,6 +1304,19 @@ async function executeActionSequence(actions = [], options = {}) {
         executedAt: new Date(),
         durationMs: Date.now() - startedAt,
         message: details?.message || 'Action executed'
+      };
+
+      results.push(resultEntry);
+      await invokeRuntimeHook(runtime, 'onActionComplete', {
+        actionIndex: index,
+        parentActionIndex,
+        action,
+        result: resultEntry,
+        details,
+        context,
+        depth,
+        workflowControlDepth,
+        startedAt: startedAtDate
       });
 
       if (Array.isArray(details?.nestedActionResults) && details.nestedActionResults.length > 0) {
@@ -1291,7 +1344,9 @@ async function executeActionSequence(actions = [], options = {}) {
             const nested = await executeActionSequence(onFalseActions, {
               context,
               depth: depth + 1,
-              workflowControlDepth
+              workflowControlDepth,
+              runtime,
+              parentActionIndex: index
             });
             nested.actionResults.forEach((nestedResult) => {
               results.push({
@@ -1304,8 +1359,9 @@ async function executeActionSequence(actions = [], options = {}) {
         }
       }
     } catch (error) {
-      results.push({
+      const resultEntry = {
         actionIndex: index,
+        parentActionIndex,
         actionType: action?.type || 'unknown',
         target: action?.target ?? null,
         parameters: action?.parameters || {},
@@ -1313,6 +1369,19 @@ async function executeActionSequence(actions = [], options = {}) {
         error: error.message || 'Action failed',
         executedAt: new Date(),
         durationMs: Date.now() - startedAt
+      };
+
+      results.push(resultEntry);
+      await invokeRuntimeHook(runtime, 'onActionError', {
+        actionIndex: index,
+        parentActionIndex,
+        action,
+        result: resultEntry,
+        error,
+        context,
+        depth,
+        workflowControlDepth,
+        startedAt: startedAtDate
       });
 
       if (/was stopped$/i.test(String(error?.message || ''))) {

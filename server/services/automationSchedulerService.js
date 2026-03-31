@@ -2,6 +2,7 @@ const Automation = require('../models/Automation');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationService = require('./automationService');
+const automationRuntimeService = require('./automationRuntimeService');
 const deviceService = require('./deviceService');
 const weatherService = require('./weatherService');
 const { applyFlattenedUpdates, resolveDeviceProperty } = require('../utils/devicePropertyResolver');
@@ -265,10 +266,10 @@ class AutomationSchedulerService {
     }
 
     this.timer = setInterval(() => {
-      void this.tick();
+      void this.tick({ source: 'scheduler_interval' });
     }, this.intervalMs);
     console.log(`AutomationSchedulerService: started (interval ${this.intervalMs}ms)`);
-    void this.tick();
+    void this.tick({ source: 'scheduler_startup' });
   }
 
   stop() {
@@ -657,7 +658,7 @@ class AutomationSchedulerService {
     }
   }
 
-  async evaluateSecurityAlarmTrigger(automation) {
+  async evaluateSecurityAlarmTrigger(automation, runtimeContext = {}) {
     const conditions = automation?.trigger?.conditions || {};
     const rawStates = Array.isArray(conditions.states)
       ? conditions.states
@@ -679,6 +680,21 @@ class AutomationSchedulerService {
     this.triggerStateCache.set(cacheKey, matchedState);
 
     const shouldRun = Boolean(matchedState && lastMatchedState !== matchedState);
+    if (runtimeContext?.source === 'security_alarm') {
+      await automationRuntimeService.recordSchedulerSecurityAlarmEvaluation({
+        automationId: automation?._id?.toString?.() || null,
+        automationName: automation?.name || null,
+        workflowId: automation?.workflowId?.toString?.() || null,
+        workflowName: automation?.name || null,
+        currentState,
+        configuredStates: states,
+        matchedState,
+        previousMatchedState: lastMatchedState,
+        willRun: shouldRun,
+        reason: runtimeContext.reason || null
+      });
+    }
+
     if (shouldRun) {
       this.setPendingTriggerContext(automation._id.toString(), {
         triggeringAlarmState: matchedState
@@ -691,7 +707,7 @@ class AutomationSchedulerService {
     return shouldRun;
   }
 
-  async shouldRunAutomation(automation, now) {
+  async shouldRunAutomation(automation, now, runtimeContext = {}) {
     if (!automation?.enabled) {
       return false;
     }
@@ -713,12 +729,12 @@ class AutomationSchedulerService {
       return this.evaluateDeviceStateTrigger(automation, now);
     }
     if (triggerType === 'security_alarm_status') {
-      return this.evaluateSecurityAlarmTrigger(automation);
+      return this.evaluateSecurityAlarmTrigger(automation, runtimeContext);
     }
     return false;
   }
 
-  async tick() {
+  async tick(executionContext = {}) {
     if (this.running) {
       return;
     }
@@ -734,13 +750,35 @@ class AutomationSchedulerService {
       }).lean();
 
       for (const automation of automations) {
-        if (!await this.shouldRunAutomation(automation, now)) {
+        if (!await this.shouldRunAutomation(automation, now, executionContext)) {
           continue;
         }
 
-        const triggerContext = this.consumePendingTriggerContext(automation._id.toString());
+        const triggerContext = {
+          ...this.consumePendingTriggerContext(automation._id.toString()),
+          ...(executionContext?.source ? { schedulerSource: executionContext.source } : {}),
+          ...(executionContext?.reason ? { schedulerReason: executionContext.reason } : {})
+        };
 
         if (this.isAlreadyExecutedForCurrentMinute(automation._id.toString(), automation.trigger.type, now)) {
+          if (automation?.trigger?.type === 'security_alarm_status' || executionContext?.source === 'security_alarm') {
+            await automationRuntimeService.publishAutomationEvent('automation.trigger.skipped', {
+              automationId: automation?._id?.toString?.() || null,
+              automationName: automation?.name || null,
+              workflowId: automation?.workflowId?.toString?.() || null,
+              workflowName: automation?.name || null,
+              triggerType: automation?.trigger?.type || null,
+              triggerSource: 'scheduler',
+              triggerContext
+            }, {
+              source: 'automation_scheduler',
+              severity: 'warn',
+              payload: {
+                reason: 'already_executed_current_minute'
+              },
+              tags: ['automation', 'trigger', 'skipped']
+            });
+          }
           continue;
         }
 

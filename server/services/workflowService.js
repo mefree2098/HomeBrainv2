@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Workflow = require('../models/Workflow');
 const Automation = require('../models/Automation');
 const automationService = require('./automationService');
+const automationRuntimeService = require('./automationRuntimeService');
 const eventStreamService = require('./eventStreamService');
 
 function normalizeTrigger(trigger) {
@@ -214,6 +215,18 @@ class WorkflowService {
         return acc;
       }, {})
     };
+  }
+
+  async getWorkflowRuntimeHistory(workflowId = null, limit = 50) {
+    if (workflowId) {
+      await this.getWorkflowById(workflowId);
+    }
+
+    return automationRuntimeService.getWorkflowExecutionHistory(workflowId, limit);
+  }
+
+  async getRunningWorkflowExecutions(limit = 25) {
+    return automationRuntimeService.getRunningWorkflowExecutions(limit);
   }
 
   async syncWorkflowToAutomation(workflowId) {
