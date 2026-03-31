@@ -94,6 +94,12 @@ class EventStreamService extends EventEmitter {
     const source = typeof options.source === 'string' && options.source.trim()
       ? options.source.trim()
       : null;
+    const category = typeof options.category === 'string' && options.category.trim()
+      ? options.category.trim()
+      : null;
+    const correlationId = typeof options.correlationId === 'string' && options.correlationId.trim()
+      ? options.correlationId.trim()
+      : null;
 
     const query = {
       ...(sinceSequence > 0 ? { sequence: { $gt: sinceSequence } } : {})
@@ -103,6 +109,12 @@ class EventStreamService extends EventEmitter {
     }
     if (source) {
       query.source = source;
+    }
+    if (category) {
+      query.category = category;
+    }
+    if (correlationId) {
+      query.correlationId = correlationId;
     }
 
     const docs = await EventStreamEvent.find(query)
@@ -118,10 +130,40 @@ class EventStreamService extends EventEmitter {
     };
   }
 
-  async latest(limit = DEFAULT_REPLAY_LIMIT) {
-    const docs = await EventStreamEvent.find({})
+  async latest(options = DEFAULT_REPLAY_LIMIT) {
+    const limit = typeof options === 'number'
+      ? options
+      : Math.min(MAX_REPLAY_LIMIT, Math.max(1, Number(options?.limit) || DEFAULT_REPLAY_LIMIT));
+    const source = typeof options === 'object' && typeof options?.source === 'string' && options.source.trim()
+      ? options.source.trim()
+      : null;
+    const category = typeof options === 'object' && typeof options?.category === 'string' && options.category.trim()
+      ? options.category.trim()
+      : null;
+    const correlationId = typeof options === 'object' && typeof options?.correlationId === 'string' && options.correlationId.trim()
+      ? options.correlationId.trim()
+      : null;
+    const types = typeof options === 'object' && Array.isArray(options?.types)
+      ? options.types.map((value) => String(value).trim()).filter(Boolean)
+      : [];
+
+    const query = {};
+    if (source) {
+      query.source = source;
+    }
+    if (category) {
+      query.category = category;
+    }
+    if (correlationId) {
+      query.correlationId = correlationId;
+    }
+    if (types.length > 0) {
+      query.type = { $in: types };
+    }
+
+    const docs = await EventStreamEvent.find(query)
       .sort({ sequence: -1 })
-      .limit(Math.min(MAX_REPLAY_LIMIT, Math.max(1, Number(limit) || DEFAULT_REPLAY_LIMIT)));
+      .limit(limit);
     return docs.map((doc) => this.toPublicEvent(doc)).reverse();
   }
 

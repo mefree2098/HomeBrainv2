@@ -30,6 +30,15 @@ export interface EventSummaryResponse {
   bySeverity: Record<string, number>;
 }
 
+type EventQueryOptions = {
+  limit?: number;
+  sinceSequence?: number;
+  types?: string[];
+  source?: string | null;
+  category?: string | null;
+  correlationId?: string | null;
+};
+
 export const getEventSummary = async (windowMinutes = 60) => {
   const response = await api.get('/api/events/summary', {
     params: { windowMinutes }
@@ -37,37 +46,38 @@ export const getEventSummary = async (windowMinutes = 60) => {
   return response.data as EventSummaryResponse;
 };
 
-export const getLatestEvents = async (limit = 100) => {
+export const getLatestEvents = async (options: number | EventQueryOptions = 100) => {
+  const resolved = typeof options === "number"
+    ? { limit: options }
+    : options;
   const response = await api.get('/api/events/latest', {
-    params: { limit }
+    params: {
+      limit: resolved.limit ?? 100,
+      types: Array.isArray(resolved.types) && resolved.types.length > 0 ? resolved.types.join(',') : undefined,
+      source: resolved.source || undefined,
+      category: resolved.category || undefined,
+      correlationId: resolved.correlationId || undefined
+    }
   });
   return response.data as EventReplayResponse;
 };
 
-export const replayEvents = async (params: {
-  sinceSequence?: number;
-  limit?: number;
-  types?: string[];
-  source?: string | null;
-}) => {
+export const replayEvents = async (params: EventQueryOptions) => {
   const response = await api.get('/api/events/replay', {
     params: {
       sinceSequence: params.sinceSequence ?? 0,
       limit: params.limit ?? 100,
       types: Array.isArray(params.types) && params.types.length > 0 ? params.types.join(',') : undefined,
-      source: params.source || undefined
+      source: params.source || undefined,
+      category: params.category || undefined,
+      correlationId: params.correlationId || undefined
     }
   });
   return response.data as EventReplayResponse;
 };
 
 export const openEventStream = (
-  options: {
-    sinceSequence?: number;
-    limit?: number;
-    types?: string[];
-    source?: string | null;
-  },
+  options: EventQueryOptions,
   handlers: {
     onEvent: (event: PlatformEvent) => void;
     onReady?: (sinceSequence: number) => void;
@@ -86,6 +96,12 @@ export const openEventStream = (
   }
   if (typeof options.source === 'string' && options.source.trim()) {
     params.set('source', options.source.trim());
+  }
+  if (typeof options.category === 'string' && options.category.trim()) {
+    params.set('category', options.category.trim());
+  }
+  if (typeof options.correlationId === 'string' && options.correlationId.trim()) {
+    params.set('correlationId', options.correlationId.trim());
   }
 
   const url = params.toString()

@@ -25,7 +25,7 @@ function parseTypes(raw) {
     .filter(Boolean);
 }
 
-function matchesFilters(event, { types, source }) {
+function matchesFilters(event, { types, source, category, correlationId }) {
   if (!event) {
     return false;
   }
@@ -35,6 +35,14 @@ function matchesFilters(event, { types, source }) {
   }
 
   if (source && event.source !== source) {
+    return false;
+  }
+
+  if (category && event.category !== category) {
+    return false;
+  }
+
+  if (correlationId && event.correlationId !== correlationId) {
     return false;
   }
 
@@ -63,7 +71,23 @@ router.get('/summary', async (req, res) => {
 router.get('/latest', async (req, res) => {
   try {
     const limit = parsePositiveInt(req.query.limit, 100);
-    const events = await eventStreamService.latest(limit);
+    const types = parseTypes(req.query.types);
+    const source = typeof req.query.source === 'string' && req.query.source.trim()
+      ? req.query.source.trim()
+      : null;
+    const category = typeof req.query.category === 'string' && req.query.category.trim()
+      ? req.query.category.trim()
+      : null;
+    const correlationId = typeof req.query.correlationId === 'string' && req.query.correlationId.trim()
+      ? req.query.correlationId.trim()
+      : null;
+    const events = await eventStreamService.latest({
+      limit,
+      types,
+      source,
+      category,
+      correlationId
+    });
     return res.status(200).json({
       success: true,
       events,
@@ -87,12 +111,20 @@ router.get('/replay', async (req, res) => {
     const source = typeof req.query.source === 'string' && req.query.source.trim()
       ? req.query.source.trim()
       : null;
+    const category = typeof req.query.category === 'string' && req.query.category.trim()
+      ? req.query.category.trim()
+      : null;
+    const correlationId = typeof req.query.correlationId === 'string' && req.query.correlationId.trim()
+      ? req.query.correlationId.trim()
+      : null;
 
     const replay = await eventStreamService.replay({
       sinceSequence,
       limit,
       types,
-      source
+      source,
+      category,
+      correlationId
     });
 
     return res.status(200).json({
@@ -112,6 +144,12 @@ router.get('/stream', async (req, res) => {
   const types = parseTypes(req.query.types);
   const source = typeof req.query.source === 'string' && req.query.source.trim()
     ? req.query.source.trim()
+    : null;
+  const category = typeof req.query.category === 'string' && req.query.category.trim()
+    ? req.query.category.trim()
+    : null;
+  const correlationId = typeof req.query.correlationId === 'string' && req.query.correlationId.trim()
+    ? req.query.correlationId.trim()
     : null;
   let sinceSequence = parsePositiveInt(req.query.sinceSequence, 0);
   const limit = parsePositiveInt(req.query.limit, 100);
@@ -138,7 +176,9 @@ router.get('/stream', async (req, res) => {
       sinceSequence,
       limit,
       types,
-      source
+      source,
+      category,
+      correlationId
     });
     replay.events.forEach(writeEvent);
   } catch (error) {
@@ -160,7 +200,7 @@ router.get('/stream', async (req, res) => {
     if ((Number(event?.sequence) || 0) <= sinceSequence) {
       return;
     }
-    if (!matchesFilters(event, { types, source })) {
+    if (!matchesFilters(event, { types, source, category, correlationId })) {
       return;
     }
     writeEvent(event);

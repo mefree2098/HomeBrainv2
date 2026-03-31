@@ -207,7 +207,10 @@ const requestSecurityAlarmAutomationEvaluation = (reason) => {
   try {
     const automationSchedulerService = require('./automationSchedulerService');
     console.log(`SecurityAlarmService: Requesting automation scheduler evaluation after ${reason}`);
-    void automationSchedulerService.tick();
+    void automationSchedulerService.tick({
+      source: 'security_alarm',
+      reason
+    });
   } catch (error) {
     console.warn(`SecurityAlarmService: Failed to request automation evaluation after ${reason}: ${error.message}`);
   }

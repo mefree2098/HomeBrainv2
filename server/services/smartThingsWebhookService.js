@@ -32,7 +32,10 @@ const requestSecurityAlarmAutomationEvaluation = (reason, log) => {
   try {
     const automationSchedulerService = require('./automationSchedulerService');
     log('info', 'Requesting automation scheduler evaluation after alarm state change', { reason });
-    void automationSchedulerService.tick();
+    void automationSchedulerService.tick({
+      source: 'smartthings_alarm_webhook',
+      reason
+    });
   } catch (error) {
     log('warn', 'Failed to request automation scheduler evaluation after alarm state change', {
       reason,

@@ -5,6 +5,8 @@ const actionResultSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  parentActionIndex: Number,
+  repeatIteration: Number,
   actionType: {
     type: String,
     required: true,
@@ -16,12 +18,49 @@ const actionResultSchema = new mongoose.Schema({
     type: Boolean,
     required: true
   },
+  message: String,
   error: String,
+  conditionMet: Boolean,
+  conditionOutcome: String,
   executedAt: {
     type: Date,
     default: Date.now
   },
   durationMs: Number
+}, { _id: false });
+
+const currentActionSchema = new mongoose.Schema({
+  actionIndex: Number,
+  parentActionIndex: Number,
+  actionType: String,
+  target: mongoose.Schema.Types.Mixed,
+  startedAt: Date,
+  updatedAt: Date,
+  message: String
+}, { _id: false });
+
+const executionEventSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    required: true
+  },
+  level: {
+    type: String,
+    enum: ['info', 'warn', 'error'],
+    default: 'info'
+  },
+  message: {
+    type: String,
+    required: true
+  },
+  details: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
 }, { _id: false });
 
 const automationHistorySchema = new mongoose.Schema({
@@ -33,6 +72,15 @@ const automationHistorySchema = new mongoose.Schema({
   automationName: {
     type: String,
     required: true
+  },
+  workflowId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Workflow',
+    default: null
+  },
+  workflowName: {
+    type: String,
+    default: null
   },
   triggerType: {
     type: String,
@@ -48,6 +96,10 @@ const automationHistorySchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'VoiceCommand'
   },
+  correlationId: {
+    type: String,
+    index: true
+  },
   // Execution details
   status: {
     type: String,
@@ -61,6 +113,19 @@ const automationHistorySchema = new mongoose.Schema({
   },
   completedAt: Date,
   durationMs: Number,
+  triggerContext: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  currentAction: currentActionSchema,
+  lastEvent: {
+    type: executionEventSchema,
+    default: null
+  },
+  runtimeEvents: {
+    type: [executionEventSchema],
+    default: []
+  },
   // Action results
   actionResults: [actionResultSchema],
   totalActions: {
@@ -93,15 +158,18 @@ const automationHistorySchema = new mongoose.Schema({
 
 // Indexes for efficient querying
 automationHistorySchema.index({ automationId: 1, startedAt: -1 });
+automationHistorySchema.index({ workflowId: 1, startedAt: -1 });
 automationHistorySchema.index({ status: 1, startedAt: -1 });
 automationHistorySchema.index({ startedAt: -1 });
 automationHistorySchema.index({ voiceCommandId: 1 });
+automationHistorySchema.index({ correlationId: 1, startedAt: -1 });
 
 // Method to mark execution as completed
 automationHistorySchema.methods.markCompleted = function(status, error = null) {
   this.status = status;
   this.completedAt = new Date();
   this.durationMs = this.completedAt - this.startedAt;
+  this.currentAction = null;
 
   if (error) {
     this.error = {

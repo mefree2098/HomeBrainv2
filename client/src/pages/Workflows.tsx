@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
+  Activity,
   Bot,
   Copy,
   Download,
   History,
+  Loader2,
   MessageSquareText,
   Play,
   Plus,
+  RefreshCw,
   Sparkles,
   Trash2,
   Upload,
@@ -18,19 +21,26 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/useToast";
 import { WorkflowBuilderDialog } from "@/components/workflows/WorkflowBuilderDialog";
 import {
   Workflow,
   WorkflowAction,
+  WorkflowExecutionHistoryEntry,
   createWorkflow,
   createWorkflowFromText,
   deleteWorkflow,
   executeWorkflow,
+  getRunningWorkflowExecutions,
+  getWorkflowRuntimeHistory,
   getWorkflows,
   toggleWorkflow,
   updateWorkflow
 } from "@/api/workflows";
+import { PlatformEvent, getLatestEvents, openEventStream } from "@/api/events";
 import { getDevices } from "@/api/devices";
 import { getScenes } from "@/api/scenes";
 import { interpretVoiceCommand } from "@/api/voice";
@@ -68,6 +78,138 @@ const formatLastRun = (value?: string | null) => {
   }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Never" : date.toLocaleString();
+};
+
+const AUTOMATION_ACTIVITY_LIMIT = 80;
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) {
+    return "Unknown";
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
+};
+
+const formatDuration = (value?: number | null) => {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "In progress";
+  }
+
+  if (ms < 1000) {
+    return `${Math.round(ms)} ms`;
+  }
+
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+};
+
+const formatRunningSince = (value?: string | null) => {
+  if (!value) {
+    return "Just now";
+  }
+
+  const date = new Date(value);
+  const startedAt = date.getTime();
+  if (Number.isNaN(startedAt)) {
+    return "Just now";
+  }
+
+  return formatDuration(Date.now() - startedAt);
+};
+
+const runtimeStatusLabel = (status: WorkflowExecutionHistoryEntry["status"]) => {
+  switch (status) {
+    case "success":
+      return "Success";
+    case "partial_success":
+      return "Partial";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Stopped";
+    case "running":
+    default:
+      return "Running";
+  }
+};
+
+const runtimeStatusClassName = (status: WorkflowExecutionHistoryEntry["status"]) => {
+  switch (status) {
+    case "success":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200";
+    case "partial_success":
+      return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200";
+    case "failed":
+      return "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200";
+    case "cancelled":
+      return "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/30 dark:bg-slate-500/10 dark:text-slate-200";
+    case "running":
+    default:
+      return "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200";
+  }
+};
+
+const activitySeverityClassName = (severity: PlatformEvent["severity"]) => {
+  switch (severity) {
+    case "error":
+      return "border-red-200/80 bg-red-50/80 dark:border-red-500/20 dark:bg-red-500/10";
+    case "warn":
+      return "border-amber-200/80 bg-amber-50/80 dark:border-amber-500/20 dark:bg-amber-500/10";
+    case "info":
+    default:
+      return "border-border/70 bg-background/70";
+  }
+};
+
+const activitySummary = (event: PlatformEvent) => {
+  const payload = event.payload || {};
+  const workflowName = typeof payload.workflowName === "string" && payload.workflowName.trim()
+    ? payload.workflowName.trim()
+    : "";
+  const automationName = typeof payload.automationName === "string" && payload.automationName.trim()
+    ? payload.automationName.trim()
+    : "";
+  const name = workflowName || automationName || "Automation";
+
+  switch (event.type) {
+    case "automation.trigger.security_alarm_evaluated": {
+      const currentState = typeof payload.currentState === "string" ? payload.currentState : "unknown";
+      const configuredStates = Array.isArray(payload.configuredStates)
+        ? payload.configuredStates.join(", ")
+        : "none";
+      return `${name}: alarm state ${currentState}, watching ${configuredStates}`;
+    }
+    case "automation.trigger.skipped":
+      return `${name}: trigger skipped`;
+    case "automation.trigger.matched":
+      return `${name}: trigger matched`;
+    case "automation.execution.started":
+      return `${name}: execution started`;
+    case "automation.execution.completed":
+      return `${name}: execution ${typeof payload.status === "string" ? payload.status.replace(/_/g, " ") : "finished"}`;
+    case "automation.action.started":
+    case "automation.action.completed":
+    case "automation.action.failed": {
+      const actionType = typeof payload.actionType === "string" ? payload.actionType.replace(/_/g, " ") : "action";
+      return `${name}: ${actionType}`;
+    }
+    default:
+      return `${name}: ${event.type}`;
+  }
 };
 
 type WorkflowTemplateDefinition = {
@@ -181,10 +323,13 @@ export function Workflows() {
   const { toast } = useToast();
   const { isAdmin } = useAuth();
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const activityCleanupRef = useRef<null | (() => void)>(null);
+  const latestActivitySequenceRef = useRef(0);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [devices, setDevices] = useState<DeviceLite[]>([]);
   const [scenes, setScenes] = useState<SceneLite[]>([]);
   const [loading, setLoading] = useState(true);
+  const [runtimeRefreshing, setRuntimeRefreshing] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = useState<Workflow | null>(null);
   const [savingWorkflow, setSavingWorkflow] = useState(false);
@@ -193,8 +338,50 @@ export function Workflows() {
   const [chatCommand, setChatCommand] = useState("");
   const [runningChatCommand, setRunningChatCommand] = useState(false);
   const [lastChatResult, setLastChatResult] = useState<string>("");
+  const [runningExecutions, setRunningExecutions] = useState<WorkflowExecutionHistoryEntry[]>([]);
+  const [runtimeHistory, setRuntimeHistory] = useState<WorkflowExecutionHistoryEntry[]>([]);
+  const [activityEvents, setActivityEvents] = useState<PlatformEvent[]>([]);
+  const [activityConnected, setActivityConnected] = useState(false);
+  const [selectedExecution, setSelectedExecution] = useState<WorkflowExecutionHistoryEntry | null>(null);
+  const [selectedExecutionEvents, setSelectedExecutionEvents] = useState<PlatformEvent[]>([]);
+  const [loadingExecutionEvents, setLoadingExecutionEvents] = useState(false);
 
-  const fetchData = async () => {
+  const loadRuntimeData = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!options.silent) {
+      setRuntimeRefreshing(true);
+    }
+
+    try {
+      const [runningResponse, historyResponse, eventsResponse] = await Promise.all([
+        getRunningWorkflowExecutions(20),
+        getWorkflowRuntimeHistory(null, 50),
+        getLatestEvents({
+          limit: AUTOMATION_ACTIVITY_LIMIT,
+          category: "automation"
+        })
+      ]);
+
+      setRunningExecutions(runningResponse.executions || []);
+      setRuntimeHistory(historyResponse.history || []);
+      const latestEvents = Array.isArray(eventsResponse.events) ? eventsResponse.events : [];
+      setActivityEvents(latestEvents.slice().reverse());
+      latestActivitySequenceRef.current = eventsResponse.lastSequence || 0;
+    } catch (error) {
+      if (!options.silent) {
+        toast({
+          title: "Failed to load automation runtime",
+          description: errorMessage(error, "Unable to load automation runtime activity."),
+          variant: "destructive"
+        });
+      }
+    } finally {
+      if (!options.silent) {
+        setRuntimeRefreshing(false);
+      }
+    }
+  }, [toast]);
+
+  const fetchData = useCallback(async () => {
     try {
       const [workflowResponse, devicesResponse, scenesResponse] = await Promise.all([
         getWorkflows(),
@@ -204,6 +391,7 @@ export function Workflows() {
       setWorkflows(workflowResponse.workflows || []);
       setDevices(devicesResponse.devices || []);
       setScenes(scenesResponse.scenes || []);
+      await loadRuntimeData({ silent: true });
     } catch (error) {
       toast({
         title: "Failed to load workflows",
@@ -213,11 +401,11 @@ export function Workflows() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [loadRuntimeData, toast]);
 
   useEffect(() => {
     void fetchData();
-  }, []);
+  }, [fetchData]);
 
   const stats = useMemo(() => {
     const enabled = workflows.filter((workflow) => workflow.enabled).length;
@@ -229,6 +417,147 @@ export function Workflows() {
       withVoiceAliases
     };
   }, [workflows]);
+
+  const workflowNameLookup = useMemo(() => {
+    return new Map(workflows.map((workflow) => [workflow._id, workflow.name]));
+  }, [workflows]);
+
+  const runningWorkflowIds = useMemo(() => {
+    return new Set(runningExecutions
+      .map((entry) => entry.workflowId)
+      .filter((value): value is string => typeof value === "string" && value.length > 0));
+  }, [runningExecutions]);
+
+  const resolveExecutionName = useCallback((entry: Partial<WorkflowExecutionHistoryEntry> | null | undefined) => {
+    if (!entry) {
+      return "Workflow";
+    }
+    if (entry.workflowId && workflowNameLookup.has(entry.workflowId)) {
+      return workflowNameLookup.get(entry.workflowId) || "Workflow";
+    }
+    return entry.workflowName || entry.automationName || "Workflow";
+  }, [workflowNameLookup]);
+
+  const openExecutionLogs = useCallback(async (entry: WorkflowExecutionHistoryEntry) => {
+    setSelectedExecution(entry);
+    setLoadingExecutionEvents(true);
+
+    try {
+      if (!entry.correlationId) {
+        setSelectedExecutionEvents([]);
+        return;
+      }
+
+      const response = await getLatestEvents({
+        limit: 200,
+        category: "automation",
+        correlationId: entry.correlationId
+      });
+      setSelectedExecutionEvents(Array.isArray(response.events) ? response.events : []);
+    } catch (error) {
+      toast({
+        title: "Failed to load execution logs",
+        description: errorMessage(error, "Unable to load runtime logs for this workflow."),
+        variant: "destructive"
+      });
+      setSelectedExecutionEvents([]);
+    } finally {
+      setLoadingExecutionEvents(false);
+    }
+  }, [toast]);
+
+  const handleAutomationEvent = useCallback((event: PlatformEvent) => {
+    latestActivitySequenceRef.current = Math.max(latestActivitySequenceRef.current, Number(event.sequence) || 0);
+    setActivityEvents((prev) => [event, ...prev].slice(0, AUTOMATION_ACTIVITY_LIMIT));
+
+    if (selectedExecution?.correlationId && event.correlationId === selectedExecution.correlationId) {
+      setSelectedExecutionEvents((prev) => {
+        if (prev.some((entry) => entry.id === event.id)) {
+          return prev;
+        }
+        return [...prev, event];
+      });
+    }
+
+    if (event.type === "automation.action.started" || event.type === "automation.action.completed" || event.type === "automation.action.failed") {
+      const payload = event.payload || {};
+      const correlationId = typeof payload.correlationId === "string" && payload.correlationId.trim()
+        ? payload.correlationId.trim()
+        : event.correlationId || "";
+
+      if (correlationId) {
+        setRunningExecutions((prev) => prev.map((entry) => (
+          entry.correlationId === correlationId
+            ? {
+                ...entry,
+                currentAction: event.type === "automation.action.started"
+                  ? {
+                      actionIndex: typeof payload.actionIndex === "number" ? payload.actionIndex : undefined,
+                      parentActionIndex: typeof payload.parentActionIndex === "number" ? payload.parentActionIndex : null,
+                      actionType: typeof payload.actionType === "string" ? payload.actionType : undefined,
+                      target: payload.target,
+                      startedAt: event.createdAt,
+                      updatedAt: event.createdAt,
+                      message: typeof payload.message === "string" ? payload.message : "Action running"
+                    }
+                  : event.type === "automation.action.failed"
+                    ? {
+                        actionIndex: typeof payload.actionIndex === "number" ? payload.actionIndex : undefined,
+                        parentActionIndex: typeof payload.parentActionIndex === "number" ? payload.parentActionIndex : null,
+                        actionType: typeof payload.actionType === "string" ? payload.actionType : undefined,
+                        target: payload.target,
+                        updatedAt: event.createdAt,
+                        message: typeof payload.message === "string" ? payload.message : "Action failed"
+                      }
+                    : null,
+                lastEvent: {
+                  type: event.type,
+                  level: event.severity,
+                  message: typeof payload.message === "string" ? payload.message : activitySummary(event),
+                  details: payload,
+                  createdAt: event.createdAt
+                }
+              }
+            : entry
+        )));
+      }
+    }
+
+    if (event.type === "automation.execution.started" || event.type === "automation.execution.completed") {
+      void loadRuntimeData({ silent: true });
+    }
+  }, [loadRuntimeData, selectedExecution]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    activityCleanupRef.current?.();
+    activityCleanupRef.current = openEventStream(
+      {
+        sinceSequence: latestActivitySequenceRef.current || 0,
+        limit: AUTOMATION_ACTIVITY_LIMIT,
+        category: "automation"
+      },
+      {
+        onEvent: handleAutomationEvent,
+        onReady: (sinceSequence) => {
+          setActivityConnected(true);
+          latestActivitySequenceRef.current = Math.max(latestActivitySequenceRef.current, sinceSequence || 0);
+        },
+        onError: () => {
+          setActivityConnected(false);
+        }
+      }
+    );
+
+    return () => {
+      activityCleanupRef.current?.();
+      activityCleanupRef.current = null;
+      setActivityConnected(false);
+    };
+  }, [handleAutomationEvent, loading]);
 
   const openCreateDialog = () => {
     setSelectedWorkflow(null);
@@ -331,6 +660,7 @@ export function Workflows() {
       if (nextWorkflow) {
         setWorkflows((prev) => prev.map((entry) => (entry._id === workflow._id ? nextWorkflow : entry)));
       }
+      void loadRuntimeData({ silent: true });
       toast({
         title: response.success ? "Workflow executed" : "Workflow executed with issues",
         description: response.message || `${workflow.name} run complete.`
@@ -678,6 +1008,197 @@ export function Workflows() {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-4 w-4" />
+                Automation Runtime
+              </CardTitle>
+              <CardDescription>
+                Live execution state, recent trigger evaluations, and runtime logs for workflow-backed automations.
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className={cn(activityConnected && "border-cyan-300 text-cyan-700 dark:text-cyan-200")}>
+                {activityConnected ? "Live connected" : "Live reconnecting"}
+              </Badge>
+              <Button variant="outline" size="sm" onClick={() => void loadRuntimeData()} disabled={runtimeRefreshing}>
+                {runtimeRefreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Refresh Runtime
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-foreground">Running Now</div>
+                <Badge variant="outline">{runningExecutions.length}</Badge>
+              </div>
+              {runningExecutions.length > 0 ? (
+                <div className="grid gap-3">
+                  {runningExecutions.map((execution) => (
+                    <div
+                      key={execution._id}
+                      className="rounded-2xl border border-cyan-200/60 bg-cyan-50/50 p-4 dark:border-cyan-500/20 dark:bg-cyan-500/10"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold">{resolveExecutionName(execution)}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Trigger: {execution.triggerType.replace(/_/g, " ")} via {execution.triggerSource.replace(/_/g, " ")}
+                          </div>
+                        </div>
+                        <span className="rounded-full border border-cyan-200 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200">
+                          Running
+                        </span>
+                      </div>
+
+                      <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Started</div>
+                          <div className="mt-1 font-medium">{formatDateTime(execution.startedAt)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Elapsed</div>
+                          <div className="mt-1 font-medium">{formatRunningSince(execution.startedAt)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Current Step</div>
+                          <div className="mt-1 font-medium">
+                            {execution.currentAction?.message || execution.lastEvent?.message || "Waiting for next action"}
+                          </div>
+                        </div>
+                      </div>
+
+                      {execution.lastEvent?.message ? (
+                        <div className="mt-3 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
+                          Latest update: {execution.lastEvent.message}
+                        </div>
+                      ) : null}
+
+                      <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                        <span>
+                          Progress: {execution.successfulActions || 0}/{execution.totalActions || 0} steps finished
+                        </span>
+                        <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(execution)}>
+                          View Logs
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
+                  No workflow-backed automations are running right now.
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-foreground">Live Activity</div>
+                <Badge variant="outline">{activityEvents.length}</Badge>
+              </div>
+              <ScrollArea className="h-[360px] rounded-2xl border border-border/70 bg-background/70">
+                <div className="space-y-3 p-3">
+                  {activityEvents.length > 0 ? activityEvents.map((event) => (
+                    <div
+                      key={event.id}
+                      className={cn("rounded-xl border px-3 py-3 text-sm", activitySeverityClassName(event.severity))}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{activitySummary(event)}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(event.createdAt)}</div>
+                        </div>
+                        <Badge variant="outline" className="text-[10px] uppercase tracking-[0.16em]">
+                          {event.severity}
+                        </Badge>
+                      </div>
+                      {typeof event.payload?.message === "string" && event.payload.message.trim() ? (
+                        <div className="mt-2 text-xs text-muted-foreground">{event.payload.message}</div>
+                      ) : null}
+                    </div>
+                  )) : (
+                    <div className="rounded-xl border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
+                      Automation activity will appear here as workflows trigger and run.
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-foreground">Recent Executions</div>
+              <div className="text-xs text-muted-foreground">
+                Shows the latest persisted runtime records for workflow-backed automations.
+              </div>
+            </div>
+            <div className="rounded-2xl border border-border/70 bg-background/70">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Workflow</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Trigger</TableHead>
+                    <TableHead>Started</TableHead>
+                    <TableHead>Duration</TableHead>
+                    <TableHead>Result</TableHead>
+                    <TableHead className="text-right">Logs</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {runtimeHistory.length > 0 ? runtimeHistory.map((entry) => (
+                    <TableRow key={entry._id}>
+                      <TableCell>
+                        <div className="font-medium">{resolveExecutionName(entry)}</div>
+                        <div className="text-xs text-muted-foreground">{entry.automationName}</div>
+                      </TableCell>
+                      <TableCell>
+                        <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold", runtimeStatusClassName(entry.status))}>
+                          {runtimeStatusLabel(entry.status)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {entry.triggerType.replace(/_/g, " ")}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {formatDateTime(entry.startedAt)}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {entry.status === "running" ? formatRunningSince(entry.startedAt) : formatDuration(entry.durationMs)}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {entry.lastEvent?.message || (entry.failedActions > 0
+                          ? `${entry.failedActions} step(s) failed`
+                          : `${entry.successfulActions || 0} step(s) succeeded`)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(entry)}>
+                          View Logs
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )) : (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
+                        No workflow execution history has been recorded yet.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="space-y-4">
         {workflows.map((workflow) => (
           <Card
@@ -694,6 +1215,11 @@ export function Workflows() {
                   <CardDescription>{workflow.description || "No description provided."}</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
+                  {runningWorkflowIds.has(workflow._id) ? (
+                    <div className="flex min-w-[96px] items-center justify-center rounded-full border border-cyan-200/90 bg-cyan-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200">
+                      Running
+                    </div>
+                  ) : null}
                   <div
                     className={cn(
                       "flex min-w-[112px] items-center justify-center rounded-full border px-4 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] transition-all",
@@ -806,6 +1332,94 @@ export function Workflows() {
           </CardContent>
         </Card>
       ) : null}
+
+      <Dialog open={Boolean(selectedExecution)} onOpenChange={(open) => {
+        if (!open) {
+          setSelectedExecution(null);
+          setSelectedExecutionEvents([]);
+        }
+      }}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedExecution ? resolveExecutionName(selectedExecution) : "Execution Logs"}
+            </DialogTitle>
+            <DialogDescription>
+              {selectedExecution
+                ? `Started ${formatDateTime(selectedExecution.startedAt)} from ${selectedExecution.triggerType.replace(/_/g, " ")}.`
+                : "Detailed runtime logs for the selected workflow execution."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedExecution ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className="rounded-xl border bg-muted/30 p-3">
+                  <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Status</div>
+                  <div className="mt-2">
+                    <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold", runtimeStatusClassName(selectedExecution.status))}>
+                      {runtimeStatusLabel(selectedExecution.status)}
+                    </span>
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-muted/30 p-3">
+                  <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Started</div>
+                  <div className="mt-2 text-sm font-medium">{formatDateTime(selectedExecution.startedAt)}</div>
+                </div>
+                <div className="rounded-xl border bg-muted/30 p-3">
+                  <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Duration</div>
+                  <div className="mt-2 text-sm font-medium">
+                    {selectedExecution.status === "running"
+                      ? formatRunningSince(selectedExecution.startedAt)
+                      : formatDuration(selectedExecution.durationMs)}
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-muted/30 p-3">
+                  <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Result</div>
+                  <div className="mt-2 text-sm font-medium">
+                    {selectedExecution.failedActions > 0
+                      ? `${selectedExecution.failedActions} failed`
+                      : `${selectedExecution.successfulActions || 0} succeeded`}
+                  </div>
+                </div>
+              </div>
+
+              <ScrollArea className="h-[420px] rounded-2xl border border-border/70 bg-background/70">
+                <div className="space-y-3 p-4">
+                  {loadingExecutionEvents ? (
+                    <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Loading runtime logs...
+                    </div>
+                  ) : selectedExecutionEvents.length > 0 ? selectedExecutionEvents.map((event) => (
+                    <div
+                      key={event.id}
+                      className={cn("rounded-xl border px-3 py-3", activitySeverityClassName(event.severity))}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{activitySummary(event)}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(event.createdAt)}</div>
+                        </div>
+                        <Badge variant="outline" className="text-[10px] uppercase tracking-[0.16em]">
+                          {event.type.replace("automation.", "")}
+                        </Badge>
+                      </div>
+                      {typeof event.payload?.message === "string" && event.payload.message.trim() ? (
+                        <div className="mt-2 text-sm text-muted-foreground">{event.payload.message}</div>
+                      ) : null}
+                    </div>
+                  )) : (
+                    <div className="rounded-xl border border-dashed border-border/70 px-4 py-12 text-center text-sm text-muted-foreground">
+                      No detailed runtime events were recorded for this execution.
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <WorkflowBuilderDialog
         open={dialogOpen}

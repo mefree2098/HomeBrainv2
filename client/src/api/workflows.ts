@@ -75,6 +75,48 @@ export interface Workflow {
   updatedAt: string;
 }
 
+export interface WorkflowExecutionEventSummary {
+  type: string;
+  level: "info" | "warn" | "error";
+  message: string;
+  details?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface WorkflowCurrentAction {
+  actionIndex?: number;
+  parentActionIndex?: number | null;
+  actionType?: string;
+  target?: unknown;
+  startedAt?: string;
+  updatedAt?: string;
+  message?: string;
+}
+
+export interface WorkflowExecutionHistoryEntry {
+  _id: string;
+  automationId: string;
+  automationName: string;
+  workflowId?: string | null;
+  workflowName?: string | null;
+  triggerType: WorkflowTriggerType | string;
+  triggerSource: string;
+  correlationId?: string | null;
+  status: "running" | "success" | "partial_success" | "failed" | "cancelled";
+  startedAt: string;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  totalActions: number;
+  successfulActions: number;
+  failedActions: number;
+  triggerContext?: Record<string, unknown>;
+  currentAction?: WorkflowCurrentAction | null;
+  lastEvent?: WorkflowExecutionEventSummary | null;
+  runtimeEvents?: WorkflowExecutionEventSummary[];
+  actionResults?: Array<Record<string, unknown>>;
+  error?: { message?: string; stack?: string; failedAt?: string } | null;
+}
+
 export const getWorkflows = async (): Promise<{ success: boolean; workflows: Workflow[]; count: number }> => {
   try {
     const response = await api.get("/api/workflows");
@@ -165,6 +207,39 @@ export const getWorkflowStats = async () => {
         disabled: number;
         categories: Record<string, number>;
       };
+    };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const getWorkflowRuntimeHistory = async (workflowId?: string | null, limit = 50) => {
+  try {
+    const path = workflowId
+      ? `/api/workflows/runtime-history/${workflowId}`
+      : "/api/workflows/runtime-history";
+    const response = await api.get(path, {
+      params: { limit }
+    });
+    return response.data as {
+      success: boolean;
+      history: WorkflowExecutionHistoryEntry[];
+      count: number;
+    };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const getRunningWorkflowExecutions = async (limit = 25) => {
+  try {
+    const response = await api.get("/api/workflows/running", {
+      params: { limit }
+    });
+    return response.data as {
+      success: boolean;
+      executions: WorkflowExecutionHistoryEntry[];
+      count: number;
     };
   } catch (error) {
     throw new Error(getApiErrorMessage(error));
