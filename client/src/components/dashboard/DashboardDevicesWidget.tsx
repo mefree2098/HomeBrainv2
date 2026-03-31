@@ -514,53 +514,59 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
   }
 
   return (
-    <Card className="h-full rounded-[1.25rem] border-white/10 bg-white/80 shadow-sm backdrop-blur dark:bg-slate-950/28">
+    <Card className="h-full rounded-[1.25rem] border border-white/10 bg-[radial-gradient(circle_at_top,rgba(148,163,184,0.28),rgba(15,23,42,0.92)_72%)] shadow-[0_24px_48px_-28px_rgba(15,23,42,0.95)] backdrop-blur-md">
       <CardContent className="flex h-full min-h-[188px] flex-col p-3">
         <div className="mb-2 flex min-h-[3.25rem] items-start gap-2">
           <div className="min-w-0 flex-1 space-y-1">
             <p className={cn(
-              "min-h-[2.35rem] line-clamp-2 font-semibold leading-tight text-foreground",
+              "min-h-[2.35rem] line-clamp-2 font-semibold leading-tight text-white",
               getDenseDeviceNameClass(device.name)
             )}>
               {device.name}
             </p>
-            <p className="line-clamp-1 text-[11px] text-muted-foreground">{device.room || "Unassigned"}</p>
+            <p className="line-clamp-1 text-[11px] text-slate-300/75">{device.room || "Unassigned"}</p>
           </div>
           {supportsColor ? (
-            <input
-              type="color"
-              value={color}
-              aria-label={`Set color for ${device.name}`}
-              onChange={(event) => {
-                const nextColor = normalizeHexColor(event.target.value)
-                setColor(nextColor)
-                onControl(device._id, "set_color", nextColor)
-              }}
-              className="mt-0.5 h-8 w-8 shrink-0 cursor-pointer appearance-none rounded-full border-0 bg-transparent p-0 shadow-none outline-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border-0"
-            />
+            <div className="relative mt-0.5 h-8 w-8 shrink-0 overflow-hidden rounded-full border border-white/15 bg-slate-950/40 shadow-[inset_0_1px_2px_rgba(255,255,255,0.08)]">
+              <div
+                className="pointer-events-none absolute inset-[2px] rounded-full border border-white/60"
+                style={{ backgroundColor: color }}
+              />
+              <input
+                type="color"
+                value={color}
+                aria-label={`Set color for ${device.name}`}
+                onChange={(event) => {
+                  const nextColor = normalizeHexColor(event.target.value)
+                  setColor(nextColor)
+                  onControl(device._id, "set_color", nextColor)
+                }}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
+            </div>
           ) : null}
         </div>
 
         {isThermostat ? (
-          <p className="mb-2 text-[11px] text-muted-foreground">{getStatusLabel(device)}</p>
+          <p className="mb-2 text-[11px] text-slate-300/75">{getStatusLabel(device)}</p>
         ) : null}
 
         {energySnapshot.supportsEnergyMonitoring ? (
-          <div className="mb-2 space-y-2 rounded-[0.9rem] border border-emerald-500/15 bg-emerald-500/5 p-2.5">
+          <div className="mb-2 space-y-2 rounded-[0.9rem] border border-emerald-400/15 bg-emerald-400/8 p-2.5">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Current Draw</p>
-                <p className="text-sm font-semibold text-foreground">{formatPowerValue(latestPowerValue, latestPowerUnit)}</p>
+                <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300/70">Current Draw</p>
+                <p className="text-sm font-semibold text-white">{formatPowerValue(latestPowerValue, latestPowerUnit)}</p>
               </div>
-              <Zap className="h-4 w-4 text-emerald-500" />
+              <Zap className="h-4 w-4 text-emerald-400" />
             </div>
 
             {latestEnergyText ? (
-              <p className="text-[11px] text-muted-foreground">Energy total {latestEnergyText}</p>
+              <p className="text-[11px] text-slate-300/75">Energy total {latestEnergyText}</p>
             ) : null}
 
             {loading && chartData.length === 0 ? (
-              <div className="flex h-14 items-center justify-center text-[11px] text-muted-foreground">
+              <div className="flex h-14 items-center justify-center text-[11px] text-slate-300/75">
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 Loading history
               </div>
@@ -575,7 +581,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
                 }}
               >
                 <LineChart data={chartData}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                  <CartesianGrid vertical={false} stroke="rgba(148,163,184,0.16)" strokeDasharray="3 3" />
                   <XAxis dataKey="recordedAt" hide />
                   <YAxis hide domain={["auto", "auto"]} />
                   <ChartTooltip
@@ -597,7 +603,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
                 </LineChart>
               </ChartContainer>
             ) : (
-              <div className="rounded-md border border-dashed border-white/10 px-2 py-3 text-center text-[11px] text-muted-foreground">
+              <div className="rounded-md border border-dashed border-white/10 px-2 py-3 text-center text-[11px] text-slate-300/75">
                 No recent power samples yet.
               </div>
             )}
@@ -606,9 +612,9 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
 
         {supportsFade ? (
           <div className="mb-2 space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+            <div className="flex items-center justify-between text-[11px] text-slate-300/75">
               <span>Fade</span>
-              <span className="font-medium text-foreground">{brightness}%</span>
+              <span className="font-medium text-white">{brightness}%</span>
             </div>
             <Slider
               value={[brightness]}

@@ -529,6 +529,7 @@ struct DashboardView: View {
     @State private var systemStatus = "Online"
     @State private var favoriteDeviceIds: Set<String> = []
     @State private var favoritesProfileId: String?
+    @State private var dashboardProfileId: String?
     @State private var dashboardViews: [DashboardViewItem] = [DashboardSupport.defaultView()]
     @State private var selectedDashboardViewID = ""
     @State private var dashboardDirty = false
@@ -578,6 +579,7 @@ struct DashboardView: View {
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
     private var useLandscapeCompactLayout: Bool { isCompact && isCompactHeight }
     private var usesPortraitCompactLayout: Bool { isCompact && !isCompactHeight }
+    private var effectiveDashboardProfileID: String? { dashboardProfileId ?? favoritesProfileId }
     private var dashboardOuterPadding: CGFloat {
         if usesPortraitCompactLayout {
             return 10
@@ -993,6 +995,9 @@ struct DashboardView: View {
             syncDashboardChrome()
         }
         .onChange(of: selectedDashboardViewID) { _, _ in
+            persistSelectedDashboardViewPreference()
+        }
+        .onChange(of: effectiveDashboardProfileID ?? "") { _, _ in
             persistSelectedDashboardViewPreference()
         }
         .onChange(of: dashboardChrome.commandToken) { _, _ in
@@ -5339,7 +5344,7 @@ struct DashboardView: View {
     }
 
     private func saveDashboardViews() async {
-        guard let profileID = favoritesProfileId, !profileID.isEmpty else {
+        guard let profileID = effectiveDashboardProfileID, !profileID.isEmpty else {
             errorMessage = "Create or activate a user profile to save dashboard layouts."
             return
         }
@@ -5358,6 +5363,7 @@ struct DashboardView: View {
             dashboardDirty = false
             infoMessage = "Dashboard layout saved for this profile."
             errorMessage = nil
+            DashboardSupport.setDefaultViewID(selectedDashboardViewID, forProfileID: profileID)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -5406,11 +5412,11 @@ struct DashboardView: View {
             return
         }
 
-        guard let profileID = favoritesProfileId, !profileID.isEmpty else {
+        guard let profileID = effectiveDashboardProfileID, !profileID.isEmpty else {
             return
         }
 
-        DashboardSupport.setDefaultViewID(currentDashboardView?.id, forProfileID: profileID)
+        DashboardSupport.setDefaultViewID(selectedDashboardViewID, forProfileID: profileID)
     }
 
     private func handleDashboardChromeCommand() {
@@ -5610,6 +5616,7 @@ struct DashboardView: View {
             securityZonesTotal = securitySensors.count
             systemStatus = "Online"
             favoritesProfileId = UIPreviewData.favoriteProfileId
+            dashboardProfileId = UIPreviewData.favoriteProfileId
             favoriteDeviceIds = UIPreviewData.favoriteDeviceIds
             let previewViews = [DashboardSupport.defaultView(name: "Preview Dashboard")]
             dashboardViews = previewViews
@@ -5657,9 +5664,10 @@ struct DashboardView: View {
             voiceDevices = voiceList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             applySecurityStatusResponse(securityResponse)
             applyFavoriteContext(favoritesContext)
+            dashboardProfileId = dashboardContext.profileId ?? favoritesContext.profileId
             dashboardViews = dashboardContext.views
             selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
-                profileId: dashboardContext.profileId,
+                profileId: dashboardContext.profileId ?? favoritesContext.profileId,
                 views: dashboardContext.views,
                 current: selectedDashboardViewID
             )
