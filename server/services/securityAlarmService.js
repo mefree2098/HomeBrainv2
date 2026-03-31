@@ -2,6 +2,7 @@ const SecurityAlarm = require('../models/SecurityAlarm');
 const Device = require('../models/Device');
 const smartThingsService = require('./smartThingsService');
 const deviceService = require('./deviceService');
+const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
 
@@ -51,6 +52,8 @@ const BATTERY_PROPERTY_KEYS = [
   'batteryPercentage'
 ];
 
+const SECURITY_STATUS_DEVICE_PROJECTION = 'name type room status isOnline lastSeen properties brand model';
+
 const normalizeString = (value) => {
   if (typeof value !== 'string') {
     return '';
@@ -85,6 +88,11 @@ const getDeviceCapabilities = (device) => uniqueStrings([
   ...(Array.isArray(device?.properties?.smartThingsCapabilities) ? device.properties.smartThingsCapabilities : []),
   ...(Array.isArray(device?.properties?.smartthingsCapabilities) ? device.properties.smartthingsCapabilities : [])
 ].map((value) => normalizeString(value)));
+
+const getDeviceCategories = (device) => uniqueStrings([
+  ...(Array.isArray(device?.properties?.smartThingsCategories) ? device.properties.smartThingsCategories : []),
+  ...(Array.isArray(device?.properties?.smartthingsCategories) ? device.properties.smartthingsCategories : [])
+].map((value) => normalizeString(value).toLowerCase()));
 
 const extractBatteryLevel = (device) => {
   if (!device || typeof device !== 'object') {
@@ -213,6 +221,25 @@ const looksLikeSecuritySensor = (device) => {
     || /security/i.test(normalizeString(device?.properties?.smartThingsDeviceTypeName));
 };
 
+const looksLikeSmartThingsAlarmOutput = (device) => {
+  if (!device || typeof device !== 'object') {
+    return false;
+  }
+
+  const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
+  if (!smartThingsDeviceId) {
+    return false;
+  }
+
+  const capabilities = getDeviceCapabilities(device);
+  if (capabilities.includes('alarm')) {
+    return true;
+  }
+
+  const categories = getDeviceCategories(device);
+  return categories.includes('siren');
+};
+
 class SecurityAlarmService {
   constructor() {
     this.smartthingsBaseUrl = 'https://api.smartthings.com/v1';
@@ -221,6 +248,7 @@ class SecurityAlarmService {
   buildSecuritySensorSummary({ device, zone }) {
     const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
     const resolvedDeviceId = localDeviceId || normalizeString(zone?.deviceId);
+    const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
     const sensorType = inferSensorType(device, zone);
     const batteryLevel = extractBatteryLevel(device);
     const batteryState = getBatteryState(batteryLevel);
@@ -258,6 +286,7 @@ class SecurityAlarmService {
     return {
       deviceId: resolvedDeviceId,
       localDeviceId: localDeviceId || null,
+      smartThingsDeviceId: smartThingsDeviceId || null,
       zoneDeviceId: normalizeString(zone?.deviceId) || null,
       name: normalizeString(zone?.name) || normalizeString(device?.name) || 'Unnamed security sensor',
       room: normalizeString(device?.room) || null,
@@ -280,12 +309,14 @@ class SecurityAlarmService {
 
   buildDoorLockSummary(device) {
     const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
+    const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
     const isLocked = Boolean(device?.status);
     const isOnline = device?.isOnline !== false;
 
     return {
       deviceId: localDeviceId,
       localDeviceId: localDeviceId || null,
+      smartThingsDeviceId: smartThingsDeviceId || null,
       name: normalizeString(device?.name) || 'Unnamed door lock',
       room: normalizeString(device?.room) || null,
       isLocked,
@@ -364,19 +395,102 @@ class SecurityAlarmService {
     return doorLocks;
   }
 
+  async refreshSmartThingsDoorLocks(devices = []) {
+    const smartThingsDoorLocks = devices.filter((device) => (
+      normalizeString(device?.type).toLowerCase() === 'lock' &&
+      normalizeString(device?.properties?.smartThingsDeviceId)
+    ));
+
+    if (smartThingsDoorLocks.length === 0) {
+      return devices;
+    }
+
+    const updatesByLocalId = new Map();
+
+    for (const device of smartThingsDoorLocks) {
+      const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
+      const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
+      if (!localDeviceId || !smartThingsDeviceId) {
+        continue;
+      }
+
+      try {
+        const [details, status] = await Promise.all([
+          smartThingsService.getDevice(smartThingsDeviceId),
+          smartThingsService.getDeviceStatus(smartThingsDeviceId)
+        ]);
+
+        if (!status || !status.components) {
+          continue;
+        }
+
+        const combined = {
+          ...(details || {}),
+          deviceId: details?.deviceId || smartThingsDeviceId,
+          status
+        };
+
+        const updates = await smartThingsService.buildSmartThingsDeviceUpdate(device, combined);
+        if (updates && Object.keys(updates).length > 0) {
+          updatesByLocalId.set(localDeviceId, updates);
+        }
+      } catch (error) {
+        console.warn(`SecurityAlarmService: Failed to refresh SmartThings door lock ${smartThingsDeviceId}: ${error.message}`);
+      }
+    }
+
+    if (updatesByLocalId.size === 0) {
+      return devices;
+    }
+
+    const bulkOps = Array.from(updatesByLocalId.entries()).map(([deviceId, updates]) => ({
+      updateOne: {
+        filter: { _id: deviceId },
+        update: { $set: updates }
+      }
+    }));
+
+    await Device.bulkWrite(bulkOps, { ordered: false });
+
+    const refreshedDevices = await Device.find(
+      { _id: { $in: Array.from(updatesByLocalId.keys()) } },
+      SECURITY_STATUS_DEVICE_PROJECTION
+    ).lean();
+
+    const refreshedById = new Map(
+      refreshedDevices.map((device) => [
+        normalizeString(device?._id?.toString?.() || device?._id || device?.id),
+        device
+      ])
+    );
+
+    const payload = deviceUpdateEmitter.normalizeDevices(refreshedDevices);
+    if (payload.length > 0) {
+      deviceUpdateEmitter.emit('devices:update', payload);
+    }
+
+    return devices.map((device) => {
+      const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
+      return refreshedById.get(localDeviceId) || device;
+    });
+  }
+
   /**
    * Check if SmartThings STHM is properly configured for security operations
    * @returns {Promise<boolean>} True if STHM is configured and connected
    */
-  async isSmartThingsConfiguredForSthm() {
+  async isSmartThingsConfiguredForSthm(options = {}) {
     try {
+      const requireAllMappings = options.requireAllMappings !== false;
       const integration = await SmartThingsIntegration.getIntegration();
       const settings = await Settings.getSettings();
-      const hasSthmMapping = Boolean(
-        integration?.sthm?.disarmDeviceId &&
-        integration?.sthm?.armStayDeviceId &&
-        integration?.sthm?.armAwayDeviceId
-      );
+      const hasSthmMapping = requireAllMappings
+        ? Boolean(
+          integration?.sthm?.disarmDeviceId &&
+          integration?.sthm?.armStayDeviceId &&
+          integration?.sthm?.armAwayDeviceId
+        )
+        : Boolean(integration?.sthm?.disarmDeviceId);
 
       if (!hasSthmMapping) {
         return false;
@@ -402,6 +516,102 @@ class SecurityAlarmService {
       console.error('SecurityAlarmService: Error checking SmartThings configuration:', error.message);
       return false;
     }
+  }
+
+  async silenceSmartThingsAlarmOutputs() {
+    try {
+      const smartThingsDevices = await Device.find(
+        {
+          'properties.smartThingsDeviceId': { $exists: true, $ne: '' }
+        },
+        'name properties'
+      ).lean();
+      const alarmOutputs = smartThingsDevices.filter((device) => looksLikeSmartThingsAlarmOutput(device));
+
+      if (alarmOutputs.length === 0) {
+        return { silenced: [], failed: [] };
+      }
+
+      const results = await Promise.allSettled(alarmOutputs.map(async (device) => {
+        const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
+        const result = await smartThingsService.silenceAlarmDevice(smartThingsDeviceId, {
+          capabilities: getDeviceCapabilities(device),
+          categories: getDeviceCategories(device)
+        });
+
+        return {
+          deviceId: smartThingsDeviceId,
+          name: normalizeString(device?.name) || smartThingsDeviceId,
+          via: result.via
+        };
+      }));
+
+      const silenced = [];
+      const failed = [];
+
+      results.forEach((result, index) => {
+        const device = alarmOutputs[index];
+        const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
+        const deviceName = normalizeString(device?.name) || smartThingsDeviceId || 'Unnamed SmartThings alarm output';
+
+        if (result.status === 'fulfilled') {
+          silenced.push(result.value);
+          return;
+        }
+
+        const message = result.reason?.message || 'Unknown SmartThings alarm output error';
+        failed.push({
+          deviceId: smartThingsDeviceId,
+          name: deviceName,
+          error: message
+        });
+        console.warn(`SecurityAlarmService: Failed to silence SmartThings alarm output ${deviceName} (${smartThingsDeviceId}): ${message}`);
+      });
+
+      if (silenced.length > 0) {
+        console.log(`SecurityAlarmService: Silenced ${silenced.length} SmartThings alarm output${silenced.length === 1 ? '' : 's'}`);
+      }
+
+      return { silenced, failed };
+    } catch (error) {
+      console.warn('SecurityAlarmService: Failed to enumerate SmartThings alarm outputs:', error.message);
+      return {
+        silenced: [],
+        failed: [{
+          deviceId: '',
+          name: 'SmartThings alarm outputs',
+          error: error.message
+        }]
+      };
+    }
+  }
+
+  async clearTriggeredSmartThingsAlarm() {
+    const result = {
+      dismissedInSmartThings: false,
+      silencedOutputs: [],
+      failedOutputs: []
+    };
+
+    const canDismissInSmartThings = await this.isSmartThingsConfiguredForSthm({ requireAllMappings: false });
+    if (canDismissInSmartThings) {
+      try {
+        await smartThingsService.setSecurityArmState('Disarmed');
+        result.dismissedInSmartThings = true;
+        console.log('SecurityAlarmService: SmartThings dismiss/disarm command sent successfully');
+      } catch (smartThingsError) {
+        console.warn(
+          'SecurityAlarmService: SmartThings dismiss command failed, continuing with local dismiss:',
+          smartThingsError.message
+        );
+      }
+    }
+
+    const alarmOutputResult = await this.silenceSmartThingsAlarmOutputs();
+    result.silencedOutputs = alarmOutputResult.silenced;
+    result.failedOutputs = alarmOutputResult.failed;
+
+    return result;
   }
 
   /**
@@ -471,21 +681,26 @@ class SecurityAlarmService {
       console.log('SecurityAlarmService: Disarming alarm');
 
       const alarm = await SecurityAlarm.getMainAlarm();
+      const alarmWasTriggered = alarm.alarmState === 'triggered';
 
       // Check if already disarmed
       if (alarm.alarmState === 'disarmed') {
         throw new Error('Alarm is already disarmed');
       }
 
-      // Send command to SmartThings if properly configured
-      const isSthmConfigured = await this.isSmartThingsConfiguredForSthm();
-      if (isSthmConfigured) {
-        try {
-          await smartThingsService.setSecurityArmState('Disarmed');
-          console.log('SecurityAlarmService: SmartThings disarm command sent successfully');
-        } catch (smartThingsError) {
-          console.warn('SecurityAlarmService: SmartThings command failed, continuing with local disarming:', smartThingsError.message);
-          // Continue with local disarming even if SmartThings fails
+      if (alarmWasTriggered) {
+        await this.clearTriggeredSmartThingsAlarm();
+      } else {
+        // Send command to SmartThings if the disarm switch is configured.
+        const canDisarmInSmartThings = await this.isSmartThingsConfiguredForSthm({ requireAllMappings: false });
+        if (canDisarmInSmartThings) {
+          try {
+            await smartThingsService.setSecurityArmState('Disarmed');
+            console.log('SecurityAlarmService: SmartThings disarm command sent successfully');
+          } catch (smartThingsError) {
+            console.warn('SecurityAlarmService: SmartThings command failed, continuing with local disarming:', smartThingsError.message);
+            // Continue with local disarming even if SmartThings fails
+          }
         }
       }
 
@@ -514,19 +729,7 @@ class SecurityAlarmService {
         throw new Error('Alarm is not currently triggered');
       }
 
-      // Best-effort SmartThings clear by forcing Disarmed state.
-      const isSthmConfigured = await this.isSmartThingsConfiguredForSthm();
-      if (isSthmConfigured) {
-        try {
-          await smartThingsService.setSecurityArmState('Disarmed');
-          console.log('SecurityAlarmService: SmartThings dismiss/disarm command sent successfully');
-        } catch (smartThingsError) {
-          console.warn(
-            'SecurityAlarmService: SmartThings dismiss command failed, continuing with local dismiss:',
-            smartThingsError.message
-          );
-        }
-      }
+      await this.clearTriggeredSmartThingsAlarm();
 
       await alarm.disarm(userId || 'system:dismiss');
 
@@ -542,7 +745,7 @@ class SecurityAlarmService {
    * Get alarm status
    * @returns {Promise<Object>} Alarm status information
    */
-  async getAlarmStatus() {
+  async getAlarmStatus(options = {}) {
     try {
       console.log('SecurityAlarmService: Getting alarm status');
 
@@ -578,7 +781,10 @@ class SecurityAlarmService {
         console.warn('SecurityAlarmService: Security sensor refresh failed:', deviceRefreshError.message);
       }
 
-      const devices = await Device.find({}, 'name type room status isOnline lastSeen properties brand model').lean();
+      let devices = await Device.find({}, SECURITY_STATUS_DEVICE_PROJECTION).lean();
+      if (options.refreshDoorLocks) {
+        devices = await this.refreshSmartThingsDoorLocks(devices);
+      }
       const securitySensors = this.getSecuritySensors(alarm, devices);
       const doorLocks = this.getDoorLocks(devices);
       const sensorCount = securitySensors.length;

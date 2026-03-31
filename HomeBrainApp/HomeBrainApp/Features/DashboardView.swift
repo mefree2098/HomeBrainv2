@@ -323,6 +323,7 @@ private func dashboardStringArray(from rawValue: Any?) -> [String]? {
 private struct DashboardSecuritySensorItem: Identifiable {
     let id: String
     var localDeviceId: String?
+    var smartThingsDeviceId: String?
     var name: String
     var room: String?
     var sensorType: String
@@ -347,6 +348,7 @@ private struct DashboardSecuritySensorItem: Identifiable {
         return DashboardSecuritySensorItem(
             id: resolvedID,
             localDeviceId: JSON.optionalString(payload, "localDeviceId"),
+            smartThingsDeviceId: JSON.optionalString(payload, "smartThingsDeviceId"),
             name: JSON.string(payload, "name", fallback: "Unnamed security sensor"),
             room: JSON.optionalString(payload, "room"),
             sensorType: JSON.string(payload, "sensorType", fallback: "security"),
@@ -369,6 +371,7 @@ private struct DashboardSecuritySensorItem: Identifiable {
 private struct DashboardSecurityDoorLockItem: Identifiable {
     let id: String
     var localDeviceId: String?
+    var smartThingsDeviceId: String?
     var name: String
     var room: String?
     var isLocked: Bool
@@ -384,6 +387,7 @@ private struct DashboardSecurityDoorLockItem: Identifiable {
         return DashboardSecurityDoorLockItem(
             id: resolvedID,
             localDeviceId: JSON.optionalString(payload, "localDeviceId"),
+            smartThingsDeviceId: JSON.optionalString(payload, "smartThingsDeviceId"),
             name: JSON.string(payload, "name", fallback: "Unnamed door lock"),
             room: JSON.optionalString(payload, "room"),
             isLocked: JSON.bool(payload, "isLocked"),
@@ -604,7 +608,7 @@ struct DashboardView: View {
         if useLandscapeCompactLayout || contentWidth >= 1160 {
             return 4
         }
-        if layoutWidth >= 760 {
+        if layoutWidth >= 820 {
             return 2
         }
         return 1
@@ -751,6 +755,22 @@ struct DashboardView: View {
         ].joined(separator: "||")
     }
 
+    private var dashboardDeviceStreamTaskKey: String {
+        [
+            String(describing: scenePhase),
+            session.serverURLString,
+            session.accessToken ?? "none"
+        ].joined(separator: "||")
+    }
+
+    private var dashboardSecurityRefreshTaskKey: String {
+        [
+            String(describing: scenePhase),
+            session.serverURLString,
+            session.accessToken ?? "none"
+        ].joined(separator: "||")
+    }
+
     private var heroBadgeTexts: [String] {
         var badges = [
             "\(scenes.count) scenes ready",
@@ -835,6 +855,20 @@ struct DashboardView: View {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { break }
                 await refreshVisibleWeatherWidgets(force: true)
+            }
+        }
+        .task(id: dashboardDeviceStreamTaskKey) {
+            guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
+            await refreshSecurityStatus()
+            await listenForDashboardDeviceUpdates()
+        }
+        .task(id: dashboardSecurityRefreshTaskKey) {
+            guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(20))
+                guard !Task.isCancelled else { break }
+                await refreshSecurityStatus()
             }
         }
         .sheet(isPresented: $showingAddWidgetSheet) {
@@ -1629,27 +1663,7 @@ struct DashboardView: View {
 
                     Spacer(minLength: 8)
 
-                    HStack(spacing: 8) {
-                        if hasCustomSecuritySensorSelection {
-                            HBBadge(
-                                text: "\(visibleSecuritySensors.count)/\(securitySensors.count) shown",
-                                foreground: HBPalette.textPrimary,
-                                background: HBPalette.panelSoft.opacity(0.9),
-                                stroke: HBPalette.panelStrokeStrong
-                            )
-                        }
-
-                        if securityAttentionSensorCount > 0 {
-                            HBBadge(
-                                text: "\(securityAttentionSensorCount) attention",
-                                foreground: HBPalette.accentOrange,
-                                background: HBPalette.accentOrange.opacity(0.14),
-                                stroke: HBPalette.accentOrange.opacity(0.65)
-                            )
-                        }
-
-                        securitySensorPickerButton()
-                    }
+                    securitySensorHeaderControls()
                 }
 
                 ScrollView(.vertical, showsIndicators: false) {
@@ -2132,6 +2146,48 @@ struct DashboardView: View {
 
     private func securityDoorLockColumns() -> [GridItem] {
         return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: securityDoorLockColumnCount)
+    }
+
+    private func securitySensorHeaderControls() -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                securitySensorHeaderBadges()
+                securitySensorPickerButton()
+            }
+
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack(spacing: 8) {
+                    securitySensorHeaderBadges()
+                }
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    securitySensorPickerButton()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func securitySensorHeaderBadges() -> some View {
+        if hasCustomSecuritySensorSelection {
+            HBBadge(
+                text: "\(visibleSecuritySensors.count)/\(securitySensors.count) shown",
+                foreground: HBPalette.textPrimary,
+                background: HBPalette.panelSoft.opacity(0.9),
+                stroke: HBPalette.panelStrokeStrong
+            )
+            .fixedSize(horizontal: true, vertical: false)
+        }
+
+        if securityAttentionSensorCount > 0 {
+            HBBadge(
+                text: "\(securityAttentionSensorCount) alerts",
+                foreground: HBPalette.accentOrange,
+                background: HBPalette.accentOrange.opacity(0.14),
+                stroke: HBPalette.accentOrange.opacity(0.65)
+            )
+            .fixedSize(horizontal: true, vertical: false)
+        }
     }
 
     private func securitySensorPickerButton() -> some View {
@@ -4985,6 +5041,7 @@ struct DashboardView: View {
                 DashboardSecuritySensorItem(
                     id: "preview-front-door-sensor",
                     localDeviceId: "preview-front-door-sensor",
+                    smartThingsDeviceId: nil,
                     name: "Front Door Sensor",
                     room: "Entry",
                     sensorType: "doorWindow",
@@ -5004,6 +5061,7 @@ struct DashboardView: View {
                 DashboardSecuritySensorItem(
                     id: "preview-hall-motion",
                     localDeviceId: "preview-hall-motion",
+                    smartThingsDeviceId: nil,
                     name: "Hall Motion Sensor",
                     room: "Upper Hall",
                     sensorType: "motion",
@@ -5023,6 +5081,7 @@ struct DashboardView: View {
                 DashboardSecuritySensorItem(
                     id: "preview-garage-contact",
                     localDeviceId: nil,
+                    smartThingsDeviceId: nil,
                     name: "Garage Entry Contact",
                     room: "Garage",
                     sensorType: "doorWindow",
@@ -5044,6 +5103,7 @@ struct DashboardView: View {
                 DashboardSecurityDoorLockItem(
                     id: "preview-lock",
                     localDeviceId: "preview-lock",
+                    smartThingsDeviceId: nil,
                     name: "Front Door Lock",
                     room: "Entry",
                     isLocked: true,
@@ -5054,6 +5114,7 @@ struct DashboardView: View {
                 DashboardSecurityDoorLockItem(
                     id: "preview-back-door-lock",
                     localDeviceId: "preview-back-door-lock",
+                    smartThingsDeviceId: nil,
                     name: "Back Door Lock",
                     room: "Kitchen",
                     isLocked: false,
@@ -5087,7 +5148,7 @@ struct DashboardView: View {
             async let devicesTask = session.apiClient.get("/api/devices")
             async let scenesTask = session.apiClient.get("/api/scenes")
             async let voiceTask = session.apiClient.get("/api/voice/devices")
-            async let securityTask = session.apiClient.get("/api/security-alarm/status")
+            async let securityTask = session.apiClient.get("/api/security-alarm/status", query: freshSecurityStatusQueryItems())
             async let profilesTask = session.apiClient.get("/api/profiles")
 
             let devicesResponse = try await devicesTask
@@ -5151,6 +5212,19 @@ struct DashboardView: View {
         systemStatus = isOnline ? "Online" : "Offline"
     }
 
+    private func freshSecurityStatusQueryItems(refreshDoorLocks: Bool = true) -> [URLQueryItem] {
+        [
+            URLQueryItem(
+                name: "refreshDoorLocks",
+                value: refreshDoorLocks ? "1" : "0"
+            ),
+            URLQueryItem(
+                name: "_ts",
+                value: String(Int(Date().timeIntervalSince1970 * 1000))
+            )
+        ]
+    }
+
     private func refreshSecurityStatus() async {
         if previewMode {
             systemStatus = "Online"
@@ -5158,11 +5232,108 @@ struct DashboardView: View {
         }
 
         do {
-            let response = try await session.apiClient.get("/api/security-alarm/status")
+            let response = try await session.apiClient.get("/api/security-alarm/status", query: freshSecurityStatusQueryItems())
             applySecurityStatusResponse(response)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func listenForDashboardDeviceUpdates() async {
+        while !Task.isCancelled {
+            guard let streamURL = session.apiClient.streamURL("/api/devices/stream"),
+                  let accessToken = session.accessToken,
+                  !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return
+            }
+
+            do {
+                var request = URLRequest(url: streamURL)
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw APIError.invalidResponse
+                }
+
+                if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                    try await session.refreshTokens()
+                    continue
+                }
+
+                guard (200..<300).contains(httpResponse.statusCode) else {
+                    throw APIError.server(statusCode: httpResponse.statusCode, message: "Failed to open device update stream.")
+                }
+
+                var eventName = "message"
+                var dataLines: [String] = []
+
+                for try await line in bytes.lines {
+                    if Task.isCancelled {
+                        return
+                    }
+
+                    if line.hasPrefix(":") {
+                        continue
+                    }
+
+                    if line.isEmpty {
+                        await handleDashboardDeviceStreamEvent(name: eventName, dataLines: dataLines)
+                        eventName = "message"
+                        dataLines.removeAll(keepingCapacity: true)
+                        continue
+                    }
+
+                    if line.hasPrefix("event:") {
+                        eventName = String(line.dropFirst("event:".count)).trimmingCharacters(in: .whitespaces)
+                        continue
+                    }
+
+                    if line.hasPrefix("data:") {
+                        dataLines.append(String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces))
+                    }
+                }
+
+                await handleDashboardDeviceStreamEvent(name: eventName, dataLines: dataLines)
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private func handleDashboardDeviceStreamEvent(name: String, dataLines: [String]) async {
+        guard name != "ready", !dataLines.isEmpty else {
+            return
+        }
+
+        let rawPayload = dataLines.joined(separator: "\n")
+        guard let data = rawPayload.data(using: .utf8) else {
+            return
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+            return
+        }
+
+        let payloadObject = JSON.object(json)
+        let deviceObjects = JSON.array(payloadObject["devices"])
+        guard !deviceObjects.isEmpty else {
+            return
+        }
+
+        let updates = deviceObjects.map { DeviceItem.from(JSON.object($0)) }
+        let shouldRefreshSecurity = updates.contains(where: deviceAffectsSecuritySummary)
+        updates.forEach(upsertDevice)
+        if shouldRefreshSecurity {
+            await refreshSecurityStatus()
         }
     }
 
@@ -5270,10 +5441,55 @@ struct DashboardView: View {
         syncSecuritySummaries(with: updated)
     }
 
+    private func deviceAffectsSecuritySummary(_ device: DeviceItem) -> Bool {
+        if device.type == "lock" {
+            return true
+        }
+
+        let capabilities = Set(deviceSmartThingsCapabilities(device))
+        if capabilities.contains("contactSensor")
+            || capabilities.contains("motionSensor")
+            || capabilities.contains("waterSensor")
+            || capabilities.contains("smokeDetector")
+            || capabilities.contains("carbonMonoxideDetector")
+            || capabilities.contains("tamperAlert")
+            || capabilities.contains("accelerationSensor")
+            || capabilities.contains("shockSensor")
+            || capabilities.contains("alarm") {
+            return true
+        }
+
+        return false
+    }
+
+    private func deviceSmartThingsCapabilities(_ device: DeviceItem) -> [String] {
+        let primary = device.properties["smartThingsCapabilities"] as? [String] ?? []
+        let fallback = device.properties["smartthingsCapabilities"] as? [String] ?? []
+        return (primary + fallback)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func deviceSmartThingsDeviceID(_ device: DeviceItem) -> String? {
+        let primary = (device.properties["smartThingsDeviceId"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = (device.properties["smartthingsDeviceId"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = primary?.isEmpty == false ? primary : fallback
+        return (resolved?.isEmpty == false) ? resolved : nil
+    }
+
     private func syncSecuritySummaries(with device: DeviceItem) {
-        if let sensorIndex = securitySensors.firstIndex(where: { $0.localDeviceId == device.id }) {
+        let smartThingsDeviceID = deviceSmartThingsDeviceID(device)
+
+        if let sensorIndex = securitySensors.firstIndex(where: {
+            $0.localDeviceId == device.id ||
+            $0.id == device.id ||
+            ($0.smartThingsDeviceId != nil && $0.smartThingsDeviceId == smartThingsDeviceID)
+        }) {
             securitySensors[sensorIndex].name = device.name
             securitySensors[sensorIndex].room = device.room
+            securitySensors[sensorIndex].smartThingsDeviceId = smartThingsDeviceID ?? securitySensors[sensorIndex].smartThingsDeviceId
             securitySensors[sensorIndex].isAvailable = true
             securitySensors[sensorIndex].isOnline = device.isOnline
             securitySensors[sensorIndex].isActive = device.status
@@ -5287,9 +5503,14 @@ struct DashboardView: View {
             securitySensors[sensorIndex].requiresAttention = !device.isOnline || batteryState == "low" || batteryState == "critical"
         }
 
-        if let doorLockIndex = securityDoorLocks.firstIndex(where: { $0.localDeviceId == device.id }) {
+        if let doorLockIndex = securityDoorLocks.firstIndex(where: {
+            $0.localDeviceId == device.id ||
+            $0.id == device.id ||
+            ($0.smartThingsDeviceId != nil && $0.smartThingsDeviceId == smartThingsDeviceID)
+        }) {
             securityDoorLocks[doorLockIndex].name = device.name
             securityDoorLocks[doorLockIndex].room = device.room
+            securityDoorLocks[doorLockIndex].smartThingsDeviceId = smartThingsDeviceID ?? securityDoorLocks[doorLockIndex].smartThingsDeviceId
             securityDoorLocks[doorLockIndex].isLocked = device.status
             securityDoorLocks[doorLockIndex].isOnline = device.isOnline
             securityDoorLocks[doorLockIndex].stateLabel = device.status ? "Locked" : "Unlocked"

@@ -61,6 +61,18 @@ final class APIClient {
         try await request(path: path, method: .delete, body: nil, query: [])
     }
 
+    func streamURL(_ path: String, query: [URLQueryItem] = [], includeAccessTokenQuery: Bool = false) -> URL? {
+        var resolvedQuery = query
+
+        if includeAccessTokenQuery,
+           let accessToken = sessionStore.accessToken,
+           !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            resolvedQuery.append(URLQueryItem(name: "token", value: accessToken))
+        }
+
+        return buildURL(path: path, query: resolvedQuery)
+    }
+
     private func request(
         path: String,
         method: HTTPMethod,
@@ -76,6 +88,9 @@ final class APIClient {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = method.rawValue
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        urlRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        urlRequest.setValue("no-cache", forHTTPHeaderField: "Pragma")
 
         if authorized, let accessToken = sessionStore.accessToken {
             urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
