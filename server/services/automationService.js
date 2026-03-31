@@ -235,6 +235,68 @@ function buildExecutionStatsMatch(automationIds, dateRange = null) {
   return match;
 }
 
+function getSmartThingsWorkflowPropertyHints(device) {
+  const hints = [];
+  const seen = new Set();
+
+  const pushHint = (hint) => {
+    if (typeof hint !== 'string' || !hint.trim()) {
+      return;
+    }
+    const normalized = hint.trim();
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    hints.push(normalized);
+  };
+
+  pushHint('status');
+  pushHint('isOnline');
+
+  if (typeof device?.brightness === 'number') {
+    pushHint('brightness');
+  }
+  if (typeof device?.temperature === 'number') {
+    pushHint('temperature');
+  }
+  if (typeof device?.targetTemperature === 'number') {
+    pushHint('targetTemperature');
+  }
+
+  const attributeRoot = device?.properties?.smartThingsAttributeValues || {};
+
+  const walk = (node, prefix = []) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+      return;
+    }
+
+    Object.entries(node).forEach(([key, value]) => {
+      if (key === 'byComponent') {
+        Object.entries(value || {}).forEach(([componentId, componentValue]) => {
+          if (componentId === 'main') {
+            return;
+          }
+          walk(componentValue, [...prefix, key, componentId]);
+        });
+        return;
+      }
+
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        walk(value, [...prefix, key]);
+        return;
+      }
+
+      const propertyPath = ['smartThingsAttributeValues', ...prefix, key].join('.');
+      pushHint(propertyPath);
+    });
+  };
+
+  walk(attributeRoot);
+
+  return hints;
+}
+
 /**
  * Get all automations
  */
@@ -1006,7 +1068,8 @@ async function buildDeviceContext() {
         hubIp: device?.properties?.harmonyHubIp || null,
         activityId: device?.properties?.harmonyActivityId || null,
         activityLabel: device?.properties?.harmonyActivityLabel || null,
-        capabilities: []
+        capabilities: [],
+        workflowProperties: getSmartThingsWorkflowPropertyHints(device)
       };
 
       if (source === 'harmony') {
@@ -1028,6 +1091,9 @@ async function buildDeviceContext() {
           deviceInfo.capabilities = ['lock', 'unlock'];
           break;
         case 'switch':
+          deviceInfo.capabilities = ['turn_on', 'turn_off', 'toggle'];
+          break;
+        case 'speaker':
           deviceInfo.capabilities = ['turn_on', 'turn_off', 'toggle'];
           break;
         case 'garage':
@@ -1681,6 +1747,8 @@ IMPORTANT RULES:
 13. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
 14. When the request refers to the security system or alarm arming/disarming state, use trigger type "security_alarm_status" with conditions like {"states":["armedStay","armedAway"]}.
 15. When the request refers to sunrise or sunset, use trigger type "schedule" with conditions like {"event":"sunrise","offset":0} or {"event":"sunset","offset":0}. Offsets are in minutes and may be negative or positive.
+16. For numeric SmartThings triggers such as power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path (for example "smartThingsAttributeValues.powerMeter.power") with an explicit operator and numeric value.
+17. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
 
 AVAILABLE DEVICES:
 ${deviceList}
@@ -1701,7 +1769,7 @@ REQUIRED JSON STRUCTURE:
         "conditions": {
           // For time: {"hour": 7, "minute": 0, "days": ["monday", "tuesday", ...]}
           // For schedule: {"cron": "0 7 * * 1-5"} or {"event": "sunrise", "offset": 0}
-          // For device_state: {"deviceId": "ID", "state": "on" or "off", "property": "status", "operator": "eq", "value": true}
+          // For device_state: {"deviceId": "ID", "property": "status" or "smartThingsAttributeValues.powerMeter.power", "operator": "eq"/"gt"/"lt"/..., "value": true or 25, "state": "on" or "off" (optional legacy alias), "forSeconds": 600 (optional)}
           // For sensor: {"sensorType": "<sensor_type>", "deviceId": "ID", "condition": "<condition>", "value": 25}
           // For security_alarm_status: {"states": ["armedStay", "armedAway"]}
           //   sensor_type options: motion, temperature, humidity
@@ -1733,6 +1801,7 @@ DEVICE ACTION COMPATIBILITY:
 - thermostat: turn_on, turn_off, set_temperature
 - lock: lock, unlock
 - switch: turn_on, turn_off, toggle
+- speaker: turn_on, turn_off, toggle
 - harmony hub activity device (Source:harmony): turn_on, turn_off, toggle (activity start/stop only)
 - garage: open, close
 - sensor: (read-only, cannot be controlled)
@@ -1742,6 +1811,8 @@ TRIGGER TYPE EXAMPLES:
 - "when motion detected" -> type: "sensor", conditions: {"sensorType": "motion", "condition": "detected"}
 - "when temperature above 75" -> type: "sensor", conditions: {"sensorType": "temperature", "condition": "above", "value": 75}
 - "when front door unlocked" -> type: "device_state", conditions: {"state": "off"}
+- "when dryer power goes above 25 watts" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "gt", "value": 25}
+- "when dryer power stays below 5 watts for 10 minutes" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "lt", "value": 5, "forSeconds": 600}
 - "when the security alarm is armed stay or armed away" -> type: "security_alarm_status", conditions: {"states": ["armedStay", "armedAway"]}
 - "at sunset" -> type: "schedule", conditions: {"event": "sunset", "offset": 0}
 - "30 minutes before sunrise" -> type: "schedule", conditions: {"event": "sunrise", "offset": -30}
@@ -1771,7 +1842,10 @@ function formatDeviceList(devicesByRoom = {}) {
       const harmonyDetails = source === 'harmony'
         ? `, Hub: ${device.hubIp || 'unknown'}, Activity: ${device.activityLabel || device.activityId || 'unknown'}`
         : '';
-      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Source: ${source}, Actions: ${actions}${harmonyDetails})`;
+      const workflowProperties = Array.isArray(device.workflowProperties) && device.workflowProperties.length > 0
+        ? `, Trigger properties: ${device.workflowProperties.slice(0, 10).join(', ')}`
+        : '';
+      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Source: ${source}, Actions: ${actions}${harmonyDetails}${workflowProperties})`;
     }).join('\n');
 
     return `Room: ${room}\n${deviceLines}`;

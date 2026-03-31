@@ -33,6 +33,9 @@ type DeviceLite = {
   name: string;
   type: string;
   room: string;
+  brightness?: number;
+  temperature?: number;
+  targetTemperature?: number;
   properties?: Record<string, unknown>;
 };
 
@@ -81,6 +84,113 @@ const ACTION_LABELS: Record<WorkflowAction["type"], string> = {
   isy_network_resource: "ISY network resource",
   http_request: "HTTP request"
 };
+
+type TriggerPropertyKind = "boolean" | "number" | "string";
+
+type TriggerPropertyOption = {
+  key: string;
+  label: string;
+  kind: TriggerPropertyKind;
+};
+
+const NUMERIC_TRIGGER_OPERATORS = ["eq", "neq", "gt", "gte", "lt", "lte"] as const;
+const TEXT_TRIGGER_OPERATORS = ["eq", "neq", "contains"] as const;
+
+function inferTriggerPropertyKind(value: unknown): TriggerPropertyKind {
+  if (typeof value === "boolean") {
+    return "boolean";
+  }
+  if (typeof value === "number") {
+    return "number";
+  }
+  return "string";
+}
+
+function getNestedRecordValue(source: unknown, path: string[]): unknown {
+  let current = source;
+  for (const segment of path) {
+    if (!current || typeof current !== "object" || Array.isArray(current) || !(segment in current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+function collectSmartThingsAttributeOptions(
+  node: unknown,
+  metadataNode: unknown,
+  prefix: string[] = []
+): TriggerPropertyOption[] {
+  if (!node || typeof node !== "object" || Array.isArray(node)) {
+    return [];
+  }
+
+  const options: TriggerPropertyOption[] = [];
+
+  Object.entries(node as Record<string, unknown>).forEach(([key, value]) => {
+    if (key === "byComponent") {
+      Object.entries((value as Record<string, unknown>) || {}).forEach(([componentId, componentValue]) => {
+        if (componentId === "main") {
+          return;
+        }
+        options.push(...collectSmartThingsAttributeOptions(componentValue, getNestedRecordValue(metadataNode, [key, componentId]), [...prefix, key, componentId]));
+      });
+      return;
+    }
+
+    const nextPrefix = [...prefix, key];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      options.push(...collectSmartThingsAttributeOptions(value, getNestedRecordValue(metadataNode, [key]), nextPrefix));
+      return;
+    }
+
+    const metadata = getNestedRecordValue(metadataNode, [key]) as Record<string, unknown> | undefined;
+    const unit = typeof metadata?.unit === "string" && metadata.unit.trim() ? ` (${metadata.unit.trim()})` : "";
+    options.push({
+      key: `smartThingsAttributeValues.${nextPrefix.join(".")}`,
+      label: `${nextPrefix.join(".")}${unit}`,
+      kind: inferTriggerPropertyKind(value)
+    });
+  });
+
+  return options;
+}
+
+function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
+  const options: TriggerPropertyOption[] = [
+    { key: "status", label: "status", kind: "boolean" },
+    { key: "isOnline", label: "isOnline", kind: "boolean" }
+  ];
+
+  if (typeof device?.brightness === "number") {
+    options.push({ key: "brightness", label: "brightness", kind: "number" });
+  }
+  if (typeof device?.temperature === "number") {
+    options.push({ key: "temperature", label: "temperature", kind: "number" });
+  }
+  if (typeof device?.targetTemperature === "number") {
+    options.push({ key: "targetTemperature", label: "targetTemperature", kind: "number" });
+  }
+
+  const attributeValues = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeValues;
+  const attributeMetadata = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeMetadata;
+  options.push(...collectSmartThingsAttributeOptions(attributeValues, attributeMetadata));
+
+  const unique = new Map<string, TriggerPropertyOption>();
+  options.forEach((option) => {
+    if (!unique.has(option.key)) {
+      unique.set(option.key, option);
+    }
+  });
+  return [...unique.values()];
+}
+
+function normalizeTriggerOperator(value: unknown, kind: TriggerPropertyKind) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const allowed = kind === "number" ? NUMERIC_TRIGGER_OPERATORS : kind === "string" ? TEXT_TRIGGER_OPERATORS : ["eq", "neq"];
+  return allowed.includes(normalized as any) ? normalized : "eq";
+}
 
 function normalizeSolarScheduleEvent(value: unknown) {
   if (typeof value !== "string") {
@@ -214,6 +324,8 @@ function getDeviceActionChoices(deviceType: string, source: string = "local") {
       return ["open", "close"];
     case "switch":
       return ["turn_on", "turn_off", "toggle"];
+    case "speaker":
+      return ["turn_on", "turn_off", "toggle"];
     default:
       return ["turn_on", "turn_off"];
   }
@@ -301,7 +413,23 @@ function describeTrigger(
         devices,
         typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : null
       );
-      return `${deviceName} changes to ${String(triggerConditions.state || "on")}.`;
+      const property = typeof triggerConditions.property === "string" && triggerConditions.property.trim()
+        ? triggerConditions.property
+        : "status";
+      const operator = typeof triggerConditions.operator === "string" && triggerConditions.operator.trim()
+        ? triggerConditions.operator
+        : "eq";
+      const value = Object.prototype.hasOwnProperty.call(triggerConditions, "value")
+        ? triggerConditions.value
+        : triggerConditions.state ?? true;
+      const forSeconds = Math.max(0, Number(triggerConditions.forSeconds) || 0);
+      const conditionText = operator === "eq"
+        ? `${property} = ${String(value)}`
+        : `${property} ${operator} ${String(value)}`;
+      if (forSeconds > 0) {
+        return `${deviceName} keeps ${conditionText} for ${formatDuration(forSeconds)}.`;
+      }
+      return `${deviceName} reaches ${conditionText}.`;
     }
     case "sensor":
       return `Runs when ${String(triggerConditions.sensorType || "sensor")} is ${String(triggerConditions.condition || "triggered")}.`;
@@ -415,6 +543,24 @@ export function WorkflowBuilderDialog({
   }, [devices]);
 
   const triggerDeviceId = typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : null;
+  const triggerDevice = useMemo(
+    () => devices.find((device) => device._id === triggerDeviceId),
+    [devices, triggerDeviceId]
+  );
+  const triggerPropertyOptions = useMemo(
+    () => getTriggerPropertyOptions(triggerDevice),
+    [triggerDevice]
+  );
+  const selectedTriggerProperty = typeof triggerConditions.property === "string" && triggerConditions.property.trim()
+    ? triggerConditions.property
+    : "status";
+  const selectedTriggerPropertyOption = triggerPropertyOptions.find((option) => option.key === selectedTriggerProperty)
+    || {
+      key: selectedTriggerProperty,
+      label: selectedTriggerProperty,
+      kind: inferTriggerPropertyKind(triggerConditions.value)
+    };
+  const selectedTriggerOperator = normalizeTriggerOperator(triggerConditions.operator, selectedTriggerPropertyOption.kind);
   const triggerSummary = useMemo(
     () => describeTrigger(triggerType, triggerConditions, devices),
     [devices, triggerConditions, triggerType]
@@ -764,45 +910,172 @@ export function WorkflowBuilderDialog({
                   )}
 
                   {triggerType === "device_state" && (
-                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_260px]">
-                      <div className="space-y-2">
-                        <Label>Device</Label>
-                        <Select
-                          value={String(triggerConditions.deviceId || "")}
-                          onValueChange={(value) => setTriggerConditions((prev) => ({ ...prev, deviceId: value }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select device" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
-                              <div key={room}>
-                                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
-                                {roomDevices.map((device) => (
-                                  <SelectItem key={device._id} value={device._id}>
-                                    {device.name} ({device.type})
-                                  </SelectItem>
-                                ))}
-                              </div>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                    <div className="space-y-4">
+                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+                        <div className="space-y-2">
+                          <Label>Device</Label>
+                          <Select
+                            value={String(triggerConditions.deviceId || "")}
+                            onValueChange={(value) => setTriggerConditions((prev) => ({
+                              ...prev,
+                              deviceId: value,
+                              property: "status",
+                              operator: "eq",
+                              value: true,
+                              state: "on",
+                              forSeconds: Number(prev.forSeconds) || 0
+                            }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select device" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
+                                <div key={room}>
+                                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
+                                  {roomDevices.map((device) => (
+                                    <SelectItem key={device._id} value={device._id}>
+                                      {device.name} ({device.type})
+                                    </SelectItem>
+                                  ))}
+                                </div>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Property</Label>
+                          <Select
+                            value={selectedTriggerProperty}
+                            onValueChange={(value) => {
+                              const option = triggerPropertyOptions.find((entry) => entry.key === value)
+                                || { key: value, label: value, kind: "string" as TriggerPropertyKind };
+                              setTriggerConditions((prev) => ({
+                                ...prev,
+                                property: value,
+                                operator: option.kind === "number"
+                                  ? normalizeTriggerOperator(prev.operator, "number")
+                                  : "eq",
+                                value: option.kind === "boolean"
+                                  ? true
+                                  : option.kind === "number"
+                                    ? Number(prev.value ?? 0) || 0
+                                    : String(prev.value ?? ""),
+                                state: option.kind === "boolean" && value === "status" ? "on" : undefined
+                              }));
+                            }}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select property" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {!triggerPropertyOptions.some((option) => option.key === selectedTriggerProperty) && (
+                                <SelectItem value={selectedTriggerProperty}>
+                                  {selectedTriggerProperty}
+                                </SelectItem>
+                              )}
+                              {triggerPropertyOptions.map((option) => (
+                                <SelectItem key={option.key} value={option.key}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
-                      <div className="space-y-2">
-                        <Label>State</Label>
-                        <Select
-                          value={String(triggerConditions.state || "on")}
-                          onValueChange={(value) => setTriggerConditions((prev) => ({ ...prev, state: value }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="on">On</SelectItem>
-                            <SelectItem value="off">Off</SelectItem>
-                          </SelectContent>
-                        </Select>
+
+                      <div className="grid gap-4 lg:grid-cols-[180px_minmax(0,1fr)_220px]">
+                        <div className="space-y-2">
+                          <Label>Operator</Label>
+                          <Select
+                            value={selectedTriggerOperator}
+                            onValueChange={(value) => setTriggerConditions((prev) => ({
+                              ...prev,
+                              operator: normalizeTriggerOperator(value, selectedTriggerPropertyOption.kind)
+                            }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(selectedTriggerPropertyOption.kind === "number"
+                                ? NUMERIC_TRIGGER_OPERATORS
+                                : selectedTriggerPropertyOption.kind === "string"
+                                  ? TEXT_TRIGGER_OPERATORS
+                                  : ["eq", "neq"]
+                              ).map((operator) => (
+                                <SelectItem key={operator} value={operator}>
+                                  {operator}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Value</Label>
+                          {selectedTriggerPropertyOption.kind === "boolean" ? (
+                            <Select
+                              value={String(Boolean(triggerConditions.value ?? true))}
+                              onValueChange={(value) => setTriggerConditions((prev) => ({
+                                ...prev,
+                                value: value === "true",
+                                state: selectedTriggerProperty === "status"
+                                  ? (value === "true" ? "on" : "off")
+                                  : undefined
+                              }))}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="true">{selectedTriggerProperty === "status" ? "On" : "True"}</SelectItem>
+                                <SelectItem value="false">{selectedTriggerProperty === "status" ? "Off" : "False"}</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          ) : selectedTriggerPropertyOption.kind === "number" ? (
+                            <Input
+                              type="number"
+                              value={String(Number(triggerConditions.value ?? 0))}
+                              onChange={(event) => setTriggerConditions((prev) => ({
+                                ...prev,
+                                value: Number(event.target.value) || 0
+                              }))}
+                              placeholder="25"
+                            />
+                          ) : (
+                            <Input
+                              value={String(triggerConditions.value ?? "")}
+                              onChange={(event) => setTriggerConditions((prev) => ({
+                                ...prev,
+                                value: event.target.value
+                              }))}
+                              placeholder="running"
+                            />
+                          )}
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Hold Time (seconds)</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={String(Math.max(0, Number(triggerConditions.forSeconds) || 0))}
+                            onChange={(event) => setTriggerConditions((prev) => ({
+                              ...prev,
+                              forSeconds: Math.max(0, Math.round(Number(event.target.value) || 0))
+                            }))}
+                            placeholder="0"
+                          />
+                        </div>
                       </div>
+
+                      {triggerPropertyOptions.some((option) => option.key.startsWith("smartThingsAttributeValues.")) && (
+                        <p className="text-xs text-muted-foreground">
+                          SmartThings readings such as power, energy, humidity, and washer or dryer state appear here after sync as imported trigger properties.
+                        </p>
+                      )}
                     </div>
                   )}
 

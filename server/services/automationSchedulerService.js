@@ -2,7 +2,9 @@ const Automation = require('../models/Automation');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationService = require('./automationService');
+const deviceService = require('./deviceService');
 const weatherService = require('./weatherService');
+const { applyFlattenedUpdates, resolveDeviceProperty } = require('../utils/devicePropertyResolver');
 
 const WEEKDAY_TO_NUMBER = {
   sunday: 0,
@@ -472,6 +474,45 @@ class AutomationSchedulerService {
     return value;
   }
 
+  normalizeHoldDurationSeconds(conditions = {}) {
+    const candidates = [
+      conditions.forSeconds,
+      conditions.durationSeconds,
+      conditions.holdSeconds
+    ];
+
+    for (const candidate of candidates) {
+      const numeric = Number(candidate);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        return Math.max(0, Math.round(numeric));
+      }
+    }
+
+    const minutes = Number(conditions.forMinutes ?? conditions.durationMinutes ?? conditions.holdMinutes);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      return Math.max(0, Math.round(minutes * 60));
+    }
+
+    return 0;
+  }
+
+  async refreshTriggerDeviceSnapshot(device) {
+    if (!device || !deviceService.isSmartThingsDevice(device)) {
+      return device;
+    }
+
+    try {
+      const updates = await deviceService.pollSmartThingsState(device, undefined);
+      if (!updates || Object.keys(updates).length === 0) {
+        return device;
+      }
+      return applyFlattenedUpdates(device, updates);
+    } catch (error) {
+      console.warn(`AutomationSchedulerService: Failed to refresh SmartThings trigger device ${device?._id || 'unknown'}: ${error.message}`);
+      return device;
+    }
+  }
+
   compareDeviceValues(left, operator, right) {
     const lhs = this.normalizeDeviceValue(left);
     const rhs = this.normalizeDeviceValue(right);
@@ -495,12 +536,14 @@ class AutomationSchedulerService {
       case 'lte':
       case '<=':
         return Number(lhs) <= Number(rhs);
+      case 'contains':
+        return typeof lhs === 'string' && typeof rhs === 'string' ? lhs.includes(rhs) : false;
       default:
         return Boolean(lhs);
     }
   }
 
-  async evaluateDeviceStateTrigger(automation) {
+  async evaluateDeviceStateTrigger(automation, now = new Date()) {
     const conditions = automation?.trigger?.conditions || {};
     const deviceId = conditions.deviceId;
     if (!deviceId) {
@@ -512,18 +555,11 @@ class AutomationSchedulerService {
       return false;
     }
 
-    let leftValue = null;
-    if (conditions.property === 'status' || conditions.state) {
-      leftValue = device.status;
-    } else if (conditions.property === 'isOnline') {
-      leftValue = device.isOnline;
-    } else if (conditions.property && Object.prototype.hasOwnProperty.call(device, conditions.property)) {
-      leftValue = device[conditions.property];
-    } else if (conditions.property && device.properties && Object.prototype.hasOwnProperty.call(device.properties, conditions.property)) {
-      leftValue = device.properties[conditions.property];
-    } else {
-      leftValue = device.status;
-    }
+    const refreshedDevice = await this.refreshTriggerDeviceSnapshot(device);
+    const propertyKey = typeof conditions.property === 'string' && conditions.property.trim()
+      ? conditions.property.trim()
+      : 'status';
+    const leftValue = resolveDeviceProperty(refreshedDevice, propertyKey, refreshedDevice.status);
 
     const operator = conditions.operator || (conditions.condition === 'above'
       ? '>'
@@ -538,21 +574,52 @@ class AutomationSchedulerService {
     const met = this.compareDeviceValues(leftValue, operator, expected);
 
     const cacheKey = `${automation._id.toString()}:trigger-state`;
-    const lastState = this.triggerStateCache.get(cacheKey);
-    this.triggerStateCache.set(cacheKey, met);
+    const previousState = this.triggerStateCache.get(cacheKey);
+    const previous = previousState && typeof previousState === 'object'
+      ? previousState
+      : {
+          met: previousState === true,
+          eligible: previousState === true,
+          matchedSince: previousState === true ? now.getTime() : null
+        };
+
+    const holdSeconds = this.normalizeHoldDurationSeconds(conditions);
+    const nowMs = now.getTime();
+    let matchedSince = previous.matchedSince ?? null;
+    if (met) {
+      if (!previous.met) {
+        matchedSince = nowMs;
+      }
+    } else {
+      matchedSince = null;
+    }
+
+    const eligible = holdSeconds > 0
+      ? Boolean(met && matchedSince !== null && (nowMs - matchedSince) >= (holdSeconds * 1000))
+      : met;
+
+    this.triggerStateCache.set(cacheKey, {
+      met,
+      eligible,
+      matchedSince
+    });
 
     // Run on edge transition false -> true so we don't fire repeatedly every tick.
-    const shouldRun = met && lastState !== true;
+    const shouldRun = eligible && previous.eligible !== true;
     if (shouldRun) {
-      this.setPendingTriggerContext(automation._id.toString(), {
-        triggeringDeviceId: device._id?.toString?.() || deviceId.toString(),
-        triggeringDeviceName: device.name || '',
-        triggeringDeviceRoom: device.room || '',
-        triggerProperty: typeof conditions.property === 'string' && conditions.property.trim()
-          ? conditions.property.trim()
-          : 'status',
+      const triggerContext = {
+        triggeringDeviceId: refreshedDevice._id?.toString?.() || deviceId.toString(),
+        triggeringDeviceName: refreshedDevice.name || '',
+        triggeringDeviceRoom: refreshedDevice.room || '',
+        triggerProperty: propertyKey,
         triggerValue: leftValue
-      });
+      };
+
+      if (holdSeconds > 0) {
+        triggerContext.triggerHoldSeconds = holdSeconds;
+      }
+
+      this.setPendingTriggerContext(automation._id.toString(), triggerContext);
     }
 
     return shouldRun;
@@ -643,7 +710,7 @@ class AutomationSchedulerService {
       return this.shouldRunScheduleTrigger(automation, now);
     }
     if (triggerType === 'device_state' || triggerType === 'sensor') {
-      return this.evaluateDeviceStateTrigger(automation);
+      return this.evaluateDeviceStateTrigger(automation, now);
     }
     if (triggerType === 'security_alarm_status') {
       return this.evaluateSecurityAlarmTrigger(automation);

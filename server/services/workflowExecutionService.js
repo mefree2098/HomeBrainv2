@@ -5,6 +5,7 @@ const Workflow = require('../models/Workflow');
 const deviceService = require('./deviceService');
 const sceneService = require('./sceneService');
 const insteonService = require('./insteonService');
+const { resolveDeviceProperty } = require('../utils/devicePropertyResolver');
 
 const MAX_DELAY_SECONDS = Math.max(
   600,
@@ -743,18 +744,7 @@ async function evaluateExpression(expression, context = {}) {
     }
 
     const property = expression.property || 'status';
-    let leftValue;
-    if (property === 'status') {
-      leftValue = device.status;
-    } else if (property === 'isOnline') {
-      leftValue = device.isOnline;
-    } else if (Object.prototype.hasOwnProperty.call(device, property)) {
-      leftValue = device[property];
-    } else if (device.properties && Object.prototype.hasOwnProperty.call(device.properties, property)) {
-      leftValue = device.properties[property];
-    } else {
-      leftValue = device.status;
-    }
+    const leftValue = resolveDeviceProperty(device, property, device.status);
 
     const operator = String(expression.operator || 'eq').toLowerCase();
     const expected = Object.prototype.hasOwnProperty.call(expression, 'value')
@@ -810,11 +800,7 @@ async function evaluateCondition(action, context = {}) {
     if (!device) {
       return false;
     }
-    const leftValue = parameters.property === 'status'
-      ? device.status
-      : parameters.property === 'isOnline'
-        ? device.isOnline
-        : device?.[parameters.property];
+    const leftValue = resolveDeviceProperty(device, parameters.property, device.status);
     return compareValues(leftValue, operator, resolveValueReference(parameters.value, context));
   }
 

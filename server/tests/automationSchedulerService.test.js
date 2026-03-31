@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationSchedulerService = require('../services/automationSchedulerService');
+const deviceService = require('../services/deviceService');
 const weatherService = require('../services/weatherService');
 
 test('shouldRunAutomation triggers on security alarm state changes that match configured states', async (t) => {
@@ -96,6 +97,81 @@ test('device_state triggers capture the triggering device context for later acti
     triggeringDeviceRoom: 'Guest Bathroom',
     triggerProperty: 'status',
     triggerValue: true
+  });
+});
+
+test('device_state triggers can evaluate SmartThings power thresholds with hold times', async (t) => {
+  const automationId = new mongoose.Types.ObjectId().toString();
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalIsSmartThingsDevice = deviceService.isSmartThingsDevice;
+  const originalPollSmartThingsState = deviceService.pollSmartThingsState;
+  let currentPower = 18;
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Dryer Monitor',
+      room: 'Laundry',
+      status: true,
+      properties: {
+        source: 'smartthings',
+        smartThingsDeviceId: 'st-dryer-1',
+        smartThingsAttributeValues: {
+          powerMeter: {
+            power: currentPower
+          }
+        }
+      }
+    })
+  });
+
+  deviceService.isSmartThingsDevice = () => true;
+  deviceService.pollSmartThingsState = async () => ({
+    'properties.smartThingsAttributeValues.powerMeter.power': currentPower
+  });
+
+  automationSchedulerService.triggerStateCache.clear();
+  automationSchedulerService.pendingTriggerContexts.clear();
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.isSmartThingsDevice = originalIsSmartThingsDevice;
+    deviceService.pollSmartThingsState = originalPollSmartThingsState;
+    automationSchedulerService.triggerStateCache.clear();
+    automationSchedulerService.pendingTriggerContexts.clear();
+  });
+
+  const automation = {
+    _id: { toString: () => automationId },
+    enabled: true,
+    cooldown: 0,
+    trigger: {
+      type: 'device_state',
+      conditions: {
+        deviceId,
+        property: 'smartThingsAttributeValues.powerMeter.power',
+        operator: 'lt',
+        value: 5,
+        forSeconds: 120
+      }
+    }
+  };
+
+  assert.equal(await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T10:00:00.000Z')), false);
+
+  currentPower = 3;
+  assert.equal(await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T10:01:00.000Z')), false);
+  assert.equal(await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T10:03:01.000Z')), true);
+
+  const context = automationSchedulerService.consumePendingTriggerContext(automationId);
+  assert.deepEqual(context, {
+    triggeringDeviceId: deviceId,
+    triggeringDeviceName: 'Dryer Monitor',
+    triggeringDeviceRoom: 'Laundry',
+    triggerProperty: 'smartThingsAttributeValues.powerMeter.power',
+    triggerValue: 3,
+    triggerHoldSeconds: 120
   });
 });
 

@@ -92,7 +92,9 @@ const SmartThingsIntegrationSchema = new mongoose.Schema({
     name: String,
     label: String,
     room: String,
+    locationId: String,
     capabilities: [String],
+    categories: [String],
     components: [String],
     lastUpdated: { type: Date, default: Date.now }
   }],
@@ -448,16 +450,34 @@ SmartThingsIntegrationSchema.methods.clearTokens = async function(errorMessage =
 SmartThingsIntegrationSchema.methods.updateDevices = async function(devices) {
   console.log(`SmartThingsIntegration: Updating device list with ${devices.length} devices`);
 
-  this.connectedDevices = devices.map(device => ({
-    deviceId: device.deviceId,
-    name: device.name,
-    label: device.label,
-    room: device.roomId || '',
-    locationId: device.locationId || '',
-    capabilities: device.components?.[0]?.capabilities?.map(cap => cap.id) || [],
-    components: device.components?.map(comp => comp.id) || [],
-    lastUpdated: new Date()
-  }));
+  this.connectedDevices = devices.map((device) => {
+    const capabilities = new Set();
+    const categories = new Set();
+    (device.components || []).forEach((component) => {
+      (component.capabilities || []).forEach((capability) => {
+        if (capability?.id) {
+          capabilities.add(capability.id);
+        }
+      });
+      (component.categories || []).forEach((category) => {
+        if (category?.name) {
+          categories.add(category.name);
+        }
+      });
+    });
+
+    return {
+      deviceId: device.deviceId,
+      name: device.name,
+      label: device.label,
+      room: device.roomId || '',
+      locationId: device.locationId || '',
+      capabilities: Array.from(capabilities),
+      categories: Array.from(categories),
+      components: device.components?.map(comp => comp.id) || [],
+      lastUpdated: new Date()
+    };
+  });
 
   this.lastSync = new Date();
   await this.save();
