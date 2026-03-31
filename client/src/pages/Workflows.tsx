@@ -694,22 +694,21 @@ export function Workflows() {
                   <CardDescription>{workflow.description || "No description provided."}</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge
-                    variant="outline"
+                  <div
                     className={cn(
-                      "min-w-[112px] justify-center",
+                      "flex min-w-[112px] items-center justify-center rounded-full border px-4 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] transition-all",
                       workflow.enabled
-                        ? "border-cyan-300/80 bg-cyan-400 text-slate-950 shadow-[0_10px_30px_rgba(34,211,238,0.24)]"
+                        ? "border-cyan-200/90 bg-[linear-gradient(135deg,rgba(86,234,255,0.98),rgba(40,208,255,0.94))] text-white shadow-[0_12px_30px_rgba(34,211,238,0.3)]"
                         : "border-white/15 bg-transparent text-muted-foreground"
                     )}
                   >
                     {workflow.enabled ? "Enabled" : "Disabled"}
-                  </Badge>
+                  </div>
                   <Switch
                     className={cn(
                       workflow.enabled
-                        ? "border-cyan-300/80 data-[state=checked]:bg-cyan-400 shadow-[0_10px_24px_rgba(34,211,238,0.2)]"
-                        : "border-white/20"
+                        ? "border-cyan-200/90 data-[state=checked]:!bg-cyan-400 data-[state=checked]:shadow-[0_0_0_1px_rgba(165,243,252,0.5),0_12px_28px_rgba(34,211,238,0.3)]"
+                        : "border-white/20 data-[state=unchecked]:!bg-white/10"
                     )}
                     checked={workflow.enabled}
                     disabled={!isAdmin}
