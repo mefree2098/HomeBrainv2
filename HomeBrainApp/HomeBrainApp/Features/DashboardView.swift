@@ -8,6 +8,7 @@ private struct DashboardTempestStationSnapshot {
     let observedAt: String?
     let temperatureF: Double?
     let feelsLikeF: Double?
+    let dewPointF: Double?
     let humidityPct: Double?
     let uvIndex: Double?
     let windAvgMph: Double?
@@ -17,6 +18,8 @@ private struct DashboardTempestStationSnapshot {
     let pressureTrend: String
     let rainTodayIn: Double?
     let rainRateInPerHr: Double?
+    let lightningAvgDistanceMiles: Double?
+    let lightningCount: Double?
     let batteryVolts: Double?
     let websocketConnected: Bool
 
@@ -35,6 +38,7 @@ private struct DashboardTempestStationSnapshot {
             observedAt: JSON.optionalString(station, "observedAt"),
             temperatureF: optionalNumber(metrics["temperatureF"]),
             feelsLikeF: optionalNumber(metrics["feelsLikeF"]),
+            dewPointF: optionalNumber(metrics["dewPointF"]),
             humidityPct: optionalNumber(metrics["humidityPct"]),
             uvIndex: optionalNumber(metrics["uvIndex"]),
             windAvgMph: optionalNumber(metrics["windAvgMph"]),
@@ -44,6 +48,8 @@ private struct DashboardTempestStationSnapshot {
             pressureTrend: JSON.string(metrics, "pressureTrend", fallback: "steady"),
             rainTodayIn: optionalNumber(metrics["rainTodayIn"]),
             rainRateInPerHr: optionalNumber(metrics["rainRateInPerHr"]),
+            lightningAvgDistanceMiles: optionalNumber(metrics["lightningAvgDistanceMiles"]),
+            lightningCount: optionalNumber(metrics["lightningCount"]),
             batteryVolts: optionalNumber(metrics["batteryVolts"]),
             websocketConnected: JSON.bool(status, "websocketConnected")
         )
@@ -406,6 +412,8 @@ struct DashboardView: View {
         case station(widgetID: String, name: String, room: String, websocketConnected: Bool)
         case today(widgetID: String, high: Double?, low: Double?, condition: String)
         case humidity(widgetID: String, value: Double?)
+        case dewPoint(widgetID: String, value: Double?)
+        case lightning(widgetID: String, count: Double?, averageDistanceMiles: Double?)
         case sunCycle(widgetID: String, sunrise: String?, sunset: String?)
         case rainChance(widgetID: String, chance: Double?, precipitationNow: Double?)
     }
@@ -2510,14 +2518,113 @@ struct DashboardView: View {
     private func weatherWidget(for widget: DashboardWidgetItem) -> some View {
         let compact = widget.size == .small
         let condensed = widget.size == .small || widget.size == .medium
+        let tabletCompactWeatherGrid = widget.size == .medium && dashboardGridColumnCount == 2 && !usesPortraitCompactLayout
+        let compactWeatherHeader = compact || tabletCompactWeatherGrid
         let stackedHeroLayout = usesPortraitCompactLayout
+        let headlineFontSize: CGFloat = compact ? 34 : (tabletCompactWeatherGrid ? 38 : 42)
+        let weatherGlyphSize: CGFloat = compact ? 28 : (tabletCompactWeatherGrid ? 30 : 34)
+        let weatherGlyphFrame: CGFloat = compact ? 50 : (tabletCompactWeatherGrid ? 54 : 58)
         let snapshot = weatherByWidgetID[widget.id]
         let error = weatherErrorsByWidgetID[widget.id]
 
         return VStack(alignment: .leading, spacing: condensed ? 12 : 14) {
             if let snapshot {
                 Group {
-                    if stackedHeroLayout {
+                    if tabletCompactWeatherGrid {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Local Forecast")
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .textCase(.uppercase)
+                                        .tracking(2.6)
+                                        .foregroundStyle(HBPalette.textMuted)
+
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        Text(formattedTemperature(snapshot.displayTemperatureF))
+                                            .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
+                                            .foregroundStyle(HBPalette.textPrimary)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.78)
+
+                                        Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
+                                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                                            .foregroundStyle(HBPalette.textSecondary)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.82)
+                                    }
+                                }
+
+                                Spacer(minLength: 8)
+
+                                HStack(alignment: .center, spacing: 8) {
+                                    weatherInfoPopoverTrigger(
+                                        topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
+                                        arrowEdge: .top
+                                    ) {
+                                        weatherAQIIndicator(value: snapshot.airQualityIndex, compact: true)
+                                    }
+
+                                    if let tempest = snapshot.tempest {
+                                        weatherInfoPopoverTrigger(
+                                            topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
+                                            arrowEdge: .top
+                                        ) {
+                                            weatherUVIndicator(value: tempest.uvIndex, compact: true)
+                                        }
+                                    }
+
+                                    Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
+                                        .font(.system(size: weatherGlyphSize, weight: .semibold))
+                                        .foregroundStyle(
+                                            LinearGradient(
+                                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                        )
+                                        .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
+                                        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+                                }
+                            }
+
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(snapshot.condition)
+                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
+
+                                    Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .lineLimit(1)
+
+                                    HBWeatherSyncCaption(value: snapshot.lastSyncedAt)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+
+                                Spacer(minLength: 8)
+
+                                HStack(spacing: 5) {
+                                    if let tempest = snapshot.tempest {
+                                        HBTempestBatteryBadge(volts: tempest.batteryVolts)
+                                            .fixedSize(horizontal: true, vertical: false)
+
+                                        HBBadge(
+                                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                                            foreground: HBPalette.textPrimary,
+                                            background: HBPalette.heroCore.opacity(0.22),
+                                            stroke: HBPalette.heroCore.opacity(0.42)
+                                        )
+                                        .fixedSize(horizontal: true, vertical: false)
+                                    }
+
+                                    weatherSourceBadge(text: snapshot.sourceBadgeLabel, compact: true)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                }
+                            }
+                        }
+                    } else if stackedHeroLayout {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 6) {
@@ -2528,7 +2635,7 @@ struct DashboardView: View {
                                         .foregroundStyle(HBPalette.textMuted)
 
                                     Text(formattedTemperature(snapshot.displayTemperatureF))
-                                        .font(.system(size: compact ? 34 : 42, weight: .bold, design: .rounded))
+                                        .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
                                         .foregroundStyle(HBPalette.textPrimary)
                                         .lineLimit(1)
                                         .minimumScaleFactor(0.78)
@@ -2543,7 +2650,7 @@ struct DashboardView: View {
                                 Spacer(minLength: 10)
 
                                 Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
-                                    .font(.system(size: compact ? 28 : 34, weight: .semibold))
+                                    .font(.system(size: weatherGlyphSize, weight: .semibold))
                                     .foregroundStyle(
                                         LinearGradient(
                                             colors: [HBPalette.accentBlue, HBPalette.accentPurple],
@@ -2551,20 +2658,20 @@ struct DashboardView: View {
                                             endPoint: .bottomTrailing
                                         )
                                     )
-                                    .frame(width: compact ? 50 : 58, height: compact ? 50 : 58)
+                                    .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
                                     .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
                             }
 
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(snapshot.condition)
-                                        .font(.system(size: compact ? 15 : 17, weight: .semibold, design: .rounded))
+                                        .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
                                         .foregroundStyle(HBPalette.textPrimary)
 
                                     Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
                                         .font(.system(size: 13, weight: .medium, design: .rounded))
                                         .foregroundStyle(HBPalette.textSecondary)
-                                        .lineLimit(2)
+                                        .lineLimit(tabletCompactWeatherGrid ? 1 : 2)
                                 }
 
                                 Spacer(minLength: 10)
@@ -2575,7 +2682,7 @@ struct DashboardView: View {
                                             topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
                                             arrowEdge: .top
                                         ) {
-                                            weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+                                            weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compactWeatherHeader)
                                         }
 
                                         if let tempest = snapshot.tempest {
@@ -2583,14 +2690,14 @@ struct DashboardView: View {
                                                 topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
                                                 arrowEdge: .top
                                             ) {
-                                                weatherUVIndicator(value: tempest.uvIndex, compact: compact)
+                                                weatherUVIndicator(value: tempest.uvIndex, compact: compactWeatherHeader)
                                             }
                                         }
                                     }
                                 }
                             }
 
-                            weatherStatusBadges(snapshot: snapshot)
+                            weatherStatusBadges(snapshot: snapshot, compact: tabletCompactWeatherGrid)
                         }
                     } else {
                         HStack(alignment: .top, spacing: 12) {
@@ -2603,7 +2710,7 @@ struct DashboardView: View {
 
                                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                                     Text(formattedTemperature(snapshot.displayTemperatureF))
-                                        .font(.system(size: compact ? 34 : 42, weight: .bold, design: .rounded))
+                                        .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
                                         .foregroundStyle(HBPalette.textPrimary)
 
                                     if !compact {
@@ -2614,7 +2721,7 @@ struct DashboardView: View {
                                 }
 
                                 Text(snapshot.condition)
-                                    .font(.system(size: compact ? 15 : 17, weight: .semibold, design: .rounded))
+                                    .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
                                     .foregroundStyle(HBPalette.textPrimary)
 
                                 Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
@@ -2631,7 +2738,7 @@ struct DashboardView: View {
                                         topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
                                         arrowEdge: .top
                                     ) {
-                                        weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+                                        weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compactWeatherHeader)
                                     }
 
                                     if let tempest = snapshot.tempest {
@@ -2639,12 +2746,12 @@ struct DashboardView: View {
                                             topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
                                             arrowEdge: .top
                                         ) {
-                                            weatherUVIndicator(value: tempest.uvIndex, compact: compact)
+                                            weatherUVIndicator(value: tempest.uvIndex, compact: compactWeatherHeader)
                                         }
                                     }
 
                                     Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
-                                        .font(.system(size: compact ? 28 : 34, weight: .semibold))
+                                        .font(.system(size: weatherGlyphSize, weight: .semibold))
                                         .foregroundStyle(
                                             LinearGradient(
                                                 colors: [HBPalette.accentBlue, HBPalette.accentPurple],
@@ -2652,17 +2759,21 @@ struct DashboardView: View {
                                                 endPoint: .bottomTrailing
                                             )
                                         )
-                                        .frame(width: compact ? 50 : 58, height: compact ? 50 : 58)
+                                        .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
                                         .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
                                 }
 
-                                weatherStatusBadges(snapshot: snapshot)
+                                weatherStatusBadges(snapshot: snapshot, compact: tabletCompactWeatherGrid)
                             }
                         }
                     }
                 }
 
+                let metricGridSpacing: CGFloat = tabletCompactWeatherGrid ? 8 : 10
                 let metricColumns: [GridItem] = {
+                    if tabletCompactWeatherGrid {
+                        return Array(repeating: GridItem(.flexible(minimum: 0), spacing: metricGridSpacing, alignment: .top), count: 3)
+                    }
                     if widget.size == .small {
                         return [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
                     }
@@ -2672,50 +2783,46 @@ struct DashboardView: View {
                     return Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
                 }()
 
-                if let tempest = snapshot.tempest {
-                    let tempestColumns: [GridItem] = condensed
-                        ? [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-                        : Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+                if tabletCompactWeatherGrid {
+                    LazyVGrid(columns: metricColumns, spacing: metricGridSpacing) {
+                        if let tempest = snapshot.tempest {
+                            weatherInfoPopoverTrigger(
+                                topic: .liveWind(
+                                    widgetID: widget.id,
+                                    speed: tempest.windAvgMph,
+                                    gust: tempest.windGustMph,
+                                    direction: tempest.windDirectionDeg
+                                )
+                            ) {
+                                weatherCompactMetricTile(
+                                    title: "Wind",
+                                    value: formattedWind(tempest.windAvgMph),
+                                    detail: formattedCompactLiveWindDetail(gust: tempest.windGustMph, direction: tempest.windDirectionDeg),
+                                    accent: HBPalette.accentBlue,
+                                    iconSystemName: "wind",
+                                    iconColor: HBPalette.accentBlue,
+                                    backgroundTint: HBPalette.heroCore,
+                                    backgroundOpacity: 0.22
+                                )
+                            }
 
-                    LazyVGrid(columns: tempestColumns, spacing: 10) {
-                        weatherInfoPopoverTrigger(
-                            topic: .liveWind(
-                                widgetID: widget.id,
-                                speed: tempest.windAvgMph,
-                                gust: tempest.windGustMph,
-                                direction: tempest.windDirectionDeg
-                            )
-                        ) {
-                            weatherLiveMetricTile(
-                                title: "Live Wind",
-                                value: formattedWind(tempest.windAvgMph),
-                                detail: formattedLiveWindDetail(gust: tempest.windGustMph, direction: tempest.windDirectionDeg),
-                                accent: HBPalette.accentBlue,
-                                iconSystemName: "wind",
-                                iconColor: HBPalette.accentBlue,
-                                backgroundTint: HBPalette.heroCore,
-                                backgroundOpacity: 0.22
-                            )
-                        }
+                            weatherInfoPopoverTrigger(
+                                topic: .rainfall(
+                                    widgetID: widget.id,
+                                    total: tempest.rainTodayIn,
+                                    rate: tempest.rainRateInPerHr
+                                )
+                            ) {
+                                weatherCompactMetricTile(
+                                    title: "Rain",
+                                    value: formattedRain(tempest.rainTodayIn),
+                                    detail: "\(formattedRain(tempest.rainRateInPerHr))/hr",
+                                    accent: HBPalette.panelStrokeStrong,
+                                    iconSystemName: "drop",
+                                    iconColor: HBPalette.accentBlue
+                                )
+                            }
 
-                        weatherInfoPopoverTrigger(
-                            topic: .rainfall(
-                                widgetID: widget.id,
-                                total: tempest.rainTodayIn,
-                                rate: tempest.rainRateInPerHr
-                            )
-                        ) {
-                            weatherLiveMetricTile(
-                                title: "Rainfall",
-                                value: formattedRain(tempest.rainTodayIn),
-                                detail: "Rate \(formattedRain(tempest.rainRateInPerHr))/hr",
-                                accent: HBPalette.panelStrokeStrong,
-                                iconSystemName: "drop",
-                                iconColor: HBPalette.accentBlue
-                            )
-                        }
-
-                        if !compact {
                             weatherInfoPopoverTrigger(
                                 topic: .pressure(
                                     widgetID: widget.id,
@@ -2723,7 +2830,7 @@ struct DashboardView: View {
                                     trend: tempestsPressureTrend(tempest.pressureTrend)
                                 )
                             ) {
-                                weatherLiveMetricTile(
+                                weatherCompactMetricTile(
                                     title: "Pressure",
                                     value: formattedPressure(tempest.pressureInHg),
                                     detail: formattedPressureMeaning(tempest.pressureTrend),
@@ -2741,65 +2848,218 @@ struct DashboardView: View {
                                     websocketConnected: tempest.websocketConnected
                                 )
                             ) {
-                                weatherLiveMetricTile(
+                                weatherCompactMetricTile(
                                     title: "Station",
                                     value: tempest.name,
-                                    detail: tempest.websocketConnected ? "WebSocket live" : "Recent snapshot",
+                                    detail: tempest.websocketConnected ? "Live feed" : "Snapshot",
                                     accent: HBPalette.panelStrokeStrong,
                                     iconSystemName: "waveform.path.ecg",
                                     iconColor: HBPalette.accentPurple
                                 )
                             }
                         }
-                    }
-                }
 
-                LazyVGrid(columns: metricColumns, spacing: 10) {
-                    weatherInfoPopoverTrigger(
-                        topic: .today(
-                            widgetID: widget.id,
-                            high: snapshot.highF,
-                            low: snapshot.lowF,
-                            condition: snapshot.todayCondition
-                        )
-                    ) {
-                        weatherMetricTile(
-                            title: "Today",
-                            value: "\(formattedTemperature(snapshot.highF)) / \(formattedTemperature(snapshot.lowF))",
-                            detail: snapshot.todayCondition,
-                            accent: HBPalette.accentBlue
-                        )
+                        weatherInfoPopoverTrigger(
+                            topic: .today(
+                                widgetID: widget.id,
+                                high: snapshot.highF,
+                                low: snapshot.lowF,
+                                condition: snapshot.todayCondition
+                            )
+                        ) {
+                            weatherCompactMetricTile(
+                                title: "Today",
+                                value: "\(formattedTemperature(snapshot.highF)) / \(formattedTemperature(snapshot.lowF))",
+                                detail: snapshot.todayCondition,
+                                accent: HBPalette.accentBlue
+                            )
+                        }
+
+                        weatherInfoPopoverTrigger(topic: .humidity(widgetID: widget.id, value: snapshot.displayHumidityPct)) {
+                            weatherCompactMetricTile(
+                                title: "Humidity",
+                                value: formattedPercent(snapshot.displayHumidityPct),
+                                detail: formattedHumidityMeaning(snapshot.displayHumidityPct),
+                                accent: HBPalette.accentGreen
+                            )
+                        }
+
+                        weatherInfoPopoverTrigger(
+                            topic: .sunCycle(
+                                widgetID: widget.id,
+                                sunrise: snapshot.sunrise,
+                                sunset: snapshot.sunset
+                            )
+                        ) {
+                            weatherCompactSunCycleTile(sunrise: snapshot.sunrise, sunset: snapshot.sunset, accent: HBPalette.accentPurple)
+                        }
+
+                        weatherInfoPopoverTrigger(
+                            topic: .rainChance(
+                                widgetID: widget.id,
+                                chance: snapshot.precipitationChance,
+                                precipitationNow: snapshot.precipitationIn
+                            )
+                        ) {
+                            weatherCompactMetricTile(
+                                title: "Rain %",
+                                value: formattedPercent(snapshot.precipitationChance),
+                                detail: formattedRainChanceMeaning(snapshot.precipitationChance),
+                                accent: HBPalette.accentOrange
+                            )
+                        }
+
+                        if let tempest = snapshot.tempest {
+                            weatherInfoPopoverTrigger(
+                                topic: .lightning(
+                                    widgetID: widget.id,
+                                    count: tempest.lightningCount,
+                                    averageDistanceMiles: tempest.lightningAvgDistanceMiles
+                                )
+                            ) {
+                                weatherCompactMetricTile(
+                                    title: "Lightning",
+                                    value: formattedLightningCount(tempest.lightningCount),
+                                    detail: formattedLightningDetail(count: tempest.lightningCount, averageDistanceMiles: tempest.lightningAvgDistanceMiles),
+                                    accent: HBPalette.accentPurple,
+                                    iconSystemName: "bolt.fill",
+                                    iconColor: HBPalette.accentPurple
+                                )
+                            }
+                        }
                     }
-                    weatherInfoPopoverTrigger(topic: .humidity(widgetID: widget.id, value: snapshot.humidity)) {
-                        weatherMetricTile(
-                            title: "Humidity",
-                            value: formattedPercent(snapshot.humidity),
-                            detail: "Indoor comfort check",
-                            accent: HBPalette.accentGreen
-                        )
+
+                    weatherCompactSummaryStrip(snapshot: snapshot)
+                } else {
+                    if let tempest = snapshot.tempest {
+                        let tempestColumns: [GridItem] = condensed
+                            ? [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+                            : Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+
+                        LazyVGrid(columns: tempestColumns, spacing: 10) {
+                            weatherInfoPopoverTrigger(
+                                topic: .liveWind(
+                                    widgetID: widget.id,
+                                    speed: tempest.windAvgMph,
+                                    gust: tempest.windGustMph,
+                                    direction: tempest.windDirectionDeg
+                                )
+                            ) {
+                                weatherLiveMetricTile(
+                                    title: "Live Wind",
+                                    value: formattedWind(tempest.windAvgMph),
+                                    detail: formattedLiveWindDetail(gust: tempest.windGustMph, direction: tempest.windDirectionDeg),
+                                    accent: HBPalette.accentBlue,
+                                    iconSystemName: "wind",
+                                    iconColor: HBPalette.accentBlue,
+                                    backgroundTint: HBPalette.heroCore,
+                                    backgroundOpacity: 0.22
+                                )
+                            }
+
+                            weatherInfoPopoverTrigger(
+                                topic: .rainfall(
+                                    widgetID: widget.id,
+                                    total: tempest.rainTodayIn,
+                                    rate: tempest.rainRateInPerHr
+                                )
+                            ) {
+                                weatherLiveMetricTile(
+                                    title: "Rainfall",
+                                    value: formattedRain(tempest.rainTodayIn),
+                                    detail: "Rate \(formattedRain(tempest.rainRateInPerHr))/hr",
+                                    accent: HBPalette.panelStrokeStrong,
+                                    iconSystemName: "drop",
+                                    iconColor: HBPalette.accentBlue
+                                )
+                            }
+
+                            if !compact {
+                                weatherInfoPopoverTrigger(
+                                    topic: .pressure(
+                                        widgetID: widget.id,
+                                        value: tempest.pressureInHg,
+                                        trend: tempestsPressureTrend(tempest.pressureTrend)
+                                    )
+                                ) {
+                                    weatherLiveMetricTile(
+                                        title: "Pressure",
+                                        value: formattedPressure(tempest.pressureInHg),
+                                        detail: formattedPressureMeaning(tempest.pressureTrend),
+                                        accent: HBPalette.panelStrokeStrong,
+                                        iconSystemName: "gauge",
+                                        iconColor: HBPalette.accentGreen
+                                    )
+                                }
+
+                                weatherInfoPopoverTrigger(
+                                    topic: .station(
+                                        widgetID: widget.id,
+                                        name: tempest.name,
+                                        room: tempest.room,
+                                        websocketConnected: tempest.websocketConnected
+                                    )
+                                ) {
+                                    weatherLiveMetricTile(
+                                        title: "Station",
+                                        value: tempest.name,
+                                        detail: tempest.websocketConnected ? "WebSocket live" : "Recent snapshot",
+                                        accent: HBPalette.panelStrokeStrong,
+                                        iconSystemName: "waveform.path.ecg",
+                                        iconColor: HBPalette.accentPurple
+                                    )
+                                }
+                            }
+                        }
                     }
-                    weatherInfoPopoverTrigger(
-                        topic: .sunCycle(
-                            widgetID: widget.id,
-                            sunrise: snapshot.sunrise,
-                            sunset: snapshot.sunset
-                        )
-                    ) {
-                        weatherSunCycleTile(sunrise: snapshot.sunrise, sunset: snapshot.sunset, accent: HBPalette.accentPurple)
-                    }
-                    weatherInfoPopoverTrigger(
-                        topic: .rainChance(
-                            widgetID: widget.id,
-                            chance: snapshot.precipitationChance,
-                            precipitationNow: snapshot.precipitationIn
-                        )
-                    ) {
-                        weatherMetricTile(
-                            title: "Rain Chance",
-                            value: formattedPercent(snapshot.precipitationChance),
-                            detail: snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precipitation feed",
-                            accent: HBPalette.accentOrange
-                        )
+
+                    LazyVGrid(columns: metricColumns, spacing: 10) {
+                        weatherInfoPopoverTrigger(
+                            topic: .today(
+                                widgetID: widget.id,
+                                high: snapshot.highF,
+                                low: snapshot.lowF,
+                                condition: snapshot.todayCondition
+                            )
+                        ) {
+                            weatherMetricTile(
+                                title: "Today",
+                                value: "\(formattedTemperature(snapshot.highF)) / \(formattedTemperature(snapshot.lowF))",
+                                detail: snapshot.todayCondition,
+                                accent: HBPalette.accentBlue
+                            )
+                        }
+                        weatherInfoPopoverTrigger(topic: .humidity(widgetID: widget.id, value: snapshot.displayHumidityPct)) {
+                            weatherMetricTile(
+                                title: "Humidity",
+                                value: formattedPercent(snapshot.displayHumidityPct),
+                                detail: "Indoor comfort check",
+                                accent: HBPalette.accentGreen
+                            )
+                        }
+                        weatherInfoPopoverTrigger(
+                            topic: .sunCycle(
+                                widgetID: widget.id,
+                                sunrise: snapshot.sunrise,
+                                sunset: snapshot.sunset
+                            )
+                        ) {
+                            weatherSunCycleTile(sunrise: snapshot.sunrise, sunset: snapshot.sunset, accent: HBPalette.accentPurple)
+                        }
+                        weatherInfoPopoverTrigger(
+                            topic: .rainChance(
+                                widgetID: widget.id,
+                                chance: snapshot.precipitationChance,
+                                precipitationNow: snapshot.precipitationIn
+                            )
+                        ) {
+                            weatherMetricTile(
+                                title: "Rain Chance",
+                                value: formattedPercent(snapshot.precipitationChance),
+                                detail: snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precipitation feed",
+                                accent: HBPalette.accentOrange
+                            )
+                        }
                     }
                 }
             } else if locationManager.isRequesting && widget.settings.weatherLocationMode == .auto {
@@ -2851,7 +3111,7 @@ struct DashboardView: View {
                             Button {
                                 locationManager.requestLocation()
                             } label: {
-                                Label("Use Device Location", systemImage: "location")
+                                Label(tabletCompactWeatherGrid ? "Use Location" : "Use Device Location", systemImage: "location")
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(HBGhostButtonStyle(compact: true))
@@ -2871,24 +3131,44 @@ struct DashboardView: View {
         }
     }
 
-    private func weatherStatusBadges(snapshot: DashboardWeatherSnapshot) -> some View {
+    private func weatherStatusBadges(snapshot: DashboardWeatherSnapshot, compact: Bool = false) -> some View {
         VStack(alignment: .trailing, spacing: 6) {
-            HStack(spacing: 6) {
+            if compact {
                 if let tempest = snapshot.tempest {
-                    HBTempestBatteryBadge(volts: tempest.batteryVolts)
-                        .fixedSize(horizontal: true, vertical: false)
+                    HStack(spacing: 6) {
+                        HBTempestBatteryBadge(volts: tempest.batteryVolts)
+                            .fixedSize(horizontal: true, vertical: false)
 
-                    HBBadge(
-                        text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
-                        foreground: HBPalette.textPrimary,
-                        background: HBPalette.heroCore.opacity(0.22),
-                        stroke: HBPalette.heroCore.opacity(0.42)
-                    )
-                    .fixedSize(horizontal: true, vertical: false)
+                        HBBadge(
+                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                            foreground: HBPalette.textPrimary,
+                            background: HBPalette.heroCore.opacity(0.22),
+                            stroke: HBPalette.heroCore.opacity(0.42)
+                        )
+                        .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
 
                 weatherSourceBadge(text: snapshot.sourceBadgeLabel)
                     .fixedSize(horizontal: true, vertical: false)
+            } else {
+                HStack(spacing: 6) {
+                    if let tempest = snapshot.tempest {
+                        HBTempestBatteryBadge(volts: tempest.batteryVolts)
+                            .fixedSize(horizontal: true, vertical: false)
+
+                        HBBadge(
+                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                            foreground: HBPalette.textPrimary,
+                            background: HBPalette.heroCore.opacity(0.22),
+                            stroke: HBPalette.heroCore.opacity(0.42)
+                        )
+                        .fixedSize(horizontal: true, vertical: false)
+                    }
+
+                    weatherSourceBadge(text: snapshot.sourceBadgeLabel)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
 
             HBWeatherSyncCaption(value: snapshot.lastSyncedAt)
@@ -2896,14 +3176,14 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    private func weatherSourceBadge(text: String) -> some View {
+    private func weatherSourceBadge(text: String, compact: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .font(.system(size: compact ? 10 : 11, weight: .bold, design: .rounded))
             .textCase(.uppercase)
             .tracking(0.8)
             .foregroundStyle(HBPalette.textPrimary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.horizontal, compact ? 9 : 10)
+            .padding(.vertical, compact ? 6 : 7)
             .background(HBPalette.panelSoft.opacity(0.92), in: Capsule())
             .overlay(
                 Capsule()
@@ -3043,6 +3323,176 @@ struct DashboardView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(accent.opacity(backgroundOpacity > 0 ? 0.3 : 0.2), lineWidth: 1)
         )
+    }
+
+    private func weatherCompactMetricTile(
+        title: String,
+        value: String,
+        detail: String,
+        accent: Color,
+        iconSystemName: String? = nil,
+        iconColor: Color? = nil,
+        backgroundTint: Color = .clear,
+        backgroundOpacity: Double = 0
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .top, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(1.4)
+                    .foregroundStyle(HBPalette.textMuted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+
+                Spacer(minLength: 4)
+
+                if let iconSystemName {
+                    Image(systemName: iconSystemName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(iconColor ?? accent)
+                }
+            }
+
+            Text(value)
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+
+            Text(detail)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            Capsule()
+                .fill(accent)
+                .frame(width: 28, height: 3)
+        }
+        .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
+        .padding(10)
+        .background(
+            ZStack {
+                HBGlassBackground(cornerRadius: 14, variant: .panelSoft)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(backgroundTint.opacity(backgroundOpacity))
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(accent.opacity(backgroundOpacity > 0 ? 0.3 : 0.2), lineWidth: 1)
+        )
+    }
+
+    private func weatherCompactSunCycleTile(sunrise: String?, sunset: String?, accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Sun")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(1.4)
+                .foregroundStyle(HBPalette.textMuted)
+                .lineLimit(1)
+
+            HStack(spacing: 6) {
+                Image(systemName: "sunrise")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(HBPalette.accentYellow)
+
+                Text(formattedWeatherTime(sunrise))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "sunset")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(HBPalette.accentOrange)
+
+                Text(formattedWeatherTime(sunset))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+
+            Capsule()
+                .fill(accent)
+                .frame(width: 28, height: 3)
+        }
+        .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
+        .padding(10)
+        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(accent.opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    private func weatherCompactSummaryStrip(snapshot: DashboardWeatherSnapshot) -> some View {
+        let tone = snapshot.tempest?.websocketConnected == true ? HBPalette.accentGreen : HBPalette.accentBlue
+
+        return HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tone)
+
+            Text(compactWeatherSummary(snapshot: snapshot))
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(HBPalette.panelStroke.opacity(0.55), lineWidth: 1)
+        )
+    }
+
+    private func compactWeatherSummary(snapshot: DashboardWeatherSnapshot) -> String {
+        var segments: [String] = []
+
+        if let dewPoint = snapshot.tempest?.dewPointF {
+            segments.append(formattedDewPointMeaning(dewPoint))
+        } else if snapshot.displayHumidityPct != nil {
+            segments.append(formattedHumidityMeaning(snapshot.displayHumidityPct))
+        }
+
+        if let tempest = snapshot.tempest {
+            segments.append(formattedPressureMeaning(tempest.pressureTrend))
+        }
+
+        if snapshot.precipitationChance != nil {
+            segments.append(formattedRainChanceMeaning(snapshot.precipitationChance))
+        }
+
+        if segments.isEmpty {
+            return "Forecast synced and ready."
+        }
+
+        return segments.joined(separator: " • ")
+    }
+
+    private func formattedCompactLiveWindDetail(gust: Double?, direction: Double?) -> String {
+        let directionText = compassDirection(direction)
+        let gustText = formattedWind(gust)
+
+        if directionText == "--" && gustText == "--" {
+            return "Live wind"
+        }
+        if directionText == "--" {
+            return gustText
+        }
+        if gustText == "--" {
+            return directionText
+        }
+        return "\(directionText) • \(gustText)"
     }
 
     private func weatherUVIndicator(value: Double?, compact: Bool) -> some View {
@@ -3226,6 +3676,28 @@ struct DashboardView: View {
                 weatherInfoRangeRow(range: "30-60%", label: "Comfort band", color: HBPalette.accentGreen)
                 weatherInfoRangeRow(range: "60%+", label: "Humid", color: HBPalette.accentBlue)
                 Text("Humidity affects skin comfort, indoor dryness, and how heavy the air feels. Mid-range humidity is usually the most comfortable.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .dewPoint(_, value):
+                weatherInfoSectionTitle(
+                    title: "Dew Point",
+                    summary: "Current \(formattedTemperature(value)) • \(formattedDewPointMeaning(value))"
+                )
+                weatherInfoRangeRow(range: "Below 30°", label: "Very dry", color: HBPalette.accentYellow)
+                weatherInfoRangeRow(range: "30-55°", label: "Comfortable", color: HBPalette.accentGreen)
+                weatherInfoRangeRow(range: "56°+", label: "Muggy", color: HBPalette.accentBlue)
+                Text("Dew point reflects how much moisture is actually in the air. Lower values feel crisper and drier, while higher values feel stickier.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .lightning(_, count, averageDistanceMiles):
+                weatherInfoSectionTitle(
+                    title: "Lightning",
+                    summary: "\(formattedLightningCount(count)) strikes • \(formattedLightningDetail(count: count, averageDistanceMiles: averageDistanceMiles))"
+                )
+                weatherInfoValueRow(label: "Strikes", value: formattedLightningCount(count), color: HBPalette.accentPurple)
+                weatherInfoValueRow(label: "Avg Distance", value: formattedLightningDistance(averageDistanceMiles), color: HBPalette.textPrimary)
+                weatherInfoValueRow(label: "Status", value: formattedLightningMeaning(count), color: count.map { $0 > 0 ? HBPalette.accentPurple : HBPalette.accentGreen } ?? HBPalette.textPrimary)
+                Text("Tempest reports recent lightning strike count and the average distance of those strikes, which helps show whether storms are staying far away or moving closer.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
             case let .sunCycle(_, sunrise, sunset):
@@ -3457,6 +3929,51 @@ struct DashboardView: View {
         default:
             return "Humid air"
         }
+    }
+
+    private func formattedDewPointMeaning(_ value: Double?) -> String {
+        guard let value else { return "No dew point reading" }
+        switch value {
+        case ..<30:
+            return "Very dry"
+        case ..<55:
+            return "Comfortable"
+        case ..<65:
+            return "Humid"
+        default:
+            return "Muggy"
+        }
+    }
+
+    private func formattedLightningCount(_ value: Double?) -> String {
+        guard let value else { return "0" }
+        return String(Int(value.rounded()))
+    }
+
+    private func formattedLightningDistance(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return String(format: "%.1f mi", value)
+    }
+
+    private func formattedLightningMeaning(_ count: Double?) -> String {
+        guard let count else { return "No strikes reported" }
+        if count <= 0 {
+            return "No nearby strikes"
+        }
+        if count == 1 {
+            return "Recent strike detected"
+        }
+        return "Storm activity nearby"
+    }
+
+    private func formattedLightningDetail(count: Double?, averageDistanceMiles: Double?) -> String {
+        let countValue = count ?? 0
+        guard countValue > 0 else { return "No nearby strikes" }
+        let distanceText = formattedLightningDistance(averageDistanceMiles)
+        if distanceText == "--" {
+            return "Recent strike detected"
+        }
+        return "Avg \(distanceText)"
     }
 
     private func formattedRainChanceMeaning(_ value: Double?) -> String {
