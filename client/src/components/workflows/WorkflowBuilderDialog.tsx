@@ -1,13 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, Clock3, Plus, Save, Trash2, Workflow as WorkflowIcon } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  ArrowDown,
+  ChevronDown,
+  ChevronUp,
+  Clock3,
+  Plus,
+  Save,
+  Trash2,
+  Workflow as WorkflowIcon
+} from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
+import { Textarea } from "@/components/ui/textarea";
 import type { Workflow, WorkflowAction, WorkflowActionTarget, WorkflowTriggerType } from "@/api/workflows";
 
 type DeviceLite = {
@@ -38,8 +56,31 @@ const DEFAULT_ACTION: WorkflowAction = {
   target: null,
   parameters: { action: "turn_on" }
 };
+
 const TRIGGERING_DEVICE_TARGET_VALUE = "__triggering_device__";
 const MAX_DELAY_SECONDS = 24 * 60 * 60;
+
+const TRIGGER_LABELS: Record<WorkflowTriggerType, string> = {
+  manual: "Manual",
+  time: "Time of day",
+  schedule: "Schedule",
+  device_state: "Device state",
+  sensor: "Sensor event",
+  security_alarm_status: "Security alarm"
+};
+
+const ACTION_LABELS: Record<WorkflowAction["type"], string> = {
+  device_control: "Control device",
+  scene_activate: "Activate scene",
+  notification: "Notification",
+  delay: "Delay",
+  condition: "Condition gate",
+  workflow_control: "Workflow control",
+  variable_control: "Variable control",
+  repeat: "Repeat",
+  isy_network_resource: "ISY network resource",
+  http_request: "HTTP request"
+};
 
 function isTriggeringDeviceTarget(target: WorkflowActionTarget | undefined) {
   if (!target || typeof target !== "object" || Array.isArray(target)) {
@@ -161,6 +202,121 @@ function getDeviceActionChoices(deviceType: string, source: string = "local") {
   }
 }
 
+function formatActionVerb(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "turn on";
+  }
+
+  return value.replace(/_/g, " ").trim();
+}
+
+function formatDuration(secondsValue: unknown) {
+  const seconds = Math.max(0, Number(secondsValue) || 0);
+  if (seconds >= 3600) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return minutes > 0 ? `${hours} hr ${minutes} min` : `${hours} hr`;
+  }
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60);
+    const remainderSeconds = seconds % 60;
+    return remainderSeconds > 0 ? `${minutes} min ${remainderSeconds} sec` : `${minutes} min`;
+  }
+  return `${seconds} sec`;
+}
+
+function getDeviceLabel(devices: DeviceLite[], deviceId: string | null | undefined) {
+  if (!deviceId) {
+    return "No device selected";
+  }
+
+  const device = devices.find((entry) => entry._id === deviceId);
+  return device ? device.name : "Selected device";
+}
+
+function getSceneLabel(scenes: SceneLite[], sceneId: string | null | undefined) {
+  if (!sceneId) {
+    return "No scene selected";
+  }
+
+  const scene = scenes.find((entry) => entry._id === sceneId);
+  return scene ? scene.name : "Selected scene";
+}
+
+function describeTrigger(
+  triggerType: WorkflowTriggerType,
+  triggerConditions: Record<string, unknown>,
+  devices: DeviceLite[]
+) {
+  switch (triggerType) {
+    case "manual":
+      return "Runs manually or from a voice/chat command.";
+    case "time": {
+      const hour = Number(triggerConditions.hour ?? 0);
+      const minute = Number(triggerConditions.minute ?? 0);
+      const days = Array.isArray(triggerConditions.days) ? triggerConditions.days.join(", ") : "";
+      const timeLabel = `${String(Math.max(0, Math.min(23, hour))).padStart(2, "0")}:${String(Math.max(0, Math.min(59, minute))).padStart(2, "0")}`;
+      return days ? `Runs at ${timeLabel} on ${days}.` : `Runs at ${timeLabel}.`;
+    }
+    case "schedule":
+      return `Runs on cron schedule "${String(triggerConditions.cron || "")}".`;
+    case "device_state": {
+      const deviceName = getDeviceLabel(
+        devices,
+        typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : null
+      );
+      return `${deviceName} changes to ${String(triggerConditions.state || "on")}.`;
+    }
+    case "sensor":
+      return `Runs when ${String(triggerConditions.sensorType || "sensor")} is ${String(triggerConditions.condition || "triggered")}.`;
+    case "security_alarm_status": {
+      const states = Array.isArray(triggerConditions.states)
+        ? triggerConditions.states.filter(Boolean).join(", ")
+        : "";
+      return states ? `Runs when the alarm enters ${states}.` : "Runs when the security alarm state changes.";
+    }
+    default:
+      return "Trigger configuration ready.";
+  }
+}
+
+function describeAction(
+  action: WorkflowAction,
+  devices: DeviceLite[],
+  scenes: SceneLite[],
+  triggerDeviceId: string | null
+) {
+  switch (action.type) {
+    case "device_control": {
+      const targetLabel = isTriggeringDeviceTarget(action.target)
+        ? getDeviceLabel(devices, triggerDeviceId) === "No device selected"
+          ? "the triggering device"
+          : getDeviceLabel(devices, triggerDeviceId)
+        : getDeviceLabel(devices, typeof action.target === "string" ? action.target : null);
+      const verb = formatActionVerb(action.parameters?.action);
+      if (verb === "set brightness") {
+        return `${targetLabel} -> ${verb} to ${String(action.parameters?.brightness ?? action.parameters?.value ?? 100)}.`;
+      }
+      if (verb === "set temperature") {
+        return `${targetLabel} -> ${verb} to ${String(action.parameters?.temperature ?? 72)}.`;
+      }
+      return `${targetLabel} -> ${verb}.`;
+    }
+    case "scene_activate":
+      return `Activate ${getSceneLabel(scenes, typeof action.target === "string" ? action.target : null)}.`;
+    case "delay":
+      return `Wait ${formatDuration(action.parameters?.seconds ?? 0)}.`;
+    case "notification": {
+      const message = String(action.parameters?.message || "").trim();
+      return message ? `Send "${message}".` : "Send a notification.";
+    }
+    case "condition":
+      return "Only continue when the condition evaluates as true.";
+    default:
+      return ACTION_LABELS[action.type] || action.type;
+  }
+}
+
 export function WorkflowBuilderDialog({
   open,
   onOpenChange,
@@ -222,6 +378,16 @@ export function WorkflowBuilderDialog({
     }, {});
   }, [devices]);
 
+  const triggerDeviceId = typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : null;
+  const triggerSummary = useMemo(
+    () => describeTrigger(triggerType, triggerConditions, devices),
+    [devices, triggerConditions, triggerType]
+  );
+  const actionSummaries = useMemo(
+    () => actions.map((action) => describeAction(action, devices, scenes, triggerDeviceId)),
+    [actions, devices, scenes, triggerDeviceId]
+  );
+
   const addAction = () => {
     setActions((prev) => [...prev, buildDefaultAction(triggerType, devices)]);
   };
@@ -276,11 +442,27 @@ export function WorkflowBuilderDialog({
     }
   };
 
+  const handleActionTypeChange = (index: number, nextType: WorkflowAction["type"]) => {
+    const nextAction: WorkflowAction = {
+      type: nextType,
+      target: nextType === "scene_activate"
+        ? scenes[0]?._id || null
+        : nextType === "device_control"
+          ? getDefaultDeviceTarget(triggerType, devices)
+          : null,
+      parameters: nextType === "delay"
+        ? { seconds: 3 }
+        : nextType === "notification"
+          ? { message: "" }
+          : nextType === "condition"
+            ? {}
+            : { action: "turn_on" }
+    };
+    setActions((prev) => prev.map((item, actionIndex) => actionIndex === index ? nextAction : item));
+  };
+
   const onSubmit = async () => {
-    if (!name.trim()) {
-      return;
-    }
-    if (!actions.length) {
+    if (!name.trim() || actions.length === 0) {
       return;
     }
 
@@ -307,466 +489,651 @@ export function WorkflowBuilderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-5xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{initialWorkflow ? "Edit Workflow" : "Create Workflow"}</DialogTitle>
-          <DialogDescription>
-            Build a workflow visually. These workflows can be voice-triggered, chat-created, or scheduled.
-          </DialogDescription>
+      <DialogContent className="flex h-[min(94vh,960px)] max-h-[94vh] w-[min(96vw,1280px)] max-w-[1280px] flex-col overflow-hidden p-0">
+        <DialogHeader className="border-b border-border/60 bg-background/95 px-5 py-5 sm:px-7">
+          <div className="pr-10">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">{initialWorkflow ? "Editing workflow" : "New workflow"}</Badge>
+              <Badge variant="outline">{TRIGGER_LABELS[triggerType]}</Badge>
+              <Badge variant="outline">{actions.length} {actions.length === 1 ? "step" : "steps"}</Badge>
+            </div>
+            <DialogTitle>{initialWorkflow ? "Edit Workflow" : "Create Workflow"}</DialogTitle>
+            <DialogDescription>
+              Tune the trigger and steps first. The right rail now keeps the summary visible so you can edit without losing the overall flow.
+            </DialogDescription>
+          </div>
         </DialogHeader>
 
-        <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-          <div className="space-y-4">
-            <Card>
-              <CardContent className="space-y-3 pt-5">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>Workflow Name</Label>
-                    <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Morning startup" />
+        <div className="grid min-h-0 flex-1 xl:grid-cols-[minmax(0,1.7fr)_360px]">
+          <div className="min-h-0 overflow-y-auto px-5 py-5 sm:px-7 sm:py-6">
+            <div className="mx-auto max-w-5xl space-y-5">
+              <Card>
+                <CardContent className="space-y-5 p-5 pt-5 sm:p-6 sm:pt-6">
+                  <div className="space-y-1">
+                    <div className="text-base font-semibold">Workflow details</div>
+                    <p className="text-sm text-muted-foreground">
+                      Name it clearly, choose the category, and set any voice aliases you want people to use.
+                    </p>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Category</Label>
-                    <Select value={category} onValueChange={(value) => setCategory(value as Workflow["category"])}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="security">Security</SelectItem>
-                        <SelectItem value="comfort">Comfort</SelectItem>
-                        <SelectItem value="energy">Energy</SelectItem>
-                        <SelectItem value="convenience">Convenience</SelectItem>
-                        <SelectItem value="custom">Custom</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Description</Label>
-                  <Textarea
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                    placeholder="What should this workflow do?"
-                  />
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>Priority: {priority}</Label>
-                    <Slider value={[priority]} min={1} max={10} step={1} onValueChange={(value) => setPriority(value[0])} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Cooldown (minutes)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={cooldown}
-                      onChange={(event) => setCooldown(Math.max(0, Number(event.target.value) || 0))}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Voice Aliases (comma separated)</Label>
-                  <Input
-                    value={voiceAliasesText}
-                    onChange={(event) => setVoiceAliasesText(event.target.value)}
-                    placeholder="goodnight routine, bedtime flow"
-                  />
-                </div>
-              </CardContent>
-            </Card>
 
-            <Card>
-              <CardContent className="space-y-3 pt-5">
-                <div className="flex items-center justify-between">
-                  <Label>Trigger</Label>
-                  <Clock3 className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <Select value={triggerType} onValueChange={(value) => handleTriggerTypeChange(value as WorkflowTriggerType)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="manual">Manual</SelectItem>
-                    <SelectItem value="time">Time of day</SelectItem>
-                    <SelectItem value="schedule">Cron schedule</SelectItem>
-                    <SelectItem value="device_state">Device state</SelectItem>
-                    <SelectItem value="sensor">Sensor event</SelectItem>
-                    <SelectItem value="security_alarm_status">Security alarm status</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {triggerType === "time" && (
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_280px]">
                     <div className="space-y-2">
-                      <Label>Hour</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={23}
-                        value={Number(triggerConditions.hour ?? 7)}
-                        onChange={(event) => setTriggerConditions((prev) => ({ ...prev, hour: Number(event.target.value) }))}
-                      />
+                      <Label>Workflow Name</Label>
+                      <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Bathroom fan auto off" />
                     </div>
                     <div className="space-y-2">
-                      <Label>Minute</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={59}
-                        value={Number(triggerConditions.minute ?? 0)}
-                        onChange={(event) => setTriggerConditions((prev) => ({ ...prev, minute: Number(event.target.value) }))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Days</Label>
-                      <Input
-                        value={Array.isArray(triggerConditions.days) ? (triggerConditions.days as string[]).join(", ") : ""}
-                        onChange={(event) => {
-                          const days = event.target.value.split(",").map((value) => value.trim()).filter(Boolean);
-                          setTriggerConditions((prev) => ({ ...prev, days }));
-                        }}
-                        placeholder="monday, tuesday, friday"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {triggerType === "schedule" && (
-                  <div className="space-y-2">
-                    <Label>Cron</Label>
-                    <Input
-                      value={String(triggerConditions.cron || "0 7 * * 1-5")}
-                      onChange={(event) => setTriggerConditions((prev) => ({ ...prev, cron: event.target.value }))}
-                      placeholder="0 7 * * 1-5"
-                    />
-                  </div>
-                )}
-
-                {triggerType === "device_state" && (
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label>Device</Label>
-                      <Select
-                        value={String(triggerConditions.deviceId || "")}
-                        onValueChange={(value) => setTriggerConditions((prev) => ({ ...prev, deviceId: value }))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select device" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
-                            <div key={room}>
-                              <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
-                              {roomDevices.map((device) => (
-                                <SelectItem key={device._id} value={device._id}>
-                                  {device.name} ({device.type})
-                                </SelectItem>
-                              ))}
-                            </div>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>State</Label>
-                      <Select
-                        value={String(triggerConditions.state || "on")}
-                        onValueChange={(value) => setTriggerConditions((prev) => ({ ...prev, state: value }))}
-                      >
+                      <Label>Category</Label>
+                      <Select value={category} onValueChange={(value) => setCategory(value as Workflow["category"])}>
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="on">On</SelectItem>
-                          <SelectItem value="off">Off</SelectItem>
+                          <SelectItem value="security">Security</SelectItem>
+                          <SelectItem value="comfort">Comfort</SelectItem>
+                          <SelectItem value="energy">Energy</SelectItem>
+                          <SelectItem value="convenience">Convenience</SelectItem>
+                          <SelectItem value="custom">Custom</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                   </div>
-                )}
 
-                {triggerType === "security_alarm_status" && (
                   <div className="space-y-2">
-                    <Label>Alarm states</Label>
-                    <Input
-                      value={Array.isArray(triggerConditions.states) ? (triggerConditions.states as string[]).join(", ") : ""}
-                      onChange={(event) => {
-                        const states = event.target.value
-                          .split(",")
-                          .map((value) => value.trim())
-                          .filter(Boolean);
-                        setTriggerConditions((prev) => ({ ...prev, states }));
-                      }}
-                      placeholder="armedStay, armedAway"
+                    <Label>Description</Label>
+                    <Textarea
+                      value={description}
+                      onChange={(event) => setDescription(event.target.value)}
+                      placeholder="Explain what this workflow should do."
+                      className="min-h-[110px]"
                     />
                   </div>
-                )}
-              </CardContent>
-            </Card>
 
-            <Card>
-              <CardContent className="space-y-3 pt-5">
-                <div className="flex items-center justify-between">
-                  <Label>Actions</Label>
-                  <Button size="sm" variant="outline" onClick={addAction}>
-                    <Plus className="mr-1 h-4 w-4" />
-                    Add Action
-                  </Button>
-                </div>
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+                    <div className="space-y-3">
+                      <Label>Priority: {priority}</Label>
+                      <Slider value={[priority]} min={1} max={10} step={1} onValueChange={(value) => setPriority(value[0])} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Cooldown (minutes)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={cooldown}
+                        onChange={(event) => setCooldown(Math.max(0, Number(event.target.value) || 0))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Voice aliases</Label>
+                      <Input
+                        value={voiceAliasesText}
+                        onChange={(event) => setVoiceAliasesText(event.target.value)}
+                        placeholder="bath fan timer"
+                      />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
-                {actions.map((action, index) => {
-                  const targetDeviceId = isTriggeringDeviceTarget(action.target)
-                    ? (typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : "")
-                    : (typeof action.target === "string" ? action.target : "");
-                  const targetDevice = devices.find((device) => device._id === targetDeviceId);
-                  const actionChoices = getDeviceActionChoices(
-                    targetDevice?.type || "switch",
-                    ((targetDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
-                  );
-                  const actionValue = String(action.parameters?.action || actionChoices[0]);
+              <Card>
+                <CardContent className="space-y-5 p-5 pt-5 sm:p-6 sm:pt-6">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 text-base font-semibold">
+                        <Clock3 className="h-4 w-4 text-muted-foreground" />
+                        Trigger
+                      </div>
+                      <p className="text-sm text-muted-foreground">{triggerSummary}</p>
+                    </div>
+                    <Badge variant="outline">{TRIGGER_LABELS[triggerType]}</Badge>
+                  </div>
 
-                  return (
-                    <Card key={`${action.type}-${index}`}>
-                      <CardContent className="space-y-3 pt-4">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium">Step {index + 1}</span>
-                          <div className="flex items-center gap-2">
-                            <Button size="sm" variant="ghost" onClick={() => moveAction(index, -1)} disabled={index === 0}>
-                              ↑
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => moveAction(index, 1)} disabled={index === actions.length - 1}>
-                              ↓
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => removeAction(index)}>
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
+                  <div className="space-y-2">
+                    <Label>Trigger type</Label>
+                    <Select value={triggerType} onValueChange={(value) => handleTriggerTypeChange(value as WorkflowTriggerType)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="manual">Manual</SelectItem>
+                        <SelectItem value="time">Time of day</SelectItem>
+                        <SelectItem value="schedule">Cron schedule</SelectItem>
+                        <SelectItem value="device_state">Device state</SelectItem>
+                        <SelectItem value="sensor">Sensor event</SelectItem>
+                        <SelectItem value="security_alarm_status">Security alarm status</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <Label>Action Type</Label>
-                            <Select
-                              value={action.type}
-                              onValueChange={(value) => {
-                                const nextType = value as WorkflowAction["type"];
-                                const nextAction: WorkflowAction = {
-                                  type: nextType,
-                                  target: nextType === "scene_activate"
-                                    ? scenes[0]?._id || null
-                                    : nextType === "device_control"
-                                      ? getDefaultDeviceTarget(triggerType, devices)
-                                      : null,
-                                  parameters: nextType === "delay" ? { seconds: 3 } : nextType === "notification" ? { message: "" } : { action: "turn_on" }
-                                };
-                                setActions((prev) => prev.map((item, actionIndex) => actionIndex === index ? nextAction : item));
-                              }}
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="device_control">Control device</SelectItem>
-                                <SelectItem value="scene_activate">Activate scene</SelectItem>
-                                <SelectItem value="delay">Delay</SelectItem>
-                                <SelectItem value="notification">Notification</SelectItem>
-                                <SelectItem value="condition">Condition gate</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
+                  {triggerType === "time" && (
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <div className="space-y-2">
+                        <Label>Hour</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={23}
+                          value={Number(triggerConditions.hour ?? 7)}
+                          onChange={(event) => setTriggerConditions((prev) => ({ ...prev, hour: Number(event.target.value) }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Minute</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={59}
+                          value={Number(triggerConditions.minute ?? 0)}
+                          onChange={(event) => setTriggerConditions((prev) => ({ ...prev, minute: Number(event.target.value) }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Days</Label>
+                        <Input
+                          value={Array.isArray(triggerConditions.days) ? (triggerConditions.days as string[]).join(", ") : ""}
+                          onChange={(event) => {
+                            const days = event.target.value.split(",").map((value) => value.trim()).filter(Boolean);
+                            setTriggerConditions((prev) => ({ ...prev, days }));
+                          }}
+                          placeholder="monday, tuesday, friday"
+                        />
+                      </div>
+                    </div>
+                  )}
 
-                          {action.type === "device_control" && (
-                            <div className="space-y-2">
-                              <Label>Device</Label>
-                              <Select
-                                value={getActionTargetSelectValue(action.target)}
-                                onValueChange={(value) => {
-                                  const usesTriggeringDevice = value === TRIGGERING_DEVICE_TARGET_VALUE;
-                                  const updatedDeviceId = usesTriggeringDevice
-                                    ? (typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : "")
-                                    : value;
-                                  const updatedDevice = devices.find((device) => device._id === updatedDeviceId);
-                                  const choices = getDeviceActionChoices(
-                                    updatedDevice?.type || "switch",
-                                    ((updatedDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
-                                  );
-                                  updateAction(index, {
-                                    target: usesTriggeringDevice ? buildTriggeringDeviceTarget() : value,
-                                    parameters: {
-                                      ...action.parameters,
-                                      action: choices[0]
-                                    }
-                                  });
-                                }}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Select device" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {(triggerType === "device_state" || isTriggeringDeviceTarget(action.target)) && (
-                                    <SelectItem value={TRIGGERING_DEVICE_TARGET_VALUE}>
-                                      Triggering device
-                                    </SelectItem>
-                                  )}
-                                  {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
-                                    <div key={room}>
-                                      <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
-                                      {roomDevices.map((device) => (
-                                        <SelectItem key={device._id} value={device._id}>
-                                          {device.name} ({device.type})
+                  {triggerType === "schedule" && (
+                    <div className="space-y-2">
+                      <Label>Cron</Label>
+                      <Input
+                        value={String(triggerConditions.cron || "0 7 * * 1-5")}
+                        onChange={(event) => setTriggerConditions((prev) => ({ ...prev, cron: event.target.value }))}
+                        placeholder="0 7 * * 1-5"
+                      />
+                    </div>
+                  )}
+
+                  {triggerType === "device_state" && (
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_260px]">
+                      <div className="space-y-2">
+                        <Label>Device</Label>
+                        <Select
+                          value={String(triggerConditions.deviceId || "")}
+                          onValueChange={(value) => setTriggerConditions((prev) => ({ ...prev, deviceId: value }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select device" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
+                              <div key={room}>
+                                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
+                                {roomDevices.map((device) => (
+                                  <SelectItem key={device._id} value={device._id}>
+                                    {device.name} ({device.type})
+                                  </SelectItem>
+                                ))}
+                              </div>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>State</Label>
+                        <Select
+                          value={String(triggerConditions.state || "on")}
+                          onValueChange={(value) => setTriggerConditions((prev) => ({ ...prev, state: value }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="on">On</SelectItem>
+                            <SelectItem value="off">Off</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  )}
+
+                  {triggerType === "security_alarm_status" && (
+                    <div className="space-y-2">
+                      <Label>Alarm states</Label>
+                      <Input
+                        value={Array.isArray(triggerConditions.states) ? (triggerConditions.states as string[]).join(", ") : ""}
+                        onChange={(event) => {
+                          const states = event.target.value
+                            .split(",")
+                            .map((value) => value.trim())
+                            .filter(Boolean);
+                          setTriggerConditions((prev) => ({ ...prev, states }));
+                        }}
+                        placeholder="armedStay, armedAway"
+                      />
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="space-y-4 p-5 pt-5 sm:p-6 sm:pt-6">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <div className="text-base font-semibold">Actions</div>
+                      <p className="text-sm text-muted-foreground">
+                        Reorder steps, adjust targets, and keep each action focused on one clear outcome.
+                      </p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={addAction}>
+                      <Plus className="h-4 w-4" />
+                      Add action
+                    </Button>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-4">
+                    {actions.map((action, index) => {
+                      const targetDeviceId = isTriggeringDeviceTarget(action.target)
+                        ? triggerDeviceId || ""
+                        : (typeof action.target === "string" ? action.target : "");
+                      const targetDevice = devices.find((device) => device._id === targetDeviceId);
+                      const actionChoices = getDeviceActionChoices(
+                        targetDevice?.type || "switch",
+                        ((targetDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
+                      );
+                      const actionValue = String(action.parameters?.action || actionChoices[0]);
+                      const showNumericValue = action.type === "device_control"
+                        && (actionValue === "set_brightness" || actionValue === "set_temperature" || actionValue === "turn_on");
+
+                      return (
+                        <Card key={`${action.type}-${index}`} className="overflow-hidden">
+                          <CardContent className="space-y-4 p-5 pt-5 sm:p-6 sm:pt-6">
+                            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant="secondary">Step {index + 1}</Badge>
+                                  <span className="text-base font-semibold">{ACTION_LABELS[action.type] || action.type}</span>
+                                </div>
+                                <p className="text-sm text-muted-foreground">{actionSummaries[index]}</p>
+                              </div>
+
+                              <div className="flex items-center gap-2 self-start">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => moveAction(index, -1)}
+                                  disabled={index === 0}
+                                  aria-label={`Move step ${index + 1} up`}
+                                >
+                                  <ChevronUp className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => moveAction(index, 1)}
+                                  disabled={index === actions.length - 1}
+                                  aria-label={`Move step ${index + 1} down`}
+                                >
+                                  <ChevronDown className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => removeAction(index)}
+                                  aria-label={`Delete step ${index + 1}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+
+                            {action.type === "device_control" && (
+                              <>
+                                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[260px_minmax(0,1.4fr)_minmax(0,1fr)]">
+                                  <div className="space-y-2">
+                                    <Label>Action type</Label>
+                                    <Select value={action.type} onValueChange={(value) => handleActionTypeChange(index, value as WorkflowAction["type"])}>
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="device_control">Control device</SelectItem>
+                                        <SelectItem value="scene_activate">Activate scene</SelectItem>
+                                        <SelectItem value="delay">Delay</SelectItem>
+                                        <SelectItem value="notification">Notification</SelectItem>
+                                        <SelectItem value="condition">Condition gate</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <Label>Device</Label>
+                                    <Select
+                                      value={getActionTargetSelectValue(action.target)}
+                                      onValueChange={(value) => {
+                                        const usesTriggeringDevice = value === TRIGGERING_DEVICE_TARGET_VALUE;
+                                        const updatedDeviceId = usesTriggeringDevice
+                                          ? (typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : "")
+                                          : value;
+                                        const updatedDevice = devices.find((device) => device._id === updatedDeviceId);
+                                        const choices = getDeviceActionChoices(
+                                          updatedDevice?.type || "switch",
+                                          ((updatedDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
+                                        );
+                                        updateAction(index, {
+                                          target: usesTriggeringDevice ? buildTriggeringDeviceTarget() : value,
+                                          parameters: {
+                                            ...action.parameters,
+                                            action: choices[0]
+                                          }
+                                        });
+                                      }}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue placeholder="Select device" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {(triggerType === "device_state" || isTriggeringDeviceTarget(action.target)) && (
+                                          <SelectItem value={TRIGGERING_DEVICE_TARGET_VALUE}>
+                                            Triggering device
+                                          </SelectItem>
+                                        )}
+                                        {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
+                                          <div key={room}>
+                                            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
+                                            {roomDevices.map((device) => (
+                                              <SelectItem key={device._id} value={device._id}>
+                                                {device.name} ({device.type})
+                                              </SelectItem>
+                                            ))}
+                                          </div>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    {isTriggeringDeviceTarget(action.target) && (
+                                      <p className="text-xs text-muted-foreground">
+                                        Uses whichever device matched the trigger.
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <Label>Device action</Label>
+                                    <Select
+                                      value={actionValue}
+                                      onValueChange={(value) => updateAction(index, { parameters: { ...action.parameters, action: value } })}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {actionChoices.map((choice) => (
+                                          <SelectItem key={choice} value={choice}>
+                                            {choice.replace(/_/g, " ")}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </div>
+
+                                {showNumericValue && (
+                                  <div className="grid gap-4 md:max-w-[320px]">
+                                    <div className="space-y-2">
+                                      <Label>{actionValue === "set_temperature" ? "Temperature" : "Value"}</Label>
+                                      <Input
+                                        type="number"
+                                        value={String(
+                                          actionValue === "set_temperature"
+                                            ? action.parameters?.temperature ?? 72
+                                            : action.parameters?.brightness ?? action.parameters?.value ?? 100
+                                        )}
+                                        onChange={(event) => {
+                                          const numeric = Number(event.target.value);
+                                          if (actionValue === "set_temperature") {
+                                            updateAction(index, { parameters: { ...action.parameters, temperature: numeric } });
+                                          } else {
+                                            updateAction(index, { parameters: { ...action.parameters, brightness: numeric, value: numeric } });
+                                          }
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {action.type === "scene_activate" && (
+                              <div className="grid gap-4 md:grid-cols-[260px_minmax(0,1fr)]">
+                                <div className="space-y-2">
+                                  <Label>Action type</Label>
+                                  <Select value={action.type} onValueChange={(value) => handleActionTypeChange(index, value as WorkflowAction["type"])}>
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="device_control">Control device</SelectItem>
+                                      <SelectItem value="scene_activate">Activate scene</SelectItem>
+                                      <SelectItem value="delay">Delay</SelectItem>
+                                      <SelectItem value="notification">Notification</SelectItem>
+                                      <SelectItem value="condition">Condition gate</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+
+                                <div className="space-y-2">
+                                  <Label>Scene</Label>
+                                  <Select
+                                    value={typeof action.target === "string" ? action.target : ""}
+                                    onValueChange={(value) => updateAction(index, { target: value })}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Select scene" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {scenes.map((scene) => (
+                                        <SelectItem key={scene._id} value={scene._id}>
+                                          {scene.name}
                                         </SelectItem>
                                       ))}
-                                    </div>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              {isTriggeringDeviceTarget(action.target) && (
-                                <p className="text-xs text-muted-foreground">
-                                  Uses whichever device matched the trigger.
-                                </p>
-                              )}
-                            </div>
-                          )}
-
-                          {action.type === "scene_activate" && (
-                            <div className="space-y-2">
-                              <Label>Scene</Label>
-                              <Select
-                                value={typeof action.target === "string" ? action.target : ""}
-                                onValueChange={(value) => updateAction(index, { target: value })}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Select scene" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {scenes.map((scene) => (
-                                    <SelectItem key={scene._id} value={scene._id}>
-                                      {scene.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          )}
-                        </div>
-
-                        {action.type === "device_control" && (
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <div className="space-y-2">
-                              <Label>Device Action</Label>
-                              <Select
-                                value={actionValue}
-                                onValueChange={(value) => updateAction(index, { parameters: { ...action.parameters, action: value } })}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {actionChoices.map((choice) => (
-                                    <SelectItem key={choice} value={choice}>
-                                      {choice.replace(/_/g, " ")}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            {(actionValue === "set_brightness" || actionValue === "set_temperature" || actionValue === "turn_on") && (
-                              <div className="space-y-2">
-                                <Label>
-                                  {actionValue === "set_temperature" ? "Temperature" : "Value"}
-                                </Label>
-                                <Input
-                                  type="number"
-                                  value={String(
-                                    actionValue === "set_temperature"
-                                      ? action.parameters?.temperature ?? 72
-                                      : action.parameters?.brightness ?? action.parameters?.value ?? 100
-                                  )}
-                                  onChange={(event) => {
-                                    const numeric = Number(event.target.value);
-                                    if (actionValue === "set_temperature") {
-                                      updateAction(index, { parameters: { ...action.parameters, temperature: numeric } });
-                                    } else {
-                                      updateAction(index, { parameters: { ...action.parameters, brightness: numeric, value: numeric } });
-                                    }
-                                  }}
-                                />
+                                    </SelectContent>
+                                  </Select>
+                                </div>
                               </div>
                             )}
-                          </div>
-                        )}
 
-                        {action.type === "delay" && (
-                          <div className="space-y-2">
-                            <Label>Delay (seconds)</Label>
-                            <Input
-                              type="number"
-                              min={0}
-                              max={MAX_DELAY_SECONDS}
-                              value={String(action.parameters?.seconds ?? 3)}
-                              onChange={(event) => updateAction(index, { parameters: { ...action.parameters, seconds: Number(event.target.value) } })}
-                            />
-                          </div>
-                        )}
+                            {action.type === "delay" && (
+                              <div className="grid gap-4 md:grid-cols-[260px_220px]">
+                                <div className="space-y-2">
+                                  <Label>Action type</Label>
+                                  <Select value={action.type} onValueChange={(value) => handleActionTypeChange(index, value as WorkflowAction["type"])}>
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="device_control">Control device</SelectItem>
+                                      <SelectItem value="scene_activate">Activate scene</SelectItem>
+                                      <SelectItem value="delay">Delay</SelectItem>
+                                      <SelectItem value="notification">Notification</SelectItem>
+                                      <SelectItem value="condition">Condition gate</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
 
-                        {action.type === "notification" && (
-                          <div className="space-y-2">
-                            <Label>Notification Message</Label>
-                            <Textarea
-                              value={String(action.parameters?.message || "")}
-                              onChange={(event) => updateAction(index, { parameters: { ...action.parameters, message: event.target.value } })}
-                            />
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </CardContent>
-            </Card>
-          </div>
+                                <div className="space-y-2">
+                                  <Label>Delay (seconds)</Label>
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    max={MAX_DELAY_SECONDS}
+                                    value={String(action.parameters?.seconds ?? 3)}
+                                    onChange={(event) => updateAction(index, { parameters: { ...action.parameters, seconds: Number(event.target.value) } })}
+                                  />
+                                  <p className="text-xs text-muted-foreground">
+                                    Current delay: {formatDuration(action.parameters?.seconds ?? 0)}
+                                  </p>
+                                </div>
+                              </div>
+                            )}
 
-          <div className="space-y-4">
-            <Card>
-              <CardContent className="pt-5">
-                <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-                  <WorkflowIcon className="h-4 w-4" />
-                  Visual Flow
-                </div>
-                <div className="space-y-2">
-                  {visualGraph.nodes.map((node, index) => (
-                    <div key={node.id} className="space-y-2">
-                      <div className="rounded-md border bg-muted/40 p-3 text-xs">
-                        <div className="font-semibold">{node.label}</div>
-                        <div className="text-muted-foreground">{node.type.replace(/_/g, " ")}</div>
-                      </div>
-                      {index < visualGraph.nodes.length - 1 && (
-                        <div className="flex justify-center text-muted-foreground">
-                          <ArrowDown className="h-4 w-4" />
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+                            {action.type === "notification" && (
+                              <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
+                                <div className="space-y-2">
+                                  <Label>Action type</Label>
+                                  <Select value={action.type} onValueChange={(value) => handleActionTypeChange(index, value as WorkflowAction["type"])}>
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="device_control">Control device</SelectItem>
+                                      <SelectItem value="scene_activate">Activate scene</SelectItem>
+                                      <SelectItem value="delay">Delay</SelectItem>
+                                      <SelectItem value="notification">Notification</SelectItem>
+                                      <SelectItem value="condition">Condition gate</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
 
-            <div className="rounded-md border bg-blue-50/70 dark:bg-blue-900/20 p-3 text-xs text-blue-900 dark:text-blue-100">
-              Tip: once saved, this workflow can be triggered by voice or chat, including commands like
-              {" "}
-              <span className="font-semibold">"run {name || "this workflow"}"</span>.
+                                <div className="space-y-2">
+                                  <Label>Notification message</Label>
+                                  <Textarea
+                                    value={String(action.parameters?.message || "")}
+                                    onChange={(event) => updateAction(index, { parameters: { ...action.parameters, message: event.target.value } })}
+                                    className="min-h-[110px]"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {action.type === "condition" && (
+                              <div className="space-y-4">
+                                <div className="grid gap-4 md:grid-cols-[260px_minmax(0,1fr)]">
+                                  <div className="space-y-2">
+                                    <Label>Action type</Label>
+                                    <Select value={action.type} onValueChange={(value) => handleActionTypeChange(index, value as WorkflowAction["type"])}>
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="device_control">Control device</SelectItem>
+                                        <SelectItem value="scene_activate">Activate scene</SelectItem>
+                                        <SelectItem value="delay">Delay</SelectItem>
+                                        <SelectItem value="notification">Notification</SelectItem>
+                                        <SelectItem value="condition">Condition gate</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+
+                                  <div className="rounded-2xl border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
+                                    Condition steps are supported at runtime, but the visual editor does not yet expose every condition parameter. If you need a deeply custom gate, exporting and re-importing the workflow JSON is still the best path for now.
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           </div>
+
+          <aside className="hidden min-h-0 border-l border-border/60 bg-muted/10 xl:block">
+            <div className="h-full overflow-y-auto px-5 py-6">
+              <div className="space-y-4">
+                <Card>
+                  <CardContent className="space-y-4 p-5 pt-5">
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <WorkflowIcon className="h-4 w-4 text-muted-foreground" />
+                      Workflow summary
+                    </div>
+
+                    <div className="rounded-2xl border border-border/70 bg-background/40 p-4">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Trigger</div>
+                      <div className="mt-2 text-sm font-medium">{triggerSummary}</div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-2xl border border-border/70 bg-background/40 p-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Category</div>
+                        <div className="mt-2 text-sm font-medium">{category}</div>
+                      </div>
+                      <div className="rounded-2xl border border-border/70 bg-background/40 p-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Priority</div>
+                        <div className="mt-2 text-sm font-medium">{priority}/10</div>
+                      </div>
+                      <div className="rounded-2xl border border-border/70 bg-background/40 p-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Cooldown</div>
+                        <div className="mt-2 text-sm font-medium">{cooldown} min</div>
+                      </div>
+                      <div className="rounded-2xl border border-border/70 bg-background/40 p-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Voice aliases</div>
+                        <div className="mt-2 text-sm font-medium">{voiceAliasesText.trim() ? voiceAliasesText.split(",").filter(Boolean).length : 0}</div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardContent className="space-y-4 p-5 pt-5">
+                    <div className="text-sm font-semibold">Step outline</div>
+                    <div className="space-y-3">
+                      {actionSummaries.map((summary, index) => (
+                        <div key={`${actions[index]?.type}-${index}`} className="rounded-2xl border border-border/70 bg-background/40 p-4">
+                          <div className="mb-2 flex items-center gap-2">
+                            <Badge variant="outline">Step {index + 1}</Badge>
+                            <span className="text-sm font-medium">{ACTION_LABELS[actions[index]?.type] || actions[index]?.type}</span>
+                          </div>
+                          <p className="text-sm text-muted-foreground">{summary}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardContent className="pt-5">
+                    <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                      <WorkflowIcon className="h-4 w-4" />
+                      Visual flow
+                    </div>
+                    <div className="space-y-2">
+                      {visualGraph.nodes.map((node, index) => (
+                        <div key={node.id} className="space-y-2">
+                          <div className="rounded-2xl border border-border/70 bg-background/40 p-3 text-xs">
+                            <div className="font-semibold">{node.label}</div>
+                            <div className="text-muted-foreground">{node.type.replace(/_/g, " ")}</div>
+                          </div>
+                          {index < visualGraph.nodes.length - 1 && (
+                            <div className="flex justify-center text-muted-foreground">
+                              <ArrowDown className="h-4 w-4" />
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          </aside>
         </div>
 
-        <div className="flex gap-2 pt-2">
-          <Button onClick={() => void onSubmit()} disabled={isSaving || !name.trim() || actions.length === 0} className="flex-1">
-            <Save className="mr-2 h-4 w-4" />
-            {isSaving ? "Saving..." : "Save Workflow"}
-          </Button>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-        </div>
+        <DialogFooter className="items-center gap-3 border-t border-border/60 bg-background/95 px-5 py-4 sm:justify-between sm:space-x-0 sm:px-7">
+          <p className="text-xs text-muted-foreground">
+            Changes here update the workflow and its linked automation runtime behavior.
+          </p>
+          <div className="flex w-full flex-col-reverse gap-3 sm:w-auto sm:flex-row">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void onSubmit()} disabled={isSaving || !name.trim() || actions.length === 0} className="sm:min-w-[220px]">
+              <Save className="h-4 w-4" />
+              {isSaving ? "Saving..." : "Save Workflow"}
+            </Button>
+          </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
