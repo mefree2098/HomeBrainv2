@@ -470,10 +470,19 @@ export function Workflows() {
           title: "Executed directly",
           description: result.message
         });
-      } else if (result.workflow) {
-        setWorkflows((prev) => [result.workflow as Workflow, ...prev]);
+      } else {
+        const createdWorkflows = Array.isArray(result.workflows) && result.workflows.length
+          ? result.workflows
+          : result.workflow
+            ? [result.workflow]
+            : [];
+
+        if (createdWorkflows.length > 0) {
+          setWorkflows((prev) => [...createdWorkflows, ...prev]);
+        }
+
         toast({
-          title: "Workflow created",
+          title: createdWorkflows.length > 1 ? "Workflows created" : "Workflow created",
           description: result.message
         });
       }
