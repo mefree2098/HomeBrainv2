@@ -485,6 +485,8 @@ export function SecurityAlarmWidget({
   }
 
   const compact = size === "small"
+  const medium = size === "medium"
+  const isNarrow = compact || medium
   const sensors = Array.isArray(alarmStatus?.sensors) ? alarmStatus.sensors : []
   const doorLocks = Array.isArray(alarmStatus?.doorLocks) ? alarmStatus.doorLocks : []
   const hasCustomSensorSelection = selectedSensorKeys !== null
@@ -533,7 +535,7 @@ export function SecurityAlarmWidget({
       : null,
     alarmStatus ? (alarmStatus.isOnline ? "Online" : "Offline") : null,
     alarmStatus?.bypassedZones ? `${alarmStatus.bypassedZones} bypassed` : null
-  ].filter(Boolean)
+  ].filter((value): value is string => Boolean(value))
 
   const sensorSummaryParts = [
     sensorCount > 0 ? `${activeSensorCount}/${sensorCount} active` : "No sensors detected",
@@ -542,6 +544,22 @@ export function SecurityAlarmWidget({
     offlineSensorCount > 0 ? `${offlineSensorCount} offline` : null,
     lowBatterySensorCount > 0 ? `${lowBatterySensorCount} low battery` : null
   ].filter(Boolean)
+
+  const sensorGridClassName = compact
+    ? "grid-cols-1"
+    : medium
+      ? "grid-cols-2"
+      : size === "large"
+        ? "grid-cols-3"
+        : "grid-cols-4"
+
+  const doorLockGridClassName = compact
+    ? "grid-cols-1"
+    : medium
+      ? "grid-cols-2"
+      : size === "large"
+        ? "grid-cols-3"
+        : "grid-cols-4"
 
   const resetSensorSelection = () => {
     setSelectedSensorKeys(null)
@@ -583,7 +601,7 @@ export function SecurityAlarmWidget({
         <>
           <div>
             <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-              <div className="flex items-start justify-between gap-3">
+              <div className={cn("flex gap-3", isNarrow ? "flex-col" : "items-start justify-between")}>
                 <div className="min-w-0 flex-1">
                   <p className="section-kicker">Alarm State</p>
                   <p className={cn(
@@ -596,16 +614,24 @@ export function SecurityAlarmWidget({
                   )}>
                     {formatAlarmState(alarmStatus.alarmState)}
                   </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {statusDetailParts.join(" • ") || "System state unavailable"}
-                  </p>
+                  {statusDetailParts.length > 0 ? (
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      {statusDetailParts.map((detail) => (
+                        <span key={detail}>{detail}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground">System state unavailable</p>
+                  )}
                 </div>
 
                 <div className={cn(
-                  "flex w-full shrink-0 flex-col items-end gap-2",
-                  compact ? "max-w-[15rem]" : "max-w-[16.75rem]"
+                  "flex w-full shrink-0 flex-col gap-2",
+                  isNarrow
+                    ? "items-stretch max-w-none"
+                    : "max-w-[16.75rem] items-end"
                 )}>
-                  <div className="grid w-full grid-cols-2 gap-2">
+                  <div className={cn("grid w-full gap-2", compact ? "grid-cols-1" : "grid-cols-2")}>
                     {isTriggered ? (
                       <Button
                         size="sm"
@@ -613,7 +639,7 @@ export function SecurityAlarmWidget({
                         onClick={handleDismiss}
                         disabled={dismissing}
                         className={cn(
-                          "col-span-2 w-full",
+                          compact ? "col-span-1 w-full" : "col-span-2 w-full",
                           alarmActionButtonClassName({ tone: "danger", prominent: true })
                         )}
                       >
@@ -631,7 +657,7 @@ export function SecurityAlarmWidget({
                         onClick={handleDisarm}
                         disabled={disarming}
                         className={cn(
-                          "col-span-2 w-full",
+                          compact ? "col-span-1 w-full" : "col-span-2 w-full",
                           alarmActionButtonClassName({ tone: "danger", prominent: true })
                         )}
                       >
@@ -695,12 +721,12 @@ export function SecurityAlarmWidget({
           </div>
 
           <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-            <div className="mb-3 flex items-center justify-between gap-3">
+            <div className={cn("mb-3 flex gap-3", isNarrow ? "flex-col items-start" : "items-center justify-between")}>
               <div>
                 <p className="section-kicker">Security Sensors</p>
                 <p className="mt-1 text-xs text-muted-foreground">Tap a sensor to open its device page.</p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className={cn("flex items-center gap-2", isNarrow ? "w-full flex-wrap" : "")}>
                 {hasCustomSensorSelection ? (
                   <Badge variant="outline" className="border-white/10 bg-white/10 text-muted-foreground dark:bg-slate-950/10">
                     {visibleSensors.length}/{sensorCount} shown
@@ -809,7 +835,7 @@ export function SecurityAlarmWidget({
               <div className="space-y-2 pr-3">
                 <div className="space-y-2">
                   {visibleSensors.length > 0 ? (
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className={cn("grid gap-2", sensorGridClassName)}>
                       {visibleSensors.map((sensor) => (
                         <button
                           key={getSensorSelectionKey(sensor)}
@@ -867,7 +893,7 @@ export function SecurityAlarmWidget({
           </div>
 
           <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-            <div className="mb-3 flex items-center justify-between gap-3">
+            <div className={cn("mb-3 flex gap-3", isNarrow ? "flex-col items-start" : "items-center justify-between")}>
               <div>
                 <p className="section-kicker">Door Locks</p>
                 <p className="mt-1 text-xs text-muted-foreground">Tap a lock tile to toggle locked or unlocked.</p>
@@ -884,7 +910,7 @@ export function SecurityAlarmWidget({
               <ScrollArea className={compact ? "max-h-36" : "max-h-40"}>
                 <div className={cn(
                   "grid gap-2 pr-3",
-                  "grid-cols-4"
+                  doorLockGridClassName
                 )}>
                   {doorLocks.map((doorLock) => {
                     const rowId = doorLock.localDeviceId || doorLock.deviceId

@@ -547,9 +547,10 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const compact = size === "small"
+  const medium = size === "medium"
   const condensed = size === "small" || size === "medium"
   const wide = size === "large" || size === "full"
-  const stackedHero = compact
+  const stackedHero = compact || medium
   const tempestStation = weather?.tempest?.available ? weather.tempest.station : null
   const tempestBatteryPercent = getTempestBatteryPercent(tempestStation?.metrics.batteryVolts)
   const aqiTone = aqiToneClassName(weather?.current.airQualityIndex)
@@ -634,7 +635,11 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const lastSyncedTime = formatLastSyncedTime(lastSyncedAt)
   const lastSyncedAgo = formatLastSyncedAgo(lastSyncedAt)
   const weatherContextRow = (className?: string) => (
-    <div className={cn("flex min-w-0 items-start justify-between gap-3", className)}>
+    <div className={cn(
+      "flex min-w-0 gap-3",
+      stackedHero ? "flex-col items-start" : "items-start justify-between",
+      className
+    )}>
       <div className="flex min-w-0 flex-1 items-center gap-2.5 text-sm text-muted-foreground">
         <span className="shrink-0 text-base font-semibold text-foreground">{weather.current.condition}</span>
         <span className="shrink-0 text-muted-foreground/50">•</span>
@@ -644,8 +649,14 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
         </span>
       </div>
 
-      <div className="ml-auto flex shrink-0 flex-col items-end gap-1 text-right">
-        <span className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+      <div className={cn(
+        "flex shrink-0 flex-col gap-1",
+        stackedHero ? "w-full items-start text-left" : "ml-auto items-end text-right"
+      )}>
+        <span className={cn(
+          "flex shrink-0 flex-wrap items-center gap-2",
+          stackedHero ? "justify-start" : "justify-end"
+        )}>
           {tempestStation ? <TempestBatteryBadge volts={tempestStation.metrics.batteryVolts} /> : null}
           {tempestStation ? (
             <span
@@ -719,7 +730,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
       <div className="absolute bottom-[-6rem] left-[-4rem] h-44 w-44 rounded-full bg-blue-300/18 blur-3xl dark:bg-blue-500/10" />
 
       <div className="relative space-y-4">
-        <div className={cn("gap-5", stackedHero ? "space-y-4" : "grid gap-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-start")}>
+        <div className={cn("gap-5", stackedHero ? "space-y-4" : "grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start")}>
           <div className="space-y-3">
             <p className="section-kicker">Local Forecast</p>
             <div className="flex flex-wrap items-center gap-3">
@@ -733,7 +744,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             {stackedHero ? weatherContextRow("flex-wrap") : null}
           </div>
 
-          <div className={cn("flex flex-wrap items-stretch gap-3", stackedHero ? "justify-between" : "justify-start md:justify-end")}>
+          <div className={cn("flex flex-wrap items-stretch gap-3", stackedHero ? "justify-between" : "justify-start lg:justify-end")}>
             <div className="flex items-stretch gap-3">
               <WeatherInfoPopover
                 label="AQI details"
