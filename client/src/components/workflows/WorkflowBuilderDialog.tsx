@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
-import type { Workflow, WorkflowAction, WorkflowTriggerType } from "@/api/workflows";
+import type { Workflow, WorkflowAction, WorkflowActionTarget, WorkflowTriggerType } from "@/api/workflows";
 
 type DeviceLite = {
   _id: string;
@@ -38,6 +38,46 @@ const DEFAULT_ACTION: WorkflowAction = {
   target: null,
   parameters: { action: "turn_on" }
 };
+const TRIGGERING_DEVICE_TARGET_VALUE = "__triggering_device__";
+const MAX_DELAY_SECONDS = 24 * 60 * 60;
+
+function isTriggeringDeviceTarget(target: WorkflowActionTarget | undefined) {
+  if (!target || typeof target !== "object" || Array.isArray(target)) {
+    return false;
+  }
+
+  const kind = typeof target.kind === "string" ? target.kind : target.type;
+  const key = typeof target.key === "string" ? target.key : target.contextKey;
+  return String(kind || "").toLowerCase() === "context" && key === "triggeringDeviceId";
+}
+
+function buildTriggeringDeviceTarget(): WorkflowActionTarget {
+  return { kind: "context", key: "triggeringDeviceId" };
+}
+
+function getDefaultDeviceTarget(triggerType: WorkflowTriggerType, devices: DeviceLite[]): WorkflowActionTarget {
+  if (triggerType === "device_state") {
+    return buildTriggeringDeviceTarget();
+  }
+
+  return devices[0]?._id || null;
+}
+
+function buildDefaultAction(triggerType: WorkflowTriggerType, devices: DeviceLite[]): WorkflowAction {
+  return {
+    type: "device_control",
+    target: getDefaultDeviceTarget(triggerType, devices),
+    parameters: { action: "turn_on" }
+  };
+}
+
+function getActionTargetSelectValue(target: WorkflowActionTarget | undefined) {
+  if (isTriggeringDeviceTarget(target)) {
+    return TRIGGERING_DEVICE_TARGET_VALUE;
+  }
+
+  return typeof target === "string" ? target : "";
+}
 
 function getDefaultTriggerConditions(type: WorkflowTriggerType) {
   if (type === "time") {
@@ -154,7 +194,7 @@ export function WorkflowBuilderDialog({
       setVoiceAliasesText((initialWorkflow.voiceAliases || []).join(", "));
       setTriggerType((initialWorkflow.trigger?.type as WorkflowTriggerType) || "manual");
       setTriggerConditions(initialWorkflow.trigger?.conditions || {});
-      setActions(initialWorkflow.actions?.length ? initialWorkflow.actions : [DEFAULT_ACTION]);
+      setActions(initialWorkflow.actions?.length ? initialWorkflow.actions : [buildDefaultAction("manual", devices)]);
       return;
     }
 
@@ -166,7 +206,7 @@ export function WorkflowBuilderDialog({
     setVoiceAliasesText("");
     setTriggerType("manual");
     setTriggerConditions({});
-    setActions([DEFAULT_ACTION]);
+    setActions([buildDefaultAction("manual", devices)]);
   }, [initialWorkflow, open]);
 
   const visualGraph = useMemo(() => buildGraph(triggerType, actions), [triggerType, actions]);
@@ -183,7 +223,7 @@ export function WorkflowBuilderDialog({
   }, [devices]);
 
   const addAction = () => {
-    setActions((prev) => [...prev, DEFAULT_ACTION]);
+    setActions((prev) => [...prev, buildDefaultAction(triggerType, devices)]);
   };
 
   const removeAction = (index: number) => {
@@ -222,6 +262,18 @@ export function WorkflowBuilderDialog({
   const handleTriggerTypeChange = (value: WorkflowTriggerType) => {
     setTriggerType(value);
     setTriggerConditions(getDefaultTriggerConditions(value));
+    if (value !== "device_state") {
+      setActions((prev) => prev.map((action) => {
+        if (action.type !== "device_control" || !isTriggeringDeviceTarget(action.target)) {
+          return action;
+        }
+
+        return {
+          ...action,
+          target: devices[0]?._id || null
+        };
+      }));
+    }
   };
 
   const onSubmit = async () => {
@@ -462,7 +514,10 @@ export function WorkflowBuilderDialog({
                 </div>
 
                 {actions.map((action, index) => {
-                  const targetDevice = devices.find((device) => device._id === action.target);
+                  const targetDeviceId = isTriggeringDeviceTarget(action.target)
+                    ? (typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : "")
+                    : (typeof action.target === "string" ? action.target : "");
+                  const targetDevice = devices.find((device) => device._id === targetDeviceId);
                   const actionChoices = getDeviceActionChoices(
                     targetDevice?.type || "switch",
                     ((targetDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
@@ -496,7 +551,11 @@ export function WorkflowBuilderDialog({
                                 const nextType = value as WorkflowAction["type"];
                                 const nextAction: WorkflowAction = {
                                   type: nextType,
-                                  target: nextType === "scene_activate" ? scenes[0]?._id || null : devices[0]?._id || null,
+                                  target: nextType === "scene_activate"
+                                    ? scenes[0]?._id || null
+                                    : nextType === "device_control"
+                                      ? getDefaultDeviceTarget(triggerType, devices)
+                                      : null,
                                   parameters: nextType === "delay" ? { seconds: 3 } : nextType === "notification" ? { message: "" } : { action: "turn_on" }
                                 };
                                 setActions((prev) => prev.map((item, actionIndex) => actionIndex === index ? nextAction : item));
@@ -519,15 +578,19 @@ export function WorkflowBuilderDialog({
                             <div className="space-y-2">
                               <Label>Device</Label>
                               <Select
-                                value={String(action.target || "")}
+                                value={getActionTargetSelectValue(action.target)}
                                 onValueChange={(value) => {
-                                  const updatedDevice = devices.find((device) => device._id === value);
+                                  const usesTriggeringDevice = value === TRIGGERING_DEVICE_TARGET_VALUE;
+                                  const updatedDeviceId = usesTriggeringDevice
+                                    ? (typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : "")
+                                    : value;
+                                  const updatedDevice = devices.find((device) => device._id === updatedDeviceId);
                                   const choices = getDeviceActionChoices(
                                     updatedDevice?.type || "switch",
                                     ((updatedDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
                                   );
                                   updateAction(index, {
-                                    target: value,
+                                    target: usesTriggeringDevice ? buildTriggeringDeviceTarget() : value,
                                     parameters: {
                                       ...action.parameters,
                                       action: choices[0]
@@ -539,6 +602,11 @@ export function WorkflowBuilderDialog({
                                   <SelectValue placeholder="Select device" />
                                 </SelectTrigger>
                                 <SelectContent>
+                                  {(triggerType === "device_state" || isTriggeringDeviceTarget(action.target)) && (
+                                    <SelectItem value={TRIGGERING_DEVICE_TARGET_VALUE}>
+                                      Triggering device
+                                    </SelectItem>
+                                  )}
                                   {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
                                     <div key={room}>
                                       <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
@@ -551,6 +619,11 @@ export function WorkflowBuilderDialog({
                                   ))}
                                 </SelectContent>
                               </Select>
+                              {isTriggeringDeviceTarget(action.target) && (
+                                <p className="text-xs text-muted-foreground">
+                                  Uses whichever device matched the trigger.
+                                </p>
+                              )}
                             </div>
                           )}
 
@@ -558,7 +631,7 @@ export function WorkflowBuilderDialog({
                             <div className="space-y-2">
                               <Label>Scene</Label>
                               <Select
-                                value={String(action.target || "")}
+                                value={typeof action.target === "string" ? action.target : ""}
                                 onValueChange={(value) => updateAction(index, { target: value })}
                               >
                                 <SelectTrigger>
@@ -628,7 +701,7 @@ export function WorkflowBuilderDialog({
                             <Input
                               type="number"
                               min={0}
-                              max={600}
+                              max={MAX_DELAY_SECONDS}
                               value={String(action.parameters?.seconds ?? 3)}
                               onChange={(event) => updateAction(index, { parameters: { ...action.parameters, seconds: Number(event.target.value) } })}
                             />

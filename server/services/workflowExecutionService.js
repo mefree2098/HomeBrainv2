@@ -6,7 +6,10 @@ const deviceService = require('./deviceService');
 const sceneService = require('./sceneService');
 const insteonService = require('./insteonService');
 
-const MAX_DELAY_SECONDS = 600;
+const MAX_DELAY_SECONDS = Math.max(
+  600,
+  Number(process.env.WORKFLOW_MAX_DELAY_SECONDS || 24 * 60 * 60)
+);
 const MIN_HTTP_TIMEOUT_MS = 1000;
 const MAX_HTTP_TIMEOUT_MS = 120000;
 const DEFAULT_HTTP_TIMEOUT_MS = 15000;
@@ -377,6 +380,24 @@ function resolveValueReference(rawValue, context = {}) {
   return parseScalar(rawValue);
 }
 
+function resolveActionTargetReference(rawTarget, context = {}) {
+  const resolved = resolveValueReference(rawTarget, context);
+  if (resolved == null) {
+    return null;
+  }
+
+  if (typeof resolved === 'string') {
+    const trimmed = resolved.trim();
+    return trimmed || null;
+  }
+
+  if (typeof resolved === 'number' || typeof resolved === 'boolean') {
+    return String(resolved);
+  }
+
+  return null;
+}
+
 function setIsyProgramState(programKey, state, extra = {}) {
   const normalized = normalizeIsyProgramKey(programKey);
   if (!normalized) {
@@ -458,8 +479,11 @@ async function resolveWorkflowReference(parameters = {}, options = {}) {
   return null;
 }
 
-async function executeDeviceControl(action) {
-  const target = action?.target || action?.deviceId;
+async function executeDeviceControl(action, context = {}) {
+  const target = resolveActionTargetReference(
+    Object.prototype.hasOwnProperty.call(action || {}, 'target') ? action?.target : action?.deviceId,
+    context
+  );
   if (!target) {
     throw new Error('Device target is required');
   }
@@ -502,8 +526,11 @@ async function executeDeviceControl(action) {
   };
 }
 
-async function executeSceneActivate(action) {
-  const sceneId = action?.target || action?.sceneId;
+async function executeSceneActivate(action, context = {}) {
+  const sceneId = resolveActionTargetReference(
+    Object.prototype.hasOwnProperty.call(action || {}, 'target') ? action?.target : action?.sceneId,
+    context
+  );
   if (!sceneId) {
     throw new Error('Scene target is required');
   }
@@ -1146,9 +1173,9 @@ async function executeAction(action, context = {}, options = {}) {
 
   switch (action?.type) {
     case 'device_control':
-      return executeDeviceControl(action);
+      return executeDeviceControl(action, context);
     case 'scene_activate':
-      return executeSceneActivate(action);
+      return executeSceneActivate(action, context);
     case 'http_request':
       return executeHttpRequest(action);
     case 'notification':

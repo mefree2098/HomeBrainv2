@@ -539,60 +539,84 @@ class WorkflowService {
       };
     }
 
-    const automation = creation?.automation;
-    if (!automation) {
+    const automations = Array.isArray(creation?.automations) && creation.automations.length
+      ? creation.automations
+      : (creation?.automation ? [creation.automation] : []);
+
+    if (!automations.length) {
       throw new Error('Automation generation failed');
     }
 
-    const trigger = normalizeTrigger(automation.trigger);
-    const actions = (Array.isArray(automation.actions) ? automation.actions : [])
-      .map((action) => normalizeAction(action))
-      .filter(Boolean);
+    const createdWorkflows = [];
 
-    if (!actions.length) {
-      throw new Error('Generated workflow does not include executable actions');
+    for (const automation of automations) {
+      const trigger = normalizeTrigger(automation.trigger);
+      const actions = (Array.isArray(automation.actions) ? automation.actions : [])
+        .map((action) => normalizeAction(action))
+        .filter(Boolean);
+
+      if (!actions.length) {
+        throw new Error('Generated workflow does not include executable actions');
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const uniqueName = await ensureUniqueWorkflowName(automation.name || `Workflow ${crypto.randomUUID().slice(0, 8)}`);
+      const workflow = new Workflow({
+        name: uniqueName,
+        description: automation.description || text.trim(),
+        source,
+        enabled: automation.enabled !== false,
+        category: automation.category || 'custom',
+        priority: automation.priority || 5,
+        cooldown: automation.cooldown || 0,
+        trigger,
+        actions,
+        graph: buildGraphFromWorkflowParts(trigger, actions),
+        linkedAutomationId: automation._id
+      });
+
+      // eslint-disable-next-line no-await-in-loop
+      const savedWorkflow = await workflow.save();
+      // eslint-disable-next-line no-await-in-loop
+      await Automation.findByIdAndUpdate(automation._id, {
+        workflowId: savedWorkflow._id,
+        workflowGraph: savedWorkflow.graph
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await this.syncWorkflowToAutomation(savedWorkflow._id);
+
+      void eventStreamService.publishSafe({
+        type: 'workflow.created_from_text',
+        source: 'workflow',
+        category: 'automation',
+        payload: {
+          workflowId: savedWorkflow._id.toString(),
+          name: savedWorkflow.name,
+          source,
+          triggerType: savedWorkflow.trigger?.type || 'manual'
+        },
+        tags: ['workflow', 'nl']
+      });
+
+      // eslint-disable-next-line no-await-in-loop
+      const hydratedWorkflow = await Workflow.findById(savedWorkflow._id).lean();
+      createdWorkflows.push(hydratedWorkflow || savedWorkflow.toObject());
     }
 
-    const uniqueName = await ensureUniqueWorkflowName(automation.name || `Workflow ${crypto.randomUUID().slice(0, 8)}`);
-    const workflow = new Workflow({
-      name: uniqueName,
-      description: automation.description || text.trim(),
-      source,
-      enabled: automation.enabled !== false,
-      category: automation.category || 'custom',
-      priority: automation.priority || 5,
-      cooldown: automation.cooldown || 0,
-      trigger,
-      actions,
-      graph: buildGraphFromWorkflowParts(trigger, actions),
-      linkedAutomationId: automation._id
-    });
-
-    const savedWorkflow = await workflow.save();
-    await Automation.findByIdAndUpdate(automation._id, {
-      workflowId: savedWorkflow._id,
-      workflowGraph: savedWorkflow.graph
-    });
-    await this.syncWorkflowToAutomation(savedWorkflow._id);
-
-    void eventStreamService.publishSafe({
-      type: 'workflow.created_from_text',
-      source: 'workflow',
-      category: 'automation',
-      payload: {
-        workflowId: savedWorkflow._id.toString(),
-        name: savedWorkflow.name,
-        source,
-        triggerType: savedWorkflow.trigger?.type || 'manual'
-      },
-      tags: ['workflow', 'nl']
-    });
+    const primaryWorkflow = createdWorkflows[0] || null;
+    const primaryAutomation = automations[0] || null;
+    const createdCount = createdWorkflows.length;
 
     return {
       success: true,
-      workflow: await Workflow.findById(savedWorkflow._id).lean(),
-      automation,
-      message: 'Workflow created successfully from natural language'
+      workflow: primaryWorkflow,
+      workflows: createdWorkflows,
+      automation: primaryAutomation,
+      automations,
+      createdCount,
+      message: createdCount === 1
+        ? 'Workflow created successfully from natural language'
+        : `Created ${createdCount} workflows from natural language`
     };
   }
 

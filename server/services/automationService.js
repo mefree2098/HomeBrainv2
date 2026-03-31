@@ -12,8 +12,10 @@ const MAX_LLM_RETRIES = 3;
 const MAX_DEVICE_PROMPT_ENTRIES = 40;
 const MAX_SCENE_PROMPT_ENTRIES = 25;
 const MIN_KEYWORD_LENGTH = 3;
+const MAX_AUTOMATIONS_PER_REQUEST = 12;
 const VALID_TRIGGER_TYPES = new Set(['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual', 'security_alarm_status']);
 const VALID_SECURITY_ALARM_STATES = new Set(['disarmed', 'armedStay', 'armedAway', 'triggered', 'arming', 'disarming']);
+const DYNAMIC_TARGET_CONTEXT_KEYS = new Set(['triggeringDeviceId']);
 
 const DEVICE_TYPE_HINTS = {
   light: ['light', 'lights', 'lamp', 'bulb'],
@@ -23,6 +25,14 @@ const DEVICE_TYPE_HINTS = {
   garage: ['garage', 'door'],
   sensor: ['sensor', 'motion', 'door', 'window', 'temperature', 'humidity']
 };
+
+function sanitizeString(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.trim();
+}
 
 function normalizeSecurityAlarmState(value) {
   if (typeof value !== 'string') {
@@ -73,6 +83,59 @@ function normalizeTriggerConditions(type, conditions) {
     .filter(Boolean)));
 
   return { states };
+}
+
+function escapeRegexLiteral(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isContextTargetReference(value, allowedKeys = DYNAMIC_TARGET_CONTEXT_KEYS) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  const kind = sanitizeString(value.kind || value.type).toLowerCase();
+  const key = sanitizeString(value.key || value.contextKey);
+  if (kind !== 'context' || !key) {
+    return false;
+  }
+
+  if (!allowedKeys) {
+    return true;
+  }
+
+  return allowedKeys.has(key);
+}
+
+function normalizeDynamicActionTarget(target) {
+  if (!isContextTargetReference(target)) {
+    return null;
+  }
+
+  return {
+    kind: 'context',
+    key: sanitizeString(target.key || target.contextKey)
+  };
+}
+
+function extractAutomationCandidates(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return [];
+  }
+
+  if (Array.isArray(payload.automations)) {
+    return payload.automations.filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry));
+  }
+
+  if (payload.automation && typeof payload.automation === 'object' && !Array.isArray(payload.automation)) {
+    return [payload.automation];
+  }
+
+  if (payload.name || payload.trigger || payload.actions) {
+    return [payload];
+  }
+
+  return [];
 }
 
 function standaloneAutomationFilter(extra = {}) {
@@ -653,6 +716,27 @@ async function getAutomationById(id) {
   }
 }
 
+async function ensureUniqueAutomationName(name, reservedNames = new Set()) {
+  const normalizedBase = sanitizeString(name) || 'Custom Automation';
+  let candidate = normalizedBase;
+  let counter = 2;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const reserved = reservedNames.has(candidate.toLowerCase());
+    const existing = await Automation.findOne({
+      name: { $regex: new RegExp(`^${escapeRegexLiteral(candidate)}$`, 'i') }
+    }).select('_id');
+
+    if (!reserved && !existing) {
+      return candidate;
+    }
+
+    candidate = `${normalizedBase} (${counter})`;
+    counter += 1;
+  }
+}
+
 /**
  * Create new automation
  */
@@ -1014,49 +1098,60 @@ async function validateAndFixAutomation(automation) {
     }
 
     // Fix device references
-    if (action.type === 'device_control' && action.target) {
-      const targetStr = action.target.toString().toLowerCase();
-
-      // Check if target is valid device ID
-      if (!mongoose.Types.ObjectId.isValid(action.target)) {
-        // Try to find device by name
-        const device = deviceMap.get(targetStr);
-        if (device) {
-          fixedAction.target = device._id.toString();
+    if (action.type === 'device_control') {
+      const dynamicTarget = normalizeDynamicActionTarget(action.target);
+      if (dynamicTarget) {
+        fixedAction.target = dynamicTarget;
+        if (JSON.stringify(dynamicTarget) !== JSON.stringify(action.target)) {
           fixed = true;
-          console.log(`AutomationService: Fixed device reference from "${action.target}" to "${device._id}"`);
-        } else {
-          issues.push(`Device not found: ${action.target}`);
-          return null;
         }
+      } else if (!action.target) {
+        issues.push(`Device target missing at index ${index}`);
+        return null;
       } else {
-        // Verify device exists
-        if (!deviceMap.has(action.target.toString())) {
-          issues.push(`Device ID not found: ${action.target}`);
-          return null;
+        const targetStr = action.target.toString().toLowerCase();
+
+        // Check if target is valid device ID
+        if (!mongoose.Types.ObjectId.isValid(action.target)) {
+          // Try to find device by name
+          const device = deviceMap.get(targetStr);
+          if (device) {
+            fixedAction.target = device._id.toString();
+            fixed = true;
+            console.log(`AutomationService: Fixed device reference from "${action.target}" to "${device._id}"`);
+          } else {
+            issues.push(`Device not found: ${action.target}`);
+            return null;
+          }
+        } else {
+          // Verify device exists
+          if (!deviceMap.has(action.target.toString())) {
+            issues.push(`Device ID not found: ${action.target}`);
+            return null;
+          }
         }
-      }
 
-      // Validate action parameters for device type
-      const device = deviceMap.get(fixedAction.target.toString());
-      if (device && action.parameters) {
-        const actionType = action.parameters.action;
+        // Validate action parameters for device type
+        const device = deviceMap.get(fixedAction.target.toString());
+        if (device && action.parameters) {
+          const actionType = action.parameters.action;
 
-        // Validate device-specific actions
-        if (device.type === 'light') {
-          if (!['turn_on', 'turn_off', 'set_brightness', 'set_color'].includes(actionType)) {
-            issues.push(`Invalid action "${actionType}" for light device`);
-            return null;
-          }
-        } else if (device.type === 'thermostat') {
-          if (!['turn_on', 'turn_off', 'set_temperature'].includes(actionType)) {
-            issues.push(`Invalid action "${actionType}" for thermostat device`);
-            return null;
-          }
-        } else if (device.type === 'lock') {
-          if (!['lock', 'unlock'].includes(actionType)) {
-            issues.push(`Invalid action "${actionType}" for lock device`);
-            return null;
+          // Validate device-specific actions
+          if (device.type === 'light') {
+            if (!['turn_on', 'turn_off', 'set_brightness', 'set_color'].includes(actionType)) {
+              issues.push(`Invalid action "${actionType}" for light device`);
+              return null;
+            }
+          } else if (device.type === 'thermostat') {
+            if (!['turn_on', 'turn_off', 'set_temperature'].includes(actionType)) {
+              issues.push(`Invalid action "${actionType}" for thermostat device`);
+              return null;
+            }
+          } else if (device.type === 'lock') {
+            if (!['lock', 'unlock'].includes(actionType)) {
+              issues.push(`Invalid action "${actionType}" for lock device`);
+              return null;
+            }
           }
         }
       }
@@ -1082,6 +1177,9 @@ async function validateAndFixAutomation(automation) {
           return null;
         }
       }
+    } else if (action.type === 'scene_activate') {
+      issues.push(`Scene target missing at index ${index}`);
+      return null;
     }
 
     return fixedAction;
@@ -1103,6 +1201,63 @@ async function validateAndFixAutomation(automation) {
   };
 
   return { valid: true, issues, fixedAutomation, fixed };
+}
+
+async function validateAndFixAutomationPayload(payload) {
+  const candidates = extractAutomationCandidates(payload);
+  if (!candidates.length) {
+    return {
+      valid: false,
+      issues: ['Response did not include any automation definitions'],
+      fixedAutomations: null,
+      fixed: false
+    };
+  }
+
+  if (candidates.length > MAX_AUTOMATIONS_PER_REQUEST) {
+    return {
+      valid: false,
+      issues: [`Response included too many automations (${candidates.length}). Maximum allowed is ${MAX_AUTOMATIONS_PER_REQUEST}.`],
+      fixedAutomations: null,
+      fixed: false
+    };
+  }
+
+  const fixedAutomations = [];
+  const issues = [];
+  let fixed = false;
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const validation = await validateAndFixAutomation(candidates[index]);
+    if (!validation.valid) {
+      validation.issues.forEach((issue) => {
+        issues.push(`Automation ${index + 1}: ${issue}`);
+      });
+      continue;
+    }
+
+    if (validation.fixed) {
+      fixed = true;
+    }
+
+    fixedAutomations.push(validation.fixedAutomation);
+  }
+
+  if (issues.length > 0 || fixedAutomations.length !== candidates.length) {
+    return {
+      valid: false,
+      issues,
+      fixedAutomations: null,
+      fixed
+    };
+  }
+
+  return {
+    valid: true,
+    issues: [],
+    fixedAutomations,
+    fixed
+  };
 }
 
 /**
@@ -1191,7 +1346,7 @@ async function createAutomationFromText(text, roomContext = null) {
       ? settingsDoc.llmPriorityList
       : ['local', 'codex', 'openai', 'anthropic'];
     let providerQueue = [...defaultPriority];
-    let parsedAutomation = null;
+    let parsedAutomations = null;
     let lastError = null;
     let jsonReminderAdded = false;
 
@@ -1237,22 +1392,22 @@ async function createAutomationFromText(text, roomContext = null) {
           continue;
         }
 
-        parsedAutomation = JSON.parse(jsonMatch[0]);
+        const parsedPayload = JSON.parse(jsonMatch[0]);
 
         // Validate and fix automation structure
-        const validation = await validateAndFixAutomation(parsedAutomation);
+        const validation = await validateAndFixAutomationPayload(parsedPayload);
 
         if (validation.valid) {
-          console.log('AutomationService: Automation structure is valid');
+          console.log(`AutomationService: Generated ${validation.fixedAutomations.length} automation definition(s)`);
           if (validation.fixed) {
             console.log('AutomationService: Applied fixes to automation structure');
           }
-          parsedAutomation = validation.fixedAutomation;
+          parsedAutomations = validation.fixedAutomations;
           break; // Success!
         } else {
           lastError = `Validation failed: ${validation.issues.join(', ')}`;
           console.error('AutomationService:', lastError);
-          parsedAutomation = null;
+          parsedAutomations = null;
           if (providerUsed === 'local') {
             providerQueue = providerQueue.filter(
               (candidate) => candidate?.toLowerCase() !== providerUsed
@@ -1265,11 +1420,13 @@ async function createAutomationFromText(text, roomContext = null) {
 The previous automation JSON had the following issues:
 ${validation.issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n')}
 
-Please fix these issues and return a corrected JSON. Remember:
+Please fix these issues and return a corrected JSON object with an "automations" array. Remember:
 - Only use device IDs or exact device names from the provided list
 - Only use scene IDs or exact scene names from the provided list
 - Ensure all action types are valid for the target device types
 - Use valid action types: device_control, scene_activate, notification, delay, condition
+- When a request applies the same logic to multiple named devices, return one automation object per device
+- Use {"kind":"context","key":"triggeringDeviceId"} only when an action should target the same device that caused a device_state trigger
 
 Original request: "${text}"
 
@@ -1280,7 +1437,7 @@ ${deviceListForPrompt || 'None'}
 AVAILABLE SCENES:
 ${sceneListForPrompt || 'None'}
 
-Return ONLY the corrected JSON, no explanation.`;
+Return ONLY the corrected JSON object, no explanation.`;
 
           // Update prompt for next attempt
           prompt = feedbackPrompt;
@@ -1306,50 +1463,67 @@ Return ONLY the corrected JSON, no explanation.`;
     }
 
     // If we exhausted all retries, throw error
-    if (!parsedAutomation) {
+    if (!parsedAutomations || parsedAutomations.length === 0) {
       console.warn('AutomationService: Falling back to heuristic automation builder');
-      parsedAutomation = buildFallbackAutomation(text, devicesByRoom, roomContext);
-      if (!parsedAutomation) {
+      const fallbackAutomation = buildFallbackAutomation(text, devicesByRoom, roomContext);
+      if (!fallbackAutomation) {
         throw new Error(`Failed to create valid automation after ${MAX_LLM_RETRIES} attempts. Last error: ${lastError}`);
       }
+      parsedAutomations = [fallbackAutomation];
     }
 
-    // Validate and clean the parsed automation
-    let actions = Array.isArray(parsedAutomation.actions)
-      ? parsedAutomation.actions.filter(Boolean)
-      : null;
+    const createdAutomations = [];
+    const reservedNames = new Set();
 
-    if (!Array.isArray(actions) || actions.length === 0) {
-      const fallbackAutomation = buildFallbackAutomation(text, devicesByRoom, roomContext);
-      if (fallbackAutomation && Array.isArray(fallbackAutomation.actions) && fallbackAutomation.actions.length) {
-        actions = fallbackAutomation.actions;
-        parsedAutomation.trigger = parsedAutomation.trigger || fallbackAutomation.trigger;
-        parsedAutomation.category = parsedAutomation.category || fallbackAutomation.category;
-        parsedAutomation.priority = parsedAutomation.priority || fallbackAutomation.priority;
-        parsedAutomation.description = parsedAutomation.description || fallbackAutomation.description;
-      } else {
+    for (const parsedAutomation of parsedAutomations) {
+      // Validate and clean the parsed automation
+      let actions = Array.isArray(parsedAutomation.actions)
+        ? parsedAutomation.actions.filter(Boolean)
+        : null;
+
+      if ((!Array.isArray(actions) || actions.length === 0) && parsedAutomations.length === 1) {
+        const fallbackAutomation = buildFallbackAutomation(text, devicesByRoom, roomContext);
+        if (fallbackAutomation && Array.isArray(fallbackAutomation.actions) && fallbackAutomation.actions.length) {
+          actions = fallbackAutomation.actions;
+          parsedAutomation.trigger = parsedAutomation.trigger || fallbackAutomation.trigger;
+          parsedAutomation.category = parsedAutomation.category || fallbackAutomation.category;
+          parsedAutomation.priority = parsedAutomation.priority || fallbackAutomation.priority;
+          parsedAutomation.description = parsedAutomation.description || fallbackAutomation.description;
+        }
+      }
+
+      if (!Array.isArray(actions) || actions.length === 0) {
         throw new Error('At least one action is required');
       }
+
+      const uniqueName = await ensureUniqueAutomationName(parsedAutomation.name || 'Custom Automation', reservedNames);
+      reservedNames.add(uniqueName.toLowerCase());
+
+      const automationData = {
+        name: uniqueName,
+        description: parsedAutomation.description || text.trim(),
+        trigger: parsedAutomation.trigger || { type: 'manual', conditions: {} },
+        actions,
+        category: parsedAutomation.category || 'custom',
+        priority: parsedAutomation.priority || 5,
+        enabled: parsedAutomation.enabled !== false
+      };
+
+      // Create the automation
+      // eslint-disable-next-line no-await-in-loop
+      const newAutomation = await createAutomation(automationData);
+      createdAutomations.push(newAutomation);
     }
-
-    const automationData = {
-      name: parsedAutomation.name || 'Custom Automation',
-      description: parsedAutomation.description || text.trim(),
-      trigger: parsedAutomation.trigger || { type: 'manual', conditions: {} },
-      actions,
-      category: parsedAutomation.category || 'custom',
-      priority: parsedAutomation.priority || 5,
-      enabled: true
-    };
-
-    // Create the automation
-    const newAutomation = await createAutomation(automationData);
 
     console.log('AutomationService: Automation created from natural language successfully');
     return {
       success: true,
-      automation: newAutomation,
-      message: 'Automation created successfully from natural language'
+      automation: createdAutomations[0] || null,
+      automations: createdAutomations,
+      createdCount: createdAutomations.length,
+      message: createdAutomations.length === 1
+        ? 'Automation created successfully from natural language'
+        : `Created ${createdAutomations.length} automations from natural language`
     };
   } catch (error) {
     console.error('AutomationService: Error creating automation from text:', error.message);
@@ -1363,23 +1537,43 @@ Return ONLY the corrected JSON, no explanation.`;
 }
 
 const AUTOMATION_JSON_TEMPLATE = `{
-  "name": "Manual: Vault Light On",
-  "description": "Manual trigger to turn on the vault light switch.",
-  "trigger": {
-    "type": "manual",
-    "conditions": {}
-  },
-  "actions": [
+  "automations": [
     {
-      "type": "device_control",
-      "target": "<DEVICE_ID>",
-      "parameters": {
-        "action": "turn_on"
-      }
+      "name": "Laundry Room Fan Auto Off",
+      "description": "Turns off the Laundry Room Fan 30 minutes after it turns on.",
+      "trigger": {
+        "type": "device_state",
+        "conditions": {
+          "deviceId": "<DEVICE_ID>",
+          "property": "status",
+          "operator": "eq",
+          "value": true,
+          "state": "on"
+        }
+      },
+      "actions": [
+        {
+          "type": "delay",
+          "target": null,
+          "parameters": {
+            "seconds": 1800
+          }
+        },
+        {
+          "type": "device_control",
+          "target": {
+            "kind": "context",
+            "key": "triggeringDeviceId"
+          },
+          "parameters": {
+            "action": "turn_off"
+          }
+        }
+      ],
+      "category": "energy",
+      "priority": 5
     }
-  ],
-  "category": "convenience",
-  "priority": 5
+  ]
 }`;
 
 /**
@@ -1394,27 +1588,31 @@ function buildAutomationPrompt(text, devicesByRoom, scenes, roomContext, preform
 OUTPUT REQUIREMENTS (FOLLOW EXACTLY):
 1. Return a single valid JSON object only. Do not include markdown, prose, comments, code fences, or additional explanations.
 2. Every key must use double quotes. All string values must use double quotes.
-3. The JSON must include the fields: name, description, trigger, actions, category, priority.
-4. The trigger must include a "type" key and a "conditions" object (empty object is fine for manual triggers).
-5. The actions array must contain at least one item. Each action must have "type", "target", and "parameters".
-6. Choose device and scene identifiers strictly from the provided context. If no appropriate device exists, leave "actions" as an empty array and set "category" to "custom".
-7. If the user's request cannot be fulfilled with the available devices/scenes, set "actions" to an empty array and use category "custom".
+3. The top-level JSON object must include an "automations" array.
+4. Every automation in "automations" must include the fields: name, description, trigger, actions, category, priority.
+5. The trigger must include a "type" key and a "conditions" object (empty object is fine for manual triggers).
+6. The actions array must contain at least one item. Each action must have "type", "target", and "parameters".
+7. Choose device and scene identifiers strictly from the provided context. Never invent IDs or placeholders.
 8. Respond with valid JSON even when uncertain; never omit required fields.
 
 REQUIRED JSON TEMPLATE (values are examples, not literals to reuse):
 ${AUTOMATION_JSON_TEMPLATE}
 
 IMPORTANT RULES:
-1. ALWAYS return at least one action when the user is asking to control something. Simple requests (e.g., "turn on the vault light") must become a manual trigger with one device_control action.
+1. ALWAYS return at least one action when the user is asking to control something. Simple requests (for example, "turn on the vault light") must become one automation with a manual trigger and one device_control action.
 2. Default the trigger to {"type": "manual", "conditions": {}} when no schedule or condition is provided.
-3. ONLY use device IDs from the provided device list and scene IDs from the provided scene list. Never invent IDs or placeholders.
-4. Match each action to the device's allowed capabilities and source restrictions.
-5. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
-6. Use intent-driven categories (choose from "security", "comfort", "energy", "convenience", "custom") and pick a sensible priority between 1-10 (default 5).
-7. Never output any prefix/suffix text. Return ONLY the JSON object.
-8. For devices with Source:harmony, only use turn_on, turn_off, or toggle. Do not use set_brightness, set_color, set_temperature, lock/unlock, or open/close on Harmony Hub activity devices.
-9. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
-10. When the request refers to the security system or alarm arming/disarming state, use trigger type "security_alarm_status" with conditions like {"states":["armedStay","armedAway"]}.
+3. Return one automation object per independently-triggered device when the request names multiple devices, rooms, or "each" device that should behave separately.
+4. Use a fixed device ID in trigger.conditions.deviceId for device_state triggers.
+5. When an action should target the same device that caused a device_state trigger, prefer the dynamic target {"kind":"context","key":"triggeringDeviceId"} instead of copying the device ID into the action target.
+6. ONLY use device IDs from the provided device list and scene IDs from the provided scene list. Never invent IDs or placeholders.
+7. Match each action to the device's allowed capabilities and source restrictions.
+8. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
+9. Delay actions support long timers. Use the full requested duration in seconds, up to 86400 seconds. Do not reduce 30 minutes to 600 seconds.
+10. Use intent-driven categories (choose from "security", "comfort", "energy", "convenience", "custom") and pick a sensible priority between 1-10 (default 5).
+11. Never output any prefix/suffix text. Return ONLY the JSON object.
+12. For devices with Source:harmony, only use turn_on, turn_off, or toggle. Do not use set_brightness, set_color, set_temperature, lock/unlock, or open/close on Harmony Hub activity devices.
+13. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
+14. When the request refers to the security system or alarm arming/disarming state, use trigger type "security_alarm_status" with conditions like {"states":["armedStay","armedAway"]}.
 
 AVAILABLE DEVICES:
 ${deviceList}
@@ -1426,36 +1624,40 @@ ${roomContext ? `ROOM CONTEXT: The user is currently in the "${roomContext}" roo
 
 REQUIRED JSON STRUCTURE:
 {
-  "name": "Brief descriptive name (max 50 chars)",
-  "description": "Detailed description of what this automation does",
-  "trigger": {
-    "type": "<trigger_type>",  // choose one: time, device_state, sensor, schedule, manual, security_alarm_status
-    "conditions": {
-      // For time: {"hour": 7, "minute": 0, "days": ["monday", "tuesday", ...]}
-      // For schedule: {"cron": "0 7 * * 1-5"}
-      // For device_state: {"deviceId": "ID", "state": "on" or "off", "property": "brightness", "operator": ">", "value": 50}
-      // For sensor: {"sensorType": "<sensor_type>", "deviceId": "ID", "condition": "<condition>", "value": 25}
-      // For security_alarm_status: {"states": ["armedStay", "armedAway"]}
-      //   sensor_type options: motion, temperature, humidity
-      //   condition options: detected, above, below
-      // For manual: {}
-    }
-  },
-  "actions": [
+  "automations": [
     {
-      "type": "<action_type>",  // choose one: device_control, scene_activate, notification, delay
-      "target": "DEVICE_ID_FROM_LIST_ABOVE or SCENE_ID_FROM_LIST_ABOVE",
-      "parameters": {
-        // For device_control: {"action": "<device_action>", "brightness": 0-100, "temperature": number, "color": "#hex"}
-        // Valid device actions include: turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
-        // For scene_activate: {}
-        // For notification: {"message": "text"}
-        // For delay: {"seconds": number}
-      }
+      "name": "Brief descriptive name (max 50 chars)",
+      "description": "Detailed description of what this automation does",
+      "trigger": {
+        "type": "<trigger_type>",  // choose one: time, device_state, sensor, schedule, manual, security_alarm_status
+        "conditions": {
+          // For time: {"hour": 7, "minute": 0, "days": ["monday", "tuesday", ...]}
+          // For schedule: {"cron": "0 7 * * 1-5"}
+          // For device_state: {"deviceId": "ID", "state": "on" or "off", "property": "status", "operator": "eq", "value": true}
+          // For sensor: {"sensorType": "<sensor_type>", "deviceId": "ID", "condition": "<condition>", "value": 25}
+          // For security_alarm_status: {"states": ["armedStay", "armedAway"]}
+          //   sensor_type options: motion, temperature, humidity
+          //   condition options: detected, above, below
+          // For manual: {}
+        }
+      },
+      "actions": [
+        {
+          "type": "<action_type>",  // choose one: device_control, scene_activate, notification, delay
+          "target": "DEVICE_ID_FROM_LIST_ABOVE or SCENE_ID_FROM_LIST_ABOVE or {\\"kind\\":\\"context\\",\\"key\\":\\"triggeringDeviceId\\"}",
+          "parameters": {
+            // For device_control: {"action": "<device_action>", "brightness": 0-100, "temperature": number, "color": "#hex"}
+            // Valid device actions include: turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
+            // For scene_activate: {}
+            // For notification: {"message": "text"}
+            // For delay: {"seconds": number}
+          }
+        }
+      ],
+      "category": "<category>",  // choose one: security, comfort, energy, convenience, custom
+      "priority": 1-10
     }
-  ],
-  "category": "<category>",  // choose one: security, comfort, energy, convenience, custom
-  "priority": 1-10
+  ]
 }
 
 DEVICE ACTION COMPATIBILITY:
@@ -1473,6 +1675,7 @@ TRIGGER TYPE EXAMPLES:
 - "when temperature above 75" -> type: "sensor", conditions: {"sensorType": "temperature", "condition": "above", "value": 75}
 - "when front door unlocked" -> type: "device_state", conditions: {"state": "off"}
 - "when the security alarm is armed stay or armed away" -> type: "security_alarm_status", conditions: {"states": ["armedStay", "armedAway"]}
+- "when a fan switch turns on, wait 30 minutes, then turn that same switch off" -> use type: "device_state", a delay action with {"seconds": 1800}, and a device_control action targeting {"kind":"context","key":"triggeringDeviceId"}
 - "manual trigger" -> type: "manual", conditions: {}
 
 USER REQUEST: "${text}"

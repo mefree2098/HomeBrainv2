@@ -1,8 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const axios = require('axios');
+const mongoose = require('mongoose');
 
 const { executeActionSequence } = require('../services/workflowExecutionService');
+const Device = require('../models/Device');
 const insteonService = require('../services/insteonService');
 
 test('condition edge=change executes onFalseActions when condition transitions to false', async () => {
@@ -211,4 +213,75 @@ test('http_request action executes REST call directly', async (t) => {
   assert.equal(result.actionResults[0].actionType, 'http_request');
   assert.equal(result.actionResults[0].success, true);
   assert.match(result.actionResults[0].message, /HTTP POST/);
+});
+
+test('device_control action can target the triggering device from execution context', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalTurnOff = insteonService.turnOff;
+  let receivedTarget = null;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Laundry Room Fan',
+      type: 'switch',
+      properties: {
+        source: 'insteon'
+      }
+    })
+  });
+
+  insteonService.turnOff = async (target) => {
+    receivedTarget = target;
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: { kind: 'context', key: 'triggeringDeviceId' },
+      parameters: { action: 'turn_off' }
+    }
+  ], {
+    context: {
+      triggeringDeviceId: deviceId
+    }
+  });
+
+  assert.equal(receivedTarget, deviceId);
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, true);
+  assert.match(result.actionResults[0].message, /Laundry Room Fan/);
+});
+
+test('delay action preserves durations longer than ten minutes', async (t) => {
+  const originalSetTimeout = global.setTimeout;
+
+  t.after(() => {
+    global.setTimeout = originalSetTimeout;
+  });
+
+  global.setTimeout = (handler, delay, ...args) => {
+    if (typeof handler === 'function') {
+      handler(...args);
+    }
+    return 0;
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'delay',
+      target: null,
+      parameters: { seconds: 1800 }
+    }
+  ], { context: {} });
+
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, true);
+  assert.equal(result.actionResults[0].message, 'Delay complete (1800s)');
 });

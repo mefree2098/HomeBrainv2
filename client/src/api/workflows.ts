@@ -21,9 +21,18 @@ export interface WorkflowTrigger {
   conditions: Record<string, unknown>;
 }
 
+export interface WorkflowContextTarget {
+  kind?: string;
+  type?: string;
+  key?: string;
+  contextKey?: string;
+}
+
+export type WorkflowActionTarget = string | WorkflowContextTarget | null;
+
 export interface WorkflowAction {
   type: WorkflowActionType;
-  target?: string | null;
+  target?: WorkflowActionTarget;
   parameters?: Record<string, unknown>;
 }
 
@@ -101,6 +110,8 @@ export const createWorkflowFromText = async (payload: { text: string; roomContex
       handledDirectCommand?: boolean;
       message: string;
       workflow?: Workflow;
+      workflows?: Workflow[];
+      createdCount?: number;
     };
   } catch (error) {
     throw new Error(getApiErrorMessage(error));

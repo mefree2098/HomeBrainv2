@@ -266,7 +266,8 @@ router.post('/create-from-text', admin, async (req, res) => {
       return res.status(200).json(result);
     }
 
-    console.log(`AutomationRoutes: Automation created from text successfully with ID: ${result.automation._id}`);
+    const createdCount = Number(result?.createdCount || result?.automations?.length || (result?.automation ? 1 : 0));
+    console.log(`AutomationRoutes: Created ${createdCount} automation(s) from natural language`);
     res.status(201).json(result);
   } catch (error) {
     console.error('AutomationRoutes: Error creating automation from text:', error.message);

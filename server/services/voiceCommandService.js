@@ -1074,9 +1074,18 @@ RULES
         result.deviceName = creation?.device?.name || null;
         result.deviceRoom = creation?.device?.room || null;
       } else {
+        const createdAutomations = Array.isArray(creation?.automations) && creation.automations.length
+          ? creation.automations
+          : (creation?.automation ? [creation.automation] : []);
         result.success = true;
-        result.message = creation?.message || 'Automation created';
-        result.automationId = creation?.automation?._id?.toString();
+        result.message = creation?.message || (createdAutomations.length > 1
+          ? `Created ${createdAutomations.length} automations`
+          : 'Automation created');
+        result.createdCount = createdAutomations.length || (creation?.automation ? 1 : 0);
+        result.automationId = createdAutomations[0]?._id?.toString?.() || null;
+        result.automationIds = createdAutomations
+          .map((automation) => automation?._id?.toString?.() || null)
+          .filter(Boolean);
       }
       return result;
     } catch (error) {
@@ -1108,9 +1117,18 @@ RULES
         result.deviceName = creation?.device?.name || null;
         result.deviceRoom = creation?.device?.room || null;
       } else {
+        const createdWorkflows = Array.isArray(creation?.workflows) && creation.workflows.length
+          ? creation.workflows
+          : (creation?.workflow ? [creation.workflow] : []);
         result.success = true;
-        result.message = creation?.message || 'Workflow created';
-        result.workflowId = creation?.workflow?._id?.toString();
+        result.message = creation?.message || (createdWorkflows.length > 1
+          ? `Created ${createdWorkflows.length} workflows`
+          : 'Workflow created');
+        result.createdCount = createdWorkflows.length || (creation?.workflow ? 1 : 0);
+        result.workflowId = createdWorkflows[0]?._id?.toString?.() || null;
+        result.workflowIds = createdWorkflows
+          .map((workflow) => workflow?._id?.toString?.() || null)
+          .filter(Boolean);
       }
 
       return result;

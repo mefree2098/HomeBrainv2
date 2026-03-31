@@ -143,6 +143,7 @@ class AutomationSchedulerService {
     this.running = false;
     this.recentRuns = new Map();
     this.triggerStateCache = new Map();
+    this.pendingTriggerContexts = new Map();
   }
 
   start() {
@@ -172,6 +173,23 @@ class AutomationSchedulerService {
         this.recentRuns.delete(key);
       }
     }
+  }
+
+  setPendingTriggerContext(automationId, context = {}) {
+    if (!automationId || !context || typeof context !== 'object') {
+      return;
+    }
+    this.pendingTriggerContexts.set(String(automationId), { ...context });
+  }
+
+  consumePendingTriggerContext(automationId) {
+    if (!automationId) {
+      return {};
+    }
+    const key = String(automationId);
+    const context = this.pendingTriggerContexts.get(key) || {};
+    this.pendingTriggerContexts.delete(key);
+    return context;
   }
 
   shouldSkipForCooldown(automation, now) {
@@ -318,7 +336,20 @@ class AutomationSchedulerService {
     this.triggerStateCache.set(cacheKey, met);
 
     // Run on edge transition false -> true so we don't fire repeatedly every tick.
-    return met && lastState !== true;
+    const shouldRun = met && lastState !== true;
+    if (shouldRun) {
+      this.setPendingTriggerContext(automation._id.toString(), {
+        triggeringDeviceId: device._id?.toString?.() || deviceId.toString(),
+        triggeringDeviceName: device.name || '',
+        triggeringDeviceRoom: device.room || '',
+        triggerProperty: typeof conditions.property === 'string' && conditions.property.trim()
+          ? conditions.property.trim()
+          : 'status',
+        triggerValue: leftValue
+      });
+    }
+
+    return shouldRun;
   }
 
   normalizeSecurityAlarmState(value) {
@@ -376,6 +407,9 @@ class AutomationSchedulerService {
 
     const shouldRun = Boolean(matchedState && lastMatchedState !== matchedState);
     if (shouldRun) {
+      this.setPendingTriggerContext(automation._id.toString(), {
+        triggeringAlarmState: matchedState
+      });
       console.log(
         `AutomationSchedulerService: security alarm trigger matched ${matchedState} for automation ${automation.name || automation._id}`
       );
@@ -428,6 +462,8 @@ class AutomationSchedulerService {
           continue;
         }
 
+        const triggerContext = this.consumePendingTriggerContext(automation._id.toString());
+
         if (this.isAlreadyExecutedForCurrentMinute(automation._id.toString(), automation.trigger.type, now)) {
           continue;
         }
@@ -435,7 +471,8 @@ class AutomationSchedulerService {
         try {
           await automationService.executeAutomation(automation._id.toString(), {
             triggerType: automation.trigger.type,
-            triggerSource: 'scheduler'
+            triggerSource: 'scheduler',
+            context: triggerContext
           });
           console.log(`AutomationSchedulerService: executed automation ${automation.name} (${automation._id})`);
         } catch (error) {
