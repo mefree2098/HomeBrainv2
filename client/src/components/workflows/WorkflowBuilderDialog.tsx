@@ -82,6 +82,23 @@ const ACTION_LABELS: Record<WorkflowAction["type"], string> = {
   http_request: "HTTP request"
 };
 
+function normalizeSolarScheduleEvent(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === "sunrise" || normalized === "sunset" ? normalized : null;
+}
+
+function isSolarScheduleTrigger(conditions: Record<string, unknown>) {
+  return Boolean(normalizeSolarScheduleEvent(conditions.event));
+}
+
+function getScheduleMode(conditions: Record<string, unknown>) {
+  return isSolarScheduleTrigger(conditions) ? "solar" : "cron";
+}
+
 function isTriggeringDeviceTarget(target: WorkflowActionTarget | undefined) {
   if (!target || typeof target !== "object" || Array.isArray(target)) {
     return false;
@@ -225,6 +242,17 @@ function formatDuration(secondsValue: unknown) {
   return `${seconds} sec`;
 }
 
+function formatOffsetMinutes(offsetValue: unknown) {
+  const offset = Math.round(Number(offsetValue) || 0);
+  if (offset === 0) {
+    return "at the event";
+  }
+
+  const absolute = Math.abs(offset);
+  const durationLabel = absolute === 1 ? "1 minute" : `${absolute} minutes`;
+  return offset > 0 ? `${durationLabel} after` : `${durationLabel} before`;
+}
+
 function getDeviceLabel(devices: DeviceLite[], deviceId: string | null | undefined) {
   if (!deviceId) {
     return "No device selected";
@@ -259,6 +287,14 @@ function describeTrigger(
       return days ? `Runs at ${timeLabel} on ${days}.` : `Runs at ${timeLabel}.`;
     }
     case "schedule":
+      if (isSolarScheduleTrigger(triggerConditions)) {
+        const event = normalizeSolarScheduleEvent(triggerConditions.event) || "sunset";
+        const offset = Math.round(Number(triggerConditions.offset) || 0);
+        if (offset === 0) {
+          return `Runs at ${event}.`;
+        }
+        return `Runs ${formatOffsetMinutes(triggerConditions.offset)} ${event}.`;
+      }
       return `Runs on cron schedule "${String(triggerConditions.cron || "")}".`;
     case "device_state": {
       const deviceName = getDeviceLabel(
@@ -440,6 +476,15 @@ export function WorkflowBuilderDialog({
         };
       }));
     }
+  };
+
+  const handleScheduleModeChange = (value: "cron" | "solar") => {
+    if (value === "solar") {
+      setTriggerConditions({ event: "sunset", offset: 0 });
+      return;
+    }
+
+    setTriggerConditions({ cron: "0 7 * * 1-5" });
   };
 
   const handleActionTypeChange = (index: number, nextType: WorkflowAction["type"]) => {
@@ -641,13 +686,80 @@ export function WorkflowBuilderDialog({
                   )}
 
                   {triggerType === "schedule" && (
-                    <div className="space-y-2">
-                      <Label>Cron</Label>
-                      <Input
-                        value={String(triggerConditions.cron || "0 7 * * 1-5")}
-                        onChange={(event) => setTriggerConditions((prev) => ({ ...prev, cron: event.target.value }))}
-                        placeholder="0 7 * * 1-5"
-                      />
+                    <div className="space-y-4">
+                      <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                        <div className="space-y-2">
+                          <Label>Schedule mode</Label>
+                          <Select
+                            value={getScheduleMode(triggerConditions)}
+                            onValueChange={(value) => handleScheduleModeChange(value as "cron" | "solar")}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="cron">Cron schedule</SelectItem>
+                              <SelectItem value="solar">Sunrise / sunset</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {getScheduleMode(triggerConditions) === "cron" ? (
+                          <div className="space-y-2">
+                            <Label>Cron</Label>
+                            <Input
+                              value={String(triggerConditions.cron || "0 7 * * 1-5")}
+                              onChange={(event) => setTriggerConditions({ cron: event.target.value })}
+                              placeholder="0 7 * * 1-5"
+                            />
+                          </div>
+                        ) : (
+                          <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                            <div className="space-y-2">
+                              <Label>Solar event</Label>
+                              <Select
+                                value={normalizeSolarScheduleEvent(triggerConditions.event) || "sunset"}
+                                onValueChange={(value) => setTriggerConditions((prev) => ({
+                                  ...prev,
+                                  event: value,
+                                  offset: Number.isFinite(Number(prev.offset)) ? Math.round(Number(prev.offset)) : 0
+                                }))}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="sunrise">Sunrise</SelectItem>
+                                  <SelectItem value="sunset">Sunset</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>Offset (minutes)</Label>
+                              <Input
+                                type="number"
+                                value={String(Number.isFinite(Number(triggerConditions.offset)) ? Math.round(Number(triggerConditions.offset)) : 0)}
+                                onChange={(event) => setTriggerConditions((prev) => ({
+                                  ...prev,
+                                  event: normalizeSolarScheduleEvent(prev.event) || "sunset",
+                                  offset: Math.round(Number(event.target.value) || 0)
+                                }))}
+                                placeholder="0"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Use a negative number for before the event and a positive number for after it.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {getScheduleMode(triggerConditions) === "solar" && (
+                        <p className="text-xs text-muted-foreground">
+                          Solar schedules use the HomeBrain weather location from Settings to resolve that day&apos;s sunrise and sunset times.
+                        </p>
+                      )}
                     </div>
                   )}
 

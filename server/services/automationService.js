@@ -15,6 +15,7 @@ const MIN_KEYWORD_LENGTH = 3;
 const MAX_AUTOMATIONS_PER_REQUEST = 12;
 const VALID_TRIGGER_TYPES = new Set(['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual', 'security_alarm_status']);
 const VALID_SECURITY_ALARM_STATES = new Set(['disarmed', 'armedStay', 'armedAway', 'triggered', 'arming', 'disarming']);
+const VALID_SOLAR_SCHEDULE_EVENTS = new Set(['sunrise', 'sunset']);
 const DYNAMIC_TARGET_CONTEXT_KEYS = new Set(['triggeringDeviceId']);
 
 const DEVICE_TYPE_HINTS = {
@@ -66,10 +67,47 @@ function normalizeSecurityAlarmState(value) {
   }
 }
 
+function normalizeSolarScheduleEvent(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (VALID_SOLAR_SCHEDULE_EVENTS.has(normalized)) {
+    return normalized;
+  }
+  return null;
+}
+
 function normalizeTriggerConditions(type, conditions) {
   const safeConditions = conditions && typeof conditions === 'object' && !Array.isArray(conditions)
     ? { ...conditions }
     : {};
+
+  if (type === 'schedule') {
+    const event = normalizeSolarScheduleEvent(safeConditions.event || safeConditions.sunEvent);
+    const days = Array.isArray(safeConditions.days)
+      ? safeConditions.days.map((value) => String(value).trim()).filter(Boolean)
+      : undefined;
+
+    if (event) {
+      const normalized = {
+        event,
+        offset: Number.isFinite(Number(safeConditions.offset)) ? Math.round(Number(safeConditions.offset)) : 0
+      };
+      if (days && days.length) {
+        normalized.days = days;
+      }
+      return normalized;
+    }
+
+    const cron = sanitizeString(safeConditions.cron);
+    const normalized = cron ? { cron } : {};
+    if (days && days.length) {
+      normalized.days = days;
+    }
+    return normalized;
+  }
 
   if (type !== 'security_alarm_status') {
     return safeConditions;
@@ -655,12 +693,17 @@ function isLikelyImmediateCommand(text) {
     'schedule',
     'scheduled',
     'scheduling',
+    'sunrise',
+    'sunset',
     'timer',
     'timers',
     'reminder',
     'reminders',
     'every ',
+    'every day',
     'each ',
+    'each day',
+    'daily',
     'per day',
     'per night',
     'weekday',
@@ -1067,6 +1110,30 @@ async function validateAndFixAutomation(automation) {
     }
   }
 
+  if (triggerType === 'schedule') {
+    const scheduleConditions = fixedTrigger.conditions || {};
+    const solarEvent = normalizeSolarScheduleEvent(scheduleConditions.event || scheduleConditions.sunEvent);
+    const cron = sanitizeString(scheduleConditions.cron);
+
+    if (solarEvent) {
+      fixedTrigger.conditions = {
+        ...scheduleConditions,
+        event: solarEvent,
+        offset: Number.isFinite(Number(scheduleConditions.offset))
+          ? Math.round(Number(scheduleConditions.offset))
+          : 0
+      };
+    } else if (cron) {
+      fixedTrigger.conditions = {
+        ...scheduleConditions,
+        cron
+      };
+    } else {
+      issues.push('Schedule triggers require either a cron expression or event "sunrise"/"sunset"');
+      return { valid: false, issues, fixedAutomation: null };
+    }
+  }
+
   // Validate actions
   if (!automation.actions || !Array.isArray(automation.actions) || automation.actions.length === 0) {
     issues.push('Missing or empty actions array');
@@ -1425,7 +1492,7 @@ Please fix these issues and return a corrected JSON object with an "automations"
 - Only use scene IDs or exact scene names from the provided list
 - Ensure all action types are valid for the target device types
 - Use valid action types: device_control, scene_activate, notification, delay, condition
-- When a request applies the same logic to multiple named devices, return one automation object per device
+- When a request applies the same logic to multiple named devices, or to multiple distinct trigger events like sunrise and sunset, return one automation object per independent workflow
 - Use {"kind":"context","key":"triggeringDeviceId"} only when an action should target the same device that caused a device_state trigger
 
 Original request: "${text}"
@@ -1601,7 +1668,7 @@ ${AUTOMATION_JSON_TEMPLATE}
 IMPORTANT RULES:
 1. ALWAYS return at least one action when the user is asking to control something. Simple requests (for example, "turn on the vault light") must become one automation with a manual trigger and one device_control action.
 2. Default the trigger to {"type": "manual", "conditions": {}} when no schedule or condition is provided.
-3. Return one automation object per independently-triggered device when the request names multiple devices, rooms, or "each" device that should behave separately.
+3. Return one automation object per independently-triggered device or distinct trigger event when the request names multiple devices, rooms, or separate times like sunrise and sunset.
 4. Use a fixed device ID in trigger.conditions.deviceId for device_state triggers.
 5. When an action should target the same device that caused a device_state trigger, prefer the dynamic target {"kind":"context","key":"triggeringDeviceId"} instead of copying the device ID into the action target.
 6. ONLY use device IDs from the provided device list and scene IDs from the provided scene list. Never invent IDs or placeholders.
@@ -1613,6 +1680,7 @@ IMPORTANT RULES:
 12. For devices with Source:harmony, only use turn_on, turn_off, or toggle. Do not use set_brightness, set_color, set_temperature, lock/unlock, or open/close on Harmony Hub activity devices.
 13. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
 14. When the request refers to the security system or alarm arming/disarming state, use trigger type "security_alarm_status" with conditions like {"states":["armedStay","armedAway"]}.
+15. When the request refers to sunrise or sunset, use trigger type "schedule" with conditions like {"event":"sunrise","offset":0} or {"event":"sunset","offset":0}. Offsets are in minutes and may be negative or positive.
 
 AVAILABLE DEVICES:
 ${deviceList}
@@ -1632,7 +1700,7 @@ REQUIRED JSON STRUCTURE:
         "type": "<trigger_type>",  // choose one: time, device_state, sensor, schedule, manual, security_alarm_status
         "conditions": {
           // For time: {"hour": 7, "minute": 0, "days": ["monday", "tuesday", ...]}
-          // For schedule: {"cron": "0 7 * * 1-5"}
+          // For schedule: {"cron": "0 7 * * 1-5"} or {"event": "sunrise", "offset": 0}
           // For device_state: {"deviceId": "ID", "state": "on" or "off", "property": "status", "operator": "eq", "value": true}
           // For sensor: {"sensorType": "<sensor_type>", "deviceId": "ID", "condition": "<condition>", "value": 25}
           // For security_alarm_status: {"states": ["armedStay", "armedAway"]}
@@ -1675,6 +1743,8 @@ TRIGGER TYPE EXAMPLES:
 - "when temperature above 75" -> type: "sensor", conditions: {"sensorType": "temperature", "condition": "above", "value": 75}
 - "when front door unlocked" -> type: "device_state", conditions: {"state": "off"}
 - "when the security alarm is armed stay or armed away" -> type: "security_alarm_status", conditions: {"states": ["armedStay", "armedAway"]}
+- "at sunset" -> type: "schedule", conditions: {"event": "sunset", "offset": 0}
+- "30 minutes before sunrise" -> type: "schedule", conditions: {"event": "sunrise", "offset": -30}
 - "when a fan switch turns on, wait 30 minutes, then turn that same switch off" -> use type: "device_state", a delay action with {"seconds": 1800}, and a device_control action targeting {"kind":"context","key":"triggeringDeviceId"}
 - "manual trigger" -> type: "manual", conditions: {}
 

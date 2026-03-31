@@ -2,6 +2,7 @@ const Automation = require('../models/Automation');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationService = require('./automationService');
+const weatherService = require('./weatherService');
 
 const WEEKDAY_TO_NUMBER = {
   sunday: 0,
@@ -22,6 +23,110 @@ const WEEKDAY_TO_NUMBER = {
 
 function normalizeMinuteKey(date) {
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
+}
+
+function normalizeSolarEvent(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'sunrise') {
+    return 'sunrise';
+  }
+  if (normalized === 'sunset') {
+    return 'sunset';
+  }
+  return null;
+}
+
+function parseLocalDateTimeString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4]),
+    minute: Number(match[5]),
+    second: Number(match[6] || 0)
+  };
+}
+
+function extractDatePartsForTimeZone(date, timeZone) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    weekday: 'short',
+    hourCycle: 'h23'
+  });
+
+  const collected = {};
+  formatter.formatToParts(date).forEach((part) => {
+    if (part.type !== 'literal') {
+      collected[part.type] = part.value;
+    }
+  });
+
+  return {
+    year: Number(collected.year),
+    month: Number(collected.month),
+    day: Number(collected.day),
+    hour: Number(collected.hour),
+    minute: Number(collected.minute),
+    second: Number(collected.second),
+    weekday: normalizeDays([collected.weekday])?.values()?.next()?.value ?? null
+  };
+}
+
+function buildDateFromTimeZoneParts(parts, timeZone) {
+  let candidate = new Date(Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second || 0
+  ));
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const actual = extractDatePartsForTimeZone(candidate, timeZone);
+    const desiredUtc = Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second || 0
+    );
+    const actualUtc = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second || 0
+    );
+    const diffMs = desiredUtc - actualUtc;
+    if (diffMs === 0) {
+      return candidate;
+    }
+    candidate = new Date(candidate.getTime() + diffMs);
+  }
+
+  return candidate;
 }
 
 function parseTimeCondition(conditions = {}) {
@@ -144,6 +249,12 @@ class AutomationSchedulerService {
     this.recentRuns = new Map();
     this.triggerStateCache = new Map();
     this.pendingTriggerContexts = new Map();
+    this.solarContextCache = {
+      key: null,
+      value: null,
+      promise: null
+    };
+    this.lastSolarWarningAt = 0;
   }
 
   start() {
@@ -240,6 +351,101 @@ class AutomationSchedulerService {
       return false;
     }
     return matchesCronExpression(cronExpr, now);
+  }
+
+  warnSolarTriggerIssue(message) {
+    const now = Date.now();
+    if ((now - this.lastSolarWarningAt) < 5 * 60 * 1000) {
+      return;
+    }
+
+    this.lastSolarWarningAt = now;
+    console.warn(`AutomationSchedulerService: ${message}`);
+  }
+
+  async getSolarContext(now) {
+    const cacheKey = normalizeMinuteKey(now);
+    if (this.solarContextCache.key === cacheKey) {
+      if (this.solarContextCache.promise) {
+        return this.solarContextCache.promise;
+      }
+      return this.solarContextCache.value;
+    }
+
+    const promise = weatherService.fetchDashboardWeather().catch((error) => {
+      this.warnSolarTriggerIssue(`Unable to load weather data for sunrise/sunset triggers: ${error.message}`);
+      return null;
+    });
+
+    this.solarContextCache = {
+      key: cacheKey,
+      value: null,
+      promise
+    };
+
+    const value = await promise;
+    this.solarContextCache = {
+      key: cacheKey,
+      value,
+      promise: null
+    };
+    return value;
+  }
+
+  async evaluateSolarScheduleTrigger(automation, now) {
+    const conditions = automation?.trigger?.conditions || {};
+    const event = normalizeSolarEvent(conditions.event || conditions.sunEvent);
+    if (!event) {
+      return false;
+    }
+
+    const weather = await this.getSolarContext(now);
+    if (!weather?.today?.[event]) {
+      this.warnSolarTriggerIssue(`No ${event} time is available for schedule trigger evaluation.`);
+      return false;
+    }
+
+    const timeZone = typeof weather.location?.timezone === 'string' && weather.location.timezone.trim()
+      ? weather.location.timezone.trim()
+      : Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const solarParts = parseLocalDateTimeString(weather.today[event]);
+    if (!solarParts) {
+      this.warnSolarTriggerIssue(`Could not parse ${event} time "${weather.today[event]}" for solar schedule triggers.`);
+      return false;
+    }
+
+    const offsetMinutes = Number.isFinite(Number(conditions.offset))
+      ? Math.round(Number(conditions.offset))
+      : 0;
+    const solarDate = buildDateFromTimeZoneParts(solarParts, timeZone);
+    const targetDate = new Date(solarDate.getTime() + (offsetMinutes * 60 * 1000));
+    const targetParts = extractDatePartsForTimeZone(targetDate, timeZone);
+    const nowParts = extractDatePartsForTimeZone(now, timeZone);
+
+    if (
+      targetParts.year !== nowParts.year
+      || targetParts.month !== nowParts.month
+      || targetParts.day !== nowParts.day
+      || targetParts.hour !== nowParts.hour
+      || targetParts.minute !== nowParts.minute
+    ) {
+      return false;
+    }
+
+    const daySet = normalizeDays(conditions.days);
+    if (daySet && nowParts.weekday !== null && !daySet.has(nowParts.weekday)) {
+      return false;
+    }
+
+    this.setPendingTriggerContext(automation._id.toString(), {
+      triggeringScheduleEvent: event,
+      triggeringScheduleTime: targetDate.toISOString(),
+      triggeringScheduleOffsetMinutes: offsetMinutes
+    });
+    console.log(
+      `AutomationSchedulerService: solar schedule matched ${event}${offsetMinutes ? ` (${offsetMinutes >= 0 ? '+' : ''}${offsetMinutes}m)` : ''} for automation ${automation.name || automation._id}`
+    );
+    return true;
   }
 
   normalizeDeviceValue(value) {
@@ -431,6 +637,9 @@ class AutomationSchedulerService {
       return this.shouldRunTimeTrigger(automation, now);
     }
     if (triggerType === 'schedule') {
+      if (normalizeSolarEvent(automation?.trigger?.conditions?.event || automation?.trigger?.conditions?.sunEvent)) {
+        return this.evaluateSolarScheduleTrigger(automation, now);
+      }
       return this.shouldRunScheduleTrigger(automation, now);
     }
     if (triggerType === 'device_state' || triggerType === 'sensor') {
