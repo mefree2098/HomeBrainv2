@@ -1162,6 +1162,7 @@ export function Dashboard() {
                 key={widget.id}
                 className={cn(
                   "rounded-[1.8rem] border border-white/15 bg-white/10 shadow-lg shadow-black/5 backdrop-blur-xl dark:bg-slate-950/20",
+                  (widget.type === "security" || widget.type === "weather") && "self-start",
                   WIDGET_SPAN_CLASSES[widget.size]
                 )}
               >
