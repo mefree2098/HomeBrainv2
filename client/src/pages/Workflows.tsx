@@ -212,6 +212,149 @@ const activitySummary = (event: PlatformEvent) => {
   }
 };
 
+const stringifyClipboardValue = (value: unknown) => {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const sortEventsChronologically = (events: PlatformEvent[]) => {
+  return events.slice().sort((left, right) => {
+    const leftSequence = Number(left.sequence) || 0;
+    const rightSequence = Number(right.sequence) || 0;
+    if (leftSequence !== rightSequence) {
+      return leftSequence - rightSequence;
+    }
+
+    const leftTime = new Date(left.createdAt).getTime();
+    const rightTime = new Date(right.createdAt).getTime();
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
+      return leftTime - rightTime;
+    }
+
+    return 0;
+  });
+};
+
+const buildExecutionLogClipboardText = ({
+  execution,
+  executionName,
+  events
+}: {
+  execution: WorkflowExecutionHistoryEntry;
+  executionName: string;
+  events: PlatformEvent[];
+}) => {
+  const lines: string[] = [
+    "HomeBrain Automation Runtime Logs",
+    `Copied: ${new Date().toLocaleString()}`,
+    "",
+    "Execution Summary",
+    `Workflow: ${executionName}`,
+    `Automation: ${execution.automationName || "Unknown"}`,
+    `Execution ID: ${execution._id}`,
+    `Status: ${runtimeStatusLabel(execution.status)}`,
+    `Trigger Type: ${execution.triggerType.replace(/_/g, " ")}`,
+    `Trigger Source: ${execution.triggerSource.replace(/_/g, " ")}`,
+    `Started: ${formatDateTime(execution.startedAt)}`,
+    `Completed: ${formatDateTime(execution.completedAt)}`,
+    `Duration: ${execution.status === "running" ? formatRunningSince(execution.startedAt) : formatDuration(execution.durationMs)}`,
+    `Successful Actions: ${execution.successfulActions || 0}`,
+    `Failed Actions: ${execution.failedActions || 0}`,
+    `Total Actions: ${execution.totalActions || 0}`
+  ];
+
+  if (execution.workflowId) {
+    lines.push(`Workflow ID: ${execution.workflowId}`);
+  }
+  if (execution.correlationId) {
+    lines.push(`Correlation ID: ${execution.correlationId}`);
+  }
+  if (execution.lastEvent?.message) {
+    lines.push(`Last Event: ${execution.lastEvent.message}`);
+  }
+
+  if (execution.currentAction) {
+    lines.push("", "Current Action", stringifyClipboardValue(execution.currentAction));
+  }
+
+  if (execution.triggerContext && Object.keys(execution.triggerContext).length > 0) {
+    lines.push("", "Trigger Context", stringifyClipboardValue(execution.triggerContext));
+  }
+
+  if (execution.error) {
+    lines.push("", "Execution Error", stringifyClipboardValue(execution.error));
+  }
+
+  if (Array.isArray(execution.actionResults) && execution.actionResults.length > 0) {
+    lines.push("", "Action Results", stringifyClipboardValue(execution.actionResults));
+  }
+
+  if (Array.isArray(execution.runtimeEvents) && execution.runtimeEvents.length > 0) {
+    lines.push("", "Persisted Runtime Event Summaries", stringifyClipboardValue(execution.runtimeEvents));
+  }
+
+  const sortedEvents = sortEventsChronologically(events);
+  lines.push("", `Event Stream Logs (${sortedEvents.length})`);
+  if (sortedEvents.length === 0) {
+    lines.push("No detailed runtime events were recorded for this execution.");
+  } else {
+    sortedEvents.forEach((event, index) => {
+      lines.push(
+        "",
+        `#${index + 1} ${event.type}`,
+        `Created: ${formatDateTime(event.createdAt)}`,
+        `Severity: ${event.severity}`,
+        `Source: ${event.source}`,
+        `Category: ${event.category}`,
+        `Sequence: ${event.sequence}`,
+        `Correlation ID: ${event.correlationId || "None"}`,
+        `Tags: ${Array.isArray(event.tags) && event.tags.length > 0 ? event.tags.join(", ") : "None"}`,
+        `Summary: ${activitySummary(event)}`,
+        "Payload:",
+        stringifyClipboardValue(event.payload || {})
+      );
+    });
+  }
+
+  lines.push("", "Raw Execution Record JSON", stringifyClipboardValue(execution));
+
+  return `${lines.join("\n")}\n`;
+};
+
+const copyTextToClipboard = async (value: string) => {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard access is unavailable in this environment.");
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.setAttribute("readonly", "true");
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textArea);
+
+  if (!copied) {
+    throw new Error("Unable to copy logs to the clipboard.");
+  }
+};
+
 type WorkflowTemplateDefinition = {
   id: string;
   name: string;
@@ -465,6 +608,31 @@ export function Workflows() {
       setLoadingExecutionEvents(false);
     }
   }, [toast]);
+
+  const handleCopyExecutionLogs = useCallback(async () => {
+    if (!selectedExecution) {
+      return;
+    }
+
+    try {
+      const clipboardText = buildExecutionLogClipboardText({
+        execution: selectedExecution,
+        executionName: resolveExecutionName(selectedExecution),
+        events: selectedExecutionEvents
+      });
+      await copyTextToClipboard(clipboardText);
+      toast({
+        title: "Logs copied",
+        description: "Execution logs are ready to paste."
+      });
+    } catch (error) {
+      toast({
+        title: "Copy failed",
+        description: errorMessage(error, "Unable to copy execution logs."),
+        variant: "destructive"
+      });
+    }
+  }, [resolveExecutionName, selectedExecution, selectedExecutionEvents, toast]);
 
   const handleAutomationEvent = useCallback((event: PlatformEvent) => {
     latestActivitySequenceRef.current = Math.max(latestActivitySequenceRef.current, Number(event.sequence) || 0);
@@ -1341,14 +1509,28 @@ export function Workflows() {
       }}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
-            <DialogTitle>
-              {selectedExecution ? resolveExecutionName(selectedExecution) : "Execution Logs"}
-            </DialogTitle>
-            <DialogDescription>
-              {selectedExecution
-                ? `Started ${formatDateTime(selectedExecution.startedAt)} from ${selectedExecution.triggerType.replace(/_/g, " ")}.`
-                : "Detailed runtime logs for the selected workflow execution."}
-            </DialogDescription>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1.5">
+                <DialogTitle>
+                  {selectedExecution ? resolveExecutionName(selectedExecution) : "Execution Logs"}
+                </DialogTitle>
+                <DialogDescription>
+                  {selectedExecution
+                    ? `Started ${formatDateTime(selectedExecution.startedAt)} from ${selectedExecution.triggerType.replace(/_/g, " ")}.`
+                    : "Detailed runtime logs for the selected workflow execution."}
+                </DialogDescription>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleCopyExecutionLogs()}
+                disabled={!selectedExecution || loadingExecutionEvents}
+              >
+                <Copy className="mr-2 h-4 w-4" />
+                Copy Logs
+              </Button>
+            </div>
           </DialogHeader>
 
           {selectedExecution ? (
