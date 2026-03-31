@@ -11,9 +11,24 @@ const DEFAULT_CAPABILITY_SUBSCRIPTIONS = [
   { capability: 'lock', attribute: 'lock' },
   { capability: 'temperatureMeasurement', attribute: 'temperature' },
   { capability: 'thermostatOperatingState', attribute: 'thermostatOperatingState' },
+  { capability: 'thermostatMode', attribute: 'thermostatMode' },
   { capability: 'contactSensor', attribute: 'contact' },
   { capability: 'motionSensor', attribute: 'motion' },
-  { capability: 'presenceSensor', attribute: 'presence' }
+  { capability: 'presenceSensor', attribute: 'presence' },
+  { capability: 'powerMeter', attribute: 'power' },
+  { capability: 'energyMeter', attribute: 'energy' },
+  { capability: 'powerConsumptionReport', attribute: 'powerConsumption' },
+  { capability: 'dryerOperatingState', attribute: 'machineState' },
+  { capability: 'washerOperatingState', attribute: 'machineState' },
+  { capability: 'waterSensor', attribute: 'water' },
+  { capability: 'humidityMeasurement', attribute: 'humidity' },
+  { capability: 'battery', attribute: 'battery' },
+  { capability: 'smokeDetector', attribute: 'smoke' },
+  { capability: 'carbonMonoxideDetector', attribute: 'carbonMonoxide' },
+  { capability: 'tamperAlert', attribute: 'tamper' },
+  { capability: 'accelerationSensor', attribute: 'acceleration' },
+  { capability: 'alarm', attribute: 'alarm' },
+  { capability: 'valve', attribute: 'valve' }
 ];
 
 class SmartThingsService {
@@ -89,6 +104,124 @@ class SmartThingsService {
 
   getDefaultCapabilitySubscriptions() {
     return DEFAULT_CAPABILITY_SUBSCRIPTIONS.map(subscription => ({ ...subscription }));
+  }
+
+  cloneSmartThingsValue(value) {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    if (value === null) {
+      return null;
+    }
+
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  setNestedSmartThingsValue(target, path, value) {
+    if (!target || typeof target !== 'object' || !Array.isArray(path) || path.length === 0) {
+      return;
+    }
+
+    let current = target;
+    for (let index = 0; index < path.length - 1; index += 1) {
+      const key = path[index];
+      if (!current[key] || typeof current[key] !== 'object' || Array.isArray(current[key])) {
+        current[key] = {};
+      }
+      current = current[key];
+    }
+
+    current[path[path.length - 1]] = value;
+  }
+
+  buildSmartThingsAttributeSnapshots(statusPayload) {
+    const sourceStatus = statusPayload && typeof statusPayload === 'object'
+      ? statusPayload
+      : {};
+    const statusComponents = sourceStatus?.components && typeof sourceStatus.components === 'object'
+      ? sourceStatus.components
+      : (sourceStatus?.main && typeof sourceStatus.main === 'object'
+        ? { main: sourceStatus.main }
+        : {});
+
+    const values = { byComponent: {} };
+    const metadata = { byComponent: {} };
+
+    Object.entries(statusComponents).forEach(([componentId, capabilityMap]) => {
+      if (!capabilityMap || typeof capabilityMap !== 'object') {
+        return;
+      }
+
+      if (!values.byComponent[componentId]) {
+        values.byComponent[componentId] = {};
+      }
+      if (!metadata.byComponent[componentId]) {
+        metadata.byComponent[componentId] = {};
+      }
+
+      Object.entries(capabilityMap).forEach(([capabilityId, capabilityState]) => {
+        if (!capabilityState || typeof capabilityState !== 'object') {
+          return;
+        }
+
+        const keys = Object.keys(capabilityState);
+        const hasNamedAttributes = keys.some((key) => key !== 'value');
+
+        keys.forEach((attributeId) => {
+          if (attributeId === 'value' && hasNamedAttributes) {
+            return;
+          }
+
+          const attributeState = capabilityState[attributeId];
+          const hasWrappedValue = attributeState && typeof attributeState === 'object' && Object.prototype.hasOwnProperty.call(attributeState, 'value');
+          const rawValue = hasWrappedValue ? attributeState.value : attributeState;
+          const detail = {
+            value: this.cloneSmartThingsValue(rawValue),
+            unit: hasWrappedValue ? (attributeState.unit ?? null) : null,
+            data: hasWrappedValue ? this.cloneSmartThingsValue(attributeState.data ?? null) : null,
+            timestamp: hasWrappedValue && attributeState.timestamp ? attributeState.timestamp : null,
+            componentId,
+            capability: capabilityId,
+            attribute: attributeId
+          };
+
+          this.setNestedSmartThingsValue(
+            values.byComponent[componentId],
+            [capabilityId, attributeId],
+            detail.value
+          );
+          this.setNestedSmartThingsValue(
+            metadata.byComponent[componentId],
+            [capabilityId, attributeId],
+            detail
+          );
+
+          if (componentId === 'main') {
+            this.setNestedSmartThingsValue(values, [capabilityId, attributeId], detail.value);
+            this.setNestedSmartThingsValue(metadata, [capabilityId, attributeId], detail);
+          }
+        });
+      });
+    });
+
+    return {
+      values,
+      metadata
+    };
+  }
+
+  collectSmartThingsComponentMetadata(device) {
+    if (!Array.isArray(device?.components)) {
+      return [];
+    }
+
+    return device.components.map((component) => ({
+      id: component?.id || 'main',
+      label: component?.label || component?.name || '',
+      categories: this.cloneSmartThingsValue(component?.categories || []),
+      capabilities: this.cloneSmartThingsValue(component?.capabilities || [])
+    }));
   }
 
   buildSubscriptionPayload(locationId, descriptor = {}) {
@@ -1047,6 +1180,8 @@ class SmartThingsService {
     const capabilities = this.collectSmartThingsCapabilities(apiDevice);
     const categories = this.collectSmartThingsCategories(apiDevice);
     const statusRoot = this.extractStatusRoot(apiDevice);
+    const attributeSnapshots = this.buildSmartThingsAttributeSnapshots(apiDevice?.status || {});
+    const componentMetadata = this.collectSmartThingsComponentMetadata(apiDevice);
     const mappedType = this.mapSmartThingsType(capabilities, apiDevice);
     const detectedType = mappedType || existingDevice.type;
     if (!detectedType) {
@@ -1099,6 +1234,27 @@ class SmartThingsService {
     const batteryLevel = this.mapSmartThingsBattery(statusRoot);
     if ((existingDevice?.properties?.smartThingsBatteryLevel ?? null) !== batteryLevel) {
       updates['properties.smartThingsBatteryLevel'] = batteryLevel;
+      changed = true;
+    }
+
+    if (JSON.stringify(existingDevice?.properties?.smartThingsAttributeValues || {}) !== JSON.stringify(attributeSnapshots.values)) {
+      updates['properties.smartThingsAttributeValues'] = attributeSnapshots.values;
+      changed = true;
+    }
+
+    if (JSON.stringify(existingDevice?.properties?.smartThingsAttributeMetadata || {}) !== JSON.stringify(attributeSnapshots.metadata)) {
+      updates['properties.smartThingsAttributeMetadata'] = attributeSnapshots.metadata;
+      changed = true;
+    }
+
+    const rawStatusPayload = this.cloneSmartThingsValue(apiDevice?.status || {});
+    if (JSON.stringify(existingDevice?.properties?.smartThingsStatus || {}) !== JSON.stringify(rawStatusPayload || {})) {
+      updates['properties.smartThingsStatus'] = rawStatusPayload;
+      changed = true;
+    }
+
+    if (JSON.stringify(existingDevice?.properties?.smartThingsComponents || []) !== JSON.stringify(componentMetadata)) {
+      updates['properties.smartThingsComponents'] = componentMetadata;
       changed = true;
     }
 
@@ -1166,6 +1322,52 @@ class SmartThingsService {
       changed = true;
     }
 
+    const componentIds = Array.isArray(apiDevice?.components)
+      ? apiDevice.components
+        .map((component) => component?.id)
+        .filter((componentId) => typeof componentId === 'string' && componentId.trim().length > 0)
+      : [];
+    if (JSON.stringify(existingDevice?.properties?.componentIds || []) !== JSON.stringify(componentIds)) {
+      updates['properties.componentIds'] = componentIds;
+      changed = true;
+    }
+
+    const smartThingsDeviceName = apiDevice?.name || null;
+    if ((existingDevice?.properties?.smartThingsDeviceName || null) !== smartThingsDeviceName) {
+      updates['properties.smartThingsDeviceName'] = smartThingsDeviceName;
+      changed = true;
+    }
+
+    const smartThingsLabel = apiDevice?.label || null;
+    if ((existingDevice?.properties?.smartThingsLabel || null) !== smartThingsLabel) {
+      updates['properties.smartThingsLabel'] = smartThingsLabel;
+      changed = true;
+    }
+
+    const locationId = apiDevice?.locationId || null;
+    if ((existingDevice?.properties?.smartThingsLocationId || null) !== locationId) {
+      updates['properties.smartThingsLocationId'] = locationId;
+      changed = true;
+    }
+
+    const roomId = apiDevice?.roomId || null;
+    if ((existingDevice?.properties?.smartThingsRoomId || null) !== roomId) {
+      updates['properties.smartThingsRoomId'] = roomId;
+      changed = true;
+    }
+
+    const presentationId = apiDevice?.presentationId || null;
+    if ((existingDevice?.properties?.smartThingsPresentationId || null) !== presentationId) {
+      updates['properties.smartThingsPresentationId'] = presentationId;
+      changed = true;
+    }
+
+    const deviceTypeName = apiDevice?.deviceTypeName || null;
+    if ((existingDevice?.properties?.smartThingsDeviceTypeName || null) !== deviceTypeName) {
+      updates['properties.smartThingsDeviceTypeName'] = deviceTypeName;
+      changed = true;
+    }
+
     const manufacturer = apiDevice?.manufacturerName || apiDevice?.manufacturer || null;
     if ((existingDevice?.properties?.smartThingsManufacturer || null) !== manufacturer) {
       updates['properties.smartThingsManufacturer'] = manufacturer;
@@ -1181,6 +1383,18 @@ class SmartThingsService {
     const preferredName = (apiDevice.label || apiDevice.name || '').trim();
     if (preferredName && preferredName !== existingDevice.name) {
       updates.name = preferredName;
+      changed = true;
+    }
+
+    const brand = apiDevice?.manufacturerName || apiDevice?.manufacturer || 'SmartThings';
+    if ((existingDevice?.brand || '') !== brand) {
+      updates.brand = brand;
+      changed = true;
+    }
+
+    const model = apiDevice?.deviceTypeName || apiDevice?.presentationId || existingDevice?.model || 'SmartThings Device';
+    if ((existingDevice?.model || '') !== model) {
+      updates.model = model;
       changed = true;
     }
 
@@ -1401,6 +1615,60 @@ class SmartThingsService {
         ['motionSensor']
       );
       return typeof state === 'string' ? state.toLowerCase() === 'active' : !!state;
+    }
+
+    if (capabilities.has('presenceSensor')) {
+      const state = valueFor(
+        ['presenceSensor', 'presence', 'value'],
+        ['presenceSensor', 'presence'],
+        ['presenceSensor']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'present' : !!state;
+    }
+
+    if (capabilities.has('waterSensor')) {
+      const state = valueFor(
+        ['waterSensor', 'water', 'value'],
+        ['waterSensor', 'water'],
+        ['waterSensor']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'wet' : !!state;
+    }
+
+    if (capabilities.has('smokeDetector')) {
+      const state = valueFor(
+        ['smokeDetector', 'smoke', 'value'],
+        ['smokeDetector', 'smoke'],
+        ['smokeDetector']
+      );
+      return typeof state === 'string' ? !['clear', 'tested'].includes(state.toLowerCase()) : !!state;
+    }
+
+    if (capabilities.has('carbonMonoxideDetector')) {
+      const state = valueFor(
+        ['carbonMonoxideDetector', 'carbonMonoxide', 'value'],
+        ['carbonMonoxideDetector', 'carbonMonoxide'],
+        ['carbonMonoxideDetector']
+      );
+      return typeof state === 'string' ? !['clear', 'tested'].includes(state.toLowerCase()) : !!state;
+    }
+
+    if (capabilities.has('valve')) {
+      const state = valueFor(
+        ['valve', 'valve', 'value'],
+        ['valve', 'valve'],
+        ['valve']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'open' : !!state;
+    }
+
+    if (capabilities.has('alarm')) {
+      const state = valueFor(
+        ['alarm', 'alarm', 'value'],
+        ['alarm', 'alarm'],
+        ['alarm']
+      );
+      return typeof state === 'string' ? state.toLowerCase() !== 'off' : !!state;
     }
 
     if (type === 'thermostat') {

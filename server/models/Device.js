@@ -9,7 +9,7 @@ const schema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['light', 'lock', 'thermostat', 'garage', 'sensor', 'switch', 'camera'],
+    enum: ['light', 'lock', 'thermostat', 'garage', 'sensor', 'switch', 'camera', 'speaker'],
   },
   room: {
     type: String,

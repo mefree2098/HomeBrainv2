@@ -259,6 +259,55 @@ test('device_control action can target the triggering device from execution cont
   assert.match(result.actionResults[0].message, /Laundry Room Fan/);
 });
 
+test('condition expressions can read nested SmartThings property paths', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Dryer Monitor',
+      type: 'switch',
+      status: true,
+      properties: {
+        source: 'smartthings',
+        smartThingsAttributeValues: {
+          powerMeter: {
+            power: 812
+          }
+        }
+      }
+    })
+  });
+
+  const result = await executeActionSequence([
+    {
+      type: 'condition',
+      parameters: {
+        expression: {
+          kind: 'device_state',
+          deviceId,
+          property: 'smartThingsAttributeValues.powerMeter.power',
+          operator: 'gt',
+          value: 100
+        }
+      }
+    },
+    {
+      type: 'notification',
+      parameters: { message: 'dryer is running' }
+    }
+  ], { context: {} });
+
+  assert.equal(result.actionResults.length, 2);
+  assert.equal(result.actionResults[0].message, 'Condition met');
+  assert.equal(result.actionResults[1].message, 'dryer is running');
+});
+
 test('delay action preserves durations longer than ten minutes', async (t) => {
   const originalSetTimeout = global.setTimeout;
 

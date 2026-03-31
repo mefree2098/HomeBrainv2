@@ -143,3 +143,107 @@ test('silenceAlarmDevice falls back to switch off when alarm off is unsupported'
     via: 'switch.off'
   });
 });
+
+test('buildSmartThingsDeviceUpdate preserves generic SmartThings attribute snapshots for workflow triggers', async () => {
+  const originalGetRoomName = smartThingsService.getRoomName;
+  smartThingsService.getRoomName = async () => 'Laundry';
+
+  try {
+  const updates = await smartThingsService.buildSmartThingsDeviceUpdate(
+    {
+      name: 'Dryer Monitor',
+      type: 'switch',
+      room: 'Laundry',
+      status: false,
+      brightness: 0,
+      temperature: undefined,
+      targetTemperature: undefined,
+      isOnline: false,
+      lastSeen: new Date('2026-03-31T00:00:00.000Z'),
+      brand: '',
+      model: '',
+      properties: {
+        smartThingsCapabilities: ['switch'],
+        smartThingsCategories: ['switch']
+      }
+    },
+    {
+      deviceId: 'st-device-1',
+      name: 'Dryer Monitor',
+      label: 'Dryer Monitor',
+      locationId: 'location-1',
+      roomId: 'room-1',
+      manufacturerName: 'Aeotec',
+      deviceTypeName: 'Outlet',
+      presentationId: 'presentation-1',
+      components: [
+        {
+          id: 'main',
+          capabilities: [{ id: 'switch' }, { id: 'powerMeter' }, { id: 'energyMeter' }],
+          categories: [{ name: 'switch' }]
+        }
+      ],
+      healthState: {
+        state: 'ONLINE',
+        lastUpdatedDate: '2026-03-31T10:15:00.000Z'
+      },
+      status: {
+        components: {
+          main: {
+            switch: {
+              switch: {
+                value: 'on'
+              }
+            },
+            powerMeter: {
+              power: {
+                value: 812,
+                unit: 'W'
+              }
+            },
+            energyMeter: {
+              energy: {
+                value: 4.6,
+                unit: 'kWh'
+              }
+            }
+          }
+        }
+      }
+    }
+  );
+
+  assert.equal(updates.status, true);
+  assert.equal(updates.isOnline, true);
+  assert.deepEqual(updates['properties.smartThingsAttributeValues'], {
+    byComponent: {
+      main: {
+        switch: {
+          switch: 'on'
+        },
+        powerMeter: {
+          power: 812
+        },
+        energyMeter: {
+          energy: 4.6
+        }
+      }
+    },
+    switch: {
+      switch: 'on'
+    },
+    powerMeter: {
+      power: 812
+    },
+    energyMeter: {
+      energy: 4.6
+    }
+  });
+  assert.equal(updates['properties.smartThingsAttributeMetadata'].powerMeter.power.unit, 'W');
+  assert.equal(updates['properties.smartThingsAttributeMetadata'].energyMeter.energy.unit, 'kWh');
+  assert.equal(updates['properties.smartThingsStatus'].components.main.powerMeter.power.value, 812);
+  assert.equal(updates['properties.smartThingsComponents'][0].capabilities.length, 3);
+  } finally {
+    smartThingsService.getRoomName = originalGetRoomName;
+  }
+});

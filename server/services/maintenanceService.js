@@ -423,6 +423,8 @@ class MaintenanceService {
     }
 
     const statusRoot = this.extractStatusRoot(device);
+    const attributeSnapshots = smartThingsService.buildSmartThingsAttributeSnapshots(device?.status || {});
+    const componentMetadata = smartThingsService.collectSmartThingsComponentMetadata(device);
 
     const isOnline = (device.healthState?.state || '').toUpperCase() === 'ONLINE';
     const status = this.mapSmartThingsStatus(type, capabilities, statusRoot, isOnline);
@@ -460,6 +462,10 @@ class MaintenanceService {
         smartThingsCapabilities: Array.from(capabilities),
         smartThingsCategories: Array.from(categories),
         smartThingsHealthState: device.healthState || null,
+        smartThingsStatus: smartThingsService.cloneSmartThingsValue(device?.status || {}),
+        smartThingsAttributeValues: attributeSnapshots.values,
+        smartThingsAttributeMetadata: attributeSnapshots.metadata,
+        smartThingsComponents: componentMetadata,
         smartThingsPresentationId: device.presentationId || null,
         smartThingsDeviceTypeName: device.deviceTypeName || null,
         smartThingsManufacturer: device.manufacturerName || device.manufacturer || null,
@@ -575,6 +581,10 @@ class MaintenanceService {
       return 'sensor';
     }
 
+    if (capabilities.has('audioVolume') || categories.has('audio') || categories.has('speaker')) {
+      return 'speaker';
+    }
+
     if (categories.has('camera')) {
       return 'camera';
     }
@@ -681,6 +691,60 @@ class MaintenanceService {
         ['motionSensor']
       );
       return typeof state === 'string' ? state.toLowerCase() === 'active' : !!state;
+    }
+
+    if (capabilities.has('presenceSensor')) {
+      const state = valueFor(
+        ['presenceSensor', 'presence', 'value'],
+        ['presenceSensor', 'presence'],
+        ['presenceSensor']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'present' : !!state;
+    }
+
+    if (capabilities.has('waterSensor')) {
+      const state = valueFor(
+        ['waterSensor', 'water', 'value'],
+        ['waterSensor', 'water'],
+        ['waterSensor']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'wet' : !!state;
+    }
+
+    if (capabilities.has('smokeDetector')) {
+      const state = valueFor(
+        ['smokeDetector', 'smoke', 'value'],
+        ['smokeDetector', 'smoke'],
+        ['smokeDetector']
+      );
+      return typeof state === 'string' ? !['clear', 'tested'].includes(state.toLowerCase()) : !!state;
+    }
+
+    if (capabilities.has('carbonMonoxideDetector')) {
+      const state = valueFor(
+        ['carbonMonoxideDetector', 'carbonMonoxide', 'value'],
+        ['carbonMonoxideDetector', 'carbonMonoxide'],
+        ['carbonMonoxideDetector']
+      );
+      return typeof state === 'string' ? !['clear', 'tested'].includes(state.toLowerCase()) : !!state;
+    }
+
+    if (capabilities.has('valve')) {
+      const state = valueFor(
+        ['valve', 'valve', 'value'],
+        ['valve', 'valve'],
+        ['valve']
+      );
+      return typeof state === 'string' ? state.toLowerCase() === 'open' : !!state;
+    }
+
+    if (capabilities.has('alarm')) {
+      const state = valueFor(
+        ['alarm', 'alarm', 'value'],
+        ['alarm', 'alarm'],
+        ['alarm']
+      );
+      return typeof state === 'string' ? state.toLowerCase() !== 'off' : !!state;
     }
 
     if (type === 'thermostat') {
