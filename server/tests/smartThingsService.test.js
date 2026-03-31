@@ -50,6 +50,53 @@ test('setSecurityArmState allows disarm with only the disarm switch configured',
   assert.equal(result.triggeredDeviceId, 'disarm-switch-1');
 });
 
+test('dismissSthmAlert triggers the configured dismiss switch', async (t) => {
+  const originalGetSthmVirtualSwitchConfig = smartThingsService.getSthmVirtualSwitchConfig;
+  const originalPulseVirtualSwitch = smartThingsService.pulseVirtualSwitch;
+  const originalUpdateSthmCommandLog = smartThingsService.updateSthmCommandLog;
+
+  t.after(() => {
+    smartThingsService.getSthmVirtualSwitchConfig = originalGetSthmVirtualSwitchConfig;
+    smartThingsService.pulseVirtualSwitch = originalPulseVirtualSwitch;
+    smartThingsService.updateSthmCommandLog = originalUpdateSthmCommandLog;
+  });
+
+  let capturedOptions = null;
+  const captured = {
+    pulsed: null
+  };
+
+  smartThingsService.getSthmVirtualSwitchConfig = async (options = {}) => {
+    capturedOptions = options;
+    return {
+      integration: null,
+      config: {
+        dismissDeviceId: 'dismiss-switch-1'
+      }
+    };
+  };
+  smartThingsService.pulseVirtualSwitch = async (deviceId, options) => {
+    captured.pulsed = { deviceId, options };
+  };
+  smartThingsService.updateSthmCommandLog = async () => {};
+
+  const result = await smartThingsService.dismissSthmAlert();
+
+  assert.deepEqual(capturedOptions, {
+    requireAll: false,
+    requiredMappings: ['dismiss']
+  });
+  assert.deepEqual(captured.pulsed, {
+    deviceId: 'dismiss-switch-1',
+    options: { ensureReset: true, delayMs: 300 }
+  });
+  assert.deepEqual(result, {
+    dismissed: true,
+    triggeredDeviceId: 'dismiss-switch-1',
+    via: 'virtualSwitch'
+  });
+});
+
 test('silenceAlarmDevice falls back to switch off when alarm off is unsupported', async (t) => {
   const originalSendDeviceCommand = smartThingsService.sendDeviceCommand;
 

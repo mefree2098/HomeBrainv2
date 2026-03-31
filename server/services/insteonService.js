@@ -9,8 +9,15 @@ const Device = require('../models/Device');
 const Scene = require('../models/Scene');
 const Settings = require('../models/Settings');
 const Workflow = require('../models/Workflow');
-const workflowService = require('./workflowService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+
+let cachedWorkflowService = null;
+const getWorkflowService = () => {
+  if (!cachedWorkflowService) {
+    cachedWorkflowService = require('./workflowService');
+  }
+  return cachedWorkflowService;
+};
 
 const DEFAULT_INSTEON_SERIAL_PORT = '/dev/ttyUSB0';
 const DEFAULT_INSTEON_TCP_PORT = 9761;
@@ -3752,7 +3759,7 @@ class InsteonService {
         let mainWorkflowId = null;
         let mainWorkflowName = translation.mainPayload.name;
         if (existingMain) {
-          const updated = await workflowService.updateWorkflow(existingMain._id.toString(), translation.mainPayload);
+          const updated = await getWorkflowService().updateWorkflow(existingMain._id.toString(), translation.mainPayload);
           results.updated += 1;
           mainWorkflowId = updated?._id || existingMain._id;
           mainWorkflowName = updated?.name || translation.mainPayload.name;
@@ -3764,7 +3771,7 @@ class InsteonService {
             status: 'updated'
           });
         } else {
-          const created = await workflowService.createWorkflow(translation.mainPayload, { source: 'import' });
+          const created = await getWorkflowService().createWorkflow(translation.mainPayload, { source: 'import' });
           results.created += 1;
           mainWorkflowId = created?._id || null;
           mainWorkflowName = created?.name || translation.mainPayload.name;
@@ -3797,7 +3804,7 @@ class InsteonService {
         }).lean();
 
         if (existingElse) {
-          const updatedElse = await workflowService.updateWorkflow(existingElse._id.toString(), translation.elsePayload);
+          const updatedElse = await getWorkflowService().updateWorkflow(existingElse._id.toString(), translation.elsePayload);
           results.updated += 1;
           results.elseUpdated += 1;
           results.workflows.push({
@@ -3808,7 +3815,7 @@ class InsteonService {
             status: 'updated'
           });
         } else {
-          const createdElse = await workflowService.createWorkflow(translation.elsePayload, { source: 'import' });
+          const createdElse = await getWorkflowService().createWorkflow(translation.elsePayload, { source: 'import' });
           results.created += 1;
           results.elseCreated += 1;
           results.workflows.push({
