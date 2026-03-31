@@ -8,6 +8,7 @@ const DASHBOARD_WIDGET_TYPES = [
   'favorite-devices',
   'weather',
   'voice-command',
+  'devices',
   'device'
 ];
 
@@ -53,6 +54,22 @@ function normalizeWidgetSettings(type, settings) {
     return {
       deviceId: normalized.deviceId.trim()
     };
+  }
+
+  if (type === 'devices') {
+    const deviceIds = Array.isArray(normalized.deviceIds)
+      ? Array.from(new Set(
+        normalized.deviceIds
+          .map((deviceId) => typeof deviceId === 'string' ? deviceId.trim() : '')
+          .filter(Boolean)
+      ))
+      : [];
+
+    if (deviceIds.length === 0) {
+      return null;
+    }
+
+    return { deviceIds };
   }
 
   if (type === 'favorite-devices') {

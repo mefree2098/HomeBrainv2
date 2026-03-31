@@ -1,3 +1,4 @@
+import Charts
 import Combine
 import CoreLocation
 import SwiftUI
@@ -283,6 +284,19 @@ private func dashboardOptionalInt(_ value: Any?) -> Int? {
     return nil
 }
 
+private func dashboardOptionalDouble(_ value: Any?) -> Double? {
+    if let raw = value as? Double {
+        return raw
+    }
+    if let raw = value as? NSNumber {
+        return raw.doubleValue
+    }
+    if let raw = value as? String, let parsed = Double(raw) {
+        return parsed
+    }
+    return nil
+}
+
 private func dashboardNormalizeStringArray(_ values: [String]?) -> [String]? {
     guard let values else {
         return nil
@@ -318,6 +332,65 @@ private func dashboardStringArray(from rawValue: Any?) -> [String]? {
     }
 
     return dashboardNormalizeStringArray(values)
+}
+
+private struct DashboardDeviceEnergyMeasurement {
+    let value: Double
+    let unit: String
+    let timestamp: Date?
+}
+
+private struct DashboardDeviceEnergySample: Identifiable {
+    let id: String
+    let recordedAt: Date
+    let power: DashboardDeviceEnergyMeasurement?
+    let energy: DashboardDeviceEnergyMeasurement?
+
+    static func from(_ payload: [String: Any]) -> DashboardDeviceEnergySample? {
+        let recordedAtValue = JSON.optionalString(payload, "recordedAt") ?? JSON.string(payload, "recordedAt")
+        guard let recordedAt = JSON.date(from: recordedAtValue) else {
+            return nil
+        }
+
+        let powerObject = JSON.object(payload["power"])
+        let energyObject = JSON.object(payload["energy"])
+
+        return DashboardDeviceEnergySample(
+            id: recordedAtValue.isEmpty ? ISO8601DateFormatter().string(from: recordedAt) : recordedAtValue,
+            recordedAt: recordedAt,
+            power: Self.measurement(from: powerObject),
+            energy: Self.measurement(from: energyObject)
+        )
+    }
+
+    private static func measurement(from payload: [String: Any]) -> DashboardDeviceEnergyMeasurement? {
+        guard !payload.isEmpty,
+              let value = dashboardOptionalDouble(payload["value"]) else {
+            return nil
+        }
+
+        return DashboardDeviceEnergyMeasurement(
+            value: value,
+            unit: JSON.string(payload, "unit", fallback: ""),
+            timestamp: JSON.date(from: JSON.optionalString(payload, "timestamp"))
+        )
+    }
+}
+
+private struct DashboardLiveEnergySnapshot {
+    let supportsEnergyMonitoring: Bool
+    let powerValue: Double?
+    let powerUnit: String
+    let powerTimestamp: Date?
+    let energyValue: Double?
+    let energyUnit: String
+    let energyTimestamp: Date?
+}
+
+private struct DashboardDeviceEnergyPoint: Identifiable {
+    let id: String
+    let recordedAt: Date
+    let powerValue: Double
 }
 
 private struct DashboardSecuritySensorItem: Identifiable {
@@ -465,6 +538,7 @@ struct DashboardView: View {
     @State private var pendingWidgetTitle = DashboardWidgetType.hero.title
     @State private var pendingWidgetSize: DashboardWidgetSize = .full
     @State private var pendingWidgetDeviceID = ""
+    @State private var pendingWidgetDeviceIDs: [String] = []
     @State private var pendingWidgetDeviceSearch = ""
     @State private var pendingWeatherLocationMode: DashboardWeatherLocationMode = .saved
     @State private var pendingWeatherLocationQuery = ""
@@ -472,8 +546,11 @@ struct DashboardView: View {
     @State private var pendingDashboardName = ""
     @State private var infoMessage: String?
     @State private var pendingFavoriteDeviceIds: Set<String> = []
+    @State private var dashboardLightBrightnessDrafts: [String: Double] = [:]
     @State private var thermostatTemperatureDrafts: [String: Double] = [:]
     @State private var pendingControlDeviceIds: Set<String> = []
+    @State private var deviceEnergySamplesByDeviceID: [String: [DashboardDeviceEnergySample]] = [:]
+    @State private var deviceEnergyLoadingDeviceIDs: Set<String> = []
     @State private var weatherByWidgetID: [String: DashboardWeatherSnapshot] = [:]
     @State private var weatherErrorsByWidgetID: [String: String] = [:]
     @State private var weatherRequestKeyByWidgetID: [String: String] = [:]
@@ -520,6 +597,9 @@ struct DashboardView: View {
     private var visibleWeatherWidgets: [DashboardWidgetItem] {
         currentDashboardWidgets.filter { $0.type == .weather }
     }
+    private var visibleDevicesWidgets: [DashboardWidgetItem] {
+        currentDashboardWidgets.filter { $0.type == .devices }
+    }
     private var sortedDevices: [DeviceItem] {
         devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -537,15 +617,15 @@ struct DashboardView: View {
             }
         }
 
-        if pendingWidgetDeviceID.isEmpty || matches.contains(where: { $0.id == pendingWidgetDeviceID }) {
+        let pinnedIDs = Set([pendingWidgetDeviceID].filter { !$0.isEmpty } + pendingWidgetDeviceIDs)
+        if pinnedIDs.isEmpty {
             return matches
         }
 
-        if let selected = sortedDevices.first(where: { $0.id == pendingWidgetDeviceID }) {
-            return [selected] + matches
+        let pinnedDevices = sortedDevices.filter { device in
+            pinnedIDs.contains(device.id) && !matches.contains(where: { $0.id == device.id })
         }
-
-        return matches
+        return pinnedDevices + matches
     }
 
     private var onlineDevices: Int {
@@ -554,6 +634,12 @@ struct DashboardView: View {
 
     private var onlineVoiceDevices: Int {
         voiceDevices.filter { $0.status == "online" }.count
+    }
+
+    private var visibleDevicesWidgetDeviceIDs: [String] {
+        dashboardNormalizeStringArray(
+            visibleDevicesWidgets.flatMap { $0.settings.deviceIds }
+        ) ?? []
     }
 
     private var securityAttentionSensorCount: Int {
@@ -725,7 +811,7 @@ struct DashboardView: View {
     }
 
     private var addableWidgetTypes: [DashboardWidgetType] {
-        [.hero, .summary, .security, .favoriteScenes, .weather, .voiceCommand, .device]
+        [.hero, .summary, .security, .favoriteScenes, .weather, .voiceCommand, .devices, .device]
     }
 
     private var dashboardChromeSyncToken: String {
@@ -752,6 +838,14 @@ struct DashboardView: View {
             visibleWeatherWidgets
                 .map { "\($0.id):\(weatherTaskKey(for: $0))" }
                 .joined(separator: "|")
+        ].joined(separator: "||")
+    }
+
+    private var dashboardEnergyRefreshTaskKey: String {
+        [
+            String(describing: scenePhase),
+            selectedDashboardViewID,
+            visibleDevicesWidgetDeviceIDs.joined(separator: "|")
         ].joined(separator: "||")
     }
 
@@ -856,6 +950,10 @@ struct DashboardView: View {
                 guard !Task.isCancelled else { break }
                 await refreshVisibleWeatherWidgets(force: true)
             }
+        }
+        .task(id: dashboardEnergyRefreshTaskKey) {
+            guard !previewMode, scenePhase == .active, !visibleDevicesWidgetDeviceIDs.isEmpty else { return }
+            await refreshVisibleDeviceEnergyHistories()
         }
         .task(id: dashboardDeviceStreamTaskKey) {
             guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
@@ -1126,6 +1224,8 @@ struct DashboardView: View {
             weatherWidget(for: widget)
         case .voiceCommand:
             voiceCommandPanel
+        case .devices:
+            devicesWidget(for: widget)
         case .device:
             singleDeviceWidget(for: widget)
         }
@@ -1178,6 +1278,48 @@ struct DashboardView: View {
                     }
                 }
 
+                if pendingWidgetType == .devices {
+                    Section("Devices") {
+                        TextField("Search devices", text: $pendingWidgetDeviceSearch)
+                            .textInputAutocapitalization(.never)
+                            .disableAutocorrection(true)
+
+                        Text("\(pendingWidgetDeviceIDs.count) selected")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                        if filteredPendingDevices.isEmpty {
+                            Text("No devices match your search.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                        } else {
+                            ForEach(filteredPendingDevices) { device in
+                                Button {
+                                    togglePendingWidgetDeviceSelection(device.id)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: pendingWidgetDeviceIDs.contains(device.id) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(
+                                                pendingWidgetDeviceIDs.contains(device.id)
+                                                    ? HBPalette.accentBlue
+                                                    : HBPalette.textMuted
+                                            )
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(device.name)
+                                                .foregroundStyle(HBPalette.textPrimary)
+                                            Text("\(device.room) • \(device.type)")
+                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .foregroundStyle(HBPalette.textSecondary)
+                                        }
+                                        Spacer()
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+
                 if pendingWidgetType == .weather {
                     Section("Weather Location") {
                         Picker("Source", selection: $pendingWeatherLocationMode) {
@@ -1202,8 +1344,11 @@ struct DashboardView: View {
                 pendingWidgetSize = defaultWidgetSize(for: newValue)
                 if newValue != .device {
                     pendingWidgetDeviceID = ""
-                    pendingWidgetDeviceSearch = ""
                 }
+                if newValue != .devices {
+                    pendingWidgetDeviceIDs = []
+                }
+                pendingWidgetDeviceSearch = ""
                 if newValue != .weather {
                     pendingWeatherLocationMode = .saved
                     pendingWeatherLocationQuery = ""
@@ -1221,6 +1366,7 @@ struct DashboardView: View {
                     }
                     .disabled(
                         (pendingWidgetType == .device && pendingWidgetDeviceID.isEmpty)
+                        || (pendingWidgetType == .devices && pendingWidgetDeviceIDs.isEmpty)
                         || (pendingWidgetType == .weather && pendingWeatherLocationMode == .custom && pendingWeatherLocationQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     )
                 }
@@ -1238,6 +1384,7 @@ struct DashboardView: View {
         case .favoriteDevices: return "heart.fill"
         case .weather: return "cloud.sun.fill"
         case .voiceCommand: return "waveform"
+        case .devices: return "square.grid.3x2.fill"
         case .device: return "lightbulb.max"
         }
     }
@@ -1245,6 +1392,8 @@ struct DashboardView: View {
     private func defaultWidgetSize(for type: DashboardWidgetType) -> DashboardWidgetSize {
         switch type {
         case .hero, .summary:
+            return .full
+        case .devices:
             return .full
         case .device:
             return .small
@@ -1304,6 +1453,33 @@ struct DashboardView: View {
             count = min(3, max(1, dashboardGridColumnCount))
         case .full:
             count = min(4, max(1, dashboardGridColumnCount))
+        }
+
+        return Array(repeating: GridItem(.flexible(), spacing: 10), count: max(1, count))
+    }
+
+    private func devicesWidgetColumns(for widget: DashboardWidgetItem) -> [GridItem] {
+        let count: Int
+
+        switch widget.size {
+        case .small:
+            count = usesPortraitCompactLayout ? 1 : 2
+        case .medium:
+            count = usesPortraitCompactLayout ? 1 : (layoutWidth >= 700 ? 3 : 2)
+        case .large:
+            count = usesPortraitCompactLayout ? 1 : (layoutWidth >= 780 ? 4 : 3)
+        case .full:
+            if usesPortraitCompactLayout {
+                count = 1
+            } else if layoutWidth >= 900 {
+                count = 6
+            } else if layoutWidth >= 760 {
+                count = 5
+            } else if layoutWidth >= 620 {
+                count = 4
+            } else {
+                count = 3
+            }
         }
 
         return Array(repeating: GridItem(.flexible(), spacing: 10), count: max(1, count))
@@ -1434,6 +1610,52 @@ struct DashboardView: View {
             weatherRequestKeyByWidgetID[widget.id] = taskKey
         } catch {
             weatherErrorsByWidgetID[widget.id] = error.localizedDescription
+        }
+    }
+
+    private func refreshVisibleDeviceEnergyHistories() async {
+        for deviceID in visibleDevicesWidgetDeviceIDs {
+            await loadDeviceEnergyHistory(for: deviceID, force: false)
+        }
+    }
+
+    private func loadDeviceEnergyHistory(for deviceID: String, force: Bool = false) async {
+        guard !deviceID.isEmpty else {
+            return
+        }
+
+        guard let device = devices.first(where: { $0.id == deviceID }), supportsEnergyMonitoring(device) else {
+            deviceEnergySamplesByDeviceID[deviceID] = []
+            return
+        }
+
+        if !force, deviceEnergySamplesByDeviceID[deviceID] != nil {
+            return
+        }
+
+        if deviceEnergyLoadingDeviceIDs.contains(deviceID) {
+            return
+        }
+
+        deviceEnergyLoadingDeviceIDs.insert(deviceID)
+        defer { deviceEnergyLoadingDeviceIDs.remove(deviceID) }
+
+        do {
+            let response = try await session.apiClient.get(
+                "/api/devices/\(deviceID)/energy-history",
+                query: [
+                    URLQueryItem(name: "hours", value: "6"),
+                    URLQueryItem(name: "limit", value: "72")
+                ]
+            )
+            let root = JSON.object(response)
+            let data = JSON.object(root["data"])
+            let samples = JSON.array(data["samples"])
+                .compactMap { DashboardDeviceEnergySample.from(JSON.object($0)) }
+                .sorted { $0.recordedAt < $1.recordedAt }
+            deviceEnergySamplesByDeviceID[deviceID] = samples
+        } catch {
+            deviceEnergySamplesByDeviceID[deviceID] = []
         }
     }
 
@@ -4705,6 +4927,219 @@ struct DashboardView: View {
         }
     }
 
+    private func devicesWidget(for widget: DashboardWidgetItem) -> some View {
+        let selectedDevices = devicesForWidget(widget)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Dense Controls")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(2.6)
+                    .foregroundStyle(HBPalette.textMuted)
+
+                Text("Devices")
+                    .font(.system(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [HBPalette.accentBlue, HBPalette.accentGreen],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+
+                Text("Compact controls sized to fit a lot more devices on one dashboard row.")
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+
+            if selectedDevices.isEmpty {
+                EmptyStateView(
+                    title: "No devices selected",
+                    subtitle: "Choose one or more devices for this widget to build a dense control grid."
+                )
+            } else {
+                LazyVGrid(columns: devicesWidgetColumns(for: widget), spacing: 10) {
+                    ForEach(selectedDevices) { device in
+                        denseDeviceCard(device)
+                    }
+                }
+            }
+        }
+    }
+
+    private func denseDeviceCard(_ device: DeviceItem) -> some View {
+        let pending = pendingControlDeviceIds.contains(device.id)
+        let energySnapshot = liveEnergySnapshot(for: device)
+        let energyPoints = deviceEnergyChartPoints(for: device, snapshot: energySnapshot)
+        let thermostat = device.type == "thermostat"
+        let statusText = dashboardDeviceStatusText(for: device)
+        let currentPowerText = formatDashboardPowerValue(energySnapshot.powerValue, unit: energySnapshot.powerUnit)
+        let energyTotalText = formatDashboardEnergyValue(energySnapshot.energyValue, unit: energySnapshot.energyUnit)
+
+        return HBPanel {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: iconForDevice(device.type))
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 30, height: 30)
+                        .background(
+                            LinearGradient(
+                                colors: device.status
+                                    ? [HBPalette.accentBlue, HBPalette.accentGreen]
+                                    : [HBPalette.accentSlate, HBPalette.panelSoft],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            in: Circle()
+                        )
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(device.name)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .lineLimit(2)
+                        Text(device.room)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    HBBadge(
+                        text: shortDeviceStatusBadge(for: device),
+                        foreground: device.status ? HBPalette.textPrimary : HBPalette.textSecondary,
+                        background: device.status ? HBPalette.accentBlue.opacity(0.18) : HBPalette.panelSoft.opacity(0.88),
+                        stroke: device.status ? HBPalette.accentBlue.opacity(0.32) : HBPalette.panelStrokeStrong
+                    )
+                }
+
+                Text(statusText)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .lineLimit(2)
+
+                if energySnapshot.supportsEnergyMonitoring {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("CURRENT DRAW")
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                                    .tracking(1.4)
+                                    .foregroundStyle(HBPalette.textMuted)
+                                Text(currentPowerText)
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textPrimary)
+                            }
+
+                            Spacer(minLength: 8)
+
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(HBPalette.accentGreen)
+                        }
+
+                        if let energyTotalText {
+                            Text("Energy total \(energyTotalText)")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                        }
+
+                        if deviceEnergyLoadingDeviceIDs.contains(device.id) && energyPoints.isEmpty {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Loading history…")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 56, alignment: .center)
+                        } else if energyPoints.isEmpty {
+                            Text("No recent power samples yet.")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+                        } else {
+                            Chart {
+                                ForEach(energyPoints) { point in
+                                    LineMark(
+                                        x: .value("Time", point.recordedAt),
+                                        y: .value("Power", point.powerValue)
+                                    )
+                                    .interpolationMethod(.catmullRom)
+                                    .lineStyle(.init(lineWidth: 2))
+                                    .foregroundStyle(HBPalette.accentGreen)
+                                }
+                            }
+                            .chartXAxis(.hidden)
+                            .chartYAxis(.hidden)
+                            .frame(height: 56)
+                        }
+                    }
+                    .padding(10)
+                    .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                }
+
+                if supportsLightFade(device) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Fade")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                            Spacer()
+                            Text("\(Int(currentDashboardLightBrightness(for: device).rounded()))%")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
+                        }
+
+                        Slider(
+                            value: Binding(
+                                get: { currentDashboardLightBrightness(for: device) },
+                                set: { dashboardLightBrightnessDrafts[device.id] = clampDashboardLightBrightness($0) }
+                            ),
+                            in: 0...100,
+                            step: 1,
+                            onEditingChanged: { editing in
+                                guard !editing else { return }
+                                let next = Int(currentDashboardLightBrightness(for: device).rounded())
+                                Task { await handleDeviceControl(deviceId: device.id, action: "set_brightness", value: next) }
+                            }
+                        )
+                        .tint(HBPalette.accentBlue)
+                        .disabled(pending)
+                    }
+                }
+
+                if thermostat {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                        ForEach(["auto", "cool", "heat", "off"], id: \.self) { mode in
+                            thermostatModeChip(
+                                device: device,
+                                mode: mode,
+                                activeMode: thermostatMode(for: device),
+                                pending: pending,
+                                compact: true
+                            )
+                        }
+                    }
+                }
+
+                Button {
+                    Task { await handleDenseDeviceToggle(device) }
+                } label: {
+                    Label(denseDeviceToggleLabel(for: device), systemImage: device.status ? "power.circle" : "power.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(device.status ? HBSecondaryButtonStyle(compact: true) : HBPrimaryButtonStyle(compact: true))
+                .disabled(pending)
+            }
+        }
+    }
+
     private func favoriteDeviceSizeControls(for widget: DashboardWidgetItem, device: DeviceItem) -> some View {
         let activeSize = favoriteDeviceCardSize(for: widget, device: device)
 
@@ -4768,11 +5203,25 @@ struct DashboardView: View {
         }
     }
 
+    private func togglePendingWidgetDeviceSelection(_ deviceID: String) {
+        var selected = Set(pendingWidgetDeviceIDs)
+        if selected.contains(deviceID) {
+            selected.remove(deviceID)
+        } else {
+            selected.insert(deviceID)
+        }
+
+        pendingWidgetDeviceIDs = sortedDevices
+            .map(\.id)
+            .filter { selected.contains($0) }
+    }
+
     private func prepareAddWidgetSheet() {
         pendingWidgetType = .hero
         pendingWidgetTitle = DashboardWidgetType.hero.title
         pendingWidgetSize = .full
         pendingWidgetDeviceID = ""
+        pendingWidgetDeviceIDs = []
         pendingWidgetDeviceSearch = ""
         pendingWeatherLocationMode = .saved
         pendingWeatherLocationQuery = ""
@@ -4829,6 +5278,9 @@ struct DashboardView: View {
         if pendingWidgetType == .device && pendingWidgetDeviceID.isEmpty {
             return
         }
+        if pendingWidgetType == .devices && pendingWidgetDeviceIDs.isEmpty {
+            return
+        }
         if pendingWidgetType == .weather
             && pendingWeatherLocationMode == .custom
             && pendingWeatherLocationQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -4840,6 +5292,10 @@ struct DashboardView: View {
 
         if pendingWidgetType == .device {
             settings.deviceId = pendingWidgetDeviceID
+        }
+
+        if pendingWidgetType == .devices {
+            settings.deviceIds = pendingWidgetDeviceIDs
         }
 
         if pendingWidgetType == .weather {
@@ -4863,6 +5319,7 @@ struct DashboardView: View {
 
         dashboardViews[viewIndex].widgets.append(widget)
         dashboardDirty = true
+        pendingWidgetDeviceIDs = []
         pendingWidgetDeviceSearch = ""
         showingAddWidgetSheet = false
     }
@@ -5384,6 +5841,9 @@ struct DashboardView: View {
 
         if previewMode {
             applyControlLocally(deviceId: deviceId, action: action, value: value)
+            if action == "set_brightness" {
+                dashboardLightBrightnessDrafts.removeValue(forKey: deviceId)
+            }
             if action == "set_temperature" {
                 thermostatTemperatureDrafts.removeValue(forKey: deviceId)
             }
@@ -5411,6 +5871,9 @@ struct DashboardView: View {
                 applyControlLocally(deviceId: deviceId, action: action, value: value)
             }
 
+            if action == "set_brightness" {
+                dashboardLightBrightnessDrafts.removeValue(forKey: deviceId)
+            }
             if action == "set_temperature" {
                 thermostatTemperatureDrafts.removeValue(forKey: deviceId)
             }
@@ -5438,6 +5901,14 @@ struct DashboardView: View {
 
         case "unlock":
             updated.status = false
+
+        case "set_brightness":
+            if let brightness = numberValue(from: value) {
+                let clamped = clampDashboardLightBrightness(brightness)
+                updated.brightness = clamped
+                updated.status = clamped > 0
+                dashboardLightBrightnessDrafts[deviceId] = clamped
+            }
 
         case "set_temperature":
             if let target = numberValue(from: value) {
@@ -5636,6 +6107,293 @@ struct DashboardView: View {
             return clampThermostatTemperature(draft)
         }
         return Double(thermostatTargetTemperature(for: device))
+    }
+
+    private func clampDashboardLightBrightness(_ value: Double) -> Double {
+        min(100, max(0, value)).rounded()
+    }
+
+    private func currentDashboardLightBrightness(for device: DeviceItem) -> Double {
+        if let draft = dashboardLightBrightnessDrafts[device.id] {
+            return clampDashboardLightBrightness(draft)
+        }
+        return clampDashboardLightBrightness(device.brightness)
+    }
+
+    private func devicesForWidget(_ widget: DashboardWidgetItem) -> [DeviceItem] {
+        let deviceIDs = widget.settings.deviceIds
+        guard !deviceIDs.isEmpty else {
+            return []
+        }
+
+        let byID = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
+        return deviceIDs.compactMap { byID[$0] }
+    }
+
+    private func handleDenseDeviceToggle(_ device: DeviceItem) async {
+        if device.type == "thermostat" {
+            let mode = thermostatMode(for: device)
+            await handleDeviceControl(
+                deviceId: device.id,
+                action: "set_mode",
+                value: mode == "off" ? thermostatOnMode(for: device) : "off"
+            )
+            return
+        }
+
+        if device.type == "lock" {
+            await handleDeviceControl(
+                deviceId: device.id,
+                action: device.status ? "unlock" : "lock"
+            )
+            return
+        }
+
+        await handleDeviceControl(
+            deviceId: device.id,
+            action: device.status ? "turn_off" : "turn_on"
+        )
+    }
+
+    private func denseDeviceToggleLabel(for device: DeviceItem) -> String {
+        if device.type == "lock" {
+            return device.status ? "Unlock" : "Lock"
+        }
+
+        return device.status ? "Turn Off" : "Turn On"
+    }
+
+    private func shortDeviceStatusBadge(for device: DeviceItem) -> String {
+        if device.type == "thermostat" {
+            return thermostatMode(for: device).uppercased()
+        }
+        if device.type == "lock" {
+            return device.status ? "LOCKED" : "UNLOCKED"
+        }
+        return device.status ? "ON" : "OFF"
+    }
+
+    private func dashboardDeviceStatusText(for device: DeviceItem) -> String {
+        if device.type == "thermostat" {
+            let mode = thermostatMode(for: device).uppercased()
+            let current = device.temperature.map { "\(Int($0.rounded()))°F" } ?? "--"
+            let target = "\(thermostatTargetTemperature(for: device))°F"
+            return "\(mode) • \(current) now • \(target) target"
+        }
+
+        if device.type == "lock" {
+            return device.status ? "Currently locked" : "Currently unlocked"
+        }
+
+        return device.status ? "Currently on" : "Currently off"
+    }
+
+    private func formatDashboardPowerValue(_ value: Double?, unit: String) -> String {
+        guard let value else {
+            return "--"
+        }
+
+        if abs(value) >= 100 {
+            return "\(Int(value.rounded())) \(unit)"
+        }
+
+        return "\(String(format: "%.1f", value)) \(unit)"
+    }
+
+    private func formatDashboardEnergyValue(_ value: Double?, unit: String) -> String? {
+        guard let value else {
+            return nil
+        }
+
+        let digits = abs(value) >= 10 ? 1 : 2
+        return "\(String(format: "%.\(digits)f", value)) \(unit)"
+    }
+
+    private func liveEnergySnapshot(for device: DeviceItem) -> DashboardLiveEnergySnapshot {
+        let capabilities = smartThingsCapabilities(for: device)
+        let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
+        let attributeMetadata = JSON.object(device.properties["smartThingsAttributeMetadata"])
+        let powerMetadata = JSON.object(JSON.object(attributeMetadata["powerMeter"])["power"])
+        let energyMetadata = JSON.object(JSON.object(attributeMetadata["energyMeter"])["energy"])
+        let powerValue = dashboardOptionalDouble(JSON.object(attributeValues["powerMeter"])["power"])
+        let energyValue = dashboardOptionalDouble(JSON.object(attributeValues["energyMeter"])["energy"])
+
+        return DashboardLiveEnergySnapshot(
+            supportsEnergyMonitoring: capabilities.contains("powerMeter")
+                || capabilities.contains("energyMeter")
+                || powerValue != nil
+                || energyValue != nil,
+            powerValue: powerValue,
+            powerUnit: JSON.string(powerMetadata, "unit", fallback: "W"),
+            powerTimestamp: JSON.date(from: JSON.optionalString(powerMetadata, "timestamp")),
+            energyValue: energyValue,
+            energyUnit: JSON.string(energyMetadata, "unit", fallback: "kWh"),
+            energyTimestamp: JSON.date(from: JSON.optionalString(energyMetadata, "timestamp"))
+        )
+    }
+
+    private func deviceEnergyChartPoints(for device: DeviceItem, snapshot: DashboardLiveEnergySnapshot) -> [DashboardDeviceEnergyPoint] {
+        var samples = deviceEnergySamplesByDeviceID[device.id] ?? []
+
+        if snapshot.powerValue != nil || snapshot.energyValue != nil {
+            let recordedAt = snapshot.powerTimestamp
+                ?? snapshot.energyTimestamp
+                ?? JSON.date(from: device.lastSeen)
+                ?? Date()
+
+            let liveSample = DashboardDeviceEnergySample(
+                id: "live-\(device.id)-\(recordedAt.timeIntervalSince1970)",
+                recordedAt: recordedAt,
+                power: snapshot.powerValue.map {
+                    DashboardDeviceEnergyMeasurement(
+                        value: $0,
+                        unit: snapshot.powerUnit,
+                        timestamp: snapshot.powerTimestamp
+                    )
+                },
+                energy: snapshot.energyValue.map {
+                    DashboardDeviceEnergyMeasurement(
+                        value: $0,
+                        unit: snapshot.energyUnit,
+                        timestamp: snapshot.energyTimestamp
+                    )
+                }
+            )
+
+            samples.removeAll { abs($0.recordedAt.timeIntervalSince(recordedAt)) < 1 }
+            samples.append(liveSample)
+        }
+
+        return samples
+            .sorted { $0.recordedAt < $1.recordedAt }
+            .compactMap { sample in
+                guard let power = sample.power?.value else {
+                    return nil
+                }
+
+                return DashboardDeviceEnergyPoint(
+                    id: sample.id,
+                    recordedAt: sample.recordedAt,
+                    powerValue: power
+                )
+            }
+            .suffix(72)
+            .map { $0 }
+    }
+
+    private func normalizedSmartThingsValue(_ value: Any) -> String {
+        if let string = value as? String {
+            return string.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let object = value as? [String: Any] {
+            if let id = object["id"] as? String, !id.isEmpty { return id.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if let capabilityId = object["capabilityId"] as? String, !capabilityId.isEmpty { return capabilityId.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if let name = object["name"] as? String, !name.isEmpty { return name.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        return ""
+    }
+
+    private func smartThingsCapabilities(for device: DeviceItem) -> Set<String> {
+        let raw = (device.properties["smartThingsCapabilities"] as? [Any] ?? [])
+            + (device.properties["smartthingsCapabilities"] as? [Any] ?? [])
+
+        return Set(
+            raw
+                .map(normalizedSmartThingsValue)
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private func smartThingsCategories(for device: DeviceItem) -> Set<String> {
+        let raw = (device.properties["smartThingsCategories"] as? [Any] ?? [])
+            + (device.properties["smartthingsCategories"] as? [Any] ?? [])
+
+        return Set(
+            raw
+                .map(normalizedSmartThingsValue)
+                .filter { !$0.isEmpty }
+                .map { $0.lowercased() }
+        )
+    }
+
+    private func looksLikeSmartThingsDimmer(_ device: DeviceItem) -> Bool {
+        let descriptor = [
+            stringValue(device.properties["smartThingsDeviceTypeName"]),
+            stringValue(device.properties["smartThingsPresentationId"]),
+            device.name
+        ]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .lowercased()
+
+        return descriptor.contains("dimmer")
+    }
+
+    private func isSmartThingsBackedDevice(_ device: DeviceItem) -> Bool {
+        let source = stringValue(device.properties["source"]).lowercased()
+        let hasDeviceId = !stringValue(device.properties["smartThingsDeviceId"]).isEmpty
+        return source == "smartthings" || hasDeviceId
+    }
+
+    private func supportsLightFade(_ device: DeviceItem) -> Bool {
+        if device.type == "light" {
+            return true
+        }
+
+        if isSmartThingsBackedDevice(device) {
+            let capabilities = smartThingsCapabilities(for: device)
+            if capabilities.contains("switchLevel") || capabilities.contains("colorControl") {
+                return true
+            }
+
+            if device.type == "switch" {
+                let categories = smartThingsCategories(for: device)
+                if categories.contains("light") || looksLikeSmartThingsDimmer(device) {
+                    return true
+                }
+            }
+        }
+
+        return boolValue(device.properties["supportsBrightness"])
+    }
+
+    private func supportsEnergyMonitoring(_ device: DeviceItem) -> Bool {
+        let capabilities = smartThingsCapabilities(for: device)
+        if capabilities.contains("powerMeter") || capabilities.contains("energyMeter") {
+            return true
+        }
+
+        let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
+        return dashboardOptionalDouble(JSON.object(attributeValues["powerMeter"])["power"]) != nil
+            || dashboardOptionalDouble(JSON.object(attributeValues["energyMeter"])["energy"]) != nil
+    }
+
+    private func stringValue(_ value: Any?) -> String {
+        if let value = value as? String {
+            return value
+        }
+        if let value {
+            return String(describing: value)
+        }
+        return ""
+    }
+
+    private func boolValue(_ value: Any?) -> Bool {
+        if let value = value as? Bool {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.boolValue
+        }
+        if let value = value as? String {
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1", "yes", "on":
+                return true
+            default:
+                return false
+            }
+        }
+        return false
     }
 
     private func applyFavoriteContext(_ context: FavoriteDeviceContext) {

@@ -91,10 +91,103 @@ type TriggerPropertyOption = {
   key: string;
   label: string;
   kind: TriggerPropertyKind;
+  unit?: string;
+  energyMetric?: boolean;
 };
 
 const NUMERIC_TRIGGER_OPERATORS = ["eq", "neq", "gt", "gte", "lt", "lte"] as const;
 const TEXT_TRIGGER_OPERATORS = ["eq", "neq", "contains"] as const;
+const TRIGGER_OPERATOR_LABELS: Record<string, string> = {
+  eq: "Equals",
+  neq: "Does not equal",
+  gt: "Greater than",
+  gte: "Greater than or equal",
+  lt: "Less than",
+  lte: "Less than or equal",
+  contains: "Contains"
+};
+
+function prettifyTriggerSegment(value: string) {
+  return value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+}
+
+function formatSmartThingsAttributeLabel(path: string[], unit?: string) {
+  const [capability, attribute] = path.slice(-2);
+  const suffix = unit ? ` (${unit})` : "";
+  const aliasKey = `${capability || ""}.${attribute || ""}`;
+
+  switch (aliasKey) {
+    case "powerMeter.power":
+      return `Power draw${suffix}`;
+    case "energyMeter.energy":
+      return `Energy total${suffix}`;
+    case "temperatureMeasurement.temperature":
+      return `Temperature${suffix}`;
+    case "humidityMeasurement.humidity":
+      return `Humidity${suffix}`;
+    case "switch.switch":
+      return "Switch state";
+    case "dryerOperatingState.machineState":
+      return "Dryer state";
+    case "washerOperatingState.machineState":
+      return "Washer state";
+    default:
+      return `${path.map(prettifyTriggerSegment).join(" / ")}${suffix}`;
+  }
+}
+
+function formatTriggerPropertyLabel(property: string) {
+  if (!property) {
+    return "Status";
+  }
+
+  if (property === "status") {
+    return "Status";
+  }
+
+  if (property === "isOnline") {
+    return "Online state";
+  }
+
+  if (property === "brightness") {
+    return "Brightness (%)";
+  }
+
+  if (property === "temperature") {
+    return "Temperature";
+  }
+
+  if (property === "targetTemperature") {
+    return "Target temperature";
+  }
+
+  if (property.startsWith("smartThingsAttributeValues.")) {
+    return formatSmartThingsAttributeLabel(property.replace(/^smartThingsAttributeValues\./, "").split("."));
+  }
+
+  return prettifyTriggerSegment(property);
+}
+
+function isEnergyTriggerProperty(key: string) {
+  return key === "smartThingsAttributeValues.powerMeter.power"
+    || key === "smartThingsAttributeValues.energyMeter.energy";
+}
+
+function getTriggerOperatorOptions(kind: TriggerPropertyKind) {
+  const values = kind === "number"
+    ? NUMERIC_TRIGGER_OPERATORS
+    : kind === "string"
+      ? TEXT_TRIGGER_OPERATORS
+      : ["eq", "neq"];
+
+  return values.map((value) => ({
+    value,
+    label: TRIGGER_OPERATOR_LABELS[value] || value
+  }));
+}
 
 function inferTriggerPropertyKind(value: unknown): TriggerPropertyKind {
   if (typeof value === "boolean") {
@@ -146,11 +239,13 @@ function collectSmartThingsAttributeOptions(
     }
 
     const metadata = getNestedRecordValue(metadataNode, [key]) as Record<string, unknown> | undefined;
-    const unit = typeof metadata?.unit === "string" && metadata.unit.trim() ? ` (${metadata.unit.trim()})` : "";
+    const unit = typeof metadata?.unit === "string" && metadata.unit.trim() ? metadata.unit.trim() : undefined;
     options.push({
       key: `smartThingsAttributeValues.${nextPrefix.join(".")}`,
-      label: `${nextPrefix.join(".")}${unit}`,
-      kind: inferTriggerPropertyKind(value)
+      label: formatSmartThingsAttributeLabel(nextPrefix, unit),
+      kind: inferTriggerPropertyKind(value),
+      unit,
+      energyMetric: isEnergyTriggerProperty(`smartThingsAttributeValues.${nextPrefix.join(".")}`)
     });
   });
 
@@ -159,18 +254,18 @@ function collectSmartThingsAttributeOptions(
 
 function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
   const options: TriggerPropertyOption[] = [
-    { key: "status", label: "status", kind: "boolean" },
-    { key: "isOnline", label: "isOnline", kind: "boolean" }
+    { key: "status", label: "Status", kind: "boolean" },
+    { key: "isOnline", label: "Online state", kind: "boolean" }
   ];
 
   if (typeof device?.brightness === "number") {
-    options.push({ key: "brightness", label: "brightness", kind: "number" });
+    options.push({ key: "brightness", label: "Brightness (%)", kind: "number", unit: "%" });
   }
   if (typeof device?.temperature === "number") {
-    options.push({ key: "temperature", label: "temperature", kind: "number" });
+    options.push({ key: "temperature", label: "Temperature", kind: "number" });
   }
   if (typeof device?.targetTemperature === "number") {
-    options.push({ key: "targetTemperature", label: "targetTemperature", kind: "number" });
+    options.push({ key: "targetTemperature", label: "Target temperature", kind: "number" });
   }
 
   const attributeValues = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeValues;
@@ -190,6 +285,14 @@ function normalizeTriggerOperator(value: unknown, kind: TriggerPropertyKind) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   const allowed = kind === "number" ? NUMERIC_TRIGGER_OPERATORS : kind === "string" ? TEXT_TRIGGER_OPERATORS : ["eq", "neq"];
   return allowed.includes(normalized as any) ? normalized : "eq";
+}
+
+function getDefaultTriggerOperator(option: TriggerPropertyOption, previousOperator: unknown) {
+  const normalizedPrevious = normalizeTriggerOperator(previousOperator, option.kind);
+  if (option.kind === "number" && option.energyMetric && normalizedPrevious === "eq") {
+    return "gt";
+  }
+  return normalizedPrevious;
 }
 
 function normalizeSolarScheduleEvent(value: unknown) {
@@ -423,9 +526,10 @@ function describeTrigger(
         ? triggerConditions.value
         : triggerConditions.state ?? true;
       const forSeconds = Math.max(0, Number(triggerConditions.forSeconds) || 0);
-      const conditionText = operator === "eq"
-        ? `${property} = ${String(value)}`
-        : `${property} ${operator} ${String(value)}`;
+      const propertyLabel = formatTriggerPropertyLabel(property).toLowerCase();
+      const normalizedOperator = normalizeTriggerOperator(operator, inferTriggerPropertyKind(value));
+      const operatorLabel = (TRIGGER_OPERATOR_LABELS[normalizedOperator] || normalizedOperator).toLowerCase();
+      const conditionText = `${propertyLabel} ${operatorLabel} ${String(value)}`;
       if (forSeconds > 0) {
         return `${deviceName} keeps ${conditionText} for ${formatDuration(forSeconds)}.`;
       }
@@ -557,10 +661,15 @@ export function WorkflowBuilderDialog({
   const selectedTriggerPropertyOption = triggerPropertyOptions.find((option) => option.key === selectedTriggerProperty)
     || {
       key: selectedTriggerProperty,
-      label: selectedTriggerProperty,
+      label: formatTriggerPropertyLabel(selectedTriggerProperty),
       kind: inferTriggerPropertyKind(triggerConditions.value)
     };
   const selectedTriggerOperator = normalizeTriggerOperator(triggerConditions.operator, selectedTriggerPropertyOption.kind);
+  const selectedTriggerOperatorOptions = getTriggerOperatorOptions(selectedTriggerPropertyOption.kind);
+  const energyThresholdTrigger = Boolean(selectedTriggerPropertyOption.energyMetric);
+  const triggerValueLabel = selectedTriggerPropertyOption.kind === "number"
+    ? `${energyThresholdTrigger ? "Threshold" : "Value"}${selectedTriggerPropertyOption.unit ? ` (${selectedTriggerPropertyOption.unit})` : ""}`
+    : "Value";
   const triggerSummary = useMemo(
     () => describeTrigger(triggerType, triggerConditions, devices),
     [devices, triggerConditions, triggerType]
@@ -950,13 +1059,15 @@ export function WorkflowBuilderDialog({
                             value={selectedTriggerProperty}
                             onValueChange={(value) => {
                               const option = triggerPropertyOptions.find((entry) => entry.key === value)
-                                || { key: value, label: value, kind: "string" as TriggerPropertyKind };
+                                || {
+                                  key: value,
+                                  label: formatTriggerPropertyLabel(value),
+                                  kind: "string" as TriggerPropertyKind
+                                };
                               setTriggerConditions((prev) => ({
                                 ...prev,
                                 property: value,
-                                operator: option.kind === "number"
-                                  ? normalizeTriggerOperator(prev.operator, "number")
-                                  : "eq",
+                                operator: getDefaultTriggerOperator(option, prev.operator),
                                 value: option.kind === "boolean"
                                   ? true
                                   : option.kind === "number"
@@ -999,14 +1110,9 @@ export function WorkflowBuilderDialog({
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {(selectedTriggerPropertyOption.kind === "number"
-                                ? NUMERIC_TRIGGER_OPERATORS
-                                : selectedTriggerPropertyOption.kind === "string"
-                                  ? TEXT_TRIGGER_OPERATORS
-                                  : ["eq", "neq"]
-                              ).map((operator) => (
-                                <SelectItem key={operator} value={operator}>
-                                  {operator}
+                              {selectedTriggerOperatorOptions.map((operator) => (
+                                <SelectItem key={operator.value} value={operator.value}>
+                                  {operator.label}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -1014,7 +1120,7 @@ export function WorkflowBuilderDialog({
                         </div>
 
                         <div className="space-y-2">
-                          <Label>Value</Label>
+                          <Label>{triggerValueLabel}</Label>
                           {selectedTriggerPropertyOption.kind === "boolean" ? (
                             <Select
                               value={String(Boolean(triggerConditions.value ?? true))}
@@ -1070,6 +1176,12 @@ export function WorkflowBuilderDialog({
                           />
                         </div>
                       </div>
+
+                      {energyThresholdTrigger && (
+                        <p className="text-xs text-muted-foreground">
+                          Use <span className="font-medium text-foreground">Greater than</span> for turn-on thresholds, or <span className="font-medium text-foreground">Less than</span> with hold time to detect when an appliance has really finished.
+                        </p>
+                      )}
 
                       {triggerPropertyOptions.some((option) => option.key.startsWith("smartThingsAttributeValues.")) && (
                         <p className="text-xs text-muted-foreground">

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const deviceService = require('../services/deviceService');
+const deviceEnergySampleService = require('../services/deviceEnergySampleService');
 const { requireUser, requireAdmin } = require('./middlewares/auth');
 
 // Apply authentication middleware to all device routes
@@ -89,6 +90,42 @@ router.get('/by-room', async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch devices by room'
+    });
+  }
+});
+
+/**
+ * GET /api/devices/:id/energy-history
+ * Get recent power and energy samples for a device
+ */
+router.get('/:id/energy-history', async (req, res) => {
+  try {
+    console.log('GET /api/devices/:id/energy-history - Device ID:', req.params.id);
+
+    await deviceService.getDeviceById(req.params.id);
+    const samples = await deviceEnergySampleService.getDeviceEnergyHistory(req.params.id, {
+      hours: req.query.hours,
+      limit: req.query.limit
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Device energy history fetched successfully',
+      data: {
+        deviceId: req.params.id,
+        hours: Number(req.query.hours) || 24,
+        count: samples.length,
+        samples
+      }
+    });
+  } catch (error) {
+    console.error('GET /api/devices/:id/energy-history - Error:', error.message);
+    console.error(error.stack);
+
+    const statusCode = error.message === 'Device not found' ? 404 : 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to fetch device energy history'
     });
   }
 });

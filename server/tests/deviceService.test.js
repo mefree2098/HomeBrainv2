@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const Device = require('../models/Device');
 const deviceService = require('../services/deviceService');
+const deviceEnergySampleService = require('../services/deviceEnergySampleService');
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
 const insteonService = require('../services/insteonService');
 
@@ -111,12 +112,14 @@ test('getAllDevices can force-refresh SmartThings lock devices before returning 
   const originalFind = Device.find;
   const originalBulkWrite = Device.bulkWrite;
   const originalPollSmartThingsState = deviceService.pollSmartThingsState;
+  const originalRecordSamplesForDevices = deviceEnergySampleService.recordSamplesForDevices;
   const originalEmit = deviceUpdateEmitter.emit;
 
   t.after(() => {
     Device.find = originalFind;
     Device.bulkWrite = originalBulkWrite;
     deviceService.pollSmartThingsState = originalPollSmartThingsState;
+    deviceEnergySampleService.recordSamplesForDevices = originalRecordSamplesForDevices;
     deviceUpdateEmitter.emit = originalEmit;
   });
 
@@ -142,6 +145,7 @@ test('getAllDevices can force-refresh SmartThings lock devices before returning 
   const queries = [];
   let bulkOps = null;
   const emitted = [];
+  let recordedSamples = null;
 
   Device.find = (query = {}) => {
     queries.push(query);
@@ -161,6 +165,10 @@ test('getAllDevices can force-refresh SmartThings lock devices before returning 
     status: false,
     lastSeen: refreshedLock.lastSeen
   });
+  deviceEnergySampleService.recordSamplesForDevices = async (devices) => {
+    recordedSamples = devices;
+    return { insertedCount: 1, skippedCount: 0 };
+  };
   deviceUpdateEmitter.emit = (eventName, payload) => {
     emitted.push({ eventName, payload });
   };
@@ -173,6 +181,9 @@ test('getAllDevices can force-refresh SmartThings lock devices before returning 
   assert.equal(queries[2].type, 'lock');
   assert.ok(Array.isArray(bulkOps));
   assert.equal(bulkOps.length, 1);
+  assert.equal(Array.isArray(recordedSamples), true);
+  assert.equal(recordedSamples.length, 1);
+  assert.equal(recordedSamples[0]._id, 'device-3');
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0].eventName, 'devices:update');
   assert.equal(devices.length, 1);

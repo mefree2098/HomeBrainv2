@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Slider } from "@/components/ui/slider"
 import { 
   ArrowLeft,
+  BarChart3,
   Search, 
   Filter, 
   Grid3X3, 
@@ -27,6 +28,7 @@ import {
   AlertCircle
 } from "lucide-react"
 import { getDevices, getDevicesByRoom, controlDevice } from "@/api/devices"
+import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
 import { useToast } from "@/hooks/useToast"
 import { useFavorites } from "@/hooks/useFavorites"
 import { useDeviceRealtime } from "@/hooks/useDeviceRealtime"
@@ -234,6 +236,21 @@ const supportsLightColor = (device: any): boolean => {
   return Boolean(device?.properties?.supportsColor)
 }
 
+const supportsEnergyMonitoring = (device: any): boolean => {
+  if (!device) {
+    return false
+  }
+
+  if (hasSmartThingsCapability(device, 'powerMeter') || hasSmartThingsCapability(device, 'energyMeter')) {
+    return true
+  }
+
+  return Boolean(
+    device?.properties?.smartThingsAttributeValues?.powerMeter?.power != null
+    || device?.properties?.smartThingsAttributeValues?.energyMeter?.energy != null
+  )
+}
+
 const DEFAULT_SOURCE_OPTIONS = ['insteon', 'smartthings', 'harmony', 'ecobee']
 
 const getDeviceSource = (device: any): string => {
@@ -280,6 +297,7 @@ export function Devices({
   const [viewMode, setViewMode] = useState("grid")
   const [activeTab, setActiveTab] = useState("all")
   const [highlightedDeviceId, setHighlightedDeviceId] = useState<string | null>(null)
+  const [detailDeviceId, setDetailDeviceId] = useState<string | null>(null)
   const [lightBrightnessDrafts, setLightBrightnessDrafts] = useState<Record<string, number>>({})
   const [lightColorDrafts, setLightColorDrafts] = useState<Record<string, string>>({})
   const [pendingControls, setPendingControls] = useState<Record<string, boolean>>({})
@@ -952,6 +970,9 @@ export function Devices({
     ? devices.find((device: any) => device?._id === initialFocusDeviceId) ?? null
     : null
   const focusDeviceId = searchParams.get("focus")
+  const detailDevice = detailDeviceId
+    ? devices.find((device: any) => device?._id === detailDeviceId) ?? null
+    : null
 
   useEffect(() => {
     if (!focusDeviceId || !Array.isArray(devices) || devices.length === 0) {
@@ -998,6 +1019,7 @@ export function Devices({
   const renderGridDeviceCard = (device: any) => {
     const isFavorite = favoriteDeviceIds.has(device._id)
     const isPendingFavorite = pendingDeviceIds.has(device._id)
+    const energyMonitoring = supportsEnergyMonitoring(device)
 
     return (
       <Card
@@ -1073,6 +1095,15 @@ export function Devices({
             </Button>
           )}
           {renderControlFeedback(device)}
+          <Button
+            variant="outline"
+            className="w-full"
+            size="sm"
+            onClick={() => setDetailDeviceId(device._id)}
+          >
+            <BarChart3 className="mr-2 h-4 w-4" />
+            {energyMonitoring ? "Details & Chart" : "Details"}
+          </Button>
           <div className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/20">
             {device.type === 'thermostat'
               ? `Voice: "Hey Anna, set ${device.name} to ${getThermostatTargetTemperature(device)} degrees"`
@@ -1269,6 +1300,15 @@ export function Devices({
                               : (device.status ? "On" : "Off")}
                           </Badge>
                           <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setDetailDeviceId(device._id)}
+                            className="min-w-[8.5rem]"
+                          >
+                            <BarChart3 className="mr-2 h-4 w-4" />
+                            {supportsEnergyMonitoring(device) ? "Details & Chart" : "Details"}
+                          </Button>
+                          <Button
                             onClick={() => {
                               if (device.type === 'thermostat') {
                                 const currentMode = getThermostatMode(device)
@@ -1387,6 +1427,15 @@ export function Devices({
                             </Button>
                           )}
                           {renderControlFeedback(device)}
+                          <Button
+                            variant="outline"
+                            className="mt-3 w-full"
+                            size="sm"
+                            onClick={() => setDetailDeviceId(device._id)}
+                          >
+                            <BarChart3 className="mr-2 h-3 w-3" />
+                            {supportsEnergyMonitoring(device) ? "Details & Chart" : "Details"}
+                          </Button>
                         </div>
                       )
                     })}
@@ -1396,6 +1445,16 @@ export function Devices({
           ))}
         </TabsContent>
       </Tabs>
+
+      <DeviceDetailsDialog
+        device={detailDevice}
+        open={Boolean(detailDeviceId)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setDetailDeviceId(null)
+          }
+        }}
+      />
     </div>
   )
 }

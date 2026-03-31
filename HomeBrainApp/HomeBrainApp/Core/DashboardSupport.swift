@@ -8,6 +8,7 @@ enum DashboardWidgetType: String, CaseIterable, Identifiable {
     case favoriteDevices = "favorite-devices"
     case weather
     case voiceCommand = "voice-command"
+    case devices
     case device
 
     var id: String { rawValue }
@@ -21,6 +22,7 @@ enum DashboardWidgetType: String, CaseIterable, Identifiable {
         case .favoriteDevices: return "Favorite Devices"
         case .weather: return "Weather"
         case .voiceCommand: return "Voice Commands"
+        case .devices: return "Devices"
         case .device: return "Device Control"
         }
     }
@@ -34,6 +36,7 @@ enum DashboardWidgetType: String, CaseIterable, Identifiable {
         case .favoriteDevices: return "Dock of favorite devices with live controls."
         case .weather: return "Current conditions and forecast for a saved or detected location."
         case .voiceCommand: return "Natural-language command surface."
+        case .devices: return "A dense control grid for a selected set of devices."
         case .device: return "A dedicated control card for one specific device."
         }
     }
@@ -91,6 +94,7 @@ enum DashboardWeatherLocationMode: String, CaseIterable, Identifiable {
 
 struct DashboardWidgetSettings: Hashable {
     var deviceId: String?
+    var deviceIds: [String] = []
     var favoriteDeviceSizes: [String: DashboardFavoriteDeviceCardSize] = [:]
     var weatherLocationMode: DashboardWeatherLocationMode = .saved
     var weatherLocationQuery: String?
@@ -100,6 +104,10 @@ struct DashboardWidgetSettings: Hashable {
 
         if let deviceId, !deviceId.isEmpty {
             result["deviceId"] = deviceId
+        }
+
+        if !deviceIds.isEmpty {
+            result["deviceIds"] = deviceIds
         }
 
         if !favoriteDeviceSizes.isEmpty {
@@ -379,6 +387,7 @@ enum DashboardSupport {
         let size = DashboardWidgetSize(rawValue: JSON.string(object, "size")) ?? defaultWidgetDescriptors.first(where: { $0.0 == type })?.2 ?? .medium
         let settingsObject = JSON.object(object["settings"])
         let deviceId = JSON.optionalString(settingsObject, "deviceId")
+        let deviceIds = dashboardStringArray(from: settingsObject["deviceIds"]) ?? []
         let weatherLocationMode = DashboardWeatherLocationMode(rawValue: JSON.string(settingsObject, "weatherLocationMode")) ?? .saved
         let weatherLocationQuery = JSON.optionalString(settingsObject, "weatherLocationQuery")?.trimmingCharacters(in: .whitespacesAndNewlines)
         let favoriteDeviceSizes = JSON.object(settingsObject["favoriteDeviceSizes"]).reduce(into: [String: DashboardFavoriteDeviceCardSize]()) { accumulator, entry in
@@ -396,6 +405,10 @@ enum DashboardSupport {
             return nil
         }
 
+        if type == .devices && deviceIds.isEmpty {
+            return nil
+        }
+
         return DashboardWidgetItem(
             id: sanitizedTitle(JSON.string(object, "id"), fallback: createID(prefix: "widget-\(index + 1)")),
             type: type,
@@ -404,6 +417,7 @@ enum DashboardSupport {
             minimized: JSON.bool(object, "minimized"),
             settings: DashboardWidgetSettings(
                 deviceId: deviceId,
+                deviceIds: deviceIds,
                 favoriteDeviceSizes: favoriteDeviceSizes,
                 weatherLocationMode: weatherLocationMode,
                 weatherLocationQuery: weatherLocationMode == .custom ? weatherLocationQuery : nil
