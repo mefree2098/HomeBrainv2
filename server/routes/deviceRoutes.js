@@ -22,7 +22,8 @@ router.get('/', async (req, res) => {
     if (req.query.isOnline !== undefined) filters.isOnline = req.query.isOnline === 'true';
     if (req.query.source) filters.source = req.query.source;
     
-    const devices = await deviceService.getAllDevices(filters);
+    const refreshSmartThings = req.query.refresh === '1' || req.query.refresh === 'true';
+    const devices = await deviceService.getAllDevices(filters, { refreshSmartThings });
     
     console.log(`GET /api/devices - Successfully returned ${devices.length} devices`);
     res.status(200).json({

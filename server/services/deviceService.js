@@ -38,7 +38,7 @@ class DeviceService {
    * @param {Object} filters - Optional filters (room, type, status, isOnline, source)
    * @returns {Promise<Array>} Array of devices
    */
-  async getAllDevices(filters = {}) {
+  async getAllDevices(filters = {}, options = {}) {
     try {
       console.log('DeviceService: Fetching all devices with filters:', filters);
 
@@ -62,7 +62,13 @@ class DeviceService {
         }
       }
       
-      const devices = await Device.find(query).sort({ room: 1, name: 1 });
+      let devices = await Device.find(query).sort({ room: 1, name: 1 });
+
+      if (options.refreshSmartThings) {
+        await this.refreshSmartThingsDevices(devices);
+        devices = await Device.find(query).sort({ room: 1, name: 1 });
+      }
+
       console.log(`DeviceService: Found ${devices.length} devices`);
       
       return devices;
@@ -71,6 +77,53 @@ class DeviceService {
       console.error(error.stack);
       throw new Error('Failed to fetch devices');
     }
+  }
+
+  async refreshSmartThingsDevices(devices = []) {
+    const smartThingsDevices = Array.isArray(devices)
+      ? devices.filter((device) => this.isSmartThingsDevice(device))
+      : [];
+
+    if (smartThingsDevices.length === 0) {
+      return [];
+    }
+
+    const bulkOps = [];
+    const updatedDeviceIds = new Set();
+
+    for (const device of smartThingsDevices) {
+      try {
+        const updates = await this.pollSmartThingsState(device, undefined);
+        if (!updates || Object.keys(updates).length === 0) {
+          continue;
+        }
+
+        bulkOps.push({
+          updateOne: {
+            filter: { _id: device._id },
+            update: { $set: updates }
+          }
+        });
+        updatedDeviceIds.add(String(device._id));
+      } catch (error) {
+        const smartThingsId = device?.properties?.smartThingsDeviceId || 'unknown-id';
+        console.warn(`DeviceService: Failed to refresh SmartThings device ${smartThingsId}: ${error.message}`);
+      }
+    }
+
+    if (bulkOps.length === 0) {
+      return [];
+    }
+
+    await Device.bulkWrite(bulkOps, { ordered: false });
+
+    const refreshedDevices = await Device.find({ _id: { $in: Array.from(updatedDeviceIds) } });
+    const payload = deviceUpdateEmitter.normalizeDevices(refreshedDevices);
+    if (payload.length > 0) {
+      deviceUpdateEmitter.emit('devices:update', payload);
+    }
+
+    return refreshedDevices;
   }
 
   /**

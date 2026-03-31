@@ -10,6 +10,7 @@ const {
   pickCodexModel,
   resolveCodexLaunchSpec,
   resolveDraftCodexHome,
+  resolveLocalCodexHomeCandidates,
   resolveSessionOptions
 } = require('../services/codexCliService');
 
@@ -67,10 +68,29 @@ test('buildCodexOutputSchema reuses explicit Codex or Ollama JSON schema payload
   assert.equal(buildCodexOutputSchema({ ollamaFormat: 'json' }), null);
 });
 
+test('resolveLocalCodexHomeCandidates prefers the shared Codex home when it already has auth', async (t) => {
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-home-pref-'));
+  const sharedHome = path.join(fakeHome, '.codex');
+  const isolatedHome = path.join(sharedHome, 'homebrain');
+
+  await fs.mkdir(sharedHome, { recursive: true });
+  await fs.mkdir(isolatedHome, { recursive: true });
+  await fs.writeFile(path.join(sharedHome, 'auth.json'), '{"token":"present"}', 'utf8');
+  await fs.writeFile(path.join(isolatedHome, 'config.toml'), 'cli_auth_credentials_store = "file"\n', 'utf8');
+
+  t.after(async () => {
+    await fs.rm(fakeHome, { recursive: true, force: true });
+  });
+
+  assert.deepEqual(resolveLocalCodexHomeCandidates(fakeHome), [sharedHome, isolatedHome]);
+});
+
 test('resolveSessionOptions ignores non-custom codexHome overrides and resolves local homes outside the repo by default', async (t) => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-test-'));
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-user-home-'));
   t.after(async () => {
     await fs.rm(cwd, { recursive: true, force: true });
+    await fs.rm(fakeHome, { recursive: true, force: true });
   });
 
   const options = await resolveSessionOptions({
@@ -83,10 +103,38 @@ test('resolveSessionOptions ignores non-custom codexHome overrides and resolves 
       codexHome: '/also/ignored',
       codexHomeProfile: 'local'
     },
-    cwd
+    cwd,
+    homeDir: fakeHome
   });
 
   assert.equal(options.codexHome, '');
   assert.equal(options.codexHomeProfile, 'local');
-  assert.equal(options.effectiveCodexHome, path.join(os.homedir(), '.codex', 'homebrain'));
+  assert.equal(options.effectiveCodexHome, path.join(fakeHome, '.codex', 'homebrain'));
+});
+
+test('resolveSessionOptions reuses an authenticated shared Codex home before the isolated default', async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-test-'));
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-user-home-'));
+  const sharedHome = path.join(fakeHome, '.codex');
+
+  await fs.mkdir(sharedHome, { recursive: true });
+  await fs.writeFile(path.join(sharedHome, 'auth.json'), '{"token":"present"}', 'utf8');
+
+  t.after(async () => {
+    await fs.rm(cwd, { recursive: true, force: true });
+    await fs.rm(fakeHome, { recursive: true, force: true });
+  });
+
+  const options = await resolveSessionOptions({
+    settings: {
+      codexHomeProfile: 'local',
+      codexAwsVolumeRoot: '/mnt/efs'
+    },
+    cwd,
+    homeDir: fakeHome
+  });
+
+  assert.equal(options.codexHome, '');
+  assert.equal(options.codexHomeProfile, 'local');
+  assert.equal(options.effectiveCodexHome, sharedHome);
 });

@@ -1,5 +1,8 @@
 import api from "./api";
 
+const getApiErrorMessage = (error: any) =>
+  error?.response?.data?.message || error?.response?.data?.error || error?.message || "Request failed";
+
 export type WorkflowTriggerType = "manual" | "time" | "schedule" | "device_state" | "sensor";
 export type WorkflowActionType =
   | "device_control"
@@ -64,59 +67,95 @@ export interface Workflow {
 }
 
 export const getWorkflows = async (): Promise<{ success: boolean; workflows: Workflow[]; count: number }> => {
-  const response = await api.get("/api/workflows");
-  return response.data;
+  try {
+    const response = await api.get("/api/workflows");
+    return response.data;
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };
 
 export const getWorkflowById = async (id: string): Promise<{ success: boolean; workflow: Workflow }> => {
-  const response = await api.get(`/api/workflows/${id}`);
-  return response.data;
+  try {
+    const response = await api.get(`/api/workflows/${id}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };
 
 export const createWorkflow = async (payload: Partial<Workflow>) => {
-  const response = await api.post("/api/workflows", payload);
-  return response.data as { success: boolean; message: string; workflow: Workflow };
+  try {
+    const response = await api.post("/api/workflows", payload);
+    return response.data as { success: boolean; message: string; workflow: Workflow };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };
 
 export const createWorkflowFromText = async (payload: { text: string; roomContext?: string | null; source?: string }) => {
-  const response = await api.post("/api/workflows/create-from-text", payload);
-  return response.data as {
-    success: boolean;
-    handledDirectCommand?: boolean;
-    message: string;
-    workflow?: Workflow;
-  };
+  try {
+    const response = await api.post("/api/workflows/create-from-text", payload);
+    return response.data as {
+      success: boolean;
+      handledDirectCommand?: boolean;
+      message: string;
+      workflow?: Workflow;
+    };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };
 
 export const updateWorkflow = async (id: string, payload: Partial<Workflow>) => {
-  const response = await api.put(`/api/workflows/${id}`, payload);
-  return response.data as { success: boolean; message: string; workflow: Workflow };
+  try {
+    const response = await api.put(`/api/workflows/${id}`, payload);
+    return response.data as { success: boolean; message: string; workflow: Workflow };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };
 
 export const toggleWorkflow = async (id: string, enabled: boolean) => {
-  const response = await api.put(`/api/workflows/${id}/toggle`, { enabled });
-  return response.data as { success: boolean; message: string; workflow: Workflow };
+  try {
+    const response = await api.put(`/api/workflows/${id}/toggle`, { enabled });
+    return response.data as { success: boolean; message: string; workflow: Workflow };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };
 
 export const executeWorkflow = async (id: string, context?: Record<string, unknown>) => {
-  const response = await api.post(`/api/workflows/${id}/execute`, { context });
-  return response.data as { success: boolean; message: string; workflow: Workflow };
+  try {
+    const response = await api.post(`/api/workflows/${id}/execute`, { context });
+    return response.data as { success: boolean; message: string; workflow: Workflow };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };
 
 export const deleteWorkflow = async (id: string) => {
-  const response = await api.delete(`/api/workflows/${id}`);
-  return response.data as { success: boolean; message: string };
+  try {
+    const response = await api.delete(`/api/workflows/${id}`);
+    return response.data as { success: boolean; message: string };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };
 
 export const getWorkflowStats = async () => {
-  const response = await api.get("/api/workflows/stats");
-  return response.data as {
-    success: boolean;
-    stats: {
-      total: number;
-      enabled: number;
-      disabled: number;
-      categories: Record<string, number>;
+  try {
+    const response = await api.get("/api/workflows/stats");
+    return response.data as {
+      success: boolean;
+      stats: {
+        total: number;
+        enabled: number;
+        disabled: number;
+        categories: Record<string, number>;
+      };
     };
-  };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
 };

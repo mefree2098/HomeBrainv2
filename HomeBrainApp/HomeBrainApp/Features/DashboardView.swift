@@ -5212,16 +5212,28 @@ struct DashboardView: View {
         systemStatus = isOnline ? "Online" : "Offline"
     }
 
+    private func freshRequestTimestampQueryItem() -> URLQueryItem {
+        URLQueryItem(
+            name: "_ts",
+            value: String(Int(Date().timeIntervalSince1970 * 1000))
+        )
+    }
+
     private func freshSecurityStatusQueryItems(refreshDoorLocks: Bool = true) -> [URLQueryItem] {
         [
             URLQueryItem(
                 name: "refreshDoorLocks",
                 value: refreshDoorLocks ? "1" : "0"
             ),
-            URLQueryItem(
-                name: "_ts",
-                value: String(Int(Date().timeIntervalSince1970 * 1000))
-            )
+            freshRequestTimestampQueryItem()
+        ]
+    }
+
+    private func freshLockDeviceQueryItems(refresh: Bool = true) -> [URLQueryItem] {
+        [
+            URLQueryItem(name: "type", value: "lock"),
+            URLQueryItem(name: "refresh", value: refresh ? "1" : "0"),
+            freshRequestTimestampQueryItem()
         ]
     }
 
@@ -5234,9 +5246,29 @@ struct DashboardView: View {
         do {
             let response = try await session.apiClient.get("/api/security-alarm/status", query: freshSecurityStatusQueryItems())
             applySecurityStatusResponse(response)
+            await refreshSecurityDoorLocksFromDevices()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func refreshSecurityDoorLocksFromDevices() async {
+        guard !previewMode else {
+            return
+        }
+
+        do {
+            let response = try await session.apiClient.get("/api/devices", query: freshLockDeviceQueryItems())
+            let root = JSON.object(response)
+            let data = JSON.object(root["data"])
+            let lockDevices = JSON.array(data["devices"]).map(DeviceItem.from)
+
+            for lockDevice in lockDevices {
+                upsertDevice(lockDevice)
+            }
+        } catch {
+            // Keep the dashboard usable even if the lock-only reconciliation call fails.
         }
     }
 
