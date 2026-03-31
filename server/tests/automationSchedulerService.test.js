@@ -2,10 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 
+const Automation = require('../models/Automation');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationSchedulerService = require('../services/automationSchedulerService');
 const automationRuntimeService = require('../services/automationRuntimeService');
+const automationService = require('../services/automationService');
 const deviceService = require('../services/deviceService');
 const weatherService = require('../services/weatherService');
 
@@ -276,4 +278,55 @@ test('schedule triggers can fire at sunset using weather-derived solar time', as
   assert.equal(context.triggeringScheduleEvent, 'sunset');
   assert.equal(context.triggeringScheduleOffsetMinutes, 15);
   assert.match(context.triggeringScheduleTime, /^2026-03-31T18:55:00\.000Z$/);
+});
+
+test('tick launches matching automations without waiting for long-running executions to finish', async (t) => {
+  const originalFind = Automation.find;
+  const originalShouldRunAutomation = automationSchedulerService.shouldRunAutomation;
+  const originalConsumePendingTriggerContext = automationSchedulerService.consumePendingTriggerContext;
+  const originalIsAlreadyExecutedForCurrentMinute = automationSchedulerService.isAlreadyExecutedForCurrentMinute;
+  const originalExecuteAutomation = automationService.executeAutomation;
+
+  const launched = [];
+  const pendingResolves = [];
+
+  Automation.find = () => ({
+    lean: async () => ([
+      {
+        _id: { toString: () => 'automation-1' },
+        name: 'Bathroom fan auto off',
+        enabled: true,
+        trigger: { type: 'device_state' }
+      },
+      {
+        _id: { toString: () => 'automation-2' },
+        name: 'Arm stay shutdown',
+        enabled: true,
+        trigger: { type: 'security_alarm_status' }
+      }
+    ])
+  });
+
+  automationSchedulerService.shouldRunAutomation = async () => true;
+  automationSchedulerService.consumePendingTriggerContext = () => ({});
+  automationSchedulerService.isAlreadyExecutedForCurrentMinute = () => false;
+  automationService.executeAutomation = async (id) => {
+    launched.push(id);
+    return new Promise((resolve) => {
+      pendingResolves.push(resolve);
+    });
+  };
+
+  t.after(() => {
+    Automation.find = originalFind;
+    automationSchedulerService.shouldRunAutomation = originalShouldRunAutomation;
+    automationSchedulerService.consumePendingTriggerContext = originalConsumePendingTriggerContext;
+    automationSchedulerService.isAlreadyExecutedForCurrentMinute = originalIsAlreadyExecutedForCurrentMinute;
+    automationService.executeAutomation = originalExecuteAutomation;
+    pendingResolves.splice(0).forEach((resolve) => resolve({ success: true }));
+  });
+
+  await automationSchedulerService.tick({ source: 'security_alarm', reason: 'test' });
+
+  assert.deepEqual(launched, ['automation-1', 'automation-2']);
 });

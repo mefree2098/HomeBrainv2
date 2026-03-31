@@ -260,6 +260,32 @@ class AutomationSchedulerService {
     this.lastSolarWarningAt = 0;
   }
 
+  shouldLogSecurityAlarmEvaluation(runtimeContext = {}) {
+    const source = typeof runtimeContext?.source === 'string'
+      ? runtimeContext.source.trim().toLowerCase()
+      : '';
+
+    return [
+      'security_alarm',
+      'smartthings_alarm_webhook',
+      'security_alarm_sync'
+    ].includes(source);
+  }
+
+  launchAutomationExecution(automation, triggerContext = {}) {
+    void automationService.executeAutomation(automation._id.toString(), {
+      triggerType: automation.trigger.type,
+      triggerSource: 'scheduler',
+      context: triggerContext
+    })
+      .then(() => {
+        console.log(`AutomationSchedulerService: executed automation ${automation.name} (${automation._id})`);
+      })
+      .catch((error) => {
+        console.error(`AutomationSchedulerService: failed executing ${automation._id}:`, error.message);
+      });
+  }
+
   start() {
     if (this.timer) {
       return;
@@ -680,7 +706,7 @@ class AutomationSchedulerService {
     this.triggerStateCache.set(cacheKey, matchedState);
 
     const shouldRun = Boolean(matchedState && lastMatchedState !== matchedState);
-    if (runtimeContext?.source === 'security_alarm') {
+    if (this.shouldLogSecurityAlarmEvaluation(runtimeContext)) {
       await automationRuntimeService.recordSchedulerSecurityAlarmEvaluation({
         automationId: automation?._id?.toString?.() || null,
         automationName: automation?.name || null,
@@ -782,16 +808,7 @@ class AutomationSchedulerService {
           continue;
         }
 
-        try {
-          await automationService.executeAutomation(automation._id.toString(), {
-            triggerType: automation.trigger.type,
-            triggerSource: 'scheduler',
-            context: triggerContext
-          });
-          console.log(`AutomationSchedulerService: executed automation ${automation.name} (${automation._id})`);
-        } catch (error) {
-          console.error(`AutomationSchedulerService: failed executing ${automation._id}:`, error.message);
-        }
+        this.launchAutomationExecution(automation, triggerContext);
       }
     } catch (error) {
       console.error('AutomationSchedulerService: tick failed:', error.message);
