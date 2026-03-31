@@ -4,7 +4,7 @@ const triggerSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual'],
+    enum: ['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual', 'security_alarm_status'],
   },
   conditions: {
     type: mongoose.Schema.Types.Mixed,

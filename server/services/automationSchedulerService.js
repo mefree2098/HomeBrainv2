@@ -1,5 +1,6 @@
 const Automation = require('../models/Automation');
 const Device = require('../models/Device');
+const SecurityAlarm = require('../models/SecurityAlarm');
 const automationService = require('./automationService');
 
 const WEEKDAY_TO_NUMBER = {
@@ -320,6 +321,62 @@ class AutomationSchedulerService {
     return met && lastState !== true;
   }
 
+  normalizeSecurityAlarmState(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    switch (normalized) {
+      case 'disarm':
+      case 'disarmed':
+        return 'disarmed';
+      case 'stay':
+      case 'armedstay':
+      case 'armed_stay':
+      case 'armed stay':
+        return 'armedStay';
+      case 'away':
+      case 'armedaway':
+      case 'armed_away':
+      case 'armed away':
+        return 'armedAway';
+      case 'trigger':
+      case 'triggered':
+        return 'triggered';
+      case 'arming':
+        return 'arming';
+      case 'disarming':
+        return 'disarming';
+      default:
+        return null;
+    }
+  }
+
+  async evaluateSecurityAlarmTrigger(automation) {
+    const conditions = automation?.trigger?.conditions || {};
+    const rawStates = Array.isArray(conditions.states)
+      ? conditions.states
+      : [conditions.state, conditions.status, conditions.value].filter((value) => value != null);
+    const states = Array.from(new Set(rawStates
+      .map((value) => this.normalizeSecurityAlarmState(String(value)))
+      .filter(Boolean)));
+
+    if (!states.length) {
+      return false;
+    }
+
+    const alarm = await SecurityAlarm.getMainAlarm();
+    const currentState = this.normalizeSecurityAlarmState(alarm?.alarmState || '');
+    const matchedState = currentState && states.includes(currentState) ? currentState : null;
+
+    const cacheKey = `${automation._id.toString()}:security-alarm-trigger`;
+    const lastMatchedState = this.triggerStateCache.get(cacheKey) || null;
+    this.triggerStateCache.set(cacheKey, matchedState);
+
+    return Boolean(matchedState && lastMatchedState !== matchedState);
+  }
+
   async shouldRunAutomation(automation, now) {
     if (!automation?.enabled) {
       return false;
@@ -338,6 +395,9 @@ class AutomationSchedulerService {
     if (triggerType === 'device_state' || triggerType === 'sensor') {
       return this.evaluateDeviceStateTrigger(automation);
     }
+    if (triggerType === 'security_alarm_status') {
+      return this.evaluateSecurityAlarmTrigger(automation);
+    }
     return false;
   }
 
@@ -353,7 +413,7 @@ class AutomationSchedulerService {
       this.cleanupRecentRuns(now.getTime());
       const automations = await Automation.find({
         enabled: true,
-        'trigger.type': { $in: ['time', 'schedule', 'device_state', 'sensor'] }
+        'trigger.type': { $in: ['time', 'schedule', 'device_state', 'sensor', 'security_alarm_status'] }
       }).lean();
 
       for (const automation of automations) {

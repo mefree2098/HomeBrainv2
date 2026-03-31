@@ -12,6 +12,8 @@ const MAX_LLM_RETRIES = 3;
 const MAX_DEVICE_PROMPT_ENTRIES = 40;
 const MAX_SCENE_PROMPT_ENTRIES = 25;
 const MIN_KEYWORD_LENGTH = 3;
+const VALID_TRIGGER_TYPES = new Set(['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual', 'security_alarm_status']);
+const VALID_SECURITY_ALARM_STATES = new Set(['disarmed', 'armedStay', 'armedAway', 'triggered', 'arming', 'disarming']);
 
 const DEVICE_TYPE_HINTS = {
   light: ['light', 'lights', 'lamp', 'bulb'],
@@ -21,6 +23,57 @@ const DEVICE_TYPE_HINTS = {
   garage: ['garage', 'door'],
   sensor: ['sensor', 'motion', 'door', 'window', 'temperature', 'humidity']
 };
+
+function normalizeSecurityAlarmState(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case 'disarm':
+    case 'disarmed':
+      return 'disarmed';
+    case 'stay':
+    case 'armedstay':
+    case 'armed_stay':
+    case 'armed stay':
+      return 'armedStay';
+    case 'away':
+    case 'armedaway':
+    case 'armed_away':
+    case 'armed away':
+      return 'armedAway';
+    case 'trigger':
+    case 'triggered':
+      return 'triggered';
+    case 'arming':
+      return 'arming';
+    case 'disarming':
+      return 'disarming';
+    default:
+      return null;
+  }
+}
+
+function normalizeTriggerConditions(type, conditions) {
+  const safeConditions = conditions && typeof conditions === 'object' && !Array.isArray(conditions)
+    ? { ...conditions }
+    : {};
+
+  if (type !== 'security_alarm_status') {
+    return safeConditions;
+  }
+
+  const rawStates = Array.isArray(safeConditions.states)
+    ? safeConditions.states
+    : [safeConditions.state, safeConditions.status, safeConditions.value].filter((value) => value != null);
+  const states = Array.from(new Set(rawStates
+    .map((value) => normalizeSecurityAlarmState(String(value)))
+    .filter(Boolean)));
+
+  return { states };
+}
 
 function standaloneAutomationFilter(extra = {}) {
   return {
@@ -902,6 +955,34 @@ async function validateAndFixAutomation(automation) {
     return { valid: false, issues, fixedAutomation: null };
   }
 
+  const triggerType = typeof automation.trigger.type === 'string'
+    ? automation.trigger.type.trim()
+    : '';
+  if (!VALID_TRIGGER_TYPES.has(triggerType)) {
+    issues.push(`Invalid trigger type: ${automation.trigger.type}`);
+    return { valid: false, issues, fixedAutomation: null };
+  }
+
+  const fixedTrigger = {
+    ...automation.trigger,
+    type: triggerType,
+    conditions: normalizeTriggerConditions(triggerType, automation.trigger.conditions)
+  };
+
+  if (triggerType === 'security_alarm_status') {
+    const states = Array.isArray(fixedTrigger.conditions?.states) ? fixedTrigger.conditions.states : [];
+    if (!states.length) {
+      issues.push('Security alarm triggers require at least one target state');
+      return { valid: false, issues, fixedAutomation: null };
+    }
+
+    const invalidStates = states.filter((state) => !VALID_SECURITY_ALARM_STATES.has(state));
+    if (invalidStates.length) {
+      issues.push(`Invalid security alarm state(s): ${invalidStates.join(', ')}`);
+      return { valid: false, issues, fixedAutomation: null };
+    }
+  }
+
   // Validate actions
   if (!automation.actions || !Array.isArray(automation.actions) || automation.actions.length === 0) {
     issues.push('Missing or empty actions array');
@@ -1017,6 +1098,7 @@ async function validateAndFixAutomation(automation) {
 
   const fixedAutomation = {
     ...automation,
+    trigger: fixedTrigger,
     actions: fixedActions
   };
 
@@ -1332,6 +1414,7 @@ IMPORTANT RULES:
 7. Never output any prefix/suffix text. Return ONLY the JSON object.
 8. For devices with Source:harmony, only use turn_on, turn_off, or toggle. Do not use set_brightness, set_color, set_temperature, lock/unlock, or open/close on Harmony Hub activity devices.
 9. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
+10. When the request refers to the security system or alarm arming/disarming state, use trigger type "security_alarm_status" with conditions like {"states":["armedStay","armedAway"]}.
 
 AVAILABLE DEVICES:
 ${deviceList}
@@ -1346,12 +1429,13 @@ REQUIRED JSON STRUCTURE:
   "name": "Brief descriptive name (max 50 chars)",
   "description": "Detailed description of what this automation does",
   "trigger": {
-    "type": "<trigger_type>",  // choose one: time, device_state, sensor, schedule, manual
+    "type": "<trigger_type>",  // choose one: time, device_state, sensor, schedule, manual, security_alarm_status
     "conditions": {
       // For time: {"hour": 7, "minute": 0, "days": ["monday", "tuesday", ...]}
       // For schedule: {"cron": "0 7 * * 1-5"}
       // For device_state: {"deviceId": "ID", "state": "on" or "off", "property": "brightness", "operator": ">", "value": 50}
       // For sensor: {"sensorType": "<sensor_type>", "deviceId": "ID", "condition": "<condition>", "value": 25}
+      // For security_alarm_status: {"states": ["armedStay", "armedAway"]}
       //   sensor_type options: motion, temperature, humidity
       //   condition options: detected, above, below
       // For manual: {}
@@ -1388,6 +1472,7 @@ TRIGGER TYPE EXAMPLES:
 - "when motion detected" -> type: "sensor", conditions: {"sensorType": "motion", "condition": "detected"}
 - "when temperature above 75" -> type: "sensor", conditions: {"sensorType": "temperature", "condition": "above", "value": 75}
 - "when front door unlocked" -> type: "device_state", conditions: {"state": "off"}
+- "when the security alarm is armed stay or armed away" -> type: "security_alarm_status", conditions: {"states": ["armedStay", "armedAway"]}
 - "manual trigger" -> type: "manual", conditions: {}
 
 USER REQUEST: "${text}"

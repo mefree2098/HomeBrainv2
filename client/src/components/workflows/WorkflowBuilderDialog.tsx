@@ -52,6 +52,9 @@ function getDefaultTriggerConditions(type: WorkflowTriggerType) {
   if (type === "sensor") {
     return { sensorType: "motion", condition: "detected" };
   }
+  if (type === "security_alarm_status") {
+    return { states: ["armedStay", "armedAway"] };
+  }
   return {};
 }
 
@@ -335,6 +338,7 @@ export function WorkflowBuilderDialog({
                     <SelectItem value="schedule">Cron schedule</SelectItem>
                     <SelectItem value="device_state">Device state</SelectItem>
                     <SelectItem value="sensor">Sensor event</SelectItem>
+                    <SelectItem value="security_alarm_status">Security alarm status</SelectItem>
                   </SelectContent>
                 </Select>
 
@@ -425,6 +429,23 @@ export function WorkflowBuilderDialog({
                         </SelectContent>
                       </Select>
                     </div>
+                  </div>
+                )}
+
+                {triggerType === "security_alarm_status" && (
+                  <div className="space-y-2">
+                    <Label>Alarm states</Label>
+                    <Input
+                      value={Array.isArray(triggerConditions.states) ? (triggerConditions.states as string[]).join(", ") : ""}
+                      onChange={(event) => {
+                        const states = event.target.value
+                          .split(",")
+                          .map((value) => value.trim())
+                          .filter(Boolean);
+                        setTriggerConditions((prev) => ({ ...prev, states }));
+                      }}
+                      placeholder="armedStay, armedAway"
+                    />
                   </div>
                 )}
               </CardContent>
