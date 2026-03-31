@@ -374,7 +374,14 @@ class AutomationSchedulerService {
     const lastMatchedState = this.triggerStateCache.get(cacheKey) || null;
     this.triggerStateCache.set(cacheKey, matchedState);
 
-    return Boolean(matchedState && lastMatchedState !== matchedState);
+    const shouldRun = Boolean(matchedState && lastMatchedState !== matchedState);
+    if (shouldRun) {
+      console.log(
+        `AutomationSchedulerService: security alarm trigger matched ${matchedState} for automation ${automation.name || automation._id}`
+      );
+    }
+
+    return shouldRun;
   }
 
   async shouldRunAutomation(automation, now) {
