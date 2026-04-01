@@ -196,17 +196,80 @@ test('_confirmDeviceStateByAddress retries level query and persists confirmed st
   assert.equal(persistedPatch.brightness, 100);
 });
 
+test('_confirmExpectedDeviceStateByAddress requires stable matching reads', async (t) => {
+  const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalSleep = insteonService._sleep;
+
+  t.after(() => {
+    insteonService._queryDeviceLevelByAddress = originalQueryLevel;
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._sleep = originalSleep;
+  });
+
+  const queriedLevels = [0, 0];
+  const persisted = [];
+
+  insteonService._queryDeviceLevelByAddress = async () => queriedLevels.shift();
+  insteonService._persistDeviceRuntimeStateByAddress = async (_address, patch) => {
+    persisted.push(patch);
+    return patch;
+  };
+  insteonService._sleep = async () => {};
+
+  const state = await insteonService._confirmExpectedDeviceStateByAddress('11.22.33', false, {
+    attempts: 2,
+    timeoutMs: 1000,
+    pauseBetweenMs: 0,
+    settleBetweenMatchesMs: 0,
+    requiredMatches: 2
+  });
+
+  assert.equal(state.status, false);
+  assert.equal(state.confirmedReads, 2);
+  assert.equal(persisted.length, 2);
+});
+
+test('_confirmExpectedDeviceStateByAddress fails when only a transient matching read is observed', async (t) => {
+  const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalSleep = insteonService._sleep;
+
+  t.after(() => {
+    insteonService._queryDeviceLevelByAddress = originalQueryLevel;
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._sleep = originalSleep;
+  });
+
+  const queriedLevels = [0, 100];
+
+  insteonService._queryDeviceLevelByAddress = async () => queriedLevels.shift();
+  insteonService._persistDeviceRuntimeStateByAddress = async (_address, patch) => patch;
+  insteonService._sleep = async () => {};
+
+  await assert.rejects(
+    insteonService._confirmExpectedDeviceStateByAddress('11.22.33', false, {
+      attempts: 2,
+      timeoutMs: 1000,
+      pauseBetweenMs: 0,
+      settleBetweenMatchesMs: 0,
+      requiredMatches: 2
+    }),
+    /stable OFF state/i
+  );
+});
+
 test('turnOn issues normalized command address and returns confirmed state', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
-  const originalConfirmState = insteonService._confirmDeviceStateByAddress;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
 
   t.after(() => {
     insteonService.hub = originalHub;
     insteonService.isConnected = originalConnected;
     Device.findById = originalFindById;
-    insteonService._confirmDeviceStateByAddress = originalConfirmState;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
   });
 
   let hubAddress = null;
@@ -221,12 +284,14 @@ test('turnOn issues normalized command address and returns confirmed state', asy
   };
   Device.findById = async () => ({
     _id: 'mock-device',
-    properties: { insteonAddress: '11.22.33' }
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
   });
-  insteonService._confirmDeviceStateByAddress = async () => ({
+  insteonService._confirmExpectedDeviceStateByAddress = async () => ({
     status: true,
     brightness: 68,
-    level: 173
+    level: 173,
+    confirmedReads: 2
   });
 
   const result = await insteonService.turnOn('mock-device', 68);
@@ -236,6 +301,53 @@ test('turnOn issues normalized command address and returns confirmed state', asy
   assert.equal(result.confirmed, true);
   assert.equal(result.status, true);
   assert.equal(result.brightness, 68);
+  assert.match(result.message, /Insteon PLM 11\.22\.33/i);
+  assert.equal(result.details.controlMethod, 'insteon_plm_direct');
+  assert.equal(result.details.confirmedReads, 2);
+});
+
+test('turnOff issues normalized command address and returns direct PLM confirmation details', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+  });
+
+  let hubAddress = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOff(address, callback) {
+      hubAddress = address;
+      callback(null);
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'SwitchLinc Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._confirmExpectedDeviceStateByAddress = async () => ({
+    status: false,
+    brightness: 0,
+    level: 0,
+    confirmedReads: 2
+  });
+
+  const result = await insteonService.turnOff('mock-device');
+
+  assert.equal(hubAddress, '112233');
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+  assert.equal(result.status, false);
+  assert.match(result.message, /Insteon PLM 11\.22\.33/i);
+  assert.equal(result.details.controlMethod, 'insteon_plm_direct');
+  assert.equal(result.details.confirmedLevel, 0);
 });
 
 test('_linkDeviceRemote writes responder and controller links when controller links are enabled', async (t) => {

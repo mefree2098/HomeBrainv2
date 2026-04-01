@@ -6658,6 +6658,95 @@ class InsteonService {
     throw lastError || new Error(`Unable to confirm device state for ${this._formatInsteonAddress(normalizedAddress)}`);
   }
 
+  async _confirmExpectedDeviceStateByAddress(address, expectedStatus, options = {}) {
+    const normalizedAddress = this._normalizeInsteonAddress(address);
+    const attempts = Number.isFinite(Number(options.attempts))
+      ? Math.max(1, Math.min(8, Number(options.attempts)))
+      : 4;
+    const timeoutMs = Number.isFinite(Number(options.timeoutMs))
+      ? Math.max(500, Number(options.timeoutMs))
+      : 4000;
+    const pauseBetweenMs = Number.isFinite(Number(options.pauseBetweenMs))
+      ? Math.max(0, Number(options.pauseBetweenMs))
+      : 200;
+    const settleBetweenMatchesMs = Number.isFinite(Number(options.settleBetweenMatchesMs))
+      ? Math.max(0, Number(options.settleBetweenMatchesMs))
+      : 250;
+    const requiredMatches = Number.isFinite(Number(options.requiredMatches))
+      ? Math.max(1, Math.min(3, Number(options.requiredMatches)))
+      : 2;
+    const persistState = options.persistState !== false;
+
+    let consecutiveMatches = 0;
+    let lastState = null;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const level = await this._queryDeviceLevelByAddress(normalizedAddress, timeoutMs);
+        const state = this._stateFromInsteonLevel(level);
+        lastState = state;
+
+        if (persistState) {
+          await this._persistDeviceRuntimeStateByAddress(normalizedAddress, state);
+        }
+
+        if (state.status === Boolean(expectedStatus)) {
+          consecutiveMatches += 1;
+          if (consecutiveMatches >= requiredMatches) {
+            return {
+              ...state,
+              confirmedReads: consecutiveMatches
+            };
+          }
+
+          if (attempt < attempts && settleBetweenMatchesMs > 0) {
+            await this._sleep(settleBetweenMatchesMs);
+          }
+          continue;
+        }
+
+        consecutiveMatches = 0;
+        lastError = new Error(
+          `Expected ${Boolean(expectedStatus) ? 'ON' : 'OFF'} but observed ${state.status ? 'ON' : 'OFF'}`
+        );
+      } catch (error) {
+        consecutiveMatches = 0;
+        lastError = error;
+      }
+
+      if (attempt < attempts && pauseBetweenMs > 0) {
+        await this._sleep(pauseBetweenMs);
+      }
+    }
+
+    const lastObservedText = lastState
+      ? ` Last observed ${lastState.status ? 'ON' : 'OFF'} at ${lastState.brightness}% brightness.`
+      : '';
+    throw new Error(
+      `Unable to confirm a stable ${Boolean(expectedStatus) ? 'ON' : 'OFF'} state for ${this._formatInsteonAddress(normalizedAddress)}.${lastObservedText}${lastError?.message ? ` ${lastError.message}` : ''}`.trim()
+    );
+  }
+
+  _buildInsteonControlDetails(device, address, action, confirmedState = null, extra = {}) {
+    const normalizedAddress = this._normalizeInsteonAddress(address);
+    const formattedAddress = this._formatInsteonAddress(normalizedAddress);
+    return {
+      controlMethod: 'insteon_plm_direct',
+      action: String(action || '').trim().toLowerCase() || null,
+      insteonAddress: formattedAddress,
+      insteonAddressNormalized: normalizedAddress,
+      deviceModel: device?.model || null,
+      deviceCategory: device?.properties?.deviceCategory ?? null,
+      deviceSubcategory: device?.properties?.subcategory ?? null,
+      confirmedStatus: confirmedState?.status ?? null,
+      confirmedBrightness: confirmedState?.brightness ?? null,
+      confirmedLevel: confirmedState?.level ?? null,
+      confirmedReads: confirmedState?.confirmedReads ?? null,
+      ...extra
+    };
+  }
+
   async _queryDeviceInfoByAddress(address, timeoutMs = 5000) {
     if (!this.isConnected || !this.hub) {
       await this.connect();
@@ -7100,24 +7189,26 @@ class InsteonService {
         });
       });
 
-      const confirmedState = await this._confirmDeviceStateByAddress(address, {
-        attempts: 3,
+      const confirmedState = await this._confirmExpectedDeviceStateByAddress(address, true, {
+        attempts: 4,
         timeoutMs: 4200,
         pauseBetweenMs: 220,
+        settleBetweenMatchesMs: 250,
+        requiredMatches: 2,
         persistState: true
       });
-
-      if (!confirmedState.status) {
-        throw new Error(`Command acknowledged but ${this._formatInsteonAddress(address)} did not report an ON state`);
-      }
+      const details = this._buildInsteonControlDetails(device, address, 'turn_on', confirmedState, {
+        requestedBrightness: boundedBrightness
+      });
 
       return {
         success: true,
-        message: 'Device turned on',
+        message: `Device turned on via Insteon PLM ${details.insteonAddress} (confirmed ON with ${confirmedState.confirmedReads || 1} read${(confirmedState.confirmedReads || 1) === 1 ? '' : 's'})`,
         status: confirmedState.status,
         brightness: confirmedState.brightness,
         level: confirmedState.level,
-        confirmed: true
+        confirmed: true,
+        details
       };
     } catch (error) {
       console.error('InsteonService: Failed to turn on device:', error.message);
@@ -7169,24 +7260,24 @@ class InsteonService {
         });
       });
 
-      const confirmedState = await this._confirmDeviceStateByAddress(address, {
-        attempts: 3,
+      const confirmedState = await this._confirmExpectedDeviceStateByAddress(address, false, {
+        attempts: 4,
         timeoutMs: 4200,
         pauseBetweenMs: 220,
+        settleBetweenMatchesMs: 250,
+        requiredMatches: 2,
         persistState: true
       });
-
-      if (confirmedState.status) {
-        throw new Error(`Command acknowledged but ${this._formatInsteonAddress(address)} did not report an OFF state`);
-      }
+      const details = this._buildInsteonControlDetails(device, address, 'turn_off', confirmedState);
 
       return {
         success: true,
-        message: 'Device turned off',
+        message: `Device turned off via Insteon PLM ${details.insteonAddress} (confirmed OFF with ${confirmedState.confirmedReads || 1} read${(confirmedState.confirmedReads || 1) === 1 ? '' : 's'})`,
         status: confirmedState.status,
         brightness: confirmedState.brightness,
         level: confirmedState.level,
-        confirmed: true
+        confirmed: true,
+        details
       };
     } catch (error) {
       console.error('InsteonService: Failed to turn off device:', error.message);
