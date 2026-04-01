@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { VoiceSelector } from "@/components/VoiceSelector"
 import {
@@ -13,13 +14,71 @@ import {
   Volume2,
   User,
   Settings,
-  Play
+  Play,
+  Trash2
 } from "lucide-react"
-import { getUserProfiles, saveUserProfile, getAvailableVoices, updateUserProfile } from "@/api/profiles"
+import {
+  getUserProfiles,
+  saveUserProfile,
+  getAvailableVoices,
+  updateUserProfile,
+  type AlexaProfileMapping
+} from "@/api/profiles"
 import { generateVoicePreview, playAudioBlob } from "@/api/elevenLabs"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 import { useAuth } from "@/contexts/AuthContext"
+import { Checkbox } from "@/components/ui/checkbox"
+
+const ALEXA_RESPONSE_MODE_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "audio", label: "ElevenLabs audio when available" },
+  { value: "ssml", label: "Alexa SSML voice" },
+  { value: "text", label: "Plain Alexa voice" }
+]
+
+const blankAlexaMapping = (): AlexaProfileMapping => ({
+  personId: "",
+  speakerLabel: "",
+  householdId: "",
+  locale: "en-US",
+  defaultForHousehold: false,
+  fallback: false,
+  enabled: true
+})
+
+const normalizeAlexaMappingsForForm = (value: any): AlexaProfileMapping[] => {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.map((entry) => ({
+    personId: String(entry?.personId || ""),
+    speakerLabel: String(entry?.speakerLabel || ""),
+    householdId: String(entry?.householdId || ""),
+    locale: String(entry?.locale || "en-US"),
+    alexaUserId: String(entry?.alexaUserId || ""),
+    alexaAccountId: String(entry?.alexaAccountId || ""),
+    defaultForHousehold: entry?.defaultForHousehold === true,
+    fallback: entry?.fallback === true,
+    enabled: entry?.enabled !== false
+  }))
+}
+
+const normalizeAlexaMappingsForPayload = (mappings: AlexaProfileMapping[]): AlexaProfileMapping[] =>
+  (Array.isArray(mappings) ? mappings : [])
+    .map((entry) => ({
+      personId: String(entry?.personId || "").trim(),
+      speakerLabel: String(entry?.speakerLabel || "").trim(),
+      householdId: String(entry?.householdId || "").trim(),
+      locale: String(entry?.locale || "").trim(),
+      alexaUserId: String(entry?.alexaUserId || "").trim(),
+      alexaAccountId: String(entry?.alexaAccountId || "").trim(),
+      defaultForHousehold: entry?.defaultForHousehold === true,
+      fallback: entry?.fallback === true,
+      enabled: entry?.enabled !== false
+    }))
+    .filter((entry) => entry.personId || entry.defaultForHousehold || entry.fallback)
 
 export function UserProfiles() {
   const { toast } = useToast()
@@ -31,6 +90,8 @@ export function UserProfiles() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingProfile, setEditingProfile] = useState<any>(null)
   const [playingVoice, setPlayingVoice] = useState<string | null>(null)
+  const [createAlexaMappings, setCreateAlexaMappings] = useState<AlexaProfileMapping[]>([])
+  const [editAlexaMappings, setEditAlexaMappings] = useState<AlexaProfileMapping[]>([])
   const { register, handleSubmit, reset, setValue, watch } = useForm()
   const { 
     register: registerEdit, 
@@ -82,6 +143,217 @@ export function UserProfiles() {
     }
   }, []) // toast is stable from useToast hook, safe to exclude
 
+  const handleCreateDialogChange = (open: boolean) => {
+    setIsCreateDialogOpen(open)
+    if (!open) {
+      reset()
+      setCreateAlexaMappings([])
+    }
+  }
+
+  const handleEditDialogChange = (open: boolean) => {
+    setIsEditDialogOpen(open)
+    if (!open) {
+      setEditingProfile(null)
+      resetEdit()
+      setEditAlexaMappings([])
+    }
+  }
+
+  const updateAlexaMappingAtIndex = (
+    mode: "create" | "edit",
+    index: number,
+    updates: Partial<AlexaProfileMapping>
+  ) => {
+    const setter = mode === "create" ? setCreateAlexaMappings : setEditAlexaMappings
+    setter((current) => current.map((entry, entryIndex) => (
+      entryIndex === index ? { ...entry, ...updates } : entry
+    )))
+  }
+
+  const removeAlexaMappingAtIndex = (mode: "create" | "edit", index: number) => {
+    const setter = mode === "create" ? setCreateAlexaMappings : setEditAlexaMappings
+    setter((current) => current.filter((_, entryIndex) => entryIndex !== index))
+  }
+
+  const addAlexaMapping = (mode: "create" | "edit") => {
+    const setter = mode === "create" ? setCreateAlexaMappings : setEditAlexaMappings
+    setter((current) => [...current, blankAlexaMapping()])
+  }
+
+  const renderAlexaMappingsEditor = (mode: "create" | "edit") => {
+    const mappings = mode === "create" ? createAlexaMappings : editAlexaMappings
+
+    return (
+      <div className="space-y-3 rounded-xl border border-border/60 bg-muted/20 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Alexa Speaker Mappings</p>
+            <p className="text-xs text-muted-foreground">
+              Match recognized Alexa speakers or households to this HomeBrain voice profile.
+            </p>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={() => addAlexaMapping(mode)}>
+            <Plus className="mr-1 h-3 w-3" />
+            Add Mapping
+          </Button>
+        </div>
+
+        {mappings.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border/70 px-3 py-4 text-xs text-muted-foreground">
+            No Alexa mappings yet. Add one to link a person ID, set a household default, or mark this profile as a fallback.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {mappings.map((mapping, index) => (
+              <div key={`${mode}-alexa-mapping-${index}`} className="space-y-3 rounded-lg border border-border/70 bg-background/70 p-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Speaker Label</label>
+                    <Input
+                      value={mapping.speakerLabel || ""}
+                      onChange={(event) => updateAlexaMappingAtIndex(mode, index, { speakerLabel: event.target.value })}
+                      placeholder="e.g., Matt Echo"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Alexa Person ID</label>
+                    <Input
+                      value={mapping.personId || ""}
+                      onChange={(event) => updateAlexaMappingAtIndex(mode, index, { personId: event.target.value })}
+                      placeholder="amzn1.ask.person..."
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Household ID</label>
+                    <Input
+                      value={mapping.householdId || ""}
+                      onChange={(event) => updateAlexaMappingAtIndex(mode, index, { householdId: event.target.value })}
+                      placeholder="Household identifier"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Locale</label>
+                    <Input
+                      value={mapping.locale || ""}
+                      onChange={(event) => updateAlexaMappingAtIndex(mode, index, { locale: event.target.value })}
+                      placeholder="en-US"
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Checkbox
+                      checked={mapping.enabled !== false}
+                      onCheckedChange={(checked) => updateAlexaMappingAtIndex(mode, index, { enabled: checked === true })}
+                    />
+                    Enabled
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Checkbox
+                      checked={mapping.defaultForHousehold === true}
+                      onCheckedChange={(checked) => updateAlexaMappingAtIndex(mode, index, { defaultForHousehold: checked === true })}
+                    />
+                    Default for household
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Checkbox
+                      checked={mapping.fallback === true}
+                      onCheckedChange={(checked) => updateAlexaMappingAtIndex(mode, index, { fallback: checked === true })}
+                    />
+                    Fallback profile
+                  </label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto text-muted-foreground"
+                    onClick={() => removeAlexaMappingAtIndex(mode, index)}
+                  >
+                    <Trash2 className="mr-1 h-3 w-3" />
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderAlexaPreferencesEditor = (mode: "create" | "edit") => {
+    const watchField = mode === "create" ? watch : watchEdit
+    const setFieldValue = mode === "create" ? setValue : setValueEdit
+    const responseModeValue = watchField("alexaResponseMode") || "auto"
+    const preferredLocaleValue = watchField("alexaPreferredLocale") || "en-US"
+    const allowPersonalizationValue = watchField("alexaAllowPersonalization") !== false
+    const includeFallbackValue = watchField("alexaIncludeFallbackText") === true
+
+    return (
+      <div className="space-y-3 rounded-xl border border-border/60 bg-muted/20 p-4">
+        <div>
+          <p className="text-sm font-medium">Alexa Response Preferences</p>
+          <p className="text-xs text-muted-foreground">
+            Control how Alexa custom-skill responses should be spoken for this profile.
+          </p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Response Mode</label>
+            <Select
+              value={responseModeValue}
+              onValueChange={(value) => setFieldValue("alexaResponseMode", value)}
+            >
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder="Select Alexa response mode" />
+              </SelectTrigger>
+              <SelectContent>
+                {ALEXA_RESPONSE_MODE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Preferred Locale</label>
+            <Input
+              value={preferredLocaleValue}
+              onChange={(event) => setFieldValue("alexaPreferredLocale", event.target.value)}
+              placeholder="en-US"
+              className="mt-1"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="flex items-center gap-3 rounded-lg border border-border/60 bg-background/70 px-3 py-3 text-sm">
+            <Checkbox
+              checked={allowPersonalizationValue}
+              onCheckedChange={(checked) => setFieldValue("alexaAllowPersonalization", checked === true)}
+            />
+            <span>Allow personalization for mapped Alexa voice users</span>
+          </label>
+          <label className="flex items-center gap-3 rounded-lg border border-border/60 bg-background/70 px-3 py-3 text-sm">
+            <Checkbox
+              checked={includeFallbackValue}
+              onCheckedChange={(checked) => setFieldValue("alexaIncludeFallbackText", checked === true)}
+            />
+            <span>Append Alexa fallback speech after custom audio</span>
+          </label>
+        </div>
+      </div>
+    )
+  }
+
   const handleCreateProfile = async (data: any) => {
     try {
       console.log('Creating user profile:', data)
@@ -91,12 +363,20 @@ export function UserProfiles() {
         name: data.name,
         wakeWords,
         voiceId: data.voiceId,
-        systemPrompt: data.systemPrompt
+        systemPrompt: data.systemPrompt,
+        alexaMappings: normalizeAlexaMappingsForPayload(createAlexaMappings),
+        alexaPreferences: {
+          responseMode: data.alexaResponseMode || "auto",
+          preferredLocale: data.alexaPreferredLocale || "en-US",
+          allowPersonalization: data.alexaAllowPersonalization !== false,
+          includeAudioFallbackText: data.alexaIncludeFallbackText === true
+        }
       })
 
       setProfiles(prev => [...prev, result.profile])
       setIsCreateDialogOpen(false)
       reset()
+      setCreateAlexaMappings([])
 
       toast({
         title: "Profile Created",
@@ -149,6 +429,11 @@ export function UserProfiles() {
     setValueEdit("voiceId", profile.voiceId)
     setValueEdit("wakeWords", profile.wakeWords.join(', '))
     setValueEdit("systemPrompt", profile.systemPrompt || '')
+    setValueEdit("alexaResponseMode", profile.alexaPreferences?.responseMode || "auto")
+    setValueEdit("alexaPreferredLocale", profile.alexaPreferences?.preferredLocale || "en-US")
+    setValueEdit("alexaAllowPersonalization", profile.alexaPreferences?.allowPersonalization !== false)
+    setValueEdit("alexaIncludeFallbackText", profile.alexaPreferences?.includeAudioFallbackText === true)
+    setEditAlexaMappings(normalizeAlexaMappingsForForm(profile.alexaMappings))
     
     setIsEditDialogOpen(true)
   }
@@ -162,7 +447,14 @@ export function UserProfiles() {
         name: data.name,
         wakeWords,
         voiceId: data.voiceId,
-        systemPrompt: data.systemPrompt
+        systemPrompt: data.systemPrompt,
+        alexaMappings: normalizeAlexaMappingsForPayload(editAlexaMappings),
+        alexaPreferences: {
+          responseMode: data.alexaResponseMode || "auto",
+          preferredLocale: data.alexaPreferredLocale || "en-US",
+          allowPersonalization: data.alexaAllowPersonalization !== false,
+          includeAudioFallbackText: data.alexaIncludeFallbackText === true
+        }
       })
 
       // Update the profile in the local state
@@ -173,6 +465,7 @@ export function UserProfiles() {
       setIsEditDialogOpen(false)
       setEditingProfile(null)
       resetEdit()
+      setEditAlexaMappings([])
 
       toast({
         title: "Profile Updated",
@@ -214,7 +507,7 @@ export function UserProfiles() {
 
         {isAdmin ? (
         <>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <Dialog open={isCreateDialogOpen} onOpenChange={handleCreateDialogChange}>
           <DialogTrigger asChild>
             <Button className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white shadow-lg">
               <Plus className="h-4 w-4 mr-2" />
@@ -273,9 +566,11 @@ export function UserProfiles() {
                   This defines the AI personality and behavior for this user
                 </p>
               </div>
+              {renderAlexaPreferencesEditor("create")}
+              {renderAlexaMappingsEditor("create")}
               <div className="flex gap-2 pt-4">
                 <Button type="submit" className="flex-1">Create Profile</Button>
-                <Button type="button" variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
+                <Button type="button" variant="outline" onClick={() => handleCreateDialogChange(false)}>
                   Cancel
                 </Button>
               </div>
@@ -284,7 +579,7 @@ export function UserProfiles() {
         </Dialog>
 
         {/* Edit Profile Dialog */}
-        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <Dialog open={isEditDialogOpen} onOpenChange={handleEditDialogChange}>
           <DialogContent className="bg-background/95 dark:bg-slate-950/95 border border-border/60 max-w-2xl" aria-describedby="edit-profile-description">
             <DialogHeader>
               <DialogTitle>Edit Voice Profile</DialogTitle>
@@ -337,9 +632,11 @@ export function UserProfiles() {
                   This defines the AI personality and behavior for this voice persona
                 </p>
               </div>
+              {renderAlexaPreferencesEditor("edit")}
+              {renderAlexaMappingsEditor("edit")}
               <div className="flex gap-2 pt-4">
                 <Button type="submit" className="flex-1">Update Profile</Button>
-                <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+                <Button type="button" variant="outline" onClick={() => handleEditDialogChange(false)}>
                   Cancel
                 </Button>
               </div>
@@ -477,6 +774,44 @@ export function UserProfiles() {
                 <p className="text-sm font-medium text-muted-foreground mb-1">AI Personality</p>
                 <p className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded line-clamp-3">
                   {profile.systemPrompt || 'Default system prompt'}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-1">Alexa Matching</p>
+                {Array.isArray(profile.alexaMappings) && profile.alexaMappings.length > 0 ? (
+                  <div className="space-y-2">
+                    {profile.alexaMappings.slice(0, 3).map((mapping, index) => (
+                      <div key={`${profile._id}-mapping-${index}`} className="rounded bg-gray-50 p-2 text-xs text-muted-foreground dark:bg-gray-800">
+                        <div className="font-medium text-foreground">
+                          {mapping?.speakerLabel || mapping?.personId || mapping?.householdId || "Alexa mapping"}
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {mapping?.personId ? <Badge variant="outline" className="text-[10px]">Person</Badge> : null}
+                          {mapping?.defaultForHousehold ? <Badge variant="outline" className="text-[10px]">Household Default</Badge> : null}
+                          {mapping?.fallback ? <Badge variant="outline" className="text-[10px]">Fallback</Badge> : null}
+                          {mapping?.householdId ? <Badge variant="outline" className="text-[10px]">{mapping.householdId}</Badge> : null}
+                        </div>
+                      </div>
+                    ))}
+                    {profile.alexaMappings.length > 3 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        {profile.alexaMappings.length - 3} more mapping{profile.alexaMappings.length - 3 === 1 ? "" : "s"}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
+                    No Alexa speaker or household mappings configured.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-1">Alexa Response</p>
+                <p className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
+                  {profile.alexaPreferences?.responseMode || "auto"} • Locale {profile.alexaPreferences?.preferredLocale || "en-US"} • Personalization {profile.alexaPreferences?.allowPersonalization === false ? "off" : "on"}
+                  {profile.alexaPreferences?.includeAudioFallbackText ? " • Fallback speech on" : ""}
                 </p>
               </div>
 

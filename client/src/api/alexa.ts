@@ -94,3 +94,58 @@ export const syncAlexaDiscovery = async (payload: { reason?: string } = {}) => {
     throw new Error(getApiErrorMessage(error));
   }
 };
+
+export const flushAlexaBrokerEvents = async (payload: { limit?: number } = {}) => {
+  try {
+    const response = await api.post('/api/alexa/events/flush', payload);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const syncAlexaHouseholdDiscovery = async (brokerAccountId: string) => {
+  try {
+    const response = await api.post(`/api/alexa/accounts/${encodeURIComponent(brokerAccountId)}/discovery-sync`);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const revokeAlexaHousehold = async (brokerAccountId: string, payload: { reason?: string } = {}) => {
+  try {
+    const response = await api.post(`/api/alexa/accounts/${encodeURIComponent(brokerAccountId)}/revoke`, payload);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const updateAlexaVoiceUser = async (voiceUserId: string, payload: {
+  label?: string;
+  status?: 'unmapped' | 'mapped' | 'disabled';
+  responseMode?: 'inherit' | 'text' | 'ssml' | 'audio';
+  userProfileId?: string | null;
+}) => {
+  try {
+    const response = await api.put(`/api/alexa/voice-users/${encodeURIComponent(voiceUserId)}`, payload);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const deleteAlexaVoiceUser = async (voiceUserId: string) => {
+  try {
+    const response = await api.delete(`/api/alexa/voice-users/${encodeURIComponent(voiceUserId)}`);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};

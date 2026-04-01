@@ -33,7 +33,171 @@ const normalizeVisibleSensorIds = (sensorIds) => {
   return normalized;
 };
 
+const normalizeAlexaMappings = (mappings) => {
+  if (mappings === undefined) {
+    return undefined;
+  }
+
+  if (mappings === null) {
+    return [];
+  }
+
+  if (!Array.isArray(mappings)) {
+    throw new Error('Alexa mappings must be an array');
+  }
+
+  const seen = new Set();
+  const normalized = [];
+
+  for (const entry of mappings) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const personId = typeof entry.personId === 'string' ? entry.personId.trim() : '';
+    const speakerLabel = typeof entry.speakerLabel === 'string' ? entry.speakerLabel.trim() : '';
+    const householdId = typeof entry.householdId === 'string' ? entry.householdId.trim() : '';
+    const locale = typeof entry.locale === 'string' ? entry.locale.trim() : '';
+    const alexaUserId = typeof entry.alexaUserId === 'string' ? entry.alexaUserId.trim() : '';
+    const alexaAccountId = typeof entry.alexaAccountId === 'string' ? entry.alexaAccountId.trim() : '';
+    const defaultForHousehold = entry.defaultForHousehold === true;
+    const fallback = entry.fallback === true;
+    const enabled = entry.enabled !== false;
+
+    if (!personId && !defaultForHousehold && !fallback) {
+      continue;
+    }
+
+    const dedupeKey = [
+      personId || '*',
+      householdId || '*',
+      locale || '*',
+      defaultForHousehold ? 'default' : 'nodefault',
+      fallback ? 'fallback' : 'nofallback'
+    ].join('::').toLowerCase();
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    normalized.push({
+      personId: personId || undefined,
+      speakerLabel: speakerLabel || undefined,
+      householdId: householdId || undefined,
+      locale: locale || undefined,
+      alexaUserId: alexaUserId || undefined,
+      alexaAccountId: alexaAccountId || undefined,
+      defaultForHousehold,
+      fallback,
+      enabled
+    });
+  }
+
+  return normalized;
+};
+
 class UserProfileService {
+  normalizeAlexaMappings(mappings) {
+    return normalizeAlexaMappings(mappings);
+  }
+
+  async validateAlexaMappings(alexaMappings = [], excludedProfileId = null) {
+    const normalized = normalizeAlexaMappings(alexaMappings) || [];
+    if (normalized.length === 0) {
+      return normalized;
+    }
+
+    const exactMappings = normalized.filter((entry) => entry.personId && entry.enabled !== false);
+    if (exactMappings.length > 0) {
+      const profiles = await UserProfile.find({
+        ...(excludedProfileId ? { _id: { $ne: excludedProfileId } } : {}),
+        'alexaMappings.personId': { $in: exactMappings.map((entry) => entry.personId) }
+      }).select('name alexaMappings');
+
+      for (const profile of profiles) {
+        const conflictingEntry = (profile.alexaMappings || []).find((mapping) => {
+          if (!mapping?.personId || mapping.enabled === false) {
+            return false;
+          }
+
+          return exactMappings.some((candidate) => candidate.personId === mapping.personId);
+        });
+
+        if (conflictingEntry) {
+          throw new Error(`Alexa speaker mapping for personId "${conflictingEntry.personId}" already belongs to profile "${profile.name}"`);
+        }
+      }
+    }
+
+    const defaultByHousehold = new Map();
+    for (const entry of normalized) {
+      if (!entry.defaultForHousehold || !entry.householdId || entry.enabled === false) {
+        continue;
+      }
+
+      const key = entry.householdId.toLowerCase();
+      if (defaultByHousehold.has(key)) {
+        throw new Error(`Only one Alexa default mapping is allowed per household (${entry.householdId}) on a profile`);
+      }
+
+      defaultByHousehold.set(key, entry);
+    }
+
+    if (defaultByHousehold.size > 0) {
+      const profiles = await UserProfile.find({
+        ...(excludedProfileId ? { _id: { $ne: excludedProfileId } } : {}),
+        'alexaMappings.defaultForHousehold': true,
+        'alexaMappings.householdId': { $in: Array.from(defaultByHousehold.values()).map((entry) => entry.householdId) }
+      }).select('name alexaMappings');
+
+      for (const profile of profiles) {
+        const conflict = (profile.alexaMappings || []).find((mapping) => {
+          if (!mapping?.defaultForHousehold || !mapping?.householdId || mapping.enabled === false) {
+            return false;
+          }
+
+          return defaultByHousehold.has(String(mapping.householdId).toLowerCase());
+        });
+
+        if (conflict) {
+          throw new Error(`Alexa household default mapping for "${conflict.householdId}" already belongs to profile "${profile.name}"`);
+        }
+      }
+    }
+
+    return normalized;
+  }
+
+  buildAlexaProfileSummary(profile) {
+    if (!profile) {
+      return null;
+    }
+
+    return {
+      profileId: profile._id?.toString?.() || profile.id || null,
+      name: profile.name || '',
+      voiceId: profile.voiceId || '',
+      voiceName: profile.voiceName || '',
+      preferredLanguage: profile.preferredLanguage || 'en-US',
+      timezone: profile.timezone || 'UTC',
+      permissions: Array.isArray(profile.permissions) ? profile.permissions : [],
+      alexaMappings: Array.isArray(profile.alexaMappings)
+        ? profile.alexaMappings.map((entry) => ({
+          personId: entry?.personId || '',
+          speakerLabel: entry?.speakerLabel || '',
+          householdId: entry?.householdId || '',
+          locale: entry?.locale || '',
+          alexaUserId: entry?.alexaUserId || '',
+          alexaAccountId: entry?.alexaAccountId || '',
+          defaultForHousehold: entry?.defaultForHousehold === true,
+          fallback: entry?.fallback === true,
+          enabled: entry?.enabled !== false
+        }))
+        : []
+    };
+  }
+
   /**
    * Get all user profiles
    * @param {Object} filters - Optional filters for the query
@@ -127,6 +291,10 @@ class UserProfileService {
         throw new Error('System prompt is required');
       }
 
+      if (Object.prototype.hasOwnProperty.call(profileData, 'alexaMappings')) {
+        profileData.alexaMappings = await this.validateAlexaMappings(profileData.alexaMappings);
+      }
+
       // Validate voice ID with ElevenLabs
       console.log('Validating voice ID with ElevenLabs service');
       const isValidVoice = await elevenLabsService.validateVoiceId(profileData.voiceId);
@@ -203,6 +371,10 @@ class UserProfileService {
         }
       }
 
+      if (Object.prototype.hasOwnProperty.call(updateData, 'alexaMappings')) {
+        updateData.alexaMappings = await this.validateAlexaMappings(updateData.alexaMappings, profileId);
+      }
+
       // Update the profile
       const updatedProfile = await UserProfile.findByIdAndUpdate(
         profileId,
@@ -238,6 +410,66 @@ class UserProfileService {
 
     } catch (error) {
       console.error(`Error updating user profile ${profileId}:`, error.message);
+      console.error('Full error:', error);
+      throw error;
+    }
+  }
+
+  async resolveAlexaProfile(options = {}) {
+    try {
+      const personId = typeof options.personId === 'string' ? options.personId.trim() : '';
+      const householdId = typeof options.householdId === 'string' ? options.householdId.trim() : '';
+      const locale = typeof options.locale === 'string' ? options.locale.trim() : '';
+      const buildResolution = async (profile, matchType) => {
+        if (profile?._id) {
+          await this.updateUsage(profile._id.toString()).catch(() => {});
+        }
+
+        return {
+          profile,
+          profileSummary: this.buildAlexaProfileSummary(profile),
+          matchType
+        };
+      };
+
+      const activeProfiles = await UserProfile.find({ active: true })
+        .select('name voiceId voiceName preferredLanguage timezone permissions alexaMappings lastUsed usageCount')
+        .sort({ lastUsed: -1, usageCount: -1, name: 1 });
+
+      const exactPersonMatch = activeProfiles.find((profile) => (profile.alexaMappings || []).some((mapping) => (
+        mapping?.enabled !== false
+        && mapping?.personId
+        && mapping.personId === personId
+        && (!mapping.householdId || !householdId || mapping.householdId === householdId)
+      )));
+      if (exactPersonMatch) {
+        return buildResolution(exactPersonMatch, 'person');
+      }
+
+      const householdDefault = activeProfiles.find((profile) => (profile.alexaMappings || []).some((mapping) => (
+        mapping?.enabled !== false
+        && mapping?.defaultForHousehold === true
+        && mapping?.householdId
+        && householdId
+        && mapping.householdId === householdId
+      )));
+      if (householdDefault) {
+        return buildResolution(householdDefault, 'household_default');
+      }
+
+      const localeFallback = activeProfiles.find((profile) => (profile.alexaMappings || []).some((mapping) => (
+        mapping?.enabled !== false
+        && mapping?.fallback === true
+        && (!mapping.locale || !locale || mapping.locale === locale)
+      )));
+      if (localeFallback) {
+        return buildResolution(localeFallback, 'fallback');
+      }
+
+      const firstProfile = activeProfiles[0] || null;
+      return buildResolution(firstProfile, firstProfile ? 'first_active_profile' : 'none');
+    } catch (error) {
+      console.error('Error resolving Alexa profile:', error.message);
       console.error('Full error:', error);
       throw error;
     }

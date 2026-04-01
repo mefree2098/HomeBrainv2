@@ -4,6 +4,7 @@ const {
   buildControlResponse,
   buildDiscoveryResponse,
   buildErrorResponse,
+  inferAlexaErrorType,
   buildStateReportResponse
 } = require('../../shared/alexa/messages');
 const { parseEndpointId } = require('../../shared/alexa/contracts');
@@ -121,7 +122,8 @@ async function handler(event) {
 
       await postToBroker('/api/alexa/grants/accept', {
         grantCode,
-        granteeToken
+        granteeToken,
+        eventRegion: trimString(process.env.AWS_REGION || process.env.HOMEBRAIN_ALEXA_EVENT_REGION || 'NA')
       }, {
         bearerToken: granteeToken
       });
@@ -133,7 +135,9 @@ async function handler(event) {
       const { hubId } = await resolveDirectiveHub(directive, {
         allowDefaultHubId: true
       });
-      const response = await getFromBroker(`/api/alexa/hubs/${hubId}/catalog`);
+      const response = await getFromBroker(`/api/alexa/hubs/${hubId}/catalog`, {
+        bearerToken: directive.bearerToken
+      });
       return buildDiscoveryResponse({
         directive: event,
         endpoints: response.endpoints || []
@@ -151,6 +155,8 @@ async function handler(event) {
       const state = await postToBroker('/api/alexa/directives/state', {
         hubId,
         endpointIds: [directive.endpointId]
+      }, {
+        bearerToken: directive.bearerToken
       });
       const snapshot = Array.isArray(state?.states) ? state.states[0] : null;
       return buildStateReportResponse({
@@ -181,6 +187,8 @@ async function handler(event) {
       const result = await postToBroker('/api/alexa/directives/execute', {
         hubId,
         directive: directive.directive
+      }, {
+        bearerToken: directive.bearerToken
       });
 
       return buildControlResponse({
@@ -197,13 +205,7 @@ async function handler(event) {
     });
   } catch (error) {
     const message = error.response?.data?.error || error.message || 'Alexa request failed';
-    const lowerMessage = message.toLowerCase();
-    const errorType = lowerMessage.includes('invalid')
-      || lowerMessage.includes('unsupported')
-      || lowerMessage.includes('required')
-      || lowerMessage.includes('mismatch')
-      ? 'INVALID_DIRECTIVE'
-      : 'INTERNAL_ERROR';
+    const errorType = inferAlexaErrorType(error);
 
     return buildErrorResponse({
       directive: event,

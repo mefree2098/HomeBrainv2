@@ -56,11 +56,17 @@ import {
   updateLLMPriorityList
 } from "@/api/settings"
 import {
+  flushAlexaBrokerEvents,
+  deleteAlexaVoiceUser,
   generateAlexaLinkCode,
   getAlexaSummary,
   pairAlexaBroker,
-  syncAlexaDiscovery
+  revokeAlexaHousehold,
+  syncAlexaHouseholdDiscovery,
+  syncAlexaDiscovery,
+  updateAlexaVoiceUser
 } from "@/api/alexa"
+import { getUserProfiles } from "@/api/profiles"
 import {
   getSmartThingsStatus,
   configureSmartThingsOAuth,
@@ -243,9 +249,14 @@ export function Settings() {
   const [generatingAlexaCode, setGeneratingAlexaCode] = useState<"private" | "public" | "">("")
   const [pairingAlexaBroker, setPairingAlexaBroker] = useState(false)
   const [syncingAlexaCatalog, setSyncingAlexaCatalog] = useState(false)
+  const [flushingAlexaEvents, setFlushingAlexaEvents] = useState(false)
+  const [alexaHouseholdActionKey, setAlexaHouseholdActionKey] = useState("")
   const [latestAlexaLinkCode, setLatestAlexaLinkCode] = useState<any>(null)
   const [alexaBrokerBaseUrl, setAlexaBrokerBaseUrl] = useState("")
   const [alexaBrokerLinkCode, setAlexaBrokerLinkCode] = useState("")
+  const [alexaProfileOptions, setAlexaProfileOptions] = useState<any[]>([])
+  const [alexaVoiceUserDrafts, setAlexaVoiceUserDrafts] = useState<Record<string, any>>({})
+  const [savingAlexaVoiceUserKey, setSavingAlexaVoiceUserKey] = useState("")
   const [loadingHarmonyStatus, setLoadingHarmonyStatus] = useState(false)
   const [loadingHarmonyHubs, setLoadingHarmonyHubs] = useState(false)
   const [discoveringHarmony, setDiscoveringHarmony] = useState(false)
@@ -634,8 +645,34 @@ export function Settings() {
     loadEcobeeStatus();
     loadHarmonyOverview();
     loadAlexaSummary();
+    loadAlexaProfileOptions();
     loadLLMPriorityList();
   }, [setValue, toast]);
+
+  useEffect(() => {
+    const voiceUsers = Array.isArray(alexaSummary?.voiceUsers) ? alexaSummary.voiceUsers : []
+    if (voiceUsers.length === 0) {
+      return
+    }
+
+    setAlexaVoiceUserDrafts((current) => {
+      const next = { ...current }
+      voiceUsers.forEach((voiceUser: any) => {
+        if (!voiceUser?._id) {
+          return
+        }
+        if (!next[voiceUser._id]) {
+          next[voiceUser._id] = {
+            label: voiceUser.label || "",
+            status: voiceUser.status || "unmapped",
+            responseMode: voiceUser.responseMode || "inherit",
+            userProfileId: voiceUser.userProfileId?._id || ""
+          }
+        }
+      })
+      return next
+    })
+  }, [alexaSummary?.voiceUsers])
 
   // Load LLM priority list
   const loadLLMPriorityList = async () => {
@@ -667,6 +704,60 @@ export function Settings() {
       setAlexaSummary(null)
     } finally {
       setLoadingAlexaSummary(false)
+    }
+  }
+
+  useEffect(() => {
+    loadAlexaProfileOptions()
+  }, [])
+
+  useEffect(() => {
+    const voiceUsers = Array.isArray(alexaSummary?.voiceUsers) ? alexaSummary.voiceUsers : []
+    if (voiceUsers.length === 0) {
+      setAlexaVoiceUserDrafts({})
+      return
+    }
+
+    setAlexaVoiceUserDrafts((current) => {
+      const next = { ...current }
+      const activeIds = new Set<string>()
+
+      voiceUsers.forEach((voiceUser: any) => {
+        const voiceUserId = String(voiceUser?._id || "")
+        if (!voiceUserId) {
+          return
+        }
+
+        activeIds.add(voiceUserId)
+        if (!next[voiceUserId]) {
+          next[voiceUserId] = {
+            label: String(voiceUser?.label || ""),
+            status: String(voiceUser?.status || "unmapped"),
+            responseMode: String(voiceUser?.responseMode || "inherit"),
+            userProfileId: String(voiceUser?.userProfileId?._id || voiceUser?.userProfileId || "")
+          }
+        }
+      })
+
+      Object.keys(next).forEach((voiceUserId) => {
+        if (!activeIds.has(voiceUserId)) {
+          delete next[voiceUserId]
+        }
+      })
+
+      return next
+    })
+  }, [alexaSummary?.voiceUsers])
+
+  const loadAlexaProfileOptions = async () => {
+    try {
+      const response = await getUserProfiles()
+      if (response?.success) {
+        setAlexaProfileOptions(Array.isArray(response.profiles) ? response.profiles : [])
+      }
+    } catch (error) {
+      console.error('Failed to load Alexa profile options:', error)
+      setAlexaProfileOptions([])
     }
   }
 
@@ -2277,6 +2368,165 @@ export function Settings() {
     }
   }
 
+  const handleFlushAlexaEvents = async () => {
+    setFlushingAlexaEvents(true)
+    try {
+      const response = await flushAlexaBrokerEvents({ limit: 25 })
+      if (response.success) {
+        toast({
+          title: "Alexa broker flush complete",
+          description: `Processed ${response.result?.processed ?? 0} queued Alexa event(s).`
+        })
+        loadAlexaSummary()
+      }
+    } catch (error) {
+      console.error('Failed to flush Alexa broker events:', error)
+      toast({
+        title: "Alexa broker flush failed",
+        description: error.message || "Failed to flush queued Alexa broker events.",
+        variant: "destructive"
+      })
+    } finally {
+      setFlushingAlexaEvents(false)
+    }
+  }
+
+  const getAlexaGrantsForAccount = (brokerAccountId: string) => {
+    const grants = Array.isArray(alexaSummary?.brokerDelivery?.grants) ? alexaSummary.brokerDelivery.grants : []
+    return grants.filter((entry: any) => entry?.brokerAccountId === brokerAccountId)
+  }
+
+  const updateAlexaVoiceUserDraft = (voiceUserId: string, updates: Record<string, any>) => {
+    setAlexaVoiceUserDrafts((current) => ({
+      ...current,
+      [voiceUserId]: {
+        ...(current[voiceUserId] || {}),
+        ...updates
+      }
+    }))
+  }
+
+  const handleSyncAlexaHouseholdDiscovery = async (brokerAccountId: string) => {
+    const actionKey = `${brokerAccountId}:sync`
+    setAlexaHouseholdActionKey(actionKey)
+    try {
+      const response = await syncAlexaHouseholdDiscovery(brokerAccountId)
+      if (response.success) {
+        toast({
+          title: "Alexa rediscovery requested",
+          description: `Queued ${response.result?.queued ?? 0} discovery update(s) for household ${brokerAccountId}.`
+        })
+        loadAlexaSummary()
+      }
+    } catch (error) {
+      console.error('Failed to sync Alexa household discovery:', error)
+      toast({
+        title: "Alexa rediscovery failed",
+        description: error.message || "Failed to queue Alexa discovery updates for that household.",
+        variant: "destructive"
+      })
+    } finally {
+      setAlexaHouseholdActionKey("")
+    }
+  }
+
+  const handleRevokeAlexaHousehold = async (brokerAccountId: string) => {
+    if (!window.confirm(`Revoke linked Alexa household ${brokerAccountId}? This will revoke active grants and stop proactive event delivery for that household.`)) {
+      return
+    }
+
+    const actionKey = `${brokerAccountId}:revoke`
+    setAlexaHouseholdActionKey(actionKey)
+    try {
+      const response = await revokeAlexaHousehold(brokerAccountId, {
+        reason: "Revoked by HomeBrain admin"
+      })
+      if (response.success) {
+        toast({
+          title: "Alexa household revoked",
+          description: `Household ${brokerAccountId} was revoked and its active grants were disabled.`
+        })
+        loadAlexaSummary()
+      }
+    } catch (error) {
+      console.error('Failed to revoke Alexa household:', error)
+      toast({
+        title: "Alexa revoke failed",
+        description: error.message || "Failed to revoke the selected Alexa household.",
+        variant: "destructive"
+      })
+    } finally {
+      setAlexaHouseholdActionKey("")
+    }
+  }
+
+  const handleSaveAlexaVoiceUser = async (voiceUserId: string) => {
+    const draft = alexaVoiceUserDrafts[voiceUserId] || {}
+    const actionKey = `${voiceUserId}:save`
+    setSavingAlexaVoiceUserKey(actionKey)
+    try {
+      const response = await updateAlexaVoiceUser(voiceUserId, {
+        label: draft.label || "",
+        status: draft.status || "unmapped",
+        responseMode: draft.responseMode || "inherit",
+        userProfileId: draft.userProfileId || null
+      })
+      if (response.success) {
+        toast({
+          title: "Alexa voice user saved",
+          description: "The Alexa speaker mapping was updated."
+        })
+        loadAlexaSummary()
+      }
+    } catch (error) {
+      console.error('Failed to save Alexa voice user:', error)
+      toast({
+        title: "Alexa voice user update failed",
+        description: error.message || "Failed to save the Alexa voice user mapping.",
+        variant: "destructive"
+      })
+    } finally {
+      setSavingAlexaVoiceUserKey("")
+    }
+  }
+
+  const handleDeleteAlexaVoiceUser = async (voiceUser: any) => {
+    const voiceUserId = voiceUser?._id
+    if (!voiceUserId) {
+      return
+    }
+    if (!window.confirm(`Remove Alexa voice user ${voiceUser?.label || voiceUserId}? It will be rediscovered the next time Alexa sends a personalized custom-skill request.`)) {
+      return
+    }
+
+    const actionKey = `${voiceUserId}:delete`
+    setSavingAlexaVoiceUserKey(actionKey)
+    try {
+      const response = await deleteAlexaVoiceUser(voiceUserId)
+      if (response.success) {
+        toast({
+          title: "Alexa voice user removed",
+          description: "The stored Alexa voice-user record was deleted."
+        })
+        setAlexaVoiceUserDrafts((current) => {
+          const next = { ...current }
+          delete next[voiceUserId]
+          return next
+        })
+        loadAlexaSummary()
+      }
+    } catch (error) {
+      console.error('Failed to delete Alexa voice user:', error)
+      toast({
+        title: "Alexa voice user delete failed",
+        description: error.message || "Failed to delete the Alexa voice-user mapping.",
+        variant: "destructive"
+      })
+    } finally {
+      setSavingAlexaVoiceUserKey("")
+    }
+  }
+
   const handleConfigureSmartThings = async () => {
     const clientId = watch('smartthingsClientId');
     const clientSecret = watch('smartthingsClientSecret');
@@ -3400,7 +3650,7 @@ export function Settings() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-lg border border-border/60 bg-background/60 p-3">
                     <p className="text-xs uppercase tracking-wide text-muted-foreground">Hub Status</p>
                     <p className="mt-1 text-lg font-semibold">
@@ -3430,6 +3680,102 @@ export function Settings() {
                       {alexaSummary?.brokerBaseUrl
                         ? `Broker: ${alexaSummary.brokerBaseUrl}`
                         : "Pair a broker to enable account linking and proactive events."}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Broker Queue</p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {alexaSummary?.brokerDelivery?.available
+                        ? `${alexaSummary.brokerDelivery.queuedCount ?? 0} queued`
+                        : "Unavailable"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alexaSummary?.brokerDelivery?.available
+                        ? `${alexaSummary.brokerDelivery.failedCount ?? 0} failed • ${alexaSummary.brokerDelivery.deliveredCount ?? 0} delivered`
+                        : alexaSummary?.brokerDelivery?.reason || "Pair the broker to monitor proactive Alexa event delivery."}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Permission Grants</p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {alexaSummary?.brokerDelivery?.available
+                        ? `${alexaSummary.brokerDelivery.activeGrantCount ?? 0} active`
+                        : "Unavailable"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Alexa event-gateway credentials for proactive discovery and state reports.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Custom Skill Voice Users</p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {Array.isArray(alexaSummary?.voiceUsers)
+                        ? `${alexaSummary.voiceUsers.filter((entry: any) => entry?.status === "mapped").length} mapped`
+                        : "Unavailable"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alexaSummary?.customSkill?.enabled
+                        ? `${alexaSummary?.voiceUsers?.length ?? 0} discovered voice user record(s)`
+                        : "Pair the broker to enable the Alexa custom skill path."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Certification Readiness</p>
+                    <div className="mt-1 flex items-center gap-2">
+                      {alexaSummary?.readiness?.status === "pass" ? (
+                        <CheckCircle className="h-4 w-4 text-emerald-600" />
+                      ) : alexaSummary?.readiness?.status === "fail" ? (
+                        <XCircle className="h-4 w-4 text-red-600" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-amber-600" />
+                      )}
+                      <p className="text-lg font-semibold">
+                        {alexaSummary?.readiness?.status === "pass"
+                          ? "Ready"
+                          : alexaSummary?.readiness?.status === "fail"
+                            ? "Blocked"
+                            : "Needs Attention"}
+                      </p>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alexaSummary?.readiness?.publicOrigin
+                        ? `Public origin ${alexaSummary.readiness.publicOrigin}`
+                        : "Configure a public HTTPS origin and reverse-proxy route to prepare for certification."}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">TLS Certificate</p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {alexaSummary?.readiness?.certificate?.status
+                        ? String(alexaSummary.readiness.certificate.status).replace(/_/g, " ")
+                        : "Unknown"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alexaSummary?.readiness?.reverseProxy?.acmeEnv
+                        ? `ACME ${alexaSummary.readiness.reverseProxy.acmeEnv}`
+                        : "Reverse proxy has not reported an ACME environment yet."}
+                      {alexaSummary?.readiness?.certificate?.servedNotAfter
+                        ? ` • Expires ${new Date(alexaSummary.readiness.certificate.servedNotAfter).toLocaleDateString()}`
+                        : ""}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Reverse Proxy Route</p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {alexaSummary?.readiness?.reverseProxy?.enabled
+                        ? alexaSummary.readiness.reverseProxy.hostname || "Configured"
+                        : "Missing"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Validation {alexaSummary?.readiness?.reverseProxy?.validationStatus || "unknown"}
+                      {alexaSummary?.readiness?.reverseProxy?.validationErrors?.length
+                        ? ` • ${alexaSummary.readiness.reverseProxy.validationErrors.length} blocking issue(s)`
+                        : ""}
                     </p>
                   </div>
                 </div>
@@ -3531,6 +3877,22 @@ export function Settings() {
                   >
                     Refresh Status
                   </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleFlushAlexaEvents}
+                    disabled={flushingAlexaEvents}
+                  >
+                    {flushingAlexaEvents ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Flushing...
+                      </>
+                    ) : (
+                      "Flush Broker Events"
+                    )}
+                  </Button>
                 </div>
 
                 {latestAlexaLinkCode?.code && (
@@ -3569,8 +3931,411 @@ export function Settings() {
                   </div>
                 )}
 
+                {alexaSummary?.brokerDelivery?.available && (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Broker Delivery Queue</p>
+                      <div className="space-y-2">
+                        {Array.isArray(alexaSummary?.brokerDelivery?.recentEvents) && alexaSummary.brokerDelivery.recentEvents.length > 0 ? (
+                          alexaSummary.brokerDelivery.recentEvents.map((entry: any, index: number) => (
+                            <div
+                              key={`${entry?.eventId || entry?.kind || "event"}-${index}`}
+                              className="rounded-md border border-border/60 bg-background/50 p-3"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-sm font-medium">{entry?.kind || "Alexa event"}</p>
+                                <p className="text-xs text-muted-foreground">{entry?.status || "unknown"}</p>
+                              </div>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Created {entry?.createdAt ? new Date(entry.createdAt).toLocaleString() : "just now"}
+                                {entry?.deliveredAt ? ` • Delivered ${new Date(entry.deliveredAt).toLocaleString()}` : ""}
+                              </p>
+                              {entry?.lastError ? (
+                                <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                                  {entry.lastError}
+                                </p>
+                              ) : null}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-md border border-dashed border-border/60 bg-background/40 p-3 text-sm text-muted-foreground">
+                            No broker delivery events recorded yet.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Event Gateway Grants</p>
+                      <div className="space-y-2">
+                        {Array.isArray(alexaSummary?.brokerDelivery?.grants) && alexaSummary.brokerDelivery.grants.length > 0 ? (
+                          alexaSummary.brokerDelivery.grants.map((entry: any, index: number) => (
+                            <div
+                              key={`${entry?.permissionGrantId || "grant"}-${index}`}
+                              className="rounded-md border border-border/60 bg-background/50 p-3"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-sm font-medium">{entry?.eventRegion || "NA"} grant</p>
+                                <p className="text-xs text-muted-foreground">{entry?.status || "unknown"}</p>
+                              </div>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Account {entry?.brokerAccountId || "unknown"}
+                                {entry?.lastRefreshedAt ? ` • Refreshed ${new Date(entry.lastRefreshedAt).toLocaleString()}` : ""}
+                              </p>
+                              {entry?.lastError ? (
+                                <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                                  {entry.lastError}
+                                </p>
+                              ) : null}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-md border border-dashed border-border/60 bg-background/40 p-3 text-sm text-muted-foreground">
+                            No Alexa event-gateway grants have been accepted yet.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {Array.isArray(alexaSummary?.linkedAccounts) && alexaSummary.linkedAccounts.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Linked Alexa Households</p>
+                    <div className="space-y-3">
+                      {alexaSummary.linkedAccounts.map((account: any, index: number) => {
+                        const brokerAccountId = account?.brokerAccountId || `account-${index}`
+                        const grants = getAlexaGrantsForAccount(brokerAccountId)
+                        const syncActionKey = `${brokerAccountId}:sync`
+                        const revokeActionKey = `${brokerAccountId}:revoke`
+                        const permissions = Array.isArray(account?.permissions) ? account.permissions : []
+
+                        return (
+                          <div
+                            key={brokerAccountId}
+                            className="rounded-md border border-border/60 bg-background/50 p-4"
+                          >
+                            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                              <div className="space-y-1">
+                                <p className="text-sm font-medium">{brokerAccountId}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Status: {account?.status || "unknown"} • Locale: {account?.locale || "en-US"}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  Household: {account?.alexaHouseholdId || "Not reported"} • Last seen {account?.lastSeenAt ? new Date(account.lastSeenAt).toLocaleString() : "never"}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  Last discovery {account?.lastDiscoveryAt ? new Date(account.lastDiscoveryAt).toLocaleString() : "never"} • Permissions {permissions.length > 0 ? permissions.join(", ") : "none"}
+                                </p>
+                                {grants.length > 0 ? (
+                                  <div className="pt-1 space-y-1">
+                                    {grants.map((grant: any) => (
+                                      <p
+                                        key={grant?.permissionGrantId || `${brokerAccountId}-grant`}
+                                        className="text-xs text-muted-foreground"
+                                      >
+                                        Grant {grant?.eventRegion || "NA"}: {grant?.status || "unknown"}
+                                        {grant?.lastRefreshedAt ? ` • refreshed ${new Date(grant.lastRefreshedAt).toLocaleString()}` : ""}
+                                        {grant?.lastError ? ` • ${grant.lastError}` : ""}
+                                      </p>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-muted-foreground">No active event-gateway grants recorded for this household.</p>
+                                )}
+                              </div>
+
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleSyncAlexaHouseholdDiscovery(brokerAccountId)}
+                                  disabled={alexaHouseholdActionKey !== ""}
+                                >
+                                  {alexaHouseholdActionKey === syncActionKey ? (
+                                    <>
+                                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                      Queueing...
+                                    </>
+                                  ) : (
+                                    "Force Rediscovery"
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleRevokeAlexaHousehold(brokerAccountId)}
+                                  disabled={alexaHouseholdActionKey !== ""}
+                                >
+                                  {alexaHouseholdActionKey === revokeActionKey ? (
+                                    <>
+                                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                      Revoking...
+                                    </>
+                                  ) : (
+                                    "Revoke Household"
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {Array.isArray(alexaSummary?.readiness?.checks) && alexaSummary.readiness.checks.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Public Release Checklist</p>
+                    <div className="space-y-2">
+                      {alexaSummary.readiness.checks.map((check: any, index: number) => (
+                        <div
+                          key={check?.key || check?.label || `readiness-check-${index}`}
+                          className="rounded-md border border-border/60 bg-background/50 p-3"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            {check?.status === "pass" ? (
+                              <CheckCircle className="h-4 w-4 text-emerald-600" />
+                            ) : check?.status === "fail" ? (
+                              <XCircle className="h-4 w-4 text-red-600" />
+                            ) : (
+                              <AlertCircle className="h-4 w-4 text-amber-600" />
+                            )}
+                            <p className="text-sm font-medium">{check?.label || "Readiness check"}</p>
+                            <Badge variant="outline" className="ml-auto capitalize">
+                              {check?.status || "info"}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {check?.message || ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {alexaSummary?.brokerMetrics?.available && alexaSummary?.brokerMetrics?.readiness && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Broker Readiness</p>
+                    <div className="grid gap-3 xl:grid-cols-2">
+                      {(Array.isArray(alexaSummary.brokerMetrics.readiness.checks) ? alexaSummary.brokerMetrics.readiness.checks : []).map((check: any) => (
+                        <div
+                          key={check?.id || check?.label}
+                          className="rounded-md border border-border/60 bg-background/50 p-3"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium">{check?.label || check?.id || "Readiness check"}</p>
+                            <Badge variant={check?.status === "ok" ? "default" : check?.status === "blocked" || check?.status === "fail" ? "destructive" : "secondary"}>
+                              {check?.status || "unknown"}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {check?.message || "No details available."}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {alexaSummary?.brokerAudit?.available && Array.isArray(alexaSummary?.brokerAudit?.auditLogs) && alexaSummary.brokerAudit.auditLogs.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Broker Audit Trail</p>
+                    <div className="space-y-2">
+                      {alexaSummary.brokerAudit.auditLogs.slice(0, 8).map((entry: any, index: number) => (
+                        <div
+                          key={`${entry?.auditId || entry?.createdAt || index}`}
+                          className="rounded-md border border-border/60 bg-background/50 p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-medium">{entry?.message || entry?.type || "Alexa broker audit"}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {entry?.createdAt ? new Date(entry.createdAt).toLocaleString() : "Just now"}
+                            </p>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Severity: {entry?.severity || "info"} • Type: {entry?.type || "info"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {alexaSummary?.customSkill?.enabled && (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-medium">Custom Skill Personalization</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Manage recognized Alexa voice users, map them to HomeBrain voice profiles, and choose whether custom-skill replies use Alexa speech or ElevenLabs-hosted audio.
+                      </p>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Mapped Users</p>
+                        <p className="mt-1 text-lg font-semibold">{alexaSummary?.customSkill?.mappedUsers ?? 0}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Voice users assigned to a HomeBrain profile.</p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Discovered Users</p>
+                        <p className="mt-1 text-lg font-semibold">{alexaSummary?.customSkill?.voiceUsers ?? 0}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Alexa voices seen by the custom skill.</p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Public Origin</p>
+                        <p className="mt-1 text-sm font-semibold break-all">{alexaSummary?.customSkill?.publicOrigin || "Not configured"}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Required for ElevenLabs audio clip hosting.</p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Custom Audio</p>
+                        <p className="mt-1 text-lg font-semibold">{alexaSummary?.customSkill?.customAudioAvailable ? "Ready" : "Fallback only"}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">ElevenLabs clips require a public origin and signing secret.</p>
+                      </div>
+                    </div>
+
+                    {Array.isArray(alexaSummary?.voiceUsers) && alexaSummary.voiceUsers.length > 0 ? (
+                      <div className="space-y-3">
+                        {alexaSummary.voiceUsers.map((voiceUser: any, index: number) => {
+                          const voiceUserId = voiceUser?._id || `voice-user-${index}`
+                          const draft = alexaVoiceUserDrafts[voiceUserId] || {}
+                          const saveActionKey = `${voiceUserId}:save`
+                          const deleteActionKey = `${voiceUserId}:delete`
+
+                          return (
+                            <div
+                              key={voiceUserId}
+                              className="rounded-md border border-border/60 bg-background/50 p-4 space-y-3"
+                            >
+                              <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                                <div className="space-y-1">
+                                  <p className="text-sm font-medium">{voiceUser?.label || voiceUserId}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Status: {voiceUser?.status || "unmapped"} • Locale: {voiceUser?.locale || "en-US"}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground break-all">
+                                    Person ID: {voiceUser?.alexaPersonId || "Not reported"} • Alexa user: {voiceUser?.alexaUserId || "Not reported"}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Last seen {voiceUser?.lastSeenAt ? new Date(voiceUser.lastSeenAt).toLocaleString() : "never"}
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleSaveAlexaVoiceUser(voiceUserId)}
+                                    disabled={savingAlexaVoiceUserKey !== ""}
+                                  >
+                                    {savingAlexaVoiceUserKey === saveActionKey ? (
+                                      <>
+                                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                        Saving...
+                                      </>
+                                    ) : (
+                                      "Save Mapping"
+                                    )}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleDeleteAlexaVoiceUser(voiceUser)}
+                                    disabled={savingAlexaVoiceUserKey !== ""}
+                                  >
+                                    {savingAlexaVoiceUserKey === deleteActionKey ? (
+                                      <>
+                                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                        Removing...
+                                      </>
+                                    ) : (
+                                      "Remove"
+                                    )}
+                                  </Button>
+                                </div>
+                              </div>
+
+                              <div className="grid gap-3 xl:grid-cols-4">
+                                <div>
+                                  <label className="text-xs font-medium text-muted-foreground">Label</label>
+                                  <Input
+                                    value={draft.label ?? voiceUser?.label ?? ""}
+                                    onChange={(event) => updateAlexaVoiceUserDraft(voiceUserId, { label: event.target.value })}
+                                    className="mt-1"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs font-medium text-muted-foreground">HomeBrain Profile</label>
+                                  <Select
+                                    value={draft.userProfileId ?? voiceUser?.userProfileId?._id ?? "__none__"}
+                                    onValueChange={(value) => updateAlexaVoiceUserDraft(voiceUserId, { userProfileId: value === "__none__" ? "" : value })}
+                                  >
+                                    <SelectTrigger className="mt-1">
+                                      <SelectValue placeholder="Select a profile" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="__none__">Unassigned</SelectItem>
+                                      {alexaProfileOptions.map((profile: any) => (
+                                        <SelectItem key={profile._id} value={profile._id}>
+                                          {profile.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <label className="text-xs font-medium text-muted-foreground">Status</label>
+                                  <Select
+                                    value={draft.status ?? voiceUser?.status ?? "unmapped"}
+                                    onValueChange={(value) => updateAlexaVoiceUserDraft(voiceUserId, { status: value })}
+                                  >
+                                    <SelectTrigger className="mt-1">
+                                      <SelectValue placeholder="Select status" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="unmapped">Unmapped</SelectItem>
+                                      <SelectItem value="mapped">Mapped</SelectItem>
+                                      <SelectItem value="disabled">Disabled</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <label className="text-xs font-medium text-muted-foreground">Response Mode</label>
+                                  <Select
+                                    value={draft.responseMode ?? voiceUser?.responseMode ?? "inherit"}
+                                    onValueChange={(value) => updateAlexaVoiceUserDraft(voiceUserId, { responseMode: value })}
+                                  >
+                                    <SelectTrigger className="mt-1">
+                                      <SelectValue placeholder="Select response mode" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="inherit">Inherit profile preference</SelectItem>
+                                      <SelectItem value="audio">Use ElevenLabs audio</SelectItem>
+                                      <SelectItem value="ssml">Use Alexa SSML voice</SelectItem>
+                                      <SelectItem value="text">Use Alexa plain speech</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div className="rounded-md border border-dashed border-border/60 bg-background/40 p-3 text-sm text-muted-foreground">
+                        No Alexa custom-skill voice users have been discovered yet. Once someone uses the linked custom skill with speaker recognition enabled, HomeBrain will surface that voice here for mapping.
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <p className="text-xs text-muted-foreground">
-                  The hub-side Alexa bridge is active now. Per-entity Alexa exposure controls are available through the new `/api/alexa/exposures` API while the broader UI rollout continues.
+                  The hub-side Alexa bridge is active now. Per-entity Alexa exposure controls are available through the new `/api/alexa/exposures` API, and broker delivery health is surfaced here for live Alexa troubleshooting.
                 </p>
               </CardContent>
             </Card>

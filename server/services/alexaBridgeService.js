@@ -2,7 +2,10 @@ const crypto = require('crypto');
 const axios = require('axios');
 const AlexaBrokerRegistration = require('../models/AlexaBrokerRegistration');
 const AlexaLinkedAccount = require('../models/AlexaLinkedAccount');
+const ReverseProxyRoute = require('../models/ReverseProxyRoute');
+const ReverseProxySettings = require('../models/ReverseProxySettings');
 const alexaProjectionService = require('./alexaProjectionService');
+const alexaCustomSkillService = require('./alexaCustomSkillService');
 const deviceService = require('./deviceService');
 const sceneService = require('./sceneService');
 const workflowService = require('./workflowService');
@@ -167,6 +170,28 @@ function mapThermostatModeForHomeBrain(mode) {
   }
 }
 
+function buildReadinessCheck(key, label, status, message, details = {}) {
+  return {
+    key,
+    label,
+    status,
+    message,
+    details
+  };
+}
+
+function summarizeReadinessStatus(checks = []) {
+  if ((checks || []).some((entry) => entry?.status === 'fail')) {
+    return 'fail';
+  }
+
+  if ((checks || []).some((entry) => entry?.status === 'warn')) {
+    return 'warn';
+  }
+
+  return 'pass';
+}
+
 function buildGroupControlAction(groupName, actionName, value) {
   const parameters = { action: actionName };
   if (value !== undefined) {
@@ -226,12 +251,21 @@ class AlexaBridgeService {
   }
 
   async getSummary() {
-    const [registration, catalog, exposures, linkedAccounts] = await Promise.all([
+    const [registration, catalog, exposures, linkedAccounts, brokerDelivery, brokerMetrics, brokerAudit, customSkill] = await Promise.all([
       this.ensureRegistration(),
       alexaProjectionService.buildCatalog(),
       alexaProjectionService.listExposureSummaries(),
-      AlexaLinkedAccount.find().sort({ linkedAt: -1 }).lean()
+      AlexaLinkedAccount.find().sort({ linkedAt: -1 }).lean(),
+      this.getBrokerDeliveryStatus(),
+      this.getBrokerMetricsStatus(),
+      this.getBrokerAuditLog(),
+      alexaCustomSkillService.getStatusSummary()
     ]);
+    const readiness = await this.getCertificationReadiness({
+      registration,
+      linkedAccounts,
+      brokerDelivery
+    });
 
     return {
       hubId: registration.hubId,
@@ -251,12 +285,181 @@ class AlexaBridgeService {
       lastStateSyncStatus: registration.lastStateSyncStatus,
       lastStateSyncError: registration.lastStateSyncError,
       linkedAccounts,
+      brokerDelivery,
+      brokerMetrics,
+      brokerAudit,
+      customSkill,
+      voiceUsers: await alexaCustomSkillService.listVoiceUsers(),
+      readiness,
       recentActivity: Array.isArray(registration.recentActivity) ? registration.recentActivity.slice(-20).reverse() : [],
       exposureStats: {
         total: exposures.length,
         enabled: exposures.filter((entry) => entry.enabled).length,
         valid: catalog.endpoints.length
       }
+    };
+  }
+
+  async getCertificationReadiness(context = {}) {
+    const registration = context.registration || await this.ensureRegistration();
+    const linkedAccounts = Array.isArray(context.linkedAccounts)
+      ? context.linkedAccounts
+      : await AlexaLinkedAccount.find().lean();
+    const brokerDelivery = context.brokerDelivery || await this.getBrokerDeliveryStatus();
+    const publicOrigin = registration.publicOrigin || getConfiguredPublicOrigin();
+
+    let parsedOrigin = null;
+    try {
+      parsedOrigin = publicOrigin ? new URL(publicOrigin) : null;
+    } catch (_error) {
+      parsedOrigin = null;
+    }
+
+    const publicHostname = String(parsedOrigin?.hostname || '').trim().toLowerCase();
+    const [reverseProxySettings, reverseProxyRoute] = await Promise.all([
+      ReverseProxySettings.getSettings().catch(() => null),
+      publicHostname
+        ? ReverseProxyRoute.findOne({ hostname: publicHostname }).lean().catch(() => null)
+        : Promise.resolve(null)
+    ]);
+
+    const certificateStatus = reverseProxyRoute?.certificateStatus || {};
+    const validationStatus = reverseProxyRoute?.validation || {};
+    const activeGrantCount = Number(brokerDelivery?.activeGrantCount || 0);
+    const linkedHouseholdCount = Array.isArray(linkedAccounts) ? linkedAccounts.length : 0;
+    const checks = [];
+
+    checks.push(
+      publicOrigin
+        ? buildReadinessCheck('public_origin', 'Public Origin', 'pass', `Public origin is set to ${publicOrigin}.`, {
+          publicOrigin
+        })
+        : buildReadinessCheck('public_origin', 'Public Origin', 'fail', 'Set HOMEBRAIN_PUBLIC_BASE_URL to a public HTTPS origin before enabling Alexa publicly.')
+    );
+
+    if (publicOrigin) {
+      checks.push(
+        parsedOrigin?.protocol === 'https:'
+          ? buildReadinessCheck('https_origin', 'HTTPS Origin', 'pass', 'The configured public origin uses HTTPS.', {
+            publicOrigin
+          })
+          : buildReadinessCheck('https_origin', 'HTTPS Origin', 'fail', 'Alexa account linking requires an HTTPS public origin.', {
+            publicOrigin
+          })
+      );
+    }
+
+    checks.push(
+      registration.status === 'paired'
+        ? buildReadinessCheck('broker_pairing', 'Broker Pairing', 'pass', 'HomeBrain is paired with the Alexa broker.', {
+          mode: registration.mode,
+          brokerBaseUrl: registration.brokerBaseUrl
+        })
+        : buildReadinessCheck('broker_pairing', 'Broker Pairing', 'fail', 'Pair HomeBrain with the Alexa broker before linking Alexa accounts.')
+    );
+
+    checks.push(
+      registration.mode === 'public'
+        ? buildReadinessCheck('broker_mode', 'Broker Mode', 'pass', 'The broker is paired in public mode.')
+        : buildReadinessCheck('broker_mode', 'Broker Mode', 'warn', 'The broker is currently paired in private mode. Public certification requires public mode.')
+    );
+
+    checks.push(
+      reverseProxyRoute?.enabled
+        ? buildReadinessCheck('reverse_proxy_route', 'Reverse Proxy Route', 'pass', `A reverse-proxy route exists for ${publicHostname}.`, {
+          hostname: reverseProxyRoute.hostname,
+          validationStatus: reverseProxyRoute.validationStatus
+        })
+        : buildReadinessCheck(
+          'reverse_proxy_route',
+          'Reverse Proxy Route',
+          publicHostname ? 'fail' : 'warn',
+          publicHostname
+            ? `Create and enable a reverse-proxy route for ${publicHostname}.`
+            : 'A public hostname is required before route validation can be checked.'
+        )
+    );
+
+    if (reverseProxyRoute?.enabled) {
+      checks.push(
+        reverseProxyRoute.validationStatus === 'valid'
+          ? buildReadinessCheck('route_validation', 'Route Validation', 'pass', 'The reverse-proxy route validates successfully.', {
+            warnings: validationStatus.warnings || []
+          })
+          : buildReadinessCheck('route_validation', 'Route Validation', 'fail', 'The reverse-proxy route still has blocking validation errors.', {
+            errors: validationStatus.blockingErrors || [],
+            warnings: validationStatus.warnings || []
+          })
+      );
+
+      let tlsStatus = 'warn';
+      let tlsMessage = 'TLS issuance has not completed yet.';
+
+      if (certificateStatus.status === 'issued') {
+        tlsStatus = 'pass';
+        tlsMessage = `A certificate is being served for ${reverseProxyRoute.hostname}.`;
+      } else if (certificateStatus.status === 'error') {
+        tlsStatus = 'fail';
+        tlsMessage = certificateStatus.lastError || 'Certificate issuance failed.';
+      } else if (reverseProxySettings?.acmeEnv === 'staging') {
+        tlsStatus = 'warn';
+        tlsMessage = 'Reverse proxy is still using ACME staging. Switch to production before public certification.';
+      }
+
+      checks.push(buildReadinessCheck('tls_certificate', 'TLS Certificate', tlsStatus, tlsMessage, {
+        acmeEnv: reverseProxySettings?.acmeEnv || null,
+        certificateStatus
+      }));
+    }
+
+    checks.push(
+      registration.proactiveEventsEnabled !== false
+        ? buildReadinessCheck(
+          'proactive_events',
+          'Proactive Events',
+          activeGrantCount > 0 ? 'pass' : 'warn',
+          activeGrantCount > 0
+            ? `Alexa proactive event delivery is enabled with ${activeGrantCount} active grant(s).`
+            : linkedHouseholdCount > 0
+              ? 'Linked households exist, but no active Alexa event-gateway grants have been accepted yet.'
+              : 'No linked Alexa households exist yet, so proactive event delivery has not been activated.'
+        )
+        : buildReadinessCheck('proactive_events', 'Proactive Events', 'fail', 'HomeBrain proactive Alexa event delivery is disabled.')
+    );
+
+    checks.push(
+      linkedHouseholdCount > 0
+        ? buildReadinessCheck('linked_households', 'Linked Households', 'pass', `${linkedHouseholdCount} Alexa household(s) are linked to this hub.`)
+        : buildReadinessCheck('linked_households', 'Linked Households', 'warn', 'No Alexa households have been linked yet.')
+    );
+
+    return {
+      status: summarizeReadinessStatus(checks),
+      publicOrigin,
+      publicHostname,
+      brokerMode: registration.mode,
+      brokerStatus: registration.status,
+      activeGrantCount,
+      linkedHouseholdCount,
+      reverseProxy: {
+        hostname: reverseProxyRoute?.hostname || publicHostname || '',
+        enabled: Boolean(reverseProxyRoute?.enabled),
+        validationStatus: reverseProxyRoute?.validationStatus || 'unknown',
+        validationErrors: validationStatus.blockingErrors || [],
+        validationWarnings: validationStatus.warnings || [],
+        acmeEnv: reverseProxySettings?.acmeEnv || null
+      },
+      certificate: {
+        status: certificateStatus.status || 'unknown',
+        automaticTlsEligible: Boolean(certificateStatus.automaticTlsEligible),
+        dnsReady: Boolean(certificateStatus.dnsReady),
+        renewalState: certificateStatus.renewalState || 'unknown',
+        servedIssuer: certificateStatus.servedIssuer || '',
+        servedSubject: certificateStatus.servedSubject || '',
+        servedNotAfter: certificateStatus.servedNotAfter || null,
+        lastError: certificateStatus.lastError || ''
+      },
+      checks
     };
   }
 
@@ -358,7 +561,8 @@ class AlexaBridgeService {
         execute: '/api/alexa/broker/execute',
         state: '/api/alexa/broker/state',
         accounts: '/api/alexa/broker/accounts',
-        linkAccount: '/api/alexa/broker/link-account'
+        linkAccount: '/api/alexa/broker/link-account',
+        customSkill: '/api/alexa/broker/custom-skill'
       }
     };
   }
@@ -839,6 +1043,209 @@ class AlexaBridgeService {
 
       throw error;
     }
+  }
+
+  async callBroker(pathname, method = 'get', body = undefined) {
+    const registration = await this.ensureRegistration();
+    if (registration.status !== 'paired' || !registration.brokerBaseUrl || !registration.relayToken) {
+      return {
+        skipped: true,
+        reason: 'Broker is not paired or does not have relay credentials'
+      };
+    }
+
+    const response = await axios({
+      url: `${registration.brokerBaseUrl}${pathname}`,
+      method,
+      data: body,
+      timeout: BROKER_TIMEOUT_MS,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${registration.relayToken}`,
+        'X-HomeBrain-Hub-Id': registration.hubId
+      }
+    });
+
+    return {
+      success: true,
+      status: response.status,
+      data: response.data
+    };
+  }
+
+  async getBrokerDeliveryStatus() {
+    const registration = await this.ensureRegistration();
+    if (registration.status !== 'paired' || !registration.brokerBaseUrl || !registration.relayToken) {
+      return {
+        available: false,
+        reason: 'Broker is not paired yet'
+      };
+    }
+
+    try {
+      const result = await this.callBroker(`/api/alexa/events?hubId=${encodeURIComponent(registration.hubId)}`, 'get');
+      const events = Array.isArray(result.data?.events) ? result.data.events : [];
+      const permissionGrants = Array.isArray(result.data?.permissionGrants) ? result.data.permissionGrants : [];
+
+      return {
+        available: true,
+        queuedCount: events.filter((entry) => entry?.status === 'queued').length,
+        processingCount: events.filter((entry) => entry?.status === 'processing').length,
+        deliveredCount: events.filter((entry) => entry?.status === 'delivered').length,
+        failedCount: events.filter((entry) => entry?.status === 'failed').length,
+        skippedCount: events.filter((entry) => entry?.status === 'skipped').length,
+        activeGrantCount: permissionGrants.filter((entry) => entry?.status === 'active' && !entry?.revokedAt).length,
+        grants: permissionGrants.map((entry) => ({
+          permissionGrantId: entry?.permissionGrantId || '',
+          brokerAccountId: entry?.brokerAccountId || '',
+          status: entry?.status || 'unknown',
+          eventRegion: entry?.eventRegion || '',
+          lastUsedAt: entry?.lastUsedAt || null,
+          lastRefreshedAt: entry?.lastRefreshedAt || null,
+          lastError: entry?.lastError || '',
+          updatedAt: entry?.updatedAt || null
+        })),
+        recentEvents: events.slice(0, 6).map((entry) => ({
+          eventId: entry?.eventId || '',
+          kind: entry?.kind || '',
+          brokerAccountId: entry?.brokerAccountId || '',
+          permissionGrantId: entry?.permissionGrantId || '',
+          status: entry?.status || 'unknown',
+          createdAt: entry?.createdAt || null,
+          deliveredAt: entry?.deliveredAt || null,
+          lastAttemptAt: entry?.lastAttemptAt || null,
+          lastError: entry?.lastError || '',
+          metadata: entry?.metadata && typeof entry.metadata === 'object' ? entry.metadata : {}
+        }))
+      };
+    } catch (error) {
+      return {
+        available: false,
+        reason: error.response?.data?.error || error.message || 'Failed to load broker delivery status'
+      };
+    }
+  }
+
+  async getBrokerMetricsStatus() {
+    const registration = await this.ensureRegistration();
+    if (registration.status !== 'paired' || !registration.brokerBaseUrl || !registration.relayToken) {
+      return {
+        available: false,
+        reason: 'Broker is not paired yet'
+      };
+    }
+
+    try {
+      const [metricsResult, readinessResult] = await Promise.all([
+        this.callBroker('/api/alexa/metrics', 'get'),
+        this.callBroker('/api/alexa/readiness', 'get')
+      ]);
+
+      return {
+        available: true,
+        metrics: metricsResult.data?.metrics || null,
+        readiness: readinessResult.data?.readiness || null
+      };
+    } catch (error) {
+      return {
+        available: false,
+        reason: error.response?.data?.error || error.message || 'Failed to load broker metrics'
+      };
+    }
+  }
+
+  async getBrokerAuditLog(limit = 20) {
+    const registration = await this.ensureRegistration();
+    if (registration.status !== 'paired' || !registration.brokerBaseUrl || !registration.relayToken) {
+      return {
+        available: false,
+        reason: 'Broker is not paired yet',
+        auditLogs: []
+      };
+    }
+
+    try {
+      const result = await this.callBroker(`/api/alexa/audit?limit=${Math.max(1, Number(limit || 20))}`, 'get');
+      return {
+        available: true,
+        auditLogs: Array.isArray(result.data?.auditLogs) ? result.data.auditLogs : []
+      };
+    } catch (error) {
+      return {
+        available: false,
+        reason: error.response?.data?.error || error.message || 'Failed to load broker audit log',
+        auditLogs: []
+      };
+    }
+  }
+
+  async flushBrokerEvents(limit = 25) {
+    const registration = await this.ensureRegistration();
+    const result = await this.callBroker('/api/alexa/events/flush', 'post', {
+      hubId: registration.hubId,
+      limit: Math.max(1, Number(limit || 25))
+    });
+
+    if (result.skipped) {
+      return result;
+    }
+
+    await this.appendActivity(registration, {
+      direction: 'outbound',
+      type: 'broker_events_flushed',
+      status: result.data?.success === true ? 'success' : 'warning',
+      message: result.data?.success === true
+        ? `Flushed ${Number(result.data?.processed || 0)} broker Alexa event(s)`
+        : 'Broker Alexa event flush returned a non-success response',
+      details: {
+        processed: result.data?.processed || 0
+      }
+    });
+
+    return result.data;
+  }
+
+  async syncBrokerDiscoveryForAccount(brokerAccountId) {
+    const registration = await this.ensureRegistration();
+    const result = await this.callBroker(`/api/alexa/households/${encodeURIComponent(String(brokerAccountId || '').trim())}/discovery-sync`, 'post', {});
+    if (result.skipped) {
+      return result;
+    }
+
+    await this.appendActivity(registration, {
+      direction: 'outbound',
+      type: 'broker_household_discovery_sync',
+      status: result.data?.success === true ? 'success' : 'warning',
+      message: `Requested Alexa rediscovery for household ${brokerAccountId}`,
+      details: {
+        brokerAccountId,
+        queued: result.data?.queued || 0
+      }
+    });
+
+    return result.data;
+  }
+
+  async revokeBrokerAccount(brokerAccountId, reason = 'Revoked by HomeBrain admin') {
+    const registration = await this.ensureRegistration();
+    const result = await this.callBroker(`/api/alexa/households/${encodeURIComponent(String(brokerAccountId || '').trim())}/revoke`, 'post', {
+      reason
+    });
+    if (result.skipped) {
+      return result;
+    }
+
+    await this.appendActivity(registration, {
+      direction: 'outbound',
+      type: 'broker_household_revoked',
+      status: result.data?.success === true ? 'warning' : 'error',
+      message: `Revoked Alexa household ${brokerAccountId}`,
+      details: {
+        brokerAccountId
+      }
+    });
+
+    return result.data;
   }
 
   async pushCatalogToBroker(reason = 'manual') {
