@@ -108,6 +108,20 @@ router.post('/link-codes', admin, async (req, res) => {
   }
 });
 
+router.post('/pair-broker', admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.pairWithBroker(req.body || {});
+    return res.status(200).json(result);
+  } catch (error) {
+    const statusCode = error.message.includes('required') ? 400 : 500;
+    console.error('POST /api/alexa/pair-broker - Error:', error.message);
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to pair Alexa broker'
+    });
+  }
+});
+
 router.post('/discovery-sync', admin, async (req, res) => {
   try {
     const result = await alexaBridgeService.pushCatalogToBroker(req.body?.reason || 'manual_admin_sync');
@@ -248,6 +262,23 @@ router.post('/broker/accounts', brokerAuth, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Failed to sync Alexa linked accounts'
+    });
+  }
+});
+
+router.post('/broker/link-account', brokerAuth, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.consumeLinkCodeForAccountLinking(req.body?.linkCode, {
+      brokerClientId: req.body?.brokerClientId,
+      actor: req.body?.actor || 'broker'
+    });
+    return res.status(200).json(result);
+  } catch (error) {
+    const statusCode = error.message.includes('invalid') || error.message.includes('required') ? 400 : 500;
+    console.error('POST /api/alexa/broker/link-account - Error:', error.message);
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to consume Alexa account-link code'
     });
   }
 });

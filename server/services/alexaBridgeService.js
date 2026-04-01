@@ -46,6 +46,18 @@ function pruneLinkCodes(codes = []) {
     .slice(-MAX_LINK_CODES);
 }
 
+function consumePendingLinkCode(codes = [], providedCode) {
+  const pendingCodes = pruneLinkCodes(codes);
+  const normalizedCodeHash = sha256(String(providedCode || '').trim());
+  const matchingCode = pendingCodes.find((entry) => secureEqual(entry.codeHash, normalizedCodeHash));
+
+  return {
+    pendingCodes,
+    matchingCode,
+    remainingCodes: pendingCodes.filter((entry) => entry.codeHash !== normalizedCodeHash)
+  };
+}
+
 function sanitizeBrokerBaseUrl(value) {
   const normalized = String(value || '').trim().replace(/\/+$/, '');
   if (!normalized) {
@@ -302,19 +314,19 @@ class AlexaBridgeService {
       throw new Error('Pairing link code is required');
     }
 
-    const pendingCodes = pruneLinkCodes(registration.pendingLinkCodes);
-    const matchingCode = pendingCodes.find((entry) => secureEqual(entry.codeHash, sha256(providedLinkCode)));
+    const { matchingCode, remainingCodes } = consumePendingLinkCode(registration.pendingLinkCodes, providedLinkCode);
     if (!matchingCode) {
       throw new Error('Pairing link code is invalid or expired');
     }
 
     const relayToken = crypto.randomBytes(32).toString('hex');
-    registration.pendingLinkCodes = pendingCodes.filter((entry) => entry.codeHash !== matchingCode.codeHash);
+    registration.pendingLinkCodes = remainingCodes;
     registration.status = 'paired';
     registration.mode = payload.mode === 'public' || matchingCode.mode === 'public' ? 'public' : 'private';
     registration.brokerBaseUrl = sanitizeBrokerBaseUrl(payload.brokerBaseUrl || registration.brokerBaseUrl);
     registration.brokerClientId = String(payload.brokerClientId || '').trim();
     registration.brokerDisplayName = normalizeAlexaName(payload.brokerDisplayName, registration.brokerDisplayName || 'HomeBrain Alexa Broker');
+    registration.relayToken = relayToken;
     registration.relayTokenHash = sha256(relayToken);
     registration.publicOrigin = getConfiguredPublicOrigin();
     registration.lastRegisteredAt = new Date();
@@ -345,8 +357,100 @@ class AlexaBridgeService {
         catalog: '/api/alexa/broker/catalog',
         execute: '/api/alexa/broker/execute',
         state: '/api/alexa/broker/state',
-        accounts: '/api/alexa/broker/accounts'
+        accounts: '/api/alexa/broker/accounts',
+        linkAccount: '/api/alexa/broker/link-account'
       }
+    };
+  }
+
+  async pairWithBroker(payload = {}) {
+    const registration = await this.ensureRegistration();
+    const brokerBaseUrl = sanitizeBrokerBaseUrl(payload.brokerBaseUrl || registration.brokerBaseUrl);
+    const linkCode = String(payload.linkCode || '').trim();
+    if (!brokerBaseUrl) {
+      throw new Error('Broker base URL is required');
+    }
+    if (!linkCode) {
+      throw new Error('Pairing link code is required');
+    }
+
+    const publicOrigin = registration.publicOrigin || getConfiguredPublicOrigin();
+    if (!publicOrigin) {
+      throw new Error('HomeBrain public origin is required before pairing the Alexa broker');
+    }
+
+    const response = await axios.post(`${brokerBaseUrl}/api/alexa/hubs/register`, {
+      hubBaseUrl: publicOrigin,
+      linkCode,
+      mode: payload.mode === 'public' ? 'public' : 'private',
+      brokerClientId: String(payload.brokerClientId || registration.brokerClientId || 'homebrain-alexa-skill').trim(),
+      brokerDisplayName: normalizeAlexaName(payload.brokerDisplayName, registration.brokerDisplayName || 'HomeBrain Alexa Broker')
+    }, {
+      timeout: BROKER_TIMEOUT_MS,
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    await this.appendActivity(await this.ensureRegistration(), {
+      direction: 'outbound',
+      type: 'broker_pair_requested',
+      status: 'success',
+      message: 'HomeBrain initiated Alexa broker pairing',
+      details: {
+        brokerBaseUrl,
+        publicOrigin
+      }
+    });
+
+    return {
+      success: true,
+      broker: response.data?.hub || response.data,
+      summary: await this.getSummary()
+    };
+  }
+
+  async consumeLinkCodeForAccountLinking(linkCode, meta = {}) {
+    const registration = await this.ensureRegistration();
+    if (registration.status !== 'paired') {
+      throw new Error('Alexa broker is not paired');
+    }
+
+    const providedLinkCode = String(linkCode || '').trim();
+    if (!providedLinkCode) {
+      throw new Error('Pairing link code is required');
+    }
+
+    const { matchingCode, remainingCodes } = consumePendingLinkCode(registration.pendingLinkCodes, providedLinkCode);
+    if (!matchingCode) {
+      throw new Error('Pairing link code is invalid or expired');
+    }
+
+    registration.pendingLinkCodes = remainingCodes;
+    registration.lastSeenAt = new Date();
+    await registration.save();
+
+    await this.appendActivity(registration, {
+      direction: 'inbound',
+      type: 'account_link_code_consumed',
+      status: 'success',
+      message: 'Broker consumed Alexa account-link pairing code',
+      details: {
+        mode: matchingCode.mode,
+        codePreview: matchingCode.codePreview,
+        brokerClientId: meta.brokerClientId || '',
+        actor: meta.actor || 'broker'
+      }
+    });
+
+    return {
+      success: true,
+      hubId: registration.hubId,
+      codePreview: matchingCode.codePreview,
+      mode: matchingCode.mode,
+      publicOrigin: registration.publicOrigin || getConfiguredPublicOrigin(),
+      brokerClientId: registration.brokerClientId,
+      consumedAt: new Date().toISOString()
     };
   }
 
@@ -666,10 +770,10 @@ class AlexaBridgeService {
 
   async notifyBroker(pathname, payload, meta = {}) {
     const registration = await this.ensureRegistration();
-    if (registration.status !== 'paired' || !registration.brokerBaseUrl) {
+    if (registration.status !== 'paired' || !registration.brokerBaseUrl || !registration.relayToken) {
       return {
         skipped: true,
-        reason: 'Broker is not paired or does not have a base URL'
+        reason: 'Broker is not paired or does not have relay credentials'
       };
     }
 
@@ -678,6 +782,7 @@ class AlexaBridgeService {
         timeout: BROKER_TIMEOUT_MS,
         headers: {
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${registration.relayToken}`,
           'X-HomeBrain-Hub-Id': registration.hubId
         }
       });

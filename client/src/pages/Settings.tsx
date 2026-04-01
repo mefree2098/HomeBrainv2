@@ -58,6 +58,7 @@ import {
 import {
   generateAlexaLinkCode,
   getAlexaSummary,
+  pairAlexaBroker,
   syncAlexaDiscovery
 } from "@/api/alexa"
 import {
@@ -240,8 +241,11 @@ export function Settings() {
   const [alexaSummary, setAlexaSummary] = useState<any>(null)
   const [loadingAlexaSummary, setLoadingAlexaSummary] = useState(false)
   const [generatingAlexaCode, setGeneratingAlexaCode] = useState<"private" | "public" | "">("")
+  const [pairingAlexaBroker, setPairingAlexaBroker] = useState(false)
   const [syncingAlexaCatalog, setSyncingAlexaCatalog] = useState(false)
   const [latestAlexaLinkCode, setLatestAlexaLinkCode] = useState<any>(null)
+  const [alexaBrokerBaseUrl, setAlexaBrokerBaseUrl] = useState("")
+  const [alexaBrokerLinkCode, setAlexaBrokerLinkCode] = useState("")
   const [loadingHarmonyStatus, setLoadingHarmonyStatus] = useState(false)
   const [loadingHarmonyHubs, setLoadingHarmonyHubs] = useState(false)
   const [discoveringHarmony, setDiscoveringHarmony] = useState(false)
@@ -656,6 +660,7 @@ export function Settings() {
       const response = await getAlexaSummary()
       if (response.success && response.summary) {
         setAlexaSummary(response.summary)
+        setAlexaBrokerBaseUrl((current) => current || response.summary?.brokerBaseUrl || "")
       }
     } catch (error) {
       console.error('Failed to load Alexa summary:', error)
@@ -2176,6 +2181,7 @@ export function Settings() {
       const response = await generateAlexaLinkCode({ mode })
       if (response.success) {
         setLatestAlexaLinkCode(response)
+        setAlexaBrokerLinkCode(response.code || "")
         toast({
           title: "Alexa pairing code ready",
           description: `${mode === "public" ? "Public" : "Private"} link code ${response.code} expires at ${new Date(response.expiresAt).toLocaleString()}.`
@@ -2191,6 +2197,53 @@ export function Settings() {
       })
     } finally {
       setGeneratingAlexaCode("")
+    }
+  }
+
+  const handlePairAlexaBroker = async () => {
+    if (!alexaBrokerBaseUrl.trim()) {
+      toast({
+        title: "Broker URL required",
+        description: "Enter the Alexa broker base URL before pairing.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    if (!alexaBrokerLinkCode.trim()) {
+      toast({
+        title: "Pairing code required",
+        description: "Generate or paste an Alexa pairing code before pairing the broker.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setPairingAlexaBroker(true)
+    try {
+      const response = await pairAlexaBroker({
+        brokerBaseUrl: alexaBrokerBaseUrl.trim(),
+        linkCode: alexaBrokerLinkCode.trim(),
+        mode: latestAlexaLinkCode?.mode === "public" ? "public" : "private"
+      })
+
+      if (response.success) {
+        setAlexaSummary(response.summary || null)
+        toast({
+          title: "Alexa broker paired",
+          description: "HomeBrain paired successfully with the Alexa broker."
+        })
+        loadAlexaSummary()
+      }
+    } catch (error) {
+      console.error('Failed to pair Alexa broker:', error)
+      toast({
+        title: "Alexa broker pairing failed",
+        description: error.message || "Failed to pair HomeBrain with the Alexa broker.",
+        variant: "destructive"
+      })
+    } finally {
+      setPairingAlexaBroker(false)
     }
   }
 
@@ -3378,6 +3431,42 @@ export function Settings() {
                         ? `Broker: ${alexaSummary.brokerBaseUrl}`
                         : "Pair a broker to enable account linking and proactive events."}
                     </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto]">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Broker Base URL</label>
+                    <Input
+                      value={alexaBrokerBaseUrl}
+                      onChange={(event) => setAlexaBrokerBaseUrl(event.target.value)}
+                      placeholder="https://broker.example.com"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Pairing Code</label>
+                    <Input
+                      value={alexaBrokerLinkCode}
+                      onChange={(event) => setAlexaBrokerLinkCode(event.target.value.toUpperCase())}
+                      placeholder="HBAX-XXXX-XXXX-XXXX"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handlePairAlexaBroker}
+                      disabled={pairingAlexaBroker}
+                    >
+                      {pairingAlexaBroker ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                          Pairing...
+                        </>
+                      ) : (
+                        "Pair Broker"
+                      )}
+                    </Button>
                   </div>
                 </div>
 

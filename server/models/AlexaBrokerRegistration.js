@@ -99,6 +99,10 @@ const alexaBrokerRegistrationSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  relayToken: {
+    type: String,
+    default: ''
+  },
   publicOrigin: {
     type: String,
     default: ''
@@ -172,6 +176,7 @@ alexaBrokerRegistrationSchema.pre('validate', function preValidate() {
   this.brokerBaseUrl = String(this.brokerBaseUrl || '').trim().replace(/\/+$/, '');
   this.brokerClientId = String(this.brokerClientId || '').trim();
   this.brokerDisplayName = String(this.brokerDisplayName || '').trim();
+  this.relayToken = String(this.relayToken || '').trim();
   this.publicOrigin = String(this.publicOrigin || '').trim().replace(/\/+$/, '');
   this.pendingLinkCodes = Array.isArray(this.pendingLinkCodes) ? this.pendingLinkCodes : [];
   this.recentActivity = Array.isArray(this.recentActivity)

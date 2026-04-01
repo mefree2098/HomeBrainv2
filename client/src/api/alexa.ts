@@ -70,6 +70,21 @@ export const generateAlexaLinkCode = async (payload: { mode?: 'private' | 'publi
   }
 };
 
+export const pairAlexaBroker = async (payload: {
+  brokerBaseUrl: string;
+  linkCode: string;
+  mode?: 'private' | 'public';
+  brokerClientId?: string;
+}) => {
+  try {
+    const response = await api.post('/api/alexa/pair-broker', payload);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
 export const syncAlexaDiscovery = async (payload: { reason?: string } = {}) => {
   try {
     const response = await api.post('/api/alexa/discovery-sync', payload);
