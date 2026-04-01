@@ -1198,23 +1198,23 @@ export function Workflows() {
         ) : null}
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MessageSquareText className="h-4 w-4" />
-              Chat/Voice Command
-            </CardTitle>
-            <CardDescription>
-              Use the same command parser as remote voice devices to create or run workflows from text.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Input
-              value={chatCommand}
-              onChange={(event) => setChatCommand(event.target.value)}
-              placeholder={isAdmin
-                ? 'Try: "create a workflow that turns off lights at 11 PM"'
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MessageSquareText className="h-4 w-4" />
+                Chat/Voice Command
+              </CardTitle>
+              <CardDescription>
+              Use the same command parser as remote voice devices to create, revise, or run workflows from text.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Input
+                value={chatCommand}
+                onChange={(event) => setChatCommand(event.target.value)}
+                placeholder={isAdmin
+                ? 'Try: "fix the Alarm Armed workflow so it uses the Interior Lights group"'
                 : 'Try: "turn on the living room lights"'}
-            />
+              />
             <Button onClick={() => void handleRunChatCommand()} disabled={runningChatCommand || !chatCommand.trim()}>
               <Bot className="mr-2 h-4 w-4" />
               {runningChatCommand ? "Processing..." : "Send Command"}
