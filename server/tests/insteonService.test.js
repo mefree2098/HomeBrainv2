@@ -264,12 +264,14 @@ test('turnOn issues normalized command address and returns confirmed state', asy
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
   const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
 
   t.after(() => {
     insteonService.hub = originalHub;
     insteonService.isConnected = originalConnected;
     Device.findById = originalFindById;
     insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
   });
 
   let hubAddress = null;
@@ -287,6 +289,7 @@ test('turnOn issues normalized command address and returns confirmed state', asy
     model: 'Dimmer Test',
     properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
   });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
   insteonService._confirmExpectedDeviceStateByAddress = async () => ({
     status: true,
     brightness: 68,
@@ -304,6 +307,108 @@ test('turnOn issues normalized command address and returns confirmed state', asy
   assert.match(result.message, /Insteon PLM 11\.22\.33/i);
   assert.equal(result.details.controlMethod, 'insteon_plm_direct');
   assert.equal(result.details.confirmedReads, 2);
+  assert.equal(result.details.commandAcknowledged, true);
+});
+
+test('turnOn returns success with warning when verification is inconclusive after the command is acknowledged', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+  });
+
+  let hubAddress = null;
+  let persistedPatch = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOn(address, _level, callback) {
+      hubAddress = address;
+      callback(null);
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => {
+    persistedPatch = patch;
+    return patch;
+  };
+  insteonService._confirmExpectedDeviceStateByAddress = async () => {
+    const error = new Error('Unable to confirm a stable ON state for 11.22.33. Timeout getting device status for 11.22.33');
+    error.code = 'INSTEON_STATE_CONFIRMATION_TIMEOUT';
+    error.details = {
+      expectedStatus: true,
+      lastObservedState: null
+    };
+    throw error;
+  };
+
+  const result = await insteonService.turnOn('mock-device', 68);
+
+  assert.equal(hubAddress, '112233');
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, false);
+  assert.equal(result.status, true);
+  assert.equal(result.brightness, 68);
+  assert.match(result.message, /verification pending/i);
+  assert.match(result.warning, /Timeout getting device status/i);
+  assert.equal(result.details.confirmationCode, 'INSTEON_STATE_CONFIRMATION_TIMEOUT');
+  assert.equal(result.details.commandAcknowledged, true);
+  assert.equal(persistedPatch.status, true);
+});
+
+test('turnOn can recover after command acknowledgement times out if the device state confirms ON', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteHubCommandWithTimeout = insteonService._executeHubCommandWithTimeout;
+  const originalRecoverCommandStateAfterTimeout = insteonService._recoverCommandStateAfterTimeout;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeHubCommandWithTimeout = originalExecuteHubCommandWithTimeout;
+    insteonService._recoverCommandStateAfterTimeout = originalRecoverCommandStateAfterTimeout;
+  });
+
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._executeHubCommandWithTimeout = async () => {
+    const error = new Error('Timeout turning on device');
+    error.code = 'INSTEON_COMMAND_TIMEOUT';
+    throw error;
+  };
+  insteonService._recoverCommandStateAfterTimeout = async () => ({
+    status: true,
+    brightness: 100,
+    level: 100,
+    confirmedReads: 1
+  });
+
+  const result = await insteonService.turnOn('mock-device', 100);
+
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+  assert.equal(result.status, true);
+  assert.match(result.message, /acknowledgement timed out, but status confirmed ON/i);
+  assert.equal(result.details.commandAcknowledged, false);
+  assert.equal(result.details.verificationRecovered, true);
 });
 
 test('turnOff issues normalized command address and returns direct PLM confirmation details', async (t) => {
@@ -311,12 +416,14 @@ test('turnOff issues normalized command address and returns direct PLM confirmat
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
   const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
 
   t.after(() => {
     insteonService.hub = originalHub;
     insteonService.isConnected = originalConnected;
     Device.findById = originalFindById;
     insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
   });
 
   let hubAddress = null;
@@ -332,6 +439,7 @@ test('turnOff issues normalized command address and returns direct PLM confirmat
     model: 'SwitchLinc Test',
     properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
   });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
   insteonService._confirmExpectedDeviceStateByAddress = async () => ({
     status: false,
     brightness: 0,
@@ -348,6 +456,7 @@ test('turnOff issues normalized command address and returns direct PLM confirmat
   assert.match(result.message, /Insteon PLM 11\.22\.33/i);
   assert.equal(result.details.controlMethod, 'insteon_plm_direct');
   assert.equal(result.details.confirmedLevel, 0);
+  assert.equal(result.details.commandAcknowledged, true);
 });
 
 test('_linkDeviceRemote writes responder and controller links when controller links are enabled', async (t) => {
