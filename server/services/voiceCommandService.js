@@ -1,5 +1,6 @@
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
+const Workflow = require('../models/Workflow');
 const deviceService = require('./deviceService');
 const sceneService = require('./sceneService');
 const automationService = require('./automationService');
@@ -109,6 +110,24 @@ const VOICE_LLM_REQUEST_CONFIG = Object.freeze({
     temperature: 0
   }
 });
+const EXECUTABLE_INTENT_TYPES = new Set([
+  'device_control',
+  'scene_activate',
+  'workflow_control',
+  'automation_create',
+  'workflow_create',
+  'workflow_revise'
+]);
+const AUTOMATION_LIKE_INTENT_TYPES = new Set([
+  'automation_create',
+  'workflow_create',
+  'workflow_revise'
+]);
+const ADMIN_ONLY_INTENT_TYPES = new Set([
+  'automation_create',
+  'workflow_create',
+  'workflow_revise'
+]);
 
 class VoiceCommandService {
   constructor() {
@@ -226,9 +245,10 @@ class VoiceCommandService {
       return this.lastContextCache.data;
     }
 
-    const [devices, scenes] = await Promise.all([
+    const [devices, scenes, workflows] = await Promise.all([
       Device.find().lean(),
-      Scene.find().select('_id name room category').lean()
+      Scene.find().select('_id name room category').lean(),
+      Workflow.find().select('_id name description enabled category trigger').lean()
     ]);
 
     const deviceMap = new Map();
@@ -262,22 +282,75 @@ class VoiceCommandService {
       return normalized;
     });
 
+    const workflowMap = new Map();
+    const workflowsWithMeta = workflows.map((workflow) => {
+      const normalized = {
+        id: workflow._id.toString(),
+        name: workflow.name,
+        description: workflow.description || '',
+        enabled: workflow.enabled !== false,
+        category: workflow.category || 'custom',
+        triggerType: workflow?.trigger?.type || 'manual'
+      };
+      workflowMap.set(normalized.id, { ...workflow, normalized });
+      return normalized;
+    });
+
     const context = {
       devices: devicesWithMeta,
       scenes: scenesWithMeta,
+      workflows: workflowsWithMeta,
       raw: {
         devices,
-        scenes
+        scenes,
+        workflows
       },
       deviceMap,
-      sceneMap
+      sceneMap,
+      workflowMap
     };
 
     this.lastContextCache = { updatedAt: now, data: context };
     return context;
   }
 
-  buildPrompt(commandText, { room, wakeWord, devices, scenes }) {
+  extractPromptKeywords(text) {
+    return Array.from(new Set(
+      String(text || '')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((token) => token.length >= 3)
+    ));
+  }
+
+  scoreWorkflowForPrompt(commandText, workflow) {
+    const normalizedText = String(commandText || '').toLowerCase();
+    const keywords = this.extractPromptKeywords(commandText);
+    const name = String(workflow?.name || '').toLowerCase();
+    const description = String(workflow?.description || '').toLowerCase();
+    let score = 1;
+
+    if (name && normalizedText.includes(name)) {
+      score += 20;
+    }
+
+    keywords.forEach((keyword) => {
+      if (name.includes(keyword)) {
+        score += 4;
+      }
+      if (description.includes(keyword)) {
+        score += 2;
+      }
+    });
+
+    if (workflow?.enabled) {
+      score += 0.25;
+    }
+
+    return score;
+  }
+
+  buildPrompt(commandText, { room, wakeWord, devices, scenes, workflows }) {
     const primaryRoom = room || 'unknown';
     const wakeWordLabel = wakeWord || 'unknown';
 
@@ -288,6 +361,15 @@ class VoiceCommandService {
     }).slice(0, 40);
 
     const sortedScenes = [...scenes].slice(0, 20);
+    const sortedWorkflows = [...(workflows || [])]
+      .sort((left, right) => {
+        const scoreDelta = this.scoreWorkflowForPrompt(commandText, right) - this.scoreWorkflowForPrompt(commandText, left);
+        if (scoreDelta !== 0) {
+          return scoreDelta;
+        }
+        return left.name.localeCompare(right.name);
+      })
+      .slice(0, 30);
 
     const deviceLines = sortedDevices.map((device, index) => {
       return `${index + 1}. ID:${device.id} | Name:${device.name} | Room:${device.room} | Type:${device.type} | Source:${device.source} | Capabilities:${device.capabilities.join(',')}`;
@@ -295,6 +377,10 @@ class VoiceCommandService {
 
     const sceneLines = sortedScenes.map((scene, index) => {
       return `${index + 1}. ID:${scene.id} | Name:${scene.name} | Room:${scene.room} | Category:${scene.category}`;
+    }).join('\n');
+
+    const workflowLines = sortedWorkflows.map((workflow, index) => {
+      return `${index + 1}. ID:${workflow.id} | Name:${workflow.name} | Enabled:${workflow.enabled ? 'yes' : 'no'} | Category:${workflow.category} | Trigger:${workflow.triggerType} | Description:${workflow.description || 'None'}`;
     }).join('\n');
 
     return `
@@ -310,22 +396,26 @@ ${deviceLines || 'None'}
 AVAILABLE SCENES
 ${sceneLines || 'None'}
 
+AVAILABLE WORKFLOWS
+${workflowLines || 'None'}
+
 USER COMMAND
 "${commandText}"
 
 OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
 {
-  "intent": "<intent_type>",  // choose one: device_control, scene_activate, automation_create, workflow_create, workflow_control, query, system_control, unknown
+  "intent": "<intent_type>",  // choose one: device_control, scene_activate, automation_create, workflow_create, workflow_control, workflow_revise, query, system_control, unknown
   "confidence": 0.0-1.0,
   "normalizedCommand": "Short paraphrase of the user's request",
   "actions": [
     {
-      "type": "<action_type>",  // choose one: device_control, scene_activate, automation_create, workflow_create, workflow_control, query
+      "type": "<action_type>",  // choose one: device_control, scene_activate, automation_create, workflow_create, workflow_control, workflow_revise, query
       "deviceId": "DEVICE_ID_FROM_LIST",
       "sceneId": "SCENE_ID_FROM_LIST",
       "workflowId": "WORKFLOW_ID_IF_KNOWN",
       "workflowName": "WORKFLOW_NAME_IF_REFERENCED",
       "operation": "run|enable|disable",
+      "description": "Required for workflow_create/workflow_revise: what should be created or changed",
       "action": "<device_action>",  // e.g., turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
       "value": "optional numeric or string value",
       "room": "optional room for extra clarity"
@@ -339,13 +429,14 @@ DECISION RULES
 1. ALWAYS return at least one action when the user wants something controlled. Map the request to the closest matching device using name + room context. Prefer devices in ${primaryRoom} unless the user clearly specifies another room.
 2. ONLY use deviceId / sceneId values from the lists above. Do not invent IDs. If two devices match equally, pick the most specific (exact name match beats fuzzy match).
 3. For brightness actions return percentages (0-100). For color actions return a hex color string (for example "#ff0000"). For temperature, use whole-number Fahrenheit unless the user specifies another scale.
-4. Use "workflow_create" when the user asks to create/schedule a routine or workflow. Use "workflow_control" when the user asks to run/enable/disable an existing workflow. Immediate commands like "turn on the vault light" must stay "device_control".
-5. If the request is a general question or not about controlling devices, set intent to "query", leave "actions" empty, and provide the direct answer in "response". Only use "followUpQuestion" when clarification is required.
-6. Never return empty "actions" for "device_control" intents.
-7. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.") or informative for queries.
-8. If a selected device has Source:harmony, only use turn_on, turn_off, or toggle. Treat it as a Harmony Hub activity target (start/stop), not a dimmable light or thermostat.
-9. Return JSON only. Do not use markdown code fences.
-10. Put any conversational text only in the "response" field.
+4. Use "workflow_create" when the user asks to create/schedule a routine or workflow. Use "workflow_revise" when the user asks to edit, fix, update, revise, or change an existing workflow. Use "workflow_control" when the user asks to run/enable/disable an existing workflow. Immediate commands like "turn on the vault light" must stay "device_control".
+5. For "workflow_revise", choose the best matching workflow from AVAILABLE WORKFLOWS. Use "workflowId" whenever possible, include the exact "workflowName", and include a concise "description" of the requested changes.
+6. If the request is a general question or not about controlling devices, set intent to "query", leave "actions" empty, and provide the direct answer in "response". Only use "followUpQuestion" when clarification is required.
+7. Never return empty "actions" for device_control, workflow_create, workflow_control, or workflow_revise intents.
+8. Make the "response" friendly, short, and actionable (e.g., "Turning on the vault light.") or informative for queries.
+9. If a selected device has Source:harmony, only use turn_on, turn_off, or toggle. Treat it as a Harmony Hub activity target (start/stop), not a dimmable light or thermostat.
+10. Return JSON only. Do not use markdown code fences.
+11. Put any conversational text only in the "response" field.
 
 Return ONLY the JSON object with no commentary.`; 
   }
@@ -848,19 +939,24 @@ RULES
       return true;
     }
 
+    const workflowEditPattern = /(\b(edit|update|fix|change|modify|revise)\b.*\b(workflow|routine|automation)\b)|(\b(workflow|routine|automation)\b.*\b(edit|update|fix|change|modify|revise)\b)/;
+    if (workflowEditPattern.test(text)) {
+      return true;
+    }
+
     return false;
   }
 
   hasControlIntentActions(interpretation) {
     const intent = (interpretation?.intent || '').toLowerCase();
-    if (['device_control', 'scene_activate', 'workflow_control', 'automation_create', 'workflow_create'].includes(intent)) {
+    if (EXECUTABLE_INTENT_TYPES.has(intent)) {
       return true;
     }
 
     const actions = Array.isArray(interpretation?.actions) ? interpretation.actions : [];
     return actions.some((action) => {
       const type = (action?.type || '').toLowerCase();
-      return ['device_control', 'scene_activate', 'workflow_control', 'automation_create', 'workflow_create'].includes(type);
+      return EXECUTABLE_INTENT_TYPES.has(type);
     });
   }
 
@@ -874,7 +970,7 @@ RULES
 
     const allowedActions = actions.filter((action) => {
       const type = String(action?.type || '').toLowerCase();
-      if (type === 'automation_create' || type === 'workflow_create') {
+      if (ADMIN_ONLY_INTENT_TYPES.has(type)) {
         blocked = true;
         return false;
       }
@@ -1139,6 +1235,43 @@ RULES
     }
   }
 
+  async executeWorkflowReviseAction(action, room) {
+    const result = {
+      type: 'workflow_revise',
+      success: false,
+      message: ''
+    };
+
+    try {
+      const description = action.description || action.summary || action.details || action.text || '';
+      if (!description) {
+        throw new Error('Workflow revision description missing');
+      }
+
+      const workflow = await workflowService.findWorkflowForControl({
+        workflowId: action.workflowId || null,
+        workflowName: action.workflowName || action.name || null
+      });
+
+      const revision = await workflowService.reviseWorkflowFromText(
+        workflow._id.toString(),
+        description,
+        room,
+        'voice'
+      );
+
+      result.success = true;
+      result.workflowId = revision?.workflow?._id?.toString() || workflow._id.toString();
+      result.workflowName = revision?.workflow?.name || workflow.name;
+      result.message = revision?.message || `Workflow "${result.workflowName}" updated`;
+      return result;
+    } catch (error) {
+      result.success = false;
+      result.message = error.message || 'Failed to revise workflow';
+      return result;
+    }
+  }
+
   async executeWorkflowControlAction(action) {
     const result = {
       type: 'workflow_control',
@@ -1213,6 +1346,9 @@ RULES
             deviceId: workflowResult.deviceId
           });
         }
+      } else if (action.type === 'workflow_revise') {
+        const workflowRevisionResult = await this.executeWorkflowReviseAction(action, room);
+        executionResults.push(workflowRevisionResult);
       } else if (action.type === 'workflow_control') {
         const workflowControlResult = await this.executeWorkflowControlAction(action);
         executionResults.push(workflowControlResult);
@@ -1260,7 +1396,7 @@ RULES
       if (item.type === 'scene_activate') {
         return item.message || 'Scene activated';
       }
-      if (item.type === 'workflow_create' || item.type === 'workflow_control') {
+      if (item.type === 'workflow_create' || item.type === 'workflow_control' || item.type === 'workflow_revise') {
         return item.message;
       }
       return item.message;
@@ -1279,6 +1415,7 @@ RULES
       : this.buildPrompt(commandText, {
         devices: context.devices,
         scenes: context.scenes,
+        workflows: context.workflows,
         room,
         wakeWord
       });
@@ -1488,12 +1625,12 @@ RULES
 
     const likelyAutomation = this.isLikelyAutomationRequest(commandText);
     const hasAutomationLikeActions = Array.isArray(interpretation?.actions) &&
-      interpretation.actions.some((action) => ['automation_create', 'workflow_create'].includes(action?.type));
+      interpretation.actions.some((action) => AUTOMATION_LIKE_INTENT_TYPES.has(action?.type));
 
     if (
       interpretation &&
       !likelyAutomation &&
-      (['automation_create', 'workflow_create'].includes(interpretation.intent) || hasAutomationLikeActions)
+      (AUTOMATION_LIKE_INTENT_TYPES.has(interpretation.intent) || hasAutomationLikeActions)
     ) {
       console.log('VoiceCommandService: Automation intent/actions detected but command appears immediate; applying device-control fallback.');
       const directFallback = this.fallbackInterpretation(commandText, context, room);
@@ -1504,13 +1641,13 @@ RULES
         };
       } else if (hasAutomationLikeActions) {
         const filteredActions = interpretation.actions.filter((action) =>
-          !['automation_create', 'workflow_create'].includes(action?.type)
+          !AUTOMATION_LIKE_INTENT_TYPES.has(action?.type)
         );
         if (filteredActions.length) {
           interpretation = {
             ...interpretation,
             actions: filteredActions,
-            intent: ['automation_create', 'workflow_create'].includes(interpretation.intent)
+            intent: AUTOMATION_LIKE_INTENT_TYPES.has(interpretation.intent)
               ? 'device_control'
               : interpretation.intent,
             usedFallback: true
