@@ -133,6 +133,18 @@ test('listGroups returns persisted groups with membership and workflow usage det
   assert.deepEqual(emptyGroup.deviceIds, []);
 });
 
+test('DeviceGroup model normalizes the name during validation', async () => {
+  const group = new DeviceGroup({
+    name: '  Interior Lights  ',
+    description: 'Lights that should be controlled together'
+  });
+
+  await group.validate();
+
+  assert.equal(group.name, 'Interior Lights');
+  assert.equal(group.normalizedName, 'interior lights');
+});
+
 test('updateGroup renames the group across devices, workflows, and standalone automations', async (t) => {
   const originalDeviceFind = Device.find;
   const originalDeviceBulkWrite = Device.bulkWrite;
