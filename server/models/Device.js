@@ -35,6 +35,11 @@ const schema = new mongoose.Schema({
     type: String,
     default: '#ffffff',
   },
+  colorTemperature: {
+    type: Number,
+    min: 1000,
+    max: 10000,
+  },
   // Thermostat-specific properties
   temperature: {
     type: Number,

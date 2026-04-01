@@ -443,6 +443,7 @@ class DeviceService {
       let commandValue = value;
       const supportsBrightnessControl = this.supportsBrightnessControl(device);
       const supportsColorControl = this.supportsColorControl(device);
+      const supportsColorTemperatureControl = this.supportsColorTemperatureControl(device);
 
       switch (normalizedAction) {
         case 'toggle':
@@ -497,6 +498,20 @@ class DeviceService {
           }
           updateData.color = normalizedColor;
           commandValue = normalizedColor;
+          break;
+        }
+
+        case 'setcolortemperature': {
+          if (!supportsColorTemperatureControl) {
+            throw new Error('Color temperature control is only available for supported lights or switches');
+          }
+          const numericKelvin = Number(value);
+          if (!Number.isFinite(numericKelvin) || numericKelvin < 1000 || numericKelvin > 10000) {
+            throw new Error('Color temperature must be between 1000 and 10000 kelvin');
+          }
+          updateData.colorTemperature = Math.round(numericKelvin);
+          updateData.status = true;
+          commandValue = updateData.colorTemperature;
           break;
         }
 
@@ -810,6 +825,27 @@ class DeviceService {
     }
 
     return Boolean(device?.properties?.supportsColor);
+  }
+
+  supportsColorTemperatureControl(device) {
+    if (!device) {
+      return false;
+    }
+
+    if (typeof device?.colorTemperature === 'number') {
+      return true;
+    }
+
+    if (device?.properties?.supportsColorTemperature === true) {
+      return true;
+    }
+
+    if (this.isSmartThingsDevice(device)) {
+      const capabilities = this.getSmartThingsCapabilitySet(device);
+      return capabilities.has('colortemperature');
+    }
+
+    return false;
   }
 
   normalizeThermostatMode(mode) {
@@ -1344,6 +1380,25 @@ class DeviceService {
           updateData.brightness = colorPayload.level;
           updateData.status = colorPayload.level > 0;
         }
+        break;
+      }
+
+      case 'setcolortemperature': {
+        if (hasDeclaredCapabilities && !capabilities.has('colortemperature')) {
+          throw new Error('Color temperature control is not supported for this SmartThings device');
+        }
+        const temperature = Math.round(Number(commandValue));
+        if (!Number.isFinite(temperature) || temperature < 1000 || temperature > 10000) {
+          throw new Error('Color temperature must be between 1000 and 10000 kelvin');
+        }
+        await smartThingsService.sendDeviceCommand(smartThingsId, [{
+          component: 'main',
+          capability: 'colorTemperature',
+          command: 'setColorTemperature',
+          arguments: [temperature]
+        }]);
+        updateData.colorTemperature = temperature;
+        updateData.status = true;
         break;
       }
 

@@ -1,5 +1,6 @@
 const Scene = require('../models/Scene');
 const Device = require('../models/Device');
+const deviceService = require('./deviceService');
 
 /**
  * Service for managing smart home scenes
@@ -157,15 +158,19 @@ class SceneService {
       // Populate device information
       await updatedScene.populate('deviceActions.deviceId', 'name type location status');
 
-      // Execute device actions (simulate for now - in real implementation this would control actual devices)
+      // Execute device actions through the existing device control service so scenes and Alexa share the same behavior.
       const deviceActions = [];
       for (const action of updatedScene.deviceActions) {
         try {
           console.log(`SceneService: Executing action ${action.action} on device ${action.deviceId.name}`);
-          // In a real implementation, this would call device control APIs
+          const controlledDevice = await deviceService.controlDevice(
+            action.deviceId._id.toString(),
+            action.action,
+            action.value
+          );
           deviceActions.push({
             deviceId: action.deviceId._id,
-            deviceName: action.deviceId.name,
+            deviceName: controlledDevice?.name || action.deviceId.name,
             action: action.action,
             value: action.value,
             status: 'executed'

@@ -3,13 +3,18 @@ const mongoose = require('mongoose');
 // Import all models to ensure they are registered
 require('./User');
 require('./Device');
+require('./DeviceGroup');
 require('./DeviceEnergySample');
 require('./Scene');
 require('./Automation');
 require('./AutomationHistory');
+require('./Workflow');
 require('./VoiceDevice');
 require('./UserProfile');
 require('./Settings');
+require('./AlexaExposure');
+require('./AlexaBrokerRegistration');
+require('./AlexaLinkedAccount');
 require('./SecurityAlarm');
 require('./VoiceCommand');
 require('./SmartThingsIntegration');
