@@ -5,6 +5,18 @@ const requestCache = new Map<string, { data: any; timestamp: number; promise?: P
 const CACHE_DURATION = 5000; // 5 seconds cache for development
 const IN_FLIGHT_REQUESTS = new Map<string, Promise<any>>();
 
+export type AlexaProfileMapping = {
+  personId?: string;
+  speakerLabel?: string;
+  householdId?: string;
+  locale?: string;
+  alexaUserId?: string;
+  alexaAccountId?: string;
+  defaultForHousehold?: boolean;
+  fallback?: boolean;
+  enabled?: boolean;
+};
+
 // Debug function to monitor cache usage
 const logCacheStats = (operation: string) => {
   console.log(`Profiles API Cache Stats (${operation}):`, {
@@ -88,8 +100,15 @@ export const createUserProfile = async (data: {
   speechRate?: number;
   speechPitch?: number;
   permissions?: Array<string>;
+  alexaMappings?: Array<AlexaProfileMapping>;
   avatar?: string;
   birthDate?: Date;
+  alexaPreferences?: {
+    responseMode?: 'auto' | 'text' | 'ssml' | 'audio';
+    preferredLocale?: string;
+    allowPersonalization?: boolean;
+    includeAudioFallbackText?: boolean;
+  };
   contextMemory?: boolean;
   learningMode?: boolean;
   privacyMode?: boolean;

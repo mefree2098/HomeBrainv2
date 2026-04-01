@@ -1,5 +1,6 @@
 const express = require('express');
 const alexaBridgeService = require('../services/alexaBridgeService');
+const alexaCustomSkillService = require('../services/alexaCustomSkillService');
 const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
@@ -138,6 +139,168 @@ router.post('/discovery-sync', admin, async (req, res) => {
   }
 });
 
+router.get('/delivery', admin, async (_req, res) => {
+  try {
+    const delivery = await alexaBridgeService.getBrokerDeliveryStatus();
+    return res.status(200).json({
+      success: true,
+      delivery
+    });
+  } catch (error) {
+    console.error('GET /api/alexa/delivery - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa delivery status'
+    });
+  }
+});
+
+router.get('/metrics', admin, async (_req, res) => {
+  try {
+    const metrics = await alexaBridgeService.getBrokerMetricsStatus();
+    return res.status(200).json({
+      success: true,
+      metrics
+    });
+  } catch (error) {
+    console.error('GET /api/alexa/metrics - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa broker metrics'
+    });
+  }
+});
+
+router.get('/audit', admin, async (req, res) => {
+  try {
+    const audit = await alexaBridgeService.getBrokerAuditLog(req.query?.limit);
+    return res.status(200).json({
+      success: true,
+      audit
+    });
+  } catch (error) {
+    console.error('GET /api/alexa/audit - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa broker audit log'
+    });
+  }
+});
+
+router.get('/readiness', admin, async (_req, res) => {
+  try {
+    const readiness = await alexaBridgeService.getCertificationReadiness();
+    return res.status(200).json({
+      success: true,
+      readiness
+    });
+  } catch (error) {
+    console.error('GET /api/alexa/readiness - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa readiness'
+    });
+  }
+});
+
+router.get('/voice-users', admin, async (_req, res) => {
+  try {
+    const voiceUsers = await alexaCustomSkillService.listVoiceUsers();
+    const customSkill = await alexaCustomSkillService.getStatusSummary();
+    return res.status(200).json({
+      success: true,
+      voiceUsers,
+      customSkill
+    });
+  } catch (error) {
+    console.error('GET /api/alexa/voice-users - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa voice users'
+    });
+  }
+});
+
+router.put('/voice-users/:voiceUserId', admin, async (req, res) => {
+  try {
+    const voiceUser = await alexaCustomSkillService.updateVoiceUser(req.params.voiceUserId, req.body || {});
+    return res.status(200).json({
+      success: true,
+      voiceUser
+    });
+  } catch (error) {
+    console.error(`PUT /api/alexa/voice-users/${req.params.voiceUserId} - Error:`, error.message);
+    return res.status(error.message.includes('not found') ? 404 : 400).json({
+      success: false,
+      error: error.message || 'Failed to update Alexa voice user'
+    });
+  }
+});
+
+router.delete('/voice-users/:voiceUserId', admin, async (req, res) => {
+  try {
+    const result = await alexaCustomSkillService.deleteVoiceUser(req.params.voiceUserId);
+    return res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    console.error(`DELETE /api/alexa/voice-users/${req.params.voiceUserId} - Error:`, error.message);
+    return res.status(error.message.includes('not found') ? 404 : 400).json({
+      success: false,
+      error: error.message || 'Failed to delete Alexa voice user'
+    });
+  }
+});
+
+router.post('/events/flush', admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.flushBrokerEvents(req.body?.limit);
+    return res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    console.error('POST /api/alexa/events/flush - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to flush Alexa broker events'
+    });
+  }
+});
+
+router.post('/accounts/:brokerAccountId/discovery-sync', admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.syncBrokerDiscoveryForAccount(req.params.brokerAccountId);
+    return res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    console.error(`POST /api/alexa/accounts/${req.params.brokerAccountId}/discovery-sync - Error:`, error.message);
+    return res.status(error.response?.status || 500).json({
+      success: false,
+      error: error.message || 'Failed to request Alexa household rediscovery'
+    });
+  }
+});
+
+router.post('/accounts/:brokerAccountId/revoke', admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.revokeBrokerAccount(req.params.brokerAccountId, req.body?.reason);
+    return res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    console.error(`POST /api/alexa/accounts/${req.params.brokerAccountId}/revoke - Error:`, error.message);
+    return res.status(error.response?.status || 500).json({
+      success: false,
+      error: error.message || 'Failed to revoke Alexa household'
+    });
+  }
+});
+
 router.post('/broker/register', async (req, res) => {
   try {
     const result = await alexaBridgeService.registerBroker(req.body || {});
@@ -181,6 +344,46 @@ router.get('/broker/catalog', brokerAuth, async (_req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch Alexa catalog'
+    });
+  }
+});
+
+router.post('/broker/custom-skill', brokerAuth, async (req, res) => {
+  try {
+    const response = await alexaCustomSkillService.handleSkillRequest(req.body?.envelope || req.body || {}, {
+      brokerAccountId: req.body?.brokerAccountId,
+      linkedAccount: req.body?.linkedAccount
+    });
+    await alexaBridgeService.appendActivity(req.alexaBrokerRegistration, {
+      direction: 'inbound',
+      type: 'custom_skill_requested',
+      status: 'success',
+      message: 'Broker routed Alexa custom skill request to HomeBrain',
+      details: {
+        brokerAccountId: req.body?.brokerAccountId || '',
+        requestType: req.body?.envelope?.request?.type || req.body?.request?.type || ''
+      }
+    });
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error('POST /api/alexa/broker/custom-skill - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to handle Alexa custom skill request'
+    });
+  }
+});
+
+router.get('/custom/audio/:clipId', async (req, res) => {
+  try {
+    const result = await alexaCustomSkillService.resolveAudioClip(req.params.clipId, req.query?.token);
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return res.status(200).send(result.buffer);
+  } catch (error) {
+    return res.status(error.status || 404).json({
+      success: false,
+      error: error.message || 'Alexa custom audio clip could not be loaded'
     });
   }
 });

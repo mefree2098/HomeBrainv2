@@ -98,6 +98,145 @@ const securityPreferencesSchema = new mongoose.Schema({
   versionKey: false,
 });
 
+const alexaPreferencesSchema = new mongoose.Schema({
+  responseMode: {
+    type: String,
+    enum: ['auto', 'text', 'ssml', 'audio'],
+    default: 'auto',
+  },
+  preferredLocale: {
+    type: String,
+    default: 'en-US',
+  },
+  allowPersonalization: {
+    type: Boolean,
+    default: true,
+  },
+  includeAudioFallbackText: {
+    type: Boolean,
+    default: false,
+  },
+}, {
+  _id: false,
+  versionKey: false,
+});
+
+const trimOptionalString = (value) => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const normalized = String(value).trim();
+  return normalized || undefined;
+};
+
+const normalizeAlexaMappings = (value) => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized = [];
+  const seen = new Set();
+
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const personId = trimOptionalString(entry.personId);
+    const householdId = trimOptionalString(entry.householdId);
+    const locale = trimOptionalString(entry.locale);
+    const speakerLabel = trimOptionalString(entry.speakerLabel);
+    const alexaUserId = trimOptionalString(entry.alexaUserId);
+    const alexaAccountId = trimOptionalString(entry.alexaAccountId);
+    const defaultForHousehold = entry.defaultForHousehold === true;
+    const fallback = entry.fallback === true;
+    const enabled = entry.enabled !== false;
+
+    if (!personId && !defaultForHousehold && !fallback) {
+      continue;
+    }
+
+    const dedupeKey = [
+      personId || '*',
+      householdId || '*',
+      locale || '*',
+      defaultForHousehold ? 'default' : 'nodefault',
+      fallback ? 'fallback' : 'nofallback'
+    ].join('::').toLowerCase();
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    normalized.push({
+      personId,
+      speakerLabel,
+      householdId,
+      locale,
+      alexaUserId,
+      alexaAccountId,
+      defaultForHousehold,
+      fallback,
+      enabled
+    });
+  }
+
+  return normalized;
+};
+
+const alexaMappingSchema = new mongoose.Schema({
+  personId: {
+    type: String,
+    trim: true,
+  },
+  speakerLabel: {
+    type: String,
+    trim: true,
+    maxlength: 120,
+  },
+  householdId: {
+    type: String,
+    trim: true,
+    maxlength: 160,
+  },
+  locale: {
+    type: String,
+    trim: true,
+    maxlength: 40,
+  },
+  alexaUserId: {
+    type: String,
+    trim: true,
+    maxlength: 160,
+  },
+  alexaAccountId: {
+    type: String,
+    trim: true,
+    maxlength: 160,
+  },
+  defaultForHousehold: {
+    type: Boolean,
+    default: false,
+  },
+  fallback: {
+    type: Boolean,
+    default: false,
+  },
+  enabled: {
+    type: Boolean,
+    default: true,
+  },
+}, {
+  _id: false,
+  versionKey: false,
+});
+
 const schema = new mongoose.Schema({
   name: {
     type: String,
@@ -205,8 +344,17 @@ const schema = new mongoose.Schema({
     type: [dashboardViewSchema],
     default: [],
   },
+  alexaMappings: {
+    type: [alexaMappingSchema],
+    default: [],
+    set: normalizeAlexaMappings,
+  },
   securityPreferences: {
     type: securityPreferencesSchema,
+    default: () => ({}),
+  },
+  alexaPreferences: {
+    type: alexaPreferencesSchema,
     default: () => ({}),
   },
   // Advanced settings
@@ -245,6 +393,8 @@ schema.index({ active: 1 });
 schema.index({ wakeWords: 1 });
 schema.index({ voiceId: 1 });
 schema.index({ lastUsed: -1 });
+schema.index({ 'alexaMappings.personId': 1 });
+schema.index({ 'alexaMappings.householdId': 1 });
 
 const UserProfile = mongoose.model('UserProfile', schema);
 

@@ -30,12 +30,21 @@ function randomIdentifier(prefix) {
   return `${prefix}_${crypto.randomBytes(12).toString('hex')}`;
 }
 
+function permissionGrantKey(brokerAccountId, eventRegion = 'NA') {
+  return `${trimString(brokerAccountId)}::${trimString(eventRegion || 'NA').toUpperCase()}`;
+}
+
 function clone(value) {
   if (value === undefined) {
     return undefined;
   }
 
   return JSON.parse(JSON.stringify(value));
+}
+
+function safeDateMs(value) {
+  const timestamp = new Date(value || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function defaultState() {
@@ -216,9 +225,11 @@ class BrokerStore {
         catalogUrl: trimString(payload.catalogUrl),
         stateUrl: trimString(payload.stateUrl),
         executeUrl: trimString(payload.executeUrl),
+        customSkillUrl: trimString(payload.customSkillUrl),
         healthUrl: trimString(payload.healthUrl),
         accountsUrl: trimString(payload.accountsUrl),
         linkAccountUrl: trimString(payload.linkAccountUrl),
+        customSkillDispatchUrl: trimString(payload.customSkillDispatchUrl),
         relayToken: trimString(payload.relayToken),
         brokerClientId: trimString(payload.brokerClientId),
         mode: trimString(payload.mode) === 'public' ? 'public' : 'private',
@@ -329,6 +340,17 @@ class BrokerStore {
       });
 
       return account;
+    });
+  }
+
+  async getAccountLink(brokerAccountId) {
+    return this.read((state) => state.accountLinks[trimString(brokerAccountId)] || null);
+  }
+
+  async touchAccountDiscovery(brokerAccountId, metadata = {}) {
+    return this.updateAccountLink(brokerAccountId, {
+      lastDiscoveryAt: new Date().toISOString(),
+      metadata
     });
   }
 
@@ -570,19 +592,34 @@ class BrokerStore {
         throw new Error('Linked account not found');
       }
 
-      const permissionGrantId = randomIdentifier('hbgrant');
+      const eventRegion = trimString(payload.eventRegion || 'NA').toUpperCase() || 'NA';
+      const permissionGrantId = permissionGrantKey(brokerAccountId, eventRegion);
       const timestamp = new Date().toISOString();
+      const existing = state.permissionGrants[permissionGrantId] || {};
       const record = {
         permissionGrantId,
         brokerAccountId,
         hubId: accountLink.hubId,
+        eventRegion,
+        eventGatewayUrl: trimString(payload.eventGatewayUrl || existing.eventGatewayUrl),
+        lwaTokenUrl: trimString(payload.lwaTokenUrl || existing.lwaTokenUrl),
         grantCodeHash: sha256(trimString(payload.grantCode)),
         granteeTokenHash: sha256(trimString(payload.granteeToken)),
-        permissionScopes: uniqueStrings(payload.permissionScopes || ['alexa::async_event:write']),
-        createdAt: timestamp,
+        permissionScopes: uniqueStrings(payload.permissionScopes || existing.permissionScopes || ['alexa::async_event:write']),
+        accessToken: Object.prototype.hasOwnProperty.call(payload, 'accessToken') ? trimString(payload.accessToken) : trimString(existing.accessToken),
+        refreshToken: Object.prototype.hasOwnProperty.call(payload, 'refreshToken') ? trimString(payload.refreshToken) : trimString(existing.refreshToken),
+        tokenType: trimString(payload.tokenType || existing.tokenType || 'bearer') || 'bearer',
+        tokenExpiresAt: payload.tokenExpiresAt || existing.tokenExpiresAt || null,
+        lastRefreshedAt: payload.lastRefreshedAt || existing.lastRefreshedAt || timestamp,
+        lastUsedAt: payload.lastUsedAt || existing.lastUsedAt || null,
+        lastError: trimString(payload.lastError || ''),
+        status: trimString(payload.status || existing.status || 'active') || 'active',
+        createdAt: existing.createdAt || timestamp,
         updatedAt: timestamp,
-        revokedAt: null,
-        metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}
+        revokedAt: payload.status === 'revoked' ? (payload.revokedAt || timestamp) : (existing.revokedAt || null),
+        metadata: payload.metadata && typeof payload.metadata === 'object'
+          ? { ...(existing.metadata || {}), ...payload.metadata }
+          : (existing.metadata || {})
       };
 
       state.permissionGrants[permissionGrantId] = record;
@@ -593,15 +630,148 @@ class BrokerStore {
     });
   }
 
+  async updatePermissionGrant(permissionGrantId, updates = {}) {
+    return this.write((state) => {
+      const record = state.permissionGrants[trimString(permissionGrantId)];
+      if (!record) {
+        throw new Error('Permission grant not found');
+      }
+
+      const timestamp = new Date().toISOString();
+      Object.assign(record, {
+        eventGatewayUrl: Object.prototype.hasOwnProperty.call(updates, 'eventGatewayUrl') ? trimString(updates.eventGatewayUrl) : record.eventGatewayUrl,
+        lwaTokenUrl: Object.prototype.hasOwnProperty.call(updates, 'lwaTokenUrl') ? trimString(updates.lwaTokenUrl) : record.lwaTokenUrl,
+        permissionScopes: Object.prototype.hasOwnProperty.call(updates, 'permissionScopes')
+          ? uniqueStrings(updates.permissionScopes)
+          : uniqueStrings(record.permissionScopes),
+        accessToken: Object.prototype.hasOwnProperty.call(updates, 'accessToken') ? trimString(updates.accessToken) : record.accessToken,
+        refreshToken: Object.prototype.hasOwnProperty.call(updates, 'refreshToken') ? trimString(updates.refreshToken) : record.refreshToken,
+        tokenType: Object.prototype.hasOwnProperty.call(updates, 'tokenType') ? (trimString(updates.tokenType) || record.tokenType) : record.tokenType,
+        tokenExpiresAt: Object.prototype.hasOwnProperty.call(updates, 'tokenExpiresAt') ? updates.tokenExpiresAt : record.tokenExpiresAt,
+        lastRefreshedAt: Object.prototype.hasOwnProperty.call(updates, 'lastRefreshedAt') ? updates.lastRefreshedAt : record.lastRefreshedAt,
+        lastUsedAt: Object.prototype.hasOwnProperty.call(updates, 'lastUsedAt') ? updates.lastUsedAt : record.lastUsedAt,
+        lastError: Object.prototype.hasOwnProperty.call(updates, 'lastError') ? trimString(updates.lastError) : record.lastError,
+        status: Object.prototype.hasOwnProperty.call(updates, 'status') ? (trimString(updates.status) || record.status) : record.status,
+        revokedAt: Object.prototype.hasOwnProperty.call(updates, 'revokedAt') ? updates.revokedAt : record.revokedAt,
+        metadata: updates.metadata && typeof updates.metadata === 'object'
+          ? { ...(record.metadata || {}), ...updates.metadata }
+          : record.metadata,
+        updatedAt: timestamp
+      });
+
+      return record;
+    });
+  }
+
+  async listPermissionGrants(filters = {}) {
+    return this.read((state) => Object.values(state.permissionGrants || {})
+      .filter((entry) => (!filters.hubId || entry.hubId === filters.hubId))
+      .filter((entry) => (!filters.brokerAccountId || entry.brokerAccountId === filters.brokerAccountId))
+      .filter((entry) => (!filters.status || entry.status === filters.status))
+      .sort((left, right) => new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime()));
+  }
+
+  async listActivePermissionGrants(filters = {}) {
+    return this.listPermissionGrants(filters)
+      .then((list) => list.filter((entry) => entry.status === 'active' && !entry.revokedAt && entry.accessToken));
+  }
+
+  async getPermissionGrant(permissionGrantId) {
+    return this.read((state) => state.permissionGrants[trimString(permissionGrantId)] || null);
+  }
+
+  async revokePermissionGrant(permissionGrantId, options = {}) {
+    return this.write((state) => {
+      const record = state.permissionGrants[trimString(permissionGrantId)];
+      if (!record) {
+        throw new Error('Permission grant not found');
+      }
+
+      const timestamp = new Date().toISOString();
+      record.status = 'revoked';
+      record.revokedAt = timestamp;
+      record.lastError = trimString(options.reason || record.lastError || 'Permission grant revoked');
+      record.updatedAt = timestamp;
+
+      (Array.isArray(state.eventQueue) ? state.eventQueue : [])
+        .filter((entry) => entry.permissionGrantId === record.permissionGrantId && (entry.status === 'queued' || entry.status === 'processing'))
+        .forEach((entry) => {
+          entry.status = 'skipped';
+          entry.lastError = record.lastError;
+          entry.updatedAt = timestamp;
+        });
+
+      return record;
+    });
+  }
+
+  async revokeAccountLink(brokerAccountId, options = {}) {
+    return this.write((state) => {
+      const account = state.accountLinks[trimString(brokerAccountId)];
+      if (!account) {
+        throw new Error('Linked account not found');
+      }
+
+      const timestamp = new Date().toISOString();
+      account.status = 'revoked';
+      account.permissions = [];
+      account.updatedAt = timestamp;
+      account.metadata = {
+        ...(account.metadata || {}),
+        revokedAt: timestamp,
+        revokeReason: trimString(options.reason || 'Linked account revoked')
+      };
+
+      Object.values(state.accessTokens || {})
+        .filter((entry) => entry.brokerAccountId === account.brokerAccountId && !entry.revokedAt)
+        .forEach((entry) => {
+          entry.revokedAt = timestamp;
+        });
+
+      Object.values(state.refreshTokens || {})
+        .filter((entry) => entry.brokerAccountId === account.brokerAccountId && !entry.revokedAt)
+        .forEach((entry) => {
+          entry.revokedAt = timestamp;
+        });
+
+      Object.values(state.permissionGrants || {})
+        .filter((entry) => entry.brokerAccountId === account.brokerAccountId && !entry.revokedAt)
+        .forEach((entry) => {
+          entry.status = 'revoked';
+          entry.revokedAt = timestamp;
+          entry.lastError = trimString(options.reason || 'Linked account revoked');
+          entry.updatedAt = timestamp;
+        });
+
+      (Array.isArray(state.eventQueue) ? state.eventQueue : [])
+        .filter((entry) => entry.brokerAccountId === account.brokerAccountId && (entry.status === 'queued' || entry.status === 'processing'))
+        .forEach((entry) => {
+          entry.status = 'skipped';
+          entry.lastError = trimString(options.reason || 'Linked account revoked');
+          entry.updatedAt = timestamp;
+        });
+
+      return account;
+    });
+  }
+
   async enqueueEvent(payload = {}) {
     return this.write((state) => {
+      const timestamp = new Date().toISOString();
       const record = {
         eventId: randomIdentifier('hbevent'),
         kind: trimString(payload.kind) || 'change_report',
         hubId: trimString(payload.hubId),
         brokerAccountId: trimString(payload.brokerAccountId),
-        createdAt: new Date().toISOString(),
+        permissionGrantId: trimString(payload.permissionGrantId),
+        createdAt: timestamp,
         status: trimString(payload.status) || 'queued',
+        attempts: Math.max(0, Number(payload.attempts || 0)),
+        maxAttempts: Math.max(1, Number(payload.maxAttempts || 3)),
+        lastAttemptAt: payload.lastAttemptAt || null,
+        nextAttemptAt: payload.nextAttemptAt || timestamp,
+        deliveredAt: payload.deliveredAt || null,
+        lastError: trimString(payload.lastError || ''),
         payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : {},
         metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}
       };
@@ -614,9 +784,64 @@ class BrokerStore {
   async listQueuedEvents(filters = {}) {
     return this.read((state) => (Array.isArray(state.eventQueue) ? state.eventQueue : [])
       .filter((entry) => (!filters.hubId || entry.hubId === filters.hubId))
+      .filter((entry) => (!filters.brokerAccountId || entry.brokerAccountId === filters.brokerAccountId))
       .filter((entry) => (!filters.status || entry.status === filters.status))
       .slice()
       .reverse());
+  }
+
+  async reserveQueuedEvents(options = {}) {
+    return this.write((state) => {
+      const limit = Math.max(1, Number(options.limit || 25));
+      const now = Date.now();
+      const selected = [];
+
+      for (const entry of Array.isArray(state.eventQueue) ? state.eventQueue : []) {
+        if (selected.length >= limit) {
+          break;
+        }
+        if (entry.status !== 'queued') {
+          continue;
+        }
+        if (options.hubId && entry.hubId !== options.hubId) {
+          continue;
+        }
+        if (entry.nextAttemptAt && new Date(entry.nextAttemptAt).getTime() > now) {
+          continue;
+        }
+
+        entry.status = 'processing';
+        entry.attempts = Math.max(0, Number(entry.attempts || 0)) + 1;
+        entry.lastAttemptAt = new Date(now).toISOString();
+        selected.push(entry);
+      }
+
+      return selected;
+    });
+  }
+
+  async finalizeQueuedEvent(eventId, updates = {}) {
+    return this.write((state) => {
+      const entry = (Array.isArray(state.eventQueue) ? state.eventQueue : [])
+        .find((candidate) => candidate.eventId === trimString(eventId));
+      if (!entry) {
+        throw new Error('Queued event not found');
+      }
+
+      const timestamp = new Date().toISOString();
+      Object.assign(entry, {
+        status: Object.prototype.hasOwnProperty.call(updates, 'status') ? trimString(updates.status) : entry.status,
+        deliveredAt: Object.prototype.hasOwnProperty.call(updates, 'deliveredAt') ? updates.deliveredAt : entry.deliveredAt,
+        nextAttemptAt: Object.prototype.hasOwnProperty.call(updates, 'nextAttemptAt') ? updates.nextAttemptAt : entry.nextAttemptAt,
+        lastError: Object.prototype.hasOwnProperty.call(updates, 'lastError') ? trimString(updates.lastError) : entry.lastError,
+        metadata: updates.metadata && typeof updates.metadata === 'object'
+          ? { ...(entry.metadata || {}), ...updates.metadata }
+          : entry.metadata,
+        updatedAt: timestamp
+      });
+
+      return entry;
+    });
   }
 
   async appendAudit(payload = {}) {
@@ -627,6 +852,7 @@ class BrokerStore {
         hubId: trimString(payload.hubId),
         brokerAccountId: trimString(payload.brokerAccountId),
         createdAt: new Date().toISOString(),
+        severity: trimString(payload.severity) || 'info',
         details: payload.details && typeof payload.details === 'object' ? payload.details : {},
         message: trimString(payload.message)
       };
@@ -635,9 +861,123 @@ class BrokerStore {
       return record;
     });
   }
+
+  async listAuditLog(filters = {}) {
+    return this.read((state) => (Array.isArray(state.auditLog) ? state.auditLog : [])
+      .filter((entry) => (!filters.hubId || entry.hubId === filters.hubId))
+      .filter((entry) => (!filters.brokerAccountId || entry.brokerAccountId === filters.brokerAccountId))
+      .filter((entry) => (!filters.type || entry.type === filters.type))
+      .slice()
+      .reverse()
+      .slice(0, Math.max(1, Number(filters.limit || 50))));
+  }
+
+  async getMetricsSnapshot(filters = {}) {
+    return this.read((state) => {
+      const hubId = trimString(filters.hubId);
+      const hubs = Object.values(state.hubs || {})
+        .filter((entry) => (!hubId || entry.hubId === hubId));
+      const accounts = Object.values(state.accountLinks || {})
+        .filter((entry) => (!hubId || entry.hubId === hubId));
+      const accessTokens = Object.values(state.accessTokens || {})
+        .filter((entry) => (!hubId || entry.hubId === hubId));
+      const refreshTokens = Object.values(state.refreshTokens || {})
+        .filter((entry) => (!hubId || entry.hubId === hubId));
+      const authCodes = Object.values(state.authCodes || {})
+        .filter((entry) => (!hubId || entry.hubId === hubId));
+      const permissionGrants = Object.values(state.permissionGrants || {})
+        .filter((entry) => (!hubId || entry.hubId === hubId));
+      const events = (Array.isArray(state.eventQueue) ? state.eventQueue : [])
+        .filter((entry) => (!hubId || entry.hubId === hubId));
+      const auditLog = (Array.isArray(state.auditLog) ? state.auditLog : [])
+        .filter((entry) => (!hubId || entry.hubId === hubId));
+
+      const queuedEvents = events.filter((entry) => entry.status === 'queued');
+      const processingEvents = events.filter((entry) => entry.status === 'processing');
+      const failedEvents = events.filter((entry) => entry.status === 'failed');
+      const deliveredEvents = events.filter((entry) => entry.status === 'delivered');
+      const skippedEvents = events.filter((entry) => entry.status === 'skipped');
+      const retryBacklog = queuedEvents.filter((entry) => Number(entry.attempts || 0) > 0);
+      const oldestQueued = queuedEvents.reduce((oldest, entry) => {
+        const currentValue = safeDateMs(entry.createdAt);
+        if (!oldest || currentValue < safeDateMs(oldest.createdAt)) {
+          return entry;
+        }
+        return oldest;
+      }, null);
+      const grantRefreshErrors = permissionGrants.filter((entry) => trimString(entry.lastError));
+      const byAuditType = {};
+      auditLog.forEach((entry) => {
+        const key = trimString(entry.type) || 'info';
+        byAuditType[key] = (byAuditType[key] || 0) + 1;
+      });
+
+      return {
+        hubId: hubId || null,
+        generatedAt: new Date().toISOString(),
+        hubs: {
+          total: hubs.length,
+          paired: hubs.filter((entry) => entry.registration).length,
+          publicMode: hubs.filter((entry) => entry.registration?.mode === 'public').length,
+          privateMode: hubs.filter((entry) => entry.registration?.mode !== 'public').length
+        },
+        linkedAccounts: {
+          total: accounts.length,
+          linked: accounts.filter((entry) => entry.status === 'linked').length,
+          revoked: accounts.filter((entry) => entry.status === 'revoked').length,
+          activeLocales: Array.from(new Set(accounts.map((entry) => trimString(entry.locale)).filter(Boolean))).sort()
+        },
+        oauth: {
+          authCodesActive: authCodes.length,
+          accessTokensActive: accessTokens.filter((entry) => !entry.revokedAt).length,
+          refreshTokensActive: refreshTokens.filter((entry) => !entry.revokedAt).length,
+          clientIds: Array.from(new Set(accessTokens.map((entry) => trimString(entry.clientId)).filter(Boolean))).sort()
+        },
+        permissionGrants: {
+          total: permissionGrants.length,
+          active: permissionGrants.filter((entry) => entry.status === 'active' && !entry.revokedAt).length,
+          revoked: permissionGrants.filter((entry) => entry.status === 'revoked' || entry.revokedAt).length,
+          withErrors: grantRefreshErrors.length,
+          regions: Array.from(new Set(permissionGrants.map((entry) => trimString(entry.eventRegion)).filter(Boolean))).sort()
+        },
+        queue: {
+          total: events.length,
+          queued: queuedEvents.length,
+          processing: processingEvents.length,
+          failed: failedEvents.length,
+          delivered: deliveredEvents.length,
+          skipped: skippedEvents.length,
+          retryBacklog: retryBacklog.length,
+          oldestQueuedAt: oldestQueued?.createdAt || null,
+          oldestQueuedAgeMs: oldestQueued ? Math.max(0, Date.now() - safeDateMs(oldestQueued.createdAt)) : 0
+        },
+        dispatch: {
+          attempts: events.reduce((sum, entry) => sum + Math.max(0, Number(entry.attempts || 0)), 0),
+          maxAttemptFailures: failedEvents.filter((entry) => Number(entry.attempts || 0) >= Number(entry.maxAttempts || 3)).length,
+          lastDeliveredAt: deliveredEvents
+            .map((entry) => entry.deliveredAt)
+            .filter(Boolean)
+            .sort((left, right) => safeDateMs(right) - safeDateMs(left))[0] || null,
+          lastFailureAt: failedEvents
+            .map((entry) => entry.updatedAt || entry.lastAttemptAt)
+            .filter(Boolean)
+            .sort((left, right) => safeDateMs(right) - safeDateMs(left))[0] || null
+        },
+        audit: {
+          total: auditLog.length,
+          lastAt: auditLog
+            .map((entry) => entry.createdAt)
+            .filter(Boolean)
+            .sort((left, right) => safeDateMs(right) - safeDateMs(left))[0] || null,
+          byType: byAuditType
+        }
+      };
+    });
+  }
 }
 
 module.exports = new BrokerStore();
 module.exports.BrokerStore = BrokerStore;
 module.exports.sha256 = sha256;
 module.exports.randomIdentifier = randomIdentifier;
+module.exports.permissionGrantKey = permissionGrantKey;

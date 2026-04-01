@@ -234,4 +234,106 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
   assert.ok(calls.some((entry) => entry.url === '/api/alexa/grants/accept'));
   assert.ok(calls.some((entry) => entry.url === '/api/oauth/alexa/resolve'));
   assert.ok(calls.some((entry) => entry.url === '/api/alexa/directives/execute'));
+  assert.equal(
+    calls.filter((entry) => entry.url === '/api/alexa/hubs/hub-test/catalog')[0]?.authorization,
+    'Bearer access-123'
+  );
+  assert.equal(
+    calls.filter((entry) => entry.url === '/api/alexa/directives/state')[0]?.authorization,
+    'Bearer access-123'
+  );
+  assert.equal(
+    calls.filter((entry) => entry.url === '/api/alexa/directives/execute')[0]?.authorization,
+    'Bearer access-123'
+  );
+});
+
+test('lambda maps broker authorization and endpoint failures into Alexa error responses', async (t) => {
+  const brokerServer = http.createServer(async (req, res) => {
+    if (req.url === '/api/oauth/alexa/resolve' && req.method === 'POST') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        brokerAccountId: 'acct-1',
+        hubId: 'hub-test',
+        scopes: ['smart_home'],
+        account: {
+          brokerAccountId: 'acct-1',
+          status: 'linked'
+        }
+      }));
+      return;
+    }
+
+    if (req.url === '/api/alexa/directives/execute' && req.method === 'POST') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: false,
+        error: 'Alexa endpoint not found'
+      }));
+      return;
+    }
+
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false,
+      error: 'Access token is invalid or expired'
+    }));
+  });
+
+  const broker = await listen(brokerServer);
+  const previousBrokerUrl = process.env.HOMEBRAIN_BROKER_BASE_URL;
+  const previousHubId = process.env.HOMEBRAIN_BROKER_HUB_ID;
+  process.env.HOMEBRAIN_BROKER_BASE_URL = broker.baseUrl;
+  process.env.HOMEBRAIN_BROKER_HUB_ID = '';
+
+  t.after(async () => {
+    process.env.HOMEBRAIN_BROKER_BASE_URL = previousBrokerUrl;
+    process.env.HOMEBRAIN_BROKER_HUB_ID = previousHubId;
+    await close(broker.server);
+  });
+
+  const endpointMissingResponse = await handler({
+    directive: {
+      header: {
+        namespace: 'Alexa.PowerController',
+        name: 'TurnOn',
+        payloadVersion: '3',
+        messageId: 'msg-404',
+        correlationToken: 'corr-404'
+      },
+      endpoint: {
+        endpointId: 'hb:hub-test:device:missing-1',
+        scope: {
+          type: 'BearerToken',
+          token: 'access-123'
+        }
+      },
+      payload: {}
+    }
+  });
+
+  assert.equal(endpointMissingResponse.event.payload.type, 'NO_SUCH_ENDPOINT');
+
+  const unauthorizedResponse = await handler({
+    directive: {
+      header: {
+        namespace: 'Alexa.Discovery',
+        name: 'Discover',
+        payloadVersion: '3',
+        messageId: 'msg-401'
+      },
+      payload: {
+        scope: {
+          type: 'BearerToken',
+          token: 'bad-token'
+        }
+      }
+    }
+  });
+
+  assert.equal(
+    ['INVALID_AUTHORIZATION_CREDENTIAL', 'EXPIRED_AUTHORIZATION_CREDENTIAL'].includes(unauthorizedResponse.event.payload.type),
+    true
+  );
 });

@@ -68,6 +68,7 @@ Important:
 - Beginner Jetson guide: [`docs/jetson-setup.md`](docs/jetson-setup.md)
 - Full deployment guide: [`DEPLOYMENT.md`](DEPLOYMENT.md)
 - Post-install configuration: [`docs/configuration.md`](docs/configuration.md)
+- Alexa integration: [`docs/alexa-integration.md`](docs/alexa-integration.md)
 - Admin workflow: [`docs/admin-guide.md`](docs/admin-guide.md)
 - End-user voice usage: [`docs/user-guide.md`](docs/user-guide.md)
 - Troubleshooting: [`docs/troubleshooting.md`](docs/troubleshooting.md)

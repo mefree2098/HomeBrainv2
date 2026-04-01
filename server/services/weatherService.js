@@ -272,6 +272,20 @@ async function fetchGeocodeCandidates(params) {
 }
 
 function createWeatherPayload(forecastResponse, airQualityResponse, location) {
+  if (!location && airQualityResponse && typeof airQualityResponse === 'object') {
+    const looksLikeLocation = (
+      Object.prototype.hasOwnProperty.call(airQualityResponse, 'name')
+      || Object.prototype.hasOwnProperty.call(airQualityResponse, 'latitude')
+      || Object.prototype.hasOwnProperty.call(airQualityResponse, 'longitude')
+      || Object.prototype.hasOwnProperty.call(airQualityResponse, 'source')
+    );
+
+    if (looksLikeLocation) {
+      location = airQualityResponse;
+      airQualityResponse = null;
+    }
+  }
+
   const current = forecastResponse?.current || {};
   const daily = forecastResponse?.daily || {};
   const hourly = forecastResponse?.hourly || {};
@@ -288,11 +302,11 @@ function createWeatherPayload(forecastResponse, airQualityResponse, location) {
   return {
     fetchedAt: new Date().toISOString(),
     location: {
-      name: location.name,
-      latitude: location.latitude,
-      longitude: location.longitude,
-      timezone: forecastResponse?.timezone || location.timezone || 'auto',
-      source: location.source
+      name: location?.name || 'Unknown location',
+      latitude: location?.latitude ?? null,
+      longitude: location?.longitude ?? null,
+      timezone: forecastResponse?.timezone || location?.timezone || 'auto',
+      source: location?.source || 'geocode'
     },
     current: {
       temperatureF: toNumber(current.temperature_2m),

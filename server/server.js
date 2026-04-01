@@ -39,6 +39,7 @@ const ollamaRoutes = require("./routes/ollamaRoutes");
 const resourceRoutes = require("./routes/resourceRoutes");
 const whisperRoutes = require("./routes/whisperRoutes");
 const alexaRoutes = require("./routes/alexaRoutes");
+const alexaCustomSkillRoutes = require("./routes/alexaCustomSkillRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
@@ -296,6 +297,7 @@ app.use('/api/events', eventStreamRoutes);
 app.use('/api/discovery', discoveryRoutes);
 // Alexa Routes
 app.use('/api/alexa', alexaRoutes);
+app.use('/api/alexa/custom-skill', alexaCustomSkillRoutes);
 // Insteon Routes
 app.use('/api/insteon', insteonRoutes);
   // SSL Routes
