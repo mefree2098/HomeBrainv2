@@ -15,12 +15,14 @@ const {
   normalizeEventPayload,
   normalizeObservationPayload,
   roundNumber,
+  summarizeLightningMetrics,
   toNumber
 } = require('./tempestData');
 
 const DEFAULT_DISCOVERY_INTERVAL_MS = Math.max(15 * 60 * 1000, Number(process.env.TEMPEST_SYNC_INTERVAL_MS || 6 * 60 * 60 * 1000));
 const DEFAULT_HTTP_TIMEOUT_MS = 12000;
 const OBSERVATION_RETENTION_LIMIT = 720;
+const RECENT_LIGHTNING_WINDOW_HOURS = 24;
 
 const clampInteger = (value, fallback, minimum, maximum) => {
   const numeric = Math.trunc(Number(value));
@@ -37,6 +39,27 @@ const trimString = (value, fallback = '') => {
 
   const trimmed = value.trim();
   return trimmed || fallback;
+};
+
+const mostRecentTimestamp = (...values) => {
+  let latest = null;
+
+  values.forEach((value) => {
+    if (!value) {
+      return;
+    }
+
+    const candidate = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(candidate.getTime())) {
+      return;
+    }
+
+    if (!latest || candidate > latest) {
+      latest = candidate;
+    }
+  });
+
+  return latest;
 };
 
 const buildTempestDeviceQuery = ({ stationId, deviceId, serialNumber, hubSerialNumber } = {}) => {
@@ -293,6 +316,36 @@ class TempestService {
         udpListening: health.udpListening === true
       }
     };
+  }
+
+  async getRecentLightningMetrics(stationId, fallbackMetrics = {}) {
+    const resolvedStationId = toNumber(stationId);
+    if (resolvedStationId === null) {
+      return summarizeLightningMetrics({}, fallbackMetrics);
+    }
+
+    const windowStart = new Date(Date.now() - RECENT_LIGHTNING_WINDOW_HOURS * 60 * 60 * 1000);
+    const [recentLightning] = await TempestEvent.aggregate([
+      {
+        $match: {
+          stationId: resolvedStationId,
+          eventType: 'lightning_strike',
+          eventAt: { $gte: windowStart }
+        }
+      },
+      { $sort: { eventAt: -1 } },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          averageDistanceMiles: { $avg: '$payload.distanceMiles' },
+          lastStrikeAt: { $first: '$eventAt' },
+          lastStrikeDistanceMiles: { $first: '$payload.distanceMiles' }
+        }
+      }
+    ]);
+
+    return summarizeLightningMetrics(recentLightning || {}, fallbackMetrics);
   }
 
   buildStationDevicePayload(station, integration, existingDevice) {
@@ -1144,7 +1197,19 @@ class TempestService {
       return null;
     }
 
-    return this.buildStationSummary(device);
+    const station = this.buildStationSummary(device);
+    const lightningMetrics = await this.getRecentLightningMetrics(station.stationId, station.metrics);
+
+    return {
+      ...station,
+      lastEventAt: mostRecentTimestamp(station.lastEventAt, lightningMetrics.lastLightningStrikeAt) || station.lastEventAt,
+      metrics: {
+        ...station.metrics,
+        lightningCount: lightningMetrics.lightningCount,
+        lightningAvgDistanceMiles: lightningMetrics.lightningAvgDistanceMiles,
+        lightningAvgDistanceKm: lightningMetrics.lightningAvgDistanceKm
+      }
+    };
   }
 
   async getObservations({ stationId = null, hours = 24, limit = OBSERVATION_RETENTION_LIMIT } = {}) {

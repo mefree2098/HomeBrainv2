@@ -8,12 +8,11 @@ import {
   Loader2,
   Lock,
   LockOpen,
-  Menu,
   RefreshCw,
+  SlidersHorizontal,
   ShieldX,
 } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -120,25 +119,29 @@ const formatAlarmState = (alarmState?: string | null) => {
     case "triggered":
       return "Triggered"
     case "arming":
-      return "Arming..."
+      return "Arming"
     case "disarming":
-      return "Disarming..."
+      return "Disarming"
     default:
       return "Unknown"
   }
 }
 
-const formatTimestamp = (value?: string | null) => {
-  if (!value) {
-    return null
+const formatAlarmStateDetail = (alarmState?: string | null) => {
+  switch (alarmState) {
+    case "armedStay":
+      return "Home perimeter mode is active"
+    case "armedAway":
+      return "Away mode is active"
+    case "triggered":
+      return "Immediate attention required"
+    case "arming":
+      return "System is arming"
+    case "disarming":
+      return "System is disarming"
+    default:
+      return "System currently disarmed"
   }
-
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) {
-    return null
-  }
-
-  return parsed.toLocaleString()
 }
 
 const batteryClassName = (sensor: SecuritySensor) => {
@@ -203,6 +206,82 @@ const alarmActionButtonClassName = ({
             : "border-red-500/45 bg-red-500/18 text-red-700 hover:bg-red-500/24 dark:border-red-300/38 dark:bg-red-300/14 dark:text-red-100 dark:hover:bg-red-300/18"
           : "border-white/10 bg-white/10 text-muted-foreground hover:bg-white/20 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
 )
+
+const panelShellClassName = (compact: boolean) => cn(
+  "border backdrop-blur-xl",
+  compact
+    ? "rounded-[1rem] p-3"
+    : "rounded-[1.15rem] p-4"
+)
+
+const sectionShellClassName = (compact: boolean) => cn(
+  panelShellClassName(compact),
+  "border-white/10 bg-white/10 dark:bg-slate-950/20"
+)
+
+const alarmStateTone = (alarmState?: string | null) => {
+  switch (alarmState) {
+    case "armedStay":
+      return {
+        shellClassName: "border-amber-400/40 bg-gradient-to-br from-amber-300/55 via-amber-400/42 to-amber-500/24 dark:border-amber-200/28 dark:from-amber-300/28 dark:via-amber-400/22 dark:to-amber-500/16",
+        titleClassName: "text-black/65 dark:text-amber-50/75",
+        valueClassName: "text-black/85 dark:text-amber-50",
+        detailClassName: "text-black/70 dark:text-amber-50/85",
+        accentClassName: "bg-amber-500 dark:bg-amber-200"
+      }
+    case "armedAway":
+      return {
+        shellClassName: "border-red-500/40 bg-gradient-to-br from-rose-600/85 via-red-600/72 to-red-900/72 shadow-[0_18px_40px_-22px_rgba(220,38,38,0.95)] dark:border-red-300/28",
+        titleClassName: "text-white/80",
+        valueClassName: "text-white",
+        detailClassName: "text-white/88",
+        accentClassName: "bg-white/95"
+      }
+    case "triggered":
+      return {
+        shellClassName: "border-red-400/48 bg-gradient-to-br from-red-500/92 via-red-600/86 to-rose-900/78 shadow-[0_20px_44px_-24px_rgba(239,68,68,1)] dark:border-red-300/34",
+        titleClassName: "text-white/82",
+        valueClassName: "text-white",
+        detailClassName: "text-white/90",
+        accentClassName: "bg-white/95"
+      }
+    default:
+      return {
+        shellClassName: "border-white/10 bg-white/10 dark:bg-slate-950/20",
+        titleClassName: "text-muted-foreground",
+        valueClassName: "text-foreground",
+        detailClassName: "text-muted-foreground",
+        accentClassName: "bg-slate-400/80 dark:bg-slate-300/70"
+      }
+  }
+}
+
+const securityChipClassName = (tone: "neutral" | "alert" = "neutral") => cn(
+  "inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]",
+  tone === "alert"
+    ? "border-amber-500/30 bg-amber-500/12 text-amber-600 dark:border-amber-300/28 dark:bg-amber-300/12 dark:text-amber-200"
+    : "border-white/10 bg-white/10 text-foreground/85 dark:bg-slate-950/10"
+)
+
+const sensorTileBorderClassName = (sensor: SecuritySensor) => {
+  if (!sensor.isOnline || !sensor.isAvailable) {
+    return "border-red-500/28"
+  }
+  if (sensor.isBypassed || sensor.isActive) {
+    return "border-amber-500/30"
+  }
+  return "border-emerald-500/24"
+}
+
+const doorLockTileBorderClassName = (doorLock: DoorLock) => {
+  if (!doorLock.isOnline) {
+    return "border-red-500/28"
+  }
+  if (doorLock.isLocked) {
+    return "border-emerald-500/24"
+  }
+  return "border-amber-500/28"
+}
 
 export function SecurityAlarmWidget({
   size = "full",
@@ -523,43 +602,41 @@ export function SecurityAlarmWidget({
   const canArm = alarmStatus?.alarmState === "disarmed" && !arming && !disarming && !dismissing
   const canSync = !syncing
 
-  const statusHistory = alarmStatus?.isTriggered
-    ? formatTimestamp(alarmStatus.lastTriggered)
-    : alarmStatus?.isArmed
-      ? formatTimestamp(alarmStatus.lastArmed)
-      : formatTimestamp(alarmStatus?.lastDisarmed)
-
-  const statusDetailParts = [
-    statusHistory
-      ? `${alarmStatus?.isTriggered ? "Triggered" : alarmStatus?.isArmed ? "Armed" : "Last disarmed"} ${statusHistory}`
-      : null,
-    alarmStatus ? (alarmStatus.isOnline ? "Online" : "Offline") : null,
-    alarmStatus?.bypassedZones ? `${alarmStatus.bypassedZones} bypassed` : null
-  ].filter((value): value is string => Boolean(value))
+  const attentionSensorCount = typeof alarmStatus?.attentionSensorCount === "number"
+    ? alarmStatus.attentionSensorCount
+    : sensors.filter((sensor) => sensor.requiresAttention).length
+  const alarmTone = alarmStateTone(alarmStatus?.alarmState)
+  const alarmStatusDetail = formatAlarmStateDetail(alarmStatus?.alarmState)
+  const systemStatus = alarmStatus?.isOnline ? "Online" : "Offline"
 
   const sensorSummaryParts = [
     sensorCount > 0 ? `${activeSensorCount}/${sensorCount} active` : "No sensors detected",
     monitoredSensorCount > 0 ? `${monitoredSensorCount} monitored` : null,
-    alarmStatus?.bypassedZones ? `${alarmStatus.bypassedZones} bypassed` : null,
     offlineSensorCount > 0 ? `${offlineSensorCount} offline` : null,
     lowBatterySensorCount > 0 ? `${lowBatterySensorCount} low battery` : null
-  ].filter(Boolean)
+  ].filter((value): value is string => Boolean(value))
 
   const sensorGridClassName = compact
     ? "grid-cols-1"
-    : medium
-      ? "grid-cols-2"
-      : size === "large"
-        ? "grid-cols-3"
-        : "grid-cols-4"
+    : "grid-cols-3"
 
   const doorLockGridClassName = compact
-    ? "grid-cols-1"
+    ? "grid-cols-2"
+    : "grid-cols-4"
+  const sensorScrollAreaClassName = compact
+    ? "max-h-44"
     : medium
-      ? "grid-cols-2"
+      ? "max-h-52"
       : size === "large"
-        ? "grid-cols-3"
-        : "grid-cols-4"
+        ? "max-h-60"
+        : "max-h-72"
+  const doorLockScrollAreaClassName = compact
+    ? "max-h-28"
+    : medium
+      ? "max-h-32"
+      : size === "large"
+        ? "max-h-36"
+        : "max-h-40"
 
   const resetSensorSelection = () => {
     setSelectedSensorKeys(null)
@@ -599,143 +676,137 @@ export function SecurityAlarmWidget({
     <div className={compact ? "space-y-3" : "space-y-4"}>
       {alarmStatus ? (
         <>
-          <div>
-            <div className={compact ? "rounded-[1.1rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.25rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
-              <div className={cn("flex gap-3", isNarrow ? "flex-col" : "items-start justify-between")}>
-                <div className="min-w-0 flex-1">
-                  <p className="section-kicker">Alarm State</p>
-                  <p className={cn(
-                    compact ? "mt-0.5 text-xl font-semibold" : "mt-0.5 text-2xl font-semibold",
-                    alarmStatus.alarmState === "triggered"
-                      ? "text-red-600 dark:text-red-300"
-                      : alarmStatus.alarmState === "disarmed"
-                        ? "text-foreground"
-                        : "text-emerald-600 dark:text-emerald-300"
-                  )}>
-                    {formatAlarmState(alarmStatus.alarmState)}
-                  </p>
-                  {statusDetailParts.length > 0 ? (
-                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      {statusDetailParts.map((detail) => (
-                        <span key={detail}>{detail}</span>
-                      ))}
-                    </div>
+          <div className={cn(panelShellClassName(compact), alarmTone.shellClassName)}>
+            <div className={cn("flex gap-3", isNarrow ? "flex-col" : "items-start justify-between")}>
+              <div className="min-w-0 flex-1">
+                <p className={cn("section-kicker", alarmTone.titleClassName)}>Alarm State</p>
+                <p className={cn(
+                  compact ? "mt-1 text-[1.55rem]" : "mt-1 text-[1.8rem]",
+                  "font-semibold leading-none",
+                  alarmTone.valueClassName
+                )}>
+                  {formatAlarmState(alarmStatus.alarmState)}
+                </p>
+                <p className={cn("mt-1.5 text-xs font-medium", alarmTone.detailClassName)}>
+                  {alarmStatusDetail} • {systemStatus}
+                </p>
+              </div>
+
+              <div className={cn(
+                "flex w-full shrink-0 flex-col gap-2",
+                isNarrow ? "items-stretch max-w-none" : "max-w-[13.5rem] items-end"
+              )}>
+                <div className={cn("grid w-full gap-2", compact ? "grid-cols-1" : "grid-cols-2")}>
+                  {isTriggered ? (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={handleDismiss}
+                      disabled={dismissing}
+                      className={cn(
+                        compact ? "col-span-1 w-full" : "col-span-2 w-full",
+                        alarmActionButtonClassName({ tone: "danger", prominent: true })
+                      )}
+                    >
+                      {dismissing ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <AlertTriangle />
+                      )}
+                      Dismiss
+                    </Button>
+                  ) : isStayArmed || isAwayArmed ? (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={handleDisarm}
+                      disabled={disarming}
+                      className={cn(
+                        compact ? "col-span-1 w-full" : "col-span-2 w-full",
+                        alarmActionButtonClassName({ tone: "danger", prominent: true })
+                      )}
+                    >
+                      {disarming ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <ShieldX />
+                      )}
+                      Disarm
+                    </Button>
                   ) : (
-                    <p className="mt-1 text-xs text-muted-foreground">System state unavailable</p>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleArmStay}
+                        disabled={!canArm}
+                        className={cn(
+                          "w-full",
+                          alarmActionButtonClassName({ tone: "stay", active: isStayArmed })
+                        )}
+                      >
+                        <Home />
+                        Arm Stay
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleArmAway}
+                        disabled={!canArm}
+                        className={cn(
+                          "w-full",
+                          alarmActionButtonClassName({ tone: "away", active: isAwayArmed })
+                        )}
+                      >
+                        <Car />
+                        Arm Away
+                      </Button>
+                    </>
                   )}
                 </div>
 
-                <div className={cn(
-                  "flex w-full shrink-0 flex-col gap-2",
-                  isNarrow
-                    ? "items-stretch max-w-none"
-                    : "max-w-[16.75rem] items-end"
-                )}>
-                  <div className={cn("grid w-full gap-2", compact ? "grid-cols-1" : "grid-cols-2")}>
-                    {isTriggered ? (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={handleDismiss}
-                        disabled={dismissing}
-                        className={cn(
-                          compact ? "col-span-1 w-full" : "col-span-2 w-full",
-                          alarmActionButtonClassName({ tone: "danger", prominent: true })
-                        )}
-                      >
-                        {dismissing ? (
-                          <Loader2 className="animate-spin" />
-                        ) : (
-                          <AlertTriangle />
-                        )}
-                        Dismiss
-                      </Button>
-                    ) : isStayArmed || isAwayArmed ? (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={handleDisarm}
-                        disabled={disarming}
-                        className={cn(
-                          compact ? "col-span-1 w-full" : "col-span-2 w-full",
-                          alarmActionButtonClassName({ tone: "danger", prominent: true })
-                        )}
-                      >
-                        {disarming ? (
-                          <Loader2 className="animate-spin" />
-                        ) : (
-                          <ShieldX />
-                        )}
-                        Disarm
-                      </Button>
-                    ) : (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={handleArmStay}
-                          disabled={!canArm}
-                          className={cn(
-                            "w-full",
-                            alarmActionButtonClassName({ tone: "stay", active: isStayArmed })
-                          )}
-                        >
-                          <Home />
-                          Arm Stay
-                        </Button>
-
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={handleArmAway}
-                          disabled={!canArm}
-                          className={cn(
-                            "w-full",
-                            alarmActionButtonClassName({ tone: "away", active: isAwayArmed })
-                          )}
-                        >
-                          <Car />
-                          Arm Away
-                        </Button>
-                      </>
-                    )}
-                  </div>
-
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleSync}
-                    disabled={!canSync}
-                    className={cn("self-end", alarmActionButtonClassName({ tone: "sync" }))}
-                  >
-                    {syncing ? (
-                      <Loader2 className="animate-spin" />
-                    ) : (
-                      <RefreshCw />
-                    )}
-                    Sync
-                  </Button>
-                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleSync}
+                  disabled={!canSync}
+                  className={cn(
+                    isNarrow ? "w-full justify-center" : "self-end",
+                    alarmActionButtonClassName({ tone: "sync" })
+                  )}
+                >
+                  {syncing ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <RefreshCw />
+                  )}
+                  Sync
+                </Button>
               </div>
             </div>
+
+            <div className={cn("mt-3 h-1 w-10 rounded-full", alarmTone.accentClassName)} />
           </div>
 
-          <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+          <div className={sectionShellClassName(compact)}>
             <div className={cn("mb-3 flex gap-3", isNarrow ? "flex-col items-start" : "items-center justify-between")}>
               <div>
                 <p className="section-kicker">Security Sensors</p>
                 <p className="mt-1 text-xs text-muted-foreground">Tap a sensor to open its device page.</p>
               </div>
-              <div className={cn("flex items-center gap-2", isNarrow ? "w-full flex-wrap" : "")}>
+
+              <div className={cn("flex flex-wrap items-center gap-2", isNarrow ? "w-full" : "justify-end")}>
                 {hasCustomSensorSelection ? (
-                  <Badge variant="outline" className="border-white/10 bg-white/10 text-muted-foreground dark:bg-slate-950/10">
+                  <span className={securityChipClassName()}>
                     {visibleSensors.length}/{sensorCount} shown
-                  </Badge>
+                  </span>
                 ) : null}
-                {alarmStatus.attentionSensorCount ? (
-                  <Badge variant="outline" className="border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300">
-                    {alarmStatus.attentionSensorCount} attention
-                  </Badge>
+
+                {attentionSensorCount > 0 ? (
+                  <span className={securityChipClassName("alert")}>
+                    {attentionSensorCount} alerts
+                  </span>
                 ) : null}
                 <Popover open={sensorSelectorOpen} onOpenChange={setSensorSelectorOpen}>
                   <PopoverTrigger asChild>
@@ -747,7 +818,7 @@ export function SecurityAlarmWidget({
                       aria-label="Choose visible security sensors"
                       aria-expanded={sensorSelectorOpen}
                     >
-                      <Menu className="h-4 w-4" />
+                      <SlidersHorizontal className="h-4 w-4" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent
@@ -780,7 +851,7 @@ export function SecurityAlarmWidget({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-8 w-full justify-start px-3 text-[11px]"
+                        className="h-9 w-full justify-start rounded-[0.9rem] border border-white/10 bg-white/10 px-3 text-[11px] text-foreground hover:bg-white/15 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
                         onClick={resetSensorSelection}
                       >
                         Show all security sensors
@@ -798,7 +869,12 @@ export function SecurityAlarmWidget({
                                   key={sensorKey}
                                   type="button"
                                   onClick={() => toggleSensorSelection(sensor)}
-                                  className="flex w-full items-center gap-3 rounded-[0.85rem] px-2 py-2 text-left transition-colors hover:bg-white/10 dark:hover:bg-slate-950/20"
+                                  className={cn(
+                                    "flex w-full items-center gap-3 rounded-[0.85rem] border px-3 py-2.5 text-left transition-colors",
+                                    isChecked
+                                      ? "border-cyan-500/25 bg-cyan-500/10"
+                                      : "border-white/10 bg-white/8 hover:bg-white/12 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
+                                  )}
                                   aria-pressed={isChecked}
                                 >
                                   <span className={cn(
@@ -831,7 +907,7 @@ export function SecurityAlarmWidget({
               </div>
             </div>
 
-            <ScrollArea className={compact ? "max-h-44" : "max-h-52"}>
+            <ScrollArea className={sensorScrollAreaClassName}>
               <div className="space-y-2 pr-3">
                 <div className="space-y-2">
                   {visibleSensors.length > 0 ? (
@@ -848,12 +924,9 @@ export function SecurityAlarmWidget({
                             sensor.batteryLevel != null ? `${sensor.batteryLevel}% battery` : null
                           ].filter(Boolean).join(" • ")}
                           className={cn(
-                            "flex min-h-[70px] flex-col justify-between rounded-[0.95rem] border bg-white/10 px-2.5 py-2 text-left transition-colors dark:bg-slate-950/10",
-                            sensor.isActive
-                              ? "border-amber-500/25"
-                              : sensor.requiresAttention
-                                ? "border-red-500/25"
-                                : "border-white/10",
+                            "flex flex-col justify-between rounded-[0.9rem] border bg-white/10 px-2.5 py-2 text-left backdrop-blur-sm transition-colors dark:bg-slate-950/10",
+                            compact ? "min-h-[4rem]" : "min-h-[4.35rem]",
+                            sensorTileBorderClassName(sensor),
                             sensor.localDeviceId
                               ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
                               : "cursor-default opacity-80"
@@ -892,7 +965,7 @@ export function SecurityAlarmWidget({
             </div>
           </div>
 
-          <div className={compact ? "rounded-[1.15rem] border border-white/10 bg-white/10 p-3 dark:bg-slate-950/20" : "rounded-[1.35rem] border border-white/10 bg-white/10 p-4 dark:bg-slate-950/20"}>
+          <div className={sectionShellClassName(compact)}>
             <div className={cn("mb-3 flex gap-3", isNarrow ? "flex-col items-start" : "items-center justify-between")}>
               <div>
                 <p className="section-kicker">Door Locks</p>
@@ -900,14 +973,14 @@ export function SecurityAlarmWidget({
               </div>
 
               {doorLockCount > 0 ? (
-                <Badge variant="outline" className="border-white/10 bg-white/10 text-muted-foreground dark:bg-slate-950/10">
+                <span className={securityChipClassName()}>
                   {lockedDoorCount}/{doorLockCount} locked
-                </Badge>
+                </span>
               ) : null}
             </div>
 
             {doorLocks.length > 0 ? (
-              <ScrollArea className={compact ? "max-h-36" : "max-h-40"}>
+              <ScrollArea className={doorLockScrollAreaClassName}>
                 <div className={cn(
                   "grid gap-2 pr-3",
                   doorLockGridClassName
@@ -926,7 +999,8 @@ export function SecurityAlarmWidget({
                         disabled={!canToggle}
                         title={`${doorLock.name} • ${doorLock.isOnline ? doorLock.stateLabel : "Offline"}${canToggle ? ` • Tap to ${toggleLabel}` : ""}`}
                         className={cn(
-                          "rounded-[1rem] border border-white/10 bg-white/10 px-2.5 py-2.5 text-left transition-colors dark:bg-slate-950/10",
+                          "rounded-[0.95rem] border bg-white/10 px-2.5 py-2.5 text-left backdrop-blur-sm transition-colors dark:bg-slate-950/10",
+                          doorLockTileBorderClassName(doorLock),
                           canToggle
                             ? "hover:bg-white/20 dark:hover:bg-slate-950/20"
                             : "cursor-default opacity-90"

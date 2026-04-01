@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const Device = require('../models/Device');
+const DeviceGroup = require('../models/DeviceGroup');
 const deviceService = require('../services/deviceService');
 const deviceEnergySampleService = require('../services/deviceEnergySampleService');
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
@@ -194,12 +195,14 @@ test('updateDevice normalizes and deduplicates device groups', async (t) => {
   const originalFindById = Device.findById;
   const originalFindOne = Device.findOne;
   const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeviceGroupFind = DeviceGroup.find;
   const originalEmit = deviceUpdateEmitter.emit;
 
   t.after(() => {
     Device.findById = originalFindById;
     Device.findOne = originalFindOne;
     Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    DeviceGroup.find = originalDeviceGroupFind;
     deviceUpdateEmitter.emit = originalEmit;
   });
 
@@ -220,6 +223,12 @@ test('updateDevice normalizes and deduplicates device groups', async (t) => {
       ...update
     };
   };
+  DeviceGroup.find = () => ({
+    lean: async () => [
+      { normalizedName: 'interior lights' },
+      { normalizedName: 'alarm shutdown' }
+    ]
+  });
   deviceUpdateEmitter.emit = () => {};
 
   const updated = await deviceService.updateDevice('device-4', {

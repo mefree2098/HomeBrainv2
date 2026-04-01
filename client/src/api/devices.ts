@@ -8,6 +8,40 @@ type DeviceFilters = {
   source?: string;
 }
 
+export type DeviceRecord = {
+  _id: string;
+  id?: string;
+  name: string;
+  type: string;
+  room: string;
+  groups?: string[];
+  status?: boolean;
+  isOnline?: boolean;
+  brightness?: number;
+  temperature?: number;
+  targetTemperature?: number;
+  properties?: Record<string, unknown>;
+};
+
+export type DeviceGroupSummary = {
+  _id: string;
+  name: string;
+  normalizedName: string;
+  description: string;
+  deviceCount: number;
+  deviceIds: string[];
+  deviceNames: string[];
+  rooms: string[];
+  types: string[];
+  sources: string[];
+  workflowUsageCount: number;
+  automationUsageCount: number;
+  workflowNames: string[];
+  automationNames: string[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type DeviceEnergySample = {
   recordedAt: string;
   source: string;
@@ -50,6 +84,88 @@ export const getDevices = async (filters?: DeviceFilters) => {
     return response.data.data;
   } catch (error) {
     console.error('Error fetching devices:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const getDeviceGroups = async () => {
+  try {
+    console.log('Fetching device groups from API');
+    const response = await api.get('/api/device-groups');
+    console.log('Successfully fetched device groups from API');
+    return response.data.data as { groups: DeviceGroupSummary[] };
+  } catch (error) {
+    console.error('Error fetching device groups:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const getDeviceGroupById = async (groupId: string) => {
+  try {
+    console.log('Fetching device group from API:', groupId);
+    const response = await api.get(`/api/device-groups/${groupId}`);
+    console.log('Successfully fetched device group from API');
+    return response.data.data as { group: DeviceGroupSummary };
+  } catch (error) {
+    console.error('Error fetching device group:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const createDeviceGroup = async (payload: {
+  name: string;
+  description?: string;
+  deviceIds?: string[];
+}) => {
+  try {
+    console.log('Creating device group via API:', payload);
+    const response = await api.post('/api/device-groups', payload);
+    console.log('Successfully created device group via API');
+    return response.data.data as { group: DeviceGroupSummary };
+  } catch (error) {
+    console.error('Error creating device group:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const updateDeviceGroup = async (
+  groupId: string,
+  payload: {
+    name?: string;
+    description?: string;
+  }
+) => {
+  try {
+    console.log('Updating device group via API:', groupId, payload);
+    const response = await api.put(`/api/device-groups/${groupId}`, payload);
+    console.log('Successfully updated device group via API');
+    return response.data.data as { group: DeviceGroupSummary };
+  } catch (error) {
+    console.error('Error updating device group:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const setDeviceGroupDevices = async (groupId: string, deviceIds: string[]) => {
+  try {
+    console.log('Updating device group membership via API:', groupId, deviceIds);
+    const response = await api.put(`/api/device-groups/${groupId}/devices`, { deviceIds });
+    console.log('Successfully updated device group membership via API');
+    return response.data.data as { group: DeviceGroupSummary };
+  } catch (error) {
+    console.error('Error updating device group membership:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const deleteDeviceGroup = async (groupId: string) => {
+  try {
+    console.log('Deleting device group via API:', groupId);
+    const response = await api.delete(`/api/device-groups/${groupId}`);
+    console.log('Successfully deleted device group via API');
+    return response.data.data as { group: DeviceGroupSummary };
+  } catch (error) {
+    console.error('Error deleting device group:', error);
     throw new Error(error?.response?.data?.error || error.message);
   }
 }

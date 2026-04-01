@@ -12,6 +12,7 @@ const BlankPage = lazy(() => import("./pages/BlankPage").then((module) => ({ def
 const Dashboard = lazy(() => import("./pages/Dashboard").then((module) => ({ default: module.Dashboard })))
 const Weather = lazy(() => import("./pages/Weather"))
 const Devices = lazy(() => import("./pages/Devices").then((module) => ({ default: module.Devices })))
+const DeviceGroups = lazy(() => import("./pages/DeviceGroups").then((module) => ({ default: module.DeviceGroups })))
 const Scenes = lazy(() => import("./pages/Scenes").then((module) => ({ default: module.Scenes })))
 const Workflows = lazy(() => import("./pages/Workflows").then((module) => ({ default: module.Workflows })))
 const VoiceDevices = lazy(() => import("./pages/VoiceDevices").then((module) => ({ default: module.VoiceDevices })))
@@ -55,6 +56,7 @@ function App() {
             <Route path="/" element={withLayout(<Dashboard />)} />
             <Route path="/weather" element={withLayout(<Weather />)} />
             <Route path="/devices" element={withLayout(<Devices />)} />
+            <Route path="/device-groups" element={withLayout(<DeviceGroups />, { adminOnly: true })} />
             <Route path="/scenes" element={withLayout(<Scenes />)} />
             <Route path="/workflows" element={withLayout(<Workflows />)} />
             <Route path="/automations" element={<Navigate to="/workflows" replace />} />

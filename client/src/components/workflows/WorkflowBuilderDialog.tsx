@@ -26,6 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
+import type { DeviceGroupSummary } from "@/api/devices";
 import type { Workflow, WorkflowAction, WorkflowActionTarget, WorkflowTriggerType } from "@/api/workflows";
 
 type DeviceLite = {
@@ -50,6 +51,7 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   initialWorkflow?: Workflow | null;
   devices: DeviceLite[];
+  deviceGroups?: DeviceGroupSummary[];
   scenes: SceneLite[];
   onSave: (payload: Partial<Workflow>) => Promise<void> | void;
   isSaving?: boolean;
@@ -690,6 +692,7 @@ export function WorkflowBuilderDialog({
   onOpenChange,
   initialWorkflow,
   devices,
+  deviceGroups: availableDeviceGroups = [],
   scenes,
   onSave,
   isSaving = false
@@ -747,28 +750,52 @@ export function WorkflowBuilderDialog({
   }, [devices]);
 
   const deviceGroups = useMemo(() => {
-    const groups = new Map<string, { name: string; devices: DeviceLite[] }>();
+    const groups = new Map<string, {
+      name: string;
+      description?: string;
+      devices: DeviceLite[];
+    }>();
+
+    const ensureGroup = (groupName: string, description?: string) => {
+      const trimmed = String(groupName || "").trim();
+      if (!trimmed) {
+        return null;
+      }
+
+      const key = trimmed.toLowerCase();
+      if (!groups.has(key)) {
+        groups.set(key, {
+          name: trimmed,
+          description: typeof description === "string" ? description.trim() : "",
+          devices: []
+        });
+      } else if (description && !groups.get(key)?.description) {
+        groups.get(key)!.description = description.trim();
+      }
+
+      return groups.get(key) || null;
+    };
+
+    availableDeviceGroups.forEach((group) => {
+      ensureGroup(group.name, group.description);
+    });
 
     devices.forEach((device) => {
       normalizeDeviceGroups(device.groups).forEach((groupName) => {
-        const key = groupName.toLowerCase();
-        if (!groups.has(key)) {
-          groups.set(key, {
-            name: groupName,
-            devices: []
-          });
-        }
-
-        groups.get(key)?.devices.push(device);
+        ensureGroup(groupName)?.devices.push(device);
       });
     });
 
     return [...groups.values()].sort((left, right) => left.name.localeCompare(right.name));
-  }, [devices]);
+  }, [availableDeviceGroups, devices]);
 
   const deviceGroupsByName = useMemo(() => {
-    return deviceGroups.reduce<Map<string, { name: string; devices: DeviceLite[] }>>((acc, group) => {
-      acc.set(group.name, group);
+    return deviceGroups.reduce<Map<string, {
+      name: string;
+      description?: string;
+      devices: DeviceLite[];
+    }>>((acc, group) => {
+      acc.set(group.name.toLowerCase(), group);
       return acc;
     }, new Map());
   }, [deviceGroups]);
@@ -1357,7 +1384,7 @@ export function WorkflowBuilderDialog({
                   <div className="space-y-4">
                     {actions.map((action, index) => {
                       const targetGroupName = getDeviceGroupName(action.target);
-                      const targetGroup = targetGroupName ? deviceGroupsByName.get(targetGroupName) : undefined;
+                      const targetGroup = targetGroupName ? deviceGroupsByName.get(targetGroupName.toLowerCase()) : undefined;
                       const targetDeviceId = isTriggeringDeviceTarget(action.target)
                         ? triggerDeviceId || ""
                         : (typeof action.target === "string" ? action.target : "");
@@ -1446,7 +1473,7 @@ export function WorkflowBuilderDialog({
                                             ? ""
                                             : value;
                                         const updatedDevice = devices.find((device) => device._id === updatedDeviceId);
-                                        const updatedGroup = selectedGroup ? deviceGroupsByName.get(selectedGroup) : undefined;
+                                        const updatedGroup = selectedGroup ? deviceGroupsByName.get(selectedGroup.toLowerCase()) : undefined;
                                         const choices = updatedGroup
                                           ? getCommonDeviceActionChoices(updatedGroup.devices)
                                           : getDeviceActionChoices(
@@ -1480,7 +1507,7 @@ export function WorkflowBuilderDialog({
                                             <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Groups</div>
                                             {deviceGroups.map((group) => (
                                               <SelectItem key={group.name} value={getDeviceGroupTargetSelectValue(group.name)}>
-                                                {group.name} ({group.devices.length} devices)
+                                                {group.name} ({group.devices.length} device{group.devices.length === 1 ? "" : "s"})
                                               </SelectItem>
                                             ))}
                                           </>
@@ -1504,7 +1531,7 @@ export function WorkflowBuilderDialog({
                                     )}
                                     {isDeviceGroupTarget(action.target) && (
                                       <p className="text-xs text-muted-foreground">
-                                        Applies this action to every device in the selected group.
+                                        Applies this action to every device in the selected group{targetGroup?.description ? `: ${targetGroup.description}` : "."}
                                       </p>
                                     )}
                                   </div>

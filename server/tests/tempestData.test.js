@@ -5,7 +5,8 @@ const {
   decodeSensorStatus,
   normalizeDiscoveryResponse,
   normalizeEventPayload,
-  normalizeObservationPayload
+  normalizeObservationPayload,
+  summarizeLightningMetrics
 } = require('../services/tempestData');
 
 test('normalizeDiscoveryResponse extracts Tempest station metadata and preferred device ids', () => {
@@ -115,4 +116,40 @@ test('decodeSensorStatus expands Tempest device fault flags', () => {
     'Temperature sensor failure',
     'Wind sensor failure'
   ]);
+});
+
+test('summarizeLightningMetrics prefers recent strike events over stale display metrics', () => {
+  const summary = summarizeLightningMetrics(
+    {
+      count: 3,
+      averageDistanceMiles: 8.36,
+      lastStrikeAt: new Date('2026-04-01T05:24:00Z')
+    },
+    {
+      lightningCount: 0,
+      lightningAvgDistanceMiles: null,
+      lightningAvgDistanceKm: null
+    }
+  );
+
+  assert.equal(summary.lightningCount, 3);
+  assert.equal(summary.lightningAvgDistanceMiles, 8.4);
+  assert.equal(summary.lightningAvgDistanceKm, 13.5);
+  assert.equal(summary.lastLightningStrikeAt?.toISOString?.(), '2026-04-01T05:24:00.000Z');
+});
+
+test('summarizeLightningMetrics falls back to station display values when no recent strikes exist', () => {
+  const summary = summarizeLightningMetrics(
+    {},
+    {
+      lightningCount: 2,
+      lightningAvgDistanceMiles: 11.2,
+      lightningAvgDistanceKm: 18
+    }
+  );
+
+  assert.equal(summary.lightningCount, 2);
+  assert.equal(summary.lightningAvgDistanceMiles, 11.2);
+  assert.equal(summary.lightningAvgDistanceKm, 18);
+  assert.equal(summary.lastLightningStrikeAt, null);
 });
