@@ -9,7 +9,9 @@ import {
   Radar,
   Droplets,
   Gauge,
-  Activity
+  Activity,
+  Sparkles,
+  Zap
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -542,13 +544,180 @@ const formatDaylightDuration = (sunrise: string | null, sunset: string | null) =
   return `${hours}h ${minutes}m`
 }
 
+const describeDewPointLevel = (value: number | null | undefined) => {
+  if (value == null) {
+    return "Humidity comfort"
+  }
+  if (value <= 30) {
+    return "Very dry"
+  }
+  if (value <= 55) {
+    return "Comfortable"
+  }
+  return "Muggy"
+}
+
+const formatCompactWindDetail = (gustMph: number | null | undefined, directionDeg: number | null | undefined) => {
+  const gust = formatWind(gustMph)
+  const direction = toCompass(directionDeg)
+
+  if (gust === "--" && direction === "--") {
+    return "Live wind"
+  }
+  if (direction === "--") {
+    return gust
+  }
+  if (gust === "--") {
+    return direction
+  }
+  return `${direction} • ${gust}`
+}
+
+const formatLightningCount = (value: number | null | undefined) => value == null ? "0" : `${Math.round(value)}`
+
+const formatLightningDistance = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(1)} mi`
+
+const describeLightningStatus = (count: number | null | undefined) => {
+  if (count == null) {
+    return "No strikes reported"
+  }
+  if (count <= 0) {
+    return "No nearby strikes"
+  }
+  if (count === 1) {
+    return "Recent strike detected"
+  }
+  return "Storm activity nearby"
+}
+
+const formatLightningDetail = (
+  count: number | null | undefined,
+  averageDistanceMiles: number | null | undefined
+) => {
+  if ((count ?? 0) <= 0) {
+    return "No nearby strikes"
+  }
+
+  const distance = formatLightningDistance(averageDistanceMiles)
+  return distance === "--" ? "Recent strike detected" : `Avg ${distance}`
+}
+
+const buildCompactWeatherSummary = (
+  weather: DashboardWeatherPayload,
+  tempestStation: DashboardWeatherPayload["tempest"]["station"] | null
+) => {
+  const segments: string[] = []
+
+  if (tempestStation?.metrics.dewPointF != null) {
+    segments.push(describeDewPointLevel(tempestStation.metrics.dewPointF))
+  } else if (weather.current.humidity != null) {
+    segments.push(describeHumidityLevel(weather.current.humidity))
+  }
+
+  if (tempestStation) {
+    segments.push(formatPressureMeaning(tempestStation.metrics.pressureTrend))
+  }
+
+  if (weather.today.precipitationChance != null) {
+    segments.push(describeRainChance(weather.today.precipitationChance))
+  }
+
+  return segments.length > 0 ? segments.join(" • ") : "Forecast synced and ready."
+}
+
+function WeatherIndicatorBadge({
+  label,
+  value,
+  chromeClassName,
+  valueClassName
+}: {
+  label: string
+  value: string
+  chromeClassName: string
+  valueClassName: string
+}) {
+  return (
+    <div className={cn("min-w-[5.5rem] rounded-[1rem] border px-3 py-2 text-right", chromeClassName)}>
+      <p className="section-kicker leading-none">{label}</p>
+      <p className={cn("mt-1 text-lg font-semibold leading-none", valueClassName)}>{value}</p>
+    </div>
+  )
+}
+
+function WeatherCompactMetricTile({
+  title,
+  value,
+  detail,
+  icon,
+  accentClassName,
+  backgroundClassName = "border-white/12 bg-white/10",
+  valueClassName,
+  detailClassName
+}: {
+  title: string
+  value: string
+  detail: string
+  icon?: React.ReactNode
+  accentClassName: string
+  backgroundClassName?: string
+  valueClassName?: string
+  detailClassName?: string
+}) {
+  return (
+    <div className={cn("h-full min-h-[5.35rem] rounded-[1.05rem] border p-3 text-left", backgroundClassName)}>
+      <div className="flex items-start justify-between gap-2">
+        <p className="section-kicker leading-none">{title}</p>
+        {icon ? <span className="shrink-0">{icon}</span> : null}
+      </div>
+      <p className={cn("mt-1.5 text-[1.12rem] font-semibold leading-tight text-foreground", valueClassName)}>{value}</p>
+      <p className={cn("mt-1 text-[0.8rem] leading-tight text-muted-foreground line-clamp-1", detailClassName)}>{detail}</p>
+      <div className={cn("mt-3 h-[3px] w-7 rounded-full", accentClassName)} />
+    </div>
+  )
+}
+
+function WeatherCompactSunTile({
+  sunrise,
+  sunset,
+  accentClassName
+}: {
+  sunrise: string | null
+  sunset: string | null
+  accentClassName: string
+}) {
+  return (
+    <div className="h-full min-h-[5.35rem] rounded-[1.05rem] border border-white/12 bg-white/10 p-3 text-left">
+      <p className="section-kicker leading-none">Sun</p>
+      <div className="mt-1.5 space-y-1.5">
+        <div className="flex items-center gap-2">
+          <Sunrise className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+          <span className="text-[0.92rem] font-semibold leading-none text-foreground">{formatSunTime(sunrise)}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Sunset className="h-3.5 w-3.5 shrink-0 text-orange-400" />
+          <span className="text-[0.92rem] font-semibold leading-none text-foreground">{formatSunTime(sunset)}</span>
+        </div>
+      </div>
+      <div className={cn("mt-3 h-[3px] w-7 rounded-full", accentClassName)} />
+    </div>
+  )
+}
+
+function WeatherSummaryStrip({ summary }: { summary: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-[1.05rem] border border-white/12 bg-white/10 px-3 py-2.5">
+      <Sparkles className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
+      <p className="min-w-0 truncate text-[0.78rem] font-medium text-muted-foreground">{summary}</p>
+    </div>
+  )
+}
+
 export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidgetProps) {
   const [weather, setWeather] = useState<DashboardWeatherPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const compact = size === "small"
   const medium = size === "medium"
-  const condensed = size === "small" || size === "medium"
   const wide = size === "large" || size === "full"
   const stackedHero = compact || medium
   const tempestStation = weather?.tempest?.available ? weather.tempest.station : null
@@ -631,61 +800,9 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
 
   const headlineTemperature = tempestStation?.metrics.temperatureF ?? weather?.current.temperatureF ?? null
   const headlineFeelsLike = tempestStation?.metrics.feelsLikeF ?? weather?.current.apparentTemperatureF ?? null
-  const lastSyncedAt = tempestStation?.observedAt ?? weather?.fetchedAt ?? null
+  const lastSyncedAt = tempestStation?.lastEventAt ?? tempestStation?.observedAt ?? weather?.fetchedAt ?? null
   const lastSyncedTime = formatLastSyncedTime(lastSyncedAt)
   const lastSyncedAgo = formatLastSyncedAgo(lastSyncedAt)
-  const weatherContextRow = (className?: string) => (
-    <div className={cn(
-      "flex min-w-0 gap-3",
-      stackedHero ? "flex-col items-start" : "items-start justify-between",
-      className
-    )}>
-      <div className="flex min-w-0 flex-1 items-center gap-2.5 text-sm text-muted-foreground">
-        <span className="shrink-0 text-base font-semibold text-foreground">{weather.current.condition}</span>
-        <span className="shrink-0 text-muted-foreground/50">•</span>
-        <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate">
-          <MapPin className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{weather.location.name}</span>
-        </span>
-      </div>
-
-      <div className={cn(
-        "flex shrink-0 flex-col gap-1",
-        stackedHero ? "w-full items-start text-left" : "ml-auto items-end text-right"
-      )}>
-        <span className={cn(
-          "flex shrink-0 flex-wrap items-center gap-2",
-          stackedHero ? "justify-start" : "justify-end"
-        )}>
-          {tempestStation ? <TempestBatteryBadge volts={tempestStation.metrics.batteryVolts} /> : null}
-          {tempestStation ? (
-            <span
-              className={cn(
-                "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium",
-                tempestBatteryPercent != null && tempestBatteryPercent <= 25
-                  ? "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-300"
-                  : "border-cyan-400/20 bg-cyan-400/10 text-cyan-700 dark:text-cyan-300"
-              )}
-            >
-              <Radar className="h-3.5 w-3.5" />
-              Tempest Live
-            </span>
-          ) : null}
-          <span className="inline-flex items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
-            {sourceLabel}
-          </span>
-        </span>
-
-        <span
-          className="text-[0.68rem] font-medium text-muted-foreground/85"
-          title={formatLastSyncedTitle(lastSyncedAt)}
-        >
-          <span className="text-foreground/70">Last synced</span> {lastSyncedTime}
-          {lastSyncedAgo ? <span className="text-muted-foreground/60"> • {lastSyncedAgo}</span> : null}
-        </span>
-      </div>
-    </div>
-  )
 
   if (loading && !weather) {
     return (
@@ -717,11 +834,15 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
     return null
   }
 
-  const metricGrid = condensed
+  const humidityValue = tempestStation?.metrics.humidityPct ?? weather.current.humidity
+  const metricGrid = compact
     ? "grid-cols-2"
-    : wide
-      ? "grid-cols-2 xl:grid-cols-4"
-      : "grid-cols-2 lg:grid-cols-4"
+    : medium
+      ? "grid-cols-3"
+      : wide
+        ? "grid-cols-3 xl:grid-cols-4"
+        : "grid-cols-3"
+  const compactSummary = buildCompactWeatherSummary(weather, tempestStation)
 
   return (
     <section className="relative overflow-hidden rounded-[1.6rem] border border-white/15 bg-white/8 p-4 shadow-lg shadow-black/5 backdrop-blur-xl dark:bg-slate-950/15 sm:p-5">
@@ -730,22 +851,21 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
       <div className="absolute bottom-[-6rem] left-[-4rem] h-44 w-44 rounded-full bg-blue-300/18 blur-3xl dark:bg-blue-500/10" />
 
       <div className="relative space-y-4">
-        <div className={cn("gap-5", stackedHero ? "space-y-4" : "grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start")}>
-          <div className="space-y-3">
-            <p className="section-kicker">Local Forecast</p>
-            <div className="flex flex-wrap items-center gap-3">
-              <h3 className={cn("font-semibold text-foreground", compact ? "text-2xl" : "text-3xl")}>
-                {formatTemperature(headlineTemperature)}
-              </h3>
-              <span className="text-sm font-medium text-muted-foreground">
-                Feels like {formatTemperature(headlineFeelsLike)}
-              </span>
+        <div className="space-y-3">
+          <div className={cn("flex gap-3", stackedHero ? "items-start justify-between" : "items-start justify-between")}>
+            <div className="min-w-0 flex-1">
+              <p className="section-kicker">Local Forecast</p>
+              <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h3 className={cn("font-semibold leading-none text-foreground", compact ? "text-[2.1rem]" : medium ? "text-[2.45rem]" : "text-[2.7rem]")}>
+                  {formatTemperature(headlineTemperature)}
+                </h3>
+                <span className="text-sm font-medium text-muted-foreground">
+                  Feels like {formatTemperature(headlineFeelsLike)}
+                </span>
+              </div>
             </div>
-            {stackedHero ? weatherContextRow("flex-wrap") : null}
-          </div>
 
-          <div className={cn("flex flex-wrap items-stretch gap-3", stackedHero ? "justify-between" : "justify-start lg:justify-end")}>
-            <div className="flex items-stretch gap-3">
+            <div className="flex shrink-0 items-start gap-2.5">
               <WeatherInfoPopover
                 label="AQI details"
                 content={(
@@ -761,10 +881,12 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                   />
                 )}
               >
-                <div className={cn("min-w-[6rem] rounded-[1.2rem] border px-3 py-2.5 text-right", aqiTone.chrome)}>
-                  <p className="section-kicker">AQI</p>
-                  <p className={cn("mt-1 text-lg font-semibold", aqiTone.value)}>{formatAqi(weather.current.airQualityIndex)}</p>
-                </div>
+                <WeatherIndicatorBadge
+                  label="AQI"
+                  value={formatAqi(weather.current.airQualityIndex)}
+                  chromeClassName={aqiTone.chrome}
+                  valueClassName={aqiTone.value}
+                />
               </WeatherInfoPopover>
 
               {tempestStation ? (
@@ -783,36 +905,70 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                     />
                   )}
                 >
-                  <div className={cn("min-w-[6rem] rounded-[1.2rem] border px-3 py-2.5 text-right", uvTone.chrome)}>
-                    <p className="section-kicker">UV</p>
-                    <p className={cn("mt-1 text-lg font-semibold", uvTone.value)}>{formatUv(tempestStation.metrics.uvIndex)}</p>
-                  </div>
+                  <WeatherIndicatorBadge
+                    label="UV"
+                    value={formatUv(tempestStation.metrics.uvIndex)}
+                    chromeClassName={uvTone.chrome}
+                    valueClassName={uvTone.value}
+                  />
                 </WeatherInfoPopover>
               ) : null}
+
+              <div className="flex h-14 w-14 items-center justify-center rounded-[1.1rem] border border-white/15 bg-white/10 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
+                <WeatherGlyph icon={weather.current.icon} isDay={weather.current.isDay} className="h-7 w-7" />
+              </div>
+            </div>
+          </div>
+
+          <div className={cn("gap-3", stackedHero ? "space-y-3" : "grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_auto]")}>
+            <div className="min-w-0 space-y-1.5">
+              <p className="text-[0.97rem] font-semibold text-foreground">{weather.current.condition}</p>
+              <div className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+                <MapPin className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{weather.location.name}</span>
+              </div>
+              <p
+                className="text-[0.72rem] font-medium text-muted-foreground/85"
+                title={formatLastSyncedTitle(lastSyncedAt)}
+              >
+                <span className="text-foreground/70">Last synced</span> {lastSyncedTime}
+                {lastSyncedAgo ? <span className="text-muted-foreground/60"> • {lastSyncedAgo}</span> : null}
+              </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="flex h-16 w-16 items-center justify-center rounded-[1.25rem] border border-white/15 bg-white/10 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
-                <WeatherGlyph icon={weather.current.icon} isDay={weather.current.isDay} className="h-8 w-8" />
-              </div>
-
+            <div className={cn("flex flex-wrap items-center gap-2", stackedHero ? "justify-start" : "justify-end")}>
+              {tempestStation ? <TempestBatteryBadge volts={tempestStation.metrics.batteryVolts} /> : null}
+              {tempestStation ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium",
+                    tempestBatteryPercent != null && tempestBatteryPercent <= 25
+                      ? "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-300"
+                      : "border-cyan-400/20 bg-cyan-400/10 text-cyan-700 dark:text-cyan-300"
+                  )}
+                >
+                  <Radar className="h-3.5 w-3.5" />
+                  {tempestStation.status.websocketConnected ? "Tempest Live" : "Tempest Snapshot"}
+                </span>
+              ) : null}
+              <span className="inline-flex items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
+                {sourceLabel}
+              </span>
               <Button
                 variant="outline"
-                size="sm"
-                className="h-11 rounded-[1.1rem] px-4"
+                size="icon"
+                className="h-8 w-8 rounded-full border-white/15 bg-white/8"
                 onClick={() => void fetchWeather()}
+                aria-label="Refresh weather"
               >
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh
+                <RefreshCw className="h-3.5 w-3.5" />
               </Button>
             </div>
           </div>
         </div>
 
-        {!stackedHero ? weatherContextRow("flex-nowrap") : null}
-
-        {tempestStation ? (
-          <div className={cn("grid gap-3", condensed ? "grid-cols-2" : "grid-cols-4")}>
+        <div className={cn("grid gap-3", metricGrid)}>
+          {tempestStation ? (
             <WeatherInfoPopover
               label="Live wind details"
               align="center"
@@ -830,18 +986,18 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 />
               )}
             >
-              <div className="rounded-[1.2rem] border border-cyan-300/15 bg-cyan-400/10 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="section-kicker">Live Wind</p>
-                  <Wind className="h-4 w-4 text-cyan-600 dark:text-cyan-300" />
-                </div>
-                <p className="mt-2 text-lg font-semibold text-foreground">{formatWind(tempestStation.metrics.windAvgMph)}</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {formatLiveWindDetail(tempestStation.metrics.windGustMph, tempestStation.metrics.windDirectionDeg)}
-                </p>
-              </div>
+              <WeatherCompactMetricTile
+                title="Wind"
+                value={formatWind(tempestStation.metrics.windAvgMph)}
+                detail={formatCompactWindDetail(tempestStation.metrics.windGustMph, tempestStation.metrics.windDirectionDeg)}
+                icon={<Wind className="h-4 w-4 text-cyan-600 dark:text-cyan-300" />}
+                accentClassName="bg-cyan-400"
+                backgroundClassName="border-cyan-300/15 bg-cyan-400/10"
+              />
             </WeatherInfoPopover>
+          ) : null}
 
+          {tempestStation ? (
             <WeatherInfoPopover
               label="Rainfall details"
               align="center"
@@ -859,81 +1015,73 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 />
               )}
             >
-              <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="section-kicker">Rainfall</p>
-                  <Droplets className="h-4 w-4 text-blue-500" />
-                </div>
-                <p className="mt-2 text-lg font-semibold text-foreground">{formatRain(tempestStation.metrics.rainTodayIn)}</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Rate {formatRain(tempestStation.metrics.rainRateInPerHr)}/hr
-                </p>
-              </div>
+              <WeatherCompactMetricTile
+                title="Rain"
+                value={formatRain(tempestStation.metrics.rainTodayIn)}
+                detail={`${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`}
+                icon={<Droplets className="h-4 w-4 text-blue-500" />}
+                accentClassName="bg-sky-400"
+              />
             </WeatherInfoPopover>
+          ) : null}
 
-            {!compact ? (
-              <WeatherInfoPopover
-                label="Pressure details"
-                align="center"
-                className="w-full"
-                content={(
-                  <WeatherInfoCard
-                    title="Pressure"
-                    summary={`Current ${formatPressure(tempestStation.metrics.pressureInHg)} · ${formatPressureMeaning(tempestStation.metrics.pressureTrend)}`}
-                    rows={[
-                      { range: "Above 30.2 inHg", detail: "Usually fair", toneClassName: "text-emerald-600 dark:text-emerald-300" },
-                      { range: "29.8-30.2 inHg", detail: "Typical band", toneClassName: "text-amber-600 dark:text-amber-300" },
-                      { range: "Below 29.8 inHg", detail: "Often unsettled", toneClassName: "text-rose-600 dark:text-rose-300" }
-                    ]}
-                    footer={`Current band: ${describePressureBand(tempestStation.metrics.pressureInHg)}. Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.`}
-                  />
-                )}
-              >
-                <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="section-kicker">Pressure</p>
-                    <Gauge className="h-4 w-4 text-emerald-500" />
-                  </div>
-                  <p className="mt-2 text-lg font-semibold text-foreground">{formatPressure(tempestStation.metrics.pressureInHg)}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{formatPressureMeaning(tempestStation.metrics.pressureTrend)}</p>
-                </div>
-              </WeatherInfoPopover>
-            ) : null}
+          {tempestStation ? (
+            <WeatherInfoPopover
+              label="Pressure details"
+              align="center"
+              className="w-full"
+              content={(
+                <WeatherInfoCard
+                  title="Pressure"
+                  summary={`Current ${formatPressure(tempestStation.metrics.pressureInHg)} · ${formatPressureMeaning(tempestStation.metrics.pressureTrend)}`}
+                  rows={[
+                    { range: "Above 30.2 inHg", detail: "Usually fair", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                    { range: "29.8-30.2 inHg", detail: "Typical band", toneClassName: "text-amber-600 dark:text-amber-300" },
+                    { range: "Below 29.8 inHg", detail: "Often unsettled", toneClassName: "text-rose-600 dark:text-rose-300" }
+                  ]}
+                  footer={`Current band: ${describePressureBand(tempestStation.metrics.pressureInHg)}. Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.`}
+                />
+              )}
+            >
+              <WeatherCompactMetricTile
+                title="Pressure"
+                value={formatPressure(tempestStation.metrics.pressureInHg)}
+                detail={formatPressureMeaning(tempestStation.metrics.pressureTrend)}
+                icon={<Gauge className="h-4 w-4 text-emerald-500" />}
+                accentClassName="bg-emerald-400"
+              />
+            </WeatherInfoPopover>
+          ) : null}
 
-            {!compact ? (
-              <WeatherInfoPopover
-                label="Station details"
-                align="center"
-                className="w-full"
-                content={(
-                  <WeatherInfoValueCard
-                    title="Station"
-                    summary={`${tempestStation.name} · ${tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}`}
-                    rows={[
-                      { label: "Feed", value: formatStationFeed(tempestStation.status.websocketConnected), toneClassName: tempestStation.status.websocketConnected ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300" },
-                      { label: "Station", value: tempestStation.name, toneClassName: "text-foreground" },
-                      { label: "Room", value: tempestStation.room, toneClassName: "text-foreground" }
-                    ]}
-                    footer="Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown."
-                  />
-                )}
-              >
-                <div className="rounded-[1.2rem] border border-cyan-300/15 bg-white/10 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="section-kicker">Station</p>
-                    <Activity className="h-4 w-4 text-violet-500" />
-                  </div>
-                  <p className="mt-2 text-lg font-semibold text-foreground">{tempestStation.name}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}
-                  </p>
-                </div>
-              </WeatherInfoPopover>
-            ) : null}
-          </div>
-        ) : null}
+          {tempestStation ? (
+            <WeatherInfoPopover
+              label="Station details"
+              align="center"
+              className="w-full"
+              content={(
+                <WeatherInfoValueCard
+                  title="Station"
+                  summary={`${tempestStation.name} · ${tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}`}
+                  rows={[
+                    { label: "Feed", value: formatStationFeed(tempestStation.status.websocketConnected), toneClassName: tempestStation.status.websocketConnected ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300" },
+                    { label: "Station", value: tempestStation.name, toneClassName: "text-foreground" },
+                    { label: "Room", value: tempestStation.room, toneClassName: "text-foreground" }
+                  ]}
+                  footer="Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown."
+                />
+              )}
+            >
+              <WeatherCompactMetricTile
+                title="Station"
+                value={tempestStation.name}
+                detail={tempestStation.status.websocketConnected ? "Live feed" : "Snapshot"}
+                icon={<Activity className="h-4 w-4 text-violet-500" />}
+                accentClassName="bg-violet-400"
+                valueClassName="line-clamp-1 text-base"
+              />
+            </WeatherInfoPopover>
+          ) : null}
 
-        <div className={cn("grid gap-3", metricGrid)}>
           <WeatherInfoPopover
             label="Today forecast details"
             align="center"
@@ -951,11 +1099,13 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               />
             )}
           >
-            <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-              <p className="section-kicker">Today</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{formatTemperature(weather.today.highF)} / {formatTemperature(weather.today.lowF)}</p>
-              <p className="mt-1 text-sm text-muted-foreground">{weather.today.condition}</p>
-            </div>
+            <WeatherCompactMetricTile
+              title="Today"
+              value={`${formatTemperature(weather.today.highF)} / ${formatTemperature(weather.today.lowF)}`}
+              detail={weather.today.condition}
+              accentClassName="bg-cyan-400"
+              valueClassName="text-base"
+            />
           </WeatherInfoPopover>
 
           <WeatherInfoPopover
@@ -965,7 +1115,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             content={(
               <WeatherInfoCard
                 title="Humidity"
-                summary={`Current ${formatPercent(weather.current.humidity)} · ${describeHumidityLevel(weather.current.humidity)}`}
+                summary={`Current ${formatPercent(humidityValue)} · ${describeHumidityLevel(humidityValue)}`}
                 rows={[
                   { range: "0-30%", detail: "Dry air", toneClassName: "text-amber-600 dark:text-amber-300" },
                   { range: "30-60%", detail: "Comfort band", toneClassName: "text-emerald-600 dark:text-emerald-300" },
@@ -975,11 +1125,12 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               />
             )}
           >
-            <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-              <p className="section-kicker">Humidity</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{formatPercent(weather.current.humidity)}</p>
-              <p className="mt-1 text-sm text-muted-foreground">Indoor comfort check</p>
-            </div>
+            <WeatherCompactMetricTile
+              title="Humidity"
+              value={formatPercent(humidityValue)}
+              detail={describeHumidityLevel(humidityValue)}
+              accentClassName="bg-emerald-400"
+            />
           </WeatherInfoPopover>
 
           <WeatherInfoPopover
@@ -999,27 +1150,11 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               />
             )}
           >
-            <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="section-kicker">Sun Cycle</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Sunrise className="h-4 w-4 text-amber-400" />
-                  <Sunset className="h-4 w-4 text-orange-400" />
-                </div>
-              </div>
-              <div className="mt-2 space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-muted-foreground">Sunrise</span>
-                  <span className="text-base font-semibold text-foreground">{formatSunTime(weather.today.sunrise)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-muted-foreground">Sunset</span>
-                  <span className="text-base font-semibold text-foreground">{formatSunTime(weather.today.sunset)}</span>
-                </div>
-              </div>
-            </div>
+            <WeatherCompactSunTile
+              sunrise={weather.today.sunrise}
+              sunset={weather.today.sunset}
+              accentClassName="bg-violet-400"
+            />
           </WeatherInfoPopover>
 
           <WeatherInfoPopover
@@ -1039,15 +1174,44 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               />
             )}
           >
-            <div className="rounded-[1.2rem] border border-white/12 bg-white/10 p-3">
-              <p className="section-kicker">Rain Chance</p>
-              <p className="mt-2 text-lg font-semibold text-foreground">{formatPercent(weather.today.precipitationChance)}</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {weather.current.precipitationIn === null ? "No live precipitation feed" : `${weather.current.precipitationIn.toFixed(2)} in now`}
-              </p>
-            </div>
+            <WeatherCompactMetricTile
+              title="Rain %"
+              value={formatPercent(weather.today.precipitationChance)}
+              detail={describeRainChance(weather.today.precipitationChance)}
+              accentClassName="bg-amber-400"
+            />
           </WeatherInfoPopover>
+
+          {tempestStation ? (
+            <WeatherInfoPopover
+              label="Lightning details"
+              align="center"
+              className="w-full"
+              content={(
+                <WeatherInfoValueCard
+                  title="Lightning"
+                  summary={`${formatLightningCount(tempestStation.metrics.lightningCount)} strikes · ${formatLightningDetail(tempestStation.metrics.lightningCount, tempestStation.metrics.lightningAvgDistanceMiles)}`}
+                  rows={[
+                    { label: "Strikes", value: formatLightningCount(tempestStation.metrics.lightningCount), toneClassName: "text-violet-600 dark:text-violet-300" },
+                    { label: "Avg Distance", value: formatLightningDistance(tempestStation.metrics.lightningAvgDistanceMiles), toneClassName: "text-foreground" },
+                    { label: "Status", value: describeLightningStatus(tempestStation.metrics.lightningCount), toneClassName: tempestStation.metrics.lightningCount && tempestStation.metrics.lightningCount > 0 ? "text-violet-600 dark:text-violet-300" : "text-emerald-600 dark:text-emerald-300" }
+                  ]}
+                  footer="Tempest reports recent lightning strike count and the average distance of those strikes, which helps show whether storms are staying far away or moving closer."
+                />
+              )}
+            >
+              <WeatherCompactMetricTile
+                title="Lightning"
+                value={formatLightningCount(tempestStation.metrics.lightningCount)}
+                detail={formatLightningDetail(tempestStation.metrics.lightningCount, tempestStation.metrics.lightningAvgDistanceMiles)}
+                icon={<Zap className="h-4 w-4 text-violet-500" />}
+                accentClassName="bg-violet-400"
+              />
+            </WeatherInfoPopover>
+          ) : null}
         </div>
+
+        <WeatherSummaryStrip summary={compactSummary} />
 
         {error ? (
           <p className="text-xs text-amber-500">{error}</p>

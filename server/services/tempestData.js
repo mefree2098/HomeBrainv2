@@ -71,6 +71,11 @@ const kmToMiles = (value) => {
   return numeric === null ? null : roundNumber(numeric * 0.6213711922, 1);
 };
 
+const milesToKm = (value) => {
+  const numeric = toNumber(value);
+  return numeric === null ? null : roundNumber(numeric / 0.6213711922, 1);
+};
+
 const mbToInHg = (value) => {
   const numeric = toNumber(value);
   return numeric === null ? null : roundNumber(numeric * 0.0295299831, 2);
@@ -478,6 +483,34 @@ const normalizeDiscoveryResponse = (payload) => {
     .filter((station) => station.stationId !== null);
 };
 
+const summarizeLightningMetrics = (recentLightning = {}, fallbackMetrics = {}) => {
+  const recentCount = toNumber(recentLightning.count);
+  const recentAverageDistanceMiles = toNumber(recentLightning.averageDistanceMiles);
+  const recentLastStrikeDistanceMiles = toNumber(recentLightning.lastStrikeDistanceMiles);
+  const fallbackCount = toNumber(fallbackMetrics.lightningCount);
+  const fallbackAverageDistanceMiles = toNumber(fallbackMetrics.lightningAvgDistanceMiles);
+  const fallbackAverageDistanceKm = toNumber(fallbackMetrics.lightningAvgDistanceKm);
+  const hasRecentLightning = recentCount !== null && recentCount > 0;
+  const resolvedCount = hasRecentLightning
+    ? roundNumber(recentCount, 0)
+    : fallbackCount;
+  const resolvedAverageDistanceMiles = hasRecentLightning
+    ? recentAverageDistanceMiles ?? recentLastStrikeDistanceMiles ?? fallbackAverageDistanceMiles
+    : fallbackAverageDistanceMiles;
+  const roundedAverageDistanceMiles = resolvedAverageDistanceMiles === null
+    ? null
+    : roundNumber(resolvedAverageDistanceMiles, 1);
+
+  return {
+    lightningCount: resolvedCount,
+    lightningAvgDistanceMiles: roundedAverageDistanceMiles,
+    lightningAvgDistanceKm: roundedAverageDistanceMiles !== null
+      ? milesToKm(roundedAverageDistanceMiles)
+      : fallbackAverageDistanceKm,
+    lastLightningStrikeAt: recentLightning.lastStrikeAt || null
+  };
+};
+
 module.exports = {
   DEVICE_TYPE_LABELS,
   applyCalibration,
@@ -486,6 +519,7 @@ module.exports = {
   cToF,
   decodeSensorStatus,
   kmToMiles,
+  milesToKm,
   mbToInHg,
   mmToIn,
   mpsToMph,
@@ -496,5 +530,6 @@ module.exports = {
   parseObservationArray,
   parseRapidWind,
   roundNumber,
+  summarizeLightningMetrics,
   toNumber
 };

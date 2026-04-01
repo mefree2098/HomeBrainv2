@@ -27,7 +27,7 @@ import {
   CheckCircle2,
   AlertCircle
 } from "lucide-react"
-import { getDevices, getDevicesByRoom, controlDevice } from "@/api/devices"
+import { getDeviceGroups, getDevices, getDevicesByRoom, controlDevice, type DeviceGroupSummary } from "@/api/devices"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
 import { useToast } from "@/hooks/useToast"
 import { useFavorites } from "@/hooks/useFavorites"
@@ -300,6 +300,7 @@ export function Devices({
   const [searchParams, setSearchParams] = useSearchParams()
   const { toast } = useToast()
   const [devices, setDevices] = useState([])
+  const [deviceGroups, setDeviceGroups] = useState<DeviceGroupSummary[]>([])
   const [roomDevices, setRoomDevices] = useState([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
@@ -396,13 +397,15 @@ export function Devices({
     const fetchDevices = async () => {
       try {
         console.log('Fetching devices data')
-        const [allDevices, byRoom] = await Promise.all([
+        const [allDevices, byRoom, groupsResponse] = await Promise.all([
           getDevices(),
-          getDevicesByRoom()
+          getDevicesByRoom(),
+          getDeviceGroups()
         ])
         
         setDevices(allDevices.devices)
         setRoomDevices(byRoom.rooms)
+        setDeviceGroups(Array.isArray(groupsResponse?.groups) ? groupsResponse.groups : [])
       } catch (error) {
         console.error('Failed to fetch devices:', error)
         toast({
@@ -421,10 +424,14 @@ export function Devices({
   useDeviceRealtime(applyIncomingDevices)
 
   const refreshDevicesSnapshot = useCallback(async () => {
-    const allDevices = await getDevices()
+    const [allDevices, groupsResponse] = await Promise.all([
+      getDevices(),
+      getDeviceGroups()
+    ])
     const deviceList = Array.isArray(allDevices?.devices) ? allDevices.devices : []
     setDevices(deviceList)
     setRoomDevices(buildRoomsFromDevices(deviceList))
+    setDeviceGroups(Array.isArray(groupsResponse?.groups) ? groupsResponse.groups : [])
   }, [buildRoomsFromDevices])
 
   useEffect(() => {
@@ -988,6 +995,18 @@ export function Devices({
   const availableDeviceGroups = useMemo(() => {
     const groups = new Map<string, string>()
 
+    deviceGroups.forEach((group) => {
+      const name = String(group?.name || '').trim()
+      if (!name) {
+        return
+      }
+
+      const key = name.toLowerCase()
+      if (!groups.has(key)) {
+        groups.set(key, name)
+      }
+    })
+
     devices.forEach((device: any) => {
       const entries = Array.isArray(device?.groups) ? device.groups : []
       entries.forEach((entry: unknown) => {
@@ -1004,7 +1023,7 @@ export function Devices({
     })
 
     return Array.from(groups.values()).sort((left, right) => left.localeCompare(right))
-  }, [devices])
+  }, [deviceGroups, devices])
 
   useEffect(() => {
     if (!focusDeviceId || !Array.isArray(devices) || devices.length === 0) {

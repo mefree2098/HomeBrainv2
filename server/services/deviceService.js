@@ -1,4 +1,5 @@
 const Device = require('../models/Device');
+const DeviceGroup = require('../models/DeviceGroup');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
@@ -43,6 +44,36 @@ function normalizeDeviceGroups(groups) {
   });
 
   return normalized;
+}
+
+async function ensureDeviceGroupRegistryEntries(groups = []) {
+  const normalizedGroups = normalizeDeviceGroups(groups);
+  if (normalizedGroups.length === 0) {
+    return;
+  }
+
+  const existingGroups = await DeviceGroup.find({
+    normalizedName: { $in: normalizedGroups.map((group) => group.toLowerCase()) }
+  }).lean();
+  const existingKeys = new Set(existingGroups.map((group) => String(group.normalizedName || '').toLowerCase()));
+
+  for (const groupName of normalizedGroups) {
+    const normalizedName = groupName.toLowerCase();
+    if (existingKeys.has(normalizedName)) {
+      continue;
+    }
+
+    try {
+      const group = new DeviceGroup({ name: groupName });
+      // eslint-disable-next-line no-await-in-loop
+      await group.save();
+      existingKeys.add(normalizedName);
+    } catch (error) {
+      if (error?.code !== 11000) {
+        throw error;
+      }
+    }
+  }
 }
 
 class DeviceService {
@@ -222,6 +253,7 @@ class DeviceService {
 
       const device = new Device(normalizedDeviceData);
       const savedDevice = await device.save();
+      await ensureDeviceGroupRegistryEntries(savedDevice.groups);
       
       console.log('DeviceService: Successfully created device:', savedDevice.name, 'with ID:', savedDevice._id);
       return savedDevice;
@@ -285,6 +317,7 @@ class DeviceService {
         );
         
         if (updatedDevice) {
+          await ensureDeviceGroupRegistryEntries(updatedDevice.groups);
           const payload = deviceUpdateEmitter.normalizeDevices([updatedDevice]);
           if (payload.length > 0) {
             deviceUpdateEmitter.emit('devices:update', payload);

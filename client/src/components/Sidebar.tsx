@@ -1,6 +1,7 @@
 import {
   Home,
   Lightbulb,
+  Layers3,
   Palette,
   Mic,
   Users,
@@ -27,6 +28,7 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'Weather', href: '/weather', icon: CloudSun },
   { name: 'Devices', href: '/devices', icon: Lightbulb },
+  { name: 'Device Groups', href: '/device-groups', icon: Layers3, adminOnly: true },
   { name: 'Scenes', href: '/scenes', icon: Palette },
   { name: 'Workflows', href: '/workflows', icon: Workflow },
   { name: 'Voice Profiles', href: '/voice-profiles', icon: Volume2 },

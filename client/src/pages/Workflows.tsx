@@ -42,7 +42,7 @@ import {
   updateWorkflow
 } from "@/api/workflows";
 import { PlatformEvent, getLatestEvents, openEventStream } from "@/api/events";
-import { getDevices } from "@/api/devices";
+import { getDeviceGroups, getDevices, type DeviceGroupSummary } from "@/api/devices";
 import { getScenes } from "@/api/scenes";
 import { interpretVoiceCommand } from "@/api/voice";
 import { useAuth } from "@/contexts/AuthContext";
@@ -476,6 +476,7 @@ export function Workflows() {
   const latestActivitySequenceRef = useRef(0);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [devices, setDevices] = useState<DeviceLite[]>([]);
+  const [deviceGroups, setDeviceGroups] = useState<DeviceGroupSummary[]>([]);
   const [scenes, setScenes] = useState<SceneLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [runtimeRefreshing, setRuntimeRefreshing] = useState(false);
@@ -536,13 +537,15 @@ export function Workflows() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [workflowResponse, devicesResponse, scenesResponse] = await Promise.all([
+      const [workflowResponse, devicesResponse, deviceGroupsResponse, scenesResponse] = await Promise.all([
         getWorkflows(),
         getDevices(),
+        getDeviceGroups(),
         getScenes()
       ]);
       setWorkflows(workflowResponse.workflows || []);
       setDevices(devicesResponse.devices || []);
+      setDeviceGroups(deviceGroupsResponse.groups || []);
       setScenes(scenesResponse.scenes || []);
       await loadRuntimeData({ silent: true });
     } catch (error) {
@@ -1703,6 +1706,7 @@ export function Workflows() {
         onOpenChange={setDialogOpen}
         initialWorkflow={selectedWorkflow}
         devices={devices}
+        deviceGroups={deviceGroups}
         scenes={scenes}
         onSave={handleSaveWorkflow}
         isSaving={savingWorkflow}

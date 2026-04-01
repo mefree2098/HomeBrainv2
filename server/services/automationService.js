@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const Automation = require('../models/Automation');
 const AutomationHistory = require('../models/AutomationHistory');
 const Device = require('../models/Device');
+const DeviceGroup = require('../models/DeviceGroup');
 const Scene = require('../models/Scene');
 const Workflow = require('../models/Workflow');
 const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
@@ -93,24 +94,53 @@ function getWorkflowCapabilitiesForDevice(device = {}) {
   }
 }
 
-function collectDeviceGroups(devices = []) {
+function collectDeviceGroups(devices = [], persistedGroups = []) {
   const groupMap = new Map();
+
+  const ensureEntry = (name, metadata = {}) => {
+    const trimmedName = sanitizeString(name);
+    if (!trimmedName) {
+      return null;
+    }
+
+    const key = trimmedName.toLowerCase();
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        name: trimmedName,
+        description: sanitizeString(metadata.description),
+        persistedId: metadata.persistedId || null,
+        devices: [],
+        rooms: new Set(),
+        sources: new Set(),
+        types: new Set()
+      });
+    }
+
+    const entry = groupMap.get(key);
+    if (metadata.persistedId && !entry.persistedId) {
+      entry.persistedId = metadata.persistedId;
+    }
+    if (metadata.description && !entry.description) {
+      entry.description = sanitizeString(metadata.description);
+    }
+
+    return entry;
+  };
+
+  persistedGroups.forEach((group) => {
+    ensureEntry(group?.name, {
+      description: group?.description || '',
+      persistedId: group?._id?.toString?.() || null
+    });
+  });
 
   devices.forEach((device) => {
     const groups = normalizeDeviceGroupNames(device?.groups);
     groups.forEach((group) => {
-      const key = group.toLowerCase();
-      if (!groupMap.has(key)) {
-        groupMap.set(key, {
-          name: group,
-          devices: [],
-          rooms: new Set(),
-          sources: new Set(),
-          types: new Set()
-        });
+      const entry = ensureEntry(group);
+      if (!entry) {
+        return;
       }
-
-      const entry = groupMap.get(key);
       entry.devices.push(device);
       if (device?.room) {
         entry.rooms.add(device.room);
@@ -128,6 +158,7 @@ function collectDeviceGroups(devices = []) {
   return [...groupMap.values()]
     .map((entry) => ({
       name: entry.name,
+      description: entry.description || '',
       deviceCount: entry.devices.length,
       deviceIds: entry.devices
         .map((device) => device.id || device?._id?.toString?.() || null)
@@ -1228,8 +1259,15 @@ async function buildDeviceContext() {
   }
 }
 
-function buildDeviceGroupContext(devicesByRoom = {}) {
-  return collectDeviceGroups(flattenDevices(devicesByRoom));
+async function buildDeviceGroupContext(devicesByRoom = {}) {
+  let persistedGroups = [];
+  try {
+    persistedGroups = await DeviceGroup.find().sort({ name: 1 }).lean();
+  } catch (error) {
+    console.warn(`AutomationService: Unable to load persisted device groups: ${error.message}`);
+  }
+
+  return collectDeviceGroups(flattenDevices(devicesByRoom), persistedGroups);
 }
 
 /**
@@ -1344,6 +1382,21 @@ async function validateAndFixAutomation(automation) {
       groupMembersMap.get(key).push(device);
     });
   });
+
+  try {
+    const persistedGroups = await DeviceGroup.find().lean();
+    persistedGroups.forEach((group) => {
+      const key = normalizeDeviceGroupNames([group.name])[0]?.toLowerCase();
+      if (key && !groupMap.has(key)) {
+        groupMap.set(key, group.name);
+      }
+      if (key && !groupMembersMap.has(key)) {
+        groupMembersMap.set(key, []);
+      }
+    });
+  } catch (error) {
+    console.warn(`AutomationService: Unable to load device group registry during validation: ${error.message}`);
+  }
 
   const scenes = await Scene.find().lean();
   const sceneMap = new Map();
@@ -1629,7 +1682,7 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
     }
 
     const promptDeviceContext = refineDeviceContextForPrompt(text, devicesByRoom, roomContext);
-    const deviceGroups = buildDeviceGroupContext(devicesByRoom);
+    const deviceGroups = await buildDeviceGroupContext(devicesByRoom);
     const promptScenes = refineSceneContextForPrompt(text, scenes);
     const deviceListForPrompt = formatDeviceList(promptDeviceContext);
     const deviceGroupListForPrompt = formatDeviceGroupList(deviceGroups);
@@ -2119,11 +2172,14 @@ function formatDeviceGroupList(deviceGroups = []) {
     const sources = Array.isArray(group.sources) && group.sources.length ? group.sources.join(', ') : 'Unknown';
     const memberPreview = Array.isArray(group.deviceNames) && group.deviceNames.length
       ? group.deviceNames.slice(0, 8).join(', ')
-      : 'No members';
+      : 'No members yet';
     const suffix = Array.isArray(group.deviceNames) && group.deviceNames.length > 8
       ? `, +${group.deviceNames.length - 8} more`
       : '';
-    return `  - ${group.name} (Devices: ${group.deviceCount}, Rooms: ${rooms}, Types: ${types}, Sources: ${sources}, Members: ${memberPreview}${suffix})`;
+    const description = sanitizeString(group.description)
+      ? `, Description: ${group.description}`
+      : '';
+    return `  - ${group.name} (Devices: ${group.deviceCount}, Rooms: ${rooms}, Types: ${types}, Sources: ${sources}, Members: ${memberPreview}${suffix}${description})`;
   }).join('\n');
 }
 

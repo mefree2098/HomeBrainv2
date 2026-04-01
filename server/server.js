@@ -7,6 +7,7 @@ const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const oidcRoutes = require("./routes/oidcRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
+const deviceGroupRoutes = require("./routes/deviceGroupRoutes");
 const sceneRoutes = require("./routes/sceneRoutes");
 const automationRoutes = require("./routes/automationRoutes");
 const workflowRoutes = require("./routes/workflowRoutes");
@@ -245,6 +246,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
+app.use('/api/device-groups', deviceGroupRoutes);
 // Scene Routes
 app.use('/api/scenes', sceneRoutes);
 // Automation Routes
