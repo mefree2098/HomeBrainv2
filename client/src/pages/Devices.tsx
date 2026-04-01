@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { useSearchParams } from "react-router-dom"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -985,6 +985,26 @@ export function Devices({
   const detailDevice = detailDeviceId
     ? devices.find((device: any) => device?._id === detailDeviceId) ?? null
     : null
+  const availableDeviceGroups = useMemo(() => {
+    const groups = new Map<string, string>()
+
+    devices.forEach((device: any) => {
+      const entries = Array.isArray(device?.groups) ? device.groups : []
+      entries.forEach((entry: unknown) => {
+        const group = String(entry || '').trim()
+        if (!group) {
+          return
+        }
+
+        const key = group.toLowerCase()
+        if (!groups.has(key)) {
+          groups.set(key, group)
+        }
+      })
+    })
+
+    return Array.from(groups.values()).sort((left, right) => left.localeCompare(right))
+  }, [devices])
 
   useEffect(() => {
     if (!focusDeviceId || !Array.isArray(devices) || devices.length === 0) {
@@ -1461,10 +1481,14 @@ export function Devices({
       <DeviceDetailsDialog
         device={detailDevice}
         open={Boolean(detailDeviceId)}
+        availableGroups={availableDeviceGroups}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) {
             setDetailDeviceId(null)
           }
+        }}
+        onDeviceUpdated={(updatedDevice) => {
+          applyIncomingDevices([updatedDevice])
         }}
       />
     </div>

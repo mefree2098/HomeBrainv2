@@ -189,3 +189,43 @@ test('getAllDevices can force-refresh SmartThings lock devices before returning 
   assert.equal(devices.length, 1);
   assert.equal(devices[0].status, false);
 });
+
+test('updateDevice normalizes and deduplicates device groups', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindOne = Device.findOne;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findOne = originalFindOne;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const existingDevice = {
+    _id: 'device-4',
+    name: 'Office Lamp',
+    room: 'Office',
+    isOnline: true
+  };
+
+  let persistedUpdate = null;
+  Device.findById = async () => existingDevice;
+  Device.findOne = async () => null;
+  Device.findByIdAndUpdate = async (_deviceId, update) => {
+    persistedUpdate = update;
+    return {
+      ...existingDevice,
+      ...update
+    };
+  };
+  deviceUpdateEmitter.emit = () => {};
+
+  const updated = await deviceService.updateDevice('device-4', {
+    groups: [' Interior Lights ', 'alarm shutdown', 'interior lights', '', 'Alarm Shutdown']
+  });
+
+  assert.deepEqual(persistedUpdate.groups, ['Interior Lights', 'alarm shutdown']);
+  assert.deepEqual(updated.groups, ['Interior Lights', 'alarm shutdown']);
+});

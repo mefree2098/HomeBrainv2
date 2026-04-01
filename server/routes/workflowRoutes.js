@@ -136,6 +136,32 @@ router.post('/create-from-text', admin, async (req, res) => {
   }
 });
 
+router.post('/:id/revise-from-text', admin, async (req, res) => {
+  try {
+    const { text, roomContext = null, source = 'chat' } = req.body || {};
+    if (!text || !text.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Workflow text description is required'
+      });
+    }
+
+    const result = await workflowService.reviseWorkflowFromText(req.params.id, text.trim(), roomContext, source);
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error(`POST /api/workflows/${req.params.id}/revise-from-text - Error:`, error.message);
+    const statusCode = error.message.includes('Invalid') || error.message.includes('required')
+      ? 400
+      : error.message.includes('not found')
+        ? 404
+        : 500;
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to revise workflow from text'
+    });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const workflow = await workflowService.getWorkflowById(req.params.id);

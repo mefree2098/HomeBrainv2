@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react"
 import { Activity, BarChart3, Clock3, Loader2, Zap } from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
-import { getDeviceEnergyHistory, type DeviceEnergySample } from "@/api/devices"
+import { getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
@@ -12,12 +13,16 @@ import {
   DialogTitle
 } from "@/components/ui/dialog"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { useToast } from "@/hooks/useToast"
 
 type DeviceLike = {
   _id: string
   name: string
   type: string
   room: string
+  groups?: string[]
   status?: boolean
   isOnline?: boolean
   lastSeen?: string | Date
@@ -27,7 +32,9 @@ type DeviceLike = {
 type Props = {
   device: DeviceLike | null
   open: boolean
+  availableGroups?: string[]
   onOpenChange: (open: boolean) => void
+  onDeviceUpdated?: (device: DeviceLike) => void
 }
 
 type LiveEnergySnapshot = {
@@ -193,12 +200,71 @@ function samplesMatch(left: DeviceEnergySample | undefined, right: DeviceEnergyS
     && (left.energy?.unit || "") === (right.energy?.unit || "")
 }
 
-export function DeviceDetailsDialog({ device, open, onOpenChange }: Props) {
+function normalizeGroupList(groups: unknown): string[] {
+  const values = Array.isArray(groups)
+    ? groups
+    : typeof groups === "string"
+      ? groups.split(",")
+      : []
+  const seen = new Set<string>()
+  const normalized: string[] = []
+
+  values.forEach((entry) => {
+    const trimmed = String(entry || "").trim()
+    if (!trimmed) {
+      return
+    }
+
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) {
+      return
+    }
+
+    seen.add(key)
+    normalized.push(trimmed)
+  })
+
+  return normalized
+}
+
+function sameStringList(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  return left.every((value, index) => value === right[index])
+}
+
+export function DeviceDetailsDialog({
+  device,
+  open,
+  availableGroups = [],
+  onOpenChange,
+  onDeviceUpdated
+}: Props) {
   const [samples, setSamples] = useState<DeviceEnergySample[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [groupInput, setGroupInput] = useState("")
+  const [savingGroups, setSavingGroups] = useState(false)
+  const { toast } = useToast()
 
   const liveSnapshot = useMemo(() => getLiveEnergySnapshot(device), [device])
+  const currentGroups = useMemo(() => normalizeGroupList(device?.groups), [device?.groups])
+  const draftGroups = useMemo(() => normalizeGroupList(groupInput), [groupInput])
+  const suggestedGroups = useMemo(() => {
+    const activeKeys = new Set(draftGroups.map((group) => group.toLowerCase()))
+    return normalizeGroupList(availableGroups).filter((group) => !activeKeys.has(group.toLowerCase()))
+  }, [availableGroups, draftGroups])
+  const groupsChanged = !sameStringList(currentGroups, draftGroups)
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    setGroupInput(currentGroups.join(", "))
+  }, [currentGroups, open, device?._id])
 
   useEffect(() => {
     if (!open || !device?._id || !liveSnapshot.supportsEnergyMonitoring) {
@@ -335,6 +401,40 @@ export function DeviceDetailsDialog({ device, open, onOpenChange }: Props) {
     || parseOptionalDate(latestSample?.recordedAt)
     || parseOptionalDate(device?.lastSeen)
 
+  const handleSaveGroups = async () => {
+    if (!device?._id) {
+      return
+    }
+
+    setSavingGroups(true)
+    try {
+      const response = await updateDevice(device._id, { groups: draftGroups })
+      const updatedDevice = (response?.device || response) as DeviceLike
+      onDeviceUpdated?.(updatedDevice)
+      setGroupInput(normalizeGroupList(updatedDevice?.groups ?? draftGroups).join(", "))
+      toast({
+        title: "Device groups updated",
+        description: `${device.name} is now assigned to ${draftGroups.length || 0} group${draftGroups.length === 1 ? "" : "s"}.`
+      })
+    } catch (saveError) {
+      const message = saveError instanceof Error
+        ? saveError.message
+        : "Failed to update device groups."
+      toast({
+        title: "Unable to save groups",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setSavingGroups(false)
+    }
+  }
+
+  const appendSuggestedGroup = (group: string) => {
+    const nextGroups = normalizeGroupList([...draftGroups, group])
+    setGroupInput(nextGroups.join(", "))
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] max-w-[960px] overflow-hidden p-0">
@@ -439,6 +539,71 @@ export function DeviceDetailsDialog({ device, open, onOpenChange }: Props) {
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-muted-foreground">Last seen</span>
                       <span className="font-medium">{formatDateTime(device.lastSeen)}</span>
+                    </div>
+                    <div className="space-y-3 rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium text-foreground">Workflow groups</span>
+                          <span className="text-xs text-muted-foreground">
+                            Reuse this device in group-based automations
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {draftGroups.length > 0 ? draftGroups.map((group) => (
+                            <Badge key={group} variant="secondary">
+                              {group}
+                            </Badge>
+                          )) : (
+                            <span className="text-xs text-muted-foreground">No groups assigned yet.</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="device-group-input">Comma-separated groups</Label>
+                        <Input
+                          id="device-group-input"
+                          value={groupInput}
+                          onChange={(event) => setGroupInput(event.target.value)}
+                          placeholder="Interior Lights, Alarm Shutdown"
+                        />
+                      </div>
+
+                      {suggestedGroups.length > 0 ? (
+                        <div className="space-y-2">
+                          <span className="text-xs text-muted-foreground">Existing groups</span>
+                          <div className="flex flex-wrap gap-2">
+                            {suggestedGroups.slice(0, 12).map((group) => (
+                              <Button
+                                key={group}
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8"
+                                onClick={() => appendSuggestedGroup(group)}
+                              >
+                                {group}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleSaveGroups}
+                          disabled={!groupsChanged || savingGroups}
+                        >
+                          {savingGroups ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Saving
+                            </>
+                          ) : "Save groups"}
+                        </Button>
+                      </div>
                     </div>
                     <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4 text-muted-foreground">
                       Use this device in workflows with threshold triggers like

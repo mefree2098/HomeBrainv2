@@ -33,6 +33,7 @@ type DeviceLite = {
   name: string;
   type: string;
   room: string;
+  groups?: string[];
   brightness?: number;
   temperature?: number;
   targetTemperature?: number;
@@ -61,6 +62,7 @@ const DEFAULT_ACTION: WorkflowAction = {
 };
 
 const TRIGGERING_DEVICE_TARGET_VALUE = "__triggering_device__";
+const DEVICE_GROUP_TARGET_PREFIX = "__device_group__:";
 const MAX_DELAY_SECONDS = 24 * 60 * 60;
 
 const TRIGGER_LABELS: Record<WorkflowTriggerType, string> = {
@@ -326,6 +328,74 @@ function buildTriggeringDeviceTarget(): WorkflowActionTarget {
   return { kind: "context", key: "triggeringDeviceId" };
 }
 
+function normalizeDeviceGroups(groups: unknown): string[] {
+  const values = Array.isArray(groups)
+    ? groups
+    : typeof groups === "string"
+      ? groups.split(",")
+      : [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  values.forEach((entry) => {
+    const trimmed = String(entry || "").trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    normalized.push(trimmed);
+  });
+
+  return normalized;
+}
+
+function isDeviceGroupTarget(target: WorkflowActionTarget | undefined) {
+  if (!target || typeof target !== "object" || Array.isArray(target)) {
+    return false;
+  }
+
+  const kind = String(target.kind || target.type || "").toLowerCase();
+  const group = String(target.group || target.name || target.label || target.value || "").trim();
+  return (kind === "device_group" || kind === "group") && Boolean(group);
+}
+
+function buildDeviceGroupTarget(group: string): WorkflowActionTarget {
+  return {
+    kind: "device_group",
+    group
+  };
+}
+
+function getDeviceGroupName(target: WorkflowActionTarget | undefined) {
+  if (!isDeviceGroupTarget(target)) {
+    return null;
+  }
+
+  const group = String((target as Record<string, unknown>).group
+    || (target as Record<string, unknown>).name
+    || (target as Record<string, unknown>).label
+    || (target as Record<string, unknown>).value
+    || "").trim();
+  return group || null;
+}
+
+function getDeviceGroupTargetSelectValue(group: string) {
+  return `${DEVICE_GROUP_TARGET_PREFIX}${group}`;
+}
+
+function parseDeviceGroupSelectValue(value: string) {
+  return value.startsWith(DEVICE_GROUP_TARGET_PREFIX)
+    ? value.slice(DEVICE_GROUP_TARGET_PREFIX.length)
+    : null;
+}
+
 function getDefaultDeviceTarget(triggerType: WorkflowTriggerType, devices: DeviceLite[]): WorkflowActionTarget {
   if (triggerType === "device_state") {
     return buildTriggeringDeviceTarget();
@@ -345,6 +415,10 @@ function buildDefaultAction(triggerType: WorkflowTriggerType, devices: DeviceLit
 function getActionTargetSelectValue(target: WorkflowActionTarget | undefined) {
   if (isTriggeringDeviceTarget(target)) {
     return TRIGGERING_DEVICE_TARGET_VALUE;
+  }
+
+  if (isDeviceGroupTarget(target)) {
+    return getDeviceGroupTargetSelectValue(getDeviceGroupName(target) || "");
   }
 
   return typeof target === "string" ? target : "";
@@ -434,6 +508,26 @@ function getDeviceActionChoices(deviceType: string, source: string = "local") {
   }
 }
 
+function getCommonDeviceActionChoices(devices: DeviceLite[]) {
+  if (!Array.isArray(devices) || devices.length === 0) {
+    return ["turn_on", "turn_off"];
+  }
+
+  const choiceSets = devices.map((device) =>
+    getDeviceActionChoices(
+      device?.type || "switch",
+      ((device?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
+    )
+  );
+
+  const [firstChoices, ...remainingChoices] = choiceSets;
+  const sharedChoices = firstChoices.filter((choice) =>
+    remainingChoices.every((choices) => choices.includes(choice))
+  );
+
+  return sharedChoices.length > 0 ? sharedChoices : firstChoices;
+}
+
 function formatActionVerb(value: unknown) {
   if (typeof value !== "string" || !value.trim()) {
     return "turn on";
@@ -475,6 +569,10 @@ function getDeviceLabel(devices: DeviceLite[], deviceId: string | null | undefin
 
   const device = devices.find((entry) => entry._id === deviceId);
   return device ? device.name : "Selected device";
+}
+
+function getDeviceGroupLabel(groupName: string | null | undefined) {
+  return groupName ? `Group: ${groupName}` : "No group selected";
 }
 
 function getSceneLabel(scenes: SceneLite[], sceneId: string | null | undefined) {
@@ -560,7 +658,9 @@ function describeAction(
         ? getDeviceLabel(devices, triggerDeviceId) === "No device selected"
           ? "the triggering device"
           : getDeviceLabel(devices, triggerDeviceId)
-        : getDeviceLabel(devices, typeof action.target === "string" ? action.target : null);
+        : isDeviceGroupTarget(action.target)
+          ? getDeviceGroupLabel(getDeviceGroupName(action.target))
+          : getDeviceLabel(devices, typeof action.target === "string" ? action.target : null);
       const verb = formatActionVerb(action.parameters?.action);
       if (verb === "set brightness") {
         return `${targetLabel} -> ${verb} to ${String(action.parameters?.brightness ?? action.parameters?.value ?? 100)}.`;
@@ -645,6 +745,33 @@ export function WorkflowBuilderDialog({
       return acc;
     }, {});
   }, [devices]);
+
+  const deviceGroups = useMemo(() => {
+    const groups = new Map<string, { name: string; devices: DeviceLite[] }>();
+
+    devices.forEach((device) => {
+      normalizeDeviceGroups(device.groups).forEach((groupName) => {
+        const key = groupName.toLowerCase();
+        if (!groups.has(key)) {
+          groups.set(key, {
+            name: groupName,
+            devices: []
+          });
+        }
+
+        groups.get(key)?.devices.push(device);
+      });
+    });
+
+    return [...groups.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }, [devices]);
+
+  const deviceGroupsByName = useMemo(() => {
+    return deviceGroups.reduce<Map<string, { name: string; devices: DeviceLite[] }>>((acc, group) => {
+      acc.set(group.name, group);
+      return acc;
+    }, new Map());
+  }, [deviceGroups]);
 
   const triggerDeviceId = typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : null;
   const triggerDevice = useMemo(
@@ -1229,14 +1356,18 @@ export function WorkflowBuilderDialog({
 
                   <div className="space-y-4">
                     {actions.map((action, index) => {
+                      const targetGroupName = getDeviceGroupName(action.target);
+                      const targetGroup = targetGroupName ? deviceGroupsByName.get(targetGroupName) : undefined;
                       const targetDeviceId = isTriggeringDeviceTarget(action.target)
                         ? triggerDeviceId || ""
                         : (typeof action.target === "string" ? action.target : "");
                       const targetDevice = devices.find((device) => device._id === targetDeviceId);
-                      const actionChoices = getDeviceActionChoices(
-                        targetDevice?.type || "switch",
-                        ((targetDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
-                      );
+                      const actionChoices = targetGroup
+                        ? getCommonDeviceActionChoices(targetGroup.devices)
+                        : getDeviceActionChoices(
+                            targetDevice?.type || "switch",
+                            ((targetDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
+                          );
                       const actionValue = String(action.parameters?.action || actionChoices[0]);
                       const showNumericValue = action.type === "device_control"
                         && (actionValue === "set_brightness" || actionValue === "set_temperature" || actionValue === "turn_on");
@@ -1303,21 +1434,31 @@ export function WorkflowBuilderDialog({
                                   </div>
 
                                   <div className="space-y-2">
-                                    <Label>Device</Label>
+                                    <Label>Device or group</Label>
                                     <Select
                                       value={getActionTargetSelectValue(action.target)}
                                       onValueChange={(value) => {
                                         const usesTriggeringDevice = value === TRIGGERING_DEVICE_TARGET_VALUE;
+                                        const selectedGroup = parseDeviceGroupSelectValue(value);
                                         const updatedDeviceId = usesTriggeringDevice
                                           ? (typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : "")
-                                          : value;
+                                          : selectedGroup
+                                            ? ""
+                                            : value;
                                         const updatedDevice = devices.find((device) => device._id === updatedDeviceId);
-                                        const choices = getDeviceActionChoices(
-                                          updatedDevice?.type || "switch",
-                                          ((updatedDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
-                                        );
+                                        const updatedGroup = selectedGroup ? deviceGroupsByName.get(selectedGroup) : undefined;
+                                        const choices = updatedGroup
+                                          ? getCommonDeviceActionChoices(updatedGroup.devices)
+                                          : getDeviceActionChoices(
+                                              updatedDevice?.type || "switch",
+                                              ((updatedDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
+                                            );
                                         updateAction(index, {
-                                          target: usesTriggeringDevice ? buildTriggeringDeviceTarget() : value,
+                                          target: usesTriggeringDevice
+                                            ? buildTriggeringDeviceTarget()
+                                            : selectedGroup
+                                              ? buildDeviceGroupTarget(selectedGroup)
+                                              : value,
                                           parameters: {
                                             ...action.parameters,
                                             action: choices[0]
@@ -1334,6 +1475,16 @@ export function WorkflowBuilderDialog({
                                             Triggering device
                                           </SelectItem>
                                         )}
+                                        {deviceGroups.length > 0 ? (
+                                          <>
+                                            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Groups</div>
+                                            {deviceGroups.map((group) => (
+                                              <SelectItem key={group.name} value={getDeviceGroupTargetSelectValue(group.name)}>
+                                                {group.name} ({group.devices.length} devices)
+                                              </SelectItem>
+                                            ))}
+                                          </>
+                                        ) : null}
                                         {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
                                           <div key={room}>
                                             <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
@@ -1349,6 +1500,11 @@ export function WorkflowBuilderDialog({
                                     {isTriggeringDeviceTarget(action.target) && (
                                       <p className="text-xs text-muted-foreground">
                                         Uses whichever device matched the trigger.
+                                      </p>
+                                    )}
+                                    {isDeviceGroupTarget(action.target) && (
+                                      <p className="text-xs text-muted-foreground">
+                                        Applies this action to every device in the selected group.
                                       </p>
                                     )}
                                   </div>

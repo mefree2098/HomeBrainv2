@@ -136,6 +136,20 @@ function normalizeVoiceAliases(aliases = []) {
   return [...unique];
 }
 
+function workflowToAutomationDraft(workflow = {}) {
+  return {
+    name: workflow.name || '',
+    description: workflow.description || '',
+    enabled: workflow.enabled !== false,
+    category: workflow.category || 'custom',
+    priority: workflow.priority || 5,
+    trigger: normalizeTrigger(workflow.trigger),
+    actions: (Array.isArray(workflow.actions) ? workflow.actions : [])
+      .map((action) => normalizeAction(action))
+      .filter(Boolean)
+  };
+}
+
 async function ensureUniqueWorkflowName(name, excludeId = null) {
   const base = name.trim();
   let candidate = base;
@@ -630,6 +644,67 @@ class WorkflowService {
       message: createdCount === 1
         ? 'Workflow created successfully from natural language'
         : `Created ${createdCount} workflows from natural language`
+    };
+  }
+
+  async reviseWorkflowFromText(id, text, roomContext = null, source = 'chat') {
+    if (!text || !text.trim()) {
+      throw new Error('Workflow text description is required');
+    }
+
+    const existingWorkflow = await this.getWorkflowById(id);
+    const revision = await automationService.reviseAutomationFromText(
+      text.trim(),
+      workflowToAutomationDraft(existingWorkflow),
+      roomContext
+    );
+
+    const revisedAutomation = revision?.automation;
+    if (!revisedAutomation) {
+      throw new Error('Workflow revision failed to return an updated workflow definition');
+    }
+
+    const workflow = await this.updateWorkflow(id, {
+      name: typeof revisedAutomation.name === 'string' && revisedAutomation.name.trim()
+        ? revisedAutomation.name
+        : existingWorkflow.name,
+      description: typeof revisedAutomation.description === 'string'
+        ? revisedAutomation.description
+        : existingWorkflow.description || '',
+      enabled: typeof revisedAutomation.enabled === 'boolean'
+        ? revisedAutomation.enabled
+        : existingWorkflow.enabled !== false,
+      category: typeof revisedAutomation.category === 'string' && revisedAutomation.category.trim()
+        ? revisedAutomation.category
+        : existingWorkflow.category || 'custom',
+      priority: typeof revisedAutomation.priority === 'number'
+        ? revisedAutomation.priority
+        : existingWorkflow.priority || 5,
+      trigger: revisedAutomation.trigger && typeof revisedAutomation.trigger === 'object'
+        ? revisedAutomation.trigger
+        : existingWorkflow.trigger,
+      actions: Array.isArray(revisedAutomation.actions) && revisedAutomation.actions.length
+        ? revisedAutomation.actions
+        : existingWorkflow.actions
+    });
+
+    void eventStreamService.publishSafe({
+      type: 'workflow.revised_from_text',
+      source: 'workflow',
+      category: 'automation',
+      payload: {
+        workflowId: workflow._id.toString(),
+        name: workflow.name,
+        source,
+        triggerType: workflow.trigger?.type || 'manual'
+      },
+      tags: ['workflow', 'nl', 'revise']
+    });
+
+    return {
+      success: true,
+      workflow,
+      message: `Workflow "${workflow.name}" updated from natural language`
     };
   }
 

@@ -36,6 +36,34 @@ function escapeRegexLiteral(value = '') {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function sanitizeString(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.trim();
+}
+
+function normalizeDeviceGroupTarget(rawTarget) {
+  if (!rawTarget || typeof rawTarget !== 'object' || Array.isArray(rawTarget)) {
+    return null;
+  }
+
+  const kind = sanitizeString(rawTarget.kind || rawTarget.type).toLowerCase();
+  if (kind !== 'device_group' && kind !== 'group') {
+    return null;
+  }
+
+  const group = sanitizeString(rawTarget.group || rawTarget.name || rawTarget.label || rawTarget.value);
+  if (!group) {
+    return null;
+  }
+
+  return {
+    kind: 'device_group',
+    group
+  };
+}
+
 function isyProgramMarker(programId) {
   return `[ISY_PROGRAM_ID:${programId}]`;
 }
@@ -517,22 +545,7 @@ async function resolveWorkflowReference(parameters = {}, options = {}) {
   return null;
 }
 
-async function executeDeviceControl(action, context = {}) {
-  const target = resolveActionTargetReference(
-    getActionTargetCandidate(action, ['deviceId']),
-    context
-  );
-  if (!target) {
-    throw new Error('Device target is required');
-  }
-
-  const device = await Device.findById(target).lean();
-  if (!device) {
-    throw new Error('Device not found');
-  }
-
-  const actionName = getActionName(action);
-  const value = getActionValue(actionName, action?.parameters || {});
+async function executeDeviceControlForResolvedDevice(device, target, actionName, value) {
   const source = (device?.properties?.source || '').toString().toLowerCase();
   let controlResult = null;
 
@@ -583,6 +596,107 @@ async function executeDeviceControl(action, context = {}) {
       ...(controlDetails && typeof controlDetails === 'object' ? controlDetails : {})
     }
   };
+}
+
+async function executeDeviceGroupControl(groupTarget, action) {
+  const groupName = sanitizeString(groupTarget?.group);
+  if (!groupName) {
+    throw new Error('Device group target is required');
+  }
+
+  const devices = await Device.find({
+    groups: { $regex: new RegExp(`^${escapeRegexLiteral(groupName)}$`, 'i') }
+  })
+    .sort({ room: 1, name: 1 })
+    .lean();
+
+  if (!Array.isArray(devices) || devices.length === 0) {
+    throw new Error(`Device group "${groupName}" has no matching devices`);
+  }
+
+  const actionName = getActionName(action);
+  const value = getActionValue(actionName, action?.parameters || {});
+  const memberResults = [];
+
+  for (const device of devices) {
+    const target = device?._id?.toString?.() || null;
+    if (!target) {
+      continue;
+    }
+
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await executeDeviceControlForResolvedDevice(device, target, actionName, value);
+      memberResults.push({
+        deviceId: target,
+        deviceName: device.name,
+        room: device.room || '',
+        success: true,
+        message: result.message,
+        details: result.details || {}
+      });
+    } catch (error) {
+      memberResults.push({
+        deviceId: target,
+        deviceName: device.name,
+        room: device.room || '',
+        success: false,
+        error: error.message || 'Group device control failed'
+      });
+    }
+  }
+
+  const successfulTargets = memberResults.filter((entry) => entry.success).length;
+  const failedTargets = memberResults.length - successfulTargets;
+  const details = {
+    kind: 'device_group',
+    group: groupName,
+    totalTargets: memberResults.length,
+    successfulTargets,
+    failedTargets,
+    members: memberResults
+  };
+
+  if (failedTargets > 0) {
+    const firstFailure = memberResults.find((entry) => !entry.success);
+    const error = new Error(
+      `Executed ${actionName} on device group "${groupName}" with ${failedTargets} failure${failedTargets === 1 ? '' : 's'}${firstFailure?.error ? `: ${firstFailure.error}` : ''}`
+    );
+    error.details = details;
+    throw error;
+  }
+
+  return {
+    target: {
+      kind: 'device_group',
+      group: groupName
+    },
+    message: `Executed ${actionName} on device group "${groupName}" (${successfulTargets} devices)`,
+    value,
+    details
+  };
+}
+
+async function executeDeviceControl(action, context = {}) {
+  const rawTarget = getActionTargetCandidate(action, ['deviceId']);
+  const groupTarget = normalizeDeviceGroupTarget(rawTarget);
+  if (groupTarget) {
+    return executeDeviceGroupControl(groupTarget, action);
+  }
+
+  const target = resolveActionTargetReference(rawTarget, context);
+  if (!target) {
+    throw new Error('Device target is required');
+  }
+
+  const device = await Device.findById(target).lean();
+  if (!device) {
+    throw new Error('Device not found');
+  }
+
+  const actionName = getActionName(action);
+  const value = getActionValue(actionName, action?.parameters || {});
+  return executeDeviceControlForResolvedDevice(device, target, actionName, value);
 }
 
 async function executeSceneActivate(action, context = {}) {
@@ -1421,7 +1535,10 @@ async function executeActionSequence(actions = [], options = {}) {
         success: false,
         error: error.message || 'Action failed',
         executedAt: new Date(),
-        durationMs: Date.now() - startedAt
+        durationMs: Date.now() - startedAt,
+        ...(error?.details && typeof error.details === 'object'
+          ? { details: error.details }
+          : {})
       };
 
       results.push(resultEntry);
