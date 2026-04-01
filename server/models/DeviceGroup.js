@@ -31,16 +31,14 @@ const deviceGroupSchema = new mongoose.Schema({
   collection: 'device_groups'
 });
 
-deviceGroupSchema.pre('validate', function preValidate(next) {
+deviceGroupSchema.pre('validate', function preValidate() {
   const trimmedName = typeof this.name === 'string' ? this.name.trim() : '';
   this.name = trimmedName;
   this.normalizedName = trimmedName.toLowerCase();
-  next();
 });
 
-deviceGroupSchema.pre('save', function preSave(next) {
+deviceGroupSchema.pre('save', function preSave() {
   this.updatedAt = new Date();
-  next();
 });
 
 deviceGroupSchema.index({ normalizedName: 1 }, { unique: true });
