@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import { Activity, BarChart3, Clock3, Loader2, Zap } from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
+import { type AlexaExposureSummary } from "@/api/alexa"
+import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,6 +17,7 @@ import {
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
 
 type DeviceLike = {
@@ -33,8 +36,16 @@ type Props = {
   device: DeviceLike | null
   open: boolean
   availableGroups?: string[]
+  alexaExposure?: AlexaExposureSummary | null
+  alexaExposureLoading?: boolean
   onOpenChange: (open: boolean) => void
   onDeviceUpdated?: (device: DeviceLike) => void
+  onAlexaExposureUpdated?: (payload: {
+    enabled: boolean
+    friendlyName: string
+    aliases: string[]
+    roomHint: string
+  }) => Promise<AlexaExposureSummary | null | undefined>
 }
 
 type LiveEnergySnapshot = {
@@ -239,8 +250,11 @@ export function DeviceDetailsDialog({
   device,
   open,
   availableGroups = [],
+  alexaExposure = null,
+  alexaExposureLoading = false,
   onOpenChange,
-  onDeviceUpdated
+  onDeviceUpdated,
+  onAlexaExposureUpdated
 }: Props) {
   const [samples, setSamples] = useState<DeviceEnergySample[]>([])
   const [loading, setLoading] = useState(false)
@@ -248,6 +262,7 @@ export function DeviceDetailsDialog({
   const [groupInput, setGroupInput] = useState("")
   const [savingGroups, setSavingGroups] = useState(false)
   const { toast } = useToast()
+  const { isAdmin } = useAuth()
 
   const liveSnapshot = useMemo(() => getLiveEnergySnapshot(device), [device])
   const currentGroups = useMemo(() => normalizeGroupList(device?.groups), [device?.groups])
@@ -616,6 +631,26 @@ export function DeviceDetailsDialog({
                       {" "}
                       plus hold time for shutdown detection.
                     </div>
+                    {isAdmin && device && onAlexaExposureUpdated ? (
+                      <div className="space-y-3 rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
+                        <div className="space-y-1">
+                          <div className="font-medium text-foreground">Alexa</div>
+                          <p className="text-xs text-muted-foreground">
+                            Expose this device to Alexa discovery with a HomeBrain-managed name and aliases.
+                          </p>
+                        </div>
+                        <AlexaExposureControl
+                          entityType="device"
+                          entityId={device._id}
+                          entityName={device.name}
+                          exposure={alexaExposure}
+                          loading={alexaExposureLoading}
+                          defaultRoomHint={device.room}
+                          compact={false}
+                          onSave={onAlexaExposureUpdated}
+                        />
+                      </div>
+                    ) : null}
                   </CardContent>
                 </Card>
               </div>

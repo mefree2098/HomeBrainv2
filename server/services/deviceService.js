@@ -1,5 +1,6 @@
 const Device = require('../models/Device');
 const DeviceGroup = require('../models/DeviceGroup');
+const AlexaExposure = require('../models/AlexaExposure');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
@@ -349,6 +350,11 @@ class DeviceService {
       if (!deletedDevice) {
         throw new Error('Device not found');
       }
+
+      await AlexaExposure.deleteOne({
+        entityType: 'device',
+        entityId: deletedDevice._id.toString()
+      });
       
       console.log('DeviceService: Successfully deleted device:', deletedDevice.name);
       return deletedDevice;
