@@ -28,7 +28,16 @@ export interface WorkflowContextTarget {
   contextKey?: string;
 }
 
-export type WorkflowActionTarget = string | WorkflowContextTarget | null;
+export interface WorkflowDeviceGroupTarget {
+  kind?: string;
+  type?: string;
+  group?: string;
+  name?: string;
+  label?: string;
+  value?: string;
+}
+
+export type WorkflowActionTarget = string | WorkflowContextTarget | WorkflowDeviceGroupTarget | null;
 
 export interface WorkflowAction {
   type: WorkflowActionType;
@@ -154,6 +163,22 @@ export const createWorkflowFromText = async (payload: { text: string; roomContex
       workflow?: Workflow;
       workflows?: Workflow[];
       createdCount?: number;
+    };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const reviseWorkflowFromText = async (
+  id: string,
+  payload: { text: string; roomContext?: string | null; source?: string }
+) => {
+  try {
+    const response = await api.post(`/api/workflows/${id}/revise-from-text`, payload);
+    return response.data as {
+      success: boolean;
+      message: string;
+      workflow: Workflow;
     };
   } catch (error) {
     throw new Error(getApiErrorMessage(error));

@@ -34,6 +34,7 @@ import {
   createWorkflowFromText,
   deleteWorkflow,
   executeWorkflow,
+  reviseWorkflowFromText,
   getRunningWorkflowExecutions,
   getWorkflowRuntimeHistory,
   getWorkflows,
@@ -52,6 +53,11 @@ type DeviceLite = {
   name: string;
   type: string;
   room: string;
+  groups?: string[];
+  brightness?: number;
+  temperature?: number;
+  targetTemperature?: number;
+  properties?: Record<string, unknown>;
 };
 
 type SceneLite = {
@@ -478,6 +484,10 @@ export function Workflows() {
   const [savingWorkflow, setSavingWorkflow] = useState(false);
   const [nlPrompt, setNlPrompt] = useState("");
   const [creatingFromText, setCreatingFromText] = useState(false);
+  const [reviseDialogOpen, setReviseDialogOpen] = useState(false);
+  const [workflowToRevise, setWorkflowToRevise] = useState<Workflow | null>(null);
+  const [revisePrompt, setRevisePrompt] = useState("");
+  const [revisingWorkflow, setRevisingWorkflow] = useState(false);
   const [chatCommand, setChatCommand] = useState("");
   const [runningChatCommand, setRunningChatCommand] = useState(false);
   const [lastChatResult, setLastChatResult] = useState<string>("");
@@ -735,6 +745,12 @@ export function Workflows() {
   const openEditDialog = (workflow: Workflow) => {
     setSelectedWorkflow(workflow);
     setDialogOpen(true);
+  };
+
+  const openReviseDialog = (workflow: Workflow) => {
+    setWorkflowToRevise(workflow);
+    setRevisePrompt("");
+    setReviseDialogOpen(true);
   };
 
   const createTemplateWorkflow = async (templateId: string) => {
@@ -997,6 +1013,40 @@ export function Workflows() {
     }
   };
 
+  const handleReviseWorkflow = async () => {
+    const text = revisePrompt.trim();
+    if (!workflowToRevise?._id || !text) {
+      return;
+    }
+
+    setRevisingWorkflow(true);
+    try {
+      const result = await reviseWorkflowFromText(workflowToRevise._id, {
+        text,
+        source: "chat"
+      });
+
+      setWorkflows((prev) => prev.map((workflow) => (
+        workflow._id === workflowToRevise._id ? result.workflow : workflow
+      )));
+      setReviseDialogOpen(false);
+      setWorkflowToRevise(null);
+      setRevisePrompt("");
+      toast({
+        title: "Workflow revised",
+        description: result.message
+      });
+    } catch (error) {
+      toast({
+        title: "AI revise failed",
+        description: errorMessage(error, "Unable to revise the workflow from text."),
+        variant: "destructive"
+      });
+    } finally {
+      setRevisingWorkflow(false);
+    }
+  };
+
   const handleRunChatCommand = async () => {
     const text = chatCommand.trim();
     if (!text) {
@@ -1130,7 +1180,7 @@ export function Workflows() {
                 Create with AI
               </CardTitle>
               <CardDescription>
-                Describe the workflow in plain English. HomeBrain will generate trigger + action steps automatically.
+                Describe a new workflow in plain English. For existing workflows, use the AI revise action on that workflow card.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -1462,6 +1512,10 @@ export function Workflows() {
                       <History className="mr-2 h-4 w-4" />
                       Edit Flow
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => openReviseDialog(workflow)}>
+                      <Wand2 className="mr-2 h-4 w-4" />
+                      AI Revise
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => void handleCloneWorkflow(workflow)}>
                       <Copy className="mr-2 h-4 w-4" />
                       Clone
@@ -1500,6 +1554,47 @@ export function Workflows() {
           </CardContent>
         </Card>
       ) : null}
+
+      <Dialog open={reviseDialogOpen} onOpenChange={(open) => {
+        setReviseDialogOpen(open);
+        if (!open) {
+          setWorkflowToRevise(null);
+          setRevisePrompt("");
+        }
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Revise Workflow with AI</DialogTitle>
+            <DialogDescription>
+              {workflowToRevise
+                ? `Tell HomeBrain how to change "${workflowToRevise.name}". It will rewrite the existing workflow instead of creating a new one.`
+                : "Describe the changes you want for the selected workflow."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {workflowToRevise ? (
+              <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                <div className="font-medium">{workflowToRevise.name}</div>
+                <div className="mt-1 text-muted-foreground">
+                  {workflowToRevise.description || "No description provided."}
+                </div>
+              </div>
+            ) : null}
+            <Textarea
+              value={revisePrompt}
+              onChange={(event) => setRevisePrompt(event.target.value)}
+              placeholder='Example: Fix this workflow so it turns off all interior Insteon lights, not just a few of them. Use the "Interior Lights" device group when possible.'
+              className="min-h-[140px]"
+            />
+            <div className="flex justify-end">
+              <Button onClick={() => void handleReviseWorkflow()} disabled={revisingWorkflow || !revisePrompt.trim() || !workflowToRevise}>
+                <Wand2 className="mr-2 h-4 w-4" />
+                {revisingWorkflow ? "Revising..." : "Revise Workflow"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(selectedExecution)} onOpenChange={(open) => {
         if (!open) {

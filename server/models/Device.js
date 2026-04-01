@@ -16,6 +16,10 @@ const schema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  groups: {
+    type: [String],
+    default: [],
+  },
   status: {
     type: Boolean,
     default: false,
@@ -92,6 +96,7 @@ schema.pre('save', function() {
 
 // Indexes for better query performance
 schema.index({ type: 1, room: 1 });
+schema.index({ groups: 1 });
 schema.index({ status: 1 });
 schema.index({ isOnline: 1 });
 

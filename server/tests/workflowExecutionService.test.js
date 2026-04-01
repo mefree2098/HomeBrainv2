@@ -319,6 +319,70 @@ test('device_control action resolves direct targets from mongoose action subdocu
   assert.equal(result.actionResults[0].target, deviceId);
 });
 
+test('device_control action can target a device group', async (t) => {
+  const originalFind = Device.find;
+  const originalTurnOff = insteonService.turnOff;
+  const receivedTargets = [];
+
+  t.after(() => {
+    Device.find = originalFind;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  const groupDevices = [
+    {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Theater Can Lights',
+      type: 'light',
+      room: 'Theater',
+      groups: ['Interior Lights'],
+      properties: {
+        source: 'insteon'
+      }
+    },
+    {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Track Lights',
+      type: 'light',
+      room: 'Theater',
+      groups: ['Interior Lights'],
+      properties: {
+        source: 'insteon'
+      }
+    }
+  ];
+
+  Device.find = () => ({
+    sort: () => ({
+      lean: async () => groupDevices
+    })
+  });
+
+  insteonService.turnOff = async (target) => {
+    receivedTargets.push(target);
+    return {
+      message: `Device turned off via Insteon PLM ${target}`,
+      details: {
+        controlMethod: 'insteon_plm_direct'
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: { kind: 'device_group', group: 'Interior Lights' },
+      parameters: { action: 'turn_off' }
+    }
+  ], { context: {} });
+
+  assert.deepEqual(receivedTargets.sort(), groupDevices.map((device) => device._id).sort());
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, true);
+  assert.equal(result.actionResults[0].details.group, 'Interior Lights');
+  assert.equal(result.actionResults[0].details.successfulTargets, 2);
+});
+
 test('condition expressions can read nested SmartThings property paths', async (t) => {
   const deviceId = new mongoose.Types.ObjectId().toString();
   const originalFindById = Device.findById;

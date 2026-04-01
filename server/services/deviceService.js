@@ -15,6 +15,36 @@ const getInsteonService = () => {
   return cachedInsteonService;
 };
 
+function normalizeDeviceGroups(groups) {
+  const values = Array.isArray(groups)
+    ? groups
+    : typeof groups === 'string'
+      ? groups.split(',')
+      : [];
+
+  const seen = new Set();
+  const normalized = [];
+
+  values.forEach((entry) => {
+    const trimmed = typeof entry === 'string'
+      ? entry.trim()
+      : String(entry || '').trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    normalized.push(trimmed);
+  });
+
+  return normalized;
+}
+
 class DeviceService {
   constructor() {
     this.smartThingsPresence = null;
@@ -185,7 +215,12 @@ class DeviceService {
         throw new Error('A device with this name already exists in this room');
       }
       
-      const device = new Device(deviceData);
+      const normalizedDeviceData = {
+        ...deviceData,
+        groups: normalizeDeviceGroups(deviceData.groups)
+      };
+
+      const device = new Device(normalizedDeviceData);
       const savedDevice = await device.save();
       
       console.log('DeviceService: Successfully created device:', savedDevice.name, 'with ID:', savedDevice._id);
@@ -216,11 +251,16 @@ class DeviceService {
         throw new Error('Device not found');
       }
       
+      const normalizedUpdateData = { ...updateData };
+      if (Object.prototype.hasOwnProperty.call(normalizedUpdateData, 'groups')) {
+        normalizedUpdateData.groups = normalizeDeviceGroups(normalizedUpdateData.groups);
+      }
+
       // If updating name and room, check for duplicates
-      if ((updateData.name && updateData.name !== existingDevice.name) || 
-          (updateData.room && updateData.room !== existingDevice.room)) {
-        const name = updateData.name || existingDevice.name;
-        const room = updateData.room || existingDevice.room;
+      if ((normalizedUpdateData.name && normalizedUpdateData.name !== existingDevice.name) ||
+          (normalizedUpdateData.room && normalizedUpdateData.room !== existingDevice.room)) {
+        const name = normalizedUpdateData.name || existingDevice.name;
+        const room = normalizedUpdateData.room || existingDevice.room;
         
         const duplicateDevice = await Device.findOne({
           _id: { $ne: deviceId },
@@ -234,13 +274,13 @@ class DeviceService {
       }
       
       // Update lastSeen if device comes back online
-      if (updateData.isOnline === true && existingDevice.isOnline === false) {
-        updateData.lastSeen = new Date();
+      if (normalizedUpdateData.isOnline === true && existingDevice.isOnline === false) {
+        normalizedUpdateData.lastSeen = new Date();
       }
       
         const updatedDevice = await Device.findByIdAndUpdate(
           deviceId,
-          updateData,
+          normalizedUpdateData,
           { returnDocument: 'after', runValidators: true }
         );
         

@@ -20,6 +20,7 @@ const VALID_TRIGGER_TYPES = new Set(['time', 'device_state', 'weather', 'locatio
 const VALID_SECURITY_ALARM_STATES = new Set(['disarmed', 'armedStay', 'armedAway', 'triggered', 'arming', 'disarming']);
 const VALID_SOLAR_SCHEDULE_EVENTS = new Set(['sunrise', 'sunset']);
 const DYNAMIC_TARGET_CONTEXT_KEYS = new Set(['triggeringDeviceId']);
+const DEVICE_GROUP_TARGET_KINDS = new Set(['device_group', 'group']);
 
 const DEVICE_TYPE_HINTS = {
   light: ['light', 'lights', 'lamp', 'bulb'],
@@ -36,6 +37,109 @@ function sanitizeString(value) {
   }
 
   return value.trim();
+}
+
+function normalizeDeviceGroupNames(groups) {
+  const values = Array.isArray(groups)
+    ? groups
+    : typeof groups === 'string'
+      ? groups.split(',')
+      : [];
+  const seen = new Set();
+  const normalized = [];
+
+  values.forEach((entry) => {
+    const trimmed = sanitizeString(typeof entry === 'string' ? entry : String(entry || ''));
+    if (!trimmed) {
+      return;
+    }
+
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    normalized.push(trimmed);
+  });
+
+  return normalized;
+}
+
+function getWorkflowCapabilitiesForDevice(device = {}) {
+  const source = sanitizeString(device?.properties?.source || 'local').toLowerCase();
+
+  if (source === 'harmony') {
+    return ['turn_on', 'turn_off', 'toggle'];
+  }
+
+  switch (sanitizeString(device.type).toLowerCase()) {
+    case 'light':
+      return device.color
+        ? ['turn_on', 'turn_off', 'set_brightness', 'set_color']
+        : ['turn_on', 'turn_off', 'set_brightness'];
+    case 'thermostat':
+      return ['turn_on', 'turn_off', 'set_temperature'];
+    case 'lock':
+      return ['lock', 'unlock'];
+    case 'switch':
+      return ['turn_on', 'turn_off', 'toggle'];
+    case 'speaker':
+      return ['turn_on', 'turn_off', 'toggle'];
+    case 'garage':
+      return ['open', 'close'];
+    default:
+      return ['turn_on', 'turn_off'];
+  }
+}
+
+function collectDeviceGroups(devices = []) {
+  const groupMap = new Map();
+
+  devices.forEach((device) => {
+    const groups = normalizeDeviceGroupNames(device?.groups);
+    groups.forEach((group) => {
+      const key = group.toLowerCase();
+      if (!groupMap.has(key)) {
+        groupMap.set(key, {
+          name: group,
+          devices: [],
+          rooms: new Set(),
+          sources: new Set(),
+          types: new Set()
+        });
+      }
+
+      const entry = groupMap.get(key);
+      entry.devices.push(device);
+      if (device?.room) {
+        entry.rooms.add(device.room);
+      }
+      if (device?.type) {
+        entry.types.add(device.type);
+      }
+      const source = sanitizeString(device?.source || device?.properties?.source || 'local').toLowerCase();
+      if (source) {
+        entry.sources.add(source);
+      }
+    });
+  });
+
+  return [...groupMap.values()]
+    .map((entry) => ({
+      name: entry.name,
+      deviceCount: entry.devices.length,
+      deviceIds: entry.devices
+        .map((device) => device.id || device?._id?.toString?.() || null)
+        .filter(Boolean),
+      deviceNames: entry.devices
+        .map((device) => sanitizeString(device.name))
+        .filter(Boolean),
+      rooms: [...entry.rooms].sort((left, right) => left.localeCompare(right)),
+      sources: [...entry.sources].sort((left, right) => left.localeCompare(right)),
+      types: [...entry.types].sort((left, right) => left.localeCompare(right))
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function normalizeSecurityAlarmState(value) {
@@ -156,6 +260,28 @@ function normalizeDynamicActionTarget(target) {
   return {
     kind: 'context',
     key: sanitizeString(target.key || target.contextKey)
+  };
+}
+
+function normalizeDeviceGroupTarget(target, groupMap = null) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) {
+    return null;
+  }
+
+  const kind = sanitizeString(target.kind || target.type).toLowerCase();
+  if (!DEVICE_GROUP_TARGET_KINDS.has(kind)) {
+    return null;
+  }
+
+  const requestedGroup = sanitizeString(target.group || target.name || target.label || target.value);
+  if (!requestedGroup) {
+    return null;
+  }
+
+  const canonicalGroup = groupMap?.get(requestedGroup.toLowerCase()) || requestedGroup;
+  return {
+    kind: 'device_group',
+    group: canonicalGroup
   };
 }
 
@@ -1083,44 +1209,14 @@ async function buildDeviceContext() {
         name: device.name,
         type: device.type,
         source,
+        groups: normalizeDeviceGroupNames(device.groups),
         hubIp: device?.properties?.harmonyHubIp || null,
         activityId: device?.properties?.harmonyActivityId || null,
         activityLabel: device?.properties?.harmonyActivityLabel || null,
-        capabilities: [],
+        capabilities: getWorkflowCapabilitiesForDevice(device),
         workflowProperties: getSmartThingsWorkflowPropertyHints(device),
         energyMonitoringHints: getSmartThingsEnergyMonitoringHints(device)
       };
-
-      if (source === 'harmony') {
-        deviceInfo.capabilities = ['turn_on', 'turn_off', 'toggle'];
-        devicesByRoom[device.room].push(deviceInfo);
-        return;
-      }
-
-      // Add capabilities based on device type
-      switch (device.type) {
-        case 'light':
-          deviceInfo.capabilities = ['turn_on', 'turn_off', 'set_brightness'];
-          if (device.color) deviceInfo.capabilities.push('set_color');
-          break;
-        case 'thermostat':
-          deviceInfo.capabilities = ['turn_on', 'turn_off', 'set_temperature'];
-          break;
-        case 'lock':
-          deviceInfo.capabilities = ['lock', 'unlock'];
-          break;
-        case 'switch':
-          deviceInfo.capabilities = ['turn_on', 'turn_off', 'toggle'];
-          break;
-        case 'speaker':
-          deviceInfo.capabilities = ['turn_on', 'turn_off', 'toggle'];
-          break;
-        case 'garage':
-          deviceInfo.capabilities = ['open', 'close'];
-          break;
-        default:
-          deviceInfo.capabilities = ['turn_on', 'turn_off'];
-      }
 
       devicesByRoom[device.room].push(deviceInfo);
     });
@@ -1130,6 +1226,10 @@ async function buildDeviceContext() {
     console.error('AutomationService: Error building device context:', error);
     return {};
   }
+}
+
+function buildDeviceGroupContext(devicesByRoom = {}) {
+  return collectDeviceGroups(flattenDevices(devicesByRoom));
 }
 
 /**
@@ -1228,9 +1328,21 @@ async function validateAndFixAutomation(automation) {
   // Validate and fix device references in actions
   const devices = await Device.find().lean();
   const deviceMap = new Map();
+  const groupMap = new Map();
+  const groupMembersMap = new Map();
   devices.forEach(device => {
     deviceMap.set(device._id.toString(), device);
     deviceMap.set(device.name.toLowerCase(), device);
+    normalizeDeviceGroupNames(device.groups).forEach((group) => {
+      const key = group.toLowerCase();
+      if (!groupMap.has(key)) {
+        groupMap.set(key, group);
+      }
+      if (!groupMembersMap.has(key)) {
+        groupMembersMap.set(key, []);
+      }
+      groupMembersMap.get(key).push(device);
+    });
   });
 
   const scenes = await Scene.find().lean();
@@ -1252,9 +1364,15 @@ async function validateAndFixAutomation(automation) {
     // Fix device references
     if (action.type === 'device_control') {
       const dynamicTarget = normalizeDynamicActionTarget(action.target);
+      const groupTarget = normalizeDeviceGroupTarget(action.target, groupMap);
       if (dynamicTarget) {
         fixedAction.target = dynamicTarget;
         if (JSON.stringify(dynamicTarget) !== JSON.stringify(action.target)) {
+          fixed = true;
+        }
+      } else if (groupTarget) {
+        fixedAction.target = groupTarget;
+        if (JSON.stringify(groupTarget) !== JSON.stringify(action.target)) {
           fixed = true;
         }
       } else if (!action.target) {
@@ -1272,8 +1390,18 @@ async function validateAndFixAutomation(automation) {
             fixed = true;
             console.log(`AutomationService: Fixed device reference from "${action.target}" to "${device._id}"`);
           } else {
-            issues.push(`Device not found: ${action.target}`);
-            return null;
+            const groupName = groupMap.get(targetStr);
+            if (groupName) {
+              fixedAction.target = {
+                kind: 'device_group',
+                group: groupName
+              };
+              fixed = true;
+              console.log(`AutomationService: Fixed group reference from "${action.target}" to device group "${groupName}"`);
+            } else {
+              issues.push(`Device or device group not found: ${action.target}`);
+              return null;
+            }
           }
         } else {
           // Verify device exists
@@ -1283,27 +1411,50 @@ async function validateAndFixAutomation(automation) {
           }
         }
 
-        // Validate action parameters for device type
-        const device = deviceMap.get(fixedAction.target.toString());
-        if (device && action.parameters) {
-          const actionType = action.parameters.action;
+      }
 
-          // Validate device-specific actions
-          if (device.type === 'light') {
-            if (!['turn_on', 'turn_off', 'set_brightness', 'set_color'].includes(actionType)) {
-              issues.push(`Invalid action "${actionType}" for light device`);
-              return null;
-            }
-          } else if (device.type === 'thermostat') {
-            if (!['turn_on', 'turn_off', 'set_temperature'].includes(actionType)) {
-              issues.push(`Invalid action "${actionType}" for thermostat device`);
-              return null;
-            }
-          } else if (device.type === 'lock') {
-            if (!['lock', 'unlock'].includes(actionType)) {
-              issues.push(`Invalid action "${actionType}" for lock device`);
-              return null;
-            }
+      // Validate action parameters for device type
+      const device = typeof fixedAction.target === 'string'
+        ? deviceMap.get(fixedAction.target.toString())
+        : null;
+      if (device && action.parameters) {
+        const actionType = action.parameters.action;
+
+        // Validate device-specific actions
+        if (device.type === 'light') {
+          if (!['turn_on', 'turn_off', 'set_brightness', 'set_color'].includes(actionType)) {
+            issues.push(`Invalid action "${actionType}" for light device`);
+            return null;
+          }
+        } else if (device.type === 'thermostat') {
+          if (!['turn_on', 'turn_off', 'set_temperature'].includes(actionType)) {
+            issues.push(`Invalid action "${actionType}" for thermostat device`);
+            return null;
+          }
+        } else if (device.type === 'lock') {
+          if (!['lock', 'unlock'].includes(actionType)) {
+            issues.push(`Invalid action "${actionType}" for lock device`);
+            return null;
+          }
+        }
+      } else if (fixedAction.target && typeof fixedAction.target === 'object' && action.parameters) {
+        const normalizedGroupTarget = normalizeDeviceGroupTarget(fixedAction.target, groupMap);
+        if (!normalizedGroupTarget) {
+          return fixedAction;
+        }
+        const groupName = sanitizeString(normalizedGroupTarget?.group);
+        const members = groupMembersMap.get(groupName.toLowerCase()) || [];
+        if (!members.length) {
+          issues.push(`Device group not found: ${groupName || 'unknown group'}`);
+          return null;
+        }
+
+        const actionType = sanitizeString(action.parameters.action).toLowerCase();
+        if (actionType) {
+          const incompatibleDevices = members.filter((member) => !getWorkflowCapabilitiesForDevice(member).includes(actionType));
+          if (incompatibleDevices.length) {
+            issues.push(`Invalid action "${actionType}" for device group "${groupName}"`);
+            return null;
           }
         }
       }
@@ -1413,10 +1564,15 @@ async function validateAndFixAutomationPayload(payload) {
 }
 
 /**
- * Create automation from natural language text with self-healing
+ * Generate automation drafts from natural language text with self-healing
  */
-async function createAutomationFromText(text, roomContext = null) {
-  console.log('AutomationService: Creating automation from natural language text');
+async function generateAutomationDraftsFromText(text, roomContext = null, options = {}) {
+  const mode = options.mode === 'revise' ? 'revise' : 'create';
+  const existingAutomation = options.existingAutomation && typeof options.existingAutomation === 'object'
+    ? options.existingAutomation
+    : null;
+
+  console.log(`AutomationService: ${mode === 'revise' ? 'Revising' : 'Creating'} automation from natural language text`);
   console.log('AutomationService: Input text:', text);
   console.log('AutomationService: Room context:', roomContext);
 
@@ -1425,13 +1581,17 @@ async function createAutomationFromText(text, roomContext = null) {
       throw new Error('Automation text description is required');
     }
 
+    if (mode === 'revise' && !existingAutomation) {
+      throw new Error('Existing automation definition is required for revision');
+    }
+
     // Build comprehensive context
     const devicesByRoom = await buildDeviceContext();
     const scenes = await buildSceneContext();
     const flatDevices = flattenDevices(devicesByRoom);
 
     // For direct control requests like "turn on the vault light", bypass automation creation
-    if (isLikelyImmediateCommand(text)) {
+    if (mode === 'create' && options.allowDirectCommand !== false && isLikelyImmediateCommand(text)) {
       const directDevice = findBestDeviceForText(text, flatDevices, roomContext);
       if (directDevice) {
         const inferredAction = inferDeviceActionFromText(text, directDevice);
@@ -1469,8 +1629,10 @@ async function createAutomationFromText(text, roomContext = null) {
     }
 
     const promptDeviceContext = refineDeviceContextForPrompt(text, devicesByRoom, roomContext);
+    const deviceGroups = buildDeviceGroupContext(devicesByRoom);
     const promptScenes = refineSceneContextForPrompt(text, scenes);
     const deviceListForPrompt = formatDeviceList(promptDeviceContext);
+    const deviceGroupListForPrompt = formatDeviceGroupList(deviceGroups);
     const sceneListForPrompt = formatSceneList(promptScenes);
 
     const originalDeviceCount = flatDevices.length;
@@ -1484,14 +1646,28 @@ async function createAutomationFromText(text, roomContext = null) {
     }
 
     // Build detailed prompt with filtered context
-    let prompt = buildAutomationPrompt(
-      text,
-      promptDeviceContext,
-      promptScenes,
-      roomContext,
-      deviceListForPrompt,
-      sceneListForPrompt
-    );
+    let prompt = mode === 'revise'
+      ? buildAutomationRevisionPrompt(
+          text,
+          existingAutomation,
+          promptDeviceContext,
+          deviceGroups,
+          promptScenes,
+          roomContext,
+          deviceListForPrompt,
+          deviceGroupListForPrompt,
+          sceneListForPrompt
+        )
+      : buildAutomationPrompt(
+          text,
+          promptDeviceContext,
+          deviceGroups,
+          promptScenes,
+          roomContext,
+          deviceListForPrompt,
+          deviceGroupListForPrompt,
+          sceneListForPrompt
+        );
 
     const settingsDoc = await Settings.getSettings();
     const defaultPriority = Array.isArray(settingsDoc.llmPriorityList) && settingsDoc.llmPriorityList.length
@@ -1550,6 +1726,23 @@ async function createAutomationFromText(text, roomContext = null) {
         const validation = await validateAndFixAutomationPayload(parsedPayload);
 
         if (validation.valid) {
+          if (mode === 'revise' && validation.fixedAutomations.length !== 1) {
+            lastError = `Revision must return exactly one automation, received ${validation.fixedAutomations.length}`;
+            console.error('AutomationService:', lastError);
+            parsedAutomations = null;
+            prompt = buildAutomationRetryPrompt({
+              mode,
+              text,
+              roomContext,
+              issues: [lastError],
+              deviceList: deviceListForPrompt,
+              deviceGroupList: deviceGroupListForPrompt,
+              sceneList: sceneListForPrompt,
+              existingAutomation
+            });
+            continue;
+          }
+
           console.log(`AutomationService: Generated ${validation.fixedAutomations.length} automation definition(s)`);
           if (validation.fixed) {
             console.log('AutomationService: Applied fixes to automation structure');
@@ -1568,31 +1761,16 @@ async function createAutomationFromText(text, roomContext = null) {
           }
 
           // Build feedback prompt for retry
-          const feedbackPrompt = `
-The previous automation JSON had the following issues:
-${validation.issues.map((issue, i) => `${i + 1}. ${issue}`).join('\n')}
-
-Please fix these issues and return a corrected JSON object with an "automations" array. Remember:
-- Only use device IDs or exact device names from the provided list
-- Only use scene IDs or exact scene names from the provided list
-- Ensure all action types are valid for the target device types
-- Use valid action types: device_control, scene_activate, notification, delay, condition
-- When a request applies the same logic to multiple named devices, or to multiple distinct trigger events like sunrise and sunset, return one automation object per independent workflow
-- Use {"kind":"context","key":"triggeringDeviceId"} only when an action should target the same device that caused a device_state trigger
-
-Original request: "${text}"
-
-${roomContext ? `Room context: The user is currently in the "${roomContext}" room.\n` : ''}
-AVAILABLE DEVICES:
-${deviceListForPrompt || 'None'}
-
-AVAILABLE SCENES:
-${sceneListForPrompt || 'None'}
-
-Return ONLY the corrected JSON object, no explanation.`;
-
-          // Update prompt for next attempt
-          prompt = feedbackPrompt;
+          prompt = buildAutomationRetryPrompt({
+            mode,
+            text,
+            roomContext,
+            issues: validation.issues,
+            deviceList: deviceListForPrompt,
+            deviceGroupList: deviceGroupListForPrompt,
+            sceneList: sceneListForPrompt,
+            existingAutomation
+          });
           continue;
         }
 
@@ -1616,6 +1794,9 @@ Return ONLY the corrected JSON object, no explanation.`;
 
     // If we exhausted all retries, throw error
     if (!parsedAutomations || parsedAutomations.length === 0) {
+      if (mode === 'revise') {
+        throw new Error(`Failed to revise automation after ${MAX_LLM_RETRIES} attempts. Last error: ${lastError}`);
+      }
       console.warn('AutomationService: Falling back to heuristic automation builder');
       const fallbackAutomation = buildFallbackAutomation(text, devicesByRoom, roomContext);
       if (!fallbackAutomation) {
@@ -1624,25 +1805,45 @@ Return ONLY the corrected JSON object, no explanation.`;
       parsedAutomations = [fallbackAutomation];
     }
 
+    return {
+      success: true,
+      automations: parsedAutomations,
+      handledDirectCommand: false
+    };
+  } catch (error) {
+    console.error(`AutomationService: Error ${mode === 'revise' ? 'revising' : 'creating'} automation from text:`, error.message);
+    console.error('AutomationService: Full error:', error);
+
+    if (error.message.includes('required') || error.message.includes('unavailable') || error.message.includes('after')) {
+      throw error;
+    }
+    throw new Error(`Failed to ${mode === 'revise' ? 'revise' : 'create'} automation from text: ${error.message}`);
+  }
+}
+
+/**
+ * Create automation from natural language text with self-healing
+ */
+async function createAutomationFromText(text, roomContext = null) {
+  try {
+    const draftResult = await generateAutomationDraftsFromText(text, roomContext, {
+      mode: 'create',
+      allowDirectCommand: true
+    });
+
+    if (draftResult?.handledDirectCommand) {
+      return draftResult;
+    }
+
     const createdAutomations = [];
     const reservedNames = new Set();
+    const parsedAutomations = Array.isArray(draftResult?.automations) ? draftResult.automations : [];
 
     for (const parsedAutomation of parsedAutomations) {
       // Validate and clean the parsed automation
-      let actions = Array.isArray(parsedAutomation.actions)
+      const actions = Array.isArray(parsedAutomation.actions)
         ? parsedAutomation.actions.filter(Boolean)
         : null;
-
-      if ((!Array.isArray(actions) || actions.length === 0) && parsedAutomations.length === 1) {
-        const fallbackAutomation = buildFallbackAutomation(text, devicesByRoom, roomContext);
-        if (fallbackAutomation && Array.isArray(fallbackAutomation.actions) && fallbackAutomation.actions.length) {
-          actions = fallbackAutomation.actions;
-          parsedAutomation.trigger = parsedAutomation.trigger || fallbackAutomation.trigger;
-          parsedAutomation.category = parsedAutomation.category || fallbackAutomation.category;
-          parsedAutomation.priority = parsedAutomation.priority || fallbackAutomation.priority;
-          parsedAutomation.description = parsedAutomation.description || fallbackAutomation.description;
-        }
-      }
 
       if (!Array.isArray(actions) || actions.length === 0) {
         throw new Error('At least one action is required');
@@ -1688,6 +1889,26 @@ Return ONLY the corrected JSON object, no explanation.`;
   }
 }
 
+async function reviseAutomationFromText(text, existingAutomation, roomContext = null) {
+  const draftResult = await generateAutomationDraftsFromText(text, roomContext, {
+    mode: 'revise',
+    existingAutomation,
+    allowDirectCommand: false
+  });
+
+  const revisedAutomation = Array.isArray(draftResult?.automations) ? draftResult.automations[0] : null;
+  if (!revisedAutomation) {
+    throw new Error('Automation revision did not return a revised automation');
+  }
+
+  return {
+    success: true,
+    automation: revisedAutomation,
+    automations: [revisedAutomation],
+    message: 'Automation revised successfully from natural language'
+  };
+}
+
 const AUTOMATION_JSON_TEMPLATE = `{
   "automations": [
     {
@@ -1731,8 +1952,9 @@ const AUTOMATION_JSON_TEMPLATE = `{
 /**
  * Build detailed automation prompt for LLM
  */
-function buildAutomationPrompt(text, devicesByRoom, scenes, roomContext, preformattedDeviceList, preformattedSceneList) {
+function buildAutomationPrompt(text, devicesByRoom, deviceGroups, scenes, roomContext, preformattedDeviceList, preformattedDeviceGroupList, preformattedSceneList) {
   const deviceList = preformattedDeviceList ?? formatDeviceList(devicesByRoom);
+  const deviceGroupList = preformattedDeviceGroupList ?? formatDeviceGroupList(deviceGroups);
   const sceneList = preformattedSceneList ?? formatSceneList(scenes);
 
   return `You are an expert at creating smart home automations. Convert the user's request into a JSON object that matches the schema below.
@@ -1744,7 +1966,7 @@ OUTPUT REQUIREMENTS (FOLLOW EXACTLY):
 4. Every automation in "automations" must include the fields: name, description, trigger, actions, category, priority.
 5. The trigger must include a "type" key and a "conditions" object (empty object is fine for manual triggers).
 6. The actions array must contain at least one item. Each action must have "type", "target", and "parameters".
-7. Choose device and scene identifiers strictly from the provided context. Never invent IDs or placeholders.
+7. Choose device IDs, device group names, and scene identifiers strictly from the provided context. Never invent IDs, group names, or placeholders.
 8. Respond with valid JSON even when uncertain; never omit required fields.
 
 REQUIRED JSON TEMPLATE (values are examples, not literals to reuse):
@@ -1756,22 +1978,26 @@ IMPORTANT RULES:
 3. Return one automation object per independently-triggered device or distinct trigger event when the request names multiple devices, rooms, or separate times like sunrise and sunset.
 4. Use a fixed device ID in trigger.conditions.deviceId for device_state triggers.
 5. When an action should target the same device that caused a device_state trigger, prefer the dynamic target {"kind":"context","key":"triggeringDeviceId"} instead of copying the device ID into the action target.
-6. ONLY use device IDs from the provided device list and scene IDs from the provided scene list. Never invent IDs or placeholders.
-7. Match each action to the device's allowed capabilities and source restrictions.
-8. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
-9. Delay actions support long timers. Use the full requested duration in seconds, up to 86400 seconds. Do not reduce 30 minutes to 600 seconds.
-10. Use intent-driven categories (choose from "security", "comfort", "energy", "convenience", "custom") and pick a sensible priority between 1-10 (default 5).
-11. Never output any prefix/suffix text. Return ONLY the JSON object.
-12. For devices with Source:harmony, only use turn_on, turn_off, or toggle. Do not use set_brightness, set_color, set_temperature, lock/unlock, or open/close on Harmony Hub activity devices.
-13. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
-14. When the request refers to the security system or alarm arming/disarming state, use trigger type "security_alarm_status" with conditions like {"states":["armedStay","armedAway"]}.
-15. When the request refers to sunrise or sunset, use trigger type "schedule" with conditions like {"event":"sunrise","offset":0} or {"event":"sunset","offset":0}. Offsets are in minutes and may be negative or positive.
-16. For numeric SmartThings triggers such as power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path (for example "smartThingsAttributeValues.powerMeter.power") with an explicit operator and numeric value.
-17. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
-18. When the request says "greater than", "above", "over", or "more than", use operator "gt". When it says "less than", "below", or "under", use operator "lt". For energy-monitoring devices, prefer threshold operators over exact numeric equality unless the user explicitly asks for an exact value.
+6. When a broad request should control many devices and a matching device group exists, prefer {"kind":"device_group","group":"Exact Group Name"} over enumerating many separate device_control actions.
+7. ONLY use device IDs from the provided device list, exact device group names from the provided device group list, and scene IDs from the provided scene list. Never invent IDs, group names, or placeholders.
+8. Match each action to the device's allowed capabilities and source restrictions.
+9. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
+10. Delay actions support long timers. Use the full requested duration in seconds, up to 86400 seconds. Do not reduce 30 minutes to 600 seconds.
+11. Use intent-driven categories (choose from "security", "comfort", "energy", "convenience", "custom") and pick a sensible priority between 1-10 (default 5).
+12. Never output any prefix/suffix text. Return ONLY the JSON object.
+13. For devices with Source:harmony, only use turn_on, turn_off, or toggle. Do not use set_brightness, set_color, set_temperature, lock/unlock, or open/close on Harmony Hub activity devices.
+14. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
+15. When the request refers to the security system or alarm arming/disarming state, use trigger type "security_alarm_status" with conditions like {"states":["armedStay","armedAway"]}.
+16. When the request refers to sunrise or sunset, use trigger type "schedule" with conditions like {"event":"sunrise","offset":0} or {"event":"sunset","offset":0}. Offsets are in minutes and may be negative or positive.
+17. For numeric SmartThings triggers such as power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path (for example "smartThingsAttributeValues.powerMeter.power") with an explicit operator and numeric value.
+18. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
+19. When the request says "greater than", "above", "over", or "more than", use operator "gt". When it says "less than", "below", or "under", use operator "lt". For energy-monitoring devices, prefer threshold operators over exact numeric equality unless the user explicitly asks for an exact value.
 
 AVAILABLE DEVICES:
 ${deviceList}
+
+AVAILABLE DEVICE GROUPS:
+${deviceGroupList}
 
 AVAILABLE SCENES:
 ${sceneList}
@@ -1801,7 +2027,7 @@ REQUIRED JSON STRUCTURE:
       "actions": [
         {
           "type": "<action_type>",  // choose one: device_control, scene_activate, notification, delay
-          "target": "DEVICE_ID_FROM_LIST_ABOVE or SCENE_ID_FROM_LIST_ABOVE or {\\"kind\\":\\"context\\",\\"key\\":\\"triggeringDeviceId\\"}",
+          "target": "DEVICE_ID_FROM_LIST_ABOVE or SCENE_ID_FROM_LIST_ABOVE or {\\"kind\\":\\"context\\",\\"key\\":\\"triggeringDeviceId\\"} or {\\"kind\\":\\"device_group\\",\\"group\\":\\"Exact Group Name\\"}",
           "parameters": {
             // For device_control: {"action": "<device_action>", "brightness": 0-100, "temperature": number, "color": "#hex"}
             // Valid device actions include: turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
@@ -1839,6 +2065,7 @@ TRIGGER TYPE EXAMPLES:
 - "when the security alarm is armed stay or armed away" -> type: "security_alarm_status", conditions: {"states": ["armedStay", "armedAway"]}
 - "at sunset" -> type: "schedule", conditions: {"event": "sunset", "offset": 0}
 - "30 minutes before sunrise" -> type: "schedule", conditions: {"event": "sunrise", "offset": -30}
+- "when the alarm is armed stay, turn off all interior lights" -> if a matching group exists, use one device_control action with target {"kind":"device_group","group":"Interior Lights"}
 - "when a fan switch turns on, wait 30 minutes, then turn that same switch off" -> use type: "device_state", a delay action with {"seconds": 1800}, and a device_control action targeting {"kind":"context","key":"triggeringDeviceId"}
 - "manual trigger" -> type: "manual", conditions: {}
 
@@ -1865,17 +2092,39 @@ function formatDeviceList(devicesByRoom = {}) {
       const harmonyDetails = source === 'harmony'
         ? `, Hub: ${device.hubIp || 'unknown'}, Activity: ${device.activityLabel || device.activityId || 'unknown'}`
         : '';
+      const groups = Array.isArray(device.groups) && device.groups.length > 0
+        ? `, Groups: ${device.groups.join(', ')}`
+        : '';
       const energyMonitoring = Array.isArray(device.energyMonitoringHints) && device.energyMonitoringHints.length > 0
         ? `, Energy monitoring: ${device.energyMonitoringHints.join(', ')}`
         : '';
       const workflowProperties = Array.isArray(device.workflowProperties) && device.workflowProperties.length > 0
         ? `, Trigger properties: ${device.workflowProperties.slice(0, 10).join(', ')}`
         : '';
-      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Source: ${source}, Actions: ${actions}${harmonyDetails}${energyMonitoring}${workflowProperties})`;
+      return `  - ${device.name} (ID: ${device.id}, Type: ${device.type}, Source: ${source}, Actions: ${actions}${groups}${harmonyDetails}${energyMonitoring}${workflowProperties})`;
     }).join('\n');
 
     return `Room: ${room}\n${deviceLines}`;
   }).join('\n\n');
+}
+
+function formatDeviceGroupList(deviceGroups = []) {
+  if (!Array.isArray(deviceGroups) || !deviceGroups.length) {
+    return 'None';
+  }
+
+  return deviceGroups.map((group) => {
+    const rooms = Array.isArray(group.rooms) && group.rooms.length ? group.rooms.join(', ') : 'Unknown';
+    const types = Array.isArray(group.types) && group.types.length ? group.types.join(', ') : 'Unknown';
+    const sources = Array.isArray(group.sources) && group.sources.length ? group.sources.join(', ') : 'Unknown';
+    const memberPreview = Array.isArray(group.deviceNames) && group.deviceNames.length
+      ? group.deviceNames.slice(0, 8).join(', ')
+      : 'No members';
+    const suffix = Array.isArray(group.deviceNames) && group.deviceNames.length > 8
+      ? `, +${group.deviceNames.length - 8} more`
+      : '';
+    return `  - ${group.name} (Devices: ${group.deviceCount}, Rooms: ${rooms}, Types: ${types}, Sources: ${sources}, Members: ${memberPreview}${suffix})`;
+  }).join('\n');
 }
 
 function formatSceneList(scenes = []) {
@@ -1886,6 +2135,123 @@ function formatSceneList(scenes = []) {
   return scenes.map((scene) =>
     `  - ${scene.name} (ID: ${scene.id}, Category: ${scene.category})`
   ).join('\n');
+}
+
+function formatAutomationForPrompt(automation = {}) {
+  return JSON.stringify({
+    name: automation.name || '',
+    description: automation.description || '',
+    enabled: automation.enabled !== false,
+    category: automation.category || 'custom',
+    priority: automation.priority || 5,
+    trigger: automation.trigger || { type: 'manual', conditions: {} },
+    actions: Array.isArray(automation.actions) ? automation.actions : []
+  }, null, 2);
+}
+
+function buildAutomationRevisionPrompt(
+  text,
+  existingAutomation,
+  devicesByRoom,
+  deviceGroups,
+  scenes,
+  roomContext,
+  preformattedDeviceList,
+  preformattedDeviceGroupList,
+  preformattedSceneList
+) {
+  const deviceList = preformattedDeviceList ?? formatDeviceList(devicesByRoom);
+  const deviceGroupList = preformattedDeviceGroupList ?? formatDeviceGroupList(deviceGroups);
+  const sceneList = preformattedSceneList ?? formatSceneList(scenes);
+  const existingAutomationJson = formatAutomationForPrompt(existingAutomation);
+
+  return `You are an expert at revising smart home automations. Update the EXISTING automation below so it matches the user's requested changes.
+
+OUTPUT REQUIREMENTS (FOLLOW EXACTLY):
+1. Return a single valid JSON object only. Do not include markdown, prose, comments, code fences, or additional explanations.
+2. Every key must use double quotes. All string values must use double quotes.
+3. The top-level JSON object must include an "automations" array with EXACTLY ONE automation object.
+4. Return the FULL revised automation, not a patch or partial diff.
+5. The revised automation must include the fields: name, description, trigger, actions, category, priority.
+6. The trigger must include a "type" key and a "conditions" object (empty object is fine for manual triggers).
+7. The actions array must contain at least one item. Each action must have "type", "target", and "parameters".
+8. Choose device IDs, device group names, and scene identifiers strictly from the provided context. Never invent IDs, group names, or placeholders.
+
+REQUIRED JSON TEMPLATE:
+${AUTOMATION_JSON_TEMPLATE}
+
+REVISION RULES:
+1. Revise the EXISTING automation below to satisfy the user's request.
+2. Keep the current automation name unless the user explicitly asks to rename it.
+3. Preserve the current trigger/action intent unless the user asks to change it.
+4. When a broad request should control many devices and a matching device group exists, prefer {"kind":"device_group","group":"Exact Group Name"} over enumerating many separate device_control actions.
+5. When fixing an automation that currently lists too few devices, expand the target coverage by using an appropriate group when available.
+6. When an action should target the same device that caused a device_state trigger, prefer {"kind":"context","key":"triggeringDeviceId"}.
+7. Use valid trigger/action structures and only capabilities allowed by the target devices.
+8. For numeric SmartThings triggers such as power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path with an explicit operator and numeric value.
+9. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
+10. When the request says "greater than", "above", "over", or "more than", use operator "gt". When it says "less than", "below", or "under", use operator "lt".
+
+EXISTING AUTOMATION TO REVISE:
+${existingAutomationJson}
+
+AVAILABLE DEVICES:
+${deviceList}
+
+AVAILABLE DEVICE GROUPS:
+${deviceGroupList}
+
+AVAILABLE SCENES:
+${sceneList}
+
+${roomContext ? `ROOM CONTEXT: The user is currently in the "${roomContext}" room.\n` : ''}USER REQUEST: "${text}"
+
+Return ONLY the JSON object containing exactly one revised automation.`;
+}
+
+function buildAutomationRetryPrompt({
+  mode,
+  text,
+  roomContext,
+  issues,
+  deviceList,
+  deviceGroupList,
+  sceneList,
+  existingAutomation
+}) {
+  const revisionContext = mode === 'revise' && existingAutomation
+    ? `\nEXISTING AUTOMATION TO REVISE:\n${formatAutomationForPrompt(existingAutomation)}\n`
+    : '';
+  const countInstruction = mode === 'revise'
+    ? 'Return ONLY the corrected JSON object with an "automations" array containing EXACTLY ONE revised automation.'
+    : 'Return ONLY the corrected JSON object with an "automations" array.';
+
+  return `
+The previous automation JSON had the following issues:
+${issues.map((issue, index) => `${index + 1}. ${issue}`).join('\n')}
+
+Please fix these issues and return a corrected JSON object. Remember:
+- Only use device IDs or exact device names from the provided list
+- Only use exact device group names from the provided device group list
+- Only use scene IDs or exact scene names from the provided scene list
+- Ensure all action types are valid for the target device types
+- Use valid action types: device_control, scene_activate, notification, delay, condition
+- Use {"kind":"context","key":"triggeringDeviceId"} only when an action should target the same device that caused a device_state trigger
+- Use {"kind":"device_group","group":"Exact Group Name"} when a broad request should apply to many devices and a matching group exists
+${mode === 'revise' ? '- Return a FULL revised replacement for the existing automation, not a patch' : ''}
+
+Original request: "${text}"
+
+${roomContext ? `Room context: The user is currently in the "${roomContext}" room.\n` : ''}${revisionContext}AVAILABLE DEVICES:
+${deviceList || 'None'}
+
+AVAILABLE DEVICE GROUPS:
+${deviceGroupList || 'None'}
+
+AVAILABLE SCENES:
+${sceneList || 'None'}
+
+${countInstruction}`;
 }
 
 /**
@@ -2268,6 +2634,7 @@ Object.assign(module.exports, {
   deleteAutomation,
   toggleAutomation,
   createAutomationFromText,
+  reviseAutomationFromText,
   getAutomationStats,
   executeAutomation,
   getAutomationHistory,

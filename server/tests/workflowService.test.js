@@ -179,3 +179,92 @@ test('createWorkflowFromText creates multiple workflows when multiple automation
   assert.equal(result.workflows[1].name, 'Guest Bathroom Fan Auto Off');
   assert.equal(linkedAutomationIds.length, 2);
 });
+
+test('reviseWorkflowFromText updates an existing workflow from natural language', async (t) => {
+  const workflowService = require('../services/workflowService');
+  const automationService = require('../services/automationService');
+  const eventStreamService = require('../services/eventStreamService');
+
+  const workflowId = new mongoose.Types.ObjectId().toString();
+  const existingWorkflow = {
+    _id: workflowId,
+    name: 'Alarm Armed: Turn Off Insteon Interior',
+    description: 'Turns off selected interior lights when the alarm is armed stay.',
+    enabled: true,
+    category: 'security',
+    priority: 5,
+    trigger: {
+      type: 'security_alarm_status',
+      conditions: {
+        states: ['armedStay']
+      }
+    },
+    actions: [
+      {
+        type: 'device_control',
+        target: 'device-1',
+        parameters: { action: 'turn_off' }
+      }
+    ]
+  };
+
+  const revisedWorkflow = {
+    ...existingWorkflow,
+    actions: [
+      {
+        type: 'device_control',
+        target: { kind: 'device_group', group: 'Interior Lights' },
+        parameters: { action: 'turn_off' }
+      }
+    ]
+  };
+
+  const originalGetWorkflowById = workflowService.getWorkflowById;
+  const originalUpdateWorkflow = workflowService.updateWorkflow;
+  const originalReviseAutomationFromText = automationService.reviseAutomationFromText;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  let receivedExistingAutomation = null;
+  let receivedUpdatePayload = null;
+
+  t.after(() => {
+    workflowService.getWorkflowById = originalGetWorkflowById;
+    workflowService.updateWorkflow = originalUpdateWorkflow;
+    automationService.reviseAutomationFromText = originalReviseAutomationFromText;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  workflowService.getWorkflowById = async () => existingWorkflow;
+  automationService.reviseAutomationFromText = async (_text, existingAutomation) => {
+    receivedExistingAutomation = existingAutomation;
+    return {
+      success: true,
+      automation: {
+        name: existingWorkflow.name,
+        description: existingWorkflow.description,
+        enabled: true,
+        category: 'security',
+        priority: 5,
+        trigger: existingWorkflow.trigger,
+        actions: revisedWorkflow.actions
+      }
+    };
+  };
+  workflowService.updateWorkflow = async (_id, payload) => {
+    receivedUpdatePayload = payload;
+    return revisedWorkflow;
+  };
+  eventStreamService.publishSafe = async () => ({ success: true });
+
+  const result = await workflowService.reviseWorkflowFromText(
+    workflowId,
+    'Fix this workflow so it turns off all interior lights using the Interior Lights group.',
+    null,
+    'chat'
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.workflow._id, workflowId);
+  assert.equal(receivedExistingAutomation.name, existingWorkflow.name);
+  assert.deepEqual(receivedUpdatePayload.actions, revisedWorkflow.actions);
+  assert.deepEqual(receivedUpdatePayload.trigger, existingWorkflow.trigger);
+});
