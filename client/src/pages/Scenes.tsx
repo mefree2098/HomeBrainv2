@@ -21,15 +21,22 @@ import {
 } from "lucide-react"
 import { getScenes, activateScene, createScene, createSceneFromNaturalLanguage, updateScene, deleteScene } from "@/api/scenes"
 import { getDevices } from "@/api/devices"
+import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
 import { SceneEditDialog } from "@/components/scenes/SceneEditDialog"
 import { useFavorites } from "@/hooks/useFavorites"
 import { useAuth } from "@/contexts/AuthContext"
+import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
 
 export function Scenes() {
   const { toast } = useToast()
   const { isAdmin } = useAuth()
+  const {
+    loading: loadingAlexaExposure,
+    getExposure,
+    saveExposure
+  } = useAlexaExposureRegistry(isAdmin)
   const [scenes, setScenes] = useState([])
   const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
@@ -205,6 +212,20 @@ export function Scenes() {
         variant: "destructive"
       })
     }
+  }
+
+  const handleSaveAlexaExposure = async (scene: any, payload: {
+    enabled: boolean
+    friendlyName: string
+    aliases: string[]
+    roomHint: string
+  }) => {
+    const exposure = await saveExposure('scene', scene._id, payload)
+    toast({
+      title: "Alexa settings saved",
+      description: `${scene.name} is ${payload.enabled ? "now" : "no longer"} exposed to Alexa.`
+    })
+    return exposure
   }
 
   const getSceneIcon = (name: string) => {
@@ -444,7 +465,11 @@ export function Scenes() {
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
                   <span>{scene.deviceActions?.length || scene.devices?.length || 0} devices</span>
-                  <span>Voice enabled</span>
+                  <span>
+                    {(getExposure('scene', scene._id)?.enabled)
+                      ? "Alexa enabled"
+                      : "Voice enabled"}
+                  </span>
                 </div>
 
                 <div className="flex gap-2">
@@ -477,6 +502,23 @@ export function Scenes() {
                     </>
                   ) : null}
                 </div>
+
+                {isAdmin ? (
+                  <div className="flex items-center justify-between gap-2 rounded-xl border border-border/60 bg-muted/15 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">
+                      Project this scene to Alexa without an invocation keyword.
+                    </div>
+                    <AlexaExposureControl
+                      entityType="scene"
+                      entityId={scene._id}
+                      entityName={scene.name}
+                      exposure={getExposure('scene', scene._id)}
+                      loading={loadingAlexaExposure}
+                      onSave={(payload) => handleSaveAlexaExposure(scene, payload)}
+                      compact
+                    />
+                  </div>
+                ) : null}
 
                 <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
                   <strong>Voice command:</strong> "Hey Anna, activate {scene.name}"

@@ -29,9 +29,11 @@ import {
 } from "lucide-react"
 import { getDeviceGroups, getDevices, getDevicesByRoom, controlDevice, type DeviceGroupSummary } from "@/api/devices"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
+import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
 import { useToast } from "@/hooks/useToast"
 import { useFavorites } from "@/hooks/useFavorites"
 import { useDeviceRealtime } from "@/hooks/useDeviceRealtime"
+import { useAuth } from "@/contexts/AuthContext"
 
 const THERMOSTAT_MODES = ['auto', 'cool', 'heat', 'off'] as const
 
@@ -299,6 +301,7 @@ export function Devices({
 }: DevicesProps = {}) {
   const [searchParams, setSearchParams] = useSearchParams()
   const { toast } = useToast()
+  const { isAdmin } = useAuth()
   const [devices, setDevices] = useState([])
   const [deviceGroups, setDeviceGroups] = useState<DeviceGroupSummary[]>([])
   const [roomDevices, setRoomDevices] = useState([])
@@ -323,6 +326,11 @@ export function Devices({
     hasProfile,
     pendingDeviceIds
   } = useFavorites()
+  const {
+    loading: loadingAlexaExposure,
+    getExposure,
+    saveExposure
+  } = useAlexaExposureRegistry(isAdmin)
 
   const buildRoomsFromDevices = useCallback((deviceList: any[]) => {
     const roomMap = new Map<string, any[]>()
@@ -992,6 +1000,48 @@ export function Devices({
   const detailDevice = detailDeviceId
     ? devices.find((device: any) => device?._id === detailDeviceId) ?? null
     : null
+  const saveAlexaExposureForDevice = useCallback(async (deviceId: string, deviceName: string, payload: {
+    enabled: boolean
+    friendlyName: string
+    aliases: string[]
+    roomHint: string
+  }) => {
+    const savedExposure = await saveExposure('device', deviceId, payload)
+    toast({
+      title: "Alexa settings saved",
+      description: `${deviceName} is ${payload.enabled ? "now" : "no longer"} exposed to Alexa.`
+    })
+    return savedExposure
+  }, [saveExposure, toast])
+
+  const renderAlexaStatusBadge = useCallback((device: any) => {
+    if (!isAdmin || !device?._id) {
+      return null
+    }
+
+    const exposure = getExposure('device', device._id)
+    if (!exposure) {
+      return null
+    }
+
+    if ((exposure.validationErrors?.length || 0) > 0) {
+      return (
+        <Badge variant="outline" className="border-amber-300 text-amber-700 dark:border-amber-500/40 dark:text-amber-200">
+          Alexa Issue
+        </Badge>
+      )
+    }
+
+    if (exposure.enabled) {
+      return (
+        <Badge variant="outline" className="border-cyan-300 text-cyan-700 dark:border-cyan-500/40 dark:text-cyan-200">
+          Alexa
+        </Badge>
+      )
+    }
+
+    return null
+  }, [getExposure, isAdmin])
   const availableDeviceGroups = useMemo(() => {
     const groups = new Map<string, string>()
 
@@ -1117,6 +1167,7 @@ export function Devices({
             <Badge variant="outline">
               {formatSourceLabel(getDeviceSource(device))}
             </Badge>
+            {renderAlexaStatusBadge(device)}
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -1350,6 +1401,7 @@ export function Devices({
                               ? getThermostatMode(device).toUpperCase()
                               : (device.status ? "On" : "Off")}
                           </Badge>
+                          {renderAlexaStatusBadge(device)}
                           <Button
                             variant="outline"
                             size="sm"
@@ -1450,6 +1502,7 @@ export function Devices({
                                   ? getThermostatMode(device).toUpperCase()
                                   : (device.status ? "On" : "Off")}
                               </Badge>
+                              {renderAlexaStatusBadge(device)}
                             </div>
                           </div>
                           {device.type === 'thermostat' ? (
@@ -1501,6 +1554,8 @@ export function Devices({
         device={detailDevice}
         open={Boolean(detailDeviceId)}
         availableGroups={availableDeviceGroups}
+        alexaExposure={detailDevice ? getExposure('device', detailDevice._id) : null}
+        alexaExposureLoading={loadingAlexaExposure}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) {
             setDetailDeviceId(null)
@@ -1508,6 +1563,13 @@ export function Devices({
         }}
         onDeviceUpdated={(updatedDevice) => {
           applyIncomingDevices([updatedDevice])
+        }}
+        onAlexaExposureUpdated={(payload) => {
+          if (!detailDevice) {
+            return Promise.resolve(null)
+          }
+
+          return saveAlexaExposureForDevice(detailDevice._id, detailDevice.name, payload)
         }}
       />
     </div>

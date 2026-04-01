@@ -1,5 +1,6 @@
 const Scene = require('../models/Scene');
 const Device = require('../models/Device');
+const AlexaExposure = require('../models/AlexaExposure');
 const deviceService = require('./deviceService');
 
 /**
@@ -263,6 +264,10 @@ class SceneService {
 
       const sceneName = scene.name;
       await Scene.findByIdAndDelete(sceneId);
+      await AlexaExposure.deleteOne({
+        entityType: 'scene',
+        entityId: sceneId.toString()
+      });
       
       console.log(`SceneService: Scene "${sceneName}" deleted successfully`);
       

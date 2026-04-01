@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const AlexaExposure = require('../models/AlexaExposure');
 const Workflow = require('../models/Workflow');
 const Automation = require('../models/Automation');
 const automationService = require('./automationService');
@@ -436,6 +437,10 @@ class WorkflowService {
     }
 
     await Workflow.deleteOne({ _id: workflow._id });
+    await AlexaExposure.deleteOne({
+      entityType: 'workflow',
+      entityId: workflow._id.toString()
+    });
 
     void eventStreamService.publishSafe({
       type: 'workflow.deleted',

@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl";
 import { useToast } from "@/hooks/useToast";
 import { WorkflowBuilderDialog } from "@/components/workflows/WorkflowBuilderDialog";
 import {
@@ -46,6 +47,7 @@ import { getDeviceGroups, getDevices, type DeviceGroupSummary } from "@/api/devi
 import { getScenes } from "@/api/scenes";
 import { interpretVoiceCommand } from "@/api/voice";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry";
 import { cn } from "@/lib/utils";
 
 type DeviceLite = {
@@ -471,6 +473,11 @@ const sanitizeWorkflowPayload = (workflow: Partial<Workflow>): Partial<Workflow>
 export function Workflows() {
   const { toast } = useToast();
   const { isAdmin } = useAuth();
+  const {
+    loading: loadingAlexaExposure,
+    getExposure,
+    saveExposure
+  } = useAlexaExposureRegistry(isAdmin);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const activityCleanupRef = useRef<null | (() => void)>(null);
   const latestActivitySequenceRef = useRef(0);
@@ -881,6 +888,20 @@ export function Workflows() {
         variant: "destructive"
       });
     }
+  };
+
+  const handleSaveAlexaExposure = async (workflow: Workflow, payload: {
+    enabled: boolean;
+    friendlyName: string;
+    aliases: string[];
+    roomHint: string;
+  }) => {
+    const exposure = await saveExposure("workflow", workflow._id, payload);
+    toast({
+      title: "Alexa settings saved",
+      description: `${workflow.name} is ${payload.enabled ? "now" : "no longer"} exposed to Alexa.`
+    });
+    return exposure;
   };
 
   const handleCloneWorkflow = async (workflow: Workflow) => {
@@ -1501,6 +1522,24 @@ export function Workflows() {
               {workflow.lastError?.message ? (
                 <div className="rounded-md border border-red-300 bg-red-50 dark:bg-red-900/20 p-2 text-xs text-red-700 dark:text-red-300">
                   Last error: {workflow.lastError.message}
+                </div>
+              ) : null}
+
+              {isAdmin ? (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-border/70 bg-muted/15 px-3 py-2">
+                  <div className="text-xs text-muted-foreground">
+                    Expose this workflow to Alexa when it can behave like a safe scene trigger.
+                  </div>
+                  <AlexaExposureControl
+                    entityType="workflow"
+                    entityId={workflow._id}
+                    entityName={workflow.name}
+                    exposure={getExposure("workflow", workflow._id)}
+                    loading={loadingAlexaExposure}
+                    defaultAliases={workflow.voiceAliases || []}
+                    onSave={(payload) => handleSaveAlexaExposure(workflow, payload)}
+                    compact
+                  />
                 </div>
               ) : null}
 

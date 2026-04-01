@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const AlexaExposure = require('../models/AlexaExposure');
 const Device = require('../models/Device');
 const DeviceGroup = require('../models/DeviceGroup');
 const Workflow = require('../models/Workflow');
@@ -541,6 +542,10 @@ class DeviceGroupService {
     }
 
     await DeviceGroup.deleteOne({ _id: group._id });
+    await AlexaExposure.deleteOne({
+      entityType: 'device_group',
+      entityId: group._id.toString()
+    });
 
     return {
       success: true,

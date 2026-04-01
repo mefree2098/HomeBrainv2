@@ -21,6 +21,7 @@ import {
   type DeviceGroupSummary,
   type DeviceRecord
 } from "@/api/devices"
+import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -38,6 +39,7 @@ import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
 import { useToast } from "@/hooks/useToast"
 
 const normalizeErrorMessage = (error: unknown, fallback: string) => {
@@ -84,6 +86,11 @@ const normalizeGroupEntries = (groups: unknown): string[] => {
 
 export function DeviceGroups() {
   const { toast } = useToast()
+  const {
+    loading: loadingAlexaExposure,
+    getExposure,
+    saveExposure
+  } = useAlexaExposureRegistry(true)
   const [groups, setGroups] = useState<DeviceGroupSummary[]>([])
   const [devices, setDevices] = useState<DeviceRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -239,6 +246,24 @@ export function DeviceGroups() {
     })
     setSelectedGroupId(updatedGroup._id)
     void fetchData({ silent: true })
+  }
+
+  const handleSaveAlexaExposure = async (payload: {
+    enabled: boolean
+    friendlyName: string
+    aliases: string[]
+    roomHint: string
+  }) => {
+    if (!selectedGroup) {
+      return null
+    }
+
+    const exposure = await saveExposure('device_group', selectedGroup._id, payload)
+    toast({
+      title: "Alexa settings saved",
+      description: `${selectedGroup.name} is ${payload.enabled ? "now" : "no longer"} exposed to Alexa.`
+    })
+    return exposure
   }
 
   const handleCreateGroup = async () => {
@@ -570,6 +595,29 @@ export function DeviceGroups() {
                     </div>
                   </div>
                 ) : null}
+
+                <div className="rounded-2xl border border-border/70 bg-muted/15 p-4">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium">Alexa</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Project this group as a HomeBrain-managed Alexa endpoint when the member capabilities are safe.
+                      </div>
+                    </div>
+                    {selectedGroup ? (
+                      <AlexaExposureControl
+                        entityType="device_group"
+                        entityId={selectedGroup._id}
+                        entityName={selectedGroup.name}
+                        exposure={getExposure('device_group', selectedGroup._id)}
+                        loading={loadingAlexaExposure}
+                        defaultRoomHint={selectedGroup.rooms?.[0] || ""}
+                        onSave={handleSaveAlexaExposure}
+                        compact
+                      />
+                    ) : null}
+                  </div>
+                </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="text-sm text-muted-foreground">
