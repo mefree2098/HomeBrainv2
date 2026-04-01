@@ -56,6 +56,11 @@ import {
   updateLLMPriorityList
 } from "@/api/settings"
 import {
+  generateAlexaLinkCode,
+  getAlexaSummary,
+  syncAlexaDiscovery
+} from "@/api/alexa"
+import {
   getSmartThingsStatus,
   configureSmartThingsOAuth,
   getSmartThingsAuthUrl,
@@ -232,6 +237,11 @@ export function Settings() {
   })
   const [harmonyStatus, setHarmonyStatus] = useState<any>(null)
   const [harmonyHubs, setHarmonyHubs] = useState<any[]>([])
+  const [alexaSummary, setAlexaSummary] = useState<any>(null)
+  const [loadingAlexaSummary, setLoadingAlexaSummary] = useState(false)
+  const [generatingAlexaCode, setGeneratingAlexaCode] = useState<"private" | "public" | "">("")
+  const [syncingAlexaCatalog, setSyncingAlexaCatalog] = useState(false)
+  const [latestAlexaLinkCode, setLatestAlexaLinkCode] = useState<any>(null)
   const [loadingHarmonyStatus, setLoadingHarmonyStatus] = useState(false)
   const [loadingHarmonyHubs, setLoadingHarmonyHubs] = useState(false)
   const [discoveringHarmony, setDiscoveringHarmony] = useState(false)
@@ -619,6 +629,7 @@ export function Settings() {
     loadSmartThingsStatus();
     loadEcobeeStatus();
     loadHarmonyOverview();
+    loadAlexaSummary();
     loadLLMPriorityList();
   }, [setValue, toast]);
 
@@ -638,6 +649,21 @@ export function Settings() {
       setLlmPriorityList(['local', 'codex', 'openai', 'anthropic']);
     }
   };
+
+  const loadAlexaSummary = async () => {
+    setLoadingAlexaSummary(true)
+    try {
+      const response = await getAlexaSummary()
+      if (response.success && response.summary) {
+        setAlexaSummary(response.summary)
+      }
+    } catch (error) {
+      console.error('Failed to load Alexa summary:', error)
+      setAlexaSummary(null)
+    } finally {
+      setLoadingAlexaSummary(false)
+    }
+  }
 
   // Load SmartThings integration status
   const loadSmartThingsStatus = async () => {
@@ -2144,6 +2170,60 @@ export function Settings() {
     }
   }
 
+  const handleGenerateAlexaLinkCode = async (mode: "private" | "public") => {
+    setGeneratingAlexaCode(mode)
+    try {
+      const response = await generateAlexaLinkCode({ mode })
+      if (response.success) {
+        setLatestAlexaLinkCode(response)
+        toast({
+          title: "Alexa pairing code ready",
+          description: `${mode === "public" ? "Public" : "Private"} link code ${response.code} expires at ${new Date(response.expiresAt).toLocaleString()}.`
+        })
+        loadAlexaSummary()
+      }
+    } catch (error) {
+      console.error('Failed to generate Alexa link code:', error)
+      toast({
+        title: "Alexa pairing failed",
+        description: error.message || "Failed to generate Alexa pairing code",
+        variant: "destructive"
+      })
+    } finally {
+      setGeneratingAlexaCode("")
+    }
+  }
+
+  const handleSyncAlexaDiscovery = async () => {
+    setSyncingAlexaCatalog(true)
+    try {
+      const response = await syncAlexaDiscovery({ reason: "settings_manual_sync" })
+      if (response.success) {
+        if (response.result?.skipped) {
+          toast({
+            title: "Alexa broker not paired",
+            description: response.result.reason || "Pair the Alexa broker before syncing discovery."
+          })
+        } else {
+          toast({
+            title: "Alexa discovery synced",
+            description: "HomeBrain pushed the current Alexa catalog to the broker."
+          })
+        }
+        loadAlexaSummary()
+      }
+    } catch (error) {
+      console.error('Failed to sync Alexa discovery:', error)
+      toast({
+        title: "Alexa sync failed",
+        description: error.message || "Failed to sync Alexa discovery catalog",
+        variant: "destructive"
+      })
+    } finally {
+      setSyncingAlexaCatalog(false)
+    }
+  }
+
   const handleConfigureSmartThings = async () => {
     const clientId = watch('smartthingsClientId');
     const clientSecret = watch('smartthingsClientSecret');
@@ -3259,6 +3339,153 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="integrations" className="space-y-6">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Command className="h-5 w-5 text-emerald-600" />
+                  Alexa Integration
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Hub Status</p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {loadingAlexaSummary
+                        ? "Loading..."
+                        : alexaSummary?.status === "paired"
+                          ? `Paired (${alexaSummary?.mode || "private"})`
+                          : "Not paired"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Hub ID: {alexaSummary?.hubId || "Preparing local Alexa bridge"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Exposure Registry</p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {alexaSummary?.exposureStats?.valid ?? 0} valid / {alexaSummary?.exposureStats?.enabled ?? 0} enabled
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Devices, groups, scenes, and eligible manual workflows can be projected to Alexa.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Linked Households</p>
+                    <p className="mt-1 text-lg font-semibold">{alexaSummary?.linkedAccounts?.length ?? 0}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alexaSummary?.brokerBaseUrl
+                        ? `Broker: ${alexaSummary.brokerBaseUrl}`
+                        : "Pair a broker to enable account linking and proactive events."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleGenerateAlexaLinkCode("private")}
+                    disabled={generatingAlexaCode !== ""}
+                  >
+                    {generatingAlexaCode === "private" ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Generating...
+                      </>
+                    ) : (
+                      "Generate Private Link Code"
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleGenerateAlexaLinkCode("public")}
+                    disabled={generatingAlexaCode !== ""}
+                  >
+                    {generatingAlexaCode === "public" ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Generating...
+                      </>
+                    ) : (
+                      "Generate Public Link Code"
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSyncAlexaDiscovery}
+                    disabled={syncingAlexaCatalog}
+                  >
+                    {syncingAlexaCatalog ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Syncing...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Force Discovery Sync
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={loadAlexaSummary}
+                    disabled={loadingAlexaSummary}
+                  >
+                    Refresh Status
+                  </Button>
+                </div>
+
+                {latestAlexaLinkCode?.code && (
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/50 dark:bg-emerald-950/10 p-3">
+                    <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300">
+                      Active Alexa pairing code
+                    </p>
+                    <p className="mt-2 font-mono text-lg">{latestAlexaLinkCode.code}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {latestAlexaLinkCode.mode === "public" ? "Public" : "Private"} mode. Expires {new Date(latestAlexaLinkCode.expiresAt).toLocaleString()}.
+                    </p>
+                  </div>
+                )}
+
+                {Array.isArray(alexaSummary?.recentActivity) && alexaSummary.recentActivity.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Recent Alexa activity</p>
+                    <div className="space-y-2">
+                      {alexaSummary.recentActivity.slice(0, 4).map((entry: any, index: number) => (
+                        <div
+                          key={`${entry?.type || "activity"}-${entry?.occurredAt || index}`}
+                          className="rounded-md border border-border/60 bg-background/50 p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-medium">{entry?.message || entry?.type || "Alexa activity"}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {entry?.occurredAt ? new Date(entry.occurredAt).toLocaleString() : "Just now"}
+                            </p>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Direction: {entry?.direction || "system"} • Status: {entry?.status || "info"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-xs text-muted-foreground">
+                  The hub-side Alexa bridge is active now. Per-entity Alexa exposure controls are available through the new `/api/alexa/exposures` API while the broader UI rollout continues.
+                </p>
+              </CardContent>
+            </Card>
+
             <TempestIntegrationCard />
 
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">

@@ -38,6 +38,7 @@ const internalAxiomRoutes = require("./routes/internalAxiomRoutes");
 const ollamaRoutes = require("./routes/ollamaRoutes");
 const resourceRoutes = require("./routes/resourceRoutes");
 const whisperRoutes = require("./routes/whisperRoutes");
+const alexaRoutes = require("./routes/alexaRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
@@ -57,6 +58,7 @@ const axiomIngressSyncService = require("./services/axiomIngressSyncService");
 const { shutdownCodexCliService } = require("./services/codexCliService");
 const automationSchedulerService = require("./services/automationSchedulerService");
 const automationRuntimeService = require("./services/automationRuntimeService");
+const alexaBridgeService = require("./services/alexaBridgeService");
 const { connectDB } = require("./config/database");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
 const cors = require("cors");
@@ -292,6 +294,8 @@ app.use('/api/remote-updates', remoteUpdateRoutes);
 app.use('/api/events', eventStreamRoutes);
 // Discovery Routes
 app.use('/api/discovery', discoveryRoutes);
+// Alexa Routes
+app.use('/api/alexa', alexaRoutes);
 // Insteon Routes
 app.use('/api/insteon', insteonRoutes);
   // SSL Routes
@@ -391,6 +395,7 @@ async function initializeDiscoveryService() {
 }
 
 void initializeDiscoveryService();
+alexaBridgeService.start();
 automationRuntimeService.reconcileRunningExecutions({ reason: 'server_startup' })
   .then((result) => {
     if (result?.cancelledCount > 0) {
