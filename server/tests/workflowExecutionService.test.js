@@ -240,6 +240,14 @@ test('device_control action can target the triggering device from execution cont
 
   insteonService.turnOff = async (target) => {
     receivedTarget = target;
+    return {
+      message: 'Device turned off via Insteon PLM 11.22.33 (confirmed OFF with 2 reads)',
+      details: {
+        controlMethod: 'insteon_plm_direct',
+        insteonAddress: '11.22.33',
+        confirmedLevel: 0
+      }
+    };
   };
 
   const result = await executeActionSequence([
@@ -258,6 +266,8 @@ test('device_control action can target the triggering device from execution cont
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].success, true);
   assert.match(result.actionResults[0].message, /Laundry Room Fan/);
+  assert.equal(result.actionResults[0].details.controlMethod, 'insteon_plm_direct');
+  assert.equal(result.actionResults[0].details.insteonAddress, '11.22.33');
 });
 
 test('device_control action resolves direct targets from mongoose action subdocuments', async (t) => {

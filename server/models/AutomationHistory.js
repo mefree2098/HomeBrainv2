@@ -20,6 +20,7 @@ const actionResultSchema = new mongoose.Schema({
   },
   message: String,
   error: String,
+  details: mongoose.Schema.Types.Mixed,
   conditionMet: Boolean,
   conditionOutcome: String,
   executedAt: {

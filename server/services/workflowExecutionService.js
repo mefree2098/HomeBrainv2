@@ -534,33 +534,54 @@ async function executeDeviceControl(action, context = {}) {
   const actionName = getActionName(action);
   const value = getActionValue(actionName, action?.parameters || {});
   const source = (device?.properties?.source || '').toString().toLowerCase();
+  let controlResult = null;
 
   if (source === 'insteon') {
     switch (actionName) {
       case 'turn_on':
       case 'turnon':
-        await insteonService.turnOn(target.toString(), value != null ? Number(value) : 100);
+        controlResult = await insteonService.turnOn(target.toString(), value != null ? Number(value) : 100);
         break;
       case 'turn_off':
       case 'turnoff':
-        await insteonService.turnOff(target.toString());
+        controlResult = await insteonService.turnOff(target.toString());
         break;
       case 'set_brightness':
       case 'setbrightness':
-        await insteonService.setBrightness(target.toString(), value != null ? Number(value) : 100);
+        controlResult = await insteonService.setBrightness(target.toString(), value != null ? Number(value) : 100);
         break;
       default:
-        await deviceService.controlDevice(target.toString(), actionName, value);
+        controlResult = await deviceService.controlDevice(target.toString(), actionName, value);
         break;
     }
   } else {
-    await deviceService.controlDevice(target.toString(), actionName, value);
+    controlResult = await deviceService.controlDevice(target.toString(), actionName, value);
   }
+
+  const controlMessage = typeof controlResult?.message === 'string' && controlResult.message.trim()
+    ? controlResult.message.trim()
+    : null;
+  const controlDetails = controlResult && typeof controlResult === 'object'
+    ? {
+        ...((controlResult.details && typeof controlResult.details === 'object')
+          ? controlResult.details
+          : {}),
+        ...Object.fromEntries(
+          Object.entries(controlResult).filter(([key]) => !['message', 'details'].includes(key))
+        )
+      }
+    : null;
 
   return {
     target: target.toString(),
-    message: `Executed ${actionName} on ${device.name}`,
-    value
+    message: controlMessage
+      ? `Executed ${actionName} on ${device.name}: ${controlMessage}`
+      : `Executed ${actionName} on ${device.name}`,
+    value,
+    details: {
+      source,
+      ...(controlDetails && typeof controlDetails === 'object' ? controlDetails : {})
+    }
   };
 }
 
@@ -1332,7 +1353,10 @@ async function executeActionSequence(actions = [], options = {}) {
         success: true,
         executedAt: new Date(),
         durationMs: Date.now() - startedAt,
-        message: details?.message || 'Action executed'
+        message: details?.message || 'Action executed',
+        ...(details?.details && typeof details.details === 'object'
+          ? { details: details.details }
+          : {})
       };
 
       results.push(resultEntry);
