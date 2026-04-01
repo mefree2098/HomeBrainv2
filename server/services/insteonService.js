@@ -6597,7 +6597,12 @@ class InsteonService {
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error(`Timeout getting device status for ${this._formatInsteonAddress(normalizedAddress)}`));
+        const error = new Error(`Timeout getting device status for ${this._formatInsteonAddress(normalizedAddress)}`);
+        error.code = 'INSTEON_LEVEL_TIMEOUT';
+        error.details = {
+          insteonAddress: this._formatInsteonAddress(normalizedAddress)
+        };
+        reject(error);
       }, timeoutValue);
 
       this.hub.level(normalizedAddress, (error, level) => {
@@ -6723,9 +6728,97 @@ class InsteonService {
     const lastObservedText = lastState
       ? ` Last observed ${lastState.status ? 'ON' : 'OFF'} at ${lastState.brightness}% brightness.`
       : '';
-    throw new Error(
+    const error = new Error(
       `Unable to confirm a stable ${Boolean(expectedStatus) ? 'ON' : 'OFF'} state for ${this._formatInsteonAddress(normalizedAddress)}.${lastObservedText}${lastError?.message ? ` ${lastError.message}` : ''}`.trim()
     );
+    error.details = {
+      expectedStatus: Boolean(expectedStatus),
+      lastObservedState: lastState ? { ...lastState } : null,
+      lastErrorCode: lastError?.code || null
+    };
+
+    if (lastState && lastState.status === Boolean(expectedStatus)) {
+      error.code = 'INSTEON_STATE_CONFIRMATION_UNCERTAIN';
+    } else if (!lastState && lastError?.code === 'INSTEON_LEVEL_TIMEOUT') {
+      error.code = 'INSTEON_STATE_CONFIRMATION_TIMEOUT';
+    } else if (lastState && lastState.status !== Boolean(expectedStatus)) {
+      error.code = 'INSTEON_STATE_MISMATCH';
+    } else {
+      error.code = 'INSTEON_STATE_CONFIRMATION_FAILED';
+    }
+
+    throw error;
+  }
+
+  _buildOptimisticCommandState(expectedStatus, brightness = null) {
+    const targetStatus = Boolean(expectedStatus);
+    const numericBrightness = Number(brightness);
+    const normalizedBrightness = targetStatus
+      ? (Number.isFinite(numericBrightness) ? Math.max(1, Math.min(100, Math.round(numericBrightness))) : 100)
+      : 0;
+
+    return {
+      status: targetStatus,
+      brightness: normalizedBrightness,
+      level: normalizedBrightness,
+      isOnline: true,
+      lastSeen: new Date()
+    };
+  }
+
+  _isRecoverableStateConfirmationError(error, expectedStatus) {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    const code = String(error.code || '').trim().toUpperCase();
+    if (!['INSTEON_STATE_CONFIRMATION_TIMEOUT', 'INSTEON_STATE_CONFIRMATION_UNCERTAIN'].includes(code)) {
+      return false;
+    }
+
+    const lastObservedStatus = error?.details?.lastObservedState?.status;
+    return lastObservedStatus == null || lastObservedStatus === Boolean(expectedStatus);
+  }
+
+  async _executeHubCommandWithTimeout(invoke, timeoutMessage, timeoutMs = 5000) {
+    const boundedTimeoutMs = Number.isFinite(Number(timeoutMs))
+      ? Math.max(500, Number(timeoutMs))
+      : 5000;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const error = new Error(timeoutMessage);
+        error.code = 'INSTEON_COMMAND_TIMEOUT';
+        reject(error);
+      }, boundedTimeoutMs);
+
+      invoke((error) => {
+        clearTimeout(timeout);
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  async _recoverCommandStateAfterTimeout(address, expectedStatus) {
+    try {
+      return await this._confirmExpectedDeviceStateByAddress(address, expectedStatus, {
+        attempts: 2,
+        timeoutMs: 2500,
+        pauseBetweenMs: 150,
+        settleBetweenMatchesMs: 0,
+        requiredMatches: 1,
+        persistState: true
+      });
+    } catch (error) {
+      console.warn(
+        `InsteonService: Unable to recover device state for ${this._formatInsteonAddress(address)} after command timeout: ${error.message}`
+      );
+      return null;
+    }
   }
 
   _buildInsteonControlDetails(device, address, action, confirmedState = null, extra = {}) {
@@ -7171,34 +7264,77 @@ class InsteonService {
       const boundedBrightness = Number.isFinite(numericBrightness)
         ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
         : 100;
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout turning on device'));
-        }, 5000);
+      try {
+        await this._executeHubCommandWithTimeout(
+          (callback) => this.hub.turnOn(address, boundedBrightness, callback),
+          'Timeout turning on device',
+          5000
+        );
+      } catch (error) {
+        const recoveredState = await this._recoverCommandStateAfterTimeout(address, true);
+        if (recoveredState) {
+          const details = this._buildInsteonControlDetails(device, address, 'turn_on', recoveredState, {
+            requestedBrightness: boundedBrightness,
+            commandAcknowledged: false,
+            commandWarning: error.message,
+            verificationRecovered: true
+          });
+          return {
+            success: true,
+            message: `Device turned on via Insteon PLM ${details.insteonAddress} (command acknowledgement timed out, but status confirmed ON)`,
+            status: recoveredState.status,
+            brightness: recoveredState.brightness,
+            level: recoveredState.level,
+            confirmed: true,
+            warning: error.message,
+            details
+          };
+        }
+        throw error;
+      }
 
-        this.hub.turnOn(address, boundedBrightness, (error) => {
-          clearTimeout(timeout);
+      console.log(`InsteonService: Device ${address} turned on at ${boundedBrightness}%`);
+      const optimisticState = this._buildOptimisticCommandState(true, boundedBrightness);
+      await this._persistDeviceRuntimeState(device, optimisticState);
 
-          if (error) {
-            console.error(`InsteonService: Error turning on device ${address}:`, error.message);
-            reject(error);
-          } else {
-            console.log(`InsteonService: Device ${address} turned on at ${boundedBrightness}%`);
-            resolve();
-          }
+      let confirmedState = null;
+      try {
+        confirmedState = await this._confirmExpectedDeviceStateByAddress(address, true, {
+          attempts: 4,
+          timeoutMs: 4200,
+          pauseBetweenMs: 220,
+          settleBetweenMatchesMs: 250,
+          requiredMatches: 2,
+          persistState: true
         });
-      });
+      } catch (error) {
+        if (!this._isRecoverableStateConfirmationError(error, true)) {
+          throw error;
+        }
 
-      const confirmedState = await this._confirmExpectedDeviceStateByAddress(address, true, {
-        attempts: 4,
-        timeoutMs: 4200,
-        pauseBetweenMs: 220,
-        settleBetweenMatchesMs: 250,
-        requiredMatches: 2,
-        persistState: true
-      });
+        const details = this._buildInsteonControlDetails(device, address, 'turn_on', optimisticState, {
+          requestedBrightness: boundedBrightness,
+          commandAcknowledged: true,
+          confirmationWarning: error.message,
+          confirmationCode: error.code || null,
+          confirmed: false
+        });
+
+        return {
+          success: true,
+          message: `Device turned on via Insteon PLM ${details.insteonAddress} (command acknowledged; status verification pending)`,
+          status: optimisticState.status,
+          brightness: optimisticState.brightness,
+          level: optimisticState.level,
+          confirmed: false,
+          warning: error.message,
+          details
+        };
+      }
+
       const details = this._buildInsteonControlDetails(device, address, 'turn_on', confirmedState, {
-        requestedBrightness: boundedBrightness
+        requestedBrightness: boundedBrightness,
+        commandAcknowledged: true
       });
 
       return {
@@ -7242,33 +7378,75 @@ class InsteonService {
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
 
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout turning off device'));
-        }, 5000);
+      try {
+        await this._executeHubCommandWithTimeout(
+          (callback) => this.hub.turnOff(address, callback),
+          'Timeout turning off device',
+          5000
+        );
+      } catch (error) {
+        const recoveredState = await this._recoverCommandStateAfterTimeout(address, false);
+        if (recoveredState) {
+          const details = this._buildInsteonControlDetails(device, address, 'turn_off', recoveredState, {
+            commandAcknowledged: false,
+            commandWarning: error.message,
+            verificationRecovered: true
+          });
+          return {
+            success: true,
+            message: `Device turned off via Insteon PLM ${details.insteonAddress} (command acknowledgement timed out, but status confirmed OFF)`,
+            status: recoveredState.status,
+            brightness: recoveredState.brightness,
+            level: recoveredState.level,
+            confirmed: true,
+            warning: error.message,
+            details
+          };
+        }
+        throw error;
+      }
 
-        this.hub.turnOff(address, (error) => {
-          clearTimeout(timeout);
+      console.log(`InsteonService: Device ${address} turned off`);
+      const optimisticState = this._buildOptimisticCommandState(false);
+      await this._persistDeviceRuntimeState(device, optimisticState);
 
-          if (error) {
-            console.error(`InsteonService: Error turning off device ${address}:`, error.message);
-            reject(error);
-          } else {
-            console.log(`InsteonService: Device ${address} turned off`);
-            resolve();
-          }
+      let confirmedState = null;
+      try {
+        confirmedState = await this._confirmExpectedDeviceStateByAddress(address, false, {
+          attempts: 4,
+          timeoutMs: 4200,
+          pauseBetweenMs: 220,
+          settleBetweenMatchesMs: 250,
+          requiredMatches: 2,
+          persistState: true
         });
-      });
+      } catch (error) {
+        if (!this._isRecoverableStateConfirmationError(error, false)) {
+          throw error;
+        }
 
-      const confirmedState = await this._confirmExpectedDeviceStateByAddress(address, false, {
-        attempts: 4,
-        timeoutMs: 4200,
-        pauseBetweenMs: 220,
-        settleBetweenMatchesMs: 250,
-        requiredMatches: 2,
-        persistState: true
+        const details = this._buildInsteonControlDetails(device, address, 'turn_off', optimisticState, {
+          commandAcknowledged: true,
+          confirmationWarning: error.message,
+          confirmationCode: error.code || null,
+          confirmed: false
+        });
+
+        return {
+          success: true,
+          message: `Device turned off via Insteon PLM ${details.insteonAddress} (command acknowledged; status verification pending)`,
+          status: optimisticState.status,
+          brightness: optimisticState.brightness,
+          level: optimisticState.level,
+          confirmed: false,
+          warning: error.message,
+          details
+        };
+      }
+
+      const details = this._buildInsteonControlDetails(device, address, 'turn_off', confirmedState, {
+        commandAcknowledged: true
       });
-      const details = this._buildInsteonControlDetails(device, address, 'turn_off', confirmedState);
 
       return {
         success: true,
