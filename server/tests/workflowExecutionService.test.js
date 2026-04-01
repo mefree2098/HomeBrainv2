@@ -323,6 +323,9 @@ test('device_control action can target a device group', async (t) => {
   const originalFind = Device.find;
   const originalTurnOff = insteonService.turnOff;
   const receivedTargets = [];
+  const receivedOptions = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
 
   t.after(() => {
     Device.find = originalFind;
@@ -358,8 +361,13 @@ test('device_control action can target a device group', async (t) => {
     })
   });
 
-  insteonService.turnOff = async (target) => {
+  insteonService.turnOff = async (target, options) => {
     receivedTargets.push(target);
+    receivedOptions.push(options);
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    inFlight -= 1;
     return {
       message: `Device turned off via Insteon PLM ${target}`,
       details: {
@@ -377,9 +385,15 @@ test('device_control action can target a device group', async (t) => {
   ], { context: {} });
 
   assert.deepEqual(receivedTargets.sort(), groupDevices.map((device) => device._id).sort());
+  assert.ok(maxInFlight > 1);
+  assert.deepEqual(
+    receivedOptions.map((entry) => entry?.verificationMode),
+    ['fast', 'fast']
+  );
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].success, true);
   assert.equal(result.actionResults[0].details.group, 'Interior Lights');
+  assert.equal(result.actionResults[0].details.executionMode, 'parallel');
   assert.equal(result.actionResults[0].details.successfulTargets, 2);
 });
 

@@ -6766,6 +6766,29 @@ class InsteonService {
     };
   }
 
+  _getExpectedStateConfirmationOptions(expectedStatus, options = {}) {
+    const verificationMode = String(options?.verificationMode || 'stable').trim().toLowerCase();
+    if (verificationMode === 'fast') {
+      return {
+        attempts: Boolean(expectedStatus) ? 2 : 2,
+        timeoutMs: 1500,
+        pauseBetweenMs: 120,
+        settleBetweenMatchesMs: 0,
+        requiredMatches: 1,
+        persistState: true
+      };
+    }
+
+    return {
+      attempts: 4,
+      timeoutMs: 4200,
+      pauseBetweenMs: 220,
+      settleBetweenMatchesMs: 250,
+      requiredMatches: 2,
+      persistState: true
+    };
+  }
+
   _isRecoverableStateConfirmationError(error, expectedStatus) {
     if (!error || typeof error !== 'object') {
       return false;
@@ -7241,7 +7264,7 @@ class InsteonService {
    * @param {Number} brightness - Optional brightness level (0-100)
    * @returns {Promise<Object>} Command result
    */
-  async turnOn(deviceId, brightness = 100) {
+  async turnOn(deviceId, brightness = 100, options = {}) {
     console.log(`InsteonService: Turning on device ${deviceId} at ${brightness}%`);
 
     try {
@@ -7296,17 +7319,11 @@ class InsteonService {
       console.log(`InsteonService: Device ${address} turned on at ${boundedBrightness}%`);
       const optimisticState = this._buildOptimisticCommandState(true, boundedBrightness);
       await this._persistDeviceRuntimeState(device, optimisticState);
+      const confirmOptions = this._getExpectedStateConfirmationOptions(true, options);
 
       let confirmedState = null;
       try {
-        confirmedState = await this._confirmExpectedDeviceStateByAddress(address, true, {
-          attempts: 4,
-          timeoutMs: 4200,
-          pauseBetweenMs: 220,
-          settleBetweenMatchesMs: 250,
-          requiredMatches: 2,
-          persistState: true
-        });
+        confirmedState = await this._confirmExpectedDeviceStateByAddress(address, true, confirmOptions);
       } catch (error) {
         if (!this._isRecoverableStateConfirmationError(error, true)) {
           throw error;
@@ -7315,6 +7332,7 @@ class InsteonService {
         const details = this._buildInsteonControlDetails(device, address, 'turn_on', optimisticState, {
           requestedBrightness: boundedBrightness,
           commandAcknowledged: true,
+          verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
           confirmationWarning: error.message,
           confirmationCode: error.code || null,
           confirmed: false
@@ -7334,7 +7352,8 @@ class InsteonService {
 
       const details = this._buildInsteonControlDetails(device, address, 'turn_on', confirmedState, {
         requestedBrightness: boundedBrightness,
-        commandAcknowledged: true
+        commandAcknowledged: true,
+        verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase()
       });
 
       return {
@@ -7358,7 +7377,7 @@ class InsteonService {
    * @param {String} deviceId - Database device ID
    * @returns {Promise<Object>} Command result
    */
-  async turnOff(deviceId) {
+  async turnOff(deviceId, options = {}) {
     console.log(`InsteonService: Turning off device ${deviceId}`);
 
     try {
@@ -7409,17 +7428,11 @@ class InsteonService {
       console.log(`InsteonService: Device ${address} turned off`);
       const optimisticState = this._buildOptimisticCommandState(false);
       await this._persistDeviceRuntimeState(device, optimisticState);
+      const confirmOptions = this._getExpectedStateConfirmationOptions(false, options);
 
       let confirmedState = null;
       try {
-        confirmedState = await this._confirmExpectedDeviceStateByAddress(address, false, {
-          attempts: 4,
-          timeoutMs: 4200,
-          pauseBetweenMs: 220,
-          settleBetweenMatchesMs: 250,
-          requiredMatches: 2,
-          persistState: true
-        });
+        confirmedState = await this._confirmExpectedDeviceStateByAddress(address, false, confirmOptions);
       } catch (error) {
         if (!this._isRecoverableStateConfirmationError(error, false)) {
           throw error;
@@ -7427,6 +7440,7 @@ class InsteonService {
 
         const details = this._buildInsteonControlDetails(device, address, 'turn_off', optimisticState, {
           commandAcknowledged: true,
+          verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
           confirmationWarning: error.message,
           confirmationCode: error.code || null,
           confirmed: false
@@ -7445,7 +7459,8 @@ class InsteonService {
       }
 
       const details = this._buildInsteonControlDetails(device, address, 'turn_off', confirmedState, {
-        commandAcknowledged: true
+        commandAcknowledged: true,
+        verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase()
       });
 
       return {
@@ -7470,13 +7485,13 @@ class InsteonService {
    * @param {Number} brightness - Brightness level (0-100)
    * @returns {Promise<Object>} Command result
    */
-  async setBrightness(deviceId, brightness) {
+  async setBrightness(deviceId, brightness, options = {}) {
     console.log(`InsteonService: Setting device ${deviceId} brightness to ${brightness}%`);
 
     if (brightness === 0) {
-      return this.turnOff(deviceId);
+      return this.turnOff(deviceId, options);
     } else {
-      return this.turnOn(deviceId, brightness);
+      return this.turnOn(deviceId, brightness, options);
     }
   }
 

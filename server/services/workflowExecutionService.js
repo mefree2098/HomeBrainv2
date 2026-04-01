@@ -18,6 +18,14 @@ const MAX_NESTED_CONDITION_DEPTH = 4;
 const MAX_WORKFLOW_CONTROL_DEPTH = 8;
 const MAX_REPEAT_EVERY_ITERATIONS = 500;
 const STOP_REQUEST_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_DEVICE_GROUP_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.WORKFLOW_DEVICE_GROUP_CONCURRENCY || 8)
+);
+const DEFAULT_INSTEON_GROUP_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.WORKFLOW_INSTEON_GROUP_CONCURRENCY || 6)
+);
 
 const conditionStateCache = new Map();
 const isyVariableStore = new Map();
@@ -41,6 +49,40 @@ function sanitizeString(value) {
     return '';
   }
   return value.trim();
+}
+
+function getDeviceSource(device) {
+  return sanitizeString(device?.properties?.source).toLowerCase();
+}
+
+function getDeviceGroupConcurrency(devices = []) {
+  const hasInsteon = devices.some((device) => getDeviceSource(device) === 'insteon');
+  return hasInsteon ? DEFAULT_INSTEON_GROUP_CONCURRENCY : DEFAULT_DEVICE_GROUP_CONCURRENCY;
+}
+
+async function mapWithConcurrency(items, limit, iteratee) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  const concurrency = Math.max(1, Math.min(Number(limit) || 1, items.length));
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      if (currentIndex >= items.length) {
+        return;
+      }
+
+      results[currentIndex] = await iteratee(items[currentIndex], currentIndex);
+    }
+  }));
+
+  return results;
 }
 
 function normalizeDeviceGroupTarget(rawTarget) {
@@ -545,23 +587,34 @@ async function resolveWorkflowReference(parameters = {}, options = {}) {
   return null;
 }
 
-async function executeDeviceControlForResolvedDevice(device, target, actionName, value) {
-  const source = (device?.properties?.source || '').toString().toLowerCase();
+async function executeDeviceControlForResolvedDevice(device, target, actionName, value, executionOptions = {}) {
+  const source = getDeviceSource(device);
   let controlResult = null;
+  const insteonOptions = executionOptions?.insteon && typeof executionOptions.insteon === 'object'
+    ? executionOptions.insteon
+    : {};
 
   if (source === 'insteon') {
     switch (actionName) {
       case 'turn_on':
       case 'turnon':
-        controlResult = await insteonService.turnOn(target.toString(), value != null ? Number(value) : 100);
+        controlResult = await insteonService.turnOn(
+          target.toString(),
+          value != null ? Number(value) : 100,
+          insteonOptions
+        );
         break;
       case 'turn_off':
       case 'turnoff':
-        controlResult = await insteonService.turnOff(target.toString());
+        controlResult = await insteonService.turnOff(target.toString(), insteonOptions);
         break;
       case 'set_brightness':
       case 'setbrightness':
-        controlResult = await insteonService.setBrightness(target.toString(), value != null ? Number(value) : 100);
+        controlResult = await insteonService.setBrightness(
+          target.toString(),
+          value != null ? Number(value) : 100,
+          insteonOptions
+        );
         break;
       default:
         controlResult = await deviceService.controlDevice(target.toString(), actionName, value);
@@ -616,41 +669,53 @@ async function executeDeviceGroupControl(groupTarget, action) {
 
   const actionName = getActionName(action);
   const value = getActionValue(actionName, action?.parameters || {});
-  const memberResults = [];
-
-  for (const device of devices) {
+  const concurrency = getDeviceGroupConcurrency(devices);
+  const memberResults = (await mapWithConcurrency(devices, concurrency, async (device) => {
     const target = device?._id?.toString?.() || null;
     if (!target) {
-      continue;
+      return null;
     }
 
     try {
-      // eslint-disable-next-line no-await-in-loop
-      const result = await executeDeviceControlForResolvedDevice(device, target, actionName, value);
-      memberResults.push({
+      const result = await executeDeviceControlForResolvedDevice(
+        device,
+        target,
+        actionName,
+        value,
+        {
+          insteon: {
+            verificationMode: 'fast',
+            deviceGroup: groupName
+          }
+        }
+      );
+
+      return {
         deviceId: target,
         deviceName: device.name,
         room: device.room || '',
         success: true,
         message: result.message,
         details: result.details || {}
-      });
+      };
     } catch (error) {
-      memberResults.push({
+      return {
         deviceId: target,
         deviceName: device.name,
         room: device.room || '',
         success: false,
         error: error.message || 'Group device control failed'
-      });
+      };
     }
-  }
+  })).filter(Boolean);
 
   const successfulTargets = memberResults.filter((entry) => entry.success).length;
   const failedTargets = memberResults.length - successfulTargets;
   const details = {
     kind: 'device_group',
     group: groupName,
+    executionMode: 'parallel',
+    concurrency,
     totalTargets: memberResults.length,
     successfulTargets,
     failedTargets,
