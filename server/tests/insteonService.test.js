@@ -222,6 +222,80 @@ test('_parseRuntimeCommand infers state from unsolicited 0D and 0C switch events
   assert.equal(offAlternateCommand.inferredState.brightness, 0);
 });
 
+test('_parseRuntimeCommand treats all-link scene broadcasts as controller events instead of literal brightness bytes', () => {
+  const broadcastCommand = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '38.89.78',
+      messageType: 6,
+      gatewayId: '02',
+      command1: '11',
+      command2: '01'
+    }
+  });
+
+  assert.ok(broadcastCommand);
+  assert.equal(broadcastCommand.address, '388978');
+  assert.equal(broadcastCommand.messageType, 6);
+  assert.equal(broadcastCommand.broadcastGroup, 2);
+  assert.equal(broadcastCommand.sceneCommand1, '11');
+  assert.equal(broadcastCommand.sceneCommand2, '01');
+  assert.equal(broadcastCommand.inferredState.status, true);
+  assert.equal(broadcastCommand.inferredState.brightness, 100);
+});
+
+test('_handleRuntimeCommand queues linked responder refreshes for controller scene broadcasts', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalGetRuntimeSceneResponderAddresses = insteonService._getRuntimeSceneResponderAddresses;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._getRuntimeSceneResponderAddresses = originalGetRuntimeSceneResponderAddresses;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+  insteonService._getRuntimeSceneResponderAddresses = async (address, group) => {
+    assert.equal(address, '388978');
+    assert.equal(group, 2);
+    return ['388A57'];
+  };
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.89.78',
+      messageType: 6,
+      gatewayId: '02',
+      command1: '11',
+      command2: '01'
+    }
+  });
+
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].address, '388978');
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[0].patch.brightness, 100);
+
+  assert.equal(scheduledRefreshes.length, 2);
+  assert.deepEqual(
+    scheduledRefreshes.map((entry) => entry.address).sort(),
+    ['388978', '388A57'].sort()
+  );
+
+  const responderRefresh = scheduledRefreshes.find((entry) => entry.address === '388A57');
+  assert.ok(responderRefresh);
+  assert.equal(responderRefresh.options.expectedStatus, true);
+});
+
 test('_confirmDeviceStateByAddress retries level query and persists confirmed state', async (t) => {
   const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
