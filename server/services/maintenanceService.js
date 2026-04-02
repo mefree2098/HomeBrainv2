@@ -1,3 +1,4 @@
+const { randomUUID } = require('node:crypto');
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
 const Automation = require('../models/Automation');
@@ -11,8 +12,14 @@ const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
 const insteonService = require('./insteonService');
 
+const DEFAULT_INSTEON_SYNC_RUN_RETENTION = 20;
+const DEFAULT_INSTEON_SYNC_RUN_LOG_LIMIT = 1000;
+
 class MaintenanceService {
   constructor() {
+    this._insteonSyncRuns = new Map();
+    this._insteonSyncRunRetention = DEFAULT_INSTEON_SYNC_RUN_RETENTION;
+    this._insteonSyncRunLogLimit = DEFAULT_INSTEON_SYNC_RUN_LOG_LIMIT;
     console.log('MaintenanceService: Initialized');
   }
 
@@ -912,15 +919,243 @@ class MaintenanceService {
     }
   }
 
+  _normalizeInsteonSyncLogEntry(entry = {}) {
+    if (!entry || typeof entry !== 'object') {
+      return null;
+    }
+
+    const message = typeof entry.message === 'string' ? entry.message.trim() : '';
+    if (!message) {
+      return null;
+    }
+
+    const stage = typeof entry.stage === 'string' ? entry.stage.trim() : '';
+    const level = ['info', 'warn', 'error'].includes(entry.level) ? entry.level : 'info';
+    const timestamp = typeof entry.timestamp === 'string' && entry.timestamp.trim()
+      ? entry.timestamp
+      : new Date().toISOString();
+    const progress = Number.isFinite(Number(entry.progress))
+      ? Math.max(0, Math.min(100, Number(entry.progress)))
+      : null;
+
+    return {
+      timestamp,
+      message,
+      stage: stage || null,
+      level,
+      progress
+    };
+  }
+
+  _snapshotInsteonSyncRun(run) {
+    if (!run || typeof run !== 'object') {
+      return null;
+    }
+
+    return {
+      id: run.id,
+      status: run.status,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+      finishedAt: run.finishedAt || null,
+      request: run.request,
+      cancelRequested: Boolean(run.cancelRequested),
+      logs: Array.isArray(run.logs) ? run.logs.slice() : [],
+      result: run.result || null,
+      error: run.error || null
+    };
+  }
+
+  _pruneInsteonSyncRuns() {
+    while (this._insteonSyncRuns.size > this._insteonSyncRunRetention) {
+      const oldestRunId = this._insteonSyncRuns.keys().next().value;
+      if (!oldestRunId) {
+        break;
+      }
+      this._insteonSyncRuns.delete(oldestRunId);
+    }
+  }
+
+  _appendInsteonSyncRunLog(runId, entry) {
+    const run = this._insteonSyncRuns.get(runId);
+    if (!run) {
+      return;
+    }
+
+    const normalizedEntry = this._normalizeInsteonSyncLogEntry(entry);
+    if (!normalizedEntry) {
+      return;
+    }
+
+    run.logs.push(normalizedEntry);
+    if (run.logs.length > this._insteonSyncRunLogLimit) {
+      run.logs.splice(0, run.logs.length - this._insteonSyncRunLogLimit);
+    }
+    run.updatedAt = new Date().toISOString();
+  }
+
+  _createInsteonSyncRun(payload = {}) {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const run = {
+      id,
+      status: 'running',
+      createdAt: now,
+      updatedAt: now,
+      finishedAt: null,
+      request: {
+        skipExisting: payload?.skipExisting === true
+      },
+      cancelRequested: false,
+      logs: [],
+      result: null,
+      error: null
+    };
+
+    this._insteonSyncRuns.set(id, run);
+    this._pruneInsteonSyncRuns();
+    return run;
+  }
+
+  getInsteonSyncRun(runId) {
+    const id = typeof runId === 'string' ? runId.trim() : '';
+    if (!id) {
+      return null;
+    }
+
+    return this._snapshotInsteonSyncRun(this._insteonSyncRuns.get(id));
+  }
+
+  cancelInsteonSyncRun(runId) {
+    const id = typeof runId === 'string' ? runId.trim() : '';
+    if (!id) {
+      return null;
+    }
+
+    const run = this._insteonSyncRuns.get(id);
+    if (!run) {
+      return null;
+    }
+
+    if (['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status)) {
+      return this._snapshotInsteonSyncRun(run);
+    }
+
+    run.cancelRequested = true;
+    run.updatedAt = new Date().toISOString();
+    this._appendInsteonSyncRunLog(run.id, {
+      message: 'Cancellation requested by user; waiting for the current PLM operation to finish.',
+      stage: 'cancel',
+      level: 'warn'
+    });
+
+    return this._snapshotInsteonSyncRun(run);
+  }
+
+  startInsteonSyncRun(payload = {}) {
+    const run = this._createInsteonSyncRun(payload);
+    this._appendInsteonSyncRunLog(run.id, {
+      message: 'Queued INSTEON PLM sync run',
+      stage: 'queued',
+      progress: 0
+    });
+
+    (async () => {
+      try {
+        const result = await this.forceInsteonSync(run.request, {
+          onProgress: (entry) => this._appendInsteonSyncRunLog(run.id, entry),
+          shouldCancel: () => Boolean(this._insteonSyncRuns.get(run.id)?.cancelRequested)
+        });
+
+        const storedRun = this._insteonSyncRuns.get(run.id);
+        if (!storedRun) {
+          return;
+        }
+
+        const completedWithWarnings = Number(result?.failed || 0) > 0
+          || (Array.isArray(result?.warnings) && result.warnings.length > 0)
+          || (Array.isArray(result?.diagnostics) && result.diagnostics.length > 0)
+          || Number(result?.linkedDeviceCount || 0) === 0;
+        storedRun.status = completedWithWarnings ? 'completed_with_errors' : 'completed';
+        storedRun.result = result;
+        storedRun.error = null;
+        storedRun.finishedAt = new Date().toISOString();
+        storedRun.updatedAt = storedRun.finishedAt;
+        this._appendInsteonSyncRunLog(run.id, {
+          message: result?.message || 'INSTEON PLM sync completed',
+          stage: 'complete',
+          level: completedWithWarnings ? 'warn' : 'info',
+          progress: 100
+        });
+      } catch (error) {
+        const storedRun = this._insteonSyncRuns.get(run.id);
+        if (!storedRun) {
+          return;
+        }
+
+        const cancelled = error?.code === 'INSTEON_SYNC_CANCELLED' || error?.isCancelled === true;
+        storedRun.status = cancelled ? 'cancelled' : 'failed';
+        storedRun.result = null;
+        storedRun.error = cancelled ? 'INSTEON sync cancelled by user.' : (error.message || 'INSTEON sync failed.');
+        storedRun.finishedAt = new Date().toISOString();
+        storedRun.updatedAt = storedRun.finishedAt;
+        this._appendInsteonSyncRunLog(run.id, {
+          message: cancelled ? 'INSTEON sync cancelled by user' : (error.message || 'INSTEON sync failed'),
+          stage: 'complete',
+          level: cancelled ? 'warn' : 'error',
+          progress: 100
+        });
+      }
+    })();
+
+    return this._snapshotInsteonSyncRun(run);
+  }
+
   /**
    * Force re-sync all INSTEON devices
    * @returns {Promise<Object>} Result of the operation
    */
-  async forceInsteonSync() {
+  async forceInsteonSync(options = {}, runtime = {}) {
     console.log('MaintenanceService: Starting INSTEON force sync');
 
+    const onProgress = runtime && typeof runtime.onProgress === 'function'
+      ? runtime.onProgress
+      : null;
+    const shouldCancel = runtime && typeof runtime.shouldCancel === 'function'
+      ? runtime.shouldCancel
+      : null;
+    const reportProgress = (message, details = {}) => {
+      if (!onProgress) {
+        return;
+      }
+
+      try {
+        onProgress({
+          timestamp: new Date().toISOString(),
+          message,
+          ...details
+        });
+      } catch (error) {
+        console.warn(`MaintenanceService: Failed to publish INSTEON sync progress update: ${error.message}`);
+      }
+    };
+
+    reportProgress('Starting INSTEON maintenance sync', {
+      stage: 'start',
+      progress: 0
+    });
+
     try {
-      const result = await insteonService.syncDevicesFromPLM({ skipExisting: false });
+      const result = await insteonService.syncDevicesFromPLM({
+        skipExisting: options?.skipExisting === true
+      }, {
+        onProgress,
+        shouldCancel
+      });
+      reportProgress('Refreshing INSTEON runtime monitoring', {
+        stage: 'finalize',
+        progress: 94
+      });
       insteonService.startRuntimeMonitoring({ immediate: false });
       const runtimeStatus = await insteonService.getStatusSnapshot().catch(() => insteonService.getStatus());
       const diagnostics = Array.isArray(result.warnings) ? [...result.warnings] : [];
@@ -929,7 +1164,14 @@ class MaintenanceService {
         diagnostics.push('PLM transport is connected, but the PLM link database returned 0 linked devices.');
       }
 
-      return {
+      if (runtimeStatus?.connected) {
+        reportProgress('PLM transport is connected; runtime status refreshed.', {
+          stage: 'finalize',
+          progress: 98
+        });
+      }
+
+      const response = {
         success: true,
         message: result.message,
         deviceCount: result.deviceCount,
@@ -943,9 +1185,22 @@ class MaintenanceService {
         runtimeStatus,
         diagnostics
       };
+
+      diagnostics.forEach((diagnostic) => {
+        reportProgress(diagnostic, {
+          stage: 'complete',
+          level: 'warn',
+          progress: 100
+        });
+      });
+
+      return response;
     } catch (error) {
       console.error('MaintenanceService: Error during INSTEON sync:', error.message);
       console.error(error.stack);
+      if (error?.code === 'INSTEON_SYNC_CANCELLED' || error?.isCancelled === true) {
+        throw error;
+      }
       const runtimeStatus = await insteonService.getStatusSnapshot().catch(() => insteonService.getStatus());
       const endpoint = runtimeStatus?.port || runtimeStatus?.configuredTarget || runtimeStatus?.resolvedTarget?.label || null;
       const connectionNote = runtimeStatus?.connected

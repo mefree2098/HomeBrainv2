@@ -90,7 +90,9 @@ import {
   clearAllFakeData,
   injectFakeData,
   forceSmartThingsSync,
-  forceInsteonSync,
+  startInsteonSyncRun,
+  getInsteonSyncRun,
+  cancelInsteonSyncRun,
   forceHarmonySync,
   clearSmartThingsDevices,
   clearInsteonDevices,
@@ -100,7 +102,8 @@ import {
   clearVoiceCommandHistory,
   performHealthCheck,
   exportConfiguration,
-  type InsteonMaintenanceSyncResponse
+  type InsteonMaintenanceSyncResponse,
+  type InsteonMaintenanceSyncRunSnapshot
 } from "@/api/maintenance"
 import {
   getHarmonyStatus,
@@ -352,6 +355,10 @@ export function Settings() {
   const [insteonLinkedStatusRunId, setInsteonLinkedStatusRunId] = useState<string | null>(null)
   const [insteonLinkedStatusRunStatus, setInsteonLinkedStatusRunStatus] = useState<string | null>(null)
   const [insteonLinkedStatusRunLogs, setInsteonLinkedStatusRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
+  const [insteonSyncRunId, setInsteonSyncRunId] = useState<string | null>(null)
+  const [insteonSyncRunStatus, setInsteonSyncRunStatus] = useState<string | null>(null)
+  const [insteonSyncRunLogs, setInsteonSyncRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
+  const [cancellingInsteonSyncRun, setCancellingInsteonSyncRun] = useState(false)
   const [testingIsyConnection, setTestingIsyConnection] = useState(false)
   const [extractingIsyData, setExtractingIsyData] = useState(false)
   const [previewingIsyMigration, setPreviewingIsyMigration] = useState(false)
@@ -1643,7 +1650,32 @@ export function Settings() {
     }
   }
 
+  const formatInsteonSyncRunStatusLabel = (status: string | null | undefined) => {
+    switch ((status || "").toLowerCase()) {
+      case "running":
+        return "Running"
+      case "completed":
+        return "Completed"
+      case "completed_with_errors":
+        return "Completed With Errors"
+      case "cancelled":
+        return "Cancelled"
+      case "failed":
+        return "Failed"
+      default:
+        return status || "Unknown"
+    }
+  }
+
   const formatLinkedStatusLogLine = (entry: InsteonIsySyncRunLogEntry) => {
+    const timestampText = entry?.timestamp
+      ? new Date(entry.timestamp).toLocaleTimeString()
+      : "--:--:--"
+    const stageText = entry?.stage ? `[${entry.stage}] ` : ""
+    return `[${timestampText}] ${stageText}${entry?.message || "No message"}`
+  }
+
+  const formatInsteonSyncLogLine = (entry: InsteonIsySyncRunLogEntry) => {
     const timestampText = entry?.timestamp
       ? new Date(entry.timestamp).toLocaleTimeString()
       : "--:--:--"
@@ -1674,6 +1706,20 @@ export function Settings() {
 
     const logLines = insteonLinkedStatusRunLogs.length > 0
       ? insteonLinkedStatusRunLogs.map((entry) => formatLinkedStatusLogLine(entry))
+      : ["(no log entries)"]
+
+    return [...headerLines, "", ...logLines].join("\n")
+  }
+
+  const buildInsteonSyncLogText = () => {
+    const headerLines = [
+      `Status: ${formatInsteonSyncRunStatusLabel(insteonSyncRunStatus)}`,
+      `Run ID: ${insteonSyncRunId || "unknown"}`,
+      `Generated: ${new Date().toISOString()}`
+    ]
+
+    const logLines = insteonSyncRunLogs.length > 0
+      ? insteonSyncRunLogs.map((entry) => formatInsteonSyncLogLine(entry))
       : ["(no log entries)"]
 
     return [...headerLines, "", ...logLines].join("\n")
@@ -1761,6 +1807,35 @@ export function Settings() {
       toast({
         title: "Copy failed",
         description: error?.message || "Unable to copy query logs.",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleCopyInsteonSyncLogs = async () => {
+    if (insteonSyncRunLogs.length === 0) {
+      toast({
+        title: "No logs to copy",
+        description: "Run an INSTEON sync first or wait for log output.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      const copied = await copyTextToClipboard(buildInsteonSyncLogText())
+      if (!copied) {
+        throw new Error("Clipboard unavailable")
+      }
+
+      toast({
+        title: "Sync log copied",
+        description: `Copied ${insteonSyncRunLogs.length} log line${insteonSyncRunLogs.length === 1 ? "" : "s"} to clipboard.`
+      })
+    } catch (error: any) {
+      toast({
+        title: "Copy failed",
+        description: error?.message || "Unable to copy sync logs.",
         variant: "destructive"
       })
     }
@@ -3121,24 +3196,93 @@ export function Settings() {
     }
   };
 
+  const applyInsteonSyncRunSnapshot = (run: InsteonMaintenanceSyncRunSnapshot | null | undefined) => {
+    if (!run) {
+      return
+    }
+
+    setInsteonSyncRunStatus(run.status || null)
+    setInsteonSyncRunLogs(Array.isArray(run.logs) ? run.logs : [])
+
+    if (run.result?.runtimeStatus) {
+      setInsteonRuntimeStatus(run.result.runtimeStatus)
+    }
+  }
+
   const handleSyncInsteon = async () => {
     setSyncingInsteon(true);
+    setCancellingInsteonSyncRun(false)
+    setInsteonSyncRunId(null)
+    setInsteonSyncRunStatus("running")
+    setInsteonSyncRunLogs([])
     try {
-      console.log('Syncing INSTEON devices...');
-      const response = await forceInsteonSync();
-      if (response.runtimeStatus) {
-        setInsteonRuntimeStatus(response.runtimeStatus)
+      console.log('Starting async INSTEON sync...');
+      const startResponse = await startInsteonSyncRun()
+      const runId = startResponse?.runId || startResponse?.run?.id
+      if (!runId) {
+        throw new Error("INSTEON sync started but no run id was returned by the server.")
       }
-      const runtimeStatus = response.runtimeStatus || await loadInsteonRuntimeStatus({ quiet: true });
 
-      if (response.success) {
-        const linkedDeviceCount = Number.isFinite(Number(response.linkedDeviceCount))
-          ? Number(response.linkedDeviceCount)
-          : null
-        toast({
-          title: linkedDeviceCount === 0 ? "Sync Completed With Warnings" : "Sync Complete",
-          description: buildInsteonSyncDescription(response, runtimeStatus)
-        });
+      setInsteonSyncRunId(runId)
+      applyInsteonSyncRunSnapshot(startResponse?.run)
+
+      const pollingStartedAt = Date.now()
+      const maxPollDurationMs = 1000 * 60 * 60 * 2
+      let consecutivePollFailures = 0
+
+      while (true) {
+        if (Date.now() - pollingStartedAt > maxPollDurationMs) {
+          throw new Error("INSTEON sync is still running after 2 hours; polling timed out. Refresh and continue monitoring with the same run id.")
+        }
+
+        try {
+          const statusResponse = await getInsteonSyncRun(runId)
+          const run = statusResponse?.run
+          if (!run) {
+            throw new Error("INSTEON sync status response did not include a run snapshot.")
+          }
+
+          consecutivePollFailures = 0
+          applyInsteonSyncRunSnapshot(run)
+
+          const isTerminal = run.status === "completed"
+            || run.status === "completed_with_errors"
+            || run.status === "cancelled"
+            || run.status === "failed"
+
+          if (isTerminal) {
+            const result = run.result || null
+            const runtimeStatus = result?.runtimeStatus || await loadInsteonRuntimeStatus({ quiet: true })
+
+            if (run.status === "cancelled") {
+              toast({
+                title: "INSTEON sync cancelled",
+                description: run.error || "INSTEON sync was cancelled."
+              })
+            } else if (run.status === "failed") {
+              throw new Error(run.error || "INSTEON sync failed.")
+            } else if (result) {
+              const linkedDeviceCount = Number.isFinite(Number(result.linkedDeviceCount))
+                ? Number(result.linkedDeviceCount)
+                : null
+              toast({
+                title: run.status === "completed_with_errors" || linkedDeviceCount === 0
+                  ? "Sync Completed With Warnings"
+                  : "Sync Complete",
+                description: buildInsteonSyncDescription(result, runtimeStatus)
+              })
+            }
+
+            break
+          }
+        } catch (pollError: any) {
+          consecutivePollFailures += 1
+          if (consecutivePollFailures >= 5) {
+            throw new Error(pollError?.message || "Failed to poll INSTEON sync log updates.")
+          }
+        }
+
+        await sleep(1000)
       }
     } catch (error) {
       console.error('INSTEON sync failed:', error);
@@ -3148,9 +3292,35 @@ export function Settings() {
         variant: "destructive"
       });
     } finally {
+      await loadInsteonRuntimeStatus({ quiet: true })
+      setCancellingInsteonSyncRun(false)
       setSyncingInsteon(false);
     }
   };
+
+  const handleCancelInsteonSync = async () => {
+    if (!insteonSyncRunId || !syncingInsteon) {
+      return
+    }
+
+    setCancellingInsteonSyncRun(true)
+    try {
+      const response = await cancelInsteonSyncRun(insteonSyncRunId)
+      applyInsteonSyncRunSnapshot(response?.run)
+      toast({
+        title: "Cancel requested",
+        description: response?.message || "Waiting for the current PLM operation to finish."
+      })
+    } catch (error: any) {
+      toast({
+        title: "Cancel request failed",
+        description: error?.message || "Unable to request cancellation for INSTEON sync.",
+        variant: "destructive"
+      })
+    } finally {
+      setCancellingInsteonSyncRun(false)
+    }
+  }
 
   const handleSyncHarmonyMaintenance = async () => {
     setSyncingHarmony(true);
@@ -6863,6 +7033,75 @@ export function Settings() {
                       )}
                     </Button>
                   </div>
+
+                  {(syncingInsteon || insteonSyncRunLogs.length > 0) && (
+                    <div className="rounded-md border border-slate-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-medium">INSTEON sync log</p>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <p className="text-muted-foreground whitespace-nowrap">
+                            Status: {formatInsteonSyncRunStatusLabel(insteonSyncRunStatus)}
+                            {insteonSyncRunId ? ` • Run ${insteonSyncRunId.slice(0, 8)}` : ""}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleCopyInsteonSyncLogs}
+                            disabled={insteonSyncRunLogs.length === 0}
+                            className="h-7 px-2"
+                          >
+                            <Copy className="h-3.5 w-3.5 mr-1" />
+                            Copy Logs
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleCancelInsteonSync}
+                            disabled={!syncingInsteon || !insteonSyncRunId || cancellingInsteonSyncRun}
+                            className="h-7 px-2"
+                          >
+                            {cancellingInsteonSyncRun ? (
+                              <>
+                                <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-gray-600 mr-1" />
+                                Cancelling...
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="h-3.5 w-3.5 mr-1" />
+                                Cancel
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="max-h-64 overflow-y-auto rounded border border-slate-200/70 bg-slate-950/85 p-2 font-mono text-[11px] leading-5 text-slate-100 dark:border-slate-800/70">
+                        {insteonSyncRunLogs.length > 0 ? (
+                          insteonSyncRunLogs.map((entry, index) => {
+                            const levelClass = entry?.level === "error"
+                              ? "text-red-300"
+                              : entry?.level === "warn"
+                                ? "text-amber-300"
+                                : "text-slate-100"
+
+                            return (
+                              <p key={`insteon-sync-log-${index}`} className={levelClass}>
+                                <span className="text-slate-400">
+                                  [{entry?.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "--:--:--"}]
+                                </span> {entry?.stage ? `[${entry.stage}] ` : ""}{entry?.message || "No message"}
+                              </p>
+                            )
+                          })
+                        ) : (
+                          <p className="text-slate-400">Waiting for INSTEON sync log output...</p>
+                        )}
+                      </div>
+                      <p className="text-muted-foreground">
+                        Log updates refresh every second while the sync run is active.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

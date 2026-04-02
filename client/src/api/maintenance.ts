@@ -1,5 +1,5 @@
 import api from './api';
-import type { InsteonStatusResponse } from './insteon';
+import type { InsteonIsySyncRunLogEntry, InsteonStatusResponse } from './insteon';
 
 export interface InsteonMaintenanceSyncResponse {
   success?: boolean;
@@ -22,6 +22,21 @@ export interface InsteonMaintenanceSyncResponse {
     subcategory?: string | number;
   };
   runtimeStatus?: InsteonStatusResponse | null;
+}
+
+export interface InsteonMaintenanceSyncRunSnapshot {
+  id: string;
+  status: 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
+  createdAt?: string;
+  updatedAt?: string;
+  finishedAt?: string | null;
+  request?: {
+    skipExisting?: boolean;
+  };
+  cancelRequested?: boolean;
+  logs?: InsteonIsySyncRunLogEntry[];
+  result?: InsteonMaintenanceSyncResponse | null;
+  error?: string | null;
 }
 
 // Description: Clear all fake/demo data from the system
@@ -79,6 +94,36 @@ export const forceInsteonSync = async () => {
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+export const startInsteonSyncRun = async (payload: { skipExisting?: boolean } = {}) => {
+  try {
+    const response = await api.post('/api/maintenance/sync/insteon/start', payload || {});
+    return response.data as { success: boolean; runId: string; run: InsteonMaintenanceSyncRunSnapshot };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const getInsteonSyncRun = async (runId: string) => {
+  try {
+    const response = await api.get(`/api/maintenance/sync/insteon/runs/${encodeURIComponent(runId)}`);
+    return response.data as { success: boolean; run: InsteonMaintenanceSyncRunSnapshot };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const cancelInsteonSyncRun = async (runId: string) => {
+  try {
+    const response = await api.post(`/api/maintenance/sync/insteon/runs/${encodeURIComponent(runId)}/cancel`);
+    return response.data as { success: boolean; message?: string; run: InsteonMaintenanceSyncRunSnapshot };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 

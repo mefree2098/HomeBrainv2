@@ -6820,16 +6820,59 @@ class InsteonService {
    * @param {boolean} options.skipExisting - When true, only import new devices.
    * @returns {Promise<Object>} Sync results
    */
-  async syncDevicesFromPLM(options = {}) {
+  async syncDevicesFromPLM(options = {}, runtime = {}) {
     console.log('InsteonService: Starting PLM device sync');
 
     const skipExisting = options?.skipExisting === true;
+    const onProgress = runtime && typeof runtime.onProgress === 'function'
+      ? runtime.onProgress
+      : null;
+    const shouldCancel = runtime && typeof runtime.shouldCancel === 'function'
+      ? runtime.shouldCancel
+      : null;
+    const reportProgress = (message, details = {}) => {
+      if (!onProgress) {
+        return;
+      }
+
+      try {
+        onProgress({
+          timestamp: new Date().toISOString(),
+          message,
+          ...details
+        });
+      } catch (error) {
+        console.warn(`InsteonService: Failed to publish PLM sync progress update: ${error.message}`);
+      }
+    };
+    const throwIfCancelled = (message = 'INSTEON PLM sync cancelled by user.') => {
+      if (shouldCancel && shouldCancel()) {
+        const cancellationError = new Error(message);
+        cancellationError.code = 'INSTEON_SYNC_CANCELLED';
+        cancellationError.isCancelled = true;
+        throw cancellationError;
+      }
+    };
 
     try {
+      reportProgress('Preparing INSTEON PLM sync', {
+        stage: 'start',
+        progress: 0
+      });
+      throwIfCancelled();
+
       if (!this.isConnected || !this.hub) {
+        reportProgress('Connecting to INSTEON PLM', {
+          stage: 'connect',
+          progress: 3
+        });
         await this.connect();
       }
 
+      reportProgress('Reading PLM metadata', {
+        stage: 'query',
+        progress: 8
+      });
       const plmInfo = await this.getPLMInfo().catch((error) => ({
         deviceId: null,
         firmwareVersion: 'Unknown',
@@ -6837,21 +6880,82 @@ class InsteonService {
         subcategory: 0,
         error: error.message
       }));
+      if (plmInfo?.error) {
+        reportProgress(`PLM metadata warning: ${plmInfo.error}`, {
+          stage: 'query',
+          level: 'warn',
+          progress: 10
+        });
+      }
+
+      throwIfCancelled();
+      reportProgress('Reading PLM link database (this may take a while)', {
+        stage: 'query',
+        progress: 12
+      });
       const linkedDevices = await this.getAllLinkedDevices();
+      const linkedDeviceCount = linkedDevices.length;
+      reportProgress(
+        `Loaded ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}`,
+        {
+          stage: 'query',
+          progress: linkedDeviceCount === 0 ? 100 : 20
+        }
+      );
       const syncedDevices = [];
       const skippedDevices = [];
       const warnings = [];
       const errors = [];
       let created = 0;
       let updated = 0;
+      let completed = 0;
 
-      for (const linkedDevice of linkedDevices) {
+      if (linkedDeviceCount === 0) {
+        const message = skipExisting
+          ? 'Imported 0 new INSTEON devices from 0 PLM-linked devices'
+          : 'INSTEON sync complete - 0 PLM-linked devices, 0 created, 0 updated, 0 failed';
+        reportProgress('PLM link database returned 0 linked devices.', {
+          stage: 'complete',
+          level: 'warn',
+          progress: 100
+        });
+        return {
+          success: true,
+          message,
+          linkedDeviceCount: 0,
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          failed: 0,
+          deviceCount: 0,
+          devices: [],
+          skippedDevices,
+          warnings,
+          errors,
+          plmInfo
+        };
+      }
+
+      for (let index = 0; index < linkedDevices.length; index += 1) {
+        const linkedDevice = linkedDevices[index];
         try {
+          throwIfCancelled();
           const address = this._normalizeInsteonAddress(linkedDevice.address);
+          const displayAddress = this._formatInsteonAddress(address);
+          const progressStart = 20 + Math.floor((index / linkedDevices.length) * 70);
+          reportProgress(`Syncing device ${index + 1}/${linkedDevices.length}: ${displayAddress}`, {
+            stage: 'devices',
+            progress: progressStart
+          });
           const existingDevice = await this._findExistingInsteonDeviceByAddress(address);
 
           if (existingDevice && skipExisting) {
             skippedDevices.push(address);
+            completed += 1;
+            reportProgress(`Skipped existing device ${displayAddress}`, {
+              stage: 'devices',
+              progress: 20 + Math.floor((completed / linkedDevices.length) * 70)
+            });
             continue;
           }
 
@@ -6859,8 +6963,13 @@ class InsteonService {
           try {
             deviceInfo = await this.getDeviceInfo(address);
           } catch (error) {
-            const warning = `Device metadata unavailable for ${this._formatInsteonAddress(address)}: ${error.message}`;
+            const warning = `Device metadata unavailable for ${displayAddress}: ${error.message}`;
             warnings.push(warning);
+            reportProgress(warning, {
+              stage: 'devices',
+              level: 'warn',
+              progress: progressStart
+            });
             deviceInfo = {
               deviceId: address,
               deviceCategory: existingDevice?.properties?.deviceCategory ?? 0,
@@ -6884,8 +6993,29 @@ class InsteonService {
             updated += 1;
           }
           syncedDevices.push(upsertResult.device);
+          completed += 1;
+          reportProgress(
+            `${displayAddress} ${upsertResult.action === 'created' ? 'created' : 'updated'} in HomeBrain`,
+            {
+              stage: 'devices',
+              progress: 20 + Math.floor((completed / linkedDevices.length) * 70)
+            }
+          );
         } catch (error) {
           console.error(`InsteonService: Error syncing linked device ${linkedDevice?.address || 'unknown'}:`, error.message);
+          if (error?.code === 'INSTEON_SYNC_CANCELLED' || error?.isCancelled === true) {
+            throw error;
+          }
+          completed += 1;
+          const fallbackAddress = this._normalizePossibleInsteonAddress(linkedDevice?.address || '');
+          const displayAddress = fallbackAddress
+            ? this._formatInsteonAddress(fallbackAddress)
+            : String(linkedDevice?.displayAddress || linkedDevice?.address || 'Unknown');
+          reportProgress(`Failed to sync ${displayAddress}: ${error.message}`, {
+            stage: 'devices',
+            level: 'error',
+            progress: 20 + Math.floor((completed / linkedDevices.length) * 70)
+          });
           errors.push({
             address: linkedDevice?.address || null,
             error: error.message
@@ -6893,13 +7023,17 @@ class InsteonService {
         }
       }
 
-      const linkedDeviceCount = linkedDevices.length;
       const failed = errors.length;
       const message = skipExisting
         ? `Imported ${created} new INSTEON device${created === 1 ? '' : 's'} from ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}`
         : `INSTEON sync complete - ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}, ${created} created, ${updated} updated, ${failed} failed`;
 
       console.log(`InsteonService: PLM sync complete - ${linkedDeviceCount} linked, ${created} created, ${updated} updated, ${failed} failed, ${skippedDevices.length} skipped`);
+      reportProgress(message, {
+        stage: 'complete',
+        level: failed > 0 ? 'warn' : 'info',
+        progress: 100
+      });
 
       return {
         success: true,
@@ -6917,6 +7051,9 @@ class InsteonService {
         plmInfo
       };
     } catch (error) {
+      if (error?.code === 'INSTEON_SYNC_CANCELLED' || error?.isCancelled === true) {
+        throw error;
+      }
       console.error('InsteonService: PLM device sync failed:', error.message);
       console.error(error.stack);
       throw new Error(`Failed to sync devices from PLM: ${error.message}`);

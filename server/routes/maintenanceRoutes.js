@@ -99,6 +99,79 @@ router.post('/sync/insteon', async (req, res) => {
   }
 });
 
+router.post('/sync/insteon/start', async (req, res) => {
+  try {
+    console.log('MaintenanceRoutes: POST /sync/insteon/start - Starting async INSTEON sync run');
+
+    const run = maintenanceService.startInsteonSyncRun(req.body || {});
+    return res.status(202).json({
+      success: true,
+      runId: run.id,
+      run
+    });
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error starting async INSTEON sync run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to start INSTEON sync run'
+    });
+  }
+});
+
+router.get('/sync/insteon/runs/:runId', async (req, res) => {
+  const runId = req.params?.runId;
+  try {
+    const run = maintenanceService.getInsteonSyncRun(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: `INSTEON sync run "${runId}" was not found`
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      run
+    });
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error fetching INSTEON sync run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch INSTEON sync run'
+    });
+  }
+});
+
+router.post('/sync/insteon/runs/:runId/cancel', async (req, res) => {
+  const runId = req.params?.runId;
+  try {
+    const run = maintenanceService.cancelInsteonSyncRun(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: `INSTEON sync run "${runId}" was not found`
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status)
+        ? `INSTEON sync run is already ${run.status}.`
+        : 'Cancellation requested.',
+      run
+    });
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error cancelling INSTEON sync run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to cancel INSTEON sync run'
+    });
+  }
+});
+
 // Description: Force re-sync all devices from Harmony
 // Endpoint: POST /api/maintenance/sync/harmony
 // Request: {}
