@@ -458,15 +458,38 @@ function DeviceOverviewStatCard({
   }[tone]
 
   return (
-    <div className="rounded-[1.35rem] border border-white/10 bg-black/20 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-5">
       <div className="flex items-center justify-between gap-3">
         <p className="section-kicker text-white/45">{label}</p>
-        <div className={cn("flex h-10 w-10 items-center justify-center rounded-2xl border", toneClassName)}>
+        <div className={cn("flex h-9 w-9 items-center justify-center rounded-2xl border sm:h-10 sm:w-10", toneClassName)}>
           <Icon className="h-4 w-4" />
         </div>
       </div>
-      <p className="mt-4 text-lg font-semibold tracking-[-0.04em] text-foreground sm:text-xl">{value}</p>
-      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{hint}</p>
+      <p className="mt-3 text-lg font-semibold tracking-[-0.04em] text-foreground sm:text-xl">{value}</p>
+      <p className="mt-1.5 max-w-[30ch] text-sm leading-relaxed text-muted-foreground">{hint}</p>
+    </div>
+  )
+}
+
+type DeviceStatusPillProps = {
+  label: string
+  tone?: "sky" | "emerald" | "amber" | "neutral"
+}
+
+function DeviceStatusPill({ label, tone = "neutral" }: DeviceStatusPillProps) {
+  const toneClassName = {
+    sky: "border-cyan-400/18 bg-cyan-400/10 text-cyan-100",
+    emerald: "border-emerald-400/18 bg-emerald-400/10 text-emerald-100",
+    amber: "border-amber-400/18 bg-amber-400/10 text-amber-100",
+    neutral: "border-white/10 bg-white/6 text-white/78"
+  }[tone]
+
+  return (
+    <div className={cn(
+      "inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium sm:px-3.5 sm:text-sm",
+      toneClassName
+    )}>
+      {label}
     </div>
   )
 }
@@ -479,9 +502,9 @@ type DeviceDetailRowProps = {
 
 function DeviceDetailRow({ label, value, mono = false }: DeviceDetailRowProps) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-white/6 py-3 last:border-b-0 last:pb-0 first:pt-0">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className={cn("text-right text-sm font-medium text-foreground", mono && "font-mono tracking-[0.08em]")}>
+    <div className="flex flex-col gap-1.5 border-b border-white/6 py-3 first:pt-0 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+      <span className="text-xs text-muted-foreground sm:text-sm">{label}</span>
+      <span className={cn("text-left text-sm font-medium text-foreground sm:text-right", mono && "font-mono tracking-[0.08em]")}>
         {value}
       </span>
     </div>
@@ -934,7 +957,7 @@ export function DeviceDetailsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[94vh] max-w-[1180px] flex-col gap-0 overflow-hidden border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_30%),radial-gradient(circle_at_top_right,rgba(96,165,250,0.12),transparent_34%),linear-gradient(180deg,rgba(8,16,31,0.96),rgba(3,9,20,0.98))] p-0">
+      <DialogContent className="left-0 top-0 flex h-[100dvh] w-screen max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_30%),radial-gradient(circle_at_top_right,rgba(96,165,250,0.12),transparent_34%),linear-gradient(180deg,rgba(8,16,31,0.96),rgba(3,9,20,0.98))] p-0 sm:left-[50%] sm:top-[50%] sm:h-auto sm:max-h-[94vh] sm:w-[min(96vw,1180px)] sm:max-w-[1180px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[1.9rem] sm:border sm:border-white/10">
         {!device ? (
           <div className="p-6 sm:p-7">
             <Card className="border-white/10 bg-black/20">
@@ -945,46 +968,63 @@ export function DeviceDetailsDialog({
           </div>
         ) : (
           <Tabs defaultValue="overview" className="flex min-h-0 flex-1 flex-col">
-            <div className="relative shrink-0 border-b border-white/10 px-5 pb-5 pt-5 sm:px-7 sm:pb-6 sm:pt-6">
-              <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.24),transparent_42%),radial-gradient(circle_at_top_right,rgba(125,211,252,0.12),transparent_36%)] opacity-80" />
-              <DialogHeader className="relative space-y-5 text-left">
-                <div className="flex flex-col gap-5 pr-12 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="flex min-w-0 items-start gap-4">
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.4rem] border border-white/10 bg-white/8 shadow-[0_18px_48px_rgba(4,12,28,0.34)]">
-                      <HeroIcon className="h-6 w-6 text-cyan-200" />
+            <div className="relative shrink-0 border-b border-white/10 px-4 pb-4 pt-14 sm:px-7 sm:pb-6 sm:pt-6">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.24),transparent_42%),radial-gradient(circle_at_top_right,rgba(125,211,252,0.12),transparent_36%)] opacity-80 sm:h-40" />
+              <DialogHeader className="relative space-y-4 text-left sm:space-y-5">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(240px,0.85fr)]">
+                  <div className="rounded-[1.5rem] border border-white/10 bg-[linear-gradient(135deg,rgba(32,73,108,0.34),rgba(12,20,40,0.14))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5">
+                    <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.2rem] border border-white/10 bg-white/8 shadow-[0_18px_48px_rgba(4,12,28,0.34)] sm:h-14 sm:w-14 sm:rounded-[1.4rem]">
+                        <HeroIcon className="h-5 w-5 text-cyan-200 sm:h-6 sm:w-6" />
+                      </div>
+                      <div className="min-w-0">
+                        <DialogTitle className="font-body text-[clamp(1.65rem,4.8vw,3rem)] font-semibold leading-[0.94] tracking-[-0.07em] text-white">
+                          {device.name}
+                        </DialogTitle>
+                        <DialogDescription className="mt-2 text-sm text-white/62 sm:text-base">
+                          {`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                        </DialogDescription>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <DialogTitle className="font-body text-[clamp(1.7rem,3vw,2.5rem)] font-semibold tracking-[-0.07em] text-white">
-                        {device.name}
-                      </DialogTitle>
-                      <DialogDescription className="mt-2 text-base text-white/62">
-                        {`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
-                      </DialogDescription>
-                      <p className="mt-3 max-w-3xl text-sm leading-relaxed text-white/74 sm:text-[0.95rem]">
-                        {overviewCopy}
-                      </p>
-                    </div>
+                    <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/74 sm:text-[0.95rem]">
+                      {overviewCopy}
+                    </p>
                   </div>
 
-                  <div className="flex flex-wrap gap-2 xl:max-w-[320px] xl:justify-end">
-                    <div className="rounded-full border border-emerald-400/18 bg-emerald-400/10 px-3.5 py-1.5 text-sm font-medium text-emerald-100">
-                      {primaryStateLabel}
+                  <div className="rounded-[1.5rem] border border-white/10 bg-black/18 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-5">
+                    <p className="section-kicker text-white/45">Status Summary</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <DeviceStatusPill
+                        label={primaryStateLabel}
+                        tone={device?.status ? "emerald" : "sky"}
+                      />
+                      <DeviceStatusPill
+                        label={connectivityLabel}
+                        tone={device?.isOnline === false ? "amber" : "sky"}
+                      />
+                      <DeviceStatusPill
+                        label={liveSnapshot.supportsEnergyMonitoring ? "Energy telemetry" : "Control profile"}
+                      />
                     </div>
-                    <div className={cn(
-                      "rounded-full border px-3.5 py-1.5 text-sm font-medium",
-                      device.isOnline === false
-                        ? "border-amber-400/18 bg-amber-400/10 text-amber-100"
-                        : "border-cyan-400/18 bg-cyan-400/10 text-cyan-100"
-                    )}>
-                      {connectivityLabel}
-                    </div>
-                    <div className="rounded-full border border-white/10 bg-white/6 px-3.5 py-1.5 text-sm font-medium text-white/78">
-                      {liveSnapshot.supportsEnergyMonitoring ? "Energy telemetry" : "Control profile"}
+
+                    <div className="mt-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3 border-b border-white/6 pb-3 text-sm">
+                        <span className="text-white/52">Room</span>
+                        <span className="font-medium text-white">{device.room || "Unassigned"}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 border-b border-white/6 pb-3 text-sm">
+                        <span className="text-white/52">Last contact</span>
+                        <span className="font-medium text-white">{formatDateTime(device.lastSeen)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <span className="text-white/52">Groups</span>
+                        <span className="font-medium text-white">{groupSummary}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
                   {overviewStats.map((item) => (
                     <DeviceOverviewStatCard
                       key={item.label}
@@ -999,14 +1039,14 @@ export function DeviceDetailsDialog({
               </DialogHeader>
             </div>
 
-            <div className="shrink-0 border-b border-white/10 px-5 py-3 sm:px-7">
-              <TabsList className="flex w-full justify-start sm:w-auto">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
-                <TabsTrigger value="history">History</TabsTrigger>
+            <div className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-7">
+              <TabsList className="grid w-full grid-cols-2 sm:inline-flex sm:w-auto">
+                <TabsTrigger value="overview" className="w-full sm:w-auto">Overview</TabsTrigger>
+                <TabsTrigger value="history" className="w-full sm:w-auto">History</TabsTrigger>
               </TabsList>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-5 sm:px-7 sm:pb-7">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4 sm:px-7 sm:pb-7 sm:pt-5">
               <TabsContent value="overview" className="mt-0 space-y-5">
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
                   <div className="space-y-5">
@@ -1184,7 +1224,7 @@ export function DeviceDetailsDialog({
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <div className="grid gap-3 md:grid-cols-3">
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                           {liveSnapshot.supportsEnergyMonitoring ? (
                             <>
                               <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">

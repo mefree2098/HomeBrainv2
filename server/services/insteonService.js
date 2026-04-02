@@ -46,6 +46,7 @@ const DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_STALE_AFTER_MS = 60000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_OFFLINE_STALE_AFTER_MS = 15000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_BATCH_SIZE = 4;
+const DEFAULT_INSTEON_RUNTIME_MONITOR_MAX_DYNAMIC_BATCH_SIZE = 50;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_COOLDOWN_MS = 6000;
 const DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS = 1500;
 const DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS = 50;
@@ -96,6 +97,7 @@ class InsteonService {
     this._pendingRuntimeStateRefreshes = new Map();
     this._runtimePollMetadata = new Map();
     this._runtimeSceneResponderCache = new Map();
+    this._runtimeMonitoringCursor = 0;
     this._runtimeMonitoringTimer = null;
     this._runtimeMonitoringStarted = false;
     this._runtimeMonitoringInProgress = false;
@@ -996,6 +998,7 @@ class InsteonService {
       this._clearPendingRuntimeStateRefreshes();
       this._runtimePollMetadata.clear();
       this._runtimeSceneResponderCache.clear();
+      this._runtimeMonitoringCursor = 0;
       this._clearPlmOperationQueue(new Error('PLM connection closed while operations were pending'));
       this._runtimeListenersAttached = false;
       this._runtimeCloseListener = null;
@@ -1124,15 +1127,121 @@ class InsteonService {
       return false;
     }
 
+    const normalizedAddress = this._normalizePossibleInsteonAddress(device?.properties?.insteonAddress || '');
+    if (!normalizedAddress) {
+      return false;
+    }
+
     const normalizedType = typeof device.type === 'string'
       ? device.type.trim().toLowerCase()
       : '';
 
-    if (normalizedType === 'light' || normalizedType === 'switch') {
+    if (device?.properties?.supportsBrightness === true) {
       return true;
     }
 
-    return device?.properties?.supportsBrightness === true;
+    if (normalizedType === 'light'
+      || normalizedType === 'switch'
+      || normalizedType === 'fan'
+      || normalizedType === 'dimmer'
+      || normalizedType === 'outlet') {
+      return true;
+    }
+
+    if (normalizedType === 'sensor'
+      || normalizedType === 'thermostat'
+      || normalizedType === 'lock'
+      || normalizedType === 'garage'
+      || normalizedType === 'camera'
+      || normalizedType === 'scene'
+      || normalizedType === 'group'
+      || normalizedType === 'automation') {
+      return false;
+    }
+
+    const deviceCategory = this._coerceNumericValue(device?.properties?.deviceCategory, 0);
+    if (deviceCategory === 0x03
+      || deviceCategory === 0x05
+      || deviceCategory === 0x0F
+      || deviceCategory === 0x10) {
+      return false;
+    }
+
+    return true;
+  }
+
+  _getRuntimeMonitoringEffectiveBatchSize(eligibleCount = 0) {
+    const normalizedEligibleCount = Number.isFinite(Number(eligibleCount))
+      ? Math.max(0, Math.trunc(Number(eligibleCount)))
+      : 0;
+    if (normalizedEligibleCount <= 0) {
+      return 0;
+    }
+
+    const configuredBatchSize = Math.max(
+      1,
+      Math.trunc(Number(this._runtimeMonitoringBatchSize) || DEFAULT_INSTEON_RUNTIME_MONITOR_BATCH_SIZE)
+    );
+    if (normalizedEligibleCount <= configuredBatchSize) {
+      return normalizedEligibleCount;
+    }
+
+    const intervalMs = Math.max(
+      1000,
+      Math.trunc(Number(this._runtimeMonitoringIntervalMs) || DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS)
+    );
+    const staleAfterMs = Math.max(
+      intervalMs,
+      Math.trunc(Number(this._runtimeMonitoringStaleAfterMs) || intervalMs)
+    );
+    const targetPassesPerSweep = Math.max(1, Math.floor(staleAfterMs / intervalMs));
+    const dynamicBatchSize = Math.ceil(normalizedEligibleCount / targetPassesPerSweep);
+
+    return Math.min(
+      normalizedEligibleCount,
+      Math.max(
+        configuredBatchSize,
+        Math.min(DEFAULT_INSTEON_RUNTIME_MONITOR_MAX_DYNAMIC_BATCH_SIZE, dynamicBatchSize)
+      )
+    );
+  }
+
+  _selectRuntimePollBatch(pollCandidates = []) {
+    if (!Array.isArray(pollCandidates) || pollCandidates.length === 0) {
+      return {
+        pollBatch: [],
+        effectiveBatchSize: 0,
+        cursorStart: 0
+      };
+    }
+
+    const effectiveBatchSize = this._getRuntimeMonitoringEffectiveBatchSize(pollCandidates.length);
+    if (effectiveBatchSize <= 0) {
+      return {
+        pollBatch: [],
+        effectiveBatchSize: 0,
+        cursorStart: 0
+      };
+    }
+
+    const cursorStart = pollCandidates.length > effectiveBatchSize
+      ? (this._runtimeMonitoringCursor % pollCandidates.length)
+      : 0;
+    const pollBatch = [];
+
+    for (let index = 0; index < effectiveBatchSize; index += 1) {
+      pollBatch.push(pollCandidates[(cursorStart + index) % pollCandidates.length]);
+    }
+
+    this._runtimeMonitoringCursor = pollCandidates.length > 0
+      ? (cursorStart + pollBatch.length) % pollCandidates.length
+      : 0;
+
+    return {
+      pollBatch,
+      effectiveBatchSize,
+      cursorStart
+    };
   }
 
   _runtimeStatePatchWouldChange(device, patch = {}) {
@@ -1217,8 +1326,22 @@ class InsteonService {
     ));
 
     summary.eligible = pollCandidates.length;
-    const pollBatch = pollCandidates.slice(0, this._runtimeMonitoringBatchSize);
+    const { pollBatch, effectiveBatchSize, cursorStart } = this._selectRuntimePollBatch(pollCandidates);
     summary.batched = pollBatch.length;
+
+    if (summary.eligible > 0) {
+      this._logEngineInfo(`Runtime poll scanning ${summary.batched}/${summary.eligible} tracked INSTEON devices`, {
+        stage: 'queue',
+        operation: 'runtime_poll',
+        details: {
+          eligibleDevices: summary.eligible,
+          configuredBatchSize: this._runtimeMonitoringBatchSize,
+          effectiveBatchSize,
+          cursorStart,
+          cursorNext: this._runtimeMonitoringCursor
+        }
+      });
+    }
 
     for (let index = 0; index < pollBatch.length; index += 1) {
       const { device, normalizedAddress } = pollBatch[index];
@@ -1265,6 +1388,7 @@ class InsteonService {
     }
 
     this._runtimeMonitoringInProgress = true;
+    const passStartedAtMs = Date.now();
 
     try {
       if (!this.isConnected || !this.hub) {
@@ -1288,7 +1412,9 @@ class InsteonService {
     } finally {
       this._runtimeMonitoringInProgress = false;
       if (this._runtimeMonitoringStarted) {
-        this._scheduleRuntimeMonitoringPass(this._runtimeMonitoringIntervalMs, 'interval');
+        const elapsedMs = Math.max(0, Date.now() - passStartedAtMs);
+        const nextDelayMs = Math.max(0, this._runtimeMonitoringIntervalMs - elapsedMs);
+        this._scheduleRuntimeMonitoringPass(nextDelayMs, 'interval');
       }
     }
   }
@@ -1305,6 +1431,7 @@ class InsteonService {
   stopRuntimeMonitoring() {
     this._runtimeMonitoringStarted = false;
     this._runtimeMonitoringInProgress = false;
+    this._runtimeMonitoringCursor = 0;
     this._clearRuntimeMonitoringTimer();
   }
 

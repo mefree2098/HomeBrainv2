@@ -551,6 +551,82 @@ test('_runRuntimeMonitoringPass polls tracked Insteon light state changes', asyn
   assert.equal(persistedPatches[0].brightness, 100);
 });
 
+test('_shouldPollRuntimeState treats address-bearing Insteon fan loads as pollable', () => {
+  const trackedFan = {
+    type: 'fan',
+    properties: {
+      insteonAddress: '38.8A.57'
+    }
+  };
+
+  assert.equal(insteonService._shouldPollRuntimeState(trackedFan), true);
+});
+
+test('_getRuntimeMonitoringEffectiveBatchSize scales above the static default for large Insteon inventories', (t) => {
+  const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
+  const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
+  const originalStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+
+  t.after(() => {
+    insteonService._runtimeMonitoringBatchSize = originalBatchSize;
+    insteonService._runtimeMonitoringIntervalMs = originalIntervalMs;
+    insteonService._runtimeMonitoringStaleAfterMs = originalStaleAfterMs;
+  });
+
+  insteonService._runtimeMonitoringBatchSize = 4;
+  insteonService._runtimeMonitoringIntervalMs = 30000;
+  insteonService._runtimeMonitoringStaleAfterMs = 60000;
+
+  assert.equal(insteonService._getRuntimeMonitoringEffectiveBatchSize(4), 4);
+  assert.equal(insteonService._getRuntimeMonitoringEffectiveBatchSize(77), 39);
+});
+
+test('_selectRuntimePollBatch rotates across the tracked Insteon inventory instead of reusing the same slice', (t) => {
+  const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
+  const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
+  const originalStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+  const originalCursor = insteonService._runtimeMonitoringCursor;
+
+  t.after(() => {
+    insteonService._runtimeMonitoringBatchSize = originalBatchSize;
+    insteonService._runtimeMonitoringIntervalMs = originalIntervalMs;
+    insteonService._runtimeMonitoringStaleAfterMs = originalStaleAfterMs;
+    insteonService._runtimeMonitoringCursor = originalCursor;
+  });
+
+  insteonService._runtimeMonitoringBatchSize = 2;
+  insteonService._runtimeMonitoringIntervalMs = 30000;
+  insteonService._runtimeMonitoringStaleAfterMs = 60000;
+  insteonService._runtimeMonitoringCursor = 0;
+
+  const pollCandidates = ['11.22.33', '22.33.44', '33.44.55', '44.55.66', '55.66.77', '66.77.88']
+    .map((address, index) => ({
+      normalizedAddress: address.replaceAll('.', ''),
+      lastPolledAt: 0,
+      isOffline: false,
+      device: {
+        _id: `device-${index + 1}`,
+        type: 'light',
+        properties: {
+          source: 'insteon',
+          insteonAddress: address
+        }
+      }
+    }));
+
+  const firstSelection = insteonService._selectRuntimePollBatch(pollCandidates);
+  const secondSelection = insteonService._selectRuntimePollBatch(pollCandidates);
+
+  assert.deepEqual(
+    firstSelection.pollBatch.map((entry) => entry.normalizedAddress),
+    ['112233', '223344', '334455']
+  );
+  assert.deepEqual(
+    secondSelection.pollBatch.map((entry) => entry.normalizedAddress),
+    ['445566', '556677', '667788']
+  );
+});
+
 test('_runRuntimeMonitoringPass also tracks address-only Insteon devices without source metadata', async (t) => {
   const originalFind = Device.find;
   const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
