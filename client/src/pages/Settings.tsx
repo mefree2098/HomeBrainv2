@@ -99,7 +99,8 @@ import {
   clearSmartThingsIntegration,
   clearVoiceCommandHistory,
   performHealthCheck,
-  exportConfiguration
+  exportConfiguration,
+  type InsteonMaintenanceSyncResponse
 } from "@/api/maintenance"
 import {
   getHarmonyStatus,
@@ -191,6 +192,47 @@ const formatInsteonConnectionTarget = (target: {
   }
 
   return "Unavailable"
+}
+
+const formatInsteonInventoryCount = (value: number | null | undefined): string => {
+  return Number.isFinite(Number(value)) ? String(Math.max(0, Number(value))) : "Unknown"
+}
+
+const buildInsteonSyncDescription = (
+  response: InsteonMaintenanceSyncResponse,
+  runtimeStatus: InsteonStatusResponse | null
+): string => {
+  const parts: string[] = []
+
+  if (typeof response.message === "string" && response.message.trim()) {
+    parts.push(response.message.trim())
+  }
+
+  if (runtimeStatus?.connected) {
+    const formattedResolvedTarget = formatInsteonConnectionTarget(runtimeStatus.resolvedTarget)
+    const activeEndpoint = runtimeStatus.port || runtimeStatus.configuredTarget || (formattedResolvedTarget !== "Unavailable" ? formattedResolvedTarget : "")
+    parts.push(`PLM transport connected${activeEndpoint ? ` at ${activeEndpoint}` : ""}.`)
+  } else if (runtimeStatus) {
+    parts.push("PLM transport is not currently connected.")
+  }
+
+  if (typeof response.linkedDeviceCount === "number") {
+    parts.push(`${response.linkedDeviceCount} PLM-linked device${response.linkedDeviceCount === 1 ? "" : "s"} reported.`)
+  }
+
+  if (runtimeStatus?.inventory) {
+    parts.push(
+      `Persisted devices: ${formatInsteonInventoryCount(runtimeStatus.inventory.persistedDeviceCount)}. Runtime cache: ${formatInsteonInventoryCount(runtimeStatus.inventory.cachedDeviceCount)}.`
+    )
+  }
+
+  const diagnostic = [...(response.diagnostics || []), ...(runtimeStatus?.diagnostics || [])]
+    .find((entry) => typeof entry === "string" && entry.trim())
+  if (diagnostic) {
+    parts.push(diagnostic.trim())
+  }
+
+  return parts.filter(Boolean).join(" ")
 }
 
 type CodexModelOption = {
@@ -732,6 +774,7 @@ export function Settings() {
     try {
       const status = await getInsteonStatus()
       setInsteonRuntimeStatus(status || {})
+      return status || {}
     } catch (error: any) {
       console.error("Failed to load INSTEON runtime status:", error)
       if (!quiet) {
@@ -741,6 +784,7 @@ export function Settings() {
           variant: "destructive"
         })
       }
+      return null
     } finally {
       setLoadingInsteonRuntimeStatus(false)
     }
@@ -3082,11 +3126,18 @@ export function Settings() {
     try {
       console.log('Syncing INSTEON devices...');
       const response = await forceInsteonSync();
+      if (response.runtimeStatus) {
+        setInsteonRuntimeStatus(response.runtimeStatus)
+      }
+      const runtimeStatus = response.runtimeStatus || await loadInsteonRuntimeStatus({ quiet: true });
 
       if (response.success) {
+        const linkedDeviceCount = Number.isFinite(Number(response.linkedDeviceCount))
+          ? Number(response.linkedDeviceCount)
+          : null
         toast({
-          title: "Sync Complete",
-          description: response.message
+          title: linkedDeviceCount === 0 ? "Sync Completed With Warnings" : "Sync Complete",
+          description: buildInsteonSyncDescription(response, runtimeStatus)
         });
       }
     } catch (error) {
@@ -4609,6 +4660,25 @@ export function Settings() {
                               ? ` • Active: ${insteonRuntimeStatus.plmQueue.active.label}`
                               : ""}
                           </p>
+                          {insteonRuntimeStatus.inventory && (
+                            <p>
+                              Persisted devices: {formatInsteonInventoryCount(insteonRuntimeStatus.inventory.persistedDeviceCount)}
+                              {` • Linked to current PLM: ${formatInsteonInventoryCount(insteonRuntimeStatus.inventory.linkedDatabaseDeviceCount)}`}
+                              {` • Runtime cache: ${formatInsteonInventoryCount(insteonRuntimeStatus.inventory.cachedDeviceCount)}`}
+                            </p>
+                          )}
+                          {Array.isArray(insteonRuntimeStatus.diagnostics) && insteonRuntimeStatus.diagnostics.length > 0 && (
+                            <div className="space-y-1 pt-1">
+                              {insteonRuntimeStatus.diagnostics.map((diagnostic, index) => (
+                                <p
+                                  key={`insteon-runtime-diagnostic-${index}`}
+                                  className="text-amber-700 dark:text-amber-300"
+                                >
+                                  Diagnostic: {diagnostic}
+                                </p>
+                              ))}
+                            </div>
+                          )}
                           {insteonRuntimeStatus.lastConnectionError && (
                             <p className="text-red-700 dark:text-red-300">
                               Last error: {insteonRuntimeStatus.lastConnectionError}

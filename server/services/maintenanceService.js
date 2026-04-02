@@ -9,6 +9,7 @@ const Settings = require('../models/Settings');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
+const insteonService = require('./insteonService');
 
 class MaintenanceService {
   constructor() {
@@ -919,19 +920,38 @@ class MaintenanceService {
     console.log('MaintenanceService: Starting INSTEON force sync');
 
     try {
-      // Note: This would need integration with INSTEON service
-      // For now, we'll return a placeholder response
-      console.log('MaintenanceService: INSTEON sync would be implemented with physical INSTEON controller');
+      const result = await insteonService.syncDevicesFromPLM({ skipExisting: false });
+      insteonService.startRuntimeMonitoring({ immediate: false });
+      const runtimeStatus = await insteonService.getStatusSnapshot().catch(() => insteonService.getStatus());
+      const diagnostics = Array.isArray(result.warnings) ? [...result.warnings] : [];
+
+      if (runtimeStatus?.connected && Number(result.linkedDeviceCount || 0) === 0) {
+        diagnostics.push('PLM transport is connected, but the PLM link database returned 0 linked devices.');
+      }
 
       return {
         success: true,
-        message: 'INSTEON sync initiated - would communicate with INSTEON PLM when available',
-        deviceCount: 0
+        message: result.message,
+        deviceCount: result.deviceCount,
+        linkedDeviceCount: result.linkedDeviceCount,
+        created: result.created,
+        updated: result.updated,
+        failed: result.failed,
+        warnings: result.warnings,
+        errors: result.errors,
+        plmInfo: result.plmInfo,
+        runtimeStatus,
+        diagnostics
       };
     } catch (error) {
       console.error('MaintenanceService: Error during INSTEON sync:', error.message);
       console.error(error.stack);
-      throw new Error('Failed to sync INSTEON devices');
+      const runtimeStatus = await insteonService.getStatusSnapshot().catch(() => insteonService.getStatus());
+      const endpoint = runtimeStatus?.port || runtimeStatus?.configuredTarget || runtimeStatus?.resolvedTarget?.label || null;
+      const connectionNote = runtimeStatus?.connected
+        ? ` PLM transport is connected${endpoint ? ` at ${endpoint}` : ''}, so the failure occurred after the serial link came up.`
+        : '';
+      throw new Error(`Failed to sync INSTEON devices: ${error.message}.${connectionNote}`.trim());
     }
   }
 

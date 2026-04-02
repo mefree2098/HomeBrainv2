@@ -6815,6 +6815,115 @@ class InsteonService {
   }
 
   /**
+   * Synchronize PLM-linked devices into the database.
+   * @param {Object} options
+   * @param {boolean} options.skipExisting - When true, only import new devices.
+   * @returns {Promise<Object>} Sync results
+   */
+  async syncDevicesFromPLM(options = {}) {
+    console.log('InsteonService: Starting PLM device sync');
+
+    const skipExisting = options?.skipExisting === true;
+
+    try {
+      if (!this.isConnected || !this.hub) {
+        await this.connect();
+      }
+
+      const plmInfo = await this.getPLMInfo().catch((error) => ({
+        deviceId: null,
+        firmwareVersion: 'Unknown',
+        deviceCategory: 0,
+        subcategory: 0,
+        error: error.message
+      }));
+      const linkedDevices = await this.getAllLinkedDevices();
+      const syncedDevices = [];
+      const skippedDevices = [];
+      const warnings = [];
+      const errors = [];
+      let created = 0;
+      let updated = 0;
+
+      for (const linkedDevice of linkedDevices) {
+        try {
+          const address = this._normalizeInsteonAddress(linkedDevice.address);
+          const existingDevice = await this._findExistingInsteonDeviceByAddress(address);
+
+          if (existingDevice && skipExisting) {
+            skippedDevices.push(address);
+            continue;
+          }
+
+          let deviceInfo = null;
+          try {
+            deviceInfo = await this.getDeviceInfo(address);
+          } catch (error) {
+            const warning = `Device metadata unavailable for ${this._formatInsteonAddress(address)}: ${error.message}`;
+            warnings.push(warning);
+            deviceInfo = {
+              deviceId: address,
+              deviceCategory: existingDevice?.properties?.deviceCategory ?? 0,
+              subcategory: existingDevice?.properties?.subcategory ?? 0,
+              firmwareVersion: existingDevice?.properties?.firmwareVersion || 'Unknown'
+            };
+          }
+
+          const upsertResult = await this._upsertInsteonDevice({
+            address,
+            group: Number.isInteger(linkedDevice?.group) ? linkedDevice.group : 1,
+            insteonType: linkedDevice?.type,
+            name: existingDevice?.name || linkedDevice?.name || null,
+            deviceInfo,
+            markLinkedToCurrentPlm: true
+          });
+
+          if (upsertResult.action === 'created') {
+            created += 1;
+          } else {
+            updated += 1;
+          }
+          syncedDevices.push(upsertResult.device);
+        } catch (error) {
+          console.error(`InsteonService: Error syncing linked device ${linkedDevice?.address || 'unknown'}:`, error.message);
+          errors.push({
+            address: linkedDevice?.address || null,
+            error: error.message
+          });
+        }
+      }
+
+      const linkedDeviceCount = linkedDevices.length;
+      const failed = errors.length;
+      const message = skipExisting
+        ? `Imported ${created} new INSTEON device${created === 1 ? '' : 's'} from ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}`
+        : `INSTEON sync complete - ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}, ${created} created, ${updated} updated, ${failed} failed`;
+
+      console.log(`InsteonService: PLM sync complete - ${linkedDeviceCount} linked, ${created} created, ${updated} updated, ${failed} failed, ${skippedDevices.length} skipped`);
+
+      return {
+        success: true,
+        message,
+        linkedDeviceCount,
+        created,
+        updated,
+        skipped: skippedDevices.length,
+        failed,
+        deviceCount: syncedDevices.length,
+        devices: syncedDevices,
+        skippedDevices,
+        warnings,
+        errors,
+        plmInfo
+      };
+    } catch (error) {
+      console.error('InsteonService: PLM device sync failed:', error.message);
+      console.error(error.stack);
+      throw new Error(`Failed to sync devices from PLM: ${error.message}`);
+    }
+  }
+
+  /**
    * Import devices from PLM to database
    * @returns {Promise<Object>} Import results
    */
@@ -6822,51 +6931,19 @@ class InsteonService {
     console.log('InsteonService: Starting device import from PLM');
 
     try {
-      const linkedDevices = await this.getAllLinkedDevices();
-      const importedDevices = [];
-      const skippedDevices = [];
-      const errors = [];
-
-      for (const device of linkedDevices) {
-        try {
-          const address = this._normalizeInsteonAddress(device.address);
-          const existingDevice = await this._findExistingInsteonDeviceByAddress(address);
-
-          if (existingDevice) {
-            console.log(`InsteonService: Device ${this._formatInsteonAddress(address)} already exists, skipping`);
-            skippedDevices.push(address);
-            continue;
-          }
-
-          const deviceInfo = await this.getDeviceInfo(address);
-          const upsertResult = await this._upsertInsteonDevice({
-            address,
-            group: device.group,
-            insteonType: device.type,
-            deviceInfo
-          });
-
-          console.log(`InsteonService: Imported device ${this._formatInsteonAddress(address)} as ${upsertResult.device._id}`);
-          importedDevices.push(upsertResult.device);
-        } catch (error) {
-          console.error(`InsteonService: Error importing device ${device.address}:`, error.message);
-          errors.push({
-            address: device.address,
-            error: error.message
-          });
-        }
-      }
-
-      console.log(`InsteonService: Import complete - ${importedDevices.length} imported, ${skippedDevices.length} skipped, ${errors.length} errors`);
+      const result = await this.syncDevicesFromPLM({ skipExisting: true });
+      console.log(`InsteonService: Import complete - ${result.created} imported, ${result.skipped} skipped, ${result.failed} errors`);
 
       return {
         success: true,
-        message: `Imported ${importedDevices.length} devices`,
-        imported: importedDevices.length,
-        skipped: skippedDevices.length,
-        errors: errors.length,
-        devices: importedDevices,
-        errorDetails: errors
+        message: `Imported ${result.created} devices`,
+        imported: result.created,
+        skipped: result.skipped,
+        errors: result.failed,
+        devices: result.devices,
+        errorDetails: result.errors,
+        warnings: result.warnings,
+        plmInfo: result.plmInfo
       };
     } catch (error) {
       console.error('InsteonService: Device import failed:', error.message);
@@ -8955,6 +9032,51 @@ class InsteonService {
             startedAt: this._localSerialBridge.startedAt
           }
         : null
+    };
+  }
+
+  async getStatusSnapshot() {
+    const status = this.getStatus();
+    const diagnostics = [];
+    let persistedDeviceCount = null;
+    let linkedDatabaseDeviceCount = null;
+
+    try {
+      const [persistedCount, linkedCount] = await Promise.all([
+        Device.countDocuments({ 'properties.source': 'insteon' }),
+        Device.countDocuments({
+          'properties.source': 'insteon',
+          'properties.linkedToCurrentPlm': true
+        })
+      ]);
+
+      persistedDeviceCount = Number.isFinite(Number(persistedCount))
+        ? Math.max(0, Number(persistedCount))
+        : 0;
+      linkedDatabaseDeviceCount = Number.isFinite(Number(linkedCount))
+        ? Math.max(0, Number(linkedCount))
+        : 0;
+    } catch (error) {
+      diagnostics.push(`Unable to query persisted INSTEON inventory: ${error.message}`);
+    }
+
+    if (status.connected && persistedDeviceCount === 0) {
+      diagnostics.push('PLM transport is connected, but HomeBrain has no persisted INSTEON devices yet.');
+    }
+
+    if (status.connected && linkedDatabaseDeviceCount === 0) {
+      diagnostics.push('PLM transport is connected, but no persisted devices are marked as linked to the current PLM.');
+    }
+
+    return {
+      ...status,
+      deviceCount: persistedDeviceCount ?? status.deviceCount,
+      inventory: {
+        cachedDeviceCount: status.deviceCount,
+        persistedDeviceCount,
+        linkedDatabaseDeviceCount
+      },
+      diagnostics
     };
   }
 }
