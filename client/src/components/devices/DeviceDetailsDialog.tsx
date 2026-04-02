@@ -183,6 +183,24 @@ function getSourceLabel(device: DeviceLike | null): string {
     .join(" ")
 }
 
+function getFormattedInsteonAddress(device: DeviceLike | null): string | null {
+  const rawAddress = (
+    (device?.properties as Record<string, unknown> | undefined)?.insteonAddress
+    || ""
+  ).toString().trim()
+
+  if (!rawAddress) {
+    return null
+  }
+
+  const normalized = rawAddress.replace(/[^a-fA-F0-9]/g, "").toUpperCase()
+  if (normalized.length === 6) {
+    return `${normalized.slice(0, 2)}.${normalized.slice(2, 4)}.${normalized.slice(4, 6)}`
+  }
+
+  return rawAddress.toUpperCase()
+}
+
 function getLiveEnergySnapshot(device: DeviceLike | null): LiveEnergySnapshot {
   const properties = device?.properties as Record<string, any> | undefined
   const attributeValues = properties?.smartThingsAttributeValues || {}
@@ -424,6 +442,7 @@ export function DeviceDetailsDialog({
   const { isAdmin } = useAuth()
 
   const liveSnapshot = useMemo(() => getLiveEnergySnapshot(device), [device])
+  const insteonAddress = useMemo(() => getFormattedInsteonAddress(device), [device])
   const currentGroups = useMemo(() => normalizeGroupList(device?.groups), [device?.groups])
   const draftGroups = useMemo(() => normalizeGroupList(groupInput), [groupInput])
   const suggestedGroups = useMemo(() => {
@@ -793,6 +812,12 @@ export function DeviceDetailsDialog({
                       <span className="text-muted-foreground">Source</span>
                       <span className="font-medium">{getSourceLabel(device)}</span>
                     </div>
+                    {insteonAddress ? (
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">INSTEON address</span>
+                        <span className="font-mono font-medium">{insteonAddress}</span>
+                      </div>
+                    ) : null}
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-muted-foreground">Connectivity</span>
                       <span className="font-medium">{device.isOnline === false ? "Offline" : "Online"}</span>

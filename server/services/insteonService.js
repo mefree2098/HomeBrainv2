@@ -6296,6 +6296,13 @@ class InsteonService {
         isOnline: true,
         lastSeen: new Date()
       };
+    } else if ((command1 === '0C' || command1 === '0D') && hasNumericCommand2) {
+      inferredState = {
+        status: command2 > 0,
+        brightness: Math.round((Math.max(0, Math.min(255, command2)) / 255) * 100),
+        isOnline: true,
+        lastSeen: new Date()
+      };
     }
 
     return {

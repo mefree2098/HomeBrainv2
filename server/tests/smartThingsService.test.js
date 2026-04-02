@@ -1,7 +1,94 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const SmartThingsIntegration = require('../models/SmartThingsIntegration');
+const Settings = require('../models/Settings');
 const smartThingsService = require('../services/smartThingsService');
+
+test('getValidAccessToken refreshes when access token is missing but a refresh token exists', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalGetSettings = Settings.getSettings;
+  const originalRefreshAccessToken = smartThingsService.refreshAccessToken;
+
+  let getIntegrationCalls = 0;
+  let refreshCalled = false;
+
+  SmartThingsIntegration.getIntegration = async () => {
+    getIntegrationCalls += 1;
+    if (getIntegrationCalls === 1) {
+      return {
+        accessToken: '',
+        refreshToken: 'refresh-token-1',
+        isTokenValid: () => false
+      };
+    }
+
+    return {
+      accessToken: 'fresh-access-token',
+      refreshToken: 'refresh-token-1',
+      isTokenValid: () => true
+    };
+  };
+  Settings.getSettings = async () => ({
+    smartthingsUseOAuth: true,
+    smartthingsToken: ''
+  });
+  smartThingsService.refreshAccessToken = async () => {
+    refreshCalled = true;
+    return { access_token: 'fresh-access-token' };
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    Settings.getSettings = originalGetSettings;
+    smartThingsService.refreshAccessToken = originalRefreshAccessToken;
+  });
+
+  const token = await smartThingsService.getValidAccessToken();
+
+  assert.equal(token, 'fresh-access-token');
+  assert.equal(refreshCalled, true);
+  assert.equal(getIntegrationCalls, 2);
+});
+
+test('getValidAccessToken marks SmartThings disconnected when no OAuth tokens are available', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalGetSettings = Settings.getSettings;
+  const originalPersistConnectionStatus = smartThingsService.persistConnectionStatus;
+
+  let persistedStatus = null;
+
+  SmartThingsIntegration.getIntegration = async () => ({
+    accessToken: '',
+    refreshToken: '',
+    isTokenValid: () => false
+  });
+  Settings.getSettings = async () => ({
+    smartthingsUseOAuth: true,
+    smartthingsToken: ''
+  });
+  smartThingsService.persistConnectionStatus = async (payload) => {
+    persistedStatus = payload;
+    return true;
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    Settings.getSettings = originalGetSettings;
+    smartThingsService.persistConnectionStatus = originalPersistConnectionStatus;
+  });
+
+  await assert.rejects(
+    () => smartThingsService.getValidAccessToken(),
+    /No access token available\. Please authorize the application\./
+  );
+
+  assert.deepEqual(persistedStatus, {
+    isConnected: false,
+    lastError: 'No access token available. Please authorize the application.',
+    reason: 'get-token:missing-credentials'
+  });
+});
 
 test('setSecurityArmState allows disarm with only the disarm switch configured', async (t) => {
   const originalGetSthmVirtualSwitchConfig = smartThingsService.getSthmVirtualSwitchConfig;
