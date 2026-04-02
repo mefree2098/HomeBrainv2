@@ -73,7 +73,15 @@ class InsteonService {
     this._runtimeMonitoringInProgress = false;
     this._runtimeMonitoringIntervalMs = Math.max(
       5000,
-      Number(process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_INTERVAL_MS || 30000)
+      Number(process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_INTERVAL_MS || 10000)
+    );
+    this._runtimeStatePollTimeoutMs = Math.max(
+      1000,
+      Number(process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS || 3500)
+    );
+    this._runtimeStatePollPauseMs = Math.max(
+      0,
+      Number(process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS || 100)
     );
     this.enableLocalSerialBridge = process.env.HOMEBRAIN_INSTEON_ENABLE_LOCAL_TCP_BRIDGE !== 'false';
     this._isySyncRuns = new Map();
@@ -466,6 +474,100 @@ class InsteonService {
     };
   }
 
+  _shouldPollRuntimeState(device) {
+    if (!device || typeof device !== 'object') {
+      return false;
+    }
+
+    const normalizedType = typeof device.type === 'string'
+      ? device.type.trim().toLowerCase()
+      : '';
+
+    if (normalizedType === 'light' || normalizedType === 'switch') {
+      return true;
+    }
+
+    return device?.properties?.supportsBrightness === true;
+  }
+
+  _runtimeStatePatchWouldChange(device, patch = {}) {
+    if (!device || !patch || typeof patch !== 'object') {
+      return false;
+    }
+
+    const compareValue = (left, right) => {
+      if (left instanceof Date || right instanceof Date) {
+        const leftTime = left instanceof Date ? left.getTime() : new Date(left).getTime();
+        const rightTime = right instanceof Date ? right.getTime() : new Date(right).getTime();
+        return leftTime !== rightTime;
+      }
+      return left !== right;
+    };
+
+    return Object.entries(patch).some(([key, value]) => {
+      if (key === 'lastSeen' || key === 'updatedAt') {
+        return false;
+      }
+
+      return compareValue(device?.[key], value);
+    });
+  }
+
+  async _pollTrackedDeviceStates() {
+    const devices = await Device.find({ 'properties.source': 'insteon' });
+    const summary = {
+      scanned: 0,
+      updated: 0,
+      offlineMarked: 0,
+      skipped: 0,
+      errors: 0
+    };
+
+    for (let index = 0; index < devices.length; index += 1) {
+      const device = devices[index];
+      if (!this._shouldPollRuntimeState(device)) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      const normalizedAddress = this._normalizePossibleInsteonAddress(device?.properties?.insteonAddress || '');
+      if (!normalizedAddress) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      if (this._pendingRuntimeStateRefreshes.has(normalizedAddress)) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      summary.scanned += 1;
+
+      try {
+        const level = await this._queryDeviceLevelByAddress(normalizedAddress, this._runtimeStatePollTimeoutMs);
+        const nextState = this._stateFromInsteonLevel(level);
+        if (this._runtimeStatePatchWouldChange(device, nextState)) {
+          await this._persistDeviceRuntimeState(device, nextState);
+          summary.updated += 1;
+        }
+      } catch (error) {
+        summary.errors += 1;
+        if (device.isOnline !== false) {
+          await this._persistDeviceRuntimeState(device, { isOnline: false });
+          summary.offlineMarked += 1;
+        }
+      }
+
+      if (index < devices.length - 1 && this._runtimeStatePollPauseMs > 0) {
+        // Spread polling over time so larger device inventories don't spike the PLM.
+        // eslint-disable-next-line no-await-in-loop
+        await this._sleep(this._runtimeStatePollPauseMs);
+      }
+    }
+
+    return summary;
+  }
+
   async _runRuntimeMonitoringPass(reason = 'interval') {
     if (!this._runtimeMonitoringStarted || this._runtimeMonitoringInProgress) {
       return;
@@ -479,6 +581,10 @@ class InsteonService {
         if (monitoringContext.shouldConnect) {
           await this.connect();
         }
+      }
+
+      if (this.isConnected && this.hub) {
+        await this._pollTrackedDeviceStates();
       }
     } catch (error) {
       console.warn(`InsteonService: Runtime monitoring pass failed (${reason}): ${error.message}`);

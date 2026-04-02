@@ -928,7 +928,7 @@ struct WeatherView: View {
                     } else if weatherLocationMode == .auto && locationManager.isRequesting {
                         EmptyStateView(
                             title: "Finding current location",
-                            subtitle: "HomeBrain is requesting this iPad's location so the weather dashboard can auto-target the forecast."
+                            subtitle: "HomeBrain is requesting this device's location so the weather dashboard can auto-target the forecast."
                         )
                     } else {
                         EmptyStateView(

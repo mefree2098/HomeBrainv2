@@ -57,7 +57,7 @@ struct DashboardViewsView: View {
                             VStack(alignment: .leading, spacing: 14) {
                                 HBSectionHeader(
                                     title: "Views Library",
-                                    subtitle: "Create multiple dashboards for different rooms or iPads, then choose which one this device should launch by default.",
+                                    subtitle: "Create multiple dashboards for different rooms or screens, then choose which one this device should launch by default.",
                                     eyebrow: "Per-Device Defaults"
                                 )
 
@@ -288,7 +288,7 @@ struct DashboardViewsView: View {
         case .rename:
             return "Rename this saved dashboard view."
         case .duplicate:
-            return "Clone this dashboard so you can tailor it for another iPad."
+            return "Clone this dashboard so you can tailor it for another screen."
         case nil:
             return ""
         }
