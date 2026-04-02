@@ -466,16 +466,25 @@ async function fetchDashboardWeather(options = {}) {
     tempestService.getSelectedStationSnapshot().catch(() => null)
   ]);
 
+  let moduleTelemetry = null;
+  if (tempestStation?.id) {
+    moduleTelemetry = await telemetryService.getTempestModuleTelemetry({
+      sourceId: tempestStation.id
+    }).catch(() => null);
+  }
+
   return {
     ...createWeatherPayload(forecastResponse, airQualityResponse, location),
     tempest: tempestStation
       ? {
           available: true,
-          station: tempestStation
+          station: tempestStation,
+          moduleTelemetry
         }
       : {
           available: false,
-          station: null
+          station: null,
+          moduleTelemetry: null
         }
   };
 }
@@ -494,12 +503,12 @@ async function fetchWeatherDashboard(options = {}) {
     }))
   ]);
 
-  let moduleTelemetry = null;
-  if (tempest?.available && tempest?.station?.id) {
-    moduleTelemetry = await telemetryService.getTempestModuleTelemetry({
-      sourceId: tempest.station.id
-    }).catch(() => null);
-  }
+  const moduleTelemetry = forecast?.tempest?.moduleTelemetry
+    ?? (tempest?.available && tempest?.station?.id
+      ? await telemetryService.getTempestModuleTelemetry({
+        sourceId: tempest.station.id
+      }).catch(() => null)
+      : null);
 
   return {
     fetchedAt: new Date().toISOString(),

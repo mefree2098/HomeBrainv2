@@ -37,7 +37,18 @@ const DEFAULT_LINKED_STATUS_RUN_LOG_LIMIT = 1000;
 const DEFAULT_INSTEON_LOCAL_BRIDGE_HOST = '127.0.0.1';
 const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
 const DEFAULT_INSTEON_COMMAND_ATTEMPTS = 3;
-const DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS = 500;
+const DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS = 250;
+const DEFAULT_INSTEON_COMMAND_TIMEOUT_MS = 1500;
+const DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE = 'ack';
+const DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS = 30000;
+const DEFAULT_INSTEON_RUNTIME_MONITOR_STALE_AFTER_MS = 60000;
+const DEFAULT_INSTEON_RUNTIME_MONITOR_OFFLINE_STALE_AFTER_MS = 15000;
+const DEFAULT_INSTEON_RUNTIME_MONITOR_BATCH_SIZE = 4;
+const DEFAULT_INSTEON_RUNTIME_MONITOR_COOLDOWN_MS = 6000;
+const DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS = 1500;
+const DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS = 50;
+const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS = 450;
+const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1200;
 const INSTEON_LOCAL_BRIDGE_SCRIPT = path.join(__dirname, '..', 'scripts', 'insteon_serial_bridge.py');
 const INSTEON_SERIAL_OPTIONS = Object.freeze({
   baudRate: 19200,
@@ -74,20 +85,69 @@ class InsteonService {
     this._activePlmOperation = null;
     this._plmDrainScheduled = false;
     this._pendingRuntimeStateRefreshes = new Map();
+    this._runtimePollMetadata = new Map();
     this._runtimeMonitoringTimer = null;
     this._runtimeMonitoringStarted = false;
     this._runtimeMonitoringInProgress = false;
-    this._runtimeMonitoringIntervalMs = Math.max(
-      5000,
-      Number(process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_INTERVAL_MS || 10000)
+    this._runtimeMonitoringCooldownUntil = 0;
+    const resolveBoundedNumber = (value, fallback, minimum, maximum = null) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return fallback;
+      }
+
+      const lowerBounded = Math.max(minimum, numeric);
+      return maximum == null ? lowerBounded : Math.min(maximum, lowerBounded);
+    };
+    this._runtimeMonitoringIntervalMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_INTERVAL_MS,
+      DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS,
+      10000
     );
-    this._runtimeStatePollTimeoutMs = Math.max(
-      1000,
-      Number(process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS || 3500)
+    this._runtimeMonitoringStaleAfterMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_STALE_AFTER_MS,
+      DEFAULT_INSTEON_RUNTIME_MONITOR_STALE_AFTER_MS,
+      5000
     );
-    this._runtimeStatePollPauseMs = Math.max(
-      0,
-      Number(process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS || 100)
+    this._runtimeMonitoringOfflineStaleAfterMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_OFFLINE_STALE_AFTER_MS,
+      DEFAULT_INSTEON_RUNTIME_MONITOR_OFFLINE_STALE_AFTER_MS,
+      1000
+    );
+    this._runtimeMonitoringBatchSize = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_BATCH_SIZE,
+      DEFAULT_INSTEON_RUNTIME_MONITOR_BATCH_SIZE,
+      1,
+      25
+    );
+    this._runtimeMonitoringCooldownMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_COOLDOWN_MS,
+      DEFAULT_INSTEON_RUNTIME_MONITOR_COOLDOWN_MS,
+      0
+    );
+    this._runtimeStatePollTimeoutMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS,
+      DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS,
+      500
+    );
+    this._runtimeStatePollPauseMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS,
+      DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS,
+      0
+    );
+    this._runtimeStateRefreshDelayMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS,
+      DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS,
+      100
+    );
+    this._runtimeStateRefreshTimeoutMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS,
+      DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS,
+      500
+    );
+    this._defaultVerificationMode = this._normalizeVerificationMode(
+      process.env.HOMEBRAIN_INSTEON_DEFAULT_VERIFICATION_MODE,
+      DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE
     );
     this.enableLocalSerialBridge = process.env.HOMEBRAIN_INSTEON_ENABLE_LOCAL_TCP_BRIDGE !== 'false';
     this._isySyncRuns = new Map();
@@ -336,6 +396,74 @@ class InsteonService {
     }
 
     return this._plmOperationQueue.some((operation) => operation.priority < threshold);
+  }
+
+  _normalizeVerificationMode(value, fallback = DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE) {
+    const mapToken = (token) => {
+      const normalized = String(token ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      switch (normalized) {
+        case '':
+        case 'default':
+          return null;
+        case 'ack':
+        case 'ack_only':
+        case 'ackonly':
+        case 'async':
+        case 'none':
+          return normalized === 'ackonly' ? 'ack' : normalized;
+        case 'fast':
+          return 'fast';
+        case 'stable':
+        case 'confirm':
+        case 'confirmed':
+        case 'strict':
+        case 'sync':
+        case 'full':
+          return 'stable';
+        default:
+          return null;
+      }
+    };
+
+    return mapToken(value) || mapToken(fallback) || DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE;
+  }
+
+  _getDefaultVerificationMode() {
+    return this._normalizeVerificationMode(
+      this._defaultVerificationMode,
+      DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE
+    );
+  }
+
+  _markRuntimePollAttempt(address) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress) {
+      return;
+    }
+
+    this._runtimePollMetadata.set(normalizedAddress, Date.now());
+  }
+
+  _markRecentPlmControlActivity(cooldownMs = this._runtimeMonitoringCooldownMs) {
+    const durationMs = Number.isFinite(Number(cooldownMs))
+      ? Math.max(0, Math.round(Number(cooldownMs)))
+      : this._runtimeMonitoringCooldownMs;
+    if (durationMs <= 0) {
+      return;
+    }
+
+    this._runtimeMonitoringCooldownUntil = Math.max(
+      Number(this._runtimeMonitoringCooldownUntil) || 0,
+      Date.now() + durationMs
+    );
+  }
+
+  _getRuntimeMonitoringCooldownRemainingMs() {
+    return Math.max(0, (Number(this._runtimeMonitoringCooldownUntil) || 0) - Date.now());
+  }
+
+  _isRuntimeMonitoringCoolingDown() {
+    return this._getRuntimeMonitoringCooldownRemainingMs() > 0;
   }
 
   _summarizeHubCommandStatus(status) {
@@ -635,6 +763,7 @@ class InsteonService {
       this.connectionTransport = null;
       this.connectionTarget = null;
       this._clearPendingRuntimeStateRefreshes();
+      this._runtimePollMetadata.clear();
       this._clearPlmOperationQueue(new Error('PLM connection closed while operations were pending'));
       this._runtimeListenersAttached = false;
       this._runtimeCloseListener = null;
@@ -792,6 +921,8 @@ class InsteonService {
   async _pollTrackedDeviceStates() {
     const devices = await Device.find({ 'properties.source': 'insteon' });
     const summary = {
+      eligible: 0,
+      batched: 0,
       scanned: 0,
       updated: 0,
       offlineMarked: 0,
@@ -799,6 +930,8 @@ class InsteonService {
       deferred: 0,
       errors: 0
     };
+    const nowMs = Date.now();
+    const pollCandidates = [];
 
     for (let index = 0; index < devices.length; index += 1) {
       const device = devices[index];
@@ -818,8 +951,39 @@ class InsteonService {
         continue;
       }
 
+      const lastPolledAt = this._runtimePollMetadata.get(normalizedAddress) || 0;
+      const staleAfterMs = device?.isOnline === false
+        ? this._runtimeMonitoringOfflineStaleAfterMs
+        : this._runtimeMonitoringStaleAfterMs;
+      if (lastPolledAt > 0 && (nowMs - lastPolledAt) < staleAfterMs) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      pollCandidates.push({
+        device,
+        normalizedAddress,
+        isOffline: device?.isOnline === false,
+        lastPolledAt
+      });
+    }
+
+    pollCandidates.sort((left, right) => (
+      Number(left.isOffline ? 0 : 1) - Number(right.isOffline ? 0 : 1)
+    ) || (
+      left.lastPolledAt - right.lastPolledAt
+    ) || (
+      String(left.device?._id || '').localeCompare(String(right.device?._id || ''))
+    ));
+
+    summary.eligible = pollCandidates.length;
+    const pollBatch = pollCandidates.slice(0, this._runtimeMonitoringBatchSize);
+    summary.batched = pollBatch.length;
+
+    for (let index = 0; index < pollBatch.length; index += 1) {
+      const { device, normalizedAddress } = pollBatch[index];
       if (this._hasPendingHigherPriorityPlmOperation('poll')) {
-        summary.deferred += 1;
+        summary.deferred += Math.max(1, pollBatch.length - index);
         break;
       }
 
@@ -830,12 +994,14 @@ class InsteonService {
           priority: 'poll',
           kind: 'runtime_poll'
         });
+        this._markRuntimePollAttempt(normalizedAddress);
         const nextState = this._stateFromInsteonLevel(level);
         if (this._runtimeStatePatchWouldChange(device, nextState)) {
           await this._persistDeviceRuntimeState(device, nextState);
           summary.updated += 1;
         }
       } catch (error) {
+        this._markRuntimePollAttempt(normalizedAddress);
         summary.errors += 1;
         if (device.isOnline !== false) {
           await this._persistDeviceRuntimeState(device, { isOnline: false });
@@ -843,7 +1009,7 @@ class InsteonService {
         }
       }
 
-      if (index < devices.length - 1 && this._runtimeStatePollPauseMs > 0) {
+      if (index < pollBatch.length - 1 && this._runtimeStatePollPauseMs > 0) {
         // Spread polling over time so larger device inventories don't spike the PLM.
         // eslint-disable-next-line no-await-in-loop
         await this._sleep(this._runtimeStatePollPauseMs);
@@ -869,6 +1035,9 @@ class InsteonService {
       }
 
       if (this.isConnected && this.hub) {
+        if (this._isRuntimeMonitoringCoolingDown()) {
+          return;
+        }
         if (this._hasPendingHigherPriorityPlmOperation('poll')) {
           return;
         }
@@ -5832,14 +6001,14 @@ class InsteonService {
     const timer = setTimeout(() => {
       this._pendingRuntimeStateRefreshes.delete(normalizedAddress);
       this._confirmDeviceStateByAddress(normalizedAddress, {
-        attempts: 2,
-        timeoutMs: 3500,
-        pauseBetweenMs: 180,
+        attempts: 1,
+        timeoutMs: this._runtimeStateRefreshTimeoutMs,
+        pauseBetweenMs: 0,
         persistState: true
       }).catch((error) => {
         console.warn(`InsteonService: Runtime state refresh (${reason}) failed for ${this._formatInsteonAddress(normalizedAddress)}: ${error.message}`);
       });
-    }, 300);
+    }, this._runtimeStateRefreshDelayMs);
 
     this._pendingRuntimeStateRefreshes.set(normalizedAddress, timer);
   }
@@ -7187,12 +7356,14 @@ class InsteonService {
           priority: 'query',
           kind: 'state_confirm'
         });
+        this._markRuntimePollAttempt(normalizedAddress);
         const state = this._stateFromInsteonLevel(level);
         if (persistState) {
           await this._persistDeviceRuntimeStateByAddress(normalizedAddress, state);
         }
         return state;
       } catch (error) {
+        this._markRuntimePollAttempt(normalizedAddress);
         lastError = error;
         if (attempt < attempts && pauseBetweenMs > 0) {
           await this._sleep(pauseBetweenMs);
@@ -7232,6 +7403,7 @@ class InsteonService {
           priority: 'confirm',
           kind: 'expected_state_confirm'
         });
+        this._markRuntimePollAttempt(normalizedAddress);
         const state = this._stateFromInsteonLevel(level);
         lastState = state;
 
@@ -7259,6 +7431,7 @@ class InsteonService {
           `Expected ${Boolean(expectedStatus) ? 'ON' : 'OFF'} but observed ${state.status ? 'ON' : 'OFF'}`
         );
       } catch (error) {
+        this._markRuntimePollAttempt(normalizedAddress);
         consecutiveMatches = 0;
         lastError = error;
       }
@@ -7309,13 +7482,24 @@ class InsteonService {
     };
   }
 
+  _getVerificationMode(options = {}) {
+    return this._normalizeVerificationMode(
+      options?.verificationMode ?? options?.verifyMode,
+      this._getDefaultVerificationMode()
+    );
+  }
+
+  _shouldSkipSynchronousVerification(verificationMode = '') {
+    return ['ack', 'ack_only', 'none', 'async'].includes(String(verificationMode || '').trim().toLowerCase());
+  }
+
   _getExpectedStateConfirmationOptions(expectedStatus, options = {}) {
-    const verificationMode = String(options?.verificationMode || 'stable').trim().toLowerCase();
+    const verificationMode = this._getVerificationMode(options);
     if (verificationMode === 'fast') {
       return {
-        attempts: Boolean(expectedStatus) ? 2 : 2,
-        timeoutMs: 1500,
-        pauseBetweenMs: 120,
+        attempts: 2,
+        timeoutMs: 1200,
+        pauseBetweenMs: 100,
         settleBetweenMatchesMs: 0,
         requiredMatches: 1,
         persistState: true
@@ -7357,7 +7541,11 @@ class InsteonService {
       ?? process.env.HOMEBRAIN_INSTEON_COMMAND_RETRY_PAUSE_MS
       ?? DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS
     );
-    const timeoutRaw = Number(options?.commandTimeoutMs);
+    const timeoutRaw = Number(
+      options?.commandTimeoutMs
+      ?? process.env.HOMEBRAIN_INSTEON_COMMAND_TIMEOUT_MS
+      ?? DEFAULT_INSTEON_COMMAND_TIMEOUT_MS
+    );
 
     return {
       attempts: Number.isFinite(attemptsRaw)
@@ -7368,7 +7556,7 @@ class InsteonService {
         : DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS,
       timeoutMs: Number.isFinite(timeoutRaw)
         ? Math.max(500, Math.min(20_000, Math.round(timeoutRaw)))
-        : 5000
+        : DEFAULT_INSTEON_COMMAND_TIMEOUT_MS
     };
   }
 
@@ -7527,8 +7715,8 @@ class InsteonService {
     try {
       return await this._confirmExpectedDeviceStateByAddress(address, expectedStatus, {
         attempts: 2,
-        timeoutMs: 2500,
-        pauseBetweenMs: 150,
+        timeoutMs: 1500,
+        pauseBetweenMs: 100,
         settleBetweenMatchesMs: 0,
         requiredMatches: 1,
         persistState: true
@@ -7998,6 +8186,7 @@ class InsteonService {
       const boundedBrightness = Number.isFinite(numericBrightness)
         ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
         : 100;
+      this._markRecentPlmControlActivity();
       try {
         commandExecution = await this._executeHubCommandWithRetries(
           (callback) => this._getHubLightController(address).turnOn(boundedBrightness, callback),
@@ -8040,6 +8229,30 @@ class InsteonService {
       console.log(`InsteonService: Device ${address} turned on at ${boundedBrightness}%`);
       const optimisticState = this._buildOptimisticCommandState(true, boundedBrightness);
       await this._persistDeviceRuntimeState(device, optimisticState);
+      const verificationMode = this._getVerificationMode(options);
+      if (this._shouldSkipSynchronousVerification(verificationMode)) {
+        this._scheduleRuntimeStateRefresh(address, 'turn_on_ack');
+        const details = this._buildInsteonControlDetails(device, address, 'turn_on', optimisticState, {
+          requestedBrightness: boundedBrightness,
+          commandAcknowledged: true,
+          hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
+          hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
+          verificationMode,
+          confirmed: false,
+          commandAttempts: commandExecution.attemptsUsed,
+          commandRetryCount: commandExecution.retryCount
+        });
+
+        return {
+          success: true,
+          message: `Device turned on via Insteon PLM ${details.insteonAddress}${commandExecution.attemptsUsed > 1 ? ` after ${commandExecution.attemptsUsed} command attempts` : ''} (command acknowledged; async status refresh queued)`,
+          status: optimisticState.status,
+          brightness: optimisticState.brightness,
+          level: optimisticState.level,
+          confirmed: false,
+          details
+        };
+      }
       const confirmOptions = this._getExpectedStateConfirmationOptions(true, options);
 
       let confirmedState = null;
@@ -8055,7 +8268,7 @@ class InsteonService {
           commandAcknowledged: true,
           hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
           hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
-          verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
+          verificationMode,
           confirmationWarning: error.message,
           confirmationCode: error.code || null,
           confirmed: false,
@@ -8080,7 +8293,7 @@ class InsteonService {
         commandAcknowledged: true,
         hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
         hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
-        verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
+        verificationMode,
         commandAttempts: commandExecution.attemptsUsed,
         commandRetryCount: commandExecution.retryCount
       });
@@ -8129,6 +8342,7 @@ class InsteonService {
         attemptsUsed: 1,
         retryCount: 0
       };
+      this._markRecentPlmControlActivity();
 
       try {
         commandExecution = await this._executeHubCommandWithRetries(
@@ -8171,6 +8385,29 @@ class InsteonService {
       console.log(`InsteonService: Device ${address} turned off`);
       const optimisticState = this._buildOptimisticCommandState(false);
       await this._persistDeviceRuntimeState(device, optimisticState);
+      const verificationMode = this._getVerificationMode(options);
+      if (this._shouldSkipSynchronousVerification(verificationMode)) {
+        this._scheduleRuntimeStateRefresh(address, 'turn_off_ack');
+        const details = this._buildInsteonControlDetails(device, address, 'turn_off', optimisticState, {
+          commandAcknowledged: true,
+          hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
+          hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
+          verificationMode,
+          confirmed: false,
+          commandAttempts: commandExecution.attemptsUsed,
+          commandRetryCount: commandExecution.retryCount
+        });
+
+        return {
+          success: true,
+          message: `Device turned off via Insteon PLM ${details.insteonAddress}${commandExecution.attemptsUsed > 1 ? ` after ${commandExecution.attemptsUsed} command attempts` : ''} (command acknowledged; async status refresh queued)`,
+          status: optimisticState.status,
+          brightness: optimisticState.brightness,
+          level: optimisticState.level,
+          confirmed: false,
+          details
+        };
+      }
       const confirmOptions = this._getExpectedStateConfirmationOptions(false, options);
 
       let confirmedState = null;
@@ -8185,7 +8422,7 @@ class InsteonService {
           commandAcknowledged: true,
           hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
           hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
-          verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
+          verificationMode,
           confirmationWarning: error.message,
           confirmationCode: error.code || null,
           confirmed: false,
@@ -8209,7 +8446,7 @@ class InsteonService {
         commandAcknowledged: true,
         hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
         hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
-        verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
+        verificationMode,
         commandAttempts: commandExecution.attemptsUsed,
         commandRetryCount: commandExecution.retryCount
       });
@@ -8521,6 +8758,7 @@ class InsteonService {
    * @returns {Object} Connection status
    */
   getStatus() {
+    const commandDefaults = this._getCommandRetryOptions();
     return {
       connected: this.isConnected,
       deviceCount: this.devices.size,
@@ -8528,6 +8766,36 @@ class InsteonService {
       transport: this.connectionTransport,
       port: this.connectionTarget,
       lastConnectionError: this.lastConnectionError,
+      defaults: {
+        verificationMode: this._getDefaultVerificationMode(),
+        commandAttempts: commandDefaults.attempts,
+        commandPauseBetweenMs: commandDefaults.pauseBetweenMs,
+        commandTimeoutMs: commandDefaults.timeoutMs
+      },
+      plmQueue: {
+        depth: this._plmOperationQueue.length,
+        active: this._activePlmOperation
+          ? {
+              priority: this._activePlmOperation.priority,
+              kind: this._activePlmOperation.kind,
+              label: this._activePlmOperation.label
+            }
+          : null
+      },
+      runtimeMonitoring: {
+        started: this._runtimeMonitoringStarted,
+        inProgress: this._runtimeMonitoringInProgress,
+        intervalMs: this._runtimeMonitoringIntervalMs,
+        staleAfterMs: this._runtimeMonitoringStaleAfterMs,
+        offlineStaleAfterMs: this._runtimeMonitoringOfflineStaleAfterMs,
+        batchSize: this._runtimeMonitoringBatchSize,
+        cooldownMs: this._runtimeMonitoringCooldownMs,
+        coolingDown: this._isRuntimeMonitoringCoolingDown(),
+        cooldownRemainingMs: this._getRuntimeMonitoringCooldownRemainingMs(),
+        pollTimeoutMs: this._runtimeStatePollTimeoutMs,
+        pollPauseMs: this._runtimeStatePollPauseMs,
+        pendingRefreshes: this._pendingRuntimeStateRefreshes.size
+      },
       localSerialBridge: this._localSerialBridge
         ? {
             active: this._isLocalSerialBridgeActive(),

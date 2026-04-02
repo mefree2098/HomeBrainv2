@@ -312,6 +312,10 @@ test('_runRuntimeMonitoringPass polls tracked Insteon light state changes', asyn
   const originalMonitoringStarted = insteonService._runtimeMonitoringStarted;
   const originalMonitoringInProgress = insteonService._runtimeMonitoringInProgress;
   const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
+  const originalPollMetadata = insteonService._runtimePollMetadata;
+  const originalStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+  const originalOfflineStaleAfterMs = insteonService._runtimeMonitoringOfflineStaleAfterMs;
+  const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
   const originalScheduleRuntimeMonitoringPass = insteonService._scheduleRuntimeMonitoringPass;
 
   t.after(() => {
@@ -323,6 +327,10 @@ test('_runRuntimeMonitoringPass polls tracked Insteon light state changes', asyn
     insteonService._runtimeMonitoringStarted = originalMonitoringStarted;
     insteonService._runtimeMonitoringInProgress = originalMonitoringInProgress;
     insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
+    insteonService._runtimePollMetadata = originalPollMetadata;
+    insteonService._runtimeMonitoringStaleAfterMs = originalStaleAfterMs;
+    insteonService._runtimeMonitoringOfflineStaleAfterMs = originalOfflineStaleAfterMs;
+    insteonService._runtimeMonitoringBatchSize = originalBatchSize;
     insteonService._scheduleRuntimeMonitoringPass = originalScheduleRuntimeMonitoringPass;
   });
 
@@ -353,6 +361,10 @@ test('_runRuntimeMonitoringPass polls tracked Insteon light state changes', asyn
   insteonService._runtimeMonitoringStarted = true;
   insteonService._runtimeMonitoringInProgress = false;
   insteonService._runtimeStatePollPauseMs = 0;
+  insteonService._runtimePollMetadata = new Map();
+  insteonService._runtimeMonitoringStaleAfterMs = 0;
+  insteonService._runtimeMonitoringOfflineStaleAfterMs = 0;
+  insteonService._runtimeMonitoringBatchSize = 10;
 
   await insteonService._runRuntimeMonitoringPass('test');
 
@@ -369,6 +381,10 @@ test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is 
   const originalMonitoringStarted = insteonService._runtimeMonitoringStarted;
   const originalMonitoringInProgress = insteonService._runtimeMonitoringInProgress;
   const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
+  const originalPollMetadata = insteonService._runtimePollMetadata;
+  const originalStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+  const originalOfflineStaleAfterMs = insteonService._runtimeMonitoringOfflineStaleAfterMs;
+  const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
   const originalScheduleRuntimeMonitoringPass = insteonService._scheduleRuntimeMonitoringPass;
   const originalQueue = insteonService._plmOperationQueue;
   const originalActiveOperation = insteonService._activePlmOperation;
@@ -381,6 +397,10 @@ test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is 
     insteonService._runtimeMonitoringStarted = originalMonitoringStarted;
     insteonService._runtimeMonitoringInProgress = originalMonitoringInProgress;
     insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
+    insteonService._runtimePollMetadata = originalPollMetadata;
+    insteonService._runtimeMonitoringStaleAfterMs = originalStaleAfterMs;
+    insteonService._runtimeMonitoringOfflineStaleAfterMs = originalOfflineStaleAfterMs;
+    insteonService._runtimeMonitoringBatchSize = originalBatchSize;
     insteonService._scheduleRuntimeMonitoringPass = originalScheduleRuntimeMonitoringPass;
     insteonService._plmOperationQueue = originalQueue;
     insteonService._activePlmOperation = originalActiveOperation;
@@ -408,6 +428,10 @@ test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is 
   insteonService._runtimeMonitoringStarted = true;
   insteonService._runtimeMonitoringInProgress = false;
   insteonService._runtimeStatePollPauseMs = 0;
+  insteonService._runtimePollMetadata = new Map();
+  insteonService._runtimeMonitoringStaleAfterMs = 0;
+  insteonService._runtimeMonitoringOfflineStaleAfterMs = 0;
+  insteonService._runtimeMonitoringBatchSize = 10;
   insteonService._plmOperationQueue = [{
     priority: 0,
     sequence: 1,
@@ -424,7 +448,7 @@ test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is 
   assert.equal(queryCalls, 0);
 });
 
-test('turnOn issues normalized command address and returns confirmed state', async (t) => {
+test('turnOn can still do stable synchronous verification when explicitly requested', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -462,7 +486,9 @@ test('turnOn issues normalized command address and returns confirmed state', asy
     confirmedReads: 2
   });
 
-  const result = await insteonService.turnOn('mock-device', 68);
+  const result = await insteonService.turnOn('mock-device', 68, {
+    verificationMode: 'stable'
+  });
   assert.equal(hubAddress, '112233');
   assert.equal(hubLevel, 68);
   assert.equal(result.success, true);
@@ -518,7 +544,9 @@ test('turnOn returns success with warning when verification is inconclusive afte
     throw error;
   };
 
-  const result = await insteonService.turnOn('mock-device', 68);
+  const result = await insteonService.turnOn('mock-device', 68, {
+    verificationMode: 'stable'
+  });
 
   assert.equal(hubAddress, '112233');
   assert.equal(result.success, true);
@@ -530,6 +558,57 @@ test('turnOn returns success with warning when verification is inconclusive afte
   assert.equal(result.details.confirmationCode, 'INSTEON_STATE_CONFIRMATION_TIMEOUT');
   assert.equal(result.details.commandAcknowledged, true);
   assert.equal(persistedPatch.status, true);
+});
+
+test('turnOn can return after acknowledgement without synchronous verification', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  let confirmCalls = 0;
+  let refreshAddress = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOn(_address, _level, callback) {
+      callback(null, { ack: true, success: true });
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => {
+    confirmCalls += 1;
+    throw new Error('should not be called');
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address) => {
+    refreshAddress = address;
+  };
+
+  const result = await insteonService.turnOn('mock-device', 68, {
+    verificationMode: 'ack'
+  });
+
+  assert.equal(confirmCalls, 0);
+  assert.equal(refreshAddress, '112233');
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, false);
+  assert.match(result.message, /async status refresh queued/i);
+  assert.equal(result.details.verificationMode, 'ack');
 });
 
 test('turnOn can recover after command acknowledgement times out if the device state confirms ON', async (t) => {
@@ -577,7 +656,7 @@ test('turnOn can recover after command acknowledgement times out if the device s
   assert.equal(result.details.verificationRecovered, true);
 });
 
-test('turnOff issues normalized command address and returns direct PLM confirmation details', async (t) => {
+test('turnOff can still do stable synchronous verification when explicitly requested', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -613,7 +692,9 @@ test('turnOff issues normalized command address and returns direct PLM confirmat
     confirmedReads: 2
   });
 
-  const result = await insteonService.turnOff('mock-device');
+  const result = await insteonService.turnOff('mock-device', {
+    verificationMode: 'stable'
+  });
 
   assert.equal(hubAddress, '112233');
   assert.equal(result.success, true);
@@ -623,6 +704,55 @@ test('turnOff issues normalized command address and returns direct PLM confirmat
   assert.equal(result.details.controlMethod, 'insteon_plm_direct');
   assert.equal(result.details.confirmedLevel, 0);
   assert.equal(result.details.commandAcknowledged, true);
+});
+
+test('turnOff defaults to acknowledgement mode without synchronous verification', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  let confirmCalls = 0;
+  let refreshAddress = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOff(_address, callback) {
+      callback(null, { ack: true, success: true });
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'SwitchLinc Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => {
+    confirmCalls += 1;
+    throw new Error('should not be called');
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address) => {
+    refreshAddress = address;
+  };
+
+  const result = await insteonService.turnOff('mock-device');
+
+  assert.equal(confirmCalls, 0);
+  assert.equal(refreshAddress, '112233');
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, false);
+  assert.match(result.message, /async status refresh queued/i);
+  assert.equal(result.details.verificationMode, 'ack');
 });
 
 test('turnOff retries command timeouts before succeeding', async (t) => {
@@ -676,7 +806,8 @@ test('turnOff retries command timeouts before succeeding', async (t) => {
 
   const result = await insteonService.turnOff('mock-device', {
     commandAttempts: 2,
-    commandPauseBetweenMs: 0
+    commandPauseBetweenMs: 0,
+    verificationMode: 'stable'
   });
 
   assert.equal(commandCalls, 2);
