@@ -50,6 +50,28 @@ router.get('/series', user, async (req, res) => {
   }
 });
 
+router.post('/chart-builder', user, async (req, res) => {
+  try {
+    const plan = await telemetryService.buildChartFromPrompt({
+      prompt: req.body?.prompt,
+      preferredSourceKey: req.body?.preferredSourceKey
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: plan
+    });
+  } catch (error) {
+    console.error('POST /api/telemetry/chart-builder - Error:', error.message);
+    const statusCode = error.message === 'A chart prompt is required.' ? 400 : 500;
+
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to build chart from prompt'
+    });
+  }
+});
+
 router.delete('/', admin, async (req, res) => {
   try {
     const cleared = await telemetryService.clearData({

@@ -8,7 +8,7 @@ const retentionDays = Math.max(
 const telemetrySampleSchema = new mongoose.Schema({
   sourceType: {
     type: String,
-    enum: ['device', 'tempest_station'],
+    enum: ['device', 'tempest_station', 'workflow'],
     required: true,
     index: true
   },
@@ -40,7 +40,7 @@ const telemetrySampleSchema = new mongoose.Schema({
   },
   streamType: {
     type: String,
-    enum: ['device_state', 'tempest_observation'],
+    enum: ['device_state', 'tempest_observation', 'tempest_device_state', 'workflow_execution'],
     required: true,
     index: true
   },

@@ -319,6 +319,61 @@ test('device_control action resolves direct targets from mongoose action subdocu
   assert.equal(result.actionResults[0].target, deviceId);
 });
 
+test('device_control action passes Insteon retry parameters through to command execution', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalTurnOff = insteonService.turnOff;
+  let receivedOptions = null;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Master Toilet Fan',
+      type: 'switch',
+      properties: {
+        source: 'insteon'
+      }
+    })
+  });
+
+  insteonService.turnOff = async (_target, options) => {
+    receivedOptions = options;
+    return {
+      message: 'Device turned off via Insteon PLM 11.22.33 after 3 command attempts',
+      details: {
+        controlMethod: 'insteon_plm_direct',
+        insteonAddress: '11.22.33',
+        commandAttempts: 3,
+        commandRetryCount: 2
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'turn_off',
+        retryCount: 2,
+        retryDelayMs: 1200
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(receivedOptions.commandAttempts, 3);
+  assert.equal(receivedOptions.commandPauseBetweenMs, 1200);
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, true);
+  assert.equal(result.actionResults[0].details.commandAttempts, 3);
+  assert.equal(result.actionResults[0].details.commandRetryCount, 2);
+});
+
 test('device_control action can target a device group', async (t) => {
   const originalFind = Device.find;
   const originalTurnOff = insteonService.turnOff;

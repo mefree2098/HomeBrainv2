@@ -118,6 +118,83 @@ export interface TempestWidgetData {
   station: TempestStationSummary | null
 }
 
+export interface TempestTelemetryWindowSummary {
+  key: "day" | "week" | "month" | "year"
+  label: string
+  hours: number
+  humidity: {
+    averagePct: number | null
+    minPct: number | null
+    maxPct: number | null
+    averageDewPointF: number | null
+  }
+  wind: {
+    averageMph: number | null
+    peakGustMph: number | null
+    directionDeg: number | null
+    directionLabel: string
+  }
+  pressure: {
+    averageInHg: number | null
+    minInHg: number | null
+    maxInHg: number | null
+  }
+  rain: {
+    totalIn: number | null
+    peakRateInPerHr: number | null
+    observationCount: number
+  }
+  solar: {
+    averageWm2: number | null
+    peakWm2: number | null
+    peakUvIndex: number | null
+    peakIlluminanceLux: number | null
+    averageIlluminanceLux: number | null
+  }
+  lightning: {
+    strikeCount: number
+    averageDistanceMiles: number | null
+    lastStrikeAt: string | null
+    lastStrikeDistanceMiles: number | null
+  }
+  signal: {
+    averageRssiDbm: number | null
+    minRssiDbm: number | null
+    maxRssiDbm: number | null
+    averageHubRssiDbm: number | null
+    websocketConnectedPct: number | null
+    udpListeningPct: number | null
+    latestRssiDbm: number | null
+    latestWebsocketConnected: number | null
+    latestUdpListening: number | null
+    sampleCount: number
+  }
+  battery: {
+    averageVolts: number | null
+    minVolts: number | null
+    maxVolts: number | null
+  }
+  temperature: {
+    averageF: number | null
+    minF: number | null
+    maxF: number | null
+  }
+  meta: {
+    observationCount: number
+    lastObservedAt: string | null
+    lastSignalAt: string | null
+  }
+}
+
+export interface TempestModuleTelemetrySummary {
+  generatedAt: string
+  sourceKey: string
+  sourceId: string
+  stationId: number | null
+  stationName: string
+  windows: TempestTelemetryWindowSummary[]
+}
+
 export interface DashboardWeatherPayload {
   fetchedAt: string
   location: DashboardWeatherLocation
@@ -136,6 +213,7 @@ export interface WeatherDashboardPayload {
     station: TempestStationSummary | null
     observations: TempestObservationPoint[]
     events: TempestEventRecord[]
+    moduleTelemetry: TempestModuleTelemetrySummary | null
   }
 }
 

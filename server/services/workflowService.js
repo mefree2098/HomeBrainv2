@@ -232,12 +232,30 @@ class WorkflowService {
     };
   }
 
-  async getWorkflowRuntimeHistory(workflowId = null, limit = 50) {
+  async getWorkflowRuntimeHistory(workflowId = null, options = {}) {
     if (workflowId) {
       await this.getWorkflowById(workflowId);
     }
 
-    return automationRuntimeService.getWorkflowExecutionHistory(workflowId, limit);
+    const normalizedOptions = typeof options === 'number'
+      ? { limit: options }
+      : options;
+
+    return automationRuntimeService.getWorkflowExecutionHistory({
+      workflowId,
+      ...normalizedOptions
+    });
+  }
+
+  async getWorkflowRuntimeTelemetry(workflowId = null, options = {}) {
+    if (workflowId) {
+      await this.getWorkflowById(workflowId);
+    }
+
+    return automationRuntimeService.getWorkflowRuntimeTelemetry({
+      workflowId,
+      ...(options && typeof options === 'object' ? options : {})
+    });
   }
 
   async getRunningWorkflowExecutions(limit = 25) {

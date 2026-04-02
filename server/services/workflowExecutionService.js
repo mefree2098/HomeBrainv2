@@ -26,6 +26,14 @@ const DEFAULT_INSTEON_GROUP_CONCURRENCY = Math.max(
   1,
   Number(process.env.WORKFLOW_INSTEON_GROUP_CONCURRENCY || 6)
 );
+const DEFAULT_WORKFLOW_INSTEON_RETRY_COUNT = Math.max(
+  0,
+  Number(process.env.WORKFLOW_INSTEON_RETRY_COUNT || 2)
+);
+const DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS = Math.max(
+  0,
+  Number(process.env.WORKFLOW_INSTEON_RETRY_DELAY_MS || 500)
+);
 
 const conditionStateCache = new Map();
 const isyVariableStore = new Map();
@@ -265,6 +273,42 @@ function getActionValue(actionName, parameters = {}) {
   }
 
   return undefined;
+}
+
+function getInsteonCommandRetryOptions(action, source = '') {
+  if (String(source || '').trim().toLowerCase() !== 'insteon') {
+    return {};
+  }
+
+  const parameters = action?.parameters && typeof action.parameters === 'object'
+    ? action.parameters
+    : {};
+  const retryCountRaw = Number(
+    Object.prototype.hasOwnProperty.call(parameters, 'retryCount')
+      ? parameters.retryCount
+      : (Object.prototype.hasOwnProperty.call(parameters, 'retries')
+        ? parameters.retries
+        : DEFAULT_WORKFLOW_INSTEON_RETRY_COUNT)
+  );
+  const retryDelayRaw = Number(
+    Object.prototype.hasOwnProperty.call(parameters, 'retryDelayMs')
+      ? parameters.retryDelayMs
+      : (Object.prototype.hasOwnProperty.call(parameters, 'retryDelay')
+        ? parameters.retryDelay
+        : DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS)
+  );
+
+  const retryCount = Number.isFinite(retryCountRaw)
+    ? Math.max(0, Math.min(4, Math.round(retryCountRaw)))
+    : DEFAULT_WORKFLOW_INSTEON_RETRY_COUNT;
+  const retryDelayMs = Number.isFinite(retryDelayRaw)
+    ? Math.max(0, Math.min(10_000, Math.round(retryDelayRaw)))
+    : DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS;
+
+  return {
+    commandAttempts: retryCount + 1,
+    commandPauseBetweenMs: retryDelayMs
+  };
 }
 
 function humanizeActionToken(value = '') {
@@ -757,9 +801,12 @@ async function resolveWorkflowReference(parameters = {}, options = {}) {
 async function executeDeviceControlForResolvedDevice(device, target, actionName, value, executionOptions = {}) {
   const source = getDeviceSource(device);
   let controlResult = null;
-  const insteonOptions = executionOptions?.insteon && typeof executionOptions.insteon === 'object'
-    ? executionOptions.insteon
-    : {};
+  const insteonOptions = {
+    ...(executionOptions?.insteon && typeof executionOptions.insteon === 'object'
+      ? executionOptions.insteon
+      : {}),
+    ...getInsteonCommandRetryOptions(executionOptions?.action, source)
+  };
 
   if (source === 'insteon') {
     switch (actionName) {
@@ -850,6 +897,7 @@ async function executeDeviceGroupControl(groupTarget, action) {
         actionName,
         value,
         {
+          action,
           insteon: {
             verificationMode: 'fast',
             deviceGroup: groupName
@@ -928,7 +976,9 @@ async function executeDeviceControl(action, context = {}) {
 
   const actionName = getActionName(action);
   const value = getActionValue(actionName, action?.parameters || {});
-  return executeDeviceControlForResolvedDevice(device, target, actionName, value);
+  return executeDeviceControlForResolvedDevice(device, target, actionName, value, {
+    action
+  });
 }
 
 async function executeSceneActivate(action, context = {}) {

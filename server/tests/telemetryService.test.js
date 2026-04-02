@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const telemetryService = require('../services/telemetryService');
 
 const {
+  buildSourceTimelineEvents,
   buildMetricDescriptors,
   downsamplePoints,
   extractDeviceMetrics,
@@ -43,6 +44,40 @@ test('extractDeviceMetrics maps device state and smartthings telemetry into char
   assert.equal(metrics.battery_pct, 87);
   assert.equal(metrics.contact_open, 1);
   assert.equal(metrics.motion_active, 0);
+});
+
+test('extractDeviceMetrics captures Tempest connectivity telemetry without duplicating observation metrics', () => {
+  const metrics = extractDeviceMetrics({
+    _id: 'tempest-device-1',
+    isOnline: true,
+    status: true,
+    properties: {
+      source: 'tempest',
+      tempest: {
+        display: {
+          batteryVolts: 2.45,
+          temperatureF: 73.5
+        },
+        health: {
+          rssi: -68,
+          hubRssi: -72,
+          websocketConnected: true,
+          udpListening: false,
+          sensorStatusFlags: ['light_wind', 'rain_check']
+        }
+      }
+    }
+  });
+
+  assert.equal(metrics.online, 1);
+  assert.equal(metrics.status, 1);
+  assert.equal(metrics.signal_rssi_dbm, -68);
+  assert.equal(metrics.hub_rssi_dbm, -72);
+  assert.equal(metrics.websocket_connected, 1);
+  assert.equal(metrics.udp_listening, 0);
+  assert.equal(metrics.sensor_fault_count, 2);
+  assert.equal(metrics.battery_volts, 2.45);
+  assert.equal(metrics.temperature_f, undefined);
 });
 
 test('extractTempestMetrics keeps display-oriented weather metrics and skips rapid wind snapshots', () => {
@@ -122,6 +157,36 @@ test('mergePointsByTimestamp and downsamplePoints collapse duplicate timestamps 
   assert.equal(downsampled.length, 3);
   assert.equal(downsampled[0].observedAt, '2026-04-01T00:00:00.000Z');
   assert.equal(downsampled[downsampled.length - 1].observedAt, '2026-04-01T03:00:00.000Z');
+});
+
+test('buildSourceTimelineEvents highlights binary state transitions for device history', () => {
+  const events = buildSourceTimelineEvents([
+    {
+      recordedAt: '2026-04-01T00:00:00.000Z',
+      metrics: {
+        status: 0,
+        online: 1
+      }
+    },
+    {
+      recordedAt: '2026-04-01T01:00:00.000Z',
+      metrics: {
+        status: 1,
+        online: 1
+      }
+    },
+    {
+      recordedAt: '2026-04-01T02:00:00.000Z',
+      metrics: {
+        status: 1,
+        online: 0
+      }
+    }
+  ], buildMetricDescriptors(['status', 'online']));
+
+  assert.equal(events.length, 2);
+  assert.equal(events[0].summary, 'Went Offline');
+  assert.equal(events[1].summary, 'Turned On');
 });
 
 test('summarizeStorageCollections totals footprint across telemetry collections', () => {

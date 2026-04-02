@@ -15,7 +15,7 @@ export interface TelemetrySourceSummary {
   category: string
   room: string
   origin: string
-  streamType: "device_state" | "tempest_observation"
+  streamType: "device_state" | "tempest_observation" | "tempest_device_state"
   sampleCount: number
   metricCount: number
   lastSampleAt: string | null
@@ -59,6 +59,9 @@ export interface TelemetryDiskSummary {
   totalLabel: string
   usedLabel: string
   freeLabel: string
+  filesystem?: string
+  mountedOn?: string
+  targetPath?: string
   available: boolean
 }
 
@@ -87,6 +90,32 @@ export interface TelemetryMetricStats {
   average: number | null
 }
 
+export interface TelemetryTimelineEvent {
+  id: string
+  observedAt: string
+  key: string
+  label: string
+  unit: string
+  binary: boolean
+  previousValue: number | null
+  nextValue: number | null
+  summary: string
+}
+
+export interface TelemetryChartBuilderResult {
+  prompt: string
+  chart: {
+    title: string
+    description: string
+    sourceKey: string
+    metricKeys: string[]
+    hours: number
+    chartType: "area" | "line"
+    reason: string
+  }
+  source: TelemetrySourceSummary
+}
+
 export interface TelemetrySeriesPayload {
   source: TelemetrySourceSummary
   metrics: TelemetryMetricDescriptor[]
@@ -100,6 +129,7 @@ export interface TelemetrySeriesPayload {
   }
   points: TelemetrySeriesPoint[]
   stats: TelemetryMetricStats[]
+  events: TelemetryTimelineEvent[]
 }
 
 export const getTelemetryOverview = async () => {
@@ -127,6 +157,19 @@ export const getTelemetrySeries = async (options: {
     })
 
     return response.data as { success: boolean; data: TelemetrySeriesPayload }
+  } catch (error) {
+    console.error(error)
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message)
+  }
+}
+
+export const buildTelemetryChart = async (payload: {
+  prompt: string
+  preferredSourceKey?: string
+}) => {
+  try {
+    const response = await api.post("/api/telemetry/chart-builder", payload)
+    return response.data as { success: boolean; data: TelemetryChartBuilderResult }
   } catch (error) {
     console.error(error)
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message)

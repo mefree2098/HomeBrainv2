@@ -108,6 +108,8 @@ struct WorkflowsView: View {
     @State private var stats: [String: Any] = [:]
     @State private var runningExecutions: [WorkflowExecutionHistoryItem] = []
     @State private var runtimeHistory: [WorkflowExecutionHistoryItem] = []
+    @State private var runtimeTelemetry = WorkflowRuntimeTelemetryItem.empty
+    @State private var runtimePagination = WorkflowRuntimePaginationItem.empty
     @State private var activityEvents: [PlatformEventItem] = []
 
     @State private var isLoading = true
@@ -130,6 +132,9 @@ struct WorkflowsView: View {
     @State private var creatingFromText = false
     @State private var revisingWorkflow = false
     @State private var runningChatCommand = false
+    @State private var runtimeLogLimit = 50
+    @State private var runtimeWindowHours = 24
+    @State private var runtimeHistoryPage = 1
 
     @State private var createName = ""
     @State private var createDescription = ""
@@ -146,6 +151,14 @@ struct WorkflowsView: View {
     private let triggerTypes = ["manual", "time", "schedule", "device_state", "sensor", "security_alarm_status"]
     private let actionTypes = ["notification", "device_control", "scene_activate", "delay"]
     private let categories = ["security", "comfort", "energy", "convenience", "custom"]
+    private let runtimeLogLimitOptions = [10, 25, 50]
+    private let runtimeWindowOptions: [(hours: Int, label: String)] = [
+        (1, "Last Hour"),
+        (24, "Last 24 Hours"),
+        (24 * 7, "Last Week"),
+        (24 * 30, "Last Month"),
+        (24 * 365, "Last Year")
+    ]
     private let refreshTimer = Timer.publish(every: 12, on: .main, in: .common).autoconnect()
     private let clockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -159,6 +172,20 @@ struct WorkflowsView: View {
 
     private var workflowIdsRunning: Set<String> {
         Set(runningExecutions.compactMap { $0.workflowId })
+    }
+
+    private var runtimeWindowLabel: String {
+        runtimeWindowOptions.first(where: { $0.hours == (runtimeTelemetry.timeRangeHours ?? runtimeWindowHours) })?.label ?? "Selected Range"
+    }
+
+    private var runtimePageSummary: String {
+        guard runtimePagination.total > 0 else {
+            return "No runtime logs in this range."
+        }
+
+        let start = ((runtimePagination.page - 1) * runtimePagination.limit) + 1
+        let end = min(runtimePagination.total, start + max(runtimeHistory.count - 1, 0))
+        return "Showing \(start)-\(end) of \(runtimePagination.total) logs."
     }
 
     var body: some View {
@@ -249,6 +276,23 @@ struct WorkflowsView: View {
         }
         .refreshable {
             await refreshWorkflowScreen(silent: false)
+        }
+        .onChange(of: runtimeLogLimit) { _ in
+            if runtimeHistoryPage == 1 {
+                Task { await refreshWorkflowScreen(silent: false) }
+            } else {
+                runtimeHistoryPage = 1
+            }
+        }
+        .onChange(of: runtimeWindowHours) { _ in
+            if runtimeHistoryPage == 1 {
+                Task { await refreshWorkflowScreen(silent: false) }
+            } else {
+                runtimeHistoryPage = 1
+            }
+        }
+        .onChange(of: runtimeHistoryPage) { _ in
+            Task { await refreshWorkflowScreen(silent: false) }
         }
     }
 
@@ -402,6 +446,29 @@ struct WorkflowsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
+                    Text("Runtime Dashboard")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: usesCompactLayout ? 128 : 148), spacing: 12, alignment: .leading)],
+                        alignment: .leading,
+                        spacing: 12
+                    ) {
+                        runtimeMetricCard(title: "Running Now", value: "\(runtimeTelemetry.runningNow)", subtitle: "Live workflow executions")
+                        runtimeMetricCard(title: "Logs in Range", value: "\(runtimeTelemetry.executionCount)", subtitle: "\(runtimeWindowLabel)\(runtimeTelemetry.cancelledCount > 0 ? " · \(runtimeTelemetry.cancelledCount) stopped" : "")")
+                        runtimeMetricCard(title: "Succeeded", value: "\(runtimeTelemetry.successCount)", subtitle: "Completed successfully")
+                        runtimeMetricCard(title: "Failed", value: "\(runtimeTelemetry.failedCount)", subtitle: "\(String(format: "%.1f", runtimeTelemetry.failureRatePct))% failure rate")
+                        runtimeMetricCard(title: "Partial", value: "\(runtimeTelemetry.partialSuccessCount)", subtitle: "Completed with issues")
+                        runtimeMetricCard(
+                            title: "Avg Duration",
+                            value: runtimeTelemetry.averageDurationMs == nil ? "No data" : formatDuration(runtimeTelemetry.averageDurationMs),
+                            subtitle: runtimeTelemetry.lastCompletedAt == nil ? "Awaiting completed runs" : "Last finished \(formatDateTime(runtimeTelemetry.lastCompletedAt))"
+                        )
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
                     sectionHeading("Running Now", count: runningExecutions.count)
 
                     if runningExecutions.isEmpty {
@@ -436,29 +503,68 @@ struct WorkflowsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("Recent Executions")
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Recent Executions")
+                                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textPrimary)
 
-                        Spacer()
+                                Text("Filter persisted runtime records by time period and how many logs appear per page.")
+                                    .font(.caption2)
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
 
-                        Text("Logs + persisted runtime records")
-                            .font(.caption2)
-                            .foregroundStyle(HBPalette.textSecondary)
+                            Spacer()
+                        }
+
+                        if usesCompactLayout {
+                            VStack(alignment: .leading, spacing: 10) {
+                                runtimeLogFilterControls
+                            }
+                        } else {
+                            HStack(alignment: .bottom, spacing: 12) {
+                                runtimeLogFilterControls
+                                Spacer()
+                            }
+                        }
                     }
 
                     if runtimeHistory.isEmpty {
                         EmptyStateView(
                             title: "No execution history",
-                            subtitle: "Workflow execution history will appear here once automations start running."
+                            subtitle: "No workflow execution history was recorded in the selected time period."
                         )
                     } else {
-                        ForEach(runtimeHistory.prefix(12)) { execution in
+                        ForEach(runtimeHistory) { execution in
                             HBCardRow {
                                 executionHistoryCard(for: execution)
                             }
                         }
+                    }
+
+                    HStack {
+                        Text(runtimePageSummary)
+                            .font(.caption)
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                        Spacer()
+
+                        Button("Previous") {
+                            runtimeHistoryPage = max(1, runtimeHistoryPage - 1)
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(!runtimePagination.hasPreviousPage || runtimeRefreshing)
+
+                        Text("Page \(runtimePagination.page) of \(runtimePagination.totalPages)")
+                            .font(.caption2)
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                        Button("Next") {
+                            runtimeHistoryPage += 1
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(!runtimePagination.hasNextPage || runtimeRefreshing)
                     }
                 }
             }
@@ -701,6 +807,40 @@ struct WorkflowsView: View {
                 background: HBPalette.accentBlue.opacity(0.12),
                 stroke: HBPalette.accentBlue.opacity(0.65)
             )
+        }
+    }
+
+    private var runtimeLogFilterControls: some View {
+        Group {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("How Many Logs")
+                    .font(.caption2)
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .textCase(.uppercase)
+                    .tracking(1.1)
+
+                Picker("How Many Logs", selection: $runtimeLogLimit) {
+                    ForEach(runtimeLogLimitOptions, id: \.self) { option in
+                        Text("\(option) logs").tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Time Period")
+                    .font(.caption2)
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .textCase(.uppercase)
+                    .tracking(1.1)
+
+                Picker("Time Period", selection: $runtimeWindowHours) {
+                    ForEach(Array(runtimeWindowOptions.enumerated()), id: \.offset) { _, option in
+                        Text(option.label).tag(option.hours)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
         }
     }
 
@@ -1056,7 +1196,14 @@ struct WorkflowsView: View {
             async let workflowsTask = session.apiClient.get("/api/workflows")
             async let statsTask = session.apiClient.get("/api/workflows/stats")
             async let runningTask = session.apiClient.get("/api/workflows/running", query: [URLQueryItem(name: "limit", value: "20")])
-            async let historyTask = session.apiClient.get("/api/workflows/runtime-history", query: [URLQueryItem(name: "limit", value: "50")])
+            async let historyTask = session.apiClient.get("/api/workflows/runtime-history", query: [
+                URLQueryItem(name: "limit", value: "\(runtimeLogLimit)"),
+                URLQueryItem(name: "page", value: "\(runtimeHistoryPage)"),
+                URLQueryItem(name: "hours", value: "\(runtimeWindowHours)")
+            ])
+            async let telemetryTask = session.apiClient.get("/api/workflows/runtime-telemetry", query: [
+                URLQueryItem(name: "hours", value: "\(runtimeWindowHours)")
+            ])
             async let eventsTask = session.apiClient.get("/api/events/latest", query: [
                 URLQueryItem(name: "limit", value: "80"),
                 URLQueryItem(name: "category", value: "automation")
@@ -1066,6 +1213,7 @@ struct WorkflowsView: View {
             let statsResponse = try await statsTask
             let runningResponse = try await runningTask
             let historyResponse = try await historyTask
+            let telemetryResponse = try await telemetryTask
             let eventsResponse = try await eventsTask
 
             workflows = JSON.array(JSON.object(workflowsResponse)["workflows"])
@@ -1074,9 +1222,15 @@ struct WorkflowsView: View {
             stats = JSON.object(JSON.object(statsResponse)["stats"])
             runningExecutions = JSON.array(JSON.object(runningResponse)["executions"]).map(WorkflowExecutionHistoryItem.from)
             runtimeHistory = JSON.array(JSON.object(historyResponse)["history"]).map(WorkflowExecutionHistoryItem.from)
+            runtimePagination = WorkflowRuntimePaginationItem.from(JSON.object(JSON.object(historyResponse)["pagination"]))
+            runtimeTelemetry = WorkflowRuntimeTelemetryItem.from(JSON.object(JSON.object(telemetryResponse)["telemetry"]))
             activityEvents = JSON.array(JSON.object(eventsResponse)["events"])
                 .map(PlatformEventItem.from)
                 .sorted { $0.sequence > $1.sequence }
+
+            if runtimePagination.page != runtimeHistoryPage {
+                runtimeHistoryPage = runtimePagination.page
+            }
 
             if let selectedExecution {
                 if let refreshed = (runningExecutions + runtimeHistory).first(where: { $0.id == selectedExecution.id }) {

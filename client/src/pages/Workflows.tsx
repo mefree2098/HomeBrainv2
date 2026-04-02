@@ -23,6 +23,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl";
 import { useToast } from "@/hooks/useToast";
@@ -31,6 +32,8 @@ import {
   Workflow,
   WorkflowAction,
   WorkflowExecutionHistoryEntry,
+  WorkflowRuntimePagination,
+  WorkflowRuntimeTelemetry,
   createWorkflow,
   createWorkflowFromText,
   deleteWorkflow,
@@ -38,6 +41,7 @@ import {
   reviseWorkflowFromText,
   getRunningWorkflowExecutions,
   getWorkflowRuntimeHistory,
+  getWorkflowRuntimeTelemetry,
   getWorkflows,
   toggleWorkflow,
   updateWorkflow
@@ -89,6 +93,14 @@ const formatLastRun = (value?: string | null) => {
 };
 
 const AUTOMATION_ACTIVITY_LIMIT = 80;
+const WORKFLOW_LOG_LIMIT_OPTIONS = [10, 25, 50] as const;
+const WORKFLOW_LOG_WINDOW_OPTIONS = [
+  { value: 1, label: "Last Hour" },
+  { value: 24, label: "Last 24 Hours" },
+  { value: 24 * 7, label: "Last Week" },
+  { value: 24 * 30, label: "Last Month" },
+  { value: 24 * 365, label: "Last Year" }
+] as const;
 
 const formatDateTime = (value?: string | null) => {
   if (!value) {
@@ -137,6 +149,11 @@ const formatRunningSince = (value?: string | null, nowMs = Date.now()) => {
   }
 
   return formatDuration(nowMs - startedAt);
+};
+
+const resolveRuntimeWindowLabel = (hours?: number | null) => {
+  const match = WORKFLOW_LOG_WINDOW_OPTIONS.find((option) => option.value === hours);
+  return match?.label || "Selected Range";
 };
 
 const getCurrentActionCountdownMs = (currentAction?: WorkflowExecutionHistoryEntry["currentAction"] | null, nowMs = Date.now()) => {
@@ -557,12 +574,17 @@ export function Workflows() {
   const [lastChatResult, setLastChatResult] = useState<string>("");
   const [runningExecutions, setRunningExecutions] = useState<WorkflowExecutionHistoryEntry[]>([]);
   const [runtimeHistory, setRuntimeHistory] = useState<WorkflowExecutionHistoryEntry[]>([]);
+  const [runtimeTelemetry, setRuntimeTelemetry] = useState<WorkflowRuntimeTelemetry | null>(null);
+  const [runtimePagination, setRuntimePagination] = useState<WorkflowRuntimePagination | null>(null);
   const [activityEvents, setActivityEvents] = useState<PlatformEvent[]>([]);
   const [activityConnected, setActivityConnected] = useState(false);
   const [selectedExecution, setSelectedExecution] = useState<WorkflowExecutionHistoryEntry | null>(null);
   const [selectedExecutionEvents, setSelectedExecutionEvents] = useState<PlatformEvent[]>([]);
   const [loadingExecutionEvents, setLoadingExecutionEvents] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [runtimeHistoryLimit, setRuntimeHistoryLimit] = useState<number>(50);
+  const [runtimeHistoryHours, setRuntimeHistoryHours] = useState<number>(24);
+  const [runtimeHistoryPage, setRuntimeHistoryPage] = useState<number>(1);
 
   const loadRuntimeData = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!options.silent) {
@@ -570,9 +592,16 @@ export function Workflows() {
     }
 
     try {
-      const [runningResponse, historyResponse, eventsResponse] = await Promise.all([
+      const [runningResponse, historyResponse, telemetryResponse, eventsResponse] = await Promise.all([
         getRunningWorkflowExecutions(20),
-        getWorkflowRuntimeHistory(null, 50),
+        getWorkflowRuntimeHistory(null, {
+          limit: runtimeHistoryLimit,
+          page: runtimeHistoryPage,
+          hours: runtimeHistoryHours
+        }),
+        getWorkflowRuntimeTelemetry({
+          hours: runtimeHistoryHours
+        }),
         getLatestEvents({
           limit: AUTOMATION_ACTIVITY_LIMIT,
           category: "automation"
@@ -581,6 +610,11 @@ export function Workflows() {
 
       setRunningExecutions(runningResponse.executions || []);
       setRuntimeHistory(historyResponse.history || []);
+      setRuntimePagination(historyResponse.pagination || null);
+      if (historyResponse.pagination?.page && historyResponse.pagination.page !== runtimeHistoryPage) {
+        setRuntimeHistoryPage(historyResponse.pagination.page);
+      }
+      setRuntimeTelemetry(telemetryResponse.telemetry || null);
       const latestEvents = Array.isArray(eventsResponse.events) ? eventsResponse.events : [];
       setActivityEvents(latestEvents.slice().reverse());
       latestActivitySequenceRef.current = eventsResponse.lastSequence || 0;
@@ -597,7 +631,7 @@ export function Workflows() {
         setRuntimeRefreshing(false);
       }
     }
-  }, [toast]);
+  }, [runtimeHistoryHours, runtimeHistoryLimit, runtimeHistoryPage, toast]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -611,7 +645,6 @@ export function Workflows() {
       setDevices(devicesResponse.devices || []);
       setDeviceGroups(deviceGroupsResponse.groups || []);
       setScenes(scenesResponse.scenes || []);
-      await loadRuntimeData({ silent: true });
     } catch (error) {
       toast({
         title: "Failed to load workflows",
@@ -621,11 +654,19 @@ export function Workflows() {
     } finally {
       setLoading(false);
     }
-  }, [loadRuntimeData, toast]);
+  }, [toast]);
 
   useEffect(() => {
     void fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    void loadRuntimeData();
+  }, [loadRuntimeData, loading]);
 
   useEffect(() => {
     const hasActiveTimer = runningExecutions.some((entry) => getCurrentActionCountdownMs(entry.currentAction) !== null);
@@ -653,6 +694,21 @@ export function Workflows() {
       withVoiceAliases
     };
   }, [workflows]);
+
+  const runtimeWindowLabel = useMemo(
+    () => resolveRuntimeWindowLabel(runtimeTelemetry?.timeRange?.hours ?? runtimeHistoryHours),
+    [runtimeHistoryHours, runtimeTelemetry?.timeRange?.hours]
+  );
+
+  const runtimePageSummary = useMemo(() => {
+    if (!runtimePagination || runtimePagination.total === 0) {
+      return "No runtime logs in this range.";
+    }
+
+    const start = (runtimePagination.page - 1) * runtimePagination.limit + 1;
+    const end = Math.min(runtimePagination.total, start + runtimeHistory.length - 1);
+    return `Showing ${start}-${end} of ${runtimePagination.total.toLocaleString()} logs.`;
+  }, [runtimeHistory.length, runtimePagination]);
 
   const workflowNameLookup = useMemo(() => {
     return new Map(workflows.map((workflow) => [workflow._id, workflow.name]));
@@ -1484,6 +1540,54 @@ export function Workflows() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+            {[
+              {
+                title: "Running Now",
+                value: (runtimeTelemetry?.runningNow ?? runningExecutions.length).toLocaleString(),
+                subtitle: "Live workflow executions"
+              },
+              {
+                title: "Logs in Range",
+                value: (runtimeTelemetry?.executionCount ?? runtimePagination?.total ?? runtimeHistory.length).toLocaleString(),
+                subtitle: `${runtimeWindowLabel}${runtimeTelemetry?.cancelledCount ? ` · ${runtimeTelemetry.cancelledCount} stopped` : ""}`
+              },
+              {
+                title: "Succeeded",
+                value: (runtimeTelemetry?.successCount ?? 0).toLocaleString(),
+                subtitle: "Completed successfully"
+              },
+              {
+                title: "Failed",
+                value: (runtimeTelemetry?.failedCount ?? 0).toLocaleString(),
+                subtitle: runtimeTelemetry ? `${runtimeTelemetry.failureRatePct}% failure rate` : "Execution failures"
+              },
+              {
+                title: "Partial",
+                value: (runtimeTelemetry?.partialSuccessCount ?? 0).toLocaleString(),
+                subtitle: "Completed with issues"
+              },
+              {
+                title: "Avg Duration",
+                value: runtimeTelemetry?.averageDurationMs != null
+                  ? formatDuration(runtimeTelemetry.averageDurationMs)
+                  : "No data",
+                subtitle: runtimeTelemetry?.lastCompletedAt
+                  ? `Last finished ${formatDateTime(runtimeTelemetry.lastCompletedAt)}`
+                  : "Awaiting completed runs"
+              }
+            ].map((card) => (
+              <div
+                key={card.title}
+                className="rounded-2xl border border-border/70 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_62%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] p-4 shadow-sm dark:bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.18),transparent_55%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(15,23,42,0.72))]"
+              >
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{card.title}</div>
+                <div className="mt-2 text-2xl font-semibold tracking-tight text-foreground">{card.value}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{card.subtitle}</div>
+              </div>
+            ))}
+          </div>
+
           <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -1607,10 +1711,56 @@ export function Workflows() {
           </div>
 
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-foreground">Recent Executions</div>
-              <div className="text-xs text-muted-foreground">
-                Shows the latest persisted runtime records for workflow-backed automations.
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-foreground">Recent Executions</div>
+                <div className="text-xs text-muted-foreground">
+                  Filter persisted runtime records by time period and how many logs appear per page.
+                </div>
+              </div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <div className="space-y-1">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">How Many Logs</div>
+                  <Select
+                    value={String(runtimeHistoryLimit)}
+                    onValueChange={(value) => {
+                      setRuntimeHistoryLimit(Number(value) || 50);
+                      setRuntimeHistoryPage(1);
+                    }}
+                  >
+                    <SelectTrigger className="w-[150px] bg-background/80">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WORKFLOW_LOG_LIMIT_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={String(option)}>
+                          {option} logs
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time Period</div>
+                  <Select
+                    value={String(runtimeHistoryHours)}
+                    onValueChange={(value) => {
+                      setRuntimeHistoryHours(Number(value) || 24);
+                      setRuntimeHistoryPage(1);
+                    }}
+                  >
+                    <SelectTrigger className="w-[170px] bg-background/80">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WORKFLOW_LOG_WINDOW_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={String(option.value)}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
             <div className="rounded-2xl border border-border/70 bg-background/70">
@@ -1661,12 +1811,36 @@ export function Workflows() {
                   )) : (
                     <TableRow>
                       <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
-                        No workflow execution history has been recorded yet.
+                        No workflow execution history was recorded in the selected time period.
                       </TableCell>
                     </TableRow>
                   )}
                 </TableBody>
               </Table>
+              <div className="flex flex-col gap-3 border-t border-border/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-xs text-muted-foreground">{runtimePageSummary}</div>
+                <div className="flex items-center gap-2 self-end sm:self-auto">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setRuntimeHistoryPage((current) => Math.max(1, current - 1))}
+                    disabled={!runtimePagination?.hasPreviousPage || runtimeRefreshing}
+                  >
+                    Previous
+                  </Button>
+                  <div className="min-w-[96px] text-center text-xs text-muted-foreground">
+                    Page {runtimePagination?.page ?? 1} of {runtimePagination?.totalPages ?? 1}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setRuntimeHistoryPage((current) => current + 1)}
+                    disabled={!runtimePagination?.hasNextPage || runtimeRefreshing}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
         </CardContent>

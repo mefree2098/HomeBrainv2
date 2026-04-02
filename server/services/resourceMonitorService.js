@@ -12,9 +12,43 @@ const DEFAULT_GPU_LOAD_PATHS = [
   '/sys/class/devfreq/17000000.ga10b/device/load',
   '/sys/class/devfreq/17000000.gv11b/device/load'
 ];
+const DISK_USAGE_PATH_ENV_KEYS = [
+  'HOMEBRAIN_DISK_USAGE_PATH',
+  'HOMEBRAIN_STORAGE_PATH',
+  'AXIOM_DISK_USAGE_PATH',
+  'AXIOM_STORAGE_PATH'
+];
+const DEFAULT_PLATFORM_DISK_PATH = path.resolve(__dirname, '..', '..');
 
 function clampPercent(value) {
   return parseFloat(Math.max(0, Math.min(100, value)).toFixed(2));
+}
+
+function quoteShellPath(value) {
+  return `'${String(value || '').replace(/'/g, `'\\''`)}'`;
+}
+
+function formatDiskLabel(bytes) {
+  const numeric = Number(bytes);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 'Unknown';
+  }
+
+  if (numeric < 1024) {
+    return `${Math.round(numeric)}B`;
+  }
+
+  const units = ['Ki', 'Mi', 'Gi', 'Ti', 'Pi'];
+  let value = numeric / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const digits = value >= 10 ? 0 : 1;
+  return `${Number(value.toFixed(digits))}${units[unitIndex]}`;
 }
 
 function parseJetsonGpuLoad(rawValue) {
@@ -65,6 +99,7 @@ class ResourceMonitorService {
     this.execAsync = dependencies.execAsync || execAsync;
     this.readFile = dependencies.readFile || fs.readFile.bind(fs);
     this.readdir = dependencies.readdir || fs.readdir.bind(fs);
+    this.stat = dependencies.stat || fs.stat.bind(fs);
   }
 
   /**
@@ -145,41 +180,94 @@ class ResourceMonitorService {
   /**
    * Get disk utilization
    */
-  async getDiskUsage() {
-    try {
-      // Use df command to get disk usage
-      const { stdout } = await this.execAsync('df -h / | tail -1');
-      const parts = stdout.trim().split(/\s+/);
+  async resolveExistingDiskPath(candidatePath) {
+    const trimmed = String(candidatePath || '').trim();
+    if (!trimmed) {
+      return null;
+    }
 
-      // Parse df output: Filesystem Size Used Avail Use% Mounted
-      const totalSize = parts[1];
-      const used = parts[2];
-      const available = parts[3];
-      const usagePercent = parseInt(parts[4].replace('%', ''));
+    let currentPath = path.resolve(trimmed);
 
-      // Get more detailed disk info
-      let diskDetails = {};
+    // Walk up to the nearest existing parent so deployment paths can be configured
+    // before the final subdirectory exists.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
       try {
-        const { stdout: dfBytes } = await this.execAsync('df -B1 / | tail -1');
-        const bytesParts = dfBytes.trim().split(/\s+/);
-        diskDetails = {
-          totalBytes: parseInt(bytesParts[1]),
-          usedBytes: parseInt(bytesParts[2]),
-          availableBytes: parseInt(bytesParts[3]),
-          totalGB: parseFloat((parseInt(bytesParts[1]) / (1024 ** 3)).toFixed(2)),
-          usedGB: parseFloat((parseInt(bytesParts[2]) / (1024 ** 3)).toFixed(2)),
-          availableGB: parseFloat((parseInt(bytesParts[3]) / (1024 ** 3)).toFixed(2))
-        };
-      } catch (err) {
-        console.error('Error getting detailed disk info:', err);
+        await this.stat(currentPath);
+        return currentPath;
+      } catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes(error?.code)) {
+          throw error;
+        }
       }
 
+      const parentPath = path.dirname(currentPath);
+      if (parentPath === currentPath) {
+        return null;
+      }
+      currentPath = parentPath;
+    }
+  }
+
+  async resolveDiskUsageTargetPath(preferredPath = null) {
+    const candidatePaths = [
+      preferredPath,
+      ...DISK_USAGE_PATH_ENV_KEYS.map((key) => process.env[key]),
+      DEFAULT_PLATFORM_DISK_PATH,
+      process.cwd(),
+      os.homedir(),
+      '/'
+    ];
+
+    const visited = new Set();
+
+    for (const candidatePath of candidatePaths) {
+      const normalized = String(candidatePath || '').trim();
+      if (!normalized || visited.has(normalized)) {
+        continue;
+      }
+      visited.add(normalized);
+
+      // eslint-disable-next-line no-await-in-loop
+      const existingPath = await this.resolveExistingDiskPath(normalized);
+      if (existingPath) {
+        return existingPath;
+      }
+    }
+
+    return '/';
+  }
+
+  async getDiskUsage(options = {}) {
+    try {
+      const preferredPath = typeof options === 'string'
+        ? options
+        : (options?.targetPath || options?.path || null);
+      const targetPath = await this.resolveDiskUsageTargetPath(preferredPath);
+      const { stdout } = await this.execAsync(`df -kP ${quoteShellPath(targetPath)} | tail -1`);
+      const parts = stdout.trim().split(/\s+/);
+
+      const filesystem = parts[0] || 'Unknown';
+      const totalBytes = (Number.parseInt(parts[1], 10) || 0) * 1024;
+      const usedBytes = (Number.parseInt(parts[2], 10) || 0) * 1024;
+      const availableBytes = (Number.parseInt(parts[3], 10) || 0) * 1024;
+      const usagePercent = Number.parseInt(String(parts[4] || '0').replace('%', ''), 10) || 0;
+      const mountedOn = parts.slice(5).join(' ') || '';
+
       return {
-        total: totalSize,
-        used: used,
-        available: available,
-        usagePercent: usagePercent,
-        ...diskDetails
+        total: formatDiskLabel(totalBytes),
+        used: formatDiskLabel(usedBytes),
+        available: formatDiskLabel(availableBytes),
+        usagePercent,
+        totalBytes,
+        usedBytes,
+        availableBytes,
+        totalGB: parseFloat((totalBytes / (1024 ** 3)).toFixed(2)),
+        usedGB: parseFloat((usedBytes / (1024 ** 3)).toFixed(2)),
+        availableGB: parseFloat((availableBytes / (1024 ** 3)).toFixed(2)),
+        filesystem,
+        mountedOn,
+        targetPath
       };
     } catch (error) {
       console.error('Error getting disk usage:', error);
@@ -188,6 +276,9 @@ class ResourceMonitorService {
         used: 'Unknown',
         available: 'Unknown',
         usagePercent: 0,
+        filesystem: 'Unknown',
+        mountedOn: '',
+        targetPath: '',
         error: error.message
       };
     }
