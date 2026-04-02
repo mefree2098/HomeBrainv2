@@ -111,6 +111,7 @@ import {
   turnOffHarmonyHub
 } from "@/api/harmony"
 import {
+  getInsteonStatus,
   getInsteonSerialPorts,
   testInsteonConnection,
   startInsteonLinkedStatusRun,
@@ -123,7 +124,8 @@ import {
   getInsteonIsySyncRun,
   cancelInsteonIsySyncRun,
   type InsteonLinkedDeviceStatusResponse,
-  type InsteonIsySyncRunLogEntry
+  type InsteonIsySyncRunLogEntry,
+  type InsteonStatusResponse
 } from "@/api/insteon"
 import { useNavigate } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
@@ -148,6 +150,10 @@ type InsteonPlmConnectionTestResult = {
   runtimeTransport?: string;
   runtimeEndpoint?: string;
   port?: string;
+  requestedPort?: string;
+  resolvedPort?: string;
+  autoResolvedPort?: boolean;
+  recommendedStablePort?: string;
   bridge?: {
     host?: string;
     port?: number;
@@ -159,6 +165,32 @@ type InsteonPlmConnectionTestResult = {
     deviceCategory?: string | number;
     subcategory?: string | number;
   };
+}
+
+const formatInsteonConnectionTarget = (target: {
+  label?: string;
+  serialPath?: string;
+  host?: string;
+  port?: number;
+  transport?: string;
+} | null | undefined): string => {
+  if (!target || typeof target !== "object") {
+    return "Unavailable"
+  }
+
+  if (typeof target.label === "string" && target.label.trim()) {
+    return target.label.trim()
+  }
+
+  if (target.transport === "serial" && typeof target.serialPath === "string" && target.serialPath.trim()) {
+    return target.serialPath.trim()
+  }
+
+  if (target.transport === "tcp" && typeof target.host === "string" && target.host.trim()) {
+    return `${target.host.trim()}:${target.port || 9761}`
+  }
+
+  return "Unavailable"
 }
 
 type CodexModelOption = {
@@ -268,10 +300,12 @@ export function Settings() {
   const [sthmDiagnostics, setSthmDiagnostics] = useState<any>(null)
   const [scanningInsteonPorts, setScanningInsteonPorts] = useState(false)
   const [testingInsteonPlmConnection, setTestingInsteonPlmConnection] = useState(false)
+  const [loadingInsteonRuntimeStatus, setLoadingInsteonRuntimeStatus] = useState(false)
   const [queryingInsteonLinkedStatus, setQueryingInsteonLinkedStatus] = useState(false)
   const [cancellingInsteonLinkedStatusQuery, setCancellingInsteonLinkedStatusQuery] = useState(false)
   const [insteonSerialPortCandidates, setInsteonSerialPortCandidates] = useState<InsteonSerialPortCandidate[]>([])
   const [insteonPlmTestResult, setInsteonPlmTestResult] = useState<InsteonPlmConnectionTestResult | null>(null)
+  const [insteonRuntimeStatus, setInsteonRuntimeStatus] = useState<InsteonStatusResponse | null>(null)
   const [insteonLinkedStatusResult, setInsteonLinkedStatusResult] = useState<InsteonLinkedDeviceStatusResponse | null>(null)
   const [insteonLinkedStatusRunId, setInsteonLinkedStatusRunId] = useState<string | null>(null)
   const [insteonLinkedStatusRunStatus, setInsteonLinkedStatusRunStatus] = useState<string | null>(null)
@@ -645,6 +679,7 @@ export function Settings() {
     loadSmartThingsStatus();
     loadEcobeeStatus();
     loadHarmonyOverview();
+    loadInsteonRuntimeStatus({ quiet: true });
     loadAlexaSummary();
     loadAlexaProfileOptions();
     loadLLMPriorityList();
@@ -691,6 +726,25 @@ export function Settings() {
       setLlmPriorityList(['local', 'codex', 'openai', 'anthropic']);
     }
   };
+
+  const loadInsteonRuntimeStatus = async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    setLoadingInsteonRuntimeStatus(true)
+    try {
+      const status = await getInsteonStatus()
+      setInsteonRuntimeStatus(status || {})
+    } catch (error: any) {
+      console.error("Failed to load INSTEON runtime status:", error)
+      if (!quiet) {
+        toast({
+          title: "PLM status unavailable",
+          description: error?.message || "Unable to load INSTEON runtime status.",
+          variant: "destructive"
+        })
+      }
+    } finally {
+      setLoadingInsteonRuntimeStatus(false)
+    }
+  }
 
   const loadAlexaSummary = async () => {
     setLoadingAlexaSummary(true)
@@ -1259,6 +1313,7 @@ export function Settings() {
         variant: "destructive"
       })
     } finally {
+      await loadInsteonRuntimeStatus({ quiet: true })
       setTestingInsteonPlmConnection(false)
     }
   }
@@ -1375,6 +1430,7 @@ export function Settings() {
         variant: "destructive"
       })
     } finally {
+      await loadInsteonRuntimeStatus({ quiet: true })
       setQueryingInsteonLinkedStatus(false)
       setCancellingInsteonLinkedStatusQuery(false)
     }
@@ -1405,6 +1461,7 @@ export function Settings() {
         variant: "destructive"
       })
     } finally {
+      await loadInsteonRuntimeStatus({ quiet: true })
       setCancellingInsteonLinkedStatusQuery(false)
     }
   }
@@ -4407,6 +4464,25 @@ export function Settings() {
                       type="button"
                       variant="outline"
                       size="sm"
+                      onClick={() => loadInsteonRuntimeStatus()}
+                      disabled={loadingInsteonRuntimeStatus}
+                    >
+                      {loadingInsteonRuntimeStatus ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Refreshing...
+                        </>
+                      ) : (
+                        <>
+                          <Activity className="h-4 w-4 mr-2" />
+                          Refresh PLM Status
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
                       onClick={handleQueryInsteonLinkedStatus}
                       disabled={queryingInsteonLinkedStatus}
                     >
@@ -4490,6 +4566,59 @@ export function Settings() {
                     </div>
                   )}
 
+                  {insteonRuntimeStatus && (
+                    <div className="rounded-md border border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40 p-3 space-y-2">
+                      <div className="flex items-start gap-2">
+                        {insteonRuntimeStatus.connected ? (
+                          <CheckCircle className="h-4 w-4 text-emerald-600 mt-0.5" />
+                        ) : (
+                          <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5" />
+                        )}
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <p className="text-sm font-medium text-foreground">
+                            {insteonRuntimeStatus.connected ? "PLM runtime connected" : "PLM runtime disconnected"}
+                          </p>
+                          <p>
+                            Configured endpoint: <span className="font-mono">{insteonRuntimeStatus.configuredTarget || insteonPortValue.trim() || "Not configured"}</span>
+                          </p>
+                          <p>
+                            Resolved target: <span className="font-mono">{formatInsteonConnectionTarget(insteonRuntimeStatus.resolvedTarget)}</span>
+                          </p>
+                          <p>
+                            Active endpoint: <span className="font-mono">{insteonRuntimeStatus.port || "Not connected"}</span>
+                          </p>
+                          <p>
+                            Serial transport: {insteonRuntimeStatus.serialTransport?.supported
+                              ? `native ${insteonRuntimeStatus.serialTransport?.module || "serial"}`
+                              : `bridge fallback required${insteonRuntimeStatus.serialTransport?.error ? ` (${insteonRuntimeStatus.serialTransport.error})` : ""}`}
+                          </p>
+                          {insteonRuntimeStatus.localSerialBridge?.active && (
+                            <p>
+                              Local bridge: <span className="font-mono">{`${insteonRuntimeStatus.localSerialBridge.host || "127.0.0.1"}:${insteonRuntimeStatus.localSerialBridge.port || "?"}`}</span>
+                            </p>
+                          )}
+                          <p>
+                            Verification default: <span className="font-mono">{insteonRuntimeStatus.defaults?.verificationMode || "unknown"}</span>
+                            {typeof insteonRuntimeStatus.defaults?.commandTimeoutMs === "number"
+                              ? ` • Command timeout: ${insteonRuntimeStatus.defaults.commandTimeoutMs}ms`
+                              : ""}
+                          </p>
+                          <p>
+                            Queue depth: {insteonRuntimeStatus.plmQueue?.depth ?? 0}
+                            {insteonRuntimeStatus.plmQueue?.active?.label
+                              ? ` • Active: ${insteonRuntimeStatus.plmQueue.active.label}`
+                              : ""}
+                          </p>
+                          {insteonRuntimeStatus.lastConnectionError && (
+                            <p className="text-red-700 dark:text-red-300">
+                              Last error: {insteonRuntimeStatus.lastConnectionError}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {insteonPlmTestResult && (
                     <div
                       className={`rounded-md border p-3 ${
@@ -4514,6 +4643,16 @@ export function Settings() {
                           {insteonPlmTestResult.port && (
                             <p className="text-xs text-muted-foreground">
                               Endpoint: <span className="font-mono">{insteonPlmTestResult.port}</span>
+                            </p>
+                          )}
+                          {insteonPlmTestResult.autoResolvedPort && insteonPlmTestResult.requestedPort && insteonPlmTestResult.resolvedPort && (
+                            <p className="text-xs text-amber-700 dark:text-amber-300">
+                              Configured endpoint <span className="font-mono">{insteonPlmTestResult.requestedPort}</span> was unavailable. HomeBrain auto-resolved to <span className="font-mono">{insteonPlmTestResult.resolvedPort}</span>.
+                            </p>
+                          )}
+                          {insteonPlmTestResult.recommendedStablePort && (
+                            <p className="text-xs text-muted-foreground">
+                              Recommended stable endpoint: <span className="font-mono">{insteonPlmTestResult.recommendedStablePort}</span>
                             </p>
                           )}
                           {insteonPlmTestResult.runtimeEndpoint && (
