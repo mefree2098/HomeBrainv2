@@ -125,6 +125,46 @@ test('supportsBrightnessControl treats fan-labeled Insteon devices like fader sw
   assert.equal(supportsBrightness, true);
 });
 
+test('createDevice rejects a duplicate INSTEON address even when the formatting differs', async (t) => {
+  const originalFindOne = Device.findOne;
+
+  t.after(() => {
+    Device.findOne = originalFindOne;
+  });
+
+  const queries = [];
+  Device.findOne = async (query) => {
+    queries.push(query);
+    if (query.name && query.room) {
+      return null;
+    }
+
+    return {
+      _id: 'device-existing',
+      name: 'Master Toilet Fan',
+      properties: {
+        source: 'insteon',
+        insteonAddress: '388A57'
+      }
+    };
+  };
+
+  await assert.rejects(
+    () => deviceService.createDevice({
+      name: 'Manual Fan Duplicate',
+      type: 'light',
+      room: 'Primary Bath',
+      properties: {
+        source: 'insteon',
+        insteonAddress: '38.8A.57'
+      }
+    }),
+    /INSTEON address already exists/i
+  );
+
+  assert.equal(queries.length, 2);
+});
+
 test('getAllDevices can force-refresh SmartThings lock devices before returning them', async (t) => {
   const originalFind = Device.find;
   const originalBulkWrite = Device.bulkWrite;

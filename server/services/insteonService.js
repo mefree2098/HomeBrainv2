@@ -1360,14 +1360,14 @@ class InsteonService {
         this._markRuntimePollAttempt(normalizedAddress);
         const nextState = this._stateFromInsteonLevel(level);
         if (this._runtimeStatePatchWouldChange(device, nextState)) {
-          await this._persistDeviceRuntimeState(device, nextState);
+          await this._persistDeviceRuntimeStateByAddress(normalizedAddress, nextState);
           summary.updated += 1;
         }
       } catch (error) {
         this._markRuntimePollAttempt(normalizedAddress);
         summary.errors += 1;
         if (device.isOnline !== false) {
-          await this._persistDeviceRuntimeState(device, { isOnline: false });
+          await this._persistDeviceRuntimeStateByAddress(normalizedAddress, { isOnline: false });
           summary.offlineMarked += 1;
         }
       }
@@ -6316,7 +6316,7 @@ class InsteonService {
     return true;
   }
 
-  async _findExistingInsteonDeviceByAddress(address) {
+  _buildInsteonAddressLookupQuery(address) {
     const normalizedAddress = this._normalizeInsteonAddress(address);
     const dottedAddress = this._formatInsteonAddress(normalizedAddress);
     const addressVariants = Array.from(new Set([
@@ -6326,9 +6326,322 @@ class InsteonService {
       dottedAddress.toLowerCase()
     ]));
 
-    return Device.findOne({
+    return {
       'properties.insteonAddress': { $in: addressVariants }
+    };
+  }
+
+  async _findExistingInsteonDeviceByAddress(address) {
+    return Device.findOne(this._buildInsteonAddressLookupQuery(address));
+  }
+
+  async _findExistingInsteonDevicesByAddress(address) {
+    return Device.find(this._buildInsteonAddressLookupQuery(address));
+  }
+
+  _compareCanonicalInsteonDevices(left, right, preferredDeviceId = null) {
+    const scoreDevice = (device) => {
+      if (!device || typeof device !== 'object') {
+        return Number.NEGATIVE_INFINITY;
+      }
+
+      let score = 0;
+      const deviceId = String(device?._id || '');
+      const properties = device?.properties && typeof device.properties === 'object'
+        ? device.properties
+        : {};
+      const trimmedName = typeof device?.name === 'string' ? device.name.trim() : '';
+      const trimmedRoom = typeof device?.room === 'string' ? device.room.trim() : '';
+      const trimmedModel = typeof device?.model === 'string' ? device.model.trim() : '';
+
+      if (preferredDeviceId && deviceId === preferredDeviceId) {
+        score += 10000;
+      }
+      if (properties.linkedToCurrentPlm === true) {
+        score += 2000;
+      }
+      if (trimmedName && !/^Insteon Device\b/i.test(trimmedName) && !this._isAddressLikeISYName(trimmedName)) {
+        score += 1000;
+      }
+      if (trimmedRoom && trimmedRoom.toLowerCase() !== 'unassigned') {
+        score += 250;
+      }
+      if (Array.isArray(device?.groups) && device.groups.length > 0) {
+        score += 100;
+      }
+      if (device?.type === 'light') {
+        score += 50;
+      }
+      if (properties.supportsBrightness === true) {
+        score += 25;
+      }
+      if (trimmedModel && trimmedModel.toLowerCase() !== 'unknown') {
+        score += 20;
+      }
+
+      return score;
+    };
+
+    const scoreDifference = scoreDevice(right) - scoreDevice(left);
+    if (scoreDifference !== 0) {
+      return scoreDifference;
+    }
+
+    const leftCreatedAt = left?.createdAt ? new Date(left.createdAt).getTime() : Number.NaN;
+    const rightCreatedAt = right?.createdAt ? new Date(right.createdAt).getTime() : Number.NaN;
+    if (Number.isFinite(leftCreatedAt) && Number.isFinite(rightCreatedAt) && leftCreatedAt !== rightCreatedAt) {
+      return leftCreatedAt - rightCreatedAt;
+    }
+
+    return String(left?._id || '').localeCompare(String(right?._id || ''));
+  }
+
+  _selectCanonicalInsteonDevice(devices = [], preferredDevice = null) {
+    if (!Array.isArray(devices) || devices.length === 0) {
+      return null;
+    }
+
+    const preferredDeviceId = preferredDevice ? String(preferredDevice?._id || '') : null;
+    const sortedDevices = [...devices].sort((left, right) => (
+      this._compareCanonicalInsteonDevices(left, right, preferredDeviceId)
+    ));
+
+    return sortedDevices[0] || null;
+  }
+
+  _mergeDuplicateInsteonDeviceMetadata(canonicalDevice, duplicateDevices = []) {
+    if (!canonicalDevice || typeof canonicalDevice !== 'object' || !Array.isArray(duplicateDevices) || duplicateDevices.length === 0) {
+      return false;
+    }
+
+    let changed = false;
+    let canonicalNameLooksGenerated = (
+      !canonicalDevice.name
+      || /^Insteon Device\b/i.test(canonicalDevice.name)
+      || this._isAddressLikeISYName(canonicalDevice.name)
+    );
+    let canonicalRoomUnassigned = (
+      !canonicalDevice.room
+      || String(canonicalDevice.room).trim().toLowerCase() === 'unassigned'
+    );
+    const canonicalProperties = canonicalDevice?.properties && typeof canonicalDevice.properties === 'object'
+      ? canonicalDevice.properties
+      : {};
+
+    if (canonicalDevice.properties !== canonicalProperties) {
+      canonicalDevice.properties = canonicalProperties;
+      changed = true;
+    }
+
+    const mergedGroups = Array.isArray(canonicalDevice.groups)
+      ? canonicalDevice.groups
+          .map((group) => (typeof group === 'string' ? group.trim() : String(group || '').trim()))
+          .filter(Boolean)
+      : [];
+    const mergedGroupKeys = new Set(mergedGroups.map((group) => group.toLowerCase()));
+
+    duplicateDevices.forEach((duplicateDevice) => {
+      if (!duplicateDevice || typeof duplicateDevice !== 'object') {
+        return;
+      }
+
+      const duplicateName = typeof duplicateDevice.name === 'string'
+        ? duplicateDevice.name.trim()
+        : '';
+      if (
+        canonicalNameLooksGenerated
+        && duplicateName
+        && !/^Insteon Device\b/i.test(duplicateName)
+        && !this._isAddressLikeISYName(duplicateName)
+      ) {
+        canonicalDevice.name = duplicateName;
+        canonicalNameLooksGenerated = false;
+        changed = true;
+      }
+
+      const duplicateRoom = typeof duplicateDevice.room === 'string'
+        ? duplicateDevice.room.trim()
+        : '';
+      if (canonicalRoomUnassigned && duplicateRoom && duplicateRoom.toLowerCase() !== 'unassigned') {
+        canonicalDevice.room = duplicateRoom;
+        canonicalRoomUnassigned = false;
+        changed = true;
+      }
+
+      if ((!canonicalDevice.type || canonicalDevice.type === 'switch' || canonicalDevice.type === 'sensor') && duplicateDevice.type === 'light') {
+        canonicalDevice.type = duplicateDevice.type;
+        changed = true;
+      }
+
+      const duplicateBrand = typeof duplicateDevice.brand === 'string'
+        ? duplicateDevice.brand.trim()
+        : '';
+      if ((!canonicalDevice.brand || !String(canonicalDevice.brand).trim()) && duplicateBrand) {
+        canonicalDevice.brand = duplicateBrand;
+        changed = true;
+      }
+
+      const duplicateModel = typeof duplicateDevice.model === 'string'
+        ? duplicateDevice.model.trim()
+        : '';
+      if (
+        (!canonicalDevice.model || !String(canonicalDevice.model).trim() || String(canonicalDevice.model).trim().toLowerCase() === 'unknown')
+        && duplicateModel
+        && duplicateModel.toLowerCase() !== 'unknown'
+      ) {
+        canonicalDevice.model = duplicateModel;
+        changed = true;
+      }
+
+      if (Array.isArray(duplicateDevice.groups)) {
+        duplicateDevice.groups.forEach((group) => {
+          const trimmedGroup = typeof group === 'string'
+            ? group.trim()
+            : String(group || '').trim();
+          if (!trimmedGroup) {
+            return;
+          }
+
+          const groupKey = trimmedGroup.toLowerCase();
+          if (!mergedGroupKeys.has(groupKey)) {
+            mergedGroupKeys.add(groupKey);
+            mergedGroups.push(trimmedGroup);
+            changed = true;
+          }
+        });
+      }
+
+      const duplicateProperties = duplicateDevice?.properties && typeof duplicateDevice.properties === 'object'
+        ? duplicateDevice.properties
+        : {};
+      Object.entries(duplicateProperties).forEach(([key, value]) => {
+        if (value == null) {
+          return;
+        }
+
+        if (key === 'insteonAddress') {
+          return;
+        }
+
+        if (key === 'supportsBrightness' || key === 'linkedToCurrentPlm') {
+          if (value === true && canonicalProperties[key] !== true) {
+            canonicalProperties[key] = true;
+            changed = true;
+          }
+          return;
+        }
+
+        if (key === 'deviceCategory' || key === 'subcategory') {
+          const currentValue = Number(canonicalProperties[key]);
+          const duplicateNumericValue = Number(value);
+          if ((!Number.isFinite(currentValue) || currentValue <= 0) && Number.isFinite(duplicateNumericValue) && duplicateNumericValue > 0) {
+            canonicalProperties[key] = duplicateNumericValue;
+            changed = true;
+          }
+          return;
+        }
+
+        if (key === 'insteonGroup') {
+          if (!Number.isInteger(canonicalProperties.insteonGroup) && Number.isInteger(value)) {
+            canonicalProperties.insteonGroup = value;
+            changed = true;
+          }
+          return;
+        }
+
+        if (key === 'lastLinkedAt') {
+          if (!canonicalProperties.lastLinkedAt) {
+            canonicalProperties.lastLinkedAt = value;
+            changed = true;
+          }
+          return;
+        }
+
+        const currentValue = canonicalProperties[key];
+        const currentText = typeof currentValue === 'string' ? currentValue.trim() : '';
+        if (currentValue == null || currentText === '') {
+          canonicalProperties[key] = value;
+          changed = true;
+        }
+      });
     });
+
+    if (changed) {
+      canonicalDevice.groups = mergedGroups;
+    }
+
+    return changed;
+  }
+
+  async _reconcileInsteonDuplicateDeviceRows(address, preferredDevice = null, options = {}) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress) {
+      return {
+        keptDevice: null,
+        removedCount: 0,
+        removedDevices: []
+      };
+    }
+
+    const devices = await this._findExistingInsteonDevicesByAddress(normalizedAddress);
+    if (!Array.isArray(devices) || devices.length === 0) {
+      return {
+        keptDevice: preferredDevice || null,
+        removedCount: 0,
+        removedDevices: []
+      };
+    }
+
+    const canonicalDevice = this._selectCanonicalInsteonDevice(devices, preferredDevice);
+    const canonicalId = String(canonicalDevice?._id || '');
+    const duplicateDevices = devices.filter((device) => String(device?._id || '') !== canonicalId);
+
+    if (duplicateDevices.length === 0) {
+      if (canonicalDevice) {
+        this.devices.set(normalizedAddress, canonicalDevice);
+      }
+      return {
+        keptDevice: canonicalDevice,
+        removedCount: 0,
+        removedDevices: []
+      };
+    }
+
+    const canonicalChanged = this._mergeDuplicateInsteonDeviceMetadata(canonicalDevice, duplicateDevices);
+    if (canonicalChanged && typeof canonicalDevice?.save === 'function') {
+      await canonicalDevice.save();
+    }
+
+    const duplicateIds = duplicateDevices
+      .map((device) => String(device?._id || ''))
+      .filter(Boolean);
+    if (duplicateIds.length > 0) {
+      await Device.deleteMany({ _id: { $in: duplicateIds } });
+    }
+
+    this.devices.set(normalizedAddress, canonicalDevice);
+    this._emitDeviceRealtimeUpdate(canonicalDevice);
+
+    this._logEngineWarn('Removed duplicate HomeBrain device rows for a PLM-linked INSTEON address', {
+      stage: 'maintenance',
+      direction: 'internal',
+      operation: 'plm_sync_dedupe',
+      address: normalizedAddress,
+      details: {
+        reason: options.reason || null,
+        insteonAddress: this._formatInsteonAddress(normalizedAddress),
+        keptDeviceId: String(canonicalDevice?._id || ''),
+        keptDeviceName: canonicalDevice?.name || null,
+        removedDeviceIds: duplicateIds,
+        removedDeviceNames: duplicateDevices.map((device) => device?.name || null)
+      }
+    });
+
+    return {
+      keptDevice: canonicalDevice,
+      removedCount: duplicateIds.length,
+      removedDevices: duplicateDevices
+    };
   }
 
   _emitDeviceRealtimeUpdate(device) {
@@ -6386,12 +6699,35 @@ class InsteonService {
       return null;
     }
 
-    const device = await this._findExistingInsteonDeviceByAddress(normalizedAddress);
-    if (!device) {
+    const devices = await this._findExistingInsteonDevicesByAddress(normalizedAddress);
+    if (!Array.isArray(devices) || devices.length === 0) {
       return null;
     }
 
-    return this._persistDeviceRuntimeState(device, patch);
+    if (devices.length > 1) {
+      this._logEngineWarn('Multiple HomeBrain devices share the same INSTEON address; applying runtime state to all matches', {
+        stage: 'state',
+        direction: 'internal',
+        operation: 'runtime_state_persist',
+        address: normalizedAddress,
+        details: {
+          insteonAddress: this._formatInsteonAddress(normalizedAddress),
+          deviceIds: devices.map((device) => String(device?._id || '')),
+          deviceNames: devices.map((device) => device?.name || null)
+        }
+      });
+    }
+
+    const persistedDevices = [];
+    for (const device of devices) {
+      // eslint-disable-next-line no-await-in-loop
+      const persistedDevice = await this._persistDeviceRuntimeState(device, patch);
+      if (persistedDevice) {
+        persistedDevices.push(persistedDevice);
+      }
+    }
+
+    return persistedDevices[0] || null;
   }
 
   _normalizeInsteonLevelPercent(level) {
@@ -6948,7 +7284,8 @@ class InsteonService {
 
   async _upsertInsteonDevice({ address, group, insteonType, name, deviceInfo, markLinkedToCurrentPlm = false }) {
     const normalizedAddress = this._normalizeInsteonAddress(address);
-    const existingDevice = await this._findExistingInsteonDeviceByAddress(normalizedAddress);
+    const existingDevices = await this._findExistingInsteonDevicesByAddress(normalizedAddress);
+    const existingDevice = this._selectCanonicalInsteonDevice(existingDevices);
     const info = deviceInfo || await this.getDeviceInfo(normalizedAddress);
     const existingProperties = existingDevice ? (existingDevice.properties || {}) : {};
     const existingCategory = this._coerceNumericValue(existingProperties.deviceCategory, 0);
@@ -7037,11 +7374,21 @@ class InsteonService {
       }
 
       await existingDevice.save();
-      this.devices.set(normalizedAddress, existingDevice);
+      const dedupeResult = existingDevices.length > 1
+        ? await this._reconcileInsteonDuplicateDeviceRows(normalizedAddress, existingDevice, {
+            reason: 'insteon_upsert'
+          })
+        : {
+            keptDevice: existingDevice,
+            removedCount: 0
+          };
+      const persistedDevice = dedupeResult.keptDevice || existingDevice;
+      this.devices.set(normalizedAddress, persistedDevice);
 
       return {
         action: 'updated',
-        device: existingDevice
+        device: persistedDevice,
+        removedDuplicates: dedupeResult.removedCount || 0
       };
     }
 
@@ -7063,7 +7410,8 @@ class InsteonService {
 
     return {
       action: 'created',
-      device: createdDevice
+      device: createdDevice,
+      removedDuplicates: 0
     };
   }
 
@@ -7784,6 +8132,7 @@ class InsteonService {
       const errors = [];
       let created = 0;
       let updated = 0;
+      let deduped = 0;
       let completed = 0;
 
       if (linkedDeviceCount === 0) {
@@ -7801,6 +8150,7 @@ class InsteonService {
           linkedDeviceCount: 0,
           created: 0,
           updated: 0,
+          deduped: 0,
           skipped: 0,
           failed: 0,
           deviceCount: 0,
@@ -7823,9 +8173,25 @@ class InsteonService {
             stage: 'devices',
             progress: progressStart
           });
-          const existingDevice = await this._findExistingInsteonDeviceByAddress(address);
+          const existingDevices = await this._findExistingInsteonDevicesByAddress(address);
+          const existingDevice = this._selectCanonicalInsteonDevice(existingDevices);
 
           if (existingDevice && skipExisting) {
+            if (existingDevices.length > 1) {
+              const dedupeResult = await this._reconcileInsteonDuplicateDeviceRows(address, existingDevice, {
+                reason: 'plm_sync_skip_existing'
+              });
+              if ((dedupeResult.removedCount || 0) > 0) {
+                deduped += dedupeResult.removedCount;
+                const warning = `Removed ${dedupeResult.removedCount} duplicate HomeBrain row${dedupeResult.removedCount === 1 ? '' : 's'} for ${displayAddress}`;
+                warnings.push(warning);
+                reportProgress(warning, {
+                  stage: 'devices',
+                  level: 'warn',
+                  progress: progressStart
+                });
+              }
+            }
             skippedDevices.push(address);
             completed += 1;
             reportProgress(`Skipped existing device ${displayAddress}`, {
@@ -7868,10 +8234,20 @@ class InsteonService {
           } else {
             updated += 1;
           }
+          if (Number(upsertResult.removedDuplicates || 0) > 0) {
+            deduped += Number(upsertResult.removedDuplicates || 0);
+            const warning = `Removed ${upsertResult.removedDuplicates} duplicate HomeBrain row${upsertResult.removedDuplicates === 1 ? '' : 's'} for ${displayAddress}`;
+            warnings.push(warning);
+            reportProgress(warning, {
+              stage: 'devices',
+              level: 'warn',
+              progress: progressStart
+            });
+          }
           syncedDevices.push(upsertResult.device);
           completed += 1;
           reportProgress(
-            `${displayAddress} ${upsertResult.action === 'created' ? 'created' : 'updated'} in HomeBrain`,
+            `${displayAddress} ${upsertResult.action === 'created' ? 'created' : 'updated'} in HomeBrain${Number(upsertResult.removedDuplicates || 0) > 0 ? `; removed ${upsertResult.removedDuplicates} duplicate row${upsertResult.removedDuplicates === 1 ? '' : 's'}` : ''}`,
             {
               stage: 'devices',
               progress: 20 + Math.floor((completed / linkedDevices.length) * 70)
@@ -7900,11 +8276,14 @@ class InsteonService {
       }
 
       const failed = errors.length;
+      const dedupeSummary = deduped > 0
+        ? ` and removed ${deduped} duplicate HomeBrain row${deduped === 1 ? '' : 's'}`
+        : '';
       const message = skipExisting
-        ? `Imported ${created} new INSTEON device${created === 1 ? '' : 's'} from ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}`
-        : `INSTEON sync complete - ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}, ${created} created, ${updated} updated, ${failed} failed`;
+        ? `Imported ${created} new INSTEON device${created === 1 ? '' : 's'} from ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}${dedupeSummary}`
+        : `INSTEON sync complete - ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}, ${created} created, ${updated} updated${deduped > 0 ? `, ${deduped} duplicate row${deduped === 1 ? '' : 's'} removed` : ''}, ${failed} failed`;
 
-      console.log(`InsteonService: PLM sync complete - ${linkedDeviceCount} linked, ${created} created, ${updated} updated, ${failed} failed, ${skippedDevices.length} skipped`);
+      console.log(`InsteonService: PLM sync complete - ${linkedDeviceCount} linked, ${created} created, ${updated} updated, ${deduped} duplicate rows removed, ${failed} failed, ${skippedDevices.length} skipped`);
       reportProgress(message, {
         stage: 'complete',
         level: failed > 0 ? 'warn' : 'info',
@@ -7917,6 +8296,7 @@ class InsteonService {
         linkedDeviceCount,
         created,
         updated,
+        deduped,
         skipped: skippedDevices.length,
         failed,
         deviceCount: syncedDevices.length,
