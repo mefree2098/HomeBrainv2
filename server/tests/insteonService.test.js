@@ -792,6 +792,122 @@ test('_runRuntimeMonitoringPass also tracks address-only Insteon devices without
   assert.deepEqual(queriedAddresses, ['388A57']);
 });
 
+test('_persistDeviceRuntimeStateByAddress updates every HomeBrain device row that shares an INSTEON address', async (t) => {
+  const originalFind = Device.find;
+  const originalPersistDeviceRuntimeState = insteonService._persistDeviceRuntimeState;
+  const originalLogEngineWarn = insteonService._logEngineWarn;
+
+  t.after(() => {
+    Device.find = originalFind;
+    insteonService._persistDeviceRuntimeState = originalPersistDeviceRuntimeState;
+    insteonService._logEngineWarn = originalLogEngineWarn;
+  });
+
+  const duplicateA = {
+    _id: 'device-duplicate-a',
+    name: 'Master Toilet Fan',
+    properties: { insteonAddress: '38.8A.57' }
+  };
+  const duplicateB = {
+    _id: 'device-duplicate-b',
+    name: 'Master Toilet Fan Mirror',
+    properties: { insteonAddress: '388A57' }
+  };
+
+  const persistedDeviceIds = [];
+  const warnings = [];
+
+  Device.find = async () => [duplicateA, duplicateB];
+  insteonService._persistDeviceRuntimeState = async (device, patch) => {
+    persistedDeviceIds.push(String(device._id));
+    Object.assign(device, patch);
+    return device;
+  };
+  insteonService._logEngineWarn = (_message, payload) => {
+    warnings.push(payload);
+  };
+
+  const persisted = await insteonService._persistDeviceRuntimeStateByAddress('38.8A.57', {
+    status: true,
+    brightness: 100
+  });
+
+  assert.equal(persisted, duplicateA);
+  assert.deepEqual(persistedDeviceIds, ['device-duplicate-a', 'device-duplicate-b']);
+  assert.equal(duplicateA.status, true);
+  assert.equal(duplicateB.status, true);
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(warnings[0].details.deviceIds, ['device-duplicate-a', 'device-duplicate-b']);
+});
+
+test('syncDevicesFromPLM removes duplicate HomeBrain rows for a PLM-linked address even when skipExisting is enabled', async (t) => {
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalGetAllLinkedDevices = insteonService.getAllLinkedDevices;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
+  const originalReconcileDuplicates = insteonService._reconcileInsteonDuplicateDeviceRows;
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+
+  t.after(() => {
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService.getAllLinkedDevices = originalGetAllLinkedDevices;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
+    insteonService._reconcileInsteonDuplicateDeviceRows = originalReconcileDuplicates;
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+  });
+
+  const canonicalDevice = {
+    _id: 'device-keep',
+    name: 'Master Toilet Fan',
+    properties: {
+      source: 'insteon',
+      insteonAddress: '388A57'
+    }
+  };
+  const duplicateDevice = {
+    _id: 'device-drop',
+    name: '38.8A.57',
+    properties: {
+      source: 'insteon',
+      insteonAddress: '38.8A.57'
+    }
+  };
+
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService.getPLMInfo = async () => ({
+    deviceId: 'AA.BB.CC',
+    firmwareVersion: '9E',
+    deviceCategory: 3,
+    subcategory: 0
+  });
+  insteonService.getAllLinkedDevices = async () => ([
+    {
+      address: '38.8A.57',
+      group: 1,
+      type: 'light'
+    }
+  ]);
+  insteonService._findExistingInsteonDevicesByAddress = async () => [canonicalDevice, duplicateDevice];
+  insteonService._reconcileInsteonDuplicateDeviceRows = async () => ({
+    keptDevice: canonicalDevice,
+    removedCount: 1,
+    removedDevices: [duplicateDevice]
+  });
+
+  const result = await insteonService.syncDevicesFromPLM({ skipExisting: true });
+
+  assert.equal(result.success, true);
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.deduped, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /Removed 1 duplicate HomeBrain row/i);
+});
+
 test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is queued', async (t) => {
   const originalFind = Device.find;
   const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
@@ -2535,10 +2651,12 @@ test('syncFromISY passes extracted device names into device replay payload', asy
 
 test('_upsertInsteonDevice upgrades switch metadata to light and applies resolved name', async (t) => {
   const originalFindExisting = insteonService._findExistingInsteonDeviceByAddress;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
   const originalGetDeviceInfo = insteonService.getDeviceInfo;
 
   t.after(() => {
     insteonService._findExistingInsteonDeviceByAddress = originalFindExisting;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
     insteonService.getDeviceInfo = originalGetDeviceInfo;
   });
 
@@ -2563,6 +2681,7 @@ test('_upsertInsteonDevice upgrades switch metadata to light and applies resolve
   };
 
   insteonService._findExistingInsteonDeviceByAddress = async () => existingDevice;
+  insteonService._findExistingInsteonDevicesByAddress = async () => [existingDevice];
   insteonService.getDeviceInfo = async () => ({
     deviceId: '3141F1',
     deviceCategory: 1,
@@ -2589,11 +2708,13 @@ test('_upsertInsteonDevice upgrades switch metadata to light and applies resolve
 
 test('_upsertInsteonDevice treats fan-labeled Insteon loads like fader switches when metadata is incomplete', async (t) => {
   const originalFindExisting = insteonService._findExistingInsteonDeviceByAddress;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
   const originalGetDeviceInfo = insteonService.getDeviceInfo;
   const originalCreate = Device.create;
 
   t.after(() => {
     insteonService._findExistingInsteonDeviceByAddress = originalFindExisting;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
     insteonService.getDeviceInfo = originalGetDeviceInfo;
     Device.create = originalCreate;
   });
@@ -2611,6 +2732,7 @@ test('_upsertInsteonDevice treats fan-labeled Insteon loads like fader switches 
   };
 
   insteonService._findExistingInsteonDeviceByAddress = async () => null;
+  insteonService._findExistingInsteonDevicesByAddress = async () => [];
   insteonService.getDeviceInfo = async () => ({
     deviceId: '388A57',
     deviceCategory: 0,
@@ -2631,10 +2753,12 @@ test('_upsertInsteonDevice treats fan-labeled Insteon loads like fader switches 
 
 test('_upsertInsteonDevice preserves known category metadata when refreshed info is unavailable', async (t) => {
   const originalFindExisting = insteonService._findExistingInsteonDeviceByAddress;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
   const originalGetDeviceInfo = insteonService.getDeviceInfo;
 
   t.after(() => {
     insteonService._findExistingInsteonDeviceByAddress = originalFindExisting;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
     insteonService.getDeviceInfo = originalGetDeviceInfo;
   });
 
@@ -2660,6 +2784,7 @@ test('_upsertInsteonDevice preserves known category metadata when refreshed info
   };
 
   insteonService._findExistingInsteonDeviceByAddress = async () => existingDevice;
+  insteonService._findExistingInsteonDevicesByAddress = async () => [existingDevice];
   insteonService.getDeviceInfo = async () => ({
     deviceId: 'AABBCC',
     deviceCategory: 0,
@@ -2678,6 +2803,81 @@ test('_upsertInsteonDevice preserves known category metadata when refreshed info
   assert.equal(existingDevice.properties.deviceCategory, 1);
   assert.equal(existingDevice.properties.subcategory, 46);
   assert.equal(existingDevice.properties.supportsBrightness, true);
+});
+
+test('_upsertInsteonDevice removes duplicate HomeBrain rows that point at the same INSTEON address', async (t) => {
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
+  const originalGetDeviceInfo = insteonService.getDeviceInfo;
+  const originalDeleteMany = Device.deleteMany;
+
+  t.after(() => {
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
+    insteonService.getDeviceInfo = originalGetDeviceInfo;
+    Device.deleteMany = originalDeleteMany;
+  });
+
+  const canonicalDevice = {
+    _id: 'device-keep',
+    name: 'Master Toilet Fan',
+    type: 'light',
+    room: 'Primary Bath',
+    groups: ['Fans'],
+    brand: 'Insteon',
+    model: '2477D',
+    properties: {
+      source: 'insteon',
+      insteonAddress: '388A57',
+      linkedToCurrentPlm: true,
+      supportsBrightness: true,
+      deviceCategory: 1,
+      subcategory: 46
+    },
+    isOnline: false,
+    lastSeen: null,
+    save: async function save() {
+      return this;
+    }
+  };
+  const duplicateDevice = {
+    _id: 'device-drop',
+    name: '38.8A.57',
+    type: 'switch',
+    room: 'Unassigned',
+    groups: [],
+    brand: 'Insteon',
+    model: 'Unknown',
+    properties: {
+      source: 'insteon',
+      insteonAddress: '38.8A.57'
+    }
+  };
+
+  let deletedQuery = null;
+
+  insteonService._findExistingInsteonDevicesByAddress = async () => [canonicalDevice, duplicateDevice];
+  insteonService.getDeviceInfo = async () => ({
+    deviceId: '388A57',
+    deviceCategory: 1,
+    subcategory: 46,
+    productKey: '2477D'
+  });
+  Device.deleteMany = async (query) => {
+    deletedQuery = query;
+    return { deletedCount: 1 };
+  };
+
+  const result = await insteonService._upsertInsteonDevice({
+    address: '38.8A.57',
+    group: 1,
+    markLinkedToCurrentPlm: true
+  });
+
+  assert.equal(result.action, 'updated');
+  assert.equal(result.device, canonicalDevice);
+  assert.equal(result.removedDuplicates, 1);
+  assert.deepEqual(deletedQuery, {
+    _id: { $in: ['device-drop'] }
+  });
 });
 
 test('_isTopologySceneAlreadyLinked resolves gw controller using PLM id', async (t) => {
