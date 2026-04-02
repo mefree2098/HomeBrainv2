@@ -758,7 +758,13 @@ struct DashboardView: View {
             return 660
         }
 
-        return 720
+        return 520
+    }
+    private var weatherInfoDetailTopPadding: CGFloat {
+        isCompact ? 12 : 20
+    }
+    private var weatherInfoSheetHeaderTopPadding: CGFloat {
+        isCompact ? 18 : 30
     }
     private var currentDashboardView: DashboardViewItem? {
         dashboardViews.first(where: { $0.id == selectedDashboardViewID }) ?? dashboardViews.first
@@ -1143,20 +1149,13 @@ struct DashboardView: View {
         }
         .sheet(isPresented: isPresentingWeatherInfoSheet) {
             if let topic = weatherInfoTopic {
-                NavigationStack {
+                VStack(spacing: 0) {
+                    weatherInfoSheetHeader(for: topic)
                     weatherInfoDetailContainer(for: topic, presentationKey: weatherInfoPresentationKey)
-                        .navigationTitle(weatherInfoSheetTitle(for: topic))
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button("Done") {
-                                    weatherInfoTopic = nil
-                                }
-                            }
-                        }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .id("weather-info-sheet-\(weatherInfoPresentationKey)-\(topic.id)")
-                .presentationDetents([.large])
+                .presentationDetents(weatherInfoPresentationDetents(for: topic))
                 .presentationDragIndicator(.visible)
             }
         }
@@ -4078,6 +4077,9 @@ struct DashboardView: View {
                         .frame(height: 1)
                         .id(scrollAnchorID)
 
+                    Color.clear
+                        .frame(height: weatherInfoDetailTopPadding)
+
                     weatherInfoPopoverCard(for: topic)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, isCompact ? 16 : 0)
@@ -4085,8 +4087,8 @@ struct DashboardView: View {
                 }
             }
             .scrollIndicators(.visible)
-            .frame(width: isCompact ? nil : weatherInfoDetailWidth, height: isCompact ? nil : weatherInfoDetailMaxHeight, alignment: .topLeading)
-            .frame(maxWidth: isCompact ? .infinity : weatherInfoDetailWidth, maxHeight: isCompact ? .infinity : weatherInfoDetailMaxHeight, alignment: .top)
+            .frame(width: isCompact ? nil : weatherInfoDetailWidth, height: isCompact ? weatherInfoDetailMaxHeight : nil, alignment: .topLeading)
+            .frame(maxWidth: isCompact ? .infinity : weatherInfoDetailWidth, maxHeight: .infinity, alignment: .top)
             .onAppear {
                 DispatchQueue.main.async {
                     scrollProxy.scrollTo(scrollAnchorID, anchor: .top)
@@ -4127,6 +4129,35 @@ struct DashboardView: View {
         case let .rainChance(widgetID, _, _):
             return "weather-info-top-rainchance-\(widgetID)"
         }
+    }
+
+    private func weatherInfoPresentationDetents(for topic: DashboardWeatherInfoTopic) -> Set<PresentationDetent> {
+        if isCompact {
+            return [.large]
+        }
+
+        return [.height(weatherInfoDetailMaxHeight)]
+    }
+
+    private func weatherInfoSheetHeader(for topic: DashboardWeatherInfoTopic) -> some View {
+        ZStack {
+            Text(weatherInfoSheetTitle(for: topic))
+                .font(.system(size: 21, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+
+            HStack {
+                Spacer()
+
+                Button("Done") {
+                    weatherInfoTopic = nil
+                }
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.accentBlue)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, weatherInfoSheetHeaderTopPadding)
+        .padding(.bottom, 14)
     }
 
     private func weatherInfoSheetTitle(for topic: DashboardWeatherInfoTopic) -> String {
