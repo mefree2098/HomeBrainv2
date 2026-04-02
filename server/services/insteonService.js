@@ -650,6 +650,24 @@ class InsteonService {
     );
   }
 
+  _buildTrackedInsteonDeviceQuery(extra = {}) {
+    const baseQuery = {
+      $or: [
+        { 'properties.source': 'insteon' },
+        { 'properties.insteonAddress': { $exists: true, $type: 'string', $ne: '' } }
+      ]
+    };
+
+    if (!extra || typeof extra !== 'object' || Array.isArray(extra) || Object.keys(extra).length === 0) {
+      return baseQuery;
+    }
+
+    return {
+      ...extra,
+      ...baseQuery
+    };
+  }
+
   _getRuntimeMonitoringCooldownRemainingMs() {
     return Math.max(0, (Number(this._runtimeMonitoringCooldownUntil) || 0) - Date.now());
   }
@@ -1072,7 +1090,7 @@ class InsteonService {
       : '';
     const configuredTarget = rawConfiguredTarget || DEFAULT_INSTEON_SERIAL_PORT;
     const connection = this.resolveConnectionTarget(configuredTarget);
-    const trackedDeviceCount = await Device.countDocuments({ 'properties.source': 'insteon' });
+    const trackedDeviceCount = await Device.countDocuments(this._buildTrackedInsteonDeviceQuery());
 
     if (connection.transport === 'tcp') {
       return {
@@ -1141,7 +1159,7 @@ class InsteonService {
   }
 
   async _pollTrackedDeviceStates() {
-    const devices = await Device.find({ 'properties.source': 'insteon' });
+    const devices = await Device.find(this._buildTrackedInsteonDeviceQuery());
     const summary = {
       eligible: 0,
       batched: 0,
@@ -8914,7 +8932,7 @@ class InsteonService {
 
       const dbDevicesByAddress = new Map();
       try {
-        const dbDevices = await Device.find({ 'properties.source': 'insteon' });
+        const dbDevices = await Device.find(this._buildTrackedInsteonDeviceQuery());
         dbDevices.forEach((device) => {
           const normalized = this._normalizePossibleInsteonAddress(device?.properties?.insteonAddress || '');
           if (normalized) {
@@ -9827,7 +9845,7 @@ class InsteonService {
     console.log('InsteonService: Scanning all Insteon devices');
 
     try {
-      const devices = await Device.find({ 'properties.source': 'insteon' });
+      const devices = await Device.find(this._buildTrackedInsteonDeviceQuery());
       const results = {
         total: devices.length,
         online: 0,
@@ -9974,11 +9992,10 @@ class InsteonService {
 
     try {
       const [persistedCount, linkedCount] = await Promise.all([
-        Device.countDocuments({ 'properties.source': 'insteon' }),
-        Device.countDocuments({
-          'properties.source': 'insteon',
+        Device.countDocuments(this._buildTrackedInsteonDeviceQuery()),
+        Device.countDocuments(this._buildTrackedInsteonDeviceQuery({
           'properties.linkedToCurrentPlm': true
-        })
+        }))
       ]);
 
       persistedDeviceCount = Number.isFinite(Number(persistedCount))
