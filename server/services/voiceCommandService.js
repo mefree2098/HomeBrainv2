@@ -189,7 +189,25 @@ class VoiceCommandService {
     return /\bdimmer\b/.test(descriptor);
   }
 
-  getDeviceCapabilities(type, source = 'local', properties = {}) {
+  looksLikeInsteonFader(properties = {}, name = '') {
+    const descriptor = [
+      properties?.insteonType,
+      properties?.productKey,
+      name
+    ]
+      .filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+    const category = Number(properties?.deviceCategory);
+
+    if (category === 0x01 || properties?.supportsBrightness === true) {
+      return true;
+    }
+
+    return /\b(?:dimmer|fader|fan)\b/.test(descriptor);
+  }
+
+  getDeviceCapabilities(type, source = 'local', properties = {}, deviceName = '') {
     const normalizedSource = (source || 'local').toLowerCase();
     const isSmartThings = normalizedSource === 'smartthings' || Boolean(properties?.smartThingsDeviceId);
     const smartThingsCapabilities = this.getSmartThingsCapabilitySet(properties);
@@ -201,7 +219,9 @@ class VoiceCommandService {
         smartThingsCategories.has('light') ||
         this.looksLikeSmartThingsDimmer(properties)
       )
-      : Boolean(properties?.supportsBrightness);
+      : normalizedSource === 'insteon'
+        ? this.looksLikeInsteonFader(properties, deviceName)
+        : Boolean(properties?.supportsBrightness);
     const supportsColor = isSmartThings
       ? smartThingsCapabilities.has('colorControl')
       : Boolean(properties?.supportsColor);
@@ -262,7 +282,8 @@ class VoiceCommandService {
         capabilities: this.getDeviceCapabilities(
           device.type,
           (device?.properties?.source || 'local').toString(),
-          device?.properties || {}
+          device?.properties || {},
+          device?.name || ''
         ),
         properties: device.properties || {}
       };

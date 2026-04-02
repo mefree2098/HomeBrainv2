@@ -109,6 +109,22 @@ test('controlDevice routes Insteon toggle to turnOff when current status is on',
   assert.equal(updated.brightness, 0);
 });
 
+test('supportsBrightnessControl treats fan-labeled Insteon devices like fader switches', () => {
+  const supportsBrightness = deviceService.supportsBrightnessControl({
+    _id: 'device-fan',
+    name: 'Master Toilet Fan',
+    type: 'switch',
+    properties: {
+      source: 'insteon',
+      insteonAddress: '38.8A.57',
+      deviceCategory: 2,
+      supportsBrightness: false
+    }
+  });
+
+  assert.equal(supportsBrightness, true);
+});
+
 test('getAllDevices can force-refresh SmartThings lock devices before returning them', async (t) => {
   const originalFind = Device.find;
   const originalBulkWrite = Device.bulkWrite;

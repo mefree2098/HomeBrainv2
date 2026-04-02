@@ -330,6 +330,20 @@ export const getInsteonEngineLogs = async (limit = 200) => {
   }
 };
 
+// Description: Clear the buffered INSTEON engine log replay history
+// Endpoint: POST /api/insteon/logs/clear
+// Request: {}
+// Response: { success: boolean, cleared: number }
+export const clearInsteonEngineLogs = async () => {
+  try {
+    const response = await api.post('/api/insteon/logs/clear');
+    return response.data as { success: boolean; cleared: number };
+  } catch (error) {
+    console.error('Clear Insteon engine logs error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
 // Description: Open a live SSE stream of INSTEON engine log entries
 // Endpoint: GET /api/insteon/logs/stream
 // Request: { limit?: number }

@@ -773,13 +773,12 @@ test('turnOff can still do stable synchronous verification when explicitly reque
   assert.equal(result.details.commandAcknowledged, true);
 });
 
-test('turnOff defaults to acknowledgement mode without synchronous verification', async (t) => {
+test('turnOff defaults to fast synchronous verification', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
   const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
   const originalPersistState = insteonService._persistDeviceRuntimeState;
-  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
 
   t.after(() => {
     insteonService.hub = originalHub;
@@ -787,11 +786,9 @@ test('turnOff defaults to acknowledgement mode without synchronous verification'
     Device.findById = originalFindById;
     insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
     insteonService._persistDeviceRuntimeState = originalPersistState;
-    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
   });
 
   let confirmCalls = 0;
-  let refreshAddress = null;
   insteonService.isConnected = true;
   insteonService.hub = {
     turnOff(_address, callback) {
@@ -806,20 +803,21 @@ test('turnOff defaults to acknowledgement mode without synchronous verification'
   insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
   insteonService._confirmExpectedDeviceStateByAddress = async () => {
     confirmCalls += 1;
-    throw new Error('should not be called');
-  };
-  insteonService._scheduleRuntimeStateRefresh = (address) => {
-    refreshAddress = address;
+    return {
+      status: false,
+      brightness: 0,
+      level: 0,
+      confirmedReads: 1
+    };
   };
 
   const result = await insteonService.turnOff('mock-device');
 
-  assert.equal(confirmCalls, 0);
-  assert.equal(refreshAddress, '112233');
+  assert.equal(confirmCalls, 1);
   assert.equal(result.success, true);
-  assert.equal(result.confirmed, false);
-  assert.match(result.message, /async status refresh queued/i);
-  assert.equal(result.details.verificationMode, 'ack');
+  assert.equal(result.confirmed, true);
+  assert.match(result.message, /confirmed OFF/i);
+  assert.equal(result.details.verificationMode, 'fast');
 });
 
 test('turnOff retries command timeouts before succeeding', async (t) => {
@@ -2125,6 +2123,48 @@ test('_upsertInsteonDevice upgrades switch metadata to light and applies resolve
   assert.equal(existingDevice.properties.subcategory, 46);
   assert.equal(existingDevice.properties.supportsBrightness, true);
   assert.equal(existingDevice.properties.linkedToCurrentPlm, true);
+});
+
+test('_upsertInsteonDevice treats fan-labeled Insteon loads like fader switches when metadata is incomplete', async (t) => {
+  const originalFindExisting = insteonService._findExistingInsteonDeviceByAddress;
+  const originalGetDeviceInfo = insteonService.getDeviceInfo;
+  const originalCreate = Device.create;
+
+  t.after(() => {
+    insteonService._findExistingInsteonDeviceByAddress = originalFindExisting;
+    insteonService.getDeviceInfo = originalGetDeviceInfo;
+    Device.create = originalCreate;
+  });
+
+  let createdPayload = null;
+  Device.create = async (payload) => {
+    createdPayload = payload;
+    return {
+      ...payload,
+      _id: 'device-fan',
+      save: async function save() {
+        return this;
+      }
+    };
+  };
+
+  insteonService._findExistingInsteonDeviceByAddress = async () => null;
+  insteonService.getDeviceInfo = async () => ({
+    deviceId: '388A57',
+    deviceCategory: 0,
+    subcategory: 0,
+    productKey: 'Unknown'
+  });
+
+  const result = await insteonService._upsertInsteonDevice({
+    address: '38.8A.57',
+    name: 'Master Toilet Fan'
+  });
+
+  assert.equal(result.action, 'created');
+  assert.equal(createdPayload.name, 'Master Toilet Fan');
+  assert.equal(createdPayload.type, 'light');
+  assert.equal(createdPayload.properties.supportsBrightness, true);
 });
 
 test('_upsertInsteonDevice preserves known category metadata when refreshed info is unavailable', async (t) => {

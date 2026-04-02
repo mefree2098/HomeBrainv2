@@ -323,7 +323,7 @@ function getInsteonCommandRetryOptions(action, source = '') {
           commandTimeoutMs: Math.max(500, Math.min(20_000, Math.round(commandTimeoutRaw)))
         }
       : {}),
-    verificationMode: verificationMode || 'ack'
+    verificationMode: verificationMode || 'fast'
   };
 }
 
@@ -915,7 +915,7 @@ async function executeDeviceGroupControl(groupTarget, action) {
         {
           action,
           insteon: {
-            verificationMode: 'ack',
+            verificationMode: 'fast',
             deviceGroup: groupName
           }
         }

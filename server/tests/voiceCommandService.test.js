@@ -26,6 +26,23 @@ test('buildPrompt includes available workflows and workflow revise guidance', as
   assert.match(prompt, /workflow_revise/);
 });
 
+test('getDeviceCapabilities keeps fan-labeled Insteon devices on the dimmer path', () => {
+  const voiceCommandService = require('../services/voiceCommandService');
+
+  const capabilities = voiceCommandService.getDeviceCapabilities(
+    'switch',
+    'insteon',
+    {
+      insteonAddress: '38.8A.57',
+      deviceCategory: 2,
+      supportsBrightness: false
+    },
+    'Master Toilet Fan'
+  );
+
+  assert.deepEqual(capabilities, ['turn_on', 'turn_off', 'toggle', 'set_brightness']);
+});
+
 test('processCommand executes workflow revisions for admin users', async (t) => {
   const voiceCommandService = require('../services/voiceCommandService');
   const workflowService = require('../services/workflowService');
