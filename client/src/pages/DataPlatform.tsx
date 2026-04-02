@@ -52,6 +52,28 @@ const integerNumber = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 0
 })
 
+function formatBytes(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value < 0) {
+    return "--"
+  }
+
+  if (value === 0) {
+    return "0 B"
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"]
+  let size = value
+  let unitIndex = 0
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+
+  const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits)} ${units[unitIndex]}`
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) {
     return "Unknown"
@@ -280,6 +302,7 @@ export default function DataPlatform() {
   const [error, setError] = useState<string | null>(null)
 
   const sources = overview?.sources ?? []
+  const storageCollections = overview?.storage?.collections ?? []
   const selectedSource = useMemo(
     () => sources.find((source) => source.sourceKey === selectedSourceKey) ?? null,
     [selectedSourceKey, sources]
@@ -527,7 +550,7 @@ export default function DataPlatform() {
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Card className="border-white/10 bg-white/5 text-white">
               <CardHeader className="pb-3">
                 <CardDescription className="text-slate-300/80">Tracked Sources</CardDescription>
@@ -538,6 +561,28 @@ export default function DataPlatform() {
               <CardHeader className="pb-3">
                 <CardDescription className="text-slate-300/80">Samples Stored</CardDescription>
                 <CardTitle className="text-3xl">{formatOverviewCount(overview?.totalSamples)}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card className="border-white/10 bg-white/5 text-white">
+              <CardHeader className="pb-3">
+                <CardDescription className="text-slate-300/80">Telemetry Footprint</CardDescription>
+                <CardTitle className="text-3xl">{formatBytes(overview?.storage?.footprintBytes)}</CardTitle>
+                <CardDescription className="pt-2 text-slate-300/70">
+                  Includes telemetry data, allocated storage, and indexes.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+            <Card className="border-white/10 bg-white/5 text-white">
+              <CardHeader className="pb-3">
+                <CardDescription className="text-slate-300/80">Drive Free / Total</CardDescription>
+                <CardTitle className="text-2xl">
+                  {formatBytes(overview?.disk?.freeBytes)} / {formatBytes(overview?.disk?.totalBytes)}
+                </CardTitle>
+                <CardDescription className="pt-2 text-slate-300/70">
+                  {overview?.disk?.available
+                    ? `${overview?.disk?.usagePercent.toFixed(1)}% used on the host drive`
+                    : "Drive capacity telemetry unavailable"}
+                </CardDescription>
               </CardHeader>
             </Card>
             <Card className="border-white/10 bg-white/5 text-white">
@@ -561,6 +606,51 @@ export default function DataPlatform() {
           </div>
         </div>
       </section>
+
+      <Card className="border-white/10 bg-background/80">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="h-5 w-5 text-cyan-500" />
+            Storage Footprint
+          </CardTitle>
+          <CardDescription>
+            HomeBrain telemetry currently uses {formatBytes(overview?.storage?.footprintBytes)} on disk, with {formatBytes(overview?.disk?.freeBytes)} free out of {formatBytes(overview?.disk?.totalBytes)} on the host drive.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-[1.4rem] border border-border/80 bg-muted/30 p-4">
+              <p className="section-kicker text-muted-foreground">Logical Data</p>
+              <p className="mt-2 text-2xl font-semibold">{formatBytes(overview?.storage?.logicalSizeBytes)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Raw document payload across telemetry collections.</p>
+            </div>
+            <div className="rounded-[1.4rem] border border-border/80 bg-muted/30 p-4">
+              <p className="section-kicker text-muted-foreground">Allocated Storage</p>
+              <p className="mt-2 text-2xl font-semibold">{formatBytes(overview?.storage?.storageSizeBytes)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">MongoDB collection storage reserved on disk.</p>
+            </div>
+            <div className="rounded-[1.4rem] border border-border/80 bg-muted/30 p-4">
+              <p className="section-kicker text-muted-foreground">Indexes</p>
+              <p className="mt-2 text-2xl font-semibold">{formatBytes(overview?.storage?.indexSizeBytes)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Index overhead supporting queries and retention policies.</p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {storageCollections.map((collection) => (
+              <div key={collection.key} className="rounded-[1.4rem] border border-border/80 bg-card/60 p-4">
+                <p className="section-kicker text-muted-foreground">{collection.label}</p>
+                <p className="mt-2 text-xl font-semibold">{formatBytes(collection.footprintBytes)}</p>
+                <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                  <p>{formatOverviewCount(collection.documentCount)} docs</p>
+                  <p>{formatBytes(collection.storageSizeBytes)} collection</p>
+                  <p>{formatBytes(collection.indexSizeBytes)} indexes</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
         <Card className="overflow-hidden border-white/10 bg-background/80">

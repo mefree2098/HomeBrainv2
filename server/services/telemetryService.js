@@ -4,6 +4,7 @@ const TelemetrySample = require('../models/TelemetrySample');
 const TempestEvent = require('../models/TempestEvent');
 const TempestObservation = require('../models/TempestObservation');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const resourceMonitorService = require('./resourceMonitorService');
 
 const RETENTION_DAYS = Math.max(
   1,
@@ -143,6 +144,29 @@ const BOOLEAN_STATE_MAP = {
 };
 const BINARY_METRIC_PATTERN = /(^|_)(online|status|open|closed|locked|active|detected|present|occupied|water|smoke|carbon|contact|motion|occupancy|presence)($|_)/i;
 
+const TELEMETRY_STORAGE_COLLECTIONS = [
+  {
+    key: 'telemetry_samples',
+    label: 'Unified Telemetry',
+    model: TelemetrySample
+  },
+  {
+    key: 'device_energy_samples',
+    label: 'Device Energy History',
+    model: DeviceEnergySample
+  },
+  {
+    key: 'tempest_observations',
+    label: 'Tempest Observations',
+    model: TempestObservation
+  },
+  {
+    key: 'tempest_events',
+    label: 'Tempest Events',
+    model: TempestEvent
+  }
+];
+
 function clampInteger(value, fallback, minimum, maximum) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -159,6 +183,52 @@ function roundNumber(value, digits = 4) {
 
   const multiplier = 10 ** digits;
   return Math.round(numeric * multiplier) / multiplier;
+}
+
+function toNonNegativeInteger(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 0;
+  }
+
+  return Math.round(numeric);
+}
+
+function summarizeStorageCollections(collections = []) {
+  const safeCollections = Array.isArray(collections) ? collections : [];
+
+  return {
+    collectionCount: safeCollections.length,
+    totalDocumentCount: safeCollections.reduce((sum, entry) => sum + toNonNegativeInteger(entry.documentCount), 0),
+    logicalSizeBytes: safeCollections.reduce((sum, entry) => sum + toNonNegativeInteger(entry.logicalSizeBytes), 0),
+    storageSizeBytes: safeCollections.reduce((sum, entry) => sum + toNonNegativeInteger(entry.storageSizeBytes), 0),
+    indexSizeBytes: safeCollections.reduce((sum, entry) => sum + toNonNegativeInteger(entry.indexSizeBytes), 0),
+    footprintBytes: safeCollections.reduce((sum, entry) => sum + toNonNegativeInteger(entry.footprintBytes), 0),
+    collections: safeCollections
+  };
+}
+
+function normalizeDiskCapacity(disk = {}) {
+  const totalBytes = toNonNegativeInteger(disk?.totalBytes);
+  const usedBytes = toNonNegativeInteger(disk?.usedBytes);
+  const freeBytes = toNonNegativeInteger(disk?.availableBytes);
+  const totalGB = Number.isFinite(Number(disk?.totalGB)) ? Number(disk.totalGB) : 0;
+  const usedGB = Number.isFinite(Number(disk?.usedGB)) ? Number(disk.usedGB) : 0;
+  const freeGB = Number.isFinite(Number(disk?.availableGB)) ? Number(disk.availableGB) : 0;
+
+  return {
+    totalBytes,
+    usedBytes,
+    freeBytes,
+    totalGB,
+    usedGB,
+    freeGB,
+    usagePercent: Number.isFinite(Number(disk?.usagePercent)) ? Number(disk.usagePercent) : 0,
+    totalLabel: typeof disk?.total === 'string' ? disk.total : '',
+    usedLabel: typeof disk?.used === 'string' ? disk.used : '',
+    freeLabel: typeof disk?.available === 'string' ? disk.available : '',
+    available: totalBytes > 0 || totalGB > 0
+  };
 }
 
 function parseOptionalDate(value) {
@@ -810,8 +880,76 @@ class TelemetryService {
     };
   }
 
+  async getCollectionStorageStats({ key, label, model }) {
+    const collectionName = model?.collection?.collectionName || '';
+
+    const fallback = {
+      key,
+      label,
+      collectionName,
+      documentCount: 0,
+      logicalSizeBytes: 0,
+      storageSizeBytes: 0,
+      indexSizeBytes: 0,
+      footprintBytes: 0,
+      averageDocumentBytes: 0,
+      available: true
+    };
+
+    if (!collectionName || !model?.db?.db?.command) {
+      return {
+        ...fallback,
+        available: false,
+        error: 'Collection stats unavailable'
+      };
+    }
+
+    try {
+      const stats = await model.db.db.command({ collStats: collectionName, scale: 1 });
+      const documentCount = toNonNegativeInteger(stats?.count);
+      const logicalSizeBytes = toNonNegativeInteger(stats?.size);
+      const storageSizeBytes = toNonNegativeInteger(stats?.storageSize);
+      const indexSizeBytes = toNonNegativeInteger(stats?.totalIndexSize);
+      const footprintBytes = storageSizeBytes + indexSizeBytes;
+
+      return {
+        key,
+        label,
+        collectionName,
+        documentCount,
+        logicalSizeBytes,
+        storageSizeBytes,
+        indexSizeBytes,
+        footprintBytes,
+        averageDocumentBytes: toNonNegativeInteger(stats?.avgObjSize),
+        available: true
+      };
+    } catch (error) {
+      const message = String(error?.message || '');
+      if (error?.codeName === 'NamespaceNotFound' || /namespace.*not found/i.test(message) || /ns not found/i.test(message)) {
+        return fallback;
+      }
+
+      return {
+        ...fallback,
+        available: false,
+        error: message || 'Collection stats unavailable'
+      };
+    }
+  }
+
+  async getStorageFootprint() {
+    const collections = await Promise.all(
+      TELEMETRY_STORAGE_COLLECTIONS.map((entry) => this.getCollectionStorageStats(entry))
+    );
+
+    return summarizeStorageCollections(
+      collections.sort((left, right) => right.footprintBytes - left.footprintBytes)
+    );
+  }
+
   async getOverview() {
-    const [totalSamples, lastSample, streamBreakdown, sourceTypeBreakdown, latestBySource] = await Promise.all([
+    const [totalSamples, lastSample, streamBreakdown, sourceTypeBreakdown, latestBySource, storage, disk] = await Promise.all([
       TelemetrySample.countDocuments({}),
       TelemetrySample.findOne({}).sort({ recordedAt: -1 }).select('recordedAt').lean(),
       TelemetrySample.aggregate([
@@ -830,7 +968,9 @@ class TelemetryService {
           }
         },
         { $sort: { 'lastSample.recordedAt': -1 } }
-      ])
+      ]),
+      this.getStorageFootprint(),
+      resourceMonitorService.getDiskUsage()
     ]);
 
     const sources = (await Promise.all(
@@ -855,6 +995,8 @@ class TelemetryService {
         }
         return acc;
       }, {}),
+      storage,
+      disk: normalizeDiskCapacity(disk),
       sources
     };
   }
@@ -1019,5 +1161,7 @@ module.exports.__private__ = {
   inferMetricUnit,
   isBinaryMetric,
   mergePointsByTimestamp,
-  pickFeaturedMetricKeys
+  normalizeDiskCapacity,
+  pickFeaturedMetricKeys,
+  summarizeStorageCollections
 };
