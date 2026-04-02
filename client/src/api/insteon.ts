@@ -199,6 +199,20 @@ export interface InsteonConnectionTarget {
   label?: string;
 }
 
+export interface InsteonEngineLogEntry {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'warn' | 'error';
+  stage?: string | null;
+  direction?: 'inbound' | 'outbound' | 'internal' | null;
+  operation?: string | null;
+  address?: string | null;
+  transport?: string | null;
+  target?: string | null;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
 export interface InsteonStatusResponse {
   connected?: boolean;
   deviceCount?: number;
@@ -296,6 +310,69 @@ export const getInsteonStatus = async (): Promise<InsteonStatusResponse> => {
     console.error('Get Insteon status error:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
+};
+
+// Description: Get recent INSTEON engine log entries
+// Endpoint: GET /api/insteon/logs/latest
+// Request: { limit?: number }
+// Response: { success: boolean, logs: InsteonEngineLogEntry[], count: number }
+export const getInsteonEngineLogs = async (limit = 200) => {
+  try {
+    const response = await api.get('/api/insteon/logs/latest', {
+      params: {
+        limit
+      }
+    });
+    return response.data as { success: boolean; logs: InsteonEngineLogEntry[]; count: number };
+  } catch (error) {
+    console.error('Get Insteon engine logs error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Open a live SSE stream of INSTEON engine log entries
+// Endpoint: GET /api/insteon/logs/stream
+// Request: { limit?: number }
+// Response: text/event-stream
+export const openInsteonEngineLogStream = (
+  options: { limit?: number } = {},
+  handlers: {
+    onLog: (entry: InsteonEngineLogEntry) => void;
+    onReady?: () => void;
+    onError?: (error: Event) => void;
+  }
+) => {
+  const params = new URLSearchParams();
+  if (typeof options.limit === 'number' && options.limit > 0) {
+    params.set('limit', String(options.limit));
+  }
+
+  const url = params.toString()
+    ? `/api/insteon/logs/stream?${params.toString()}`
+    : '/api/insteon/logs/stream';
+  const stream = new EventSource(url, { withCredentials: true });
+
+  stream.addEventListener('log', (raw) => {
+    const message = raw as MessageEvent<string>;
+    try {
+      const parsed = JSON.parse(message.data) as InsteonEngineLogEntry;
+      handlers.onLog(parsed);
+    } catch (error) {
+      console.error('Failed to parse INSTEON engine log stream payload:', error);
+    }
+  });
+
+  stream.addEventListener('ready', () => {
+    handlers.onReady?.();
+  });
+
+  stream.onerror = (error) => {
+    handlers.onError?.(error);
+  };
+
+  return () => {
+    stream.close();
+  };
 };
 
 // Description: List local serial ports available for USB PLM setup

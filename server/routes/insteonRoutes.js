@@ -1,8 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const insteonService = require('../services/insteonService');
+const insteonEngineLogService = require('../services/insteonEngineLogService');
 const Settings = require('../models/Settings');
 const { requireAdmin } = require('./middlewares/auth');
+
+const INSTEON_LOG_HEARTBEAT_MS = 25_000;
+
+function parsePositiveInt(value, fallback, maximum = 1000) {
+  const numeric = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+
+  return Math.min(maximum, numeric);
+}
 
 // Apply authentication to all routes
 router.use(requireAdmin());
@@ -83,6 +95,99 @@ router.get('/status', async (req, res) => {
       message: error.message
     });
   }
+});
+
+// Description: Get recent live INSTEON engine log entries
+// Endpoint: GET /api/insteon/logs/latest
+// Request: { limit?: number }
+// Response: { success: boolean, logs: Array<object>, count: number }
+router.get('/logs/latest', async (req, res) => {
+  try {
+    const limit = parsePositiveInt(req.query.limit, 200);
+    const logs = insteonEngineLogService.latest({ limit });
+    return res.status(200).json({
+      success: true,
+      logs,
+      count: logs.length
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to get engine logs:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch INSTEON engine logs',
+      logs: []
+    });
+  }
+});
+
+// Description: Stream live INSTEON engine logs over SSE
+// Endpoint: GET /api/insteon/logs/stream
+// Request: { limit?: number }
+// Response: text/event-stream
+router.get('/logs/stream', async (req, res) => {
+  const limit = parsePositiveInt(req.query.limit, 200);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const writeLog = (entry) => {
+    try {
+      res.write(`id: ${entry.id}\n`);
+      res.write('event: log\n');
+      res.write(`data: ${JSON.stringify(entry)}\n\n`);
+    } catch (error) {
+      console.warn('GET /api/insteon/logs/stream - Failed to write log:', error.message);
+    }
+  };
+
+  try {
+    const logs = insteonEngineLogService.latest({ limit });
+    logs.forEach(writeLog);
+  } catch (error) {
+    console.error('GET /api/insteon/logs/stream - Failed initial replay:', error.message);
+  }
+
+  res.write('event: ready\n');
+  res.write(`data: ${JSON.stringify({ connectedAt: new Date().toISOString() })}\n\n`);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(':\n\n');
+    } catch (error) {
+      clearInterval(heartbeat);
+    }
+  }, INSTEON_LOG_HEARTBEAT_MS);
+
+  const listener = (entry) => {
+    writeLog(entry);
+  };
+
+  insteonEngineLogService.on('log', listener);
+
+  let closed = false;
+  const cleanup = () => {
+    if (closed) {
+      return;
+    }
+
+    closed = true;
+    clearInterval(heartbeat);
+    insteonEngineLogService.removeListener('log', listener);
+    try {
+      res.end();
+    } catch (error) {
+      // No-op.
+    }
+  };
+
+  req.on('close', cleanup);
+  req.on('end', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 });
 
 // Description: List local serial ports available for USB PLM use
