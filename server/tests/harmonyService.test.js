@@ -91,3 +91,31 @@ test('discoverHubs downgrades low-level socket failures into a safe empty result
   const result = await service.discoverHubs({ timeoutMs: 1 });
   assert.deepEqual(result, []);
 });
+
+test('startBackgroundMonitoring polls Harmony activity state for known hubs', async (t) => {
+  const service = new HarmonyService();
+  const originalIntervalMs = service.backgroundMonitorIntervalMs;
+
+  t.after(() => {
+    service.stopBackgroundMonitoring();
+    service.backgroundMonitorIntervalMs = originalIntervalMs;
+  });
+
+  const observedHubLists = [];
+
+  service.getMonitoringHubIps = async () => ['192.168.1.50'];
+  service.syncActivityStates = async ({ hubIps, force }) => {
+    observedHubLists.push({ hubIps, force });
+    return { success: true };
+  };
+  service.backgroundMonitorIntervalMs = 5;
+
+  service.startBackgroundMonitoring({ immediate: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.ok(observedHubLists.length >= 1);
+  assert.deepEqual(observedHubLists[0], {
+    hubIps: ['192.168.1.50'],
+    force: true
+  });
+});

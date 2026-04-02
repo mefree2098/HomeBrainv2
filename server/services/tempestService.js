@@ -6,6 +6,7 @@ const TempestEvent = require('../models/TempestEvent');
 const TempestIntegration = require('../models/TempestIntegration');
 const TempestObservation = require('../models/TempestObservation');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const telemetryService = require('./telemetryService');
 const {
   DEVICE_TYPE_LABELS,
   buildDisplayMetrics,
@@ -1038,6 +1039,12 @@ class TempestService {
       source,
       firmwareRevision
     });
+
+    try {
+      await telemetryService.recordTempestObservation(device, observation);
+    } catch (error) {
+      console.warn(`TempestService: Failed to record telemetry observation: ${error.message}`);
+    }
 
     return observation;
   }

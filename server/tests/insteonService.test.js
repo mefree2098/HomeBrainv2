@@ -259,6 +259,47 @@ test('_confirmExpectedDeviceStateByAddress fails when only a transient matching 
   );
 });
 
+test('startRuntimeMonitoring attempts a background connect when tracked Insteon devices exist', async (t) => {
+  const originalGetSettings = Settings.getSettings;
+  const originalCountDocuments = Device.countDocuments;
+  const originalConnect = insteonService.connect;
+  const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+
+  t.after(() => {
+    Settings.getSettings = originalGetSettings;
+    Device.countDocuments = originalCountDocuments;
+    insteonService.connect = originalConnect;
+    insteonService._runtimeMonitoringIntervalMs = originalIntervalMs;
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+    insteonService.stopRuntimeMonitoring();
+  });
+
+  let connectCalls = 0;
+
+  Settings.getSettings = async () => ({
+    insteonPort: '/dev/ttyUSB0'
+  });
+  Device.countDocuments = async () => 1;
+  insteonService.connect = async () => {
+    connectCalls += 1;
+    insteonService.isConnected = true;
+    insteonService.hub = {};
+    return { success: true };
+  };
+
+  insteonService.isConnected = false;
+  insteonService.hub = null;
+  insteonService._runtimeMonitoringIntervalMs = 5;
+
+  insteonService.startRuntimeMonitoring({ immediate: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(connectCalls, 1);
+});
+
 test('turnOn issues normalized command address and returns confirmed state', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;

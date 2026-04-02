@@ -267,6 +267,173 @@ function getActionValue(actionName, parameters = {}) {
   return undefined;
 }
 
+function humanizeActionToken(value = '') {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+}
+
+function capitalizeLabel(value = '') {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function formatDurationSecondsLabel(seconds) {
+  const normalized = Math.max(0, Number(seconds) || 0);
+  if (normalized <= 0) {
+    return '0s';
+  }
+
+  if (normalized < 60) {
+    const rounded = normalized % 1 === 0 ? normalized : Number(normalized.toFixed(1));
+    return `${rounded}s`;
+  }
+
+  const totalSeconds = Math.round(normalized);
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function describeActionTarget(rawTarget) {
+  if (rawTarget == null) {
+    return null;
+  }
+
+  if (typeof rawTarget === 'string') {
+    const trimmed = rawTarget.trim();
+    return trimmed || null;
+  }
+
+  if (typeof rawTarget !== 'object' || Array.isArray(rawTarget)) {
+    return String(rawTarget);
+  }
+
+  const kind = sanitizeString(rawTarget.kind || rawTarget.type).toLowerCase();
+  if ((kind === 'device_group' || kind === 'group') && rawTarget.group) {
+    return `device group "${rawTarget.group}"`;
+  }
+  if (kind === 'context' && (rawTarget.key || rawTarget.contextKey)) {
+    return `context "${rawTarget.key || rawTarget.contextKey}"`;
+  }
+  if (rawTarget.name) {
+    return String(rawTarget.name);
+  }
+  if (rawTarget.label) {
+    return String(rawTarget.label);
+  }
+  if (rawTarget.value) {
+    return String(rawTarget.value);
+  }
+
+  return kind || null;
+}
+
+function resolveDelaySeconds(action) {
+  const parameters = action?.parameters || {};
+  const requested = Number(parameters.seconds ?? action?.seconds ?? 0);
+  let seconds = Number.isFinite(requested) ? Math.max(0, Math.min(MAX_DELAY_SECONDS, requested)) : 0;
+  if (parameters.random === true && seconds > 0) {
+    seconds = resolveRandomInteger(0, Math.round(seconds));
+  }
+  return seconds;
+}
+
+function describeWorkflowAction(action, options = {}) {
+  const actionType = String(action?.type || 'action').trim().toLowerCase();
+  const targetLabel = describeActionTarget(getActionTargetCandidate(action, ['deviceId', 'sceneId']));
+
+  switch (actionType) {
+    case 'device_control': {
+      const actionName = humanizeActionToken(getActionName(action));
+      const prefix = actionName ? capitalizeLabel(actionName) : 'Control device';
+      return targetLabel ? `${prefix} ${targetLabel}` : prefix;
+    }
+    case 'scene_activate':
+      return targetLabel ? `Activate scene ${targetLabel}` : 'Activate scene';
+    case 'notification':
+      return 'Send notification';
+    case 'delay': {
+      const seconds = options.resolvedDelaySeconds ?? resolveDelaySeconds(action);
+      return `Wait ${formatDurationSecondsLabel(seconds)}`;
+    }
+    case 'condition':
+      return 'Evaluate condition';
+    case 'workflow_control': {
+      const operation = humanizeActionToken(action?.parameters?.operation || action?.parameters?.action || 'run');
+      return `${capitalizeLabel(operation || 'Run')} workflow`;
+    }
+    case 'variable_control':
+      return 'Update variable';
+    case 'repeat':
+      return 'Repeat nested actions';
+    case 'isy_network_resource':
+      return 'Run ISY network resource';
+    case 'http_request': {
+      const method = sanitizeString(action?.parameters?.method || 'GET').toUpperCase();
+      return action?.target ? `${method} ${action.target}` : `Send ${method} request`;
+    }
+    default:
+      return capitalizeLabel(humanizeActionToken(actionType || 'action') || 'Action');
+  }
+}
+
+function buildActionPreview(action, actionIndex, parentActionIndex = null, options = {}) {
+  return {
+    actionIndex,
+    parentActionIndex: Number.isInteger(parentActionIndex) ? parentActionIndex : null,
+    actionType: String(action?.type || 'unknown'),
+    target: getActionTargetCandidate(action, ['deviceId', 'sceneId']) ?? null,
+    message: describeWorkflowAction(action, options)
+  };
+}
+
+function buildNextActionPreview(actions = [], currentIndex = 0, parentActionIndex = null) {
+  if (Array.isArray(actions) && currentIndex + 1 < actions.length) {
+    const nextAction = actions[currentIndex + 1];
+    return buildActionPreview(nextAction, currentIndex + 1, parentActionIndex);
+  }
+
+  if (Number.isInteger(parentActionIndex)) {
+    return {
+      actionIndex: parentActionIndex,
+      parentActionIndex: null,
+      actionType: 'parent_sequence',
+      target: null,
+      message: 'Return to parent workflow steps'
+    };
+  }
+
+  return {
+    actionIndex: currentIndex + 1,
+    parentActionIndex: null,
+    actionType: 'execution_complete',
+    target: null,
+    message: 'Workflow completes'
+  };
+}
+
+function buildDelayTimer(resolvedDelaySeconds, startedAt) {
+  const durationMs = Math.round(Math.max(0, Number(resolvedDelaySeconds) || 0) * 1000);
+  if (!Number.isFinite(durationMs) || durationMs <= 0 || !(startedAt instanceof Date) || !Number.isFinite(startedAt.getTime())) {
+    return null;
+  }
+
+  return {
+    durationMs,
+    endsAt: new Date(startedAt.getTime() + durationMs)
+  };
+}
+
 function normalizeIsyVariableKey(value = '') {
   return String(value || '').replace(/^\$/u, '').trim().toLowerCase();
 }
@@ -884,14 +1051,10 @@ async function executeIsyNetworkResource(action) {
   };
 }
 
-async function executeDelay(action, context = {}) {
-  const parameters = action?.parameters || {};
-  const requested = Number(parameters.seconds ?? action?.seconds ?? 0);
-  let seconds = Number.isFinite(requested) ? Math.max(0, Math.min(MAX_DELAY_SECONDS, requested)) : 0;
-  if (parameters.random === true && seconds > 0) {
-    seconds = resolveRandomInteger(0, Math.round(seconds));
-  }
-
+async function executeDelay(action, context = {}, options = {}) {
+  const seconds = Number.isFinite(options.resolvedDelaySeconds)
+    ? options.resolvedDelaySeconds
+    : resolveDelaySeconds(action);
   if (seconds > 0) {
     await sleepWithStopCheck(seconds * 1000, context);
   }
@@ -1414,7 +1577,7 @@ async function executeAction(action, context = {}, options = {}) {
     case 'isy_network_resource':
       return executeIsyNetworkResource(action);
     case 'delay':
-      return executeDelay(action, context);
+      return executeDelay(action, context, options);
     case 'variable_control':
       return executeVariableControl(action, context);
     case 'workflow_control':
@@ -1501,17 +1664,28 @@ async function executeActionSequence(actions = [], options = {}) {
     const action = actions[index];
     const startedAt = Date.now();
     const startedAtDate = new Date(startedAt);
+    const resolvedDelaySeconds = action?.type === 'delay'
+      ? resolveDelaySeconds(action)
+      : null;
+    const nextAction = buildNextActionPreview(actions, index, parentActionIndex);
+    const timer = action?.type === 'delay'
+      ? buildDelayTimer(resolvedDelaySeconds, startedAtDate)
+      : null;
 
     try {
       ensureWorkflowNotStopped(context);
       await invokeRuntimeHook(runtime, 'onActionStart', {
         actionIndex: index,
         parentActionIndex,
+        actionType: action?.type || 'unknown',
         action,
+        target: getActionTargetCandidate(action, ['deviceId', 'sceneId']),
         context,
         depth,
         workflowControlDepth,
-        startedAt: startedAtDate
+        startedAt: startedAtDate,
+        nextAction,
+        timer
       });
 
       const details = await executeAction(action, context, {
@@ -1519,7 +1693,8 @@ async function executeActionSequence(actions = [], options = {}) {
         workflowControlDepth,
         runtime,
         actionIndex: index,
-        parentActionIndex
+        parentActionIndex,
+        resolvedDelaySeconds
       });
       const conditionMet = details?.conditionMet;
 

@@ -30,6 +30,19 @@ const actionResultSchema = new mongoose.Schema({
   durationMs: Number
 }, { _id: false });
 
+const nextActionSchema = new mongoose.Schema({
+  actionIndex: Number,
+  parentActionIndex: Number,
+  actionType: String,
+  target: mongoose.Schema.Types.Mixed,
+  message: String
+}, { _id: false });
+
+const currentActionTimerSchema = new mongoose.Schema({
+  durationMs: Number,
+  endsAt: Date
+}, { _id: false });
+
 const currentActionSchema = new mongoose.Schema({
   actionIndex: Number,
   parentActionIndex: Number,
@@ -37,7 +50,15 @@ const currentActionSchema = new mongoose.Schema({
   target: mongoose.Schema.Types.Mixed,
   startedAt: Date,
   updatedAt: Date,
-  message: String
+  message: String,
+  timer: {
+    type: currentActionTimerSchema,
+    default: null
+  },
+  nextAction: {
+    type: nextActionSchema,
+    default: null
+  }
 }, { _id: false });
 
 const executionEventSchema = new mongoose.Schema({

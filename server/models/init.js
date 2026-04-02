@@ -22,6 +22,7 @@ require('./SmartThingsIntegration');
 require('./TempestIntegration');
 require('./TempestObservation');
 require('./TempestEvent');
+require('./TelemetrySample');
 require('./SSLCertificate');
 require('./OllamaConfig');
 require('./ReverseProxyRoute');

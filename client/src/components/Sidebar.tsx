@@ -17,7 +17,8 @@ import {
   Activity,
   Waypoints,
   Volume2,
-  CloudSun
+  CloudSun,
+  Database
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -27,6 +28,7 @@ import { useAuth } from "@/contexts/AuthContext"
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'Weather', href: '/weather', icon: CloudSun },
+  { name: 'Data Platform', href: '/data-platform', icon: Database },
   { name: 'Devices', href: '/devices', icon: Lightbulb },
   { name: 'Device Groups', href: '/device-groups', icon: Layers3, adminOnly: true },
   { name: 'Scenes', href: '/scenes', icon: Palette },

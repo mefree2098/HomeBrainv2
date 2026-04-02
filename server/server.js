@@ -40,6 +40,7 @@ const resourceRoutes = require("./routes/resourceRoutes");
 const whisperRoutes = require("./routes/whisperRoutes");
 const alexaRoutes = require("./routes/alexaRoutes");
 const alexaCustomSkillRoutes = require("./routes/alexaCustomSkillRoutes");
+const telemetryRoutes = require("./routes/telemetryRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
@@ -60,6 +61,8 @@ const { shutdownCodexCliService } = require("./services/codexCliService");
 const automationSchedulerService = require("./services/automationSchedulerService");
 const automationRuntimeService = require("./services/automationRuntimeService");
 const alexaBridgeService = require("./services/alexaBridgeService");
+const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
+const telemetryService = require("./services/telemetryService");
 const { connectDB } = require("./config/database");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
 const cors = require("cors");
@@ -250,6 +253,7 @@ app.use('/api/users', userRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
 app.use('/api/device-groups', deviceGroupRoutes);
+app.use('/api/telemetry', telemetryRoutes);
 // Scene Routes
 app.use('/api/scenes', sceneRoutes);
 // Automation Routes
@@ -408,6 +412,7 @@ automationRuntimeService.reconcileRunningExecutions({ reason: 'server_startup' }
     console.warn(`Automation runtime startup reconciliation failed: ${error.message}`);
   });
 automationSchedulerService.start();
+platformUpdateMonitorService.start();
 
 // Initialize Remote Update Service
 (async () => {
@@ -436,6 +441,16 @@ automationSchedulerService.start();
     console.log('Voice acknowledgment cache primed');
   } catch (error) {
     console.warn('Failed to prime voice acknowledgment cache:', error.message);
+  }
+})();
+
+// Initialize telemetry listeners
+(() => {
+  try {
+    telemetryService.initialize();
+    console.log('Telemetry listeners initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize telemetry listeners:', error.message);
   }
 })();
 
@@ -476,6 +491,12 @@ async function gracefulShutdown(signal) {
   }
 
   try {
+    await platformUpdateMonitorService.stop({ disconnectInsteon: true });
+  } catch (error) {
+    console.error('Error stopping platform update monitor service:', error.message);
+  }
+
+  try {
     const reconciliation = await automationRuntimeService.reconcileRunningExecutions({ reason: 'server_shutdown' });
     if (reconciliation?.cancelledCount > 0) {
       console.warn(`Automation runtime reconciliation cancelled ${reconciliation.cancelledCount} execution(s) during shutdown`);
@@ -510,6 +531,12 @@ async function gracefulShutdown(signal) {
       await tempestService.shutdown();
     } catch (error) {
       console.error('Error stopping Tempest service:', error.message);
+    }
+
+    try {
+      telemetryService.shutdown();
+    } catch (error) {
+      console.error('Error stopping telemetry listeners:', error.message);
     }
 
     try {
