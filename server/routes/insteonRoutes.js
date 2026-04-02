@@ -121,6 +121,28 @@ router.get('/logs/latest', async (req, res) => {
   }
 });
 
+// Description: Clear the buffered INSTEON engine log replay history
+// Endpoint: POST /api/insteon/logs/clear
+// Request: {}
+// Response: { success: boolean, cleared: number }
+router.post('/logs/clear', async (_req, res) => {
+  try {
+    const cleared = insteonEngineLogService.latest({ limit: 2000 }).length;
+    insteonEngineLogService.reset();
+    return res.status(200).json({
+      success: true,
+      cleared
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to clear engine logs:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to clear INSTEON engine logs'
+    });
+  }
+});
+
 // Description: Stream live INSTEON engine logs over SSE
 // Endpoint: GET /api/insteon/logs/stream
 // Request: { limit?: number }

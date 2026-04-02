@@ -40,7 +40,7 @@ const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
 const DEFAULT_INSTEON_COMMAND_ATTEMPTS = 3;
 const DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS = 250;
 const DEFAULT_INSTEON_COMMAND_TIMEOUT_MS = 1500;
-const DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE = 'ack';
+const DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE = 'fast';
 const DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_STALE_AFTER_MS = 60000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_OFFLINE_STALE_AFTER_MS = 15000;
@@ -6296,7 +6296,7 @@ class InsteonService {
     };
   }
 
-  _scheduleRuntimeStateRefresh(address, reason = 'command') {
+  _scheduleRuntimeStateRefresh(address, reason = 'command', options = {}) {
     const normalizedAddress = this._normalizePossibleInsteonAddress(address);
     if (!normalizedAddress) {
       return;
@@ -6313,7 +6313,45 @@ class InsteonService {
         timeoutMs: this._runtimeStateRefreshTimeoutMs,
         pauseBetweenMs: 0,
         persistState: true
+      }).then((state) => {
+        this._logEngineInfo(`Runtime state refresh (${reason}) observed ${state.status ? 'ON' : 'OFF'} at ${state.level}%`, {
+          stage: 'state',
+          direction: 'inbound',
+          operation: 'runtime_state_refresh',
+          address: normalizedAddress,
+          details: {
+            reason,
+            expectedStatus: typeof options.expectedStatus === 'boolean' ? options.expectedStatus : null,
+            observedStatus: state.status,
+            observedLevel: state.level
+          }
+        });
+
+        if (typeof options.expectedStatus === 'boolean' && state.status !== options.expectedStatus) {
+          this._logEngineWarn(`Runtime state refresh (${reason}) mismatched expected state`, {
+            stage: 'state',
+            direction: 'inbound',
+            operation: 'runtime_state_refresh',
+            address: normalizedAddress,
+            details: {
+              expectedStatus: options.expectedStatus,
+              observedStatus: state.status,
+              observedLevel: state.level
+            }
+          });
+        }
       }).catch((error) => {
+        this._logEngineWarn(`Runtime state refresh (${reason}) failed`, {
+          stage: 'state',
+          direction: 'inbound',
+          operation: 'runtime_state_refresh',
+          address: normalizedAddress,
+          details: {
+            reason,
+            expectedStatus: typeof options.expectedStatus === 'boolean' ? options.expectedStatus : null,
+            error: error.message
+          }
+        });
         console.warn(`InsteonService: Runtime state refresh (${reason}) failed for ${this._formatInsteonAddress(normalizedAddress)}: ${error.message}`);
       });
     }, this._runtimeStateRefreshDelayMs);
@@ -6344,6 +6382,21 @@ class InsteonService {
     }
 
     this._scheduleRuntimeStateRefresh(parsed.address, `cmd:${parsed.command1}`);
+  }
+
+  _looksLikeInsteonFaderDescriptor(...values) {
+    const descriptor = values
+      .filter((value) => typeof value === 'string' && value.trim())
+      .join(' ')
+      .toLowerCase();
+
+    if (!descriptor) {
+      return false;
+    }
+
+    // Some dimmable Insteon loads are named as fans, but they should remain on
+    // the same dimmer/fader capability path as any other Insteon fader switch.
+    return /\b(?:dimmer|fader|fan)\b/.test(descriptor);
   }
 
   async _upsertInsteonDevice({ address, group, insteonType, name, deviceInfo, markLinkedToCurrentPlm = false }) {
@@ -6382,7 +6435,7 @@ class InsteonService {
       resolvedCategory === 0x01
       || existingProperties.supportsBrightness === true
       || existingDevice?.type === 'light'
-      || /\bdimmer\b/.test(descriptor)
+      || this._looksLikeInsteonFaderDescriptor(descriptor)
     );
 
     const mergedProperties = {
@@ -7973,7 +8026,19 @@ class InsteonService {
       ? Math.round((Math.max(0, Math.min(255, numericLevel)) / 255) * 100)
       : Math.round(numericLevel);
 
-    return Math.max(0, Math.min(100, normalizedPercent));
+    const boundedLevel = Math.max(0, Math.min(100, normalizedPercent));
+    this._logEngineInfo(`Observed INSTEON level ${boundedLevel}% for ${this._formatInsteonAddress(normalizedAddress)}`, {
+      stage: 'state',
+      direction: 'inbound',
+      operation: options.kind || 'level_query',
+      address: normalizedAddress,
+      details: {
+        rawLevel: numericLevel,
+        normalizedLevel: boundedLevel
+      }
+    });
+
+    return boundedLevel;
   }
 
   async _confirmDeviceStateByAddress(address, options = {}) {
@@ -7998,6 +8063,18 @@ class InsteonService {
         });
         this._markRuntimePollAttempt(normalizedAddress);
         const state = this._stateFromInsteonLevel(level);
+        this._logEngineInfo(`Confirmed current state for ${this._formatInsteonAddress(normalizedAddress)} as ${state.status ? 'ON' : 'OFF'} at ${state.level}%`, {
+          stage: 'state',
+          direction: 'inbound',
+          operation: 'state_confirm',
+          address: normalizedAddress,
+          details: {
+            attempt,
+            attempts,
+            observedStatus: state.status,
+            observedLevel: state.level
+          }
+        });
         if (persistState) {
           await this._persistDeviceRuntimeStateByAddress(normalizedAddress, state);
         }
@@ -8047,6 +8124,21 @@ class InsteonService {
         const state = this._stateFromInsteonLevel(level);
         lastState = state;
 
+        this._logEngineInfo(`Observed ${state.status ? 'ON' : 'OFF'} at ${state.level}% while verifying expected ${Boolean(expectedStatus) ? 'ON' : 'OFF'} for ${this._formatInsteonAddress(normalizedAddress)}`, {
+          stage: 'state',
+          direction: 'inbound',
+          operation: 'expected_state_confirm',
+          address: normalizedAddress,
+          details: {
+            attempt,
+            attempts,
+            expectedStatus: Boolean(expectedStatus),
+            observedStatus: state.status,
+            observedLevel: state.level,
+            requiredMatches
+          }
+        });
+
         if (persistState) {
           await this._persistDeviceRuntimeStateByAddress(normalizedAddress, state);
         }
@@ -8054,6 +8146,16 @@ class InsteonService {
         if (state.status === Boolean(expectedStatus)) {
           consecutiveMatches += 1;
           if (consecutiveMatches >= requiredMatches) {
+            this._logEngineInfo(`Verified expected ${Boolean(expectedStatus) ? 'ON' : 'OFF'} state for ${this._formatInsteonAddress(normalizedAddress)}`, {
+              stage: 'state',
+              direction: 'inbound',
+              operation: 'expected_state_confirm',
+              address: normalizedAddress,
+              details: {
+                confirmedReads: consecutiveMatches,
+                observedLevel: state.level
+              }
+            });
             return {
               ...state,
               confirmedReads: consecutiveMatches
@@ -8067,6 +8169,19 @@ class InsteonService {
         }
 
         consecutiveMatches = 0;
+        this._logEngineWarn(`Expected ${Boolean(expectedStatus) ? 'ON' : 'OFF'} but observed ${state.status ? 'ON' : 'OFF'} for ${this._formatInsteonAddress(normalizedAddress)}`, {
+          stage: 'state',
+          direction: 'inbound',
+          operation: 'expected_state_confirm',
+          address: normalizedAddress,
+          details: {
+            attempt,
+            attempts,
+            expectedStatus: Boolean(expectedStatus),
+            observedStatus: state.status,
+            observedLevel: state.level
+          }
+        });
         lastError = new Error(
           `Expected ${Boolean(expectedStatus) ? 'ON' : 'OFF'} but observed ${state.status ? 'ON' : 'OFF'}`
         );
@@ -8876,7 +8991,11 @@ class InsteonService {
         operation: 'turn_on',
         address,
         details: {
-          deviceId: String(device._id)
+          deviceId: String(device._id),
+          deviceType: device.type || null,
+          deviceModel: device.model || null,
+          deviceCategory: device?.properties?.deviceCategory ?? null,
+          deviceSubcategory: device?.properties?.subcategory ?? null
         }
       });
       this._markRecentPlmControlActivity();
@@ -8934,7 +9053,9 @@ class InsteonService {
       await this._persistDeviceRuntimeState(device, optimisticState);
       const verificationMode = this._getVerificationMode(options);
       if (this._shouldSkipSynchronousVerification(verificationMode)) {
-        this._scheduleRuntimeStateRefresh(address, 'turn_on_ack');
+        this._scheduleRuntimeStateRefresh(address, 'turn_on_ack', {
+          expectedStatus: true
+        });
         const details = this._buildInsteonControlDetails(device, address, 'turn_on', optimisticState, {
           requestedBrightness: boundedBrightness,
           commandAcknowledged: true,
@@ -9086,7 +9207,11 @@ class InsteonService {
         operation: 'turn_off',
         address,
         details: {
-          deviceId: String(device._id)
+          deviceId: String(device._id),
+          deviceType: device.type || null,
+          deviceModel: device.model || null,
+          deviceCategory: device?.properties?.deviceCategory ?? null,
+          deviceSubcategory: device?.properties?.subcategory ?? null
         }
       });
       let commandExecution = {
@@ -9148,7 +9273,9 @@ class InsteonService {
       await this._persistDeviceRuntimeState(device, optimisticState);
       const verificationMode = this._getVerificationMode(options);
       if (this._shouldSkipSynchronousVerification(verificationMode)) {
-        this._scheduleRuntimeStateRefresh(address, 'turn_off_ack');
+        this._scheduleRuntimeStateRefresh(address, 'turn_off_ack', {
+          expectedStatus: false
+        });
         const details = this._buildInsteonControlDetails(device, address, 'turn_off', optimisticState, {
           commandAcknowledged: true,
           hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,

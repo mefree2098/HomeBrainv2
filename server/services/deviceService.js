@@ -772,6 +772,30 @@ class DeviceService {
     return /\bdimmer\b/.test(descriptor);
   }
 
+  isInsteonDevice(device) {
+    const source = (device?.properties?.source || '').toString().trim().toLowerCase();
+    return source === 'insteon' || Boolean(device?.properties?.insteonAddress);
+  }
+
+  looksLikeInsteonFader(device) {
+    const descriptor = [
+      device?.properties?.insteonType,
+      device?.properties?.productKey,
+      device?.model,
+      device?.name
+    ]
+      .filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+    const category = Number(device?.properties?.deviceCategory);
+
+    if (category === 0x01 || device?.properties?.supportsBrightness === true) {
+      return true;
+    }
+
+    return /\b(?:dimmer|fader|fan)\b/.test(descriptor);
+  }
+
   hasSmartThingsLevelState(device) {
     const attributeValues = device?.properties?.smartThingsAttributeValues || {};
     const attributeMetadata = device?.properties?.smartThingsAttributeMetadata || {};
@@ -807,6 +831,10 @@ class DeviceService {
       if (this.hasSmartThingsLevelState(device)) {
         return true;
       }
+    }
+
+    if (this.isInsteonDevice(device) && this.looksLikeInsteonFader(device)) {
+      return true;
     }
 
     return Boolean(device?.properties?.supportsBrightness);

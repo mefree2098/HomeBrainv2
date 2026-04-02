@@ -191,6 +191,11 @@ const isSmartThingsBackedDevice = (device: any): boolean => {
   return source === 'smartthings' || Boolean(device?.properties?.smartThingsDeviceId)
 }
 
+const isInsteonBackedDevice = (device: any): boolean => {
+  const source = (device?.properties?.source || '').toString().toLowerCase()
+  return source === 'insteon' || Boolean(device?.properties?.insteonAddress)
+}
+
 const looksLikeSmartThingsDimmer = (device: any): boolean => {
   const descriptor = [
     device?.properties?.smartThingsDeviceTypeName,
@@ -210,6 +215,25 @@ const hasSmartThingsLevelState = (device: any): boolean => {
 
   return levelValue !== undefined && levelValue !== null
     || Boolean(levelMetadata && typeof levelMetadata === 'object' && Object.keys(levelMetadata).length > 0)
+}
+
+const looksLikeInsteonFader = (device: any): boolean => {
+  const descriptor = [
+    device?.properties?.insteonType,
+    device?.properties?.productKey,
+    device?.model,
+    device?.name
+  ]
+    .filter((value) => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase()
+  const category = Number(device?.properties?.deviceCategory)
+
+  if (category === 0x01 || device?.properties?.supportsBrightness === true) {
+    return true
+  }
+
+  return /\b(?:dimmer|fader|fan)\b/.test(descriptor)
 }
 
 const supportsLightFade = (device: any): boolean => {
@@ -233,6 +257,10 @@ const supportsLightFade = (device: any): boolean => {
     if (hasSmartThingsLevelState(device)) {
       return true
     }
+  }
+
+  if (isInsteonBackedDevice(device) && looksLikeInsteonFader(device)) {
+    return true
   }
 
   return Boolean(device?.properties?.supportsBrightness)

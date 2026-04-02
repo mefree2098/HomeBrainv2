@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Copy, Loader2, RefreshCw, Server } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Loader2, RefreshCw, Server, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,7 @@ import {
 } from "@/api/events";
 import {
   InsteonEngineLogEntry,
+  clearInsteonEngineLogs,
   getInsteonEngineLogs,
   openInsteonEngineLogStream
 } from "@/api/insteon";
@@ -135,6 +136,7 @@ export function Operations() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [insteonLogs, setInsteonLogs] = useState<InsteonEngineLogEntry[]>([]);
   const [insteonLogStreamConnected, setInsteonLogStreamConnected] = useState(false);
+  const [clearingInsteonLogs, setClearingInsteonLogs] = useState(false);
   const latestSequenceRef = useRef(0);
   const cleanupRef = useRef<null | (() => void)>(null);
   const insteonCleanupRef = useRef<null | (() => void)>(null);
@@ -297,6 +299,26 @@ export function Operations() {
       });
     }
   }, [insteonLogs, toast]);
+
+  const handleClearInsteonLogs = useCallback(async () => {
+    setClearingInsteonLogs(true);
+    try {
+      const response = await clearInsteonEngineLogs();
+      setInsteonLogs([]);
+      toast({
+        title: "INSTEON logs cleared",
+        description: `Cleared ${response.cleared ?? 0} buffered engine log entr${response.cleared === 1 ? "y" : "ies"}.`
+      });
+    } catch (error) {
+      toast({
+        title: "Clear failed",
+        description: toErrorMessage(error, "Unable to clear INSTEON engine logs."),
+        variant: "destructive"
+      });
+    } finally {
+      setClearingInsteonLogs(false);
+    }
+  }, [toast]);
 
   const filteredEvents = useMemo(() => {
     const sourceNeedle = sourceFilter.trim().toLowerCase();
@@ -463,6 +485,16 @@ export function Operations() {
               >
                 <Copy className="mr-2 h-4 w-4" />
                 Copy Logs
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void handleClearInsteonLogs()}
+                disabled={clearingInsteonLogs || insteonLogs.length === 0}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                {clearingInsteonLogs ? "Clearing..." : "Clear Logs"}
               </Button>
             </div>
           </div>
