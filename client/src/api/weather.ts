@@ -116,6 +116,7 @@ export interface TempestEventRecord {
 export interface TempestWidgetData {
   available: boolean
   station: TempestStationSummary | null
+  moduleTelemetry: TempestModuleTelemetrySummary | null
 }
 
 export interface TempestTelemetryWindowSummary {

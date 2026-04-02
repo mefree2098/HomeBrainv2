@@ -71,6 +71,98 @@ private struct DashboardTempestStationSnapshot {
     }
 }
 
+private struct DashboardTempestTelemetryWindowSummary: Identifiable {
+    let key: String
+    let label: String
+    let hours: Int
+    let humidityAveragePct: Double?
+    let humidityMinPct: Double?
+    let humidityMaxPct: Double?
+    let humidityAverageDewPointF: Double?
+    let windAverageMph: Double?
+    let windPeakGustMph: Double?
+    let windDirectionLabel: String
+    let pressureAverageInHg: Double?
+    let pressureMinInHg: Double?
+    let pressureMaxInHg: Double?
+    let rainTotalIn: Double?
+    let rainPeakRateInPerHr: Double?
+    let rainObservationCount: Int
+    let solarAverageWm2: Double?
+    let solarPeakWm2: Double?
+    let solarPeakUvIndex: Double?
+    let lightningStrikeCount: Int
+    let lightningAverageDistanceMiles: Double?
+    let lightningLastStrikeAt: String?
+    let signalAverageRssiDbm: Double?
+    let signalWebsocketConnectedPct: Double?
+    let signalUdpListeningPct: Double?
+
+    var id: String { key }
+
+    static func from(_ payload: Any?) -> DashboardTempestTelemetryWindowSummary? {
+        let object = JSON.object(payload)
+        guard !object.isEmpty else {
+            return nil
+        }
+
+        let humidity = JSON.object(object["humidity"])
+        let wind = JSON.object(object["wind"])
+        let pressure = JSON.object(object["pressure"])
+        let rain = JSON.object(object["rain"])
+        let solar = JSON.object(object["solar"])
+        let lightning = JSON.object(object["lightning"])
+        let signal = JSON.object(object["signal"])
+
+        return DashboardTempestTelemetryWindowSummary(
+            key: JSON.string(object, "key", fallback: UUID().uuidString),
+            label: JSON.string(object, "label", fallback: "Window"),
+            hours: JSON.int(object, "hours", fallback: 24),
+            humidityAveragePct: dashboardOptionalDouble(humidity["averagePct"]),
+            humidityMinPct: dashboardOptionalDouble(humidity["minPct"]),
+            humidityMaxPct: dashboardOptionalDouble(humidity["maxPct"]),
+            humidityAverageDewPointF: dashboardOptionalDouble(humidity["averageDewPointF"]),
+            windAverageMph: dashboardOptionalDouble(wind["averageMph"]),
+            windPeakGustMph: dashboardOptionalDouble(wind["peakGustMph"]),
+            windDirectionLabel: JSON.string(wind, "directionLabel"),
+            pressureAverageInHg: dashboardOptionalDouble(pressure["averageInHg"]),
+            pressureMinInHg: dashboardOptionalDouble(pressure["minInHg"]),
+            pressureMaxInHg: dashboardOptionalDouble(pressure["maxInHg"]),
+            rainTotalIn: dashboardOptionalDouble(rain["totalIn"]),
+            rainPeakRateInPerHr: dashboardOptionalDouble(rain["peakRateInPerHr"]),
+            rainObservationCount: JSON.int(rain, "observationCount"),
+            solarAverageWm2: dashboardOptionalDouble(solar["averageWm2"]),
+            solarPeakWm2: dashboardOptionalDouble(solar["peakWm2"]),
+            solarPeakUvIndex: dashboardOptionalDouble(solar["peakUvIndex"]),
+            lightningStrikeCount: JSON.int(lightning, "strikeCount"),
+            lightningAverageDistanceMiles: dashboardOptionalDouble(lightning["averageDistanceMiles"]),
+            lightningLastStrikeAt: JSON.optionalString(lightning, "lastStrikeAt"),
+            signalAverageRssiDbm: dashboardOptionalDouble(signal["averageRssiDbm"]),
+            signalWebsocketConnectedPct: dashboardOptionalDouble(signal["websocketConnectedPct"]),
+            signalUdpListeningPct: dashboardOptionalDouble(signal["udpListeningPct"])
+        )
+    }
+}
+
+private struct DashboardTempestModuleTelemetrySummary {
+    let generatedAt: String
+    let stationName: String
+    let windows: [DashboardTempestTelemetryWindowSummary]
+
+    static func from(_ payload: Any?) -> DashboardTempestModuleTelemetrySummary? {
+        let object = JSON.object(payload)
+        guard !object.isEmpty else {
+            return nil
+        }
+
+        return DashboardTempestModuleTelemetrySummary(
+            generatedAt: JSON.string(object, "generatedAt"),
+            stationName: JSON.string(object, "stationName", fallback: "Tempest Station"),
+            windows: JSON.array(object["windows"]).compactMap(DashboardTempestTelemetryWindowSummary.from)
+        )
+    }
+}
+
 private struct DashboardWeatherSnapshot {
     let fetchedAt: String
     let locationName: String
@@ -91,6 +183,7 @@ private struct DashboardWeatherSnapshot {
     let sunrise: String?
     let sunset: String?
     let tempest: DashboardTempestStationSnapshot?
+    let moduleTelemetry: DashboardTempestModuleTelemetrySummary?
 
     static func from(_ payload: Any?) -> DashboardWeatherSnapshot? {
         let root = JSON.object(payload)
@@ -123,7 +216,8 @@ private struct DashboardWeatherSnapshot {
             todayCondition: JSON.string(today, "condition", fallback: JSON.string(current, "condition", fallback: "Unknown")),
             sunrise: JSON.optionalString(today, "sunrise"),
             sunset: JSON.optionalString(today, "sunset"),
-            tempest: JSON.bool(tempest, "available") ? DashboardTempestStationSnapshot.from(tempest["station"]) : nil
+            tempest: JSON.bool(tempest, "available") ? DashboardTempestStationSnapshot.from(tempest["station"]) : nil,
+            moduleTelemetry: DashboardTempestModuleTelemetrySummary.from(tempest["moduleTelemetry"])
         )
     }
 
@@ -149,7 +243,8 @@ private struct DashboardWeatherSnapshot {
             todayCondition: "Overcast",
             sunrise: "2026-03-23T07:01:00-06:00",
             sunset: "2026-03-23T19:14:00-06:00",
-            tempest: nil
+            tempest: nil,
+            moduleTelemetry: nil
         )
     }
 
@@ -492,6 +587,16 @@ struct DashboardView: View {
         case lightning(widgetID: String, count: Double?, averageDistanceMiles: Double?)
         case sunCycle(widgetID: String, sunrise: String?, sunset: String?)
         case rainChance(widgetID: String, chance: Double?, precipitationNow: Double?)
+    }
+
+    private enum DashboardWeatherTelemetryModuleKey {
+        case wind
+        case rain
+        case pressure
+        case humidity
+        case lightning
+        case signal
+        case solar
     }
 
     private struct DashboardWidgetRow: Identifiable {
@@ -3877,6 +3982,136 @@ struct DashboardView: View {
         }
     }
 
+    private func weatherModuleTelemetry(for widgetID: String) -> DashboardTempestModuleTelemetrySummary? {
+        weatherByWidgetID[widgetID]?.moduleTelemetry
+    }
+
+    private func weatherTelemetryWindow(
+        _ telemetry: DashboardTempestModuleTelemetrySummary,
+        key: String
+    ) -> DashboardTempestTelemetryWindowSummary? {
+        telemetry.windows.first(where: { $0.key == key })
+    }
+
+    private func weatherTelemetrySummary(
+        module: DashboardWeatherTelemetryModuleKey,
+        telemetry: DashboardTempestModuleTelemetrySummary
+    ) -> String {
+        let day = weatherTelemetryWindow(telemetry, key: "day")
+        let week = weatherTelemetryWindow(telemetry, key: "week")
+
+        switch module {
+        case .wind:
+            return "24h avg \(formattedWind(day?.windAverageMph)) • gust \(formattedWind(day?.windPeakGustMph))"
+        case .rain:
+            return "24h total \(formattedRain(day?.rainTotalIn)) • 7d total \(formattedRain(week?.rainTotalIn))"
+        case .pressure:
+            return "24h avg \(formattedPressure(day?.pressureAverageInHg)) • 7d range \(formattedPressure(week?.pressureMinInHg))-\(formattedPressure(week?.pressureMaxInHg))"
+        case .humidity:
+            return "24h avg \(formattedPercent(day?.humidityAveragePct)) • dew \(formattedTemperature(day?.humidityAverageDewPointF))"
+        case .lightning:
+            let distance = day?.lightningAverageDistanceMiles.map { String(format: "%.1f", $0) } ?? "--"
+            return "24h \(day?.lightningStrikeCount ?? 0) strikes • avg \(distance) mi"
+        case .signal:
+            return "24h avg \(formattedSignalDbm(day?.signalAverageRssiDbm)) • WS \(formattedWholePercent(day?.signalWebsocketConnectedPct))"
+        case .solar:
+            return "24h avg \(formattedSolar(day?.solarAverageWm2)) • UV peak \(formattedUV(day?.solarPeakUvIndex))"
+        }
+    }
+
+    private func weatherTelemetryWindowCopy(
+        module: DashboardWeatherTelemetryModuleKey,
+        window: DashboardTempestTelemetryWindowSummary
+    ) -> (primary: String, detail: String) {
+        switch module {
+        case .wind:
+            return (
+                primary: "\(formattedWind(window.windAverageMph)) avg",
+                detail: "Gust \(formattedWind(window.windPeakGustMph)) • \(!window.windDirectionLabel.isEmpty ? window.windDirectionLabel : "--")"
+            )
+        case .rain:
+            return (
+                primary: "\(formattedRain(window.rainTotalIn)) total",
+                detail: "Peak \(formattedRain(window.rainPeakRateInPerHr))/hr • \(window.rainObservationCount) samples"
+            )
+        case .pressure:
+            return (
+                primary: "\(formattedPressure(window.pressureAverageInHg)) avg",
+                detail: "\(formattedPressure(window.pressureMinInHg)) low • \(formattedPressure(window.pressureMaxInHg)) high"
+            )
+        case .humidity:
+            return (
+                primary: "\(formattedPercent(window.humidityAveragePct)) avg",
+                detail: "\(formattedPercent(window.humidityMinPct))-\(formattedPercent(window.humidityMaxPct)) • Dew \(formattedTemperature(window.humidityAverageDewPointF))"
+            )
+        case .lightning:
+            return (
+                primary: "\(window.lightningStrikeCount) strikes",
+                detail: "Avg \(formattedLightningDistance(window.lightningAverageDistanceMiles)) • Last \(formattedWeatherTelemetryTimestamp(window.lightningLastStrikeAt))"
+            )
+        case .signal:
+            return (
+                primary: formattedSignalDbm(window.signalAverageRssiDbm),
+                detail: "WS \(formattedWholePercent(window.signalWebsocketConnectedPct)) • UDP \(formattedWholePercent(window.signalUdpListeningPct))"
+            )
+        case .solar:
+            return (
+                primary: "UV \(formattedUV(window.solarPeakUvIndex))",
+                detail: "Avg \(formattedSolar(window.solarAverageWm2)) • Peak \(formattedSolar(window.solarPeakWm2))"
+            )
+        }
+    }
+
+    private func weatherTelemetryPopoverCard(
+        title: String,
+        summary: String,
+        telemetry: DashboardTempestModuleTelemetrySummary,
+        module: DashboardWeatherTelemetryModuleKey,
+        footer: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            weatherInfoSectionTitle(title: title, summary: summary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(telemetry.windows) { window in
+                    let copy = weatherTelemetryWindowCopy(module: module, window: window)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(window.label)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
+
+                            Spacer(minLength: 8)
+
+                            Text(copy.primary)
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.accentBlue)
+                                .multilineTextAlignment(.trailing)
+                        }
+
+                        Text(copy.detail)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(HBPalette.panelStroke.opacity(0.6), lineWidth: 1)
+                    )
+                }
+            }
+
+            Text(footer)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func weatherInfoPopoverCard(for topic: DashboardWeatherInfoTopic) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             switch topic {
@@ -3891,61 +4126,111 @@ struct DashboardView: View {
                 Text("AQI shows how current air pollution may affect breathing comfort outdoors.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
-            case let .uv(_, value):
-                weatherInfoSectionTitle(
-                    title: "UV",
-                    summary: "Current \(formattedUV(value)) • \(formattedUVMeaning(value))"
-                )
-                weatherInfoRangeRow(range: "0-2", label: "Low", color: HBPalette.accentGreen)
-                weatherInfoRangeRow(range: "3-5", label: "Moderate", color: HBPalette.accentYellow)
-                weatherInfoRangeRow(range: "6+", label: "High", color: HBPalette.accentRed)
-                Text("Higher UV means faster sun exposure risk and stronger need for shade or sunscreen.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-            case let .liveWind(_, speed, gust, direction):
-                weatherInfoSectionTitle(
-                    title: "Live Wind",
-                    summary: "Current \(formattedWind(speed)) • \(formattedLiveWindDetail(gust: gust, direction: direction))"
-                )
-                weatherInfoValueRow(label: "Average", value: formattedWind(speed), color: HBPalette.accentBlue)
-                weatherInfoValueRow(label: "Direction", value: compassDirection(direction), color: HBPalette.textPrimary)
-                weatherInfoValueRow(label: "Gust", value: formattedWind(gust), color: HBPalette.accentBlue)
-                Text("Direction shows where the wind is coming from, and gust shows the strongest recent burst measured by the Tempest station.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-            case let .rainfall(_, total, rate):
-                weatherInfoSectionTitle(
-                    title: "Rainfall",
-                    summary: "Today \(formattedRain(total)) • Rate \(formattedRain(rate))/hr"
-                )
-                weatherInfoValueRow(label: "Today", value: formattedRain(total), color: HBPalette.accentBlue)
-                weatherInfoValueRow(label: "Current Rate", value: "\(formattedRain(rate))/hr", color: HBPalette.accentBlue)
-                weatherInfoValueRow(label: "Meaning", value: formattedRainIntensityMeaning(rate), color: HBPalette.textPrimary)
-                Text("Today's rainfall is total accumulation. Rate shows how quickly rain is falling right now.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-            case let .pressure(_, value, trend):
-                weatherInfoSectionTitle(
-                    title: "Pressure",
-                    summary: "Current \(formattedPressure(value)) • \(trend)"
-                )
-                weatherInfoRangeRow(range: "Above 30.2 inHg", label: "Usually fair", color: HBPalette.accentGreen)
-                weatherInfoRangeRow(range: "29.8-30.2 inHg", label: "Typical band", color: HBPalette.accentYellow)
-                weatherInfoRangeRow(range: "Below 29.8 inHg", label: "Often unsettled", color: HBPalette.accentRed)
-                Text("Current band: \(formattedPressureBand(value)). Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-            case let .station(_, name, room, websocketConnected):
-                weatherInfoSectionTitle(
-                    title: "Station",
-                    summary: "\(name) • \(websocketConnected ? "WebSocket live" : "Recent snapshot")"
-                )
-                weatherInfoValueRow(label: "Feed", value: websocketConnected ? "WebSocket live" : "Snapshot only", color: websocketConnected ? HBPalette.accentGreen : HBPalette.accentYellow)
-                weatherInfoValueRow(label: "Station", value: name, color: HBPalette.textPrimary)
-                weatherInfoValueRow(label: "Room", value: room, color: HBPalette.textPrimary)
-                Text("Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
+            case let .uv(widgetID, value):
+                if let telemetry = weatherModuleTelemetry(for: widgetID) {
+                    weatherTelemetryPopoverCard(
+                        title: "Solar & UV Telemetry",
+                        summary: weatherTelemetrySummary(module: .solar, telemetry: telemetry),
+                        telemetry: telemetry,
+                        module: .solar,
+                        footer: "Tempest solar telemetry shows average and peak radiation plus UV peaks across the last day, week, month, and year."
+                    )
+                } else {
+                    weatherInfoSectionTitle(
+                        title: "UV",
+                        summary: "Current \(formattedUV(value)) • \(formattedUVMeaning(value))"
+                    )
+                    weatherInfoRangeRow(range: "0-2", label: "Low", color: HBPalette.accentGreen)
+                    weatherInfoRangeRow(range: "3-5", label: "Moderate", color: HBPalette.accentYellow)
+                    weatherInfoRangeRow(range: "6+", label: "High", color: HBPalette.accentRed)
+                    Text("Higher UV means faster sun exposure risk and stronger need for shade or sunscreen.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            case let .liveWind(widgetID, speed, gust, direction):
+                if let telemetry = weatherModuleTelemetry(for: widgetID) {
+                    weatherTelemetryPopoverCard(
+                        title: "Wind Telemetry",
+                        summary: weatherTelemetrySummary(module: .wind, telemetry: telemetry),
+                        telemetry: telemetry,
+                        module: .wind,
+                        footer: "Wind telemetry shows average speed, peak gusts, and prevailing direction across the last day, week, month, and year."
+                    )
+                } else {
+                    weatherInfoSectionTitle(
+                        title: "Live Wind",
+                        summary: "Current \(formattedWind(speed)) • \(formattedLiveWindDetail(gust: gust, direction: direction))"
+                    )
+                    weatherInfoValueRow(label: "Average", value: formattedWind(speed), color: HBPalette.accentBlue)
+                    weatherInfoValueRow(label: "Direction", value: compassDirection(direction), color: HBPalette.textPrimary)
+                    weatherInfoValueRow(label: "Gust", value: formattedWind(gust), color: HBPalette.accentBlue)
+                    Text("Direction shows where the wind is coming from, and gust shows the strongest recent burst measured by the Tempest station.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            case let .rainfall(widgetID, total, rate):
+                if let telemetry = weatherModuleTelemetry(for: widgetID) {
+                    weatherTelemetryPopoverCard(
+                        title: "Rain Telemetry",
+                        summary: weatherTelemetrySummary(module: .rain, telemetry: telemetry),
+                        telemetry: telemetry,
+                        module: .rain,
+                        footer: "Rain telemetry shows total rainfall and peak rate across the last day, week, month, and year."
+                    )
+                } else {
+                    weatherInfoSectionTitle(
+                        title: "Rainfall",
+                        summary: "Today \(formattedRain(total)) • Rate \(formattedRain(rate))/hr"
+                    )
+                    weatherInfoValueRow(label: "Today", value: formattedRain(total), color: HBPalette.accentBlue)
+                    weatherInfoValueRow(label: "Current Rate", value: "\(formattedRain(rate))/hr", color: HBPalette.accentBlue)
+                    weatherInfoValueRow(label: "Meaning", value: formattedRainIntensityMeaning(rate), color: HBPalette.textPrimary)
+                    Text("Today's rainfall is total accumulation. Rate shows how quickly rain is falling right now.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            case let .pressure(widgetID, value, trend):
+                if let telemetry = weatherModuleTelemetry(for: widgetID) {
+                    weatherTelemetryPopoverCard(
+                        title: "Pressure Telemetry",
+                        summary: weatherTelemetrySummary(module: .pressure, telemetry: telemetry),
+                        telemetry: telemetry,
+                        module: .pressure,
+                        footer: "Pressure telemetry shows average pressure plus the low and high range for each retained window."
+                    )
+                } else {
+                    weatherInfoSectionTitle(
+                        title: "Pressure",
+                        summary: "Current \(formattedPressure(value)) • \(trend)"
+                    )
+                    weatherInfoRangeRow(range: "Above 30.2 inHg", label: "Usually fair", color: HBPalette.accentGreen)
+                    weatherInfoRangeRow(range: "29.8-30.2 inHg", label: "Typical band", color: HBPalette.accentYellow)
+                    weatherInfoRangeRow(range: "Below 29.8 inHg", label: "Often unsettled", color: HBPalette.accentRed)
+                    Text("Current band: \(formattedPressureBand(value)). Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            case let .station(widgetID, name, room, websocketConnected):
+                if let telemetry = weatherModuleTelemetry(for: widgetID) {
+                    weatherTelemetryPopoverCard(
+                        title: "Station Signal Telemetry",
+                        summary: weatherTelemetrySummary(module: .signal, telemetry: telemetry),
+                        telemetry: telemetry,
+                        module: .signal,
+                        footer: "Signal telemetry tracks average RSSI plus WebSocket and UDP uptime across the last day, week, month, and year."
+                    )
+                } else {
+                    weatherInfoSectionTitle(
+                        title: "Station",
+                        summary: "\(name) • \(websocketConnected ? "WebSocket live" : "Recent snapshot")"
+                    )
+                    weatherInfoValueRow(label: "Feed", value: websocketConnected ? "WebSocket live" : "Snapshot only", color: websocketConnected ? HBPalette.accentGreen : HBPalette.accentYellow)
+                    weatherInfoValueRow(label: "Station", value: name, color: HBPalette.textPrimary)
+                    weatherInfoValueRow(label: "Room", value: room, color: HBPalette.textPrimary)
+                    Text("Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
             case let .today(_, high, low, condition):
                 weatherInfoSectionTitle(
                     title: "Today",
@@ -3957,39 +4242,69 @@ struct DashboardView: View {
                 Text("This card shows today's forecast high and low from the weather service, along with the expected overall condition.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
-            case let .humidity(_, value):
-                weatherInfoSectionTitle(
-                    title: "Humidity",
-                    summary: "Current \(formattedPercent(value)) • \(formattedHumidityMeaning(value))"
-                )
-                weatherInfoRangeRow(range: "0-30%", label: "Dry air", color: HBPalette.accentYellow)
-                weatherInfoRangeRow(range: "30-60%", label: "Comfort band", color: HBPalette.accentGreen)
-                weatherInfoRangeRow(range: "60%+", label: "Humid", color: HBPalette.accentBlue)
-                Text("Humidity affects skin comfort, indoor dryness, and how heavy the air feels. Mid-range humidity is usually the most comfortable.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-            case let .dewPoint(_, value):
-                weatherInfoSectionTitle(
-                    title: "Dew Point",
-                    summary: "Current \(formattedTemperature(value)) • \(formattedDewPointMeaning(value))"
-                )
-                weatherInfoRangeRow(range: "Below 30°", label: "Very dry", color: HBPalette.accentYellow)
-                weatherInfoRangeRow(range: "30-55°", label: "Comfortable", color: HBPalette.accentGreen)
-                weatherInfoRangeRow(range: "56°+", label: "Muggy", color: HBPalette.accentBlue)
-                Text("Dew point reflects how much moisture is actually in the air. Lower values feel crisper and drier, while higher values feel stickier.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-            case let .lightning(_, count, averageDistanceMiles):
-                weatherInfoSectionTitle(
-                    title: "Lightning",
-                    summary: "\(formattedLightningCount(count)) strikes • \(formattedLightningDetail(count: count, averageDistanceMiles: averageDistanceMiles))"
-                )
-                weatherInfoValueRow(label: "Strikes", value: formattedLightningCount(count), color: HBPalette.accentPurple)
-                weatherInfoValueRow(label: "Avg Distance", value: formattedLightningDistance(averageDistanceMiles), color: HBPalette.textPrimary)
-                weatherInfoValueRow(label: "Status", value: formattedLightningMeaning(count), color: count.map { $0 > 0 ? HBPalette.accentPurple : HBPalette.accentGreen } ?? HBPalette.textPrimary)
-                Text("Tempest reports recent lightning strike count and the average distance of those strikes, which helps show whether storms are staying far away or moving closer.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
+            case let .humidity(widgetID, value):
+                if let telemetry = weatherModuleTelemetry(for: widgetID) {
+                    weatherTelemetryPopoverCard(
+                        title: "Humidity Telemetry",
+                        summary: weatherTelemetrySummary(module: .humidity, telemetry: telemetry),
+                        telemetry: telemetry,
+                        module: .humidity,
+                        footer: "Humidity telemetry includes average humidity, range, and average dew point for the last day, week, month, and year."
+                    )
+                } else {
+                    weatherInfoSectionTitle(
+                        title: "Humidity",
+                        summary: "Current \(formattedPercent(value)) • \(formattedHumidityMeaning(value))"
+                    )
+                    weatherInfoRangeRow(range: "0-30%", label: "Dry air", color: HBPalette.accentYellow)
+                    weatherInfoRangeRow(range: "30-60%", label: "Comfort band", color: HBPalette.accentGreen)
+                    weatherInfoRangeRow(range: "60%+", label: "Humid", color: HBPalette.accentBlue)
+                    Text("Humidity affects skin comfort, indoor dryness, and how heavy the air feels. Mid-range humidity is usually the most comfortable.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            case let .dewPoint(widgetID, value):
+                if let telemetry = weatherModuleTelemetry(for: widgetID) {
+                    weatherTelemetryPopoverCard(
+                        title: "Humidity Telemetry",
+                        summary: weatherTelemetrySummary(module: .humidity, telemetry: telemetry),
+                        telemetry: telemetry,
+                        module: .humidity,
+                        footer: "Humidity telemetry includes average humidity, range, and average dew point for the last day, week, month, and year."
+                    )
+                } else {
+                    weatherInfoSectionTitle(
+                        title: "Dew Point",
+                        summary: "Current \(formattedTemperature(value)) • \(formattedDewPointMeaning(value))"
+                    )
+                    weatherInfoRangeRow(range: "Below 30°", label: "Very dry", color: HBPalette.accentYellow)
+                    weatherInfoRangeRow(range: "30-55°", label: "Comfortable", color: HBPalette.accentGreen)
+                    weatherInfoRangeRow(range: "56°+", label: "Muggy", color: HBPalette.accentBlue)
+                    Text("Dew point reflects how much moisture is actually in the air. Lower values feel crisper and drier, while higher values feel stickier.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            case let .lightning(widgetID, count, averageDistanceMiles):
+                if let telemetry = weatherModuleTelemetry(for: widgetID) {
+                    weatherTelemetryPopoverCard(
+                        title: "Lightning Telemetry",
+                        summary: weatherTelemetrySummary(module: .lightning, telemetry: telemetry),
+                        telemetry: telemetry,
+                        module: .lightning,
+                        footer: "Lightning telemetry shows strike counts, average distance, and the latest strike timing across the last day, week, month, and year."
+                    )
+                } else {
+                    weatherInfoSectionTitle(
+                        title: "Lightning",
+                        summary: "\(formattedLightningCount(count)) strikes • \(formattedLightningDetail(count: count, averageDistanceMiles: averageDistanceMiles))"
+                    )
+                    weatherInfoValueRow(label: "Strikes", value: formattedLightningCount(count), color: HBPalette.accentPurple)
+                    weatherInfoValueRow(label: "Avg Distance", value: formattedLightningDistance(averageDistanceMiles), color: HBPalette.textPrimary)
+                    weatherInfoValueRow(label: "Status", value: formattedLightningMeaning(count), color: count.map { $0 > 0 ? HBPalette.accentPurple : HBPalette.accentGreen } ?? HBPalette.textPrimary)
+                    Text("Tempest reports recent lightning strike count and the average distance of those strikes, which helps show whether storms are staying far away or moving closer.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
             case let .sunCycle(_, sunrise, sunset):
                 weatherInfoSectionTitle(
                     title: "Sun Cycle",
@@ -4014,7 +4329,7 @@ struct DashboardView: View {
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
-        .frame(width: 280, alignment: .leading)
+        .frame(width: 320, alignment: .leading)
         .padding(16)
         .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
     }
@@ -4140,9 +4455,24 @@ struct DashboardView: View {
         return String(format: "%.1f", value)
     }
 
+    private func formattedSolar(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return "\(Int(value.rounded())) W/m²"
+    }
+
     private func formattedAQI(_ value: Double?) -> String {
         guard let value else { return "--" }
         return "\(Int(value.rounded()))"
+    }
+
+    private func formattedWholePercent(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return "\(Int(value.rounded()))%"
+    }
+
+    private func formattedSignalDbm(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return "\(Int(value.rounded())) dBm"
     }
 
     private func formattedAQIMeaning(_ value: Double?) -> String {
@@ -4330,6 +4660,14 @@ struct DashboardView: View {
         }
 
         return "--"
+    }
+
+    private func formattedWeatherTelemetryTimestamp(_ value: String?) -> String {
+        guard let date = JSON.date(from: value) else {
+            return "--"
+        }
+
+        return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
     }
 
     private func formattedDaylightDuration(sunrise: String?, sunset: String?) -> String {

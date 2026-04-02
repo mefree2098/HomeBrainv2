@@ -34,6 +34,10 @@ const DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS = Math.max(
   0,
   Number(process.env.WORKFLOW_INSTEON_RETRY_DELAY_MS || 500)
 );
+const DEFAULT_WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS = Math.max(
+  500,
+  Number(process.env.WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS || 1500)
+);
 
 const conditionStateCache = new Map();
 const isyVariableStore = new Map();
@@ -304,7 +308,11 @@ function getInsteonCommandRetryOptions(action, source = '') {
   const retryDelayMs = Number.isFinite(retryDelayRaw)
     ? Math.max(0, Math.min(10_000, Math.round(retryDelayRaw)))
     : DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS;
-  const commandTimeoutRaw = Number(parameters.commandTimeoutMs);
+  const commandTimeoutRaw = Number(
+    Object.prototype.hasOwnProperty.call(parameters, 'commandTimeoutMs')
+      ? parameters.commandTimeoutMs
+      : DEFAULT_WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS
+  );
   const verificationMode = sanitizeString(parameters.verificationMode || parameters.verifyMode).toLowerCase();
 
   return {
@@ -315,7 +323,7 @@ function getInsteonCommandRetryOptions(action, source = '') {
           commandTimeoutMs: Math.max(500, Math.min(20_000, Math.round(commandTimeoutRaw)))
         }
       : {}),
-    verificationMode: verificationMode || 'fast'
+    verificationMode: verificationMode || 'ack'
   };
 }
 
@@ -907,7 +915,7 @@ async function executeDeviceGroupControl(groupTarget, action) {
         {
           action,
           insteon: {
-            verificationMode: 'fast',
+            verificationMode: 'ack',
             deviceGroup: groupName
           }
         }

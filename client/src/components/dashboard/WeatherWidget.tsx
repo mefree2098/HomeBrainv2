@@ -16,7 +16,12 @@ import {
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
-import { getDashboardWeather, type DashboardWeatherPayload } from "@/api/weather"
+import {
+  getDashboardWeather,
+  type DashboardWeatherPayload,
+  type TempestModuleTelemetrySummary,
+  type TempestTelemetryWindowSummary
+} from "@/api/weather"
 import type { DashboardWeatherLocationMode, DashboardWidgetSize } from "@/lib/dashboard"
 import { WeatherGlyph } from "@/components/weather/WeatherGlyph"
 
@@ -382,13 +387,15 @@ function WeatherInfoPopover({
   children,
   content,
   align = "end",
-  className
+  className,
+  contentClassName
 }: {
   label: string
   children: React.ReactNode
   content: React.ReactNode
   align?: "start" | "center" | "end"
   className?: string
+  contentClassName?: string
 }) {
   const [open, setOpen] = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
@@ -436,7 +443,7 @@ function WeatherInfoPopover({
       <PopoverContent
         align={align}
         sideOffset={8}
-        className="w-80 p-0"
+        className={cn("w-80 max-w-[calc(100vw-1.5rem)] p-0", contentClassName)}
         onMouseEnter={openPopover}
         onMouseLeave={closePopover}
       >
@@ -577,6 +584,8 @@ const formatLightningCount = (value: number | null | undefined) => value == null
 
 const formatLightningDistance = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(1)} mi`
 
+type DashboardTelemetryModuleKey = "wind" | "rain" | "pressure" | "humidity" | "lightning" | "signal" | "solar"
+
 const describeLightningStatus = (count: number | null | undefined) => {
   if (count == null) {
     return "No strikes reported"
@@ -600,6 +609,127 @@ const formatLightningDetail = (
 
   const distance = formatLightningDistance(averageDistanceMiles)
   return distance === "--" ? "Recent strike detected" : `Avg ${distance}`
+}
+
+const findTelemetryWindow = (
+  telemetry: TempestModuleTelemetrySummary | null | undefined,
+  key: TempestTelemetryWindowSummary["key"]
+) => telemetry?.windows?.find((window) => window.key === key) ?? null
+
+const summarizeModuleTelemetry = (
+  moduleKey: DashboardTelemetryModuleKey,
+  telemetry: TempestModuleTelemetrySummary | null | undefined
+) => {
+  const day = findTelemetryWindow(telemetry, "day")
+  const week = findTelemetryWindow(telemetry, "week")
+
+  switch (moduleKey) {
+    case "wind":
+      return `24h avg ${formatWind(day?.wind.averageMph)} • gust ${formatWind(day?.wind.peakGustMph)}`
+    case "rain":
+      return `24h total ${formatRain(day?.rain.totalIn)} • 7d total ${formatRain(week?.rain.totalIn)}`
+    case "pressure":
+      return `24h avg ${formatPressure(day?.pressure.averageInHg)} • 7d range ${formatPressure(week?.pressure.minInHg)}-${formatPressure(week?.pressure.maxInHg)}`
+    case "humidity":
+      return `24h avg ${formatPercent(day?.humidity.averagePct)} • dew ${formatTemperature(day?.humidity.averageDewPointF)}`
+    case "lightning":
+      return `24h ${day?.lightning.strikeCount ?? 0} strikes • avg ${day?.lightning.averageDistanceMiles?.toFixed(1) ?? "--"} mi`
+    case "signal":
+      return `24h avg ${day?.signal.averageRssiDbm?.toFixed(0) ?? "--"} dBm • WS ${day?.signal.websocketConnectedPct?.toFixed(0) ?? "--"}%`
+    case "solar":
+      return `24h avg ${day?.solar.averageWm2?.toFixed(0) ?? "--"} W/m² • UV peak ${formatUv(day?.solar.peakUvIndex)}`
+    default:
+      return "Telemetry history available"
+  }
+}
+
+const describeModuleTelemetryWindow = (
+  moduleKey: DashboardTelemetryModuleKey,
+  window: TempestTelemetryWindowSummary
+) => {
+  switch (moduleKey) {
+    case "wind":
+      return {
+        primary: `${formatWind(window.wind.averageMph)} avg`,
+        detail: `Gust ${formatWind(window.wind.peakGustMph)} • ${window.wind.directionLabel || "--"}`
+      }
+    case "rain":
+      return {
+        primary: `${formatRain(window.rain.totalIn)} total`,
+        detail: `Peak ${formatRain(window.rain.peakRateInPerHr)}/hr • ${window.rain.observationCount} samples`
+      }
+    case "pressure":
+      return {
+        primary: `${formatPressure(window.pressure.averageInHg)} avg`,
+        detail: `${formatPressure(window.pressure.minInHg)} low • ${formatPressure(window.pressure.maxInHg)} high`
+      }
+    case "humidity":
+      return {
+        primary: `${formatPercent(window.humidity.averagePct)} avg`,
+        detail: `${formatPercent(window.humidity.minPct)}-${formatPercent(window.humidity.maxPct)} • Dew ${formatTemperature(window.humidity.averageDewPointF)}`
+      }
+    case "lightning":
+      return {
+        primary: `${window.lightning.strikeCount} strikes`,
+        detail: `Avg ${formatLightningDistance(window.lightning.averageDistanceMiles)} • Last ${formatLastSyncedTime(window.lightning.lastStrikeAt)}`
+      }
+    case "signal":
+      return {
+        primary: `${window.signal.averageRssiDbm?.toFixed(0) ?? "--"} dBm`,
+        detail: `WS ${window.signal.websocketConnectedPct?.toFixed(0) ?? "--"}% • UDP ${window.signal.udpListeningPct?.toFixed(0) ?? "--"}%`
+      }
+    case "solar":
+      return {
+        primary: `UV ${formatUv(window.solar.peakUvIndex)}`,
+        detail: `Avg ${window.solar.averageWm2?.toFixed(0) ?? "--"} W/m² • Peak ${window.solar.peakWm2?.toFixed(0) ?? "--"} W/m²`
+      }
+    default:
+      return {
+        primary: "--",
+        detail: "No telemetry available"
+      }
+  }
+}
+
+function WeatherTelemetryPopoverCard({
+  title,
+  summary,
+  telemetry,
+  moduleKey,
+  footer
+}: {
+  title: string
+  summary: string
+  telemetry: TempestModuleTelemetrySummary
+  moduleKey: DashboardTelemetryModuleKey
+  footer: string
+}) {
+  return (
+    <div className="space-y-3 p-4">
+      <div className="space-y-1">
+        <p className="section-kicker">{title}</p>
+        <p className="text-sm font-medium text-foreground">{summary}</p>
+      </div>
+
+      <div className="grid gap-2">
+        {telemetry.windows.map((window) => {
+          const copy = describeModuleTelemetryWindow(moduleKey, window)
+
+          return (
+            <div key={window.key} className="rounded-xl border border-border/60 bg-background/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-foreground">{window.label}</span>
+                <span className="text-sm font-semibold text-cyan-700 dark:text-cyan-300">{copy.primary}</span>
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{copy.detail}</p>
+            </div>
+          )
+        })}
+      </div>
+
+      <p className="text-xs leading-relaxed text-muted-foreground">{footer}</p>
+    </div>
+  )
 }
 
 const buildCompactWeatherSummary = (
@@ -800,6 +930,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
 
   const headlineTemperature = tempestStation?.metrics.temperatureF ?? weather?.current.temperatureF ?? null
   const headlineFeelsLike = tempestStation?.metrics.feelsLikeF ?? weather?.current.apparentTemperatureF ?? null
+  const moduleTelemetry = weather?.tempest?.moduleTelemetry ?? null
   const lastSyncedAt = tempestStation?.lastEventAt ?? tempestStation?.observedAt ?? weather?.fetchedAt ?? null
   const lastSyncedTime = formatLastSyncedTime(lastSyncedAt)
   const lastSyncedAgo = formatLastSyncedAgo(lastSyncedAt)
@@ -892,17 +1023,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               {tempestStation ? (
                 <WeatherInfoPopover
                   label="UV details"
+                  contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
                   content={(
-                    <WeatherInfoCard
-                      title="UV"
-                      summary={`Current ${formatUv(tempestStation.metrics.uvIndex)} · ${describeUvLevel(tempestStation.metrics.uvIndex)}`}
-                      rows={[
-                        { range: "0-2", detail: "Low", toneClassName: "text-emerald-600 dark:text-emerald-300" },
-                        { range: "3-5", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
-                        { range: "6+", detail: "High", toneClassName: "text-rose-600 dark:text-rose-300" }
-                      ]}
-                      footer="Higher UV means quicker sun exposure risk and stronger need for shade or sunscreen."
-                    />
+                    moduleTelemetry ? (
+                      <WeatherTelemetryPopoverCard
+                        title="Solar & UV Telemetry"
+                        summary={summarizeModuleTelemetry("solar", moduleTelemetry)}
+                        telemetry={moduleTelemetry}
+                        moduleKey="solar"
+                        footer="Tempest solar telemetry shows average and peak radiation plus UV peaks across the last day, week, month, and year."
+                      />
+                    ) : (
+                      <WeatherInfoCard
+                        title="UV"
+                        summary={`Current ${formatUv(tempestStation.metrics.uvIndex)} · ${describeUvLevel(tempestStation.metrics.uvIndex)}`}
+                        rows={[
+                          { range: "0-2", detail: "Low", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                          { range: "3-5", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
+                          { range: "6+", detail: "High", toneClassName: "text-rose-600 dark:text-rose-300" }
+                        ]}
+                        footer="Higher UV means quicker sun exposure risk and stronger need for shade or sunscreen."
+                      />
+                    )
                   )}
                 >
                   <WeatherIndicatorBadge
@@ -973,17 +1115,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               label="Live wind details"
               align="center"
               className="w-full"
+              contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
               content={(
-                <WeatherInfoValueCard
-                  title="Live Wind"
-                  summary={`Current ${formatWind(tempestStation.metrics.windAvgMph)} · ${formatLiveWindDetail(tempestStation.metrics.windGustMph, tempestStation.metrics.windDirectionDeg)}`}
-                  rows={[
-                    { label: "Average", value: formatWind(tempestStation.metrics.windAvgMph), toneClassName: "text-cyan-600 dark:text-cyan-300" },
-                    { label: "Direction", value: toCompass(tempestStation.metrics.windDirectionDeg), toneClassName: "text-foreground" },
-                    { label: "Gust", value: formatWind(tempestStation.metrics.windGustMph), toneClassName: "text-cyan-600 dark:text-cyan-300" }
-                  ]}
-                  footer="Direction shows where the wind is coming from, and gust shows the strongest recent burst measured by the Tempest station."
-                />
+                moduleTelemetry ? (
+                  <WeatherTelemetryPopoverCard
+                    title="Wind Telemetry"
+                    summary={summarizeModuleTelemetry("wind", moduleTelemetry)}
+                    telemetry={moduleTelemetry}
+                    moduleKey="wind"
+                    footer="Wind telemetry shows average speed, peak gusts, and prevailing direction across the last day, week, month, and year."
+                  />
+                ) : (
+                  <WeatherInfoValueCard
+                    title="Live Wind"
+                    summary={`Current ${formatWind(tempestStation.metrics.windAvgMph)} · ${formatLiveWindDetail(tempestStation.metrics.windGustMph, tempestStation.metrics.windDirectionDeg)}`}
+                    rows={[
+                      { label: "Average", value: formatWind(tempestStation.metrics.windAvgMph), toneClassName: "text-cyan-600 dark:text-cyan-300" },
+                      { label: "Direction", value: toCompass(tempestStation.metrics.windDirectionDeg), toneClassName: "text-foreground" },
+                      { label: "Gust", value: formatWind(tempestStation.metrics.windGustMph), toneClassName: "text-cyan-600 dark:text-cyan-300" }
+                    ]}
+                    footer="Direction shows where the wind is coming from, and gust shows the strongest recent burst measured by the Tempest station."
+                  />
+                )
               )}
             >
               <WeatherCompactMetricTile
@@ -1002,17 +1155,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               label="Rainfall details"
               align="center"
               className="w-full"
+              contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
               content={(
-                <WeatherInfoValueCard
-                  title="Rainfall"
-                  summary={`Today ${formatRain(tempestStation.metrics.rainTodayIn)} · Rate ${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`}
-                  rows={[
-                    { label: "Today", value: formatRain(tempestStation.metrics.rainTodayIn), toneClassName: "text-blue-600 dark:text-blue-300" },
-                    { label: "Current Rate", value: `${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`, toneClassName: "text-blue-600 dark:text-blue-300" },
-                    { label: "Meaning", value: describeRainIntensity(tempestStation.metrics.rainRateInPerHr), toneClassName: "text-foreground" }
-                  ]}
-                  footer="Today's rainfall is total accumulation. Rate shows how quickly rain is falling right now."
-                />
+                moduleTelemetry ? (
+                  <WeatherTelemetryPopoverCard
+                    title="Rain Telemetry"
+                    summary={summarizeModuleTelemetry("rain", moduleTelemetry)}
+                    telemetry={moduleTelemetry}
+                    moduleKey="rain"
+                    footer="Rain telemetry shows total rainfall and peak rate across the last day, week, month, and year."
+                  />
+                ) : (
+                  <WeatherInfoValueCard
+                    title="Rainfall"
+                    summary={`Today ${formatRain(tempestStation.metrics.rainTodayIn)} · Rate ${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`}
+                    rows={[
+                      { label: "Today", value: formatRain(tempestStation.metrics.rainTodayIn), toneClassName: "text-blue-600 dark:text-blue-300" },
+                      { label: "Current Rate", value: `${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`, toneClassName: "text-blue-600 dark:text-blue-300" },
+                      { label: "Meaning", value: describeRainIntensity(tempestStation.metrics.rainRateInPerHr), toneClassName: "text-foreground" }
+                    ]}
+                    footer="Today's rainfall is total accumulation. Rate shows how quickly rain is falling right now."
+                  />
+                )
               )}
             >
               <WeatherCompactMetricTile
@@ -1030,17 +1194,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               label="Pressure details"
               align="center"
               className="w-full"
+              contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
               content={(
-                <WeatherInfoCard
-                  title="Pressure"
-                  summary={`Current ${formatPressure(tempestStation.metrics.pressureInHg)} · ${formatPressureMeaning(tempestStation.metrics.pressureTrend)}`}
-                  rows={[
-                    { range: "Above 30.2 inHg", detail: "Usually fair", toneClassName: "text-emerald-600 dark:text-emerald-300" },
-                    { range: "29.8-30.2 inHg", detail: "Typical band", toneClassName: "text-amber-600 dark:text-amber-300" },
-                    { range: "Below 29.8 inHg", detail: "Often unsettled", toneClassName: "text-rose-600 dark:text-rose-300" }
-                  ]}
-                  footer={`Current band: ${describePressureBand(tempestStation.metrics.pressureInHg)}. Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.`}
-                />
+                moduleTelemetry ? (
+                  <WeatherTelemetryPopoverCard
+                    title="Pressure Telemetry"
+                    summary={summarizeModuleTelemetry("pressure", moduleTelemetry)}
+                    telemetry={moduleTelemetry}
+                    moduleKey="pressure"
+                    footer="Pressure telemetry shows average pressure plus the low and high range for each retained window."
+                  />
+                ) : (
+                  <WeatherInfoCard
+                    title="Pressure"
+                    summary={`Current ${formatPressure(tempestStation.metrics.pressureInHg)} · ${formatPressureMeaning(tempestStation.metrics.pressureTrend)}`}
+                    rows={[
+                      { range: "Above 30.2 inHg", detail: "Usually fair", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                      { range: "29.8-30.2 inHg", detail: "Typical band", toneClassName: "text-amber-600 dark:text-amber-300" },
+                      { range: "Below 29.8 inHg", detail: "Often unsettled", toneClassName: "text-rose-600 dark:text-rose-300" }
+                    ]}
+                    footer={`Current band: ${describePressureBand(tempestStation.metrics.pressureInHg)}. Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.`}
+                  />
+                )
               )}
             >
               <WeatherCompactMetricTile
@@ -1058,17 +1233,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               label="Station details"
               align="center"
               className="w-full"
+              contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
               content={(
-                <WeatherInfoValueCard
-                  title="Station"
-                  summary={`${tempestStation.name} · ${tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}`}
-                  rows={[
-                    { label: "Feed", value: formatStationFeed(tempestStation.status.websocketConnected), toneClassName: tempestStation.status.websocketConnected ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300" },
-                    { label: "Station", value: tempestStation.name, toneClassName: "text-foreground" },
-                    { label: "Room", value: tempestStation.room, toneClassName: "text-foreground" }
-                  ]}
-                  footer="Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown."
-                />
+                moduleTelemetry ? (
+                  <WeatherTelemetryPopoverCard
+                    title="Station Signal Telemetry"
+                    summary={summarizeModuleTelemetry("signal", moduleTelemetry)}
+                    telemetry={moduleTelemetry}
+                    moduleKey="signal"
+                    footer={`Signal telemetry tracks average RSSI plus WebSocket and UDP uptime for ${tempestStation.name} across the last day, week, month, and year.`}
+                  />
+                ) : (
+                  <WeatherInfoValueCard
+                    title="Station"
+                    summary={`${tempestStation.name} · ${tempestStation.status.websocketConnected ? "WebSocket live" : "Recent snapshot"}`}
+                    rows={[
+                      { label: "Feed", value: formatStationFeed(tempestStation.status.websocketConnected), toneClassName: tempestStation.status.websocketConnected ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300" },
+                      { label: "Station", value: tempestStation.name, toneClassName: "text-foreground" },
+                      { label: "Room", value: tempestStation.room, toneClassName: "text-foreground" }
+                    ]}
+                    footer="Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown."
+                  />
+                )
               )}
             >
               <WeatherCompactMetricTile
@@ -1112,17 +1298,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             label="Humidity details"
             align="center"
             className="w-full"
+            contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
             content={(
-              <WeatherInfoCard
-                title="Humidity"
-                summary={`Current ${formatPercent(humidityValue)} · ${describeHumidityLevel(humidityValue)}`}
-                rows={[
-                  { range: "0-30%", detail: "Dry air", toneClassName: "text-amber-600 dark:text-amber-300" },
-                  { range: "30-60%", detail: "Comfort band", toneClassName: "text-emerald-600 dark:text-emerald-300" },
-                  { range: "60%+", detail: "Humid", toneClassName: "text-cyan-600 dark:text-cyan-300" }
-                ]}
-                footer="Humidity affects skin comfort, indoor dryness, and how heavy the air feels. Mid-range humidity is usually the most comfortable."
-              />
+              moduleTelemetry ? (
+                <WeatherTelemetryPopoverCard
+                  title="Humidity Telemetry"
+                  summary={summarizeModuleTelemetry("humidity", moduleTelemetry)}
+                  telemetry={moduleTelemetry}
+                  moduleKey="humidity"
+                  footer="Humidity telemetry includes average humidity, range, and average dew point for the last day, week, month, and year."
+                />
+              ) : (
+                <WeatherInfoCard
+                  title="Humidity"
+                  summary={`Current ${formatPercent(humidityValue)} · ${describeHumidityLevel(humidityValue)}`}
+                  rows={[
+                    { range: "0-30%", detail: "Dry air", toneClassName: "text-amber-600 dark:text-amber-300" },
+                    { range: "30-60%", detail: "Comfort band", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                    { range: "60%+", detail: "Humid", toneClassName: "text-cyan-600 dark:text-cyan-300" }
+                  ]}
+                  footer="Humidity affects skin comfort, indoor dryness, and how heavy the air feels. Mid-range humidity is usually the most comfortable."
+                />
+              )
             )}
           >
             <WeatherCompactMetricTile
@@ -1187,17 +1384,28 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               label="Lightning details"
               align="center"
               className="w-full"
+              contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
               content={(
-                <WeatherInfoValueCard
-                  title="Lightning"
-                  summary={`${formatLightningCount(tempestStation.metrics.lightningCount)} strikes · ${formatLightningDetail(tempestStation.metrics.lightningCount, tempestStation.metrics.lightningAvgDistanceMiles)}`}
-                  rows={[
-                    { label: "Strikes", value: formatLightningCount(tempestStation.metrics.lightningCount), toneClassName: "text-violet-600 dark:text-violet-300" },
-                    { label: "Avg Distance", value: formatLightningDistance(tempestStation.metrics.lightningAvgDistanceMiles), toneClassName: "text-foreground" },
-                    { label: "Status", value: describeLightningStatus(tempestStation.metrics.lightningCount), toneClassName: tempestStation.metrics.lightningCount && tempestStation.metrics.lightningCount > 0 ? "text-violet-600 dark:text-violet-300" : "text-emerald-600 dark:text-emerald-300" }
-                  ]}
-                  footer="Tempest reports recent lightning strike count and the average distance of those strikes, which helps show whether storms are staying far away or moving closer."
-                />
+                moduleTelemetry ? (
+                  <WeatherTelemetryPopoverCard
+                    title="Lightning Telemetry"
+                    summary={summarizeModuleTelemetry("lightning", moduleTelemetry)}
+                    telemetry={moduleTelemetry}
+                    moduleKey="lightning"
+                    footer="Lightning telemetry shows strike counts, average distance, and the latest strike timing across the last day, week, month, and year."
+                  />
+                ) : (
+                  <WeatherInfoValueCard
+                    title="Lightning"
+                    summary={`${formatLightningCount(tempestStation.metrics.lightningCount)} strikes · ${formatLightningDetail(tempestStation.metrics.lightningCount, tempestStation.metrics.lightningAvgDistanceMiles)}`}
+                    rows={[
+                      { label: "Strikes", value: formatLightningCount(tempestStation.metrics.lightningCount), toneClassName: "text-violet-600 dark:text-violet-300" },
+                      { label: "Avg Distance", value: formatLightningDistance(tempestStation.metrics.lightningAvgDistanceMiles), toneClassName: "text-foreground" },
+                      { label: "Status", value: describeLightningStatus(tempestStation.metrics.lightningCount), toneClassName: tempestStation.metrics.lightningCount && tempestStation.metrics.lightningCount > 0 ? "text-violet-600 dark:text-violet-300" : "text-emerald-600 dark:text-emerald-300" }
+                    ]}
+                    footer="Tempest reports recent lightning strike count and the average distance of those strikes, which helps show whether storms are staying far away or moving closer."
+                  />
+                )
               )}
             >
               <WeatherCompactMetricTile
