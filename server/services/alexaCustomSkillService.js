@@ -153,7 +153,7 @@ class AlexaCustomSkillService {
     return {
       clipId,
       expiresAt: new Date(expiresAtMs).toISOString(),
-      url: `${publicOrigin}/api/alexa/custom/audio/${clipId}?token=${encodeURIComponent(token)}`
+      url: `${publicOrigin}/api/alexa/custom-skill/audio/${clipId}?token=${encodeURIComponent(token)}`
     };
   }
 

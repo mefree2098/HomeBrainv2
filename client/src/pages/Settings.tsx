@@ -1,5 +1,6 @@
 import { useState, useEffect, ChangeEvent, forwardRef, type ComponentProps } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input as BaseInput } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
