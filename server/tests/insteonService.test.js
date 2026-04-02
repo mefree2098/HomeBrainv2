@@ -262,6 +262,7 @@ test('_confirmExpectedDeviceStateByAddress fails when only a transient matching 
 test('startRuntimeMonitoring attempts a background connect when tracked Insteon devices exist', async (t) => {
   const originalGetSettings = Settings.getSettings;
   const originalCountDocuments = Device.countDocuments;
+  const originalFind = Device.find;
   const originalConnect = insteonService.connect;
   const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
   const originalIsConnected = insteonService.isConnected;
@@ -270,6 +271,7 @@ test('startRuntimeMonitoring attempts a background connect when tracked Insteon 
   t.after(() => {
     Settings.getSettings = originalGetSettings;
     Device.countDocuments = originalCountDocuments;
+    Device.find = originalFind;
     insteonService.connect = originalConnect;
     insteonService._runtimeMonitoringIntervalMs = originalIntervalMs;
     insteonService.isConnected = originalIsConnected;
@@ -283,6 +285,7 @@ test('startRuntimeMonitoring attempts a background connect when tracked Insteon 
     insteonPort: '/dev/ttyUSB0'
   });
   Device.countDocuments = async () => 1;
+  Device.find = async () => [];
   insteonService.connect = async () => {
     connectCalls += 1;
     insteonService.isConnected = true;
@@ -298,6 +301,64 @@ test('startRuntimeMonitoring attempts a background connect when tracked Insteon 
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   assert.equal(connectCalls, 1);
+});
+
+test('_runRuntimeMonitoringPass polls tracked Insteon light state changes', async (t) => {
+  const originalFind = Device.find;
+  const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalPersistDeviceRuntimeState = insteonService._persistDeviceRuntimeState;
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+  const originalMonitoringStarted = insteonService._runtimeMonitoringStarted;
+  const originalMonitoringInProgress = insteonService._runtimeMonitoringInProgress;
+  const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
+  const originalScheduleRuntimeMonitoringPass = insteonService._scheduleRuntimeMonitoringPass;
+
+  t.after(() => {
+    Device.find = originalFind;
+    insteonService._queryDeviceLevelByAddress = originalQueryLevelByAddress;
+    insteonService._persistDeviceRuntimeState = originalPersistDeviceRuntimeState;
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+    insteonService._runtimeMonitoringStarted = originalMonitoringStarted;
+    insteonService._runtimeMonitoringInProgress = originalMonitoringInProgress;
+    insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
+    insteonService._scheduleRuntimeMonitoringPass = originalScheduleRuntimeMonitoringPass;
+  });
+
+  const trackedDevice = {
+    _id: 'device-9',
+    type: 'light',
+    status: false,
+    brightness: 0,
+    isOnline: true,
+    properties: {
+      source: 'insteon',
+      insteonAddress: '11.22.33'
+    }
+  };
+
+  const persistedPatches = [];
+
+  Device.find = async () => [trackedDevice];
+  insteonService._queryDeviceLevelByAddress = async () => 100;
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => {
+    persistedPatches.push(patch);
+    Object.assign(trackedDevice, patch);
+    return trackedDevice;
+  };
+  insteonService._scheduleRuntimeMonitoringPass = () => {};
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService._runtimeMonitoringStarted = true;
+  insteonService._runtimeMonitoringInProgress = false;
+  insteonService._runtimeStatePollPauseMs = 0;
+
+  await insteonService._runRuntimeMonitoringPass('test');
+
+  assert.equal(persistedPatches.length, 1);
+  assert.equal(persistedPatches[0].status, true);
+  assert.equal(persistedPatches[0].brightness, 100);
 });
 
 test('turnOn issues normalized command address and returns confirmed state', async (t) => {

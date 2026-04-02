@@ -224,7 +224,7 @@ private final class DashboardLocationManager: NSObject, ObservableObject, CLLoca
 
     func requestLocation() {
         guard CLLocationManager.locationServicesEnabled() else {
-            errorMessage = "Location services are disabled on this iPad."
+            errorMessage = "Location services are disabled on this device."
             return
         }
 
@@ -1776,7 +1776,7 @@ struct DashboardView: View {
                 .foregroundStyle(HBPalette.textSecondary)
 
             LazyVGrid(columns: compact ? [GridItem(.flexible(), spacing: 8)] : commandSuggestionColumns, spacing: 8) {
-                ForEach(Array(commandSuggestions.prefix(compact ? 2 : commandSuggestions.count)), id: \.self) { suggestion in
+                ForEach(commandSuggestions, id: \.self) { suggestion in
                     Text(suggestion)
                         .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
@@ -3008,6 +3008,12 @@ struct DashboardView: View {
                                     }
                                 }
 
+                                if compact {
+                                    Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                }
+
                                 Text(snapshot.condition)
                                     .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
                                     .foregroundStyle(HBPalette.textPrimary)
@@ -3262,41 +3268,39 @@ struct DashboardView: View {
                                 )
                             }
 
-                            if !compact {
-                                weatherInfoPopoverTrigger(
-                                    topic: .pressure(
-                                        widgetID: widget.id,
-                                        value: tempest.pressureInHg,
-                                        trend: tempestsPressureTrend(tempest.pressureTrend)
-                                    )
-                                ) {
-                                    weatherLiveMetricTile(
-                                        title: "Pressure",
-                                        value: formattedPressure(tempest.pressureInHg),
-                                        detail: formattedPressureMeaning(tempest.pressureTrend),
-                                        accent: HBPalette.panelStrokeStrong,
-                                        iconSystemName: "gauge",
-                                        iconColor: HBPalette.accentGreen
-                                    )
-                                }
+                            weatherInfoPopoverTrigger(
+                                topic: .pressure(
+                                    widgetID: widget.id,
+                                    value: tempest.pressureInHg,
+                                    trend: tempestsPressureTrend(tempest.pressureTrend)
+                                )
+                            ) {
+                                weatherLiveMetricTile(
+                                    title: "Pressure",
+                                    value: formattedPressure(tempest.pressureInHg),
+                                    detail: formattedPressureMeaning(tempest.pressureTrend),
+                                    accent: HBPalette.panelStrokeStrong,
+                                    iconSystemName: "gauge",
+                                    iconColor: HBPalette.accentGreen
+                                )
+                            }
 
-                                weatherInfoPopoverTrigger(
-                                    topic: .station(
-                                        widgetID: widget.id,
-                                        name: tempest.name,
-                                        room: tempest.room,
-                                        websocketConnected: tempest.websocketConnected
-                                    )
-                                ) {
-                                    weatherLiveMetricTile(
-                                        title: "Station",
-                                        value: tempest.name,
-                                        detail: tempest.websocketConnected ? "WebSocket live" : "Recent snapshot",
-                                        accent: HBPalette.panelStrokeStrong,
-                                        iconSystemName: "waveform.path.ecg",
-                                        iconColor: HBPalette.accentPurple
-                                    )
-                                }
+                            weatherInfoPopoverTrigger(
+                                topic: .station(
+                                    widgetID: widget.id,
+                                    name: tempest.name,
+                                    room: tempest.room,
+                                    websocketConnected: tempest.websocketConnected
+                                )
+                            ) {
+                                weatherLiveMetricTile(
+                                    title: "Station",
+                                    value: tempest.name,
+                                    detail: tempest.websocketConnected ? "WebSocket live" : "Recent snapshot",
+                                    accent: HBPalette.panelStrokeStrong,
+                                    iconSystemName: "waveform.path.ecg",
+                                    iconColor: HBPalette.accentPurple
+                                )
                             }
                         }
                     }
@@ -3353,7 +3357,7 @@ struct DashboardView: View {
             } else if locationManager.isRequesting && widget.settings.weatherLocationMode == .auto {
                 EmptyStateView(
                     title: "Finding current location",
-                    subtitle: "HomeBrain is requesting this iPad's location for the weather widget."
+                    subtitle: "HomeBrain is requesting this device's location for the weather widget."
                 )
             } else {
                 EmptyStateView(
@@ -4408,11 +4412,6 @@ struct DashboardView: View {
         let compact = cardSize == .small
         let expanded = cardSize == .large
         let pending = pendingControlDeviceIds.contains(device.id)
-        let targetTemp = Int(currentThermostatSetpoint(for: device).rounded())
-        let currentTemp = device.temperature.map { Int($0.rounded()) }
-        let onMode = thermostatOnMode(for: device)
-        let isOff = mode == "off"
-
         return HBPanel {
             VStack(alignment: .leading, spacing: compact ? 10 : 12) {
                 HStack(alignment: .top, spacing: compact ? 10 : 12) {
@@ -4467,19 +4466,7 @@ struct DashboardView: View {
                 }
 
                 if isThermostat {
-                    if compact {
-                        compactThermostatCard(
-                            device: device,
-                            mode: mode,
-                            targetTemp: targetTemp,
-                            currentTemp: currentTemp,
-                            pending: pending,
-                            isOff: isOff,
-                            onMode: onMode
-                        )
-                    } else {
-                        featuredThermostatControls(for: device, compact: !expanded)
-                    }
+                    featuredThermostatControls(for: device, compact: compact || !expanded)
                 } else {
                     if device.status {
                         Button("Turn Off") {
@@ -4531,66 +4518,6 @@ struct DashboardView: View {
         .buttonStyle(.plain)
         .disabled(isPending)
         .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
-    }
-
-    private func compactThermostatCard(
-        device: DeviceItem,
-        mode: String,
-        targetTemp: Int,
-        currentTemp: Int?,
-        pending: Bool,
-        isOff: Bool,
-        onMode: String
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("SETPOINT")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .tracking(1.0)
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Text("\(targetTemp)°F")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
-                }
-
-                Spacer(minLength: 8)
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("CURRENT")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .tracking(1.0)
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Text(currentTemp.map { "\($0)°F" } ?? "--")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
-                }
-            }
-
-            if isOff {
-                Button {
-                    let nextMode = isOff ? onMode : "off"
-                    Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
-                } label: {
-                    Label("Turn On", systemImage: "power.circle.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(HBPrimaryButtonStyle(compact: true))
-                .disabled(pending)
-            } else {
-                Button {
-                    let nextMode = isOff ? onMode : "off"
-                    Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
-                } label: {
-                    Label("Turn Off", systemImage: "power.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                .disabled(pending)
-            }
-        }
-        .padding(12)
-        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
     }
 
     private func featuredThermostatControls(for device: DeviceItem, compact: Bool) -> some View {

@@ -320,6 +320,7 @@ struct AppShellView: View {
         }
         return "\(dashboardChrome.widgetCount) widgets"
     }
+    private var overflowNeedsSystemStatusMenu: Bool { !showsTopBarResourceStrip }
 
     init(previewMode: Bool = false) {
         self.previewMode = previewMode
@@ -659,6 +660,54 @@ struct AppShellView: View {
 
     private var chromeOverflowMenu: some View {
         Menu {
+            Menu {
+                ForEach(visibleSections) { section in
+                    Button {
+                        selectSection(section)
+                    } label: {
+                        Label(
+                            section.title,
+                            systemImage: selection == section ? "checkmark" : section.icon
+                        )
+                    }
+                }
+            } label: {
+                Label("Open Section", systemImage: "square.grid.2x2")
+            }
+
+            if overflowNeedsSystemStatusMenu {
+                Menu {
+                    overflowStatusItem(
+                        title: "Active Devices",
+                        value: activeDevicesSummary,
+                        systemImage: "lightbulb"
+                    )
+
+                    ForEach(resourceStripMetrics) { metric in
+                        overflowStatusItem(
+                            title: metric.shortLabel,
+                            value: overflowMetricValue(for: metric),
+                            systemImage: metric.icon
+                        )
+                    }
+
+                    Divider()
+
+                    Button {
+                        Task {
+                            await refreshHeaderSummary()
+                            await refreshResourceStrip(initialLoad: false)
+                        }
+                    } label: {
+                        Label("Refresh System Status", systemImage: "arrow.clockwise")
+                    }
+                } label: {
+                    Label("System Status", systemImage: "waveform.path.ecg")
+                }
+            }
+
+            Divider()
+
             if showsDashboardChrome {
                 Menu {
                     ForEach(dashboardChrome.views) { view in
@@ -753,6 +802,24 @@ struct AppShellView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("More")
+    }
+
+    private func overflowStatusItem(
+        title: String,
+        value: String,
+        systemImage: String
+    ) -> some View {
+        Button {} label: {
+            Label("\(title): \(value)", systemImage: systemImage)
+        }
+        .disabled(true)
+    }
+
+    private func overflowMetricValue(for metric: ResourceStripMetric) -> String {
+        if metric.telemetryAvailable {
+            return "\(Int(metric.percent.rounded()))%"
+        }
+        return metric.detected ? "Detected" : "Unavailable"
     }
 
     private func chromeBrandCluster(compact: Bool, ultraCompact: Bool = false) -> some View {
