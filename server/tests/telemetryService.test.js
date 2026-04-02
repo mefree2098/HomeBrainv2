@@ -9,7 +9,9 @@ const {
   extractDeviceMetrics,
   extractTempestMetrics,
   mergePointsByTimestamp,
-  pickFeaturedMetricKeys
+  normalizeDiskCapacity,
+  pickFeaturedMetricKeys,
+  summarizeStorageCollections
 } = telemetryService.__private__;
 
 test('extractDeviceMetrics maps device state and smartthings telemetry into chartable metrics', () => {
@@ -120,4 +122,55 @@ test('mergePointsByTimestamp and downsamplePoints collapse duplicate timestamps 
   assert.equal(downsampled.length, 3);
   assert.equal(downsampled[0].observedAt, '2026-04-01T00:00:00.000Z');
   assert.equal(downsampled[downsampled.length - 1].observedAt, '2026-04-01T03:00:00.000Z');
+});
+
+test('summarizeStorageCollections totals footprint across telemetry collections', () => {
+  const summary = summarizeStorageCollections([
+    {
+      key: 'telemetry_samples',
+      documentCount: 120,
+      logicalSizeBytes: 4096,
+      storageSizeBytes: 8192,
+      indexSizeBytes: 2048,
+      footprintBytes: 10240
+    },
+    {
+      key: 'tempest_observations',
+      documentCount: 24,
+      logicalSizeBytes: 1024,
+      storageSizeBytes: 2048,
+      indexSizeBytes: 512,
+      footprintBytes: 2560
+    }
+  ]);
+
+  assert.equal(summary.collectionCount, 2);
+  assert.equal(summary.totalDocumentCount, 144);
+  assert.equal(summary.logicalSizeBytes, 5120);
+  assert.equal(summary.storageSizeBytes, 10240);
+  assert.equal(summary.indexSizeBytes, 2560);
+  assert.equal(summary.footprintBytes, 12800);
+});
+
+test('normalizeDiskCapacity maps resource monitor disk output into free and total values', () => {
+  const disk = normalizeDiskCapacity({
+    totalBytes: 1_000_000,
+    usedBytes: 640_000,
+    availableBytes: 360_000,
+    totalGB: 0.93,
+    usedGB: 0.60,
+    availableGB: 0.33,
+    usagePercent: 64,
+    total: '932M',
+    used: '596M',
+    available: '336M'
+  });
+
+  assert.equal(disk.totalBytes, 1_000_000);
+  assert.equal(disk.usedBytes, 640_000);
+  assert.equal(disk.freeBytes, 360_000);
+  assert.equal(disk.totalGB, 0.93);
+  assert.equal(disk.freeGB, 0.33);
+  assert.equal(disk.freeLabel, '336M');
+  assert.equal(disk.available, true);
 });

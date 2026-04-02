@@ -24,6 +24,44 @@ export interface TelemetrySourceSummary {
   lastValues: Record<string, number | null>
 }
 
+export interface TelemetryStorageCollection {
+  key: string
+  label: string
+  collectionName: string
+  documentCount: number
+  logicalSizeBytes: number
+  storageSizeBytes: number
+  indexSizeBytes: number
+  footprintBytes: number
+  averageDocumentBytes: number
+  available: boolean
+  error?: string
+}
+
+export interface TelemetryStorageSummary {
+  collectionCount: number
+  totalDocumentCount: number
+  logicalSizeBytes: number
+  storageSizeBytes: number
+  indexSizeBytes: number
+  footprintBytes: number
+  collections: TelemetryStorageCollection[]
+}
+
+export interface TelemetryDiskSummary {
+  totalBytes: number
+  usedBytes: number
+  freeBytes: number
+  totalGB: number
+  usedGB: number
+  freeGB: number
+  usagePercent: number
+  totalLabel: string
+  usedLabel: string
+  freeLabel: string
+  available: boolean
+}
+
 export interface TelemetryOverviewPayload {
   retentionDays: number
   totalSamples: number
@@ -31,6 +69,8 @@ export interface TelemetryOverviewPayload {
   lastSampleAt: string | null
   streamCounts: Record<string, number>
   sourceTypeCounts: Record<string, number>
+  storage: TelemetryStorageSummary
+  disk: TelemetryDiskSummary
   sources: TelemetrySourceSummary[]
 }
 

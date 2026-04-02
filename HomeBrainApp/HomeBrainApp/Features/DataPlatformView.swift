@@ -93,6 +93,8 @@ private struct TelemetryOverviewSnapshot {
     let sourceCount: Int
     let lastSampleAt: String?
     let streamCounts: [String: Int]
+    let storage: TelemetryStorageSummary
+    let disk: TelemetryDiskSummary
     let sources: [TelemetrySourceSummary]
 
     static func from(_ object: [String: Any]) -> TelemetryOverviewSnapshot {
@@ -102,7 +104,91 @@ private struct TelemetryOverviewSnapshot {
             sourceCount: JSON.int(object, "sourceCount"),
             lastSampleAt: JSON.optionalString(object, "lastSampleAt"),
             streamCounts: telemetryIntMap(object["streamCounts"]),
+            storage: TelemetryStorageSummary.from(JSON.object(object["storage"])),
+            disk: TelemetryDiskSummary.from(JSON.object(object["disk"])),
             sources: JSON.array(object["sources"]).map(TelemetrySourceSummary.from)
+        )
+    }
+}
+
+private struct TelemetryStorageCollection: Identifiable, Equatable {
+    let key: String
+    let label: String
+    let collectionName: String
+    let documentCount: Int
+    let logicalSizeBytes: Int
+    let storageSizeBytes: Int
+    let indexSizeBytes: Int
+    let footprintBytes: Int
+    let averageDocumentBytes: Int
+    let available: Bool
+
+    var id: String { key }
+
+    static func from(_ object: [String: Any]) -> TelemetryStorageCollection {
+        TelemetryStorageCollection(
+            key: JSON.string(object, "key"),
+            label: JSON.string(object, "label", fallback: "Telemetry Collection"),
+            collectionName: JSON.string(object, "collectionName"),
+            documentCount: JSON.int(object, "documentCount"),
+            logicalSizeBytes: JSON.int(object, "logicalSizeBytes"),
+            storageSizeBytes: JSON.int(object, "storageSizeBytes"),
+            indexSizeBytes: JSON.int(object, "indexSizeBytes"),
+            footprintBytes: JSON.int(object, "footprintBytes"),
+            averageDocumentBytes: JSON.int(object, "averageDocumentBytes"),
+            available: JSON.bool(object, "available", fallback: true)
+        )
+    }
+}
+
+private struct TelemetryStorageSummary: Equatable {
+    let collectionCount: Int
+    let totalDocumentCount: Int
+    let logicalSizeBytes: Int
+    let storageSizeBytes: Int
+    let indexSizeBytes: Int
+    let footprintBytes: Int
+    let collections: [TelemetryStorageCollection]
+
+    static func from(_ object: [String: Any]) -> TelemetryStorageSummary {
+        TelemetryStorageSummary(
+            collectionCount: JSON.int(object, "collectionCount"),
+            totalDocumentCount: JSON.int(object, "totalDocumentCount"),
+            logicalSizeBytes: JSON.int(object, "logicalSizeBytes"),
+            storageSizeBytes: JSON.int(object, "storageSizeBytes"),
+            indexSizeBytes: JSON.int(object, "indexSizeBytes"),
+            footprintBytes: JSON.int(object, "footprintBytes"),
+            collections: JSON.array(object["collections"]).map(TelemetryStorageCollection.from)
+        )
+    }
+}
+
+private struct TelemetryDiskSummary: Equatable {
+    let totalBytes: Int
+    let usedBytes: Int
+    let freeBytes: Int
+    let totalGB: Double
+    let usedGB: Double
+    let freeGB: Double
+    let usagePercent: Double
+    let totalLabel: String
+    let usedLabel: String
+    let freeLabel: String
+    let available: Bool
+
+    static func from(_ object: [String: Any]) -> TelemetryDiskSummary {
+        TelemetryDiskSummary(
+            totalBytes: JSON.int(object, "totalBytes"),
+            usedBytes: JSON.int(object, "usedBytes"),
+            freeBytes: JSON.int(object, "freeBytes"),
+            totalGB: JSON.double(object, "totalGB"),
+            usedGB: JSON.double(object, "usedGB"),
+            freeGB: JSON.double(object, "freeGB"),
+            usagePercent: JSON.double(object, "usagePercent"),
+            totalLabel: JSON.string(object, "totalLabel"),
+            usedLabel: JSON.string(object, "usedLabel"),
+            freeLabel: JSON.string(object, "freeLabel"),
+            available: JSON.bool(object, "available")
         )
     }
 }
@@ -245,6 +331,36 @@ private func telemetryFormatCompactCount(_ value: Int) -> String {
         return value.formatted(.number.notation(.compactName))
     }
     return value.formatted()
+}
+
+private func telemetryFormatBytes(_ value: Int) -> String {
+    if value < 0 {
+        return "--"
+    }
+
+    if value == 0 {
+        return "0 B"
+    }
+
+    let units = ["B", "KB", "MB", "GB", "TB"]
+    var size = Double(value)
+    var unitIndex = 0
+
+    while size >= 1024, unitIndex < units.count - 1 {
+        size /= 1024
+        unitIndex += 1
+    }
+
+    let digits: Int
+    if size >= 100 {
+        digits = 0
+    } else if size >= 10 {
+        digits = 1
+    } else {
+        digits = 2
+    }
+
+    return "\(size.formatted(.number.precision(.fractionLength(0...digits)))) \(units[unitIndex])"
 }
 
 private func telemetryBinaryLabel(for metricKey: String, value: Double?) -> String {
@@ -479,6 +595,10 @@ struct DataPlatformView: View {
         Dictionary(uniqueKeysWithValues: (series?.stats ?? []).map { ($0.key, $0) })
     }
 
+    private var storageCollections: [TelemetryStorageCollection] {
+        overview?.storage.collections ?? []
+    }
+
     private var seriesTaskKey: String {
         "\(selectedSourceKey ?? "none")|\(selectedMetricKeys.joined(separator: ","))|\(selectedRange.rawValue)"
     }
@@ -495,6 +615,7 @@ struct DataPlatformView: View {
                 }
 
                 sourceExplorerPanel
+                storageFootprintPanel
 
                 if isLoadingSeries, selectedSource != nil {
                     LoadingView(title: "Rendering telemetry window...")
@@ -601,7 +722,75 @@ struct DataPlatformView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                     telemetryOverviewTile(title: "Tracked Sources", value: telemetryFormatCompactCount(overview?.sourceCount ?? 0), subtitle: "Active telemetry feeds")
                     telemetryOverviewTile(title: "Samples Stored", value: telemetryFormatCompactCount(overview?.totalSamples ?? 0), subtitle: "\(overview?.retentionDays ?? 365)-day retention target")
+                    telemetryOverviewTile(title: "Telemetry Footprint", value: telemetryFormatBytes(overview?.storage.footprintBytes ?? 0), subtitle: "Collections plus indexes on disk")
+                    telemetryOverviewTile(
+                        title: "Drive Free / Total",
+                        value: "\(telemetryFormatBytes(overview?.disk.freeBytes ?? 0)) / \(telemetryFormatBytes(overview?.disk.totalBytes ?? 0))",
+                        subtitle: overview?.disk.available == true
+                            ? "\(String(format: "%.1f", overview?.disk.usagePercent ?? 0))% used on host drive"
+                            : "Drive telemetry unavailable"
+                    )
                     telemetryOverviewTile(title: "Last Ingest", value: telemetryFormatDateTime(overview?.lastSampleAt), subtitle: "Latest observed sample")
+                }
+            }
+        }
+    }
+
+    private var storageFootprintPanel: some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Storage Footprint")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+
+                    Text("HomeBrain telemetry currently uses \(telemetryFormatBytes(overview?.storage.footprintBytes ?? 0)) on disk, with \(telemetryFormatBytes(overview?.disk.freeBytes ?? 0)) free out of \(telemetryFormatBytes(overview?.disk.totalBytes ?? 0)) on the host drive.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
+                    telemetryOverviewTile(
+                        title: "Logical Data",
+                        value: telemetryFormatBytes(overview?.storage.logicalSizeBytes ?? 0),
+                        subtitle: "Raw telemetry document payload"
+                    )
+                    telemetryOverviewTile(
+                        title: "Allocated Storage",
+                        value: telemetryFormatBytes(overview?.storage.storageSizeBytes ?? 0),
+                        subtitle: "Collection storage reserved on disk"
+                    )
+                    telemetryOverviewTile(
+                        title: "Indexes",
+                        value: telemetryFormatBytes(overview?.storage.indexSizeBytes ?? 0),
+                        subtitle: "Query and retention-policy overhead"
+                    )
+                }
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
+                    ForEach(storageCollections) { collection in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(collection.label)
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
+
+                            Text(telemetryFormatBytes(collection.footprintBytes))
+                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(telemetryFormatCompactCount(collection.documentCount)) docs")
+                                Text("\(telemetryFormatBytes(collection.storageSizeBytes)) collection")
+                                Text("\(telemetryFormatBytes(collection.indexSizeBytes)) indexes")
+                            }
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+                    }
                 }
             }
         }
