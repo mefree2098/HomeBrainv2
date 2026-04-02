@@ -8,6 +8,12 @@ const TempestObservation = require('../models/TempestObservation');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const telemetryService = require('./telemetryService');
 const {
+  buildTempestStationIdentityQuery,
+  selectCanonicalDevice,
+  mergeDuplicateDeviceGroups,
+  describeDevices
+} = require('./deviceIdentityService');
+const {
   DEVICE_TYPE_LABELS,
   buildDisplayMetrics,
   cToF,
@@ -398,15 +404,21 @@ class TempestService {
   }
 
   async upsertStationDevice(station, integration) {
-    const existingDevice = await Device.findOne({
-      'properties.source': 'tempest',
-      'properties.tempest.stationId': station.stationId
-    });
+    const identityQuery = buildTempestStationIdentityQuery(station.stationId);
+    const matchingDevices = identityQuery
+      ? await Device.find(identityQuery)
+      : [];
+    const existingDevice = selectCanonicalDevice(matchingDevices);
+    const duplicateDevices = matchingDevices.filter((candidate) => (
+      String(candidate?._id || '') !== String(existingDevice?._id || '')
+    ));
 
     const payload = this.buildStationDevicePayload(station, integration, existingDevice);
     let device = existingDevice;
+    let deduped = 0;
 
     if (device) {
+      mergeDuplicateDeviceGroups(device, duplicateDevices);
       device.name = payload.name;
       device.type = payload.type;
       device.room = payload.room;
@@ -418,6 +430,17 @@ class TempestService {
       device.isOnline = payload.isOnline;
       device.lastSeen = payload.lastSeen;
       await device.save();
+
+      const duplicateIds = duplicateDevices
+        .map((candidate) => String(candidate?._id || ''))
+        .filter(Boolean);
+      if (duplicateIds.length > 0) {
+        await Device.deleteMany({ _id: { $in: duplicateIds } });
+        deduped = duplicateIds.length;
+        console.warn(
+          `TempestService: Removed ${duplicateIds.length} duplicate HomeBrain row(s) for station ${station.stationId}: ${describeDevices(duplicateDevices)}`
+        );
+      }
     } else {
       device = await Device.create(payload);
     }
@@ -427,7 +450,10 @@ class TempestService {
       deviceUpdateEmitter.emit('devices:update', normalized);
     }
 
-    return device;
+    return {
+      device,
+      deduped
+    };
   }
 
   async syncStations({ integration: providedIntegration = null, reason = 'manual' } = {}) {
@@ -444,8 +470,10 @@ class TempestService {
     const payload = await this.requestJson('/stations', { token: resolvedToken });
     const stations = normalizeDiscoveryResponse(payload);
 
+    let deduped = 0;
     for (const station of stations) {
-      await this.upsertStationDevice(station, persistedIntegration);
+      const result = await this.upsertStationDevice(station, persistedIntegration);
+      deduped += result?.deduped || 0;
     }
 
     const selectedStation = stations.find((station) => station.stationId === toNumber(persistedIntegration.selectedStationId))
@@ -479,7 +507,8 @@ class TempestService {
       success: true,
       reason,
       integration: persistedIntegration,
-      stations
+      stations,
+      deduped
     };
   }
 

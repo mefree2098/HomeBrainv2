@@ -7,6 +7,9 @@ const harmonyService = require('./harmonyService');
 const ecobeeService = require('./ecobeeService');
 const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const {
+  ensureUniquePlatformIdentity
+} = require('./deviceIdentityService');
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 let cachedInsteonService = null;
@@ -45,52 +48,6 @@ function normalizeDeviceGroups(groups) {
   });
 
   return normalized;
-}
-
-function buildNormalizedInsteonProperties(properties = {}) {
-  const normalizedProperties = properties && typeof properties === 'object'
-    ? { ...properties }
-    : {};
-  const rawAddress = typeof normalizedProperties.insteonAddress === 'string'
-    ? normalizedProperties.insteonAddress.trim()
-    : '';
-
-  if (!rawAddress) {
-    return normalizedProperties;
-  }
-
-  const insteonService = getInsteonService();
-  const normalizedAddress = insteonService._normalizePossibleInsteonAddress(rawAddress);
-  if (!normalizedAddress) {
-    throw new Error('Invalid INSTEON address');
-  }
-
-  normalizedProperties.insteonAddress = normalizedAddress;
-  return normalizedProperties;
-}
-
-async function ensureUniqueInsteonAddress(properties = {}, excludeDeviceId = null) {
-  const normalizedProperties = buildNormalizedInsteonProperties(properties);
-  const normalizedAddress = typeof normalizedProperties.insteonAddress === 'string'
-    ? normalizedProperties.insteonAddress
-    : '';
-
-  if (!normalizedAddress) {
-    return normalizedProperties;
-  }
-
-  const insteonService = getInsteonService();
-  const query = insteonService._buildInsteonAddressLookupQuery(normalizedAddress);
-  if (excludeDeviceId) {
-    query._id = { $ne: excludeDeviceId };
-  }
-
-  const existingDevice = await Device.findOne(query);
-  if (existingDevice) {
-    throw new Error('A HomeBrain device with this INSTEON address already exists');
-  }
-
-  return normalizedProperties;
 }
 
 async function ensureDeviceGroupRegistryEntries(groups = []) {
@@ -297,7 +254,7 @@ class DeviceService {
         ...deviceData,
         groups: normalizeDeviceGroups(deviceData.groups)
       };
-      normalizedDeviceData.properties = await ensureUniqueInsteonAddress(deviceData.properties || {});
+      normalizedDeviceData.properties = await ensureUniquePlatformIdentity(deviceData.properties || {});
 
       const device = new Device(normalizedDeviceData);
       const savedDevice = await device.save();
@@ -344,7 +301,7 @@ class DeviceService {
             ? normalizedUpdateData.properties
             : {})
         };
-        normalizedUpdateData.properties = await ensureUniqueInsteonAddress(nextProperties, deviceId);
+        normalizedUpdateData.properties = await ensureUniquePlatformIdentity(nextProperties, deviceId);
       }
 
       // If updating name and room, check for duplicates

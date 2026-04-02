@@ -4,6 +4,12 @@ const Device = require('../models/Device');
 const Settings = require('../models/Settings');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const eventStreamService = require('./eventStreamService');
+const {
+  buildHarmonyActivityIdentityQuery,
+  selectCanonicalDevice,
+  mergeDuplicateDeviceGroups,
+  describeDevices
+} = require('./deviceIdentityService');
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = Number(process.env.HARMONY_DISCOVERY_TIMEOUT_MS || 4500);
 const DEFAULT_DISCOVERY_CACHE_MS = Number(process.env.HARMONY_DISCOVERY_CACHE_MS || 15000);
@@ -1062,6 +1068,7 @@ class HarmonyService {
         hubsFailed: 0,
         created: 0,
         updated: 0,
+        deduped: 0,
         removed: 0,
         offlineMarked: 0,
         details: []
@@ -1075,17 +1082,19 @@ class HarmonyService {
           for (const activity of snapshot.activities) {
             activityIds.push(activity.id.toString());
             const payload = this.buildHarmonyActivityDevice(snapshot, activity);
-            const query = {
-              'properties.source': 'harmony',
-              'properties.harmonyHubIp': snapshot.ip,
-              'properties.harmonyActivityId': activity.id.toString()
-            };
-
-            const existing = await Device.findOne(query);
+            const identityQuery = buildHarmonyActivityIdentityQuery(snapshot.ip, activity.id.toString());
+            const matchingDevices = identityQuery
+              ? await Device.find(identityQuery)
+              : [];
+            const existing = selectCanonicalDevice(matchingDevices);
+            const duplicateDevices = matchingDevices.filter((candidate) => (
+              String(candidate?._id || '') !== String(existing?._id || '')
+            ));
             if (!existing) {
               await Device.create(payload);
               summary.created += 1;
             } else {
+              mergeDuplicateDeviceGroups(existing, duplicateDevices);
               existing.name = payload.name;
               existing.type = payload.type;
               existing.room = payload.room;
@@ -1096,6 +1105,18 @@ class HarmonyService {
               existing.isOnline = true;
               existing.lastSeen = new Date();
               await existing.save();
+
+              const duplicateIds = duplicateDevices
+                .map((candidate) => String(candidate?._id || ''))
+                .filter(Boolean);
+              if (duplicateIds.length > 0) {
+                await Device.deleteMany({ _id: { $in: duplicateIds } });
+                summary.deduped += duplicateIds.length;
+                console.warn(
+                  `HarmonyService: Removed ${duplicateIds.length} duplicate HomeBrain row(s) for hub ${snapshot.ip} activity ${activity.id}: ${describeDevices(duplicateDevices)}`
+                );
+              }
+
               summary.updated += 1;
             }
           }

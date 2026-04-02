@@ -11,6 +11,12 @@ const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
 const insteonService = require('./insteonService');
+const {
+  buildSmartThingsDeviceIdentityQuery,
+  selectCanonicalDevice,
+  mergeDuplicateDeviceGroups,
+  describeDevices
+} = require('./deviceIdentityService');
 
 const DEFAULT_INSTEON_SYNC_RUN_RETENTION = 20;
 const DEFAULT_INSTEON_SYNC_RUN_LOG_LIMIT = 1000;
@@ -327,6 +333,7 @@ class MaintenanceService {
       const locationCounts = new Map();
       let created = 0;
       let updated = 0;
+      let deduped = 0;
       let skipped = 0;
 
       for (const device of devices) {
@@ -343,9 +350,17 @@ class MaintenanceService {
           continue;
         }
 
-        const existing = await Device.findOne({ 'properties.smartThingsDeviceId': device.deviceId });
+        const identityQuery = buildSmartThingsDeviceIdentityQuery(device.deviceId);
+        const matchingDevices = identityQuery
+          ? await Device.find(identityQuery)
+          : [];
+        const existing = selectCanonicalDevice(matchingDevices);
+        const duplicateDevices = matchingDevices.filter((candidate) => (
+          String(candidate?._id || '') !== String(existing?._id || '')
+        ));
 
         if (existing) {
+          mergeDuplicateDeviceGroups(existing, duplicateDevices);
           existing.name = mappedDevice.name;
           existing.type = mappedDevice.type;
           existing.room = mappedDevice.room;
@@ -360,6 +375,18 @@ class MaintenanceService {
           existing.lastSeen = mappedDevice.lastSeen;
 
           await existing.save();
+
+          const duplicateIds = duplicateDevices
+            .map((candidate) => String(candidate?._id || ''))
+            .filter(Boolean);
+          if (duplicateIds.length > 0) {
+            await Device.deleteMany({ _id: { $in: duplicateIds } });
+            deduped += duplicateIds.length;
+            console.warn(
+              `MaintenanceService: Removed ${duplicateIds.length} duplicate HomeBrain row(s) for SmartThings device ${device.deviceId}: ${describeDevices(duplicateDevices)}`
+            );
+          }
+
           updated += 1;
         } else {
           await Device.create(mappedDevice);
@@ -387,15 +414,16 @@ class MaintenanceService {
         }
       }
 
-      console.log(`MaintenanceService: SmartThings sync summary - created: ${created}, updated: ${updated}, removed: ${removed}, skipped: ${skipped}`);
+      console.log(`MaintenanceService: SmartThings sync summary - created: ${created}, updated: ${updated}, removed: ${removed}, deduped: ${deduped}, skipped: ${skipped}`);
 
       return {
         success: true,
-        message: `Synced ${devices.length} SmartThings devices (created ${created}, updated ${updated}, removed ${removed}, skipped ${skipped})`,
+        message: `Synced ${devices.length} SmartThings devices (created ${created}, updated ${updated}, removed ${removed}, deduped ${deduped}, skipped ${skipped})`,
         deviceCount: devices.length,
         created,
         updated,
         removed,
+        deduped,
         skipped
       };
     } catch (error) {
@@ -1178,6 +1206,7 @@ class MaintenanceService {
         linkedDeviceCount: result.linkedDeviceCount,
         created: result.created,
         updated: result.updated,
+        deduped: result.deduped,
         failed: result.failed,
         warnings: result.warnings,
         errors: result.errors,
@@ -1221,7 +1250,7 @@ class MaintenanceService {
       const result = await harmonyService.syncDevices({ timeoutMs: 6000 });
       return {
         success: true,
-        message: `Harmony sync complete (${result.created} created, ${result.updated} updated, ${result.removed} removed)`,
+        message: `Harmony sync complete (${result.created} created, ${result.updated} updated, ${result.removed} removed, ${result.deduped || 0} deduped)`,
         ...result
       };
     } catch (error) {
