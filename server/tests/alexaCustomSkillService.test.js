@@ -121,3 +121,34 @@ test('resolveAudioClip validates signed tokens and returns stored mp3 data', asy
   assert.equal(result.contentType, 'audio/mpeg');
   assert.equal(Buffer.isBuffer(result.buffer), true);
 });
+
+test('ensureAudioClip returns the mounted Alexa custom-skill audio route', async (t) => {
+  const originalTextToSpeech = require('../services/elevenLabsService').textToSpeech;
+  const originalWriteFile = require('fs').promises.writeFile;
+  const originalAccess = require('fs').promises.access;
+  const originalPublicOrigin = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+
+  process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://homebrain.example.com';
+  require('fs').promises.access = async () => {
+    const error = new Error('missing');
+    error.code = 'ENOENT';
+    throw error;
+  };
+  require('fs').promises.writeFile = async () => {};
+  require('../services/elevenLabsService').textToSpeech = async () => Buffer.from('mp3-data');
+
+  t.after(() => {
+    process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicOrigin;
+    require('fs').promises.writeFile = originalWriteFile;
+    require('fs').promises.access = originalAccess;
+    require('../services/elevenLabsService').textToSpeech = originalTextToSpeech;
+  });
+
+  const result = await alexaCustomSkillService.ensureAudioClip({
+    _id: 'profile-1',
+    voiceId: 'voice-anna'
+  }, 'Hello from HomeBrain');
+
+  assert.equal(result.url.startsWith('https://homebrain.example.com/api/alexa/custom-skill/audio/'), true);
+  assert.match(result.url, /[?&]token=/);
+});
