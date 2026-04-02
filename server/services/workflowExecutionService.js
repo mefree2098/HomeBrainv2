@@ -304,10 +304,18 @@ function getInsteonCommandRetryOptions(action, source = '') {
   const retryDelayMs = Number.isFinite(retryDelayRaw)
     ? Math.max(0, Math.min(10_000, Math.round(retryDelayRaw)))
     : DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS;
+  const commandTimeoutRaw = Number(parameters.commandTimeoutMs);
+  const verificationMode = sanitizeString(parameters.verificationMode || parameters.verifyMode).toLowerCase();
 
   return {
     commandAttempts: retryCount + 1,
-    commandPauseBetweenMs: retryDelayMs
+    commandPauseBetweenMs: retryDelayMs,
+    ...(Number.isFinite(commandTimeoutRaw)
+      ? {
+          commandTimeoutMs: Math.max(500, Math.min(20_000, Math.round(commandTimeoutRaw)))
+        }
+      : {}),
+    verificationMode: verificationMode || 'fast'
   };
 }
 
@@ -802,10 +810,10 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
   const source = getDeviceSource(device);
   let controlResult = null;
   const insteonOptions = {
+    ...getInsteonCommandRetryOptions(executionOptions?.action, source),
     ...(executionOptions?.insteon && typeof executionOptions.insteon === 'object'
       ? executionOptions.insteon
-      : {}),
-    ...getInsteonCommandRetryOptions(executionOptions?.action, source)
+      : {})
   };
 
   if (source === 'insteon') {

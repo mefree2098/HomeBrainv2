@@ -361,6 +361,69 @@ test('_runRuntimeMonitoringPass polls tracked Insteon light state changes', asyn
   assert.equal(persistedPatches[0].brightness, 100);
 });
 
+test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is queued', async (t) => {
+  const originalFind = Device.find;
+  const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+  const originalMonitoringStarted = insteonService._runtimeMonitoringStarted;
+  const originalMonitoringInProgress = insteonService._runtimeMonitoringInProgress;
+  const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
+  const originalScheduleRuntimeMonitoringPass = insteonService._scheduleRuntimeMonitoringPass;
+  const originalQueue = insteonService._plmOperationQueue;
+  const originalActiveOperation = insteonService._activePlmOperation;
+
+  t.after(() => {
+    Device.find = originalFind;
+    insteonService._queryDeviceLevelByAddress = originalQueryLevelByAddress;
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+    insteonService._runtimeMonitoringStarted = originalMonitoringStarted;
+    insteonService._runtimeMonitoringInProgress = originalMonitoringInProgress;
+    insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
+    insteonService._scheduleRuntimeMonitoringPass = originalScheduleRuntimeMonitoringPass;
+    insteonService._plmOperationQueue = originalQueue;
+    insteonService._activePlmOperation = originalActiveOperation;
+  });
+
+  let queryCalls = 0;
+  Device.find = async () => ([{
+    _id: 'device-10',
+    type: 'light',
+    status: false,
+    brightness: 0,
+    isOnline: true,
+    properties: {
+      source: 'insteon',
+      insteonAddress: '11.22.33'
+    }
+  }]);
+  insteonService._queryDeviceLevelByAddress = async () => {
+    queryCalls += 1;
+    return 0;
+  };
+  insteonService._scheduleRuntimeMonitoringPass = () => {};
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService._runtimeMonitoringStarted = true;
+  insteonService._runtimeMonitoringInProgress = false;
+  insteonService._runtimeStatePollPauseMs = 0;
+  insteonService._plmOperationQueue = [{
+    priority: 0,
+    sequence: 1,
+    kind: 'control_command',
+    label: 'turning off 11.22.33',
+    executor: async () => {},
+    resolve: () => {},
+    reject: () => {}
+  }];
+  insteonService._activePlmOperation = null;
+
+  await insteonService._runRuntimeMonitoringPass('test');
+
+  assert.equal(queryCalls, 0);
+});
+
 test('turnOn issues normalized command address and returns confirmed state', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
@@ -383,7 +446,7 @@ test('turnOn issues normalized command address and returns confirmed state', asy
     turnOn(address, level, callback) {
       hubAddress = address;
       hubLevel = level;
-      callback(null);
+      callback(null, { ack: true, success: true });
     }
   };
   Device.findById = async () => ({
@@ -433,7 +496,7 @@ test('turnOn returns success with warning when verification is inconclusive afte
   insteonService.hub = {
     turnOn(address, _level, callback) {
       hubAddress = address;
-      callback(null);
+      callback(null, { ack: true, success: true });
     }
   };
   Device.findById = async () => ({
@@ -534,7 +597,7 @@ test('turnOff issues normalized command address and returns direct PLM confirmat
   insteonService.hub = {
     turnOff(address, callback) {
       hubAddress = address;
-      callback(null);
+      callback(null, { ack: true, success: true });
     }
   };
   Device.findById = async () => ({
@@ -621,6 +684,66 @@ test('turnOff retries command timeouts before succeeding', async (t) => {
   assert.match(result.message, /after 2 command attempts/i);
   assert.equal(result.details.commandAttempts, 2);
   assert.equal(result.details.commandRetryCount, 1);
+});
+
+test('setBrightness routes string zero values to turnOff', async (t) => {
+  const originalTurnOn = insteonService.turnOn;
+  const originalTurnOff = insteonService.turnOff;
+
+  t.after(() => {
+    insteonService.turnOn = originalTurnOn;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  let turnOnCalls = 0;
+  let turnOffCalls = 0;
+  let receivedOptions = null;
+  insteonService.turnOn = async () => {
+    turnOnCalls += 1;
+    return { success: true, action: 'turn_on' };
+  };
+  insteonService.turnOff = async (_deviceId, options = {}) => {
+    turnOffCalls += 1;
+    receivedOptions = options;
+    return { success: true, action: 'turn_off' };
+  };
+
+  const result = await insteonService.setBrightness('mock-device', '0', {
+    verificationMode: 'fast'
+  });
+
+  assert.equal(turnOnCalls, 0);
+  assert.equal(turnOffCalls, 1);
+  assert.equal(result.action, 'turn_off');
+  assert.equal(receivedOptions.verificationMode, 'fast');
+});
+
+test('linkDevice accepts id-based link confirmations', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+  });
+
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    link(callback) {
+      callback(null, {
+        id: '11.22.33',
+        group: 1,
+        type: 'dimmer'
+      });
+    }
+  };
+
+  const result = await insteonService.linkDevice(1);
+
+  assert.equal(result.success, true);
+  assert.equal(result.address, '11.22.33');
+  assert.equal(result.normalizedAddress, '112233');
+  assert.equal(result.group, 1);
 });
 
 test('_linkDeviceRemote writes responder and controller links when controller links are enabled', async (t) => {

@@ -277,21 +277,21 @@ struct WorkflowsView: View {
         .refreshable {
             await refreshWorkflowScreen(silent: false)
         }
-        .onChange(of: runtimeLogLimit) { _ in
+        .onChange(of: runtimeLogLimit) { _, _ in
             if runtimeHistoryPage == 1 {
                 Task { await refreshWorkflowScreen(silent: false) }
             } else {
                 runtimeHistoryPage = 1
             }
         }
-        .onChange(of: runtimeWindowHours) { _ in
+        .onChange(of: runtimeWindowHours) { _, _ in
             if runtimeHistoryPage == 1 {
                 Task { await refreshWorkflowScreen(silent: false) }
             } else {
                 runtimeHistoryPage = 1
             }
         }
-        .onChange(of: runtimeHistoryPage) { _ in
+        .onChange(of: runtimeHistoryPage) { _, _ in
             Task { await refreshWorkflowScreen(silent: false) }
         }
     }
