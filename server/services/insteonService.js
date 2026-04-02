@@ -51,6 +51,7 @@ const DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS = 1500;
 const DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS = 50;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS = 450;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1200;
+const DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS = 300000;
 const INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS = Object.freeze([
   /^ttyUSB\d+$/i,
   /^ttyACM\d+$/i,
@@ -94,6 +95,7 @@ class InsteonService {
     this._plmDrainScheduled = false;
     this._pendingRuntimeStateRefreshes = new Map();
     this._runtimePollMetadata = new Map();
+    this._runtimeSceneResponderCache = new Map();
     this._runtimeMonitoringTimer = null;
     this._runtimeMonitoringStarted = false;
     this._runtimeMonitoringInProgress = false;
@@ -152,6 +154,11 @@ class InsteonService {
       process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS,
       DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS,
       500
+    );
+    this._runtimeSceneCacheTtlMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS,
+      DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS,
+      1000
     );
     this._defaultVerificationMode = this._normalizeVerificationMode(
       process.env.HOMEBRAIN_INSTEON_DEFAULT_VERIFICATION_MODE,
@@ -970,6 +977,7 @@ class InsteonService {
       this.connectionTarget = null;
       this._clearPendingRuntimeStateRefreshes();
       this._runtimePollMetadata.clear();
+      this._runtimeSceneResponderCache.clear();
       this._clearPlmOperationQueue(new Error('PLM connection closed while operations were pending'));
       this._runtimeListenersAttached = false;
       this._runtimeCloseListener = null;
@@ -6255,6 +6263,81 @@ class InsteonService {
     };
   }
 
+  _extractRuntimeBroadcastMetadata(payload, command1, command2Hex) {
+    const messageType = Number(payload?.messageType);
+    if (!Number.isInteger(messageType)) {
+      return {
+        messageType: null,
+        group: null,
+        command1: command1 || null,
+        command2: command2Hex || null
+      };
+    }
+
+    const gatewayId = typeof payload?.gatewayId === 'string'
+      ? payload.gatewayId.trim().toUpperCase()
+      : '';
+
+    if (messageType === 6 && command1 !== '06') {
+      const group = Number.parseInt(gatewayId, 16);
+      return {
+        messageType,
+        group: Number.isInteger(group) ? group : null,
+        command1,
+        command2: command2Hex
+      };
+    }
+
+    if (messageType === 6 && gatewayId.length >= 6) {
+      const group = Number.parseInt(gatewayId.slice(4, 6), 16);
+      return {
+        messageType,
+        group: Number.isInteger(group) ? group : null,
+        command1: gatewayId.slice(0, 2),
+        command2: gatewayId.slice(2, 4)
+      };
+    }
+
+    if (messageType === 2 || messageType === 3) {
+      const group = Number.parseInt(command2Hex, 16);
+      return {
+        messageType,
+        group: Number.isInteger(group) ? group : null,
+        command1,
+        command2: '00'
+      };
+    }
+
+    return {
+      messageType,
+      group: null,
+      command1,
+      command2: command2Hex
+    };
+  }
+
+  _inferRuntimeStateFromBroadcastCommand(command1) {
+    if (command1 === '11' || command1 === '12') {
+      return {
+        status: true,
+        brightness: 100,
+        isOnline: true,
+        lastSeen: new Date()
+      };
+    }
+
+    if (command1 === '13' || command1 === '14') {
+      return {
+        status: false,
+        brightness: 0,
+        isOnline: true,
+        lastSeen: new Date()
+      };
+    }
+
+    return null;
+  }
+
   _parseRuntimeCommand(command) {
     const payload = command?.standard || command?.extended || null;
     if (!payload || typeof payload !== 'object') {
@@ -6270,9 +6353,12 @@ class InsteonService {
     const command2Hex = String(payload.command2 || '').trim().toUpperCase();
     const command2 = Number.parseInt(command2Hex, 16);
     const hasNumericCommand2 = Number.isFinite(command2);
+    const broadcastMetadata = this._extractRuntimeBroadcastMetadata(payload, command1, command2Hex);
 
     let inferredState = null;
-    if (command1 === '11' || command1 === '12' || command1 === '21') {
+    if (broadcastMetadata.group != null) {
+      inferredState = this._inferRuntimeStateFromBroadcastCommand(broadcastMetadata.command1);
+    } else if (command1 === '11' || command1 === '12' || command1 === '21') {
       const inferredBrightness = hasNumericCommand2
         ? Math.round((Math.max(0, Math.min(255, command2)) / 255) * 100)
         : 100;
@@ -6309,8 +6395,109 @@ class InsteonService {
       address: normalizedAddress,
       command1,
       command2: command2Hex,
-      inferredState
+      inferredState,
+      messageType: broadcastMetadata.messageType,
+      broadcastGroup: broadcastMetadata.group,
+      sceneCommand1: broadcastMetadata.command1,
+      sceneCommand2: broadcastMetadata.command2
     };
+  }
+
+  async _getRuntimeSceneResponderAddresses(controllerAddress, group) {
+    const normalizedController = this._normalizePossibleInsteonAddress(controllerAddress);
+    const numericGroup = Number(group);
+    if (!normalizedController || !Number.isInteger(numericGroup) || numericGroup <= 0) {
+      return [];
+    }
+
+    const cacheKey = `${normalizedController}:${numericGroup}`;
+    const cached = this._runtimeSceneResponderCache.get(cacheKey);
+    if (cached && (Date.now() - cached.cachedAt) < this._runtimeSceneCacheTtlMs) {
+      return cached.addresses.slice();
+    }
+
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const links = await this._executeQueuedPlmCallbackOperation(
+      (callback) => this.hub.links(normalizedController, callback),
+      {
+        priority: 'state_confirm',
+        kind: 'runtime_scene_link_lookup',
+        label: `reading scene links for ${this._formatInsteonAddress(normalizedController)} group ${numericGroup}`,
+        timeoutMs: 12000,
+        timeoutMessage: `Timeout reading scene links for ${this._formatInsteonAddress(normalizedController)} group ${numericGroup}`
+      }
+    );
+
+    const addresses = Array.from(new Set(
+      (Array.isArray(links) ? links : [])
+        .flatMap((link) => {
+          if (!link || link.isInUse === false || link.controller !== true || Number(link.group) !== numericGroup) {
+            return [];
+          }
+
+          const rawId = typeof link.id === 'string'
+            ? link.id
+            : (typeof link.at === 'string' ? link.at : '');
+          if (!rawId) {
+            return [];
+          }
+
+          try {
+            const normalizedLinkedId = this._normalizeInsteonAddress(rawId);
+            return normalizedLinkedId === normalizedController ? [] : [normalizedLinkedId];
+          } catch (error) {
+            return [];
+          }
+        })
+    ));
+
+    this._runtimeSceneResponderCache.set(cacheKey, {
+      addresses,
+      cachedAt: Date.now()
+    });
+
+    return addresses.slice();
+  }
+
+  async _scheduleRuntimeSceneResponderRefreshes(parsed) {
+    if (!parsed || parsed.broadcastGroup == null || !parsed.sceneCommand1) {
+      return;
+    }
+
+    const responderAddresses = await this._getRuntimeSceneResponderAddresses(parsed.address, parsed.broadcastGroup);
+    if (!Array.isArray(responderAddresses) || responderAddresses.length === 0) {
+      return;
+    }
+
+    const expectedStatus = typeof parsed.inferredState?.status === 'boolean'
+      ? parsed.inferredState.status
+      : null;
+
+    this._logEngineInfo(
+      `Queued ${responderAddresses.length} linked responder refresh${responderAddresses.length === 1 ? '' : 'es'} for controller group ${parsed.broadcastGroup}`,
+      {
+        stage: 'runtime',
+        direction: 'internal',
+        operation: 'runtime_scene_refresh',
+        address: parsed.address,
+        details: {
+          group: parsed.broadcastGroup,
+          sceneCommand1: parsed.sceneCommand1,
+          sceneCommand2: parsed.sceneCommand2,
+          expectedStatus,
+          responders: responderAddresses.map((address) => this._formatInsteonAddress(address))
+        }
+      }
+    );
+
+    responderAddresses.forEach((address) => {
+      this._scheduleRuntimeStateRefresh(address, `scene:${this._formatInsteonAddress(parsed.address)}:${parsed.broadcastGroup}`, {
+        expectedStatus
+      });
+    });
   }
 
   _scheduleRuntimeStateRefresh(address, reason = 'command', options = {}) {
@@ -6390,12 +6577,20 @@ class InsteonService {
       details: {
         command1: parsed.command1,
         command2: parsed.command2,
+        messageType: parsed.messageType,
+        broadcastGroup: parsed.broadcastGroup,
+        sceneCommand1: parsed.sceneCommand1,
+        sceneCommand2: parsed.sceneCommand2,
         inferredState: parsed.inferredState || null
       }
     });
 
     if (parsed.inferredState) {
       await this._persistDeviceRuntimeStateByAddress(parsed.address, parsed.inferredState);
+    }
+
+    if (parsed.broadcastGroup != null && parsed.sceneCommand1) {
+      await this._scheduleRuntimeSceneResponderRefreshes(parsed);
     }
 
     this._scheduleRuntimeStateRefresh(parsed.address, `cmd:${parsed.command1}`);

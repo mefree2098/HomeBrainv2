@@ -1,5 +1,22 @@
 import { useEffect, useMemo, useState } from "react"
-import { Activity, BarChart3, Clock3, Loader2, Zap } from "lucide-react"
+import {
+  type LucideIcon,
+  Activity,
+  BarChart3,
+  Clock3,
+  Cpu,
+  Gauge,
+  House,
+  Lightbulb,
+  Loader2,
+  Lock,
+  RadioTower,
+  Sparkles,
+  Thermometer,
+  Wind,
+  Workflow,
+  Zap
+} from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
 import {
@@ -24,8 +41,10 @@ import {
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
+import { cn } from "@/lib/utils"
 
 type DeviceLike = {
   _id: string
@@ -322,10 +341,151 @@ function sameStringList(left: string[], right: string[]) {
   return left.every((value, index) => value === right[index])
 }
 
+function formatTokenLabel(value: string | null | undefined, fallback = "Device") {
+  const normalized = String(value || "").trim()
+  if (!normalized) {
+    return fallback
+  }
+
+  return normalized
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ")
+}
+
+function looksLikeFanDevice(device: DeviceLike | null) {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const descriptor = [
+    device?.name,
+    device?.type,
+    properties?.insteonType,
+    properties?.productKey,
+    properties?.smartThingsDeviceTypeName
+  ]
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase()
+
+  return /\bfan\b/.test(descriptor)
+}
+
+function getDeviceTypeLabel(device: DeviceLike | null) {
+  return formatTokenLabel(device?.type, "Device")
+}
+
+function getPrimaryStateLabel(device: DeviceLike | null) {
+  const type = String(device?.type || "").trim().toLowerCase()
+
+  switch (type) {
+    case "lock":
+      return device?.status ? "Locked" : "Unlocked"
+    case "garage":
+      return device?.status ? "Open" : "Closed"
+    default:
+      return device?.status ? "On" : "Off"
+  }
+}
+
+function getDeviceHeroIcon(device: DeviceLike | null): LucideIcon {
+  if (looksLikeFanDevice(device)) {
+    return Wind
+  }
+
+  const type = String(device?.type || "").trim().toLowerCase()
+  switch (type) {
+    case "light":
+    case "switch":
+      return Lightbulb
+    case "lock":
+      return Lock
+    case "thermostat":
+      return Thermometer
+    default:
+      return Cpu
+  }
+}
+
+function getDeviceOverviewCopy(
+  device: DeviceLike | null,
+  supportsEnergyMonitoring: boolean,
+  insteonAddress: string | null
+) {
+  if (!device) {
+    return "The selected device is no longer available."
+  }
+
+  const source = getSourceLabel(device)
+  const typeLabel = getDeviceTypeLabel(device).toLowerCase()
+
+  if (supportsEnergyMonitoring) {
+    return `${source} telemetry is available for live draw, stored history, and threshold-driven automations.`
+  }
+
+  if (source === "Insteon" && insteonAddress) {
+    return `Direct ${source} control routes through ${insteonAddress}. This view prioritizes health, routing, and workflow context instead of power telemetry.`
+  }
+
+  return `${source} control is available for this ${typeLabel}. This view prioritizes health, routing, and workflow context instead of power telemetry.`
+}
+
 type DeviceTelemetryMetricCardProps = {
   metric: TelemetryMetricDescriptor
   stats: TelemetryMetricStats | undefined
   points: TelemetrySeriesPayload["points"]
+}
+
+type DeviceOverviewStatCardProps = {
+  label: string
+  value: string
+  hint: string
+  icon: LucideIcon
+  tone?: "sky" | "emerald" | "amber" | "violet"
+}
+
+function DeviceOverviewStatCard({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  tone = "sky"
+}: DeviceOverviewStatCardProps) {
+  const toneClassName = {
+    sky: "border-cyan-400/20 bg-cyan-400/10 text-cyan-200",
+    emerald: "border-emerald-400/20 bg-emerald-400/10 text-emerald-200",
+    amber: "border-amber-400/20 bg-amber-400/10 text-amber-200",
+    violet: "border-violet-400/20 bg-violet-400/10 text-violet-200"
+  }[tone]
+
+  return (
+    <div className="rounded-[1.35rem] border border-white/10 bg-black/20 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+      <div className="flex items-center justify-between gap-3">
+        <p className="section-kicker text-white/45">{label}</p>
+        <div className={cn("flex h-10 w-10 items-center justify-center rounded-2xl border", toneClassName)}>
+          <Icon className="h-4 w-4" />
+        </div>
+      </div>
+      <p className="mt-4 text-lg font-semibold tracking-[-0.04em] text-foreground sm:text-xl">{value}</p>
+      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{hint}</p>
+    </div>
+  )
+}
+
+type DeviceDetailRowProps = {
+  label: string
+  value: string
+  mono?: boolean
+}
+
+function DeviceDetailRow({ label, value, mono = false }: DeviceDetailRowProps) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-white/6 py-3 last:border-b-0 last:pb-0 first:pt-0">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <span className={cn("text-right text-sm font-medium text-foreground", mono && "font-mono tracking-[0.08em]")}>
+        {value}
+      </span>
+    </div>
+  )
 }
 
 function DeviceTelemetryMetricCard({ metric, stats, points }: DeviceTelemetryMetricCardProps) {
@@ -655,6 +815,63 @@ export function DeviceDetailsDialog({
     [telemetrySeries?.stats]
   )
   const telemetryEvents = telemetrySeries?.events ?? []
+  const deviceTypeLabel = useMemo(() => getDeviceTypeLabel(device), [device])
+  const primaryStateLabel = useMemo(() => getPrimaryStateLabel(device), [device])
+  const connectivityLabel = device?.isOnline === false ? "Offline" : "Online"
+  const HeroIcon = useMemo(() => getDeviceHeroIcon(device), [device])
+  const overviewCopy = useMemo(
+    () => getDeviceOverviewCopy(device, liveSnapshot.supportsEnergyMonitoring, insteonAddress),
+    [device, insteonAddress, liveSnapshot.supportsEnergyMonitoring]
+  )
+  const groupSummary = currentGroups.length === 0
+    ? "No groups assigned"
+    : `${currentGroups.length} group${currentGroups.length === 1 ? "" : "s"} assigned`
+  const telemetryMetricCount = telemetrySeries?.source?.availableMetrics.length ?? 0
+  const telemetrySampleCountLabel = telemetrySeries?.source?.sampleCount != null
+    ? telemetrySeries.source.sampleCount.toLocaleString()
+    : "0"
+  const overviewStats = [
+    {
+      label: "State",
+      value: primaryStateLabel,
+      hint: device?.status
+        ? "Active right now and ready for live automations."
+        : "Idle until a manual command or workflow runs.",
+      icon: Zap,
+      tone: device?.status ? "emerald" : "sky"
+    },
+    {
+      label: "Connectivity",
+      value: connectivityLabel,
+      hint: device?.isOnline === false
+        ? "Reconnect it before depending on critical routines."
+        : `Last seen ${formatDateTime(device?.lastSeen)}`,
+      icon: RadioTower,
+      tone: device?.isOnline === false ? "amber" : "sky"
+    },
+    {
+      label: "Placement",
+      value: device?.room || "Unassigned",
+      hint: `${deviceTypeLabel} via ${getSourceLabel(device)}`,
+      icon: House,
+      tone: "violet"
+    },
+    liveSnapshot.supportsEnergyMonitoring
+      ? {
+          label: "Live draw",
+          value: latestPowerValue !== null ? formatPowerValue(latestPowerValue, latestPowerUnit) : "Monitoring ready",
+          hint: `Updated ${formatDateTime(latestObservedAt)}`,
+          icon: Gauge,
+          tone: "emerald"
+        }
+      : {
+          label: "Groups",
+          value: groupSummary,
+          hint: "Reuse this device in scenes and grouped workflow actions.",
+          icon: Workflow,
+          tone: "amber"
+        }
+  ] as const
 
   const handleTelemetryMetricToggle = (metricKey: string) => {
     setTelemetryMetricKeys((current) => {
@@ -717,424 +934,637 @@ export function DeviceDetailsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-[960px] overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/60 px-6 py-5">
-          <div className="flex flex-wrap items-start gap-3 pr-10">
-            <div className="min-w-0 flex-1">
-              <DialogTitle>{device?.name || "Device details"}</DialogTitle>
-              <DialogDescription>
-                {device
-                  ? `${device.room || "Unassigned"} • ${device.type} • ${getSourceLabel(device)}`
-                  : "The selected device is no longer available."}
-              </DialogDescription>
-            </div>
-            {device ? (
-              <>
-                <Badge variant={device.status ? "default" : "secondary"}>
-                  {device.status ? "On" : "Off"}
-                </Badge>
-                {liveSnapshot.supportsEnergyMonitoring ? (
-                  <Badge variant="outline">Energy monitoring</Badge>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        </DialogHeader>
-
-        <div className="overflow-y-auto px-6 py-5">
-          {!device ? (
-            <Card>
+      <DialogContent className="flex max-h-[94vh] max-w-[1180px] flex-col gap-0 overflow-hidden border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_30%),radial-gradient(circle_at_top_right,rgba(96,165,250,0.12),transparent_34%),linear-gradient(180deg,rgba(8,16,31,0.96),rgba(3,9,20,0.98))] p-0">
+        {!device ? (
+          <div className="p-6 sm:p-7">
+            <Card className="border-white/10 bg-black/20">
               <CardContent className="p-6 text-sm text-muted-foreground">
                 This device is no longer available in the current device list.
               </CardContent>
             </Card>
-          ) : (
-            <div className="space-y-5">
-              <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-                <Card className="border-white/10 bg-white/5">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Zap className="h-4 w-4 text-emerald-500" />
-                      Live Power Readout
-                    </CardTitle>
-                    <CardDescription>
-                      Current power draw from the imported SmartThings energy-monitoring capability.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div>
-                      <p className="text-4xl font-semibold tracking-tight">
-                        {formatPowerValue(latestPowerValue, latestPowerUnit)}
+          </div>
+        ) : (
+          <Tabs defaultValue="overview" className="flex min-h-0 flex-1 flex-col">
+            <div className="relative shrink-0 border-b border-white/10 px-5 pb-5 pt-5 sm:px-7 sm:pb-6 sm:pt-6">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.24),transparent_42%),radial-gradient(circle_at_top_right,rgba(125,211,252,0.12),transparent_36%)] opacity-80" />
+              <DialogHeader className="relative space-y-5 text-left">
+                <div className="flex flex-col gap-5 pr-12 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="flex min-w-0 items-start gap-4">
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.4rem] border border-white/10 bg-white/8 shadow-[0_18px_48px_rgba(4,12,28,0.34)]">
+                      <HeroIcon className="h-6 w-6 text-cyan-200" />
+                    </div>
+                    <div className="min-w-0">
+                      <DialogTitle className="font-body text-[clamp(1.7rem,3vw,2.5rem)] font-semibold tracking-[-0.07em] text-white">
+                        {device.name}
+                      </DialogTitle>
+                      <DialogDescription className="mt-2 text-base text-white/62">
+                        {`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                      </DialogDescription>
+                      <p className="mt-3 max-w-3xl text-sm leading-relaxed text-white/74 sm:text-[0.95rem]">
+                        {overviewCopy}
                       </p>
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        Updated {formatDateTime(latestObservedAt)}
-                      </p>
                     </div>
+                  </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm text-muted-foreground">Energy total</span>
-                          <Activity className="h-4 w-4 text-cyan-500" />
-                        </div>
-                        <p className="mt-2 text-xl font-semibold">
-                          {formatEnergyValue(latestEnergyValue, latestEnergyUnit)}
-                        </p>
-                      </div>
+                  <div className="flex flex-wrap gap-2 xl:max-w-[320px] xl:justify-end">
+                    <div className="rounded-full border border-emerald-400/18 bg-emerald-400/10 px-3.5 py-1.5 text-sm font-medium text-emerald-100">
+                      {primaryStateLabel}
+                    </div>
+                    <div className={cn(
+                      "rounded-full border px-3.5 py-1.5 text-sm font-medium",
+                      device.isOnline === false
+                        ? "border-amber-400/18 bg-amber-400/10 text-amber-100"
+                        : "border-cyan-400/18 bg-cyan-400/10 text-cyan-100"
+                    )}>
+                      {connectivityLabel}
+                    </div>
+                    <div className="rounded-full border border-white/10 bg-white/6 px-3.5 py-1.5 text-sm font-medium text-white/78">
+                      {liveSnapshot.supportsEnergyMonitoring ? "Energy telemetry" : "Control profile"}
+                    </div>
+                  </div>
+                </div>
 
-                      <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm text-muted-foreground">History window</span>
-                          <Clock3 className="h-4 w-4 text-amber-500" />
-                        </div>
-                        <p className="mt-2 text-xl font-semibold">Last {HISTORY_HOURS} hours</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {overviewStats.map((item) => (
+                    <DeviceOverviewStatCard
+                      key={item.label}
+                      label={item.label}
+                      value={item.value}
+                      hint={item.hint}
+                      icon={item.icon}
+                      tone={item.tone}
+                    />
+                  ))}
+                </div>
+              </DialogHeader>
+            </div>
 
-                <Card className="border-white/10 bg-white/5">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <BarChart3 className="h-4 w-4 text-blue-500" />
-                      Device Snapshot
-                    </CardTitle>
-                    <CardDescription>
-                      Quick context for troubleshooting automations and validating threshold rules.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground">Room</span>
-                      <span className="font-medium">{device.room || "Unassigned"}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground">Source</span>
-                      <span className="font-medium">{getSourceLabel(device)}</span>
-                    </div>
-                    {insteonAddress ? (
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">INSTEON address</span>
-                        <span className="font-mono font-medium">{insteonAddress}</span>
-                      </div>
-                    ) : null}
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground">Connectivity</span>
-                      <span className="font-medium">{device.isOnline === false ? "Offline" : "Online"}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-muted-foreground">Last seen</span>
-                      <span className="font-medium">{formatDateTime(device.lastSeen)}</span>
-                    </div>
-                    <div className="space-y-3 rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium text-foreground">Workflow groups</span>
-                          <span className="text-xs text-muted-foreground">
-                            Reuse this device in group-based automations
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {draftGroups.length > 0 ? draftGroups.map((group) => (
-                            <Badge key={group} variant="secondary">
-                              {group}
-                            </Badge>
-                          )) : (
-                            <span className="text-xs text-muted-foreground">No groups assigned yet.</span>
-                          )}
-                        </div>
-                      </div>
+            <div className="shrink-0 border-b border-white/10 px-5 py-3 sm:px-7">
+              <TabsList className="flex w-full justify-start sm:w-auto">
+                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="history">History</TabsTrigger>
+              </TabsList>
+            </div>
 
-                      <div className="space-y-2">
-                        <Label htmlFor="device-group-input">Comma-separated groups</Label>
-                        <Input
-                          id="device-group-input"
-                          value={groupInput}
-                          onChange={(event) => setGroupInput(event.target.value)}
-                          placeholder="Interior Lights, Alarm Shutdown"
-                        />
-                      </div>
-
-                      {suggestedGroups.length > 0 ? (
-                        <div className="space-y-2">
-                          <span className="text-xs text-muted-foreground">Existing groups</span>
-                          <div className="flex flex-wrap gap-2">
-                            {suggestedGroups.slice(0, 12).map((group) => (
-                              <Button
-                                key={group}
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="h-8"
-                                onClick={() => appendSuggestedGroup(group)}
-                              >
-                                {group}
-                              </Button>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <div className="flex justify-end">
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={handleSaveGroups}
-                          disabled={!groupsChanged || savingGroups}
-                        >
-                          {savingGroups ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Saving
-                            </>
-                          ) : "Save groups"}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4 text-muted-foreground">
-                      Use this device in workflows with threshold triggers like
-                      {" "}
-                      <span className="font-medium text-foreground">energy level greater than</span>
-                      {" "}
-                      for startup and
-                      {" "}
-                      <span className="font-medium text-foreground">energy level less than</span>
-                      {" "}
-                      plus hold time for shutdown detection.
-                    </div>
-                    {isAdmin && device && onAlexaExposureUpdated ? (
-                      <div className="space-y-3 rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
-                        <div className="space-y-1">
-                          <div className="font-medium text-foreground">Alexa</div>
-                          <p className="text-xs text-muted-foreground">
-                            Expose this device to Alexa discovery with a HomeBrain-managed name and aliases.
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-5 sm:px-7 sm:pb-7">
+              <TabsContent value="overview" className="mt-0 space-y-5">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
+                  <div className="space-y-5">
+                    <Card className="border-white/10 bg-black/20">
+                      <CardContent className="space-y-6 p-6 sm:p-7">
+                        <div className="flex flex-col gap-2">
+                          <p className="section-kicker text-white/45">
+                            {liveSnapshot.supportsEnergyMonitoring ? "Signal & Power" : "Operational Profile"}
                           </p>
-                        </div>
-                        <AlexaExposureControl
-                          entityType="device"
-                          entityId={device._id}
-                          entityName={device.name}
-                          exposure={alexaExposure}
-                          loading={alexaExposureLoading}
-                          defaultRoomHint={device.room}
-                          compact={false}
-                          onSave={onAlexaExposureUpdated}
-                        />
-                      </div>
-                    ) : null}
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Card className="border-white/10 bg-white/5">
-                <CardHeader>
-                  <CardTitle>Power Usage Trend</CardTitle>
-                  <CardDescription>
-                    Continuous power samples recorded for this device across the last {HISTORY_HOURS} hours.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {!liveSnapshot.supportsEnergyMonitoring ? (
-                    <div className="rounded-[1.1rem] border border-dashed border-white/10 px-4 py-10 text-center text-sm text-muted-foreground">
-                      This device does not currently expose SmartThings power or energy readings.
-                    </div>
-                  ) : loading ? (
-                    <div className="flex h-[320px] items-center justify-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading device history...
-                    </div>
-                  ) : error ? (
-                    <div className="rounded-[1.1rem] border border-dashed border-red-500/30 px-4 py-10 text-center text-sm text-red-400">
-                      {error}
-                    </div>
-                  ) : chartData.length === 0 ? (
-                    <div className="rounded-[1.1rem] border border-dashed border-white/10 px-4 py-10 text-center text-sm text-muted-foreground">
-                      No power samples have been recorded for this device yet.
-                    </div>
-                  ) : (
-                    <ChartContainer
-                      className="h-[320px] w-full"
-                      config={{
-                        powerValue: {
-                          label: `Power (${latestPowerUnit})`,
-                          color: "#16a34a"
-                        }
-                      }}
-                    >
-                      <LineChart data={chartData}>
-                        <CartesianGrid vertical={false} strokeDasharray="4 4" />
-                        <XAxis
-                          dataKey="recordedAt"
-                          tickLine={false}
-                          axisLine={false}
-                          minTickGap={24}
-                          tickFormatter={formatChartTick}
-                        />
-                        <YAxis
-                          tickLine={false}
-                          axisLine={false}
-                          width={52}
-                          tickFormatter={(value) => Number(value).toFixed(0)}
-                        />
-                        <ChartTooltip
-                          content={
-                            <ChartTooltipContent
-                              indicator="line"
-                              labelFormatter={(value) => formatDateTime(typeof value === "string" ? value : "")}
-                            />
-                          }
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="powerValue"
-                          stroke="var(--color-powerValue)"
-                          strokeWidth={2.5}
-                          dot={false}
-                          isAnimationActive={false}
-                        />
-                      </LineChart>
-                    </ChartContainer>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="border-white/10 bg-white/5">
-                <CardHeader className="gap-4">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                      <CardTitle>Full Telemetry History</CardTitle>
-                      <CardDescription>
-                        Unified device telemetry for on/off activity, connectivity, thresholds, and sensor changes.
-                      </CardDescription>
-                    </div>
-                    <Badge variant="outline">
-                      {telemetrySeries?.source.sampleCount?.toLocaleString?.() ?? "0"} stored samples
-                    </Badge>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    {TELEMETRY_RANGE_OPTIONS.map((option) => (
-                      <Button
-                        key={option.hours}
-                        type="button"
-                        size="sm"
-                        variant={telemetryRangeHours === option.hours ? "default" : "outline"}
-                        onClick={() => setTelemetryRangeHours(option.hours)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </div>
-
-                  {telemetrySeries?.source ? (
-                    <div className="flex flex-wrap gap-2">
-                      {telemetrySeries.source.availableMetrics.map((metric) => {
-                        const activeMetricKeys = telemetryMetricKeys.length > 0
-                          ? telemetryMetricKeys
-                          : telemetrySeries.metrics.map((entry) => entry.key)
-
-                        return (
-                          <Button
-                            key={metric.key}
-                            type="button"
-                            size="sm"
-                            variant={activeMetricKeys.includes(metric.key) ? "default" : "outline"}
-                            onClick={() => handleTelemetryMetricToggle(metric.key)}
-                          >
-                            {metric.label}
-                          </Button>
-                        )
-                      })}
-                    </div>
-                  ) : null}
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {telemetryLoading ? (
-                    <div className="flex h-52 items-center justify-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading telemetry timeline...
-                    </div>
-                  ) : telemetryError ? (
-                    <div className="rounded-[1.1rem] border border-dashed border-red-500/30 px-4 py-10 text-center text-sm text-red-400">
-                      {telemetryError}
-                    </div>
-                  ) : !telemetrySeries ? (
-                    <div className="rounded-[1.1rem] border border-dashed border-white/10 px-4 py-10 text-center text-sm text-muted-foreground">
-                      This device has not emitted telemetry samples yet.
-                    </div>
-                  ) : (
-                    <>
-                      <div className="grid gap-4 md:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
-                        <div className="grid gap-4 md:grid-cols-2">
-                          {telemetryMetricDescriptors.map((metric) => (
-                            <DeviceTelemetryMetricCard
-                              key={metric.key}
-                              metric={metric}
-                              stats={telemetryStats.get(metric.key)}
-                              points={telemetrySeries.points}
-                            />
-                          ))}
-                        </div>
-
-                        <div className="rounded-[1.2rem] border border-white/10 bg-white/5 p-4">
-                          <div className="flex items-start justify-between gap-3">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                             <div>
-                              <p className="font-medium text-foreground">Activity Timeline</p>
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                When this device changed state in the selected telemetry window.
+                              <p className="text-2xl font-semibold tracking-[-0.05em] text-white">
+                                {liveSnapshot.supportsEnergyMonitoring ? "Live energy story" : "Clean, actionable device context"}
+                              </p>
+                              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                                {liveSnapshot.supportsEnergyMonitoring
+                                  ? "Use the current draw and stored energy history to spot activity spikes, validate shutdown holds, and tune threshold automations."
+                                  : "This device view now emphasizes routing, availability, and automation fit instead of forcing a power-centric layout when the hardware does not report it."}
                               </p>
                             </div>
-                            <Badge variant="secondary">{telemetryEvents.length}</Badge>
+                            <div className="rounded-full border border-white/10 bg-white/6 px-3.5 py-1.5 text-sm text-white/72">
+                              {liveSnapshot.supportsEnergyMonitoring ? `${telemetryMetricCount || "Power"} metrics available` : `${telemetryMetricCount || "Base"} metrics available`}
+                            </div>
                           </div>
+                        </div>
 
-                          {telemetryEvents.length === 0 ? (
-                            <div className="mt-4 rounded-[1rem] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-muted-foreground">
-                              No discrete state transitions were detected in this range.
-                            </div>
-                          ) : (
-                            <div className="mt-4 space-y-3">
-                              {telemetryEvents.slice(0, 14).map((event: TelemetryTimelineEvent) => (
-                                <div key={event.id} className="rounded-[1rem] border border-white/10 bg-black/10 p-3">
-                                  <div className="flex items-center justify-between gap-3">
-                                    <p className="text-sm font-medium text-foreground">{event.summary}</p>
-                                    <Badge variant="outline">{event.label}</Badge>
+                        {liveSnapshot.supportsEnergyMonitoring ? (
+                          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.95fr)]">
+                            <div className="space-y-5">
+                              <div>
+                                <p className="text-[clamp(2.3rem,4vw,4rem)] font-semibold tracking-[-0.08em] text-white">
+                                  {formatPowerValue(latestPowerValue, latestPowerUnit)}
+                                </p>
+                                <p className="mt-2 text-sm text-muted-foreground">
+                                  Updated {formatDateTime(latestObservedAt)}
+                                </p>
+                              </div>
+
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="section-kicker text-white/45">Energy Total</span>
+                                    <Activity className="h-4 w-4 text-cyan-300" />
                                   </div>
-                                  <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(event.observedAt)}</p>
+                                  <p className="mt-3 text-xl font-semibold tracking-[-0.05em] text-white">
+                                    {formatEnergyValue(latestEnergyValue, latestEnergyUnit)}
+                                  </p>
+                                  <p className="mt-1 text-sm text-muted-foreground">
+                                    Cumulative energy exposed by the active device integration.
+                                  </p>
                                 </div>
-                              ))}
+
+                                <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="section-kicker text-white/45">History Window</span>
+                                    <Clock3 className="h-4 w-4 text-amber-300" />
+                                  </div>
+                                  <p className="mt-3 text-xl font-semibold tracking-[-0.05em] text-white">
+                                    Last {HISTORY_HOURS} hours
+                                  </p>
+                                  <p className="mt-1 text-sm text-muted-foreground">
+                                    Quick trend preview here, with deeper history in the next tab.
+                                  </p>
+                                </div>
+                              </div>
                             </div>
+
+                            <div className="rounded-[1.35rem] border border-white/10 bg-black/20 p-4">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="font-medium text-white">Recent curve</p>
+                                  <p className="mt-1 text-xs text-muted-foreground">
+                                    A compact preview of the latest recorded power samples.
+                                  </p>
+                                </div>
+                                <Gauge className="h-4 w-4 text-cyan-300" />
+                              </div>
+
+                              {loading ? (
+                                <div className="flex h-[210px] items-center justify-center gap-2 text-sm text-muted-foreground">
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  Loading preview...
+                                </div>
+                              ) : error ? (
+                                <div className="mt-4 rounded-[1rem] border border-dashed border-red-500/30 px-4 py-10 text-center text-sm text-red-300">
+                                  {error}
+                                </div>
+                              ) : chartData.length === 0 ? (
+                                <div className="mt-4 flex h-[210px] items-center justify-center rounded-[1rem] border border-dashed border-white/10 px-4 text-center text-sm text-muted-foreground">
+                                  No power samples are available yet for the preview window.
+                                </div>
+                              ) : (
+                                <ChartContainer
+                                  className="mt-4 h-[210px] w-full"
+                                  config={{
+                                    powerValue: {
+                                      label: `Power (${latestPowerUnit})`,
+                                      color: "#22c55e"
+                                    }
+                                  }}
+                                >
+                                  <LineChart data={chartData}>
+                                    <CartesianGrid vertical={false} strokeDasharray="4 4" />
+                                    <XAxis
+                                      dataKey="recordedAt"
+                                      tickLine={false}
+                                      axisLine={false}
+                                      minTickGap={24}
+                                      tickFormatter={formatChartTick}
+                                    />
+                                    <YAxis
+                                      tickLine={false}
+                                      axisLine={false}
+                                      width={48}
+                                      tickFormatter={(value) => Number(value).toFixed(0)}
+                                    />
+                                    <ChartTooltip
+                                      content={(
+                                        <ChartTooltipContent
+                                          indicator="line"
+                                          labelFormatter={(value) => formatDateTime(typeof value === "string" ? value : "")}
+                                        />
+                                      )}
+                                    />
+                                    <Line
+                                      type="monotone"
+                                      dataKey="powerValue"
+                                      stroke="var(--color-powerValue)"
+                                      strokeWidth={2.5}
+                                      dot={false}
+                                      isAnimationActive={false}
+                                    />
+                                  </LineChart>
+                                </ChartContainer>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="rounded-[1.25rem] border border-white/10 bg-white/[0.04] p-5">
+                              <p className="section-kicker text-white/45">Control Route</p>
+                              <p className="mt-3 text-xl font-semibold tracking-[-0.05em] text-white">
+                                {getSourceLabel(device)}
+                              </p>
+                              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                                {insteonAddress
+                                  ? `Commands route directly to ${insteonAddress}, which is a much better story for this device than pretending it should have a live power dashboard.`
+                                  : "Commands route through the configured device integration and this panel keeps the operational details front and center."}
+                              </p>
+                            </div>
+
+                            <div className="rounded-[1.25rem] border border-white/10 bg-white/[0.04] p-5">
+                              <p className="section-kicker text-white/45">History Coverage</p>
+                              <p className="mt-3 text-xl font-semibold tracking-[-0.05em] text-white">
+                                {telemetryMetricCount > 0 ? `${telemetryMetricCount} telemetry metric${telemetryMetricCount === 1 ? "" : "s"}` : "State-first history"}
+                              </p>
+                              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                                {telemetryMetricCount > 0
+                                  ? "The History tab still captures device-level samples and event changes when the integration exposes them."
+                                  : "This device does not report energy telemetry right now, so the experience emphasizes state, availability, and workflow reuse instead."}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-white/10 bg-black/20">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Automation fit</CardTitle>
+                        <CardDescription>
+                          {liveSnapshot.supportsEnergyMonitoring
+                            ? "Recommended ways to use this device in thresholds, holds, and state-aware routines."
+                            : "Recommended ways to use this device in direct-control routines, scenes, and grouped actions."}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="grid gap-3 md:grid-cols-3">
+                          {liveSnapshot.supportsEnergyMonitoring ? (
+                            <>
+                              <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                                <p className="section-kicker text-white/45">Startup</p>
+                                <p className="mt-3 font-medium text-white">Trigger when power rises above your active threshold.</p>
+                              </div>
+                              <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                                <p className="section-kicker text-white/45">Shutdown</p>
+                                <p className="mt-3 font-medium text-white">Use a lower threshold plus hold time to avoid noisy false exits.</p>
+                              </div>
+                              <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                                <p className="section-kicker text-white/45">History</p>
+                                <p className="mt-3 font-medium text-white">Validate thresholds with the recent curve and full telemetry timeline.</p>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                                <p className="section-kicker text-white/45">Grouping</p>
+                                <p className="mt-3 font-medium text-white">Use groups to target this device from one workflow action instead of repeating it everywhere.</p>
+                              </div>
+                              <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                                <p className="section-kicker text-white/45">Reliability</p>
+                                <p className="mt-3 font-medium text-white">Online state matters more than telemetry here, especially for critical routines.</p>
+                              </div>
+                              <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                                <p className="section-kicker text-white/45">History</p>
+                                <p className="mt-3 font-medium text-white">Use the History tab for state changes and device activity when samples exist.</p>
+                              </div>
+                            </>
                           )}
                         </div>
-                      </div>
 
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
-                          <p className="section-kicker text-muted-foreground">Samples Returned</p>
-                          <p className="mt-2 text-2xl font-semibold">{telemetrySeries.range.pointCount.toLocaleString()}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            From {telemetrySeries.range.rawPointCount.toLocaleString()} raw points.
+                        <div className="rounded-[1.2rem] border border-cyan-400/12 bg-cyan-400/[0.07] px-4 py-3 text-sm leading-relaxed text-cyan-50/88">
+                          {liveSnapshot.supportsEnergyMonitoring
+                            ? "For appliance detection, pair an energy-above trigger for startup with an energy-below trigger and a short hold for shutdown. It reads much cleaner in automations than chaining a bunch of on/off guesses."
+                            : "For direct-control devices like this one, reusable groups and connectivity-aware actions usually make for cleaner workflows than stuffing every routine with one-off device references."}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <div className="space-y-5">
+                    <Card className="border-white/10 bg-black/20">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Device snapshot</CardTitle>
+                        <CardDescription>
+                          Operational identity, routing, and traceable metadata at a glance.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-0">
+                        <DeviceDetailRow label="Current state" value={primaryStateLabel} />
+                        <DeviceDetailRow label="Connectivity" value={connectivityLabel} />
+                        <DeviceDetailRow label="Room" value={device.room || "Unassigned"} />
+                        <DeviceDetailRow label="Type" value={deviceTypeLabel} />
+                        <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
+                        {insteonAddress ? (
+                          <DeviceDetailRow label="INSTEON address" value={insteonAddress} mono />
+                        ) : null}
+                        <DeviceDetailRow label="Last seen" value={formatDateTime(device.lastSeen)} />
+                        <DeviceDetailRow label="Groups" value={groupSummary} />
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-white/10 bg-black/20">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Workflow groups</CardTitle>
+                        <CardDescription>
+                          Assign reusable group names so workflows can target this device without repeating raw device IDs.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                          <p className="section-kicker text-white/45">Assigned Now</p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {draftGroups.length > 0 ? draftGroups.map((group) => (
+                              <Badge key={group} variant="secondary" className="border-white/10 bg-white/[0.08] text-white/82">
+                                {group}
+                              </Badge>
+                            )) : (
+                              <span className="text-sm text-muted-foreground">No groups assigned yet.</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="device-group-input">Comma-separated groups</Label>
+                          <Input
+                            id="device-group-input"
+                            className="bg-black/20"
+                            value={groupInput}
+                            onChange={(event) => setGroupInput(event.target.value)}
+                            placeholder="Interior Lights, Alarm Shutdown"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Separate names with commas. Groups make scene and workflow targeting much cleaner.
                           </p>
                         </div>
-                        <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
-                          <p className="section-kicker text-muted-foreground">Window</p>
-                          <p className="mt-2 text-2xl font-semibold">
-                            {telemetryRangeHours >= 24 ? `${Math.round(telemetryRangeHours / 24)}d` : `${telemetryRangeHours}h`}
+
+                        {suggestedGroups.length > 0 ? (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Sparkles className="h-3.5 w-3.5" />
+                              Existing groups you can reuse
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {suggestedGroups.slice(0, 12).map((group) => (
+                                <Button
+                                  key={group}
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 border-white/10 bg-white/[0.04] text-white/80 hover:text-white"
+                                  onClick={() => appendSuggestedGroup(group)}
+                                >
+                                  {group}
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-xs text-muted-foreground">
+                            {groupsChanged
+                              ? `${draftGroups.length} group${draftGroups.length === 1 ? "" : "s"} ready to save.`
+                              : "No unsaved group changes."}
                           </p>
-                          <p className="mt-1 text-xs text-muted-foreground">History across state and metric changes.</p>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={handleSaveGroups}
+                            disabled={!groupsChanged || savingGroups}
+                          >
+                            {savingGroups ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Saving
+                              </>
+                            ) : "Save groups"}
+                          </Button>
                         </div>
-                        <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
-                          <p className="section-kicker text-muted-foreground">Last Device Sample</p>
-                          <p className="mt-2 text-lg font-semibold">{formatDateTime(telemetrySeries.source.lastSampleAt)}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">Latest stored telemetry point for this device.</p>
-                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {isAdmin && onAlexaExposureUpdated ? (
+                      <Card className="border-white/10 bg-black/20">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Alexa exposure</CardTitle>
+                          <CardDescription>
+                            Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <AlexaExposureControl
+                            entityType="device"
+                            entityId={device._id}
+                            entityName={device.name}
+                            exposure={alexaExposure}
+                            loading={alexaExposureLoading}
+                            defaultRoomHint={device.room}
+                            compact={false}
+                            onSave={onAlexaExposureUpdated}
+                          />
+                        </CardContent>
+                      </Card>
+                    ) : null}
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="history" className="mt-0 space-y-5">
+                <Card className="border-white/10 bg-black/20">
+                  <CardHeader>
+                    <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Power usage trend</CardTitle>
+                    <CardDescription>
+                      Continuous power samples recorded for this device across the last {HISTORY_HOURS} hours.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {!liveSnapshot.supportsEnergyMonitoring ? (
+                      <div className="rounded-[1.1rem] border border-dashed border-white/10 px-4 py-10 text-center text-sm text-muted-foreground">
+                        This device does not currently expose power or energy readings.
                       </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
+                    ) : loading ? (
+                      <div className="flex h-[320px] items-center justify-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading device history...
+                      </div>
+                    ) : error ? (
+                      <div className="rounded-[1.1rem] border border-dashed border-red-500/30 px-4 py-10 text-center text-sm text-red-400">
+                        {error}
+                      </div>
+                    ) : chartData.length === 0 ? (
+                      <div className="rounded-[1.1rem] border border-dashed border-white/10 px-4 py-10 text-center text-sm text-muted-foreground">
+                        No power samples have been recorded for this device yet.
+                      </div>
+                    ) : (
+                      <ChartContainer
+                        className="h-[320px] w-full"
+                        config={{
+                          powerValue: {
+                            label: `Power (${latestPowerUnit})`,
+                            color: "#16a34a"
+                          }
+                        }}
+                      >
+                        <LineChart data={chartData}>
+                          <CartesianGrid vertical={false} strokeDasharray="4 4" />
+                          <XAxis
+                            dataKey="recordedAt"
+                            tickLine={false}
+                            axisLine={false}
+                            minTickGap={24}
+                            tickFormatter={formatChartTick}
+                          />
+                          <YAxis
+                            tickLine={false}
+                            axisLine={false}
+                            width={52}
+                            tickFormatter={(value) => Number(value).toFixed(0)}
+                          />
+                          <ChartTooltip
+                            content={(
+                              <ChartTooltipContent
+                                indicator="line"
+                                labelFormatter={(value) => formatDateTime(typeof value === "string" ? value : "")}
+                              />
+                            )}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="powerValue"
+                            stroke="var(--color-powerValue)"
+                            strokeWidth={2.5}
+                            dot={false}
+                            isAnimationActive={false}
+                          />
+                        </LineChart>
+                      </ChartContainer>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="border-white/10 bg-black/20">
+                  <CardHeader className="gap-4">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Event & telemetry history</CardTitle>
+                        <CardDescription>
+                          Unified device telemetry for activity, connectivity, thresholds, and sensor changes.
+                        </CardDescription>
+                      </div>
+                      <Badge variant="outline">{telemetrySampleCountLabel} stored samples</Badge>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {TELEMETRY_RANGE_OPTIONS.map((option) => (
+                        <Button
+                          key={option.hours}
+                          type="button"
+                          size="sm"
+                          variant={telemetryRangeHours === option.hours ? "default" : "outline"}
+                          onClick={() => setTelemetryRangeHours(option.hours)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </div>
+
+                    {telemetrySeries?.source ? (
+                      <div className="flex flex-wrap gap-2">
+                        {telemetrySeries.source.availableMetrics.map((metric) => {
+                          const activeMetricKeys = telemetryMetricKeys.length > 0
+                            ? telemetryMetricKeys
+                            : telemetrySeries.metrics.map((entry) => entry.key)
+
+                          return (
+                            <Button
+                              key={metric.key}
+                              type="button"
+                              size="sm"
+                              variant={activeMetricKeys.includes(metric.key) ? "default" : "outline"}
+                              onClick={() => handleTelemetryMetricToggle(metric.key)}
+                            >
+                              {metric.label}
+                            </Button>
+                          )
+                        })}
+                      </div>
+                    ) : null}
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {telemetryLoading ? (
+                      <div className="flex h-52 items-center justify-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading telemetry timeline...
+                      </div>
+                    ) : telemetryError ? (
+                      <div className="rounded-[1.1rem] border border-dashed border-red-500/30 px-4 py-10 text-center text-sm text-red-400">
+                        {telemetryError}
+                      </div>
+                    ) : !telemetrySeries ? (
+                      <div className="rounded-[1.1rem] border border-dashed border-white/10 px-4 py-10 text-center text-sm text-muted-foreground">
+                        This device has not emitted telemetry samples yet.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid gap-4 md:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
+                          <div className="grid gap-4 md:grid-cols-2">
+                            {telemetryMetricDescriptors.map((metric) => (
+                              <DeviceTelemetryMetricCard
+                                key={metric.key}
+                                metric={metric}
+                                stats={telemetryStats.get(metric.key)}
+                                points={telemetrySeries.points}
+                              />
+                            ))}
+                          </div>
+
+                          <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-medium text-foreground">Activity timeline</p>
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  When this device changed state in the selected telemetry window.
+                                </p>
+                              </div>
+                              <Badge variant="secondary">{telemetryEvents.length}</Badge>
+                            </div>
+
+                            {telemetryEvents.length === 0 ? (
+                              <div className="mt-4 rounded-[1rem] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-muted-foreground">
+                                No discrete state transitions were detected in this range.
+                              </div>
+                            ) : (
+                              <div className="mt-4 space-y-3">
+                                {telemetryEvents.slice(0, 14).map((event: TelemetryTimelineEvent) => (
+                                  <div key={event.id} className="rounded-[1rem] border border-white/10 bg-black/10 p-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <p className="text-sm font-medium text-foreground">{event.summary}</p>
+                                      <Badge variant="outline">{event.label}</Badge>
+                                    </div>
+                                    <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(event.observedAt)}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-[1.1rem] border border-white/10 bg-white/[0.04] p-4">
+                            <p className="section-kicker text-muted-foreground">Samples Returned</p>
+                            <p className="mt-2 text-2xl font-semibold">{telemetrySeries.range.pointCount.toLocaleString()}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              From {telemetrySeries.range.rawPointCount.toLocaleString()} raw points.
+                            </p>
+                          </div>
+                          <div className="rounded-[1.1rem] border border-white/10 bg-white/[0.04] p-4">
+                            <p className="section-kicker text-muted-foreground">Window</p>
+                            <p className="mt-2 text-2xl font-semibold">
+                              {telemetryRangeHours >= 24 ? `${Math.round(telemetryRangeHours / 24)}d` : `${telemetryRangeHours}h`}
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">History across state and metric changes.</p>
+                          </div>
+                          <div className="rounded-[1.1rem] border border-white/10 bg-white/[0.04] p-4">
+                            <p className="section-kicker text-muted-foreground">Last Device Sample</p>
+                            <p className="mt-2 text-lg font-semibold">{formatDateTime(telemetrySeries.source.lastSampleAt)}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">Latest stored telemetry point for this device.</p>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
             </div>
-          )}
-        </div>
+          </Tabs>
+        )}
       </DialogContent>
     </Dialog>
   )
