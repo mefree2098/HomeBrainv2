@@ -11,6 +11,7 @@ const Register = lazy(() => import("./pages/Register").then((module) => ({ defau
 const BlankPage = lazy(() => import("./pages/BlankPage").then((module) => ({ default: module.BlankPage })))
 const Dashboard = lazy(() => import("./pages/Dashboard").then((module) => ({ default: module.Dashboard })))
 const Weather = lazy(() => import("./pages/Weather"))
+const DataPlatform = lazy(() => import("./pages/DataPlatform"))
 const Devices = lazy(() => import("./pages/Devices").then((module) => ({ default: module.Devices })))
 const DeviceGroups = lazy(() => import("./pages/DeviceGroups").then((module) => ({ default: module.DeviceGroups })))
 const Scenes = lazy(() => import("./pages/Scenes").then((module) => ({ default: module.Scenes })))
@@ -55,6 +56,7 @@ function App() {
             <Route path="/register" element={<Register />} />
             <Route path="/" element={withLayout(<Dashboard />)} />
             <Route path="/weather" element={withLayout(<Weather />)} />
+            <Route path="/data-platform" element={withLayout(<DataPlatform />)} />
             <Route path="/devices" element={withLayout(<Devices />)} />
             <Route path="/device-groups" element={withLayout(<DeviceGroups />, { adminOnly: true })} />
             <Route path="/scenes" element={withLayout(<Scenes />)} />

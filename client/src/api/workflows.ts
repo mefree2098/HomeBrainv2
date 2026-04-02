@@ -100,6 +100,17 @@ export interface WorkflowCurrentAction {
   startedAt?: string;
   updatedAt?: string;
   message?: string;
+  timer?: {
+    durationMs?: number | null;
+    endsAt?: string | null;
+  } | null;
+  nextAction?: {
+    actionIndex?: number | null;
+    parentActionIndex?: number | null;
+    actionType?: string;
+    target?: unknown;
+    message?: string;
+  } | null;
 }
 
 export interface WorkflowExecutionHistoryEntry {

@@ -14,6 +14,42 @@ function sanitizeLevel(level) {
   return ['info', 'warn', 'error'].includes(level) ? level : 'info';
 }
 
+function humanizeToken(value = '') {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+}
+
+function capitalizeMessage(value = '') {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function formatRuntimeDuration(durationMs) {
+  const normalized = Math.max(0, Number(durationMs) || 0);
+  if (normalized < 1000) {
+    return `${Math.round(normalized)} ms`;
+  }
+
+  const totalSeconds = Math.max(0, Math.round(normalized / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
 function formatInterruptionReason(reason = '') {
   const normalized = String(reason || '').trim().replace(/[_-]+/g, ' ');
   return normalized || 'server restart';
@@ -43,6 +79,58 @@ function createRuntimeEvent(type, message, details = {}, level = 'info') {
     details: details && typeof details === 'object' ? details : {},
     createdAt: new Date()
   };
+}
+
+function sanitizeActionTimer(timer, startedAt = null) {
+  if (!timer || typeof timer !== 'object') {
+    return null;
+  }
+
+  const durationMs = Number(timer.durationMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
+  }
+
+  const endsAt = timer.endsAt
+    ? new Date(timer.endsAt)
+    : (startedAt instanceof Date && Number.isFinite(startedAt.getTime())
+      ? new Date(startedAt.getTime() + Math.round(durationMs))
+      : null);
+
+  return {
+    durationMs: Math.round(durationMs),
+    endsAt: endsAt instanceof Date && Number.isFinite(endsAt.getTime()) ? endsAt : null
+  };
+}
+
+function sanitizeNextAction(nextAction) {
+  if (!nextAction || typeof nextAction !== 'object') {
+    return null;
+  }
+
+  const actionType = humanizeToken(nextAction.actionType || 'unknown');
+  const message = typeof nextAction.message === 'string' && nextAction.message.trim()
+    ? nextAction.message.trim()
+    : (actionType ? capitalizeMessage(actionType) : 'Next action');
+
+  return {
+    actionIndex: Number.isInteger(nextAction.actionIndex) ? nextAction.actionIndex : null,
+    parentActionIndex: Number.isInteger(nextAction.parentActionIndex) ? nextAction.parentActionIndex : null,
+    actionType: String(nextAction.actionType || 'unknown'),
+    target: Object.prototype.hasOwnProperty.call(nextAction, 'target') ? nextAction.target : null,
+    message
+  };
+}
+
+function formatActionStartMessage(actionType, timer = null) {
+  if (timer?.durationMs) {
+    return `Waiting ${formatRuntimeDuration(timer.durationMs)}`;
+  }
+
+  const normalizedType = humanizeToken(actionType || 'action');
+  return normalizedType
+    ? `Running ${normalizedType}`
+    : 'Running action';
 }
 
 async function appendRuntimeEvent(historyId, event, currentAction = undefined) {
@@ -157,14 +245,19 @@ async function recordExecutionStarted(context) {
 }
 
 async function recordActionStarted(context, details = {}) {
+  const startedAt = details.startedAt ? new Date(details.startedAt) : new Date();
+  const timer = sanitizeActionTimer(details.timer, startedAt);
+  const nextAction = sanitizeNextAction(details.nextAction);
   const currentAction = {
     actionIndex: details.actionIndex,
     parentActionIndex: details.parentActionIndex ?? null,
     actionType: details.actionType || 'unknown',
     target: details.target ?? null,
-    startedAt: new Date(),
-    updatedAt: new Date(),
-    message: details.message || `Running ${details.actionType || 'action'}`
+    startedAt,
+    updatedAt: startedAt,
+    message: details.message || formatActionStartMessage(details.actionType, timer),
+    timer,
+    nextAction
   };
 
   const event = createRuntimeEvent(
@@ -174,7 +267,10 @@ async function recordActionStarted(context, details = {}) {
       actionIndex: currentAction.actionIndex,
       parentActionIndex: currentAction.parentActionIndex,
       actionType: currentAction.actionType,
-      target: currentAction.target
+      target: currentAction.target,
+      startedAt: currentAction.startedAt,
+      timer: currentAction.timer,
+      nextAction: currentAction.nextAction
     },
     'info'
   );
@@ -186,6 +282,9 @@ async function recordActionStarted(context, details = {}) {
       parentActionIndex: currentAction.parentActionIndex,
       actionType: currentAction.actionType,
       target: currentAction.target,
+      startedAt: currentAction.startedAt,
+      timer: currentAction.timer,
+      nextAction: currentAction.nextAction,
       status: 'running',
       message: currentAction.message
     },

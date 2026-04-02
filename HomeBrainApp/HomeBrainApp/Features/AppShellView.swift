@@ -116,6 +116,7 @@ struct AppShellView: View {
     enum AppSection: String, CaseIterable, Identifiable {
         case dashboard
         case weather
+        case dataPlatform
         case views
         case devices
         case scenes
@@ -135,6 +136,7 @@ struct AppShellView: View {
             switch self {
             case .dashboard: return "Dashboard"
             case .weather: return "Weather"
+            case .dataPlatform: return "Data Platform"
             case .views: return "Views"
             case .devices: return "Devices"
             case .scenes: return "Scenes"
@@ -154,6 +156,7 @@ struct AppShellView: View {
             switch self {
             case .dashboard: return "Residence Overview"
             case .weather: return "Weather Command Deck"
+            case .dataPlatform: return "Telemetry Atlas"
             case .views: return "Device Dashboards"
             case .devices: return "Device Matrix"
             case .scenes: return "Scene Sequencer"
@@ -173,6 +176,7 @@ struct AppShellView: View {
             switch self {
             case .dashboard: return "Live Command Deck"
             case .weather: return "Atmospheric Systems"
+            case .dataPlatform: return "Historical Intelligence"
             case .views: return "Room Presets"
             case .devices: return "Hardware Orchestration"
             case .scenes: return "Atmosphere Control"
@@ -192,6 +196,7 @@ struct AppShellView: View {
             switch self {
             case .dashboard: return "house"
             case .weather: return "cloud.sun"
+            case .dataPlatform: return "chart.xyaxis.line"
             case .views: return "rectangle.3.group"
             case .devices: return "lightbulb"
             case .scenes: return "sparkles"
@@ -1338,6 +1343,12 @@ struct AppShellView: View {
                 UIPreviewModuleView(section: section)
             } else {
                 WeatherView()
+            }
+        case .dataPlatform:
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                DataPlatformView()
             }
         case .views:
             if previewMode {

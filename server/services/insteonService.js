@@ -63,10 +63,18 @@ class InsteonService {
     this._runtimeErrorListener = null;
     this._runtimeCloseListener = null;
     this._runtimeCommandListener = null;
+    this._connectPromise = null;
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
     this._localSerialBridge = null;
     this._pendingRuntimeStateRefreshes = new Map();
+    this._runtimeMonitoringTimer = null;
+    this._runtimeMonitoringStarted = false;
+    this._runtimeMonitoringInProgress = false;
+    this._runtimeMonitoringIntervalMs = Math.max(
+      5000,
+      Number(process.env.HOMEBRAIN_INSTEON_RUNTIME_MONITOR_INTERVAL_MS || 30000)
+    );
     this.enableLocalSerialBridge = process.env.HOMEBRAIN_INSTEON_ENABLE_LOCAL_TCP_BRIDGE !== 'false';
     this._isySyncRuns = new Map();
     this._isySyncRunRetention = Number(process.env.HOMEBRAIN_ISY_SYNC_RUN_RETENTION || DEFAULT_ISY_SYNC_RUN_RETENTION);
@@ -348,6 +356,9 @@ class InsteonService {
       this._runtimeCloseListener = null;
       this._runtimeErrorListener = null;
       this._runtimeCommandListener = null;
+      if (this._runtimeMonitoringStarted) {
+        this._scheduleRuntimeMonitoringPass(1000, 'runtime-close');
+      }
     };
 
     this._runtimeCommandListener = (command) => {
@@ -391,6 +402,107 @@ class InsteonService {
       clearTimeout(timer);
     }
     this._pendingRuntimeStateRefreshes.clear();
+  }
+
+  _clearRuntimeMonitoringTimer() {
+    if (this._runtimeMonitoringTimer) {
+      clearTimeout(this._runtimeMonitoringTimer);
+      this._runtimeMonitoringTimer = null;
+    }
+  }
+
+  _scheduleRuntimeMonitoringPass(delayMs = this._runtimeMonitoringIntervalMs, reason = 'interval') {
+    if (!this._runtimeMonitoringStarted) {
+      return;
+    }
+
+    this._clearRuntimeMonitoringTimer();
+    const boundedDelayMs = Math.max(0, Number(delayMs) || 0);
+    this._runtimeMonitoringTimer = setTimeout(() => {
+      this._runtimeMonitoringTimer = null;
+      this._runRuntimeMonitoringPass(reason).catch((error) => {
+        console.warn(`InsteonService: Runtime monitoring pass failed (${reason}): ${error.message}`);
+      });
+    }, boundedDelayMs);
+
+    if (typeof this._runtimeMonitoringTimer.unref === 'function') {
+      this._runtimeMonitoringTimer.unref();
+    }
+  }
+
+  async _resolveRuntimeMonitoringContext() {
+    const settings = await Settings.getSettings();
+    const rawConfiguredTarget = typeof settings?.insteonPort === 'string'
+      ? settings.insteonPort.trim()
+      : '';
+    const configuredTarget = rawConfiguredTarget || DEFAULT_INSTEON_SERIAL_PORT;
+    const connection = this.resolveConnectionTarget(configuredTarget);
+    const trackedDeviceCount = await Device.countDocuments({ 'properties.source': 'insteon' });
+
+    if (connection.transport === 'tcp') {
+      return {
+        shouldConnect: Boolean(rawConfiguredTarget || trackedDeviceCount > 0),
+        reason: rawConfiguredTarget
+          ? 'configured-tcp-target'
+          : (trackedDeviceCount > 0 ? 'tracked-insteon-devices' : 'no-runtime-target')
+      };
+    }
+
+    const normalizedSerialPath = this._normalizeSerialPath(connection.serialPath);
+    const explicitSerialTarget = Boolean(
+      rawConfiguredTarget
+      && normalizedSerialPath
+      && normalizedSerialPath !== DEFAULT_INSTEON_SERIAL_PORT
+    );
+    const serialPathExists = Boolean(normalizedSerialPath && fs.existsSync(normalizedSerialPath));
+
+    return {
+      shouldConnect: Boolean(explicitSerialTarget || serialPathExists || trackedDeviceCount > 0),
+      reason: explicitSerialTarget
+        ? 'configured-serial-target'
+        : serialPathExists
+          ? 'serial-port-present'
+          : (trackedDeviceCount > 0 ? 'tracked-insteon-devices' : 'no-runtime-target')
+    };
+  }
+
+  async _runRuntimeMonitoringPass(reason = 'interval') {
+    if (!this._runtimeMonitoringStarted || this._runtimeMonitoringInProgress) {
+      return;
+    }
+
+    this._runtimeMonitoringInProgress = true;
+
+    try {
+      if (!this.isConnected || !this.hub) {
+        const monitoringContext = await this._resolveRuntimeMonitoringContext();
+        if (monitoringContext.shouldConnect) {
+          await this.connect();
+        }
+      }
+    } catch (error) {
+      console.warn(`InsteonService: Runtime monitoring pass failed (${reason}): ${error.message}`);
+    } finally {
+      this._runtimeMonitoringInProgress = false;
+      if (this._runtimeMonitoringStarted) {
+        this._scheduleRuntimeMonitoringPass(this._runtimeMonitoringIntervalMs, 'interval');
+      }
+    }
+  }
+
+  startRuntimeMonitoring({ immediate = true } = {}) {
+    if (this._runtimeMonitoringStarted) {
+      return;
+    }
+
+    this._runtimeMonitoringStarted = true;
+    this._scheduleRuntimeMonitoringPass(immediate ? 0 : this._runtimeMonitoringIntervalMs, 'startup');
+  }
+
+  stopRuntimeMonitoring() {
+    this._runtimeMonitoringStarted = false;
+    this._runtimeMonitoringInProgress = false;
+    this._clearRuntimeMonitoringTimer();
   }
 
   _normalizeSerialPath(serialPath) {
@@ -5586,180 +5698,191 @@ class InsteonService {
    * @returns {Promise<Object>} Connection status
    */
   async connect() {
-    console.log('InsteonService: Attempting to connect to PLM');
+    if (this._connectPromise) {
+      return this._connectPromise;
+    }
 
-    try {
-      const settings = await Settings.getSettings();
-      const configuredTarget = settings.insteonPort || DEFAULT_INSTEON_SERIAL_PORT;
-      const connection = this.resolveConnectionTarget(configuredTarget);
-      let validatedSerial = null;
-      let serialPortModule = null;
-      let runtimeTransport = connection.transport;
-      let bridgeConnection = null;
+    this._connectPromise = (async () => {
+      console.log('InsteonService: Attempting to connect to PLM');
 
-      if (connection.transport === 'serial') {
-        validatedSerial = await this._validateSerialEndpoint(connection.serialPath);
-        connection.serialPath = validatedSerial.serialPath;
-        connection.label = validatedSerial.serialPath;
+      try {
+        const settings = await Settings.getSettings();
+        const configuredTarget = settings.insteonPort || DEFAULT_INSTEON_SERIAL_PORT;
+        const connection = this.resolveConnectionTarget(configuredTarget);
+        let validatedSerial = null;
+        let serialPortModule = null;
+        let runtimeTransport = connection.transport;
+        let bridgeConnection = null;
 
-        serialPortModule = this._loadSerialPortModule();
-        if (serialPortModule) {
-          if (this._isLocalSerialBridgeActive()) {
-            await this._stopLocalSerialBridge({ reason: 'native serial transport available' });
+        if (connection.transport === 'serial') {
+          validatedSerial = await this._validateSerialEndpoint(connection.serialPath);
+          connection.serialPath = validatedSerial.serialPath;
+          connection.label = validatedSerial.serialPath;
+
+          serialPortModule = this._loadSerialPortModule();
+          if (serialPortModule) {
+            if (this._isLocalSerialBridgeActive()) {
+              await this._stopLocalSerialBridge({ reason: 'native serial transport available' });
+            }
+          } else {
+            try {
+              bridgeConnection = await this._ensureLocalSerialBridge(validatedSerial.serialPath, {
+                baudRate: INSTEON_SERIAL_OPTIONS.baudRate
+              });
+              runtimeTransport = 'tcp';
+              connection.host = bridgeConnection.host;
+              connection.port = bridgeConnection.port;
+              console.log(
+                `InsteonService: Serial transport unavailable, using local TCP bridge at ${bridgeConnection.host}:${bridgeConnection.port}`
+              );
+            } catch (bridgeError) {
+              throw new Error(this._buildSerialTransportUnavailableMessage(validatedSerial.serialPath, bridgeError));
+            }
+          }
+
+          if (validatedSerial.stablePath && validatedSerial.serialPath.startsWith('/dev/tty')) {
+            console.log(`InsteonService: Serial port ${validatedSerial.serialPath} also available as stable path ${validatedSerial.stablePath}`);
+          }
+          if (runtimeTransport === 'serial') {
+            console.log(`InsteonService: Connecting to PLM on serial port ${connection.serialPath}`);
           }
         } else {
+          if (this._isLocalSerialBridgeActive()) {
+            await this._stopLocalSerialBridge({ reason: 'TCP endpoint selected' });
+          }
+          console.log(`InsteonService: Connecting to PLM over TCP at ${connection.label}`);
+        }
+
+        const targetIdentity = connection.transport === 'serial'
+          ? connection.serialPath
+          : connection.label;
+
+        if (this.isConnected && this.hub) {
+          const alreadyConnectedToTarget =
+            this.connectionTransport === connection.transport &&
+            this.connectionTarget === targetIdentity;
+
+          if (alreadyConnectedToTarget) {
+            console.log('InsteonService: Already connected to PLM');
+            const response = {
+              success: true,
+              message: 'Already connected to Insteon PLM',
+              port: this.connectionTarget || targetIdentity,
+              transport: this.connectionTransport || connection.transport,
+              runtimeTransport
+            };
+            if (connection.transport === 'serial' && runtimeTransport === 'tcp' && this._isLocalSerialBridgeActive()) {
+              response.bridge = {
+                host: this._localSerialBridge.host,
+                port: this._localSerialBridge.port,
+                serialPath: this._localSerialBridge.serialPath
+              };
+              response.runtimeEndpoint = `${this._localSerialBridge.host}:${this._localSerialBridge.port}`;
+            }
+            return response;
+          }
+
+          console.log(`InsteonService: Endpoint changed (${this.connectionTarget || 'unknown'} -> ${targetIdentity}), reconnecting`);
+          await this.disconnect();
+        }
+
+        this.hub = new Insteon();
+        if (runtimeTransport === 'serial' && serialPortModule) {
+          this.hub.SerialPort = serialPortModule;
+        }
+        this._attachRuntimeListeners();
+        this.lastConnectionError = null;
+
+        const connectionPromise = new Promise((resolve, reject) => {
+          let settled = false;
+
+          const timeout = setTimeout(() => {
+            onError(new Error('Connection timeout after 10 seconds'));
+          }, 10000);
+
+          const cleanup = () => {
+            clearTimeout(timeout);
+            if (this.hub && typeof this.hub.removeListener === 'function') {
+              this.hub.removeListener('connect', onConnect);
+              this.hub.removeListener('error', onError);
+            }
+          };
+
+          const onConnect = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            this.isConnected = true;
+            this.connectionAttempts = 0;
+            this.connectionTransport = connection.transport;
+            this.connectionTarget = targetIdentity;
+            console.log('InsteonService: Successfully connected to PLM');
+            const response = {
+              success: true,
+              message: 'Successfully connected to Insteon PLM',
+              port: targetIdentity,
+              transport: connection.transport,
+              runtimeTransport
+            };
+            if (validatedSerial && validatedSerial.stablePath) {
+              response.recommendedStablePort = validatedSerial.stablePath;
+            }
+            if (connection.transport === 'serial' && runtimeTransport === 'tcp' && bridgeConnection) {
+              response.bridge = {
+                host: bridgeConnection.host,
+                port: bridgeConnection.port,
+                serialPath: bridgeConnection.serialPath
+              };
+              response.runtimeEndpoint = `${bridgeConnection.host}:${bridgeConnection.port}`;
+            }
+            resolve(response);
+          };
+
+          const onError = (error) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            const err = error instanceof Error ? error : new Error(String(error || 'Unknown connection error'));
+            this.lastConnectionError = err.message;
+            console.error('InsteonService: Connection error:', err.message);
+            reject(err);
+          };
+
+          this.hub.once('connect', onConnect);
+          this.hub.once('error', onError);
+
           try {
-            bridgeConnection = await this._ensureLocalSerialBridge(validatedSerial.serialPath, {
-              baudRate: INSTEON_SERIAL_OPTIONS.baudRate
-            });
-            runtimeTransport = 'tcp';
-            connection.host = bridgeConnection.host;
-            connection.port = bridgeConnection.port;
-            console.log(
-              `InsteonService: Serial transport unavailable, using local TCP bridge at ${bridgeConnection.host}:${bridgeConnection.port}`
-            );
-          } catch (bridgeError) {
-            throw new Error(this._buildSerialTransportUnavailableMessage(validatedSerial.serialPath, bridgeError));
+            if (runtimeTransport === 'tcp') {
+              this.hub.connect(connection.host, connection.port);
+            } else {
+              this.hub.serial(connection.serialPath, { ...INSTEON_SERIAL_OPTIONS });
+            }
+          } catch (error) {
+            onError(error);
           }
-        }
+        });
 
-        if (validatedSerial.stablePath && validatedSerial.serialPath.startsWith('/dev/tty')) {
-          console.log(`InsteonService: Serial port ${validatedSerial.serialPath} also available as stable path ${validatedSerial.stablePath}`);
-        }
-        if (runtimeTransport === 'serial') {
-          console.log(`InsteonService: Connecting to PLM on serial port ${connection.serialPath}`);
-        }
-      } else {
-        if (this._isLocalSerialBridgeActive()) {
-          await this._stopLocalSerialBridge({ reason: 'TCP endpoint selected' });
-        }
-        console.log(`InsteonService: Connecting to PLM over TCP at ${connection.label}`);
+        return await connectionPromise;
+      } catch (error) {
+        this.connectionAttempts++;
+        console.error(`InsteonService: Connection failed (attempt ${this.connectionAttempts}/${this.maxConnectionAttempts}):`, error.message);
+        console.error(error.stack);
+
+        this.isConnected = false;
+        this.lastConnectionError = error.message;
+        this._detachRuntimeListeners();
+        this.hub = null;
+        this.connectionTransport = null;
+        this.connectionTarget = null;
+
+        throw new Error(`Failed to connect to Insteon PLM: ${error.message}`);
       }
+    })();
 
-      const targetIdentity = connection.transport === 'serial'
-        ? connection.serialPath
-        : connection.label;
-
-      if (this.isConnected && this.hub) {
-        const alreadyConnectedToTarget =
-          this.connectionTransport === connection.transport &&
-          this.connectionTarget === targetIdentity;
-
-        if (alreadyConnectedToTarget) {
-          console.log('InsteonService: Already connected to PLM');
-          const response = {
-            success: true,
-            message: 'Already connected to Insteon PLM',
-            port: this.connectionTarget || targetIdentity,
-            transport: this.connectionTransport || connection.transport,
-            runtimeTransport
-          };
-          if (connection.transport === 'serial' && runtimeTransport === 'tcp' && this._isLocalSerialBridgeActive()) {
-            response.bridge = {
-              host: this._localSerialBridge.host,
-              port: this._localSerialBridge.port,
-              serialPath: this._localSerialBridge.serialPath
-            };
-            response.runtimeEndpoint = `${this._localSerialBridge.host}:${this._localSerialBridge.port}`;
-          }
-          return response;
-        }
-
-        console.log(`InsteonService: Endpoint changed (${this.connectionTarget || 'unknown'} -> ${targetIdentity}), reconnecting`);
-        await this.disconnect();
-      }
-
-      this.hub = new Insteon();
-      if (runtimeTransport === 'serial' && serialPortModule) {
-        this.hub.SerialPort = serialPortModule;
-      }
-      this._attachRuntimeListeners();
-      this.lastConnectionError = null;
-
-      // Connect with timeout handling
-      const connectionPromise = new Promise((resolve, reject) => {
-        let settled = false;
-
-        const timeout = setTimeout(() => {
-          onError(new Error('Connection timeout after 10 seconds'));
-        }, 10000);
-
-        const cleanup = () => {
-          clearTimeout(timeout);
-          if (this.hub && typeof this.hub.removeListener === 'function') {
-            this.hub.removeListener('connect', onConnect);
-            this.hub.removeListener('error', onError);
-          }
-        };
-
-        const onConnect = () => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          this.isConnected = true;
-          this.connectionAttempts = 0;
-          this.connectionTransport = connection.transport;
-          this.connectionTarget = targetIdentity;
-          console.log('InsteonService: Successfully connected to PLM');
-          const response = {
-            success: true,
-            message: 'Successfully connected to Insteon PLM',
-            port: targetIdentity,
-            transport: connection.transport,
-            runtimeTransport
-          };
-          if (validatedSerial && validatedSerial.stablePath) {
-            response.recommendedStablePort = validatedSerial.stablePath;
-          }
-          if (connection.transport === 'serial' && runtimeTransport === 'tcp' && bridgeConnection) {
-            response.bridge = {
-              host: bridgeConnection.host,
-              port: bridgeConnection.port,
-              serialPath: bridgeConnection.serialPath
-            };
-            response.runtimeEndpoint = `${bridgeConnection.host}:${bridgeConnection.port}`;
-          }
-          resolve(response);
-        };
-
-        const onError = (error) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          const err = error instanceof Error ? error : new Error(String(error || 'Unknown connection error'));
-          this.lastConnectionError = err.message;
-          console.error('InsteonService: Connection error:', err.message);
-          reject(err);
-        };
-
-        this.hub.once('connect', onConnect);
-        this.hub.once('error', onError);
-
-        try {
-          if (runtimeTransport === 'tcp') {
-            this.hub.connect(connection.host, connection.port);
-          } else {
-            this.hub.serial(connection.serialPath, { ...INSTEON_SERIAL_OPTIONS });
-          }
-        } catch (error) {
-          onError(error);
-        }
-      });
-
-      return await connectionPromise;
-    } catch (error) {
-      this.connectionAttempts++;
-      console.error(`InsteonService: Connection failed (attempt ${this.connectionAttempts}/${this.maxConnectionAttempts}):`, error.message);
-      console.error(error.stack);
-
-      this.isConnected = false;
-      this.lastConnectionError = error.message;
-      this._detachRuntimeListeners();
-      this.hub = null;
-      this.connectionTransport = null;
-      this.connectionTarget = null;
-
-      throw new Error(`Failed to connect to Insteon PLM: ${error.message}`);
+    try {
+      return await this._connectPromise;
+    } finally {
+      this._connectPromise = null;
     }
   }
 
@@ -5767,10 +5890,14 @@ class InsteonService {
    * Disconnect from Insteon PLM
    * @returns {Promise<Object>} Disconnection status
    */
-  async disconnect() {
+  async disconnect(options = {}) {
     console.log('InsteonService: Disconnecting from PLM');
 
     try {
+      if (options.stopRuntimeMonitoring === true) {
+        this.stopRuntimeMonitoring();
+      }
+
       this._detachRuntimeListeners();
       if (this.hub && this.hub.close) {
         this.hub.close();

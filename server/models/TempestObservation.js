@@ -1,5 +1,10 @@
 const mongoose = require('mongoose');
 
+const retentionDays = Math.max(
+  1,
+  Number(process.env.TEMPEST_HISTORY_RETENTION_DAYS || process.env.HOMEBRAIN_TELEMETRY_RETENTION_DAYS || 365)
+);
+
 const TempestObservationSchema = new mongoose.Schema({
   stationId: {
     type: Number,
@@ -53,6 +58,13 @@ const TempestObservationSchema = new mongoose.Schema({
 TempestObservationSchema.index(
   { stationId: 1, deviceId: 1, observedAt: 1, observationType: 1 },
   { unique: true, name: 'tempest_observation_unique' }
+);
+TempestObservationSchema.index(
+  { observedAt: 1 },
+  {
+    expireAfterSeconds: retentionDays * 24 * 60 * 60,
+    name: 'tempest_observations_ttl'
+  }
 );
 
 module.exports = mongoose.model('TempestObservation', TempestObservationSchema);

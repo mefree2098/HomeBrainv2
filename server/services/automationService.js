@@ -2445,13 +2445,15 @@ async function executeAutomation(id, options = {}) {
     const execution = await executeActionSequence(automation.actions, {
       context: triggerContext,
       runtime: {
-        onActionStart: async ({ actionIndex, parentActionIndex, action }) => {
+        onActionStart: async ({ actionIndex, parentActionIndex, action, nextAction, timer, startedAt }) => {
           await automationRuntimeService.recordActionStarted(runtimeContext, {
             actionIndex,
             parentActionIndex,
             actionType: action?.type || 'unknown',
             target: getActionTargetCandidate(action, ['deviceId', 'sceneId']),
-            message: `Starting ${action?.type || 'action'} action`
+            nextAction,
+            timer,
+            startedAt
           });
         },
         onActionComplete: async ({ actionIndex, parentActionIndex, action, result, startedAt }) => {

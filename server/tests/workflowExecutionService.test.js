@@ -472,3 +472,47 @@ test('delay action preserves durations longer than ten minutes', async (t) => {
   assert.equal(result.actionResults[0].success, true);
   assert.equal(result.actionResults[0].message, 'Delay complete (1800s)');
 });
+
+test('delay action runtime hook exposes timer countdown and next action metadata', async (t) => {
+  const originalSetTimeout = global.setTimeout;
+  const actionStarts = [];
+
+  t.after(() => {
+    global.setTimeout = originalSetTimeout;
+  });
+
+  global.setTimeout = (handler, delay, ...args) => {
+    if (typeof handler === 'function') {
+      handler(...args);
+    }
+    return 0;
+  };
+
+  await executeActionSequence([
+    {
+      type: 'delay',
+      parameters: { seconds: 120 }
+    },
+    {
+      type: 'notification',
+      parameters: { message: 'fan is off' }
+    }
+  ], {
+    context: {},
+    runtime: {
+      onActionStart: async (payload) => {
+        actionStarts.push(payload);
+      }
+    }
+  });
+
+  assert.equal(actionStarts.length, 2);
+  assert.equal(actionStarts[0].actionType, 'delay');
+  assert.equal(actionStarts[0].timer.durationMs, 120_000);
+  assert.equal(
+    actionStarts[0].timer.endsAt.getTime() - actionStarts[0].startedAt.getTime(),
+    120_000
+  );
+  assert.equal(actionStarts[0].nextAction.actionType, 'notification');
+  assert.match(actionStarts[0].nextAction.message, /notification/i);
+});

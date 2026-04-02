@@ -125,7 +125,7 @@ const formatDuration = (value?: number | null) => {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 };
 
-const formatRunningSince = (value?: string | null) => {
+const formatRunningSince = (value?: string | null, nowMs = Date.now()) => {
   if (!value) {
     return "Just now";
   }
@@ -136,7 +136,58 @@ const formatRunningSince = (value?: string | null) => {
     return "Just now";
   }
 
-  return formatDuration(Date.now() - startedAt);
+  return formatDuration(nowMs - startedAt);
+};
+
+const getCurrentActionCountdownMs = (currentAction?: WorkflowExecutionHistoryEntry["currentAction"] | null, nowMs = Date.now()) => {
+  const endsAt = currentAction?.timer?.endsAt ? new Date(currentAction.timer.endsAt).getTime() : Number.NaN;
+  if (Number.isFinite(endsAt)) {
+    return Math.max(0, endsAt - nowMs);
+  }
+
+  const startedAt = currentAction?.startedAt ? new Date(currentAction.startedAt).getTime() : Number.NaN;
+  const durationMs = Number(currentAction?.timer?.durationMs);
+  if (Number.isFinite(startedAt) && Number.isFinite(durationMs) && durationMs > 0) {
+    return Math.max(0, (startedAt + durationMs) - nowMs);
+  }
+
+  return null;
+};
+
+const formatCountdown = (value?: number | null) => {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "No active timer";
+  }
+
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes.toString().padStart(2, "0")}m`;
+};
+
+const resolveNextActionMessage = (currentAction?: WorkflowExecutionHistoryEntry["currentAction"] | null) => {
+  const explicit = currentAction?.nextAction?.message;
+  if (typeof explicit === "string" && explicit.trim()) {
+    return explicit.trim();
+  }
+
+  const actionType = currentAction?.nextAction?.actionType;
+  if (typeof actionType === "string" && actionType.trim()) {
+    return actionType.replace(/[_-]+/g, " ");
+  }
+
+  return "Workflow completes";
 };
 
 const runtimeStatusLabel = (status: WorkflowExecutionHistoryEntry["status"]) => {
@@ -290,6 +341,11 @@ const buildExecutionLogClipboardText = ({
 
   if (execution.currentAction) {
     lines.push("", "Current Action", stringifyClipboardValue(execution.currentAction));
+    const countdownMs = getCurrentActionCountdownMs(execution.currentAction);
+    if (countdownMs !== null) {
+      lines.push(`Timer Remaining: ${formatCountdown(countdownMs)}`);
+      lines.push(`Next Action: ${resolveNextActionMessage(execution.currentAction)}`);
+    }
   }
 
   if (execution.triggerContext && Object.keys(execution.triggerContext).length > 0) {
@@ -506,6 +562,7 @@ export function Workflows() {
   const [selectedExecution, setSelectedExecution] = useState<WorkflowExecutionHistoryEntry | null>(null);
   const [selectedExecutionEvents, setSelectedExecutionEvents] = useState<PlatformEvent[]>([]);
   const [loadingExecutionEvents, setLoadingExecutionEvents] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const loadRuntimeData = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!options.silent) {
@@ -569,6 +626,22 @@ export function Workflows() {
   useEffect(() => {
     void fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    const hasActiveTimer = runningExecutions.some((entry) => getCurrentActionCountdownMs(entry.currentAction) !== null);
+    const hasRunningExecution = runningExecutions.length > 0 || selectedExecution?.status === "running";
+    if (!hasActiveTimer && !hasRunningExecution) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [runningExecutions, selectedExecution]);
 
   const stats = useMemo(() => {
     const enabled = workflows.filter((workflow) => workflow.enabled).length;
@@ -665,6 +738,116 @@ export function Workflows() {
         }
         return [...prev, event];
       });
+
+      const payload = event.payload || {};
+      setSelectedExecution((prev) => {
+        if (!prev || prev.correlationId !== (event.correlationId || prev.correlationId)) {
+          return prev;
+        }
+
+        if (event.type === "automation.action.started") {
+          return {
+            ...prev,
+            currentAction: {
+              actionIndex: typeof payload.actionIndex === "number" ? payload.actionIndex : undefined,
+              parentActionIndex: typeof payload.parentActionIndex === "number" ? payload.parentActionIndex : null,
+              actionType: typeof payload.actionType === "string" ? payload.actionType : undefined,
+              target: payload.target,
+              startedAt: typeof payload.startedAt === "string" ? payload.startedAt : event.createdAt,
+              updatedAt: event.createdAt,
+              message: typeof payload.message === "string" ? payload.message : "Action running",
+              timer: payload.timer && typeof payload.timer === "object"
+                ? {
+                    durationMs: typeof (payload.timer as { durationMs?: unknown }).durationMs === "number"
+                      ? (payload.timer as { durationMs: number }).durationMs
+                      : null,
+                    endsAt: typeof (payload.timer as { endsAt?: unknown }).endsAt === "string"
+                      ? (payload.timer as { endsAt: string }).endsAt
+                      : null
+                  }
+                : null,
+              nextAction: payload.nextAction && typeof payload.nextAction === "object"
+                ? {
+                    actionIndex: typeof (payload.nextAction as { actionIndex?: unknown }).actionIndex === "number"
+                      ? (payload.nextAction as { actionIndex: number }).actionIndex
+                      : null,
+                    parentActionIndex: typeof (payload.nextAction as { parentActionIndex?: unknown }).parentActionIndex === "number"
+                      ? (payload.nextAction as { parentActionIndex: number }).parentActionIndex
+                      : null,
+                    actionType: typeof (payload.nextAction as { actionType?: unknown }).actionType === "string"
+                      ? (payload.nextAction as { actionType: string }).actionType
+                      : undefined,
+                    target: (payload.nextAction as { target?: unknown }).target,
+                    message: typeof (payload.nextAction as { message?: unknown }).message === "string"
+                      ? (payload.nextAction as { message: string }).message
+                      : undefined
+                  }
+                : null
+            },
+            lastEvent: {
+              type: event.type,
+              level: event.severity,
+              message: typeof payload.message === "string" ? payload.message : activitySummary(event),
+              details: payload,
+              createdAt: event.createdAt
+            }
+          };
+        }
+
+        if (event.type === "automation.action.completed") {
+          return {
+            ...prev,
+            currentAction: null,
+            lastEvent: {
+              type: event.type,
+              level: event.severity,
+              message: typeof payload.message === "string" ? payload.message : activitySummary(event),
+              details: payload,
+              createdAt: event.createdAt
+            }
+          };
+        }
+
+        if (event.type === "automation.action.failed") {
+          return {
+            ...prev,
+            currentAction: {
+              actionIndex: typeof payload.actionIndex === "number" ? payload.actionIndex : undefined,
+              parentActionIndex: typeof payload.parentActionIndex === "number" ? payload.parentActionIndex : null,
+              actionType: typeof payload.actionType === "string" ? payload.actionType : undefined,
+              target: payload.target,
+              updatedAt: event.createdAt,
+              message: typeof payload.message === "string" ? payload.message : "Action failed"
+            },
+            lastEvent: {
+              type: event.type,
+              level: event.severity,
+              message: typeof payload.message === "string" ? payload.message : activitySummary(event),
+              details: payload,
+              createdAt: event.createdAt
+            }
+          };
+        }
+
+        if (event.type === "automation.execution.completed") {
+          return {
+            ...prev,
+            status: typeof payload.status === "string" ? payload.status as WorkflowExecutionHistoryEntry["status"] : prev.status,
+            completedAt: event.createdAt,
+            durationMs: typeof payload.durationMs === "number" ? payload.durationMs : prev.durationMs,
+            currentAction: null,
+            lastEvent: {
+              type: event.type,
+              level: event.severity,
+              message: typeof payload.message === "string" ? payload.message : activitySummary(event),
+              details: payload,
+              createdAt: event.createdAt
+            }
+          };
+        }
+
+        return prev;
+      });
     }
 
     if (event.type === "automation.action.started" || event.type === "automation.action.completed" || event.type === "automation.action.failed") {
@@ -684,9 +867,36 @@ export function Workflows() {
                       parentActionIndex: typeof payload.parentActionIndex === "number" ? payload.parentActionIndex : null,
                       actionType: typeof payload.actionType === "string" ? payload.actionType : undefined,
                       target: payload.target,
-                      startedAt: event.createdAt,
+                      startedAt: typeof payload.startedAt === "string" ? payload.startedAt : event.createdAt,
                       updatedAt: event.createdAt,
-                      message: typeof payload.message === "string" ? payload.message : "Action running"
+                      message: typeof payload.message === "string" ? payload.message : "Action running",
+                      timer: payload.timer && typeof payload.timer === "object"
+                        ? {
+                            durationMs: typeof (payload.timer as { durationMs?: unknown }).durationMs === "number"
+                              ? (payload.timer as { durationMs: number }).durationMs
+                              : null,
+                            endsAt: typeof (payload.timer as { endsAt?: unknown }).endsAt === "string"
+                              ? (payload.timer as { endsAt: string }).endsAt
+                              : null
+                          }
+                        : null,
+                      nextAction: payload.nextAction && typeof payload.nextAction === "object"
+                        ? {
+                            actionIndex: typeof (payload.nextAction as { actionIndex?: unknown }).actionIndex === "number"
+                              ? (payload.nextAction as { actionIndex: number }).actionIndex
+                              : null,
+                            parentActionIndex: typeof (payload.nextAction as { parentActionIndex?: unknown }).parentActionIndex === "number"
+                              ? (payload.nextAction as { parentActionIndex: number }).parentActionIndex
+                              : null,
+                            actionType: typeof (payload.nextAction as { actionType?: unknown }).actionType === "string"
+                              ? (payload.nextAction as { actionType: string }).actionType
+                              : undefined,
+                            target: (payload.nextAction as { target?: unknown }).target,
+                            message: typeof (payload.nextAction as { message?: unknown }).message === "string"
+                              ? (payload.nextAction as { message: string }).message
+                              : undefined
+                          }
+                        : null
                     }
                   : event.type === "automation.action.failed"
                     ? {
@@ -1287,6 +1497,11 @@ export function Workflows() {
                       key={execution._id}
                       className="rounded-2xl border border-cyan-200/60 bg-cyan-50/50 p-4 dark:border-cyan-500/20 dark:bg-cyan-500/10"
                     >
+                      {(() => {
+                        const countdownMs = getCurrentActionCountdownMs(execution.currentAction, nowMs);
+                        const nextActionMessage = resolveNextActionMessage(execution.currentAction);
+                        return (
+                          <>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <div className="font-semibold">{resolveExecutionName(execution)}</div>
@@ -1306,7 +1521,7 @@ export function Workflows() {
                         </div>
                         <div>
                           <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Elapsed</div>
-                          <div className="mt-1 font-medium">{formatRunningSince(execution.startedAt)}</div>
+                          <div className="mt-1 font-medium">{formatRunningSince(execution.startedAt, nowMs)}</div>
                         </div>
                         <div>
                           <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Current Step</div>
@@ -1315,6 +1530,19 @@ export function Workflows() {
                           </div>
                         </div>
                       </div>
+
+                      {countdownMs !== null ? (
+                        <div className="mt-3 grid gap-3 rounded-xl border border-cyan-200/70 bg-white/70 px-3 py-3 text-sm dark:border-cyan-500/20 dark:bg-slate-950/20 sm:grid-cols-2">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Timer Countdown</div>
+                            <div className="mt-1 font-semibold text-cyan-700 dark:text-cyan-200">{formatCountdown(countdownMs)}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">When Timer Ends</div>
+                            <div className="mt-1 font-medium">{nextActionMessage}</div>
+                          </div>
+                        </div>
+                      ) : null}
 
                       {execution.lastEvent?.message ? (
                         <div className="mt-3 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
@@ -1330,6 +1558,9 @@ export function Workflows() {
                           View Logs
                         </Button>
                       </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -1414,7 +1645,7 @@ export function Workflows() {
                         {formatDateTime(entry.startedAt)}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {entry.status === "running" ? formatRunningSince(entry.startedAt) : formatDuration(entry.durationMs)}
+                        {entry.status === "running" ? formatRunningSince(entry.startedAt, nowMs) : formatDuration(entry.durationMs)}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {entry.lastEvent?.message || (entry.failedActions > 0
@@ -1689,7 +1920,7 @@ export function Workflows() {
                   <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Duration</div>
                   <div className="mt-2 text-sm font-medium">
                     {selectedExecution.status === "running"
-                      ? formatRunningSince(selectedExecution.startedAt)
+                      ? formatRunningSince(selectedExecution.startedAt, nowMs)
                       : formatDuration(selectedExecution.durationMs)}
                   </div>
                 </div>
@@ -1702,6 +1933,26 @@ export function Workflows() {
                   </div>
                 </div>
               </div>
+
+              {(() => {
+                const countdownMs = getCurrentActionCountdownMs(selectedExecution.currentAction, nowMs);
+                if (countdownMs === null) {
+                  return null;
+                }
+
+                return (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-xl border border-cyan-200/70 bg-cyan-50/70 p-3 dark:border-cyan-500/20 dark:bg-cyan-500/10">
+                      <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Timer Countdown</div>
+                      <div className="mt-2 text-sm font-semibold text-cyan-700 dark:text-cyan-200">{formatCountdown(countdownMs)}</div>
+                    </div>
+                    <div className="rounded-xl border border-cyan-200/70 bg-cyan-50/70 p-3 dark:border-cyan-500/20 dark:bg-cyan-500/10">
+                      <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">When Timer Ends</div>
+                      <div className="mt-2 text-sm font-medium">{resolveNextActionMessage(selectedExecution.currentAction)}</div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <ScrollArea className="h-[420px] rounded-2xl border border-border/70 bg-background/70">
                 <div className="space-y-3 p-4">

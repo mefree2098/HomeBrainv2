@@ -107,6 +107,7 @@ router.post('/connect', async (req, res) => {
 
   try {
     const result = await insteonService.connect();
+    insteonService.startRuntimeMonitoring({ immediate: false });
     res.status(200).json(result);
   } catch (error) {
     console.error('InsteonRoutes: Connection failed:', error.message);
@@ -126,7 +127,7 @@ router.post('/disconnect', async (req, res) => {
   console.log('InsteonRoutes: Disconnecting from PLM');
 
   try {
-    const result = await insteonService.disconnect();
+    const result = await insteonService.disconnect({ stopRuntimeMonitoring: true });
     res.status(200).json(result);
   } catch (error) {
     console.error('InsteonRoutes: Disconnection failed:', error.message);

@@ -111,6 +111,13 @@ class HarmonyService {
     this.syncPromise = null;
     this.stateSyncPromise = null;
     this.discoveryPromise = null;
+    this.backgroundMonitorTimer = null;
+    this.backgroundMonitorInProgress = false;
+    this.backgroundMonitoringStarted = false;
+    this.backgroundMonitorIntervalMs = Math.max(
+      5000,
+      Number(process.env.HARMONY_BACKGROUND_MONITOR_INTERVAL_MS || 15000)
+    );
   }
 
   parseConfiguredHubAddresses(rawInput) {
@@ -424,6 +431,83 @@ class HarmonyService {
     const fromSettings = this.parseConfiguredHubAddresses(settings?.harmonyHubAddresses || '');
     const fromEnv = this.parseConfiguredHubAddresses(process.env.HARMONY_HUB_IPS || '');
     return toUniqueHostList([...fromSettings, ...fromEnv]);
+  }
+
+  _clearBackgroundMonitorTimer() {
+    if (this.backgroundMonitorTimer) {
+      clearTimeout(this.backgroundMonitorTimer);
+      this.backgroundMonitorTimer = null;
+    }
+  }
+
+  _scheduleBackgroundMonitoringPass(delayMs = this.backgroundMonitorIntervalMs, reason = 'interval') {
+    if (!this.backgroundMonitoringStarted) {
+      return;
+    }
+
+    this._clearBackgroundMonitorTimer();
+    const boundedDelayMs = Math.max(0, Number(delayMs) || 0);
+    this.backgroundMonitorTimer = setTimeout(() => {
+      this.backgroundMonitorTimer = null;
+      this.runBackgroundMonitoringPass(reason).catch((error) => {
+        console.warn(`HarmonyService: background monitoring pass failed (${reason}): ${error.message}`);
+      });
+    }, boundedDelayMs);
+
+    if (typeof this.backgroundMonitorTimer.unref === 'function') {
+      this.backgroundMonitorTimer.unref();
+    }
+  }
+
+  async getMonitoringHubIps() {
+    const [trackedHubIps, configuredHubIps, knownHubs] = await Promise.all([
+      Device.distinct('properties.harmonyHubIp', { 'properties.source': 'harmony' }),
+      this.getConfiguredHubAddresses(),
+      this.getKnownHubRegistry()
+    ]);
+
+    return toUniqueHostList([
+      ...trackedHubIps,
+      ...configuredHubIps,
+      ...knownHubs.map((hub) => hub.ip)
+    ]);
+  }
+
+  async runBackgroundMonitoringPass(reason = 'interval') {
+    if (!this.backgroundMonitoringStarted || this.backgroundMonitorInProgress) {
+      return;
+    }
+
+    this.backgroundMonitorInProgress = true;
+
+    try {
+      const hubIps = await this.getMonitoringHubIps();
+      if (hubIps.length > 0) {
+        await this.syncActivityStates({ hubIps, force: true });
+      }
+    } catch (error) {
+      console.warn(`HarmonyService: background monitoring pass failed (${reason}): ${error.message}`);
+    } finally {
+      this.backgroundMonitorInProgress = false;
+      if (this.backgroundMonitoringStarted) {
+        this._scheduleBackgroundMonitoringPass(this.backgroundMonitorIntervalMs, 'interval');
+      }
+    }
+  }
+
+  startBackgroundMonitoring({ immediate = true } = {}) {
+    if (this.backgroundMonitoringStarted) {
+      return;
+    }
+
+    this.backgroundMonitoringStarted = true;
+    this._scheduleBackgroundMonitoringPass(immediate ? 0 : this.backgroundMonitorIntervalMs, 'startup');
+  }
+
+  stopBackgroundMonitoring() {
+    this.backgroundMonitoringStarted = false;
+    this.backgroundMonitorInProgress = false;
+    this._clearBackgroundMonitorTimer();
   }
 
   async discoverHubs(options = {}) {
