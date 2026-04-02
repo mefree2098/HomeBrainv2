@@ -1,6 +1,7 @@
 const axios = require('axios');
 const settingsService = require('./settingsService');
 const tempestService = require('./tempestService');
+const telemetryService = require('./telemetryService');
 
 const DEFAULT_FORECAST_CACHE_TTL_MS = 60 * 1000;
 const DEFAULT_AIR_QUALITY_CACHE_TTL_MS = 60 * 1000;
@@ -488,15 +489,26 @@ async function fetchWeatherDashboard(options = {}) {
       available: false,
       station: null,
       observations: [],
-      events: []
+      events: [],
+      moduleTelemetry: null
     }))
   ]);
+
+  let moduleTelemetry = null;
+  if (tempest?.available && tempest?.station?.id) {
+    moduleTelemetry = await telemetryService.getTempestModuleTelemetry({
+      sourceId: tempest.station.id
+    }).catch(() => null);
+  }
 
   return {
     fetchedAt: new Date().toISOString(),
     forecast,
     hourlyForecast: Array.isArray(forecast.hourlyForecast) ? forecast.hourlyForecast : [],
-    tempest
+    tempest: {
+      ...tempest,
+      moduleTelemetry
+    }
   };
 }
 

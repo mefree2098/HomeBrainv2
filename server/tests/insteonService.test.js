@@ -508,8 +508,9 @@ test('turnOn can recover after command acknowledgement times out if the device s
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
   assert.equal(result.status, true);
-  assert.match(result.message, /acknowledgement timed out, but status confirmed ON/i);
+  assert.match(result.message, /timed out after 3 attempts, but status confirmed ON/i);
   assert.equal(result.details.commandAcknowledged, false);
+  assert.equal(result.details.commandAttempts, 3);
   assert.equal(result.details.verificationRecovered, true);
 });
 
@@ -559,6 +560,67 @@ test('turnOff issues normalized command address and returns direct PLM confirmat
   assert.equal(result.details.controlMethod, 'insteon_plm_direct');
   assert.equal(result.details.confirmedLevel, 0);
   assert.equal(result.details.commandAcknowledged, true);
+});
+
+test('turnOff retries command timeouts before succeeding', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteHubCommandWithTimeout = insteonService._executeHubCommandWithTimeout;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalSleep = insteonService._sleep;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeHubCommandWithTimeout = originalExecuteHubCommandWithTimeout;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._sleep = originalSleep;
+  });
+
+  let commandCalls = 0;
+
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOff(_address, callback) {
+      callback(null);
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'SwitchLinc Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._executeHubCommandWithTimeout = async () => {
+    commandCalls += 1;
+    if (commandCalls === 1) {
+      const error = new Error('Timeout turning off device');
+      error.code = 'INSTEON_COMMAND_TIMEOUT';
+      throw error;
+    }
+  };
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => ({
+    status: false,
+    brightness: 0,
+    level: 0,
+    confirmedReads: 2
+  });
+  insteonService._sleep = async () => {};
+
+  const result = await insteonService.turnOff('mock-device', {
+    commandAttempts: 2,
+    commandPauseBetweenMs: 0
+  });
+
+  assert.equal(commandCalls, 2);
+  assert.equal(result.success, true);
+  assert.match(result.message, /after 2 command attempts/i);
+  assert.equal(result.details.commandAttempts, 2);
+  assert.equal(result.details.commandRetryCount, 1);
 });
 
 test('_linkDeviceRemote writes responder and controller links when controller links are enabled', async (t) => {

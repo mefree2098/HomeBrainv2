@@ -1,6 +1,6 @@
 import Foundation
 
-struct AppUserPlatforms: Codable {
+nonisolated struct AppUserPlatforms: Codable {
     let homebrain: Bool
     let axiom: Bool
 
@@ -15,7 +15,7 @@ struct AppUserPlatforms: Codable {
         axiom = try container.decodeIfPresent(Bool.self, forKey: .axiom) ?? false
     }
 
-    static func from(_ object: [String: Any]) -> AppUserPlatforms {
+    nonisolated static func from(_ object: [String: Any]) -> AppUserPlatforms {
         AppUserPlatforms(
             homebrain: JSON.bool(object, "homebrain", fallback: true),
             axiom: JSON.bool(object, "axiom", fallback: false)
@@ -23,7 +23,7 @@ struct AppUserPlatforms: Codable {
     }
 }
 
-struct AppUser: Codable, Identifiable {
+nonisolated struct AppUser: Codable, Identifiable {
     let id: String
     let name: String
     let email: String
@@ -34,7 +34,7 @@ struct AppUser: Codable, Identifiable {
         platforms.homebrain
     }
 
-    static func from(_ object: [String: Any]) -> AppUser? {
+    nonisolated static func from(_ object: [String: Any]) -> AppUser? {
         let id = JSON.id(object)
         let email = JSON.string(object, "email")
         if email.isEmpty {
@@ -51,7 +51,7 @@ struct AppUser: Codable, Identifiable {
     }
 }
 
-struct DeviceItem: Identifiable {
+nonisolated struct DeviceItem: Identifiable {
     let id: String
     var name: String
     var type: String
@@ -65,7 +65,7 @@ struct DeviceItem: Identifiable {
     var properties: [String: Any]
     var lastSeen: String
 
-    static func from(_ object: [String: Any]) -> DeviceItem {
+    nonisolated static func from(_ object: [String: Any]) -> DeviceItem {
         let properties = JSON.object(object["properties"])
 
         return DeviceItem(
@@ -84,7 +84,7 @@ struct DeviceItem: Identifiable {
         )
     }
 
-    private static func optionalDouble(_ value: Any?) -> Double? {
+    private nonisolated static func optionalDouble(_ value: Any?) -> Double? {
         if let raw = value as? Double {
             return raw
         }
@@ -97,7 +97,7 @@ struct DeviceItem: Identifiable {
         return nil
     }
 
-    private static func normalizedHexColor(_ value: Any?) -> String {
+    private nonisolated static func normalizedHexColor(_ value: Any?) -> String {
         guard let raw = value as? String else {
             return "#ffffff"
         }
@@ -112,7 +112,7 @@ struct DeviceItem: Identifiable {
     }
 }
 
-struct SceneItem: Identifiable {
+nonisolated struct SceneItem: Identifiable {
     let id: String
     var name: String
     var details: String
@@ -120,7 +120,7 @@ struct SceneItem: Identifiable {
     var category: String
     var activationCount: Int
 
-    static func from(_ object: [String: Any]) -> SceneItem {
+    nonisolated static func from(_ object: [String: Any]) -> SceneItem {
         SceneItem(
             id: JSON.id(object),
             name: JSON.string(object, "name", fallback: "Untitled Scene"),
@@ -132,7 +132,7 @@ struct SceneItem: Identifiable {
     }
 }
 
-struct AutomationItem: Identifiable {
+nonisolated struct AutomationItem: Identifiable {
     let id: String
     var name: String
     var details: String
@@ -142,7 +142,7 @@ struct AutomationItem: Identifiable {
     var executionCount: Int
     var lastRun: String
 
-    static func from(_ object: [String: Any]) -> AutomationItem {
+    nonisolated static func from(_ object: [String: Any]) -> AutomationItem {
         AutomationItem(
             id: JSON.id(object),
             name: JSON.string(object, "name", fallback: "Untitled Automation"),
@@ -156,7 +156,7 @@ struct AutomationItem: Identifiable {
     }
 }
 
-struct WorkflowItem: Identifiable {
+nonisolated struct WorkflowItem: Identifiable {
     let id: String
     var name: String
     var details: String
@@ -170,10 +170,10 @@ struct WorkflowItem: Identifiable {
     var voiceAliases: [String]
     var lastErrorMessage: String?
 
-    static func from(_ object: [String: Any]) -> WorkflowItem {
+    nonisolated static func from(_ object: [String: Any]) -> WorkflowItem {
         let trigger = JSON.object(object["trigger"])
         let lastError = JSON.object(object["lastError"])
-        WorkflowItem(
+        return WorkflowItem(
             id: JSON.id(object),
             name: JSON.string(object, "name", fallback: "Untitled Workflow"),
             details: JSON.string(object, "description", fallback: "No description"),
@@ -190,7 +190,7 @@ struct WorkflowItem: Identifiable {
     }
 }
 
-struct WorkflowRuntimeEventItem {
+nonisolated struct WorkflowRuntimeEventItem {
     let type: String
     let level: String
     let message: String
@@ -201,7 +201,7 @@ struct WorkflowRuntimeEventItem {
         JSON.displayDate(from: createdAt)
     }
 
-    static func from(_ object: [String: Any]) -> WorkflowRuntimeEventItem {
+    nonisolated static func from(_ object: [String: Any]) -> WorkflowRuntimeEventItem {
         WorkflowRuntimeEventItem(
             type: JSON.string(object, "type", fallback: "automation.runtime"),
             level: JSON.string(object, "level", fallback: "info"),
@@ -212,14 +212,14 @@ struct WorkflowRuntimeEventItem {
     }
 }
 
-struct WorkflowNextActionItem {
+nonisolated struct WorkflowNextActionItem {
     let actionIndex: Int?
     let parentActionIndex: Int?
     let actionType: String
     let target: Any?
     let message: String
 
-    static func from(_ object: [String: Any]) -> WorkflowNextActionItem {
+    nonisolated static func from(_ object: [String: Any]) -> WorkflowNextActionItem {
         WorkflowNextActionItem(
             actionIndex: object["actionIndex"] == nil ? nil : JSON.int(object, "actionIndex"),
             parentActionIndex: object["parentActionIndex"] == nil ? nil : JSON.int(object, "parentActionIndex"),
@@ -230,7 +230,7 @@ struct WorkflowNextActionItem {
     }
 }
 
-struct WorkflowActionTimerItem {
+nonisolated struct WorkflowActionTimerItem {
     let durationMs: Double?
     let endsAt: String?
 
@@ -238,7 +238,7 @@ struct WorkflowActionTimerItem {
         JSON.date(from: endsAt)
     }
 
-    static func from(_ object: [String: Any]) -> WorkflowActionTimerItem? {
+    nonisolated static func from(_ object: [String: Any]) -> WorkflowActionTimerItem? {
         let durationValue = object["durationMs"] == nil ? nil : JSON.double(object, "durationMs")
         let endsAt = JSON.optionalString(object, "endsAt")
         if durationValue == nil && endsAt == nil {
@@ -252,7 +252,7 @@ struct WorkflowActionTimerItem {
     }
 }
 
-struct WorkflowCurrentActionItem {
+nonisolated struct WorkflowCurrentActionItem {
     let actionIndex: Int?
     let parentActionIndex: Int?
     let actionType: String
@@ -267,7 +267,7 @@ struct WorkflowCurrentActionItem {
         JSON.date(from: startedAt)
     }
 
-    static func from(_ object: [String: Any]) -> WorkflowCurrentActionItem {
+    nonisolated static func from(_ object: [String: Any]) -> WorkflowCurrentActionItem {
         WorkflowCurrentActionItem(
             actionIndex: object["actionIndex"] == nil ? nil : JSON.int(object, "actionIndex"),
             parentActionIndex: object["parentActionIndex"] == nil ? nil : JSON.int(object, "parentActionIndex"),
@@ -282,7 +282,7 @@ struct WorkflowCurrentActionItem {
     }
 }
 
-struct WorkflowExecutionHistoryItem: Identifiable {
+nonisolated struct WorkflowExecutionHistoryItem: Identifiable {
     let id: String
     let automationId: String
     let automationName: String
@@ -321,7 +321,7 @@ struct WorkflowExecutionHistoryItem: Identifiable {
         JSON.displayDate(from: completedAt)
     }
 
-    static func from(_ object: [String: Any]) -> WorkflowExecutionHistoryItem {
+    nonisolated static func from(_ object: [String: Any]) -> WorkflowExecutionHistoryItem {
         WorkflowExecutionHistoryItem(
             id: JSON.id(object),
             automationId: JSON.string(object, "automationId"),
@@ -349,7 +349,93 @@ struct WorkflowExecutionHistoryItem: Identifiable {
     }
 }
 
-struct VoiceDeviceItem: Identifiable {
+nonisolated struct WorkflowRuntimePaginationItem {
+    let page: Int
+    let limit: Int
+    let total: Int
+    let totalPages: Int
+    let hasPreviousPage: Bool
+    let hasNextPage: Bool
+
+    static let empty = WorkflowRuntimePaginationItem(
+        page: 1,
+        limit: 50,
+        total: 0,
+        totalPages: 1,
+        hasPreviousPage: false,
+        hasNextPage: false
+    )
+
+    nonisolated static func from(_ object: [String: Any]) -> WorkflowRuntimePaginationItem {
+        WorkflowRuntimePaginationItem(
+            page: JSON.int(object, "page", fallback: 1),
+            limit: JSON.int(object, "limit", fallback: 50),
+            total: JSON.int(object, "total"),
+            totalPages: JSON.int(object, "totalPages", fallback: 1),
+            hasPreviousPage: JSON.bool(object, "hasPreviousPage"),
+            hasNextPage: JSON.bool(object, "hasNextPage")
+        )
+    }
+}
+
+nonisolated struct WorkflowRuntimeTelemetryItem {
+    let runningNow: Int
+    let executionCount: Int
+    let successCount: Int
+    let partialSuccessCount: Int
+    let failedCount: Int
+    let cancelledCount: Int
+    let runningCountInRange: Int
+    let totalActions: Int
+    let successfulActions: Int
+    let failedActions: Int
+    let averageDurationMs: Double?
+    let failureRatePct: Double
+    let lastStartedAt: String?
+    let lastCompletedAt: String?
+    let timeRangeHours: Int?
+
+    static let empty = WorkflowRuntimeTelemetryItem(
+        runningNow: 0,
+        executionCount: 0,
+        successCount: 0,
+        partialSuccessCount: 0,
+        failedCount: 0,
+        cancelledCount: 0,
+        runningCountInRange: 0,
+        totalActions: 0,
+        successfulActions: 0,
+        failedActions: 0,
+        averageDurationMs: nil,
+        failureRatePct: 0,
+        lastStartedAt: nil,
+        lastCompletedAt: nil,
+        timeRangeHours: nil
+    )
+
+    nonisolated static func from(_ object: [String: Any]) -> WorkflowRuntimeTelemetryItem {
+        let timeRange = JSON.object(object["timeRange"])
+        return WorkflowRuntimeTelemetryItem(
+            runningNow: JSON.int(object, "runningNow"),
+            executionCount: JSON.int(object, "executionCount"),
+            successCount: JSON.int(object, "successCount"),
+            partialSuccessCount: JSON.int(object, "partialSuccessCount"),
+            failedCount: JSON.int(object, "failedCount"),
+            cancelledCount: JSON.int(object, "cancelledCount"),
+            runningCountInRange: JSON.int(object, "runningCountInRange"),
+            totalActions: JSON.int(object, "totalActions"),
+            successfulActions: JSON.int(object, "successfulActions"),
+            failedActions: JSON.int(object, "failedActions"),
+            averageDurationMs: object["averageDurationMs"] == nil ? nil : JSON.double(object, "averageDurationMs"),
+            failureRatePct: JSON.double(object, "failureRatePct"),
+            lastStartedAt: JSON.optionalString(object, "lastStartedAt"),
+            lastCompletedAt: JSON.optionalString(object, "lastCompletedAt"),
+            timeRangeHours: timeRange["hours"] == nil ? nil : JSON.int(timeRange, "hours")
+        )
+    }
+}
+
+nonisolated struct VoiceDeviceItem: Identifiable {
     let id: String
     var name: String
     var room: String
@@ -361,7 +447,7 @@ struct VoiceDeviceItem: Identifiable {
     var firmwareVersion: String
     var lastSeen: String
 
-    static func from(_ object: [String: Any]) -> VoiceDeviceItem {
+    nonisolated static func from(_ object: [String: Any]) -> VoiceDeviceItem {
         let batteryRaw = object["batteryLevel"]
         let battery: Int?
         if let value = batteryRaw as? Int {
@@ -387,7 +473,7 @@ struct VoiceDeviceItem: Identifiable {
     }
 }
 
-struct UserProfileItem: Identifiable {
+nonisolated struct UserProfileItem: Identifiable {
     let id: String
     var name: String
     var wakeWords: [String]
@@ -396,7 +482,7 @@ struct UserProfileItem: Identifiable {
     var active: Bool
     var lastUsed: String
 
-    static func from(_ object: [String: Any]) -> UserProfileItem {
+    nonisolated static func from(_ object: [String: Any]) -> UserProfileItem {
         let wakeWords = (object["wakeWords"] as? [String]) ?? []
         return UserProfileItem(
             id: JSON.id(object),
@@ -410,13 +496,13 @@ struct UserProfileItem: Identifiable {
     }
 }
 
-struct VoiceOption: Identifiable {
+nonisolated struct VoiceOption: Identifiable {
     let id: String
     let name: String
     let category: String
     let previewURL: String
 
-    static func from(_ object: [String: Any]) -> VoiceOption {
+    nonisolated static func from(_ object: [String: Any]) -> VoiceOption {
         VoiceOption(
             id: JSON.optionalString(object, "voice_id") ?? JSON.optionalString(object, "id") ?? JSON.id(object),
             name: JSON.string(object, "name", fallback: "Unnamed Voice"),
@@ -426,7 +512,7 @@ struct VoiceOption: Identifiable {
     }
 }
 
-struct PlatformEventItem: Identifiable {
+nonisolated struct PlatformEventItem: Identifiable {
     let id: String
     let sequence: Int
     let type: String
@@ -439,9 +525,9 @@ struct PlatformEventItem: Identifiable {
     let payloadMessage: String?
     let payloadSummary: String
 
-    static func from(_ object: [String: Any]) -> PlatformEventItem {
+    nonisolated static func from(_ object: [String: Any]) -> PlatformEventItem {
         let payload = JSON.object(object["payload"])
-        PlatformEventItem(
+        return PlatformEventItem(
             id: JSON.optionalString(object, "id") ?? String(JSON.int(object, "sequence")),
             sequence: JSON.int(object, "sequence"),
             type: JSON.string(object, "type", fallback: "unknown"),
@@ -457,14 +543,14 @@ struct PlatformEventItem: Identifiable {
     }
 }
 
-struct SSLCertificateItem: Identifiable {
+nonisolated struct SSLCertificateItem: Identifiable {
     let id: String
     let domain: String
     let status: String
     let provider: String
     let expiryDate: String
 
-    static func from(_ object: [String: Any]) -> SSLCertificateItem {
+    nonisolated static func from(_ object: [String: Any]) -> SSLCertificateItem {
         SSLCertificateItem(
             id: JSON.id(object),
             domain: JSON.string(object, "domain", fallback: "Unknown domain"),

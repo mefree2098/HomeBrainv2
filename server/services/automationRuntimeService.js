@@ -1,10 +1,70 @@
 const AutomationHistory = require('../models/AutomationHistory');
 const eventStreamService = require('./eventStreamService');
+const telemetryService = require('./telemetryService');
 
 const MAX_RUNTIME_EVENTS = Math.max(
   50,
   Number(process.env.AUTOMATION_RUNTIME_EVENT_LIMIT || 250)
 );
+const DEFAULT_HISTORY_LIMIT = 50;
+const MAX_HISTORY_LIMIT = 100;
+const DEFAULT_HISTORY_PAGE = 1;
+const MAX_HISTORY_HOURS = 24 * 365;
+
+function clampInteger(value, fallback, minimum, maximum) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return Math.min(maximum, Math.max(minimum, Math.round(numeric)));
+}
+
+function normalizeHistoryOptions(options = {}) {
+  if (typeof options === 'number') {
+    return {
+      limit: clampInteger(options, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),
+      page: DEFAULT_HISTORY_PAGE,
+      hours: null
+    };
+  }
+
+  return {
+    limit: clampInteger(options?.limit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),
+    page: clampInteger(options?.page, DEFAULT_HISTORY_PAGE, 1, Number.MAX_SAFE_INTEGER),
+    hours: options?.hours == null
+      ? null
+      : clampInteger(options.hours, 24, 1, MAX_HISTORY_HOURS)
+  };
+}
+
+function buildWorkflowHistoryQuery({ workflowId = null, hours = null } = {}) {
+  const query = workflowId
+    ? { workflowId }
+    : { workflowId: { $ne: null } };
+
+  if (hours != null) {
+    query.startedAt = {
+      $gte: new Date(Date.now() - hours * 60 * 60 * 1000)
+    };
+  }
+
+  return query;
+}
+
+function buildHistoryPagination({ page, limit, total }) {
+  const totalPages = total > 0 ? Math.ceil(total / limit) : 1;
+  const safePage = Math.min(page, totalPages);
+
+  return {
+    page: safePage,
+    limit,
+    total,
+    totalPages,
+    hasPreviousPage: safePage > 1,
+    hasNextPage: safePage < totalPages
+  };
+}
 
 function toObjectIdString(value) {
   return value?._id?.toString?.() || value?.toString?.() || null;
@@ -212,6 +272,14 @@ function buildExecutionContextFromHistory(history, overrides = {}) {
   });
 }
 
+async function persistWorkflowTelemetry(context = {}, details = {}) {
+  try {
+    await telemetryService.recordWorkflowExecution(context, details);
+  } catch (error) {
+    console.warn(`AutomationRuntimeService: failed to persist workflow telemetry: ${error.message}`);
+  }
+}
+
 async function recordTriggerMatched(context, details = {}) {
   const event = createRuntimeEvent(
     'automation.trigger.matched',
@@ -227,6 +295,7 @@ async function recordTriggerMatched(context, details = {}) {
 }
 
 async function recordExecutionStarted(context) {
+  const recordedAt = new Date();
   const event = createRuntimeEvent(
     'automation.execution.started',
     'Automation execution started',
@@ -241,6 +310,14 @@ async function recordExecutionStarted(context) {
       status: 'running'
     },
     tags: ['automation', 'execution', 'started']
+  });
+  await persistWorkflowTelemetry(context, {
+    phase: 'started',
+    status: 'running',
+    startedAt: recordedAt,
+    recordedAt,
+    totalActions: context.totalActions,
+    message: event.message
   });
 }
 
@@ -343,6 +420,7 @@ async function recordActionCompleted(context, details = {}) {
 }
 
 async function recordExecutionCompleted(context, details = {}) {
+  const recordedAt = new Date();
   const status = details.status || 'success';
   const isFailure = status === 'failed';
   const isPartial = status === 'partial_success';
@@ -379,6 +457,17 @@ async function recordExecutionCompleted(context, details = {}) {
     },
     tags: ['automation', 'execution', status]
   });
+  await persistWorkflowTelemetry(context, {
+    phase: 'completed',
+    status,
+    completedAt: recordedAt,
+    recordedAt,
+    totalActions: details.totalActions ?? context.totalActions,
+    successfulActions: details.successfulActions ?? 0,
+    failedActions: details.failedActions ?? 0,
+    durationMs: details.durationMs ?? null,
+    message
+  });
 }
 
 async function recordSchedulerSecurityAlarmEvaluation(details = {}) {
@@ -403,15 +492,101 @@ async function recordSchedulerSecurityAlarmEvaluation(details = {}) {
   });
 }
 
-async function getWorkflowExecutionHistory(workflowId = null, limit = 50) {
-  const query = workflowId
-    ? { workflowId }
-    : { workflowId: { $ne: null } };
+async function getWorkflowExecutionHistory(options = {}) {
+  const normalized = normalizeHistoryOptions(options);
+  const workflowId = options?.workflowId || null;
+  const { limit, page, hours } = normalized;
+  const query = buildWorkflowHistoryQuery({ workflowId, hours });
+  const total = await AutomationHistory.countDocuments(query);
+  const pagination = buildHistoryPagination({ page, limit, total });
+  const skip = (pagination.page - 1) * pagination.limit;
 
-  return AutomationHistory.find(query)
+  const history = await AutomationHistory.find(query)
     .sort({ startedAt: -1 })
-    .limit(Math.max(1, Number(limit) || 50))
+    .skip(skip)
+    .limit(pagination.limit)
     .lean();
+
+  return {
+    history,
+    pagination,
+    timeRange: {
+      hours,
+      startAt: hours == null ? null : new Date(Date.now() - hours * 60 * 60 * 1000),
+      endAt: new Date()
+    }
+  };
+}
+
+async function getWorkflowRuntimeTelemetry(options = {}) {
+  const normalized = normalizeHistoryOptions(options);
+  const query = buildWorkflowHistoryQuery({
+    workflowId: options?.workflowId || null,
+    hours: normalized.hours
+  });
+
+  const [runningNow, aggregates] = await Promise.all([
+    AutomationHistory.countDocuments({
+      ...(options?.workflowId ? { workflowId: options.workflowId } : { workflowId: { $ne: null } }),
+      status: 'running'
+    }),
+    AutomationHistory.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: null,
+          executionCount: { $sum: 1 },
+          successCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] }
+          },
+          partialSuccessCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'partial_success'] }, 1, 0] }
+          },
+          failedCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] }
+          },
+          cancelledCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] }
+          },
+          runningCountInRange: {
+            $sum: { $cond: [{ $eq: ['$status', 'running'] }, 1, 0] }
+          },
+          totalActions: { $sum: '$totalActions' },
+          successfulActions: { $sum: '$successfulActions' },
+          failedActions: { $sum: '$failedActions' },
+          averageDurationMs: { $avg: '$durationMs' },
+          lastStartedAt: { $max: '$startedAt' },
+          lastCompletedAt: { $max: '$completedAt' }
+        }
+      }
+    ])
+  ]);
+
+  const aggregate = aggregates[0] || {};
+  const executionCount = Number(aggregate.executionCount || 0);
+  const failedCount = Number(aggregate.failedCount || 0);
+
+  return {
+    runningNow: Number(runningNow || 0),
+    executionCount,
+    successCount: Number(aggregate.successCount || 0),
+    partialSuccessCount: Number(aggregate.partialSuccessCount || 0),
+    failedCount,
+    cancelledCount: Number(aggregate.cancelledCount || 0),
+    runningCountInRange: Number(aggregate.runningCountInRange || 0),
+    totalActions: Number(aggregate.totalActions || 0),
+    successfulActions: Number(aggregate.successfulActions || 0),
+    failedActions: Number(aggregate.failedActions || 0),
+    averageDurationMs: Number.isFinite(Number(aggregate.averageDurationMs)) ? Number(aggregate.averageDurationMs) : null,
+    failureRatePct: executionCount > 0 ? Number(((failedCount / executionCount) * 100).toFixed(1)) : 0,
+    lastStartedAt: aggregate.lastStartedAt || null,
+    lastCompletedAt: aggregate.lastCompletedAt || null,
+    timeRange: {
+      hours: normalized.hours,
+      startAt: normalized.hours == null ? null : new Date(Date.now() - normalized.hours * 60 * 60 * 1000),
+      endAt: new Date()
+    }
+  };
 }
 
 async function getRunningWorkflowExecutions(limit = 25) {
@@ -482,6 +657,7 @@ module.exports = {
   recordExecutionCompleted,
   recordSchedulerSecurityAlarmEvaluation,
   getWorkflowExecutionHistory,
+  getWorkflowRuntimeTelemetry,
   getRunningWorkflowExecutions,
   reconcileRunningExecutions
 };

@@ -1,6 +1,6 @@
 import Foundation
 
-enum JSON {
+nonisolated enum JSON {
     static func object(_ value: Any?) -> [String: Any] {
         value as? [String: Any] ?? [:]
     }

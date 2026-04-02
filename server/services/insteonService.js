@@ -36,6 +36,8 @@ const DEFAULT_LINKED_STATUS_RUN_RETENTION = 20;
 const DEFAULT_LINKED_STATUS_RUN_LOG_LIMIT = 1000;
 const DEFAULT_INSTEON_LOCAL_BRIDGE_HOST = '127.0.0.1';
 const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
+const DEFAULT_INSTEON_COMMAND_ATTEMPTS = 3;
+const DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS = 500;
 const INSTEON_LOCAL_BRIDGE_SCRIPT = path.join(__dirname, '..', 'scripts', 'insteon_serial_bridge.py');
 const INSTEON_SERIAL_OPTIONS = Object.freeze({
   baudRate: 19200,
@@ -7036,6 +7038,128 @@ class InsteonService {
     return lastObservedStatus == null || lastObservedStatus === Boolean(expectedStatus);
   }
 
+  _getCommandRetryOptions(options = {}) {
+    const attemptsRaw = Number(
+      options?.commandAttempts
+      ?? process.env.HOMEBRAIN_INSTEON_COMMAND_ATTEMPTS
+      ?? DEFAULT_INSTEON_COMMAND_ATTEMPTS
+    );
+    const pauseRaw = Number(
+      options?.commandPauseBetweenMs
+      ?? process.env.HOMEBRAIN_INSTEON_COMMAND_RETRY_PAUSE_MS
+      ?? DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS
+    );
+    const timeoutRaw = Number(options?.commandTimeoutMs);
+
+    return {
+      attempts: Number.isFinite(attemptsRaw)
+        ? Math.max(1, Math.min(5, Math.round(attemptsRaw)))
+        : DEFAULT_INSTEON_COMMAND_ATTEMPTS,
+      pauseBetweenMs: Number.isFinite(pauseRaw)
+        ? Math.max(0, Math.min(10_000, Math.round(pauseRaw)))
+        : DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS,
+      timeoutMs: Number.isFinite(timeoutRaw)
+        ? Math.max(500, Math.min(20_000, Math.round(timeoutRaw)))
+        : 5000
+    };
+  }
+
+  _isRetryableCommandError(error) {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    const code = String(error.code || '').trim().toUpperCase();
+    if ([
+      'INSTEON_COMMAND_TIMEOUT',
+      'ETIMEDOUT',
+      'ECONNRESET',
+      'EPIPE',
+      'ERR_STREAM_DESTROYED',
+      'ENETDOWN',
+      'ENETUNREACH'
+    ].includes(code)) {
+      return true;
+    }
+
+    return /timeout|timed out|socket hang up|connection reset|broken pipe|temporarily unavailable/i
+      .test(String(error.message || ''));
+  }
+
+  _decorateCommandRetryError(error, options = {}) {
+    const decorated = error instanceof Error
+      ? error
+      : new Error(String(error || 'Insteon command failed'));
+    const attempts = Number.isFinite(Number(options.attempts))
+      ? Math.max(1, Number(options.attempts))
+      : 1;
+    const pauseBetweenMs = Number.isFinite(Number(options.pauseBetweenMs))
+      ? Math.max(0, Number(options.pauseBetweenMs))
+      : 0;
+
+    if (attempts > 1 && !/after \d+ attempts/i.test(String(decorated.message || ''))) {
+      decorated.message = `${decorated.message} after ${attempts} attempts`;
+    }
+
+    const existingDetails = decorated.details && typeof decorated.details === 'object'
+      ? decorated.details
+      : {};
+    decorated.details = {
+      ...existingDetails,
+      commandAttempts: attempts,
+      commandRetryCount: Math.max(0, attempts - 1),
+      commandPauseBetweenMs: pauseBetweenMs
+    };
+    decorated.commandAttempts = attempts;
+    decorated.commandRetryCount = Math.max(0, attempts - 1);
+    decorated.commandPauseBetweenMs = pauseBetweenMs;
+
+    return decorated;
+  }
+
+  async _executeHubCommandWithRetries(invoke, timeoutMessage, options = {}) {
+    const retryOptions = this._getCommandRetryOptions(options);
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= retryOptions.attempts; attempt += 1) {
+      try {
+        await this._executeHubCommandWithTimeout(
+          invoke,
+          timeoutMessage,
+          retryOptions.timeoutMs
+        );
+        return {
+          attemptsUsed: attempt,
+          retryCount: Math.max(0, attempt - 1)
+        };
+      } catch (error) {
+        lastError = error instanceof Error
+          ? error
+          : new Error(String(error || timeoutMessage));
+
+        const shouldRetry = this._isRetryableCommandError(lastError) && attempt < retryOptions.attempts;
+        if (!shouldRetry) {
+          throw this._decorateCommandRetryError(lastError, {
+            attempts: attempt,
+            pauseBetweenMs: retryOptions.pauseBetweenMs
+          });
+        }
+
+        console.warn(
+          `InsteonService: ${timeoutMessage} on attempt ${attempt}/${retryOptions.attempts}; retrying${retryOptions.pauseBetweenMs > 0 ? ` in ${retryOptions.pauseBetweenMs}ms` : ''}.`
+        );
+        if (retryOptions.pauseBetweenMs > 0) {
+          await this._sleep(retryOptions.pauseBetweenMs);
+        }
+      }
+    }
+
+    throw this._decorateCommandRetryError(lastError || new Error(timeoutMessage), {
+      attempts: retryOptions.attempts,
+      pauseBetweenMs: retryOptions.pauseBetweenMs
+    });
+  }
+
   async _executeHubCommandWithTimeout(invoke, timeoutMessage, timeoutMs = 5000) {
     const boundedTimeoutMs = Number.isFinite(Number(timeoutMs))
       ? Math.max(500, Number(timeoutMs))
@@ -7516,28 +7640,37 @@ class InsteonService {
       }
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
+      let commandExecution = {
+        attemptsUsed: 1,
+        retryCount: 0
+      };
       const numericBrightness = Number(brightness);
       const boundedBrightness = Number.isFinite(numericBrightness)
         ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
         : 100;
       try {
-        await this._executeHubCommandWithTimeout(
+        commandExecution = await this._executeHubCommandWithRetries(
           (callback) => this.hub.turnOn(address, boundedBrightness, callback),
           'Timeout turning on device',
-          5000
+          options
         );
       } catch (error) {
         const recoveredState = await this._recoverCommandStateAfterTimeout(address, true);
         if (recoveredState) {
+          const commandAttempts = Number.isFinite(Number(error?.commandAttempts))
+            ? Math.max(1, Number(error.commandAttempts))
+            : 1;
           const details = this._buildInsteonControlDetails(device, address, 'turn_on', recoveredState, {
             requestedBrightness: boundedBrightness,
             commandAcknowledged: false,
             commandWarning: error.message,
-            verificationRecovered: true
+            verificationRecovered: true,
+            commandAttempts,
+            commandRetryCount: Math.max(0, commandAttempts - 1)
           });
           return {
             success: true,
-            message: `Device turned on via Insteon PLM ${details.insteonAddress} (command acknowledgement timed out, but status confirmed ON)`,
+            message: `Device turned on via Insteon PLM ${details.insteonAddress} (${commandAttempts > 1 ? `command acknowledgements timed out after ${commandAttempts} attempts` : 'command acknowledgement timed out'}, but status confirmed ON)`,
             status: recoveredState.status,
             brightness: recoveredState.brightness,
             level: recoveredState.level,
@@ -7568,12 +7701,14 @@ class InsteonService {
           verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
           confirmationWarning: error.message,
           confirmationCode: error.code || null,
-          confirmed: false
+          confirmed: false,
+          commandAttempts: commandExecution.attemptsUsed,
+          commandRetryCount: commandExecution.retryCount
         });
 
         return {
           success: true,
-          message: `Device turned on via Insteon PLM ${details.insteonAddress} (command acknowledged; status verification pending)`,
+          message: `Device turned on via Insteon PLM ${details.insteonAddress}${commandExecution.attemptsUsed > 1 ? ` after ${commandExecution.attemptsUsed} command attempts` : ''} (command acknowledged; status verification pending)`,
           status: optimisticState.status,
           brightness: optimisticState.brightness,
           level: optimisticState.level,
@@ -7586,12 +7721,14 @@ class InsteonService {
       const details = this._buildInsteonControlDetails(device, address, 'turn_on', confirmedState, {
         requestedBrightness: boundedBrightness,
         commandAcknowledged: true,
-        verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase()
+        verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
+        commandAttempts: commandExecution.attemptsUsed,
+        commandRetryCount: commandExecution.retryCount
       });
 
       return {
         success: true,
-        message: `Device turned on via Insteon PLM ${details.insteonAddress} (confirmed ON with ${confirmedState.confirmedReads || 1} read${(confirmedState.confirmedReads || 1) === 1 ? '' : 's'})`,
+        message: `Device turned on via Insteon PLM ${details.insteonAddress}${commandExecution.attemptsUsed > 1 ? ` after ${commandExecution.attemptsUsed} command attempts` : ''} (confirmed ON with ${confirmedState.confirmedReads || 1} read${(confirmedState.confirmedReads || 1) === 1 ? '' : 's'})`,
         status: confirmedState.status,
         brightness: confirmedState.brightness,
         level: confirmedState.level,
@@ -7629,24 +7766,33 @@ class InsteonService {
       }
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
+      let commandExecution = {
+        attemptsUsed: 1,
+        retryCount: 0
+      };
 
       try {
-        await this._executeHubCommandWithTimeout(
+        commandExecution = await this._executeHubCommandWithRetries(
           (callback) => this.hub.turnOff(address, callback),
           'Timeout turning off device',
-          5000
+          options
         );
       } catch (error) {
         const recoveredState = await this._recoverCommandStateAfterTimeout(address, false);
         if (recoveredState) {
+          const commandAttempts = Number.isFinite(Number(error?.commandAttempts))
+            ? Math.max(1, Number(error.commandAttempts))
+            : 1;
           const details = this._buildInsteonControlDetails(device, address, 'turn_off', recoveredState, {
             commandAcknowledged: false,
             commandWarning: error.message,
-            verificationRecovered: true
+            verificationRecovered: true,
+            commandAttempts,
+            commandRetryCount: Math.max(0, commandAttempts - 1)
           });
           return {
             success: true,
-            message: `Device turned off via Insteon PLM ${details.insteonAddress} (command acknowledgement timed out, but status confirmed OFF)`,
+            message: `Device turned off via Insteon PLM ${details.insteonAddress} (${commandAttempts > 1 ? `command acknowledgements timed out after ${commandAttempts} attempts` : 'command acknowledgement timed out'}, but status confirmed OFF)`,
             status: recoveredState.status,
             brightness: recoveredState.brightness,
             level: recoveredState.level,
@@ -7676,12 +7822,14 @@ class InsteonService {
           verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
           confirmationWarning: error.message,
           confirmationCode: error.code || null,
-          confirmed: false
+          confirmed: false,
+          commandAttempts: commandExecution.attemptsUsed,
+          commandRetryCount: commandExecution.retryCount
         });
 
         return {
           success: true,
-          message: `Device turned off via Insteon PLM ${details.insteonAddress} (command acknowledged; status verification pending)`,
+          message: `Device turned off via Insteon PLM ${details.insteonAddress}${commandExecution.attemptsUsed > 1 ? ` after ${commandExecution.attemptsUsed} command attempts` : ''} (command acknowledged; status verification pending)`,
           status: optimisticState.status,
           brightness: optimisticState.brightness,
           level: optimisticState.level,
@@ -7693,12 +7841,14 @@ class InsteonService {
 
       const details = this._buildInsteonControlDetails(device, address, 'turn_off', confirmedState, {
         commandAcknowledged: true,
-        verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase()
+        verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
+        commandAttempts: commandExecution.attemptsUsed,
+        commandRetryCount: commandExecution.retryCount
       });
 
       return {
         success: true,
-        message: `Device turned off via Insteon PLM ${details.insteonAddress} (confirmed OFF with ${confirmedState.confirmedReads || 1} read${(confirmedState.confirmedReads || 1) === 1 ? '' : 's'})`,
+        message: `Device turned off via Insteon PLM ${details.insteonAddress}${commandExecution.attemptsUsed > 1 ? ` after ${commandExecution.attemptsUsed} command attempts` : ''} (confirmed OFF with ${confirmedState.confirmedReads || 1} read${(confirmedState.confirmedReads || 1) === 1 ? '' : 's'})`,
         status: confirmedState.status,
         brightness: confirmedState.brightness,
         level: confirmedState.level,

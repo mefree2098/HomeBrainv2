@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Activity,
@@ -22,11 +22,24 @@ import {
   XAxis,
   YAxis
 } from "recharts"
-import { getWeatherDashboard, type WeatherDashboardPayload } from "@/api/weather"
+import {
+  getWeatherDashboard,
+  type TempestModuleTelemetrySummary,
+  type TempestTelemetryWindowSummary,
+  type WeatherDashboardPayload
+} from "@/api/weather"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import { WeatherGlyph } from "@/components/weather/WeatherGlyph"
 import { useAuth } from "@/contexts/AuthContext"
 
@@ -42,6 +55,8 @@ const formatRain = (value: number | null | undefined) => value == null ? "--" : 
 const formatPressure = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(2)} inHg`
 const formatSolar = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)} W/m²`
 const formatUv = (value: number | null | undefined) => value == null ? "--" : value.toFixed(1)
+
+type WeatherModuleKey = "wind" | "pressure" | "rain" | "humidity" | "solar" | "signal" | "lightning"
 
 const formatChartTime = (value: string) => {
   const date = new Date(value)
@@ -82,6 +97,200 @@ const toCompass = (degrees: number | null | undefined) => {
   return directions[Math.round(degrees / 45) % 8]
 }
 
+function findTelemetryWindow(
+  telemetry: TempestModuleTelemetrySummary | null | undefined,
+  key: TempestTelemetryWindowSummary["key"]
+) {
+  return telemetry?.windows?.find((window) => window.key === key) ?? null
+}
+
+function modulePreview(moduleKey: WeatherModuleKey, telemetry: TempestModuleTelemetrySummary | null | undefined) {
+  const day = findTelemetryWindow(telemetry, "day")
+  const week = findTelemetryWindow(telemetry, "week")
+
+  switch (moduleKey) {
+    case "wind":
+      return `24h avg ${formatWind(day?.wind.averageMph)} • gust ${formatWind(day?.wind.peakGustMph)}`
+    case "pressure":
+      return `24h avg ${formatPressure(day?.pressure.averageInHg)} • 7d range ${formatPressure(week?.pressure.minInHg)}-${formatPressure(week?.pressure.maxInHg)}`
+    case "rain":
+      return `24h total ${formatRain(day?.rain.totalIn)} • 7d total ${formatRain(week?.rain.totalIn)}`
+    case "humidity":
+      return `24h avg ${formatPercent(day?.humidity.averagePct)} • dew point ${formatTemperature(day?.humidity.averageDewPointF)}`
+    case "solar":
+      return `24h avg ${formatSolar(day?.solar.averageWm2)} • UV peak ${formatUv(day?.solar.peakUvIndex)}`
+    case "signal":
+      return `24h avg ${day?.signal.averageRssiDbm?.toFixed(0) ?? "--"} dBm • WS ${day?.signal.websocketConnectedPct?.toFixed(0) ?? "--"}%`
+    case "lightning":
+      return `24h ${day?.lightning.strikeCount ?? 0} strikes • avg ${day?.lightning.averageDistanceMiles?.toFixed(1) ?? "--"} mi`
+    default:
+      return "Telemetry history available"
+  }
+}
+
+function moduleDescription(moduleKey: WeatherModuleKey) {
+  switch (moduleKey) {
+    case "wind":
+      return "Average wind, peak gusts, and prevailing direction across the retention window."
+    case "pressure":
+      return "Pressure average and range over short and long weather windows."
+    case "rain":
+      return "Rainfall totals and peak rates across the last day, week, month, and year."
+    case "humidity":
+      return "Humidity envelope plus average dew point over each telemetry range."
+    case "solar":
+      return "Solar intensity, UV exposure, and illuminance from the station history."
+    case "signal":
+      return "Station connectivity health, RSSI quality, and transport uptime."
+    case "lightning":
+      return "Lightning strike counts, average distance, and most recent strike details."
+    default:
+      return "Telemetry summary"
+  }
+}
+
+function WeatherTelemetryModuleCard({
+  enabled,
+  title,
+  preview,
+  onOpen,
+  className,
+  children
+}: {
+  enabled: boolean
+  title: string
+  preview: string
+  onOpen: () => void
+  className?: string
+  children: ReactNode
+}) {
+  const card = (
+    <button
+      type="button"
+      disabled={!enabled}
+      onClick={enabled ? onOpen : undefined}
+      className="w-full text-left disabled:cursor-default"
+    >
+      <Card className={className}>
+        {children}
+        <CardContent className="pt-0">
+          <p className="text-xs text-cyan-50/70">
+            {enabled ? "Hover or tap for telemetry" : "Telemetry drilldown unlocks when Tempest history is available"}
+          </p>
+        </CardContent>
+      </Card>
+    </button>
+  )
+
+  if (!enabled) {
+    return card
+  }
+
+  return (
+    <HoverCard openDelay={80}>
+      <HoverCardTrigger asChild>{card}</HoverCardTrigger>
+      <HoverCardContent className="w-[320px]">
+        <div className="space-y-2">
+          <p className="font-medium">{title}</p>
+          <p className="text-sm text-muted-foreground">{preview}</p>
+        </div>
+      </HoverCardContent>
+    </HoverCard>
+  )
+}
+
+function WeatherModuleTelemetryDialog({
+  moduleKey,
+  telemetry,
+  open,
+  onOpenChange
+}: {
+  moduleKey: WeatherModuleKey | null
+  telemetry: TempestModuleTelemetrySummary | null | undefined
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  if (!moduleKey || !telemetry) {
+    return null
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>{telemetry.stationName}: {moduleKey.charAt(0).toUpperCase() + moduleKey.slice(1)} Telemetry</DialogTitle>
+          <DialogDescription>{moduleDescription(moduleKey)}</DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {telemetry.windows.map((window) => (
+            <div key={window.key} className="rounded-[1.2rem] border border-border/80 bg-muted/25 p-4">
+              <p className="section-kicker text-muted-foreground">{window.label}</p>
+              <div className="mt-3 space-y-2 text-sm">
+                {moduleKey === "rain" ? (
+                  <>
+                    <p><span className="text-muted-foreground">Total rain:</span> {formatRain(window.rain.totalIn)}</p>
+                    <p><span className="text-muted-foreground">Peak rate:</span> {formatRain(window.rain.peakRateInPerHr)}/hr</p>
+                    <p><span className="text-muted-foreground">Observed samples:</span> {window.rain.observationCount}</p>
+                  </>
+                ) : null}
+
+                {moduleKey === "lightning" ? (
+                  <>
+                    <p><span className="text-muted-foreground">Strikes:</span> {window.lightning.strikeCount}</p>
+                    <p><span className="text-muted-foreground">Avg distance:</span> {window.lightning.averageDistanceMiles?.toFixed(1) ?? "--"} mi</p>
+                    <p><span className="text-muted-foreground">Last strike:</span> {formatDateTime(window.lightning.lastStrikeAt)}</p>
+                  </>
+                ) : null}
+
+                {moduleKey === "wind" ? (
+                  <>
+                    <p><span className="text-muted-foreground">Average:</span> {formatWind(window.wind.averageMph)}</p>
+                    <p><span className="text-muted-foreground">Peak gust:</span> {formatWind(window.wind.peakGustMph)}</p>
+                    <p><span className="text-muted-foreground">Direction:</span> {window.wind.directionLabel || "--"}</p>
+                  </>
+                ) : null}
+
+                {moduleKey === "pressure" ? (
+                  <>
+                    <p><span className="text-muted-foreground">Average:</span> {formatPressure(window.pressure.averageInHg)}</p>
+                    <p><span className="text-muted-foreground">Low:</span> {formatPressure(window.pressure.minInHg)}</p>
+                    <p><span className="text-muted-foreground">High:</span> {formatPressure(window.pressure.maxInHg)}</p>
+                  </>
+                ) : null}
+
+                {moduleKey === "humidity" ? (
+                  <>
+                    <p><span className="text-muted-foreground">Average:</span> {formatPercent(window.humidity.averagePct)}</p>
+                    <p><span className="text-muted-foreground">Range:</span> {formatPercent(window.humidity.minPct)} - {formatPercent(window.humidity.maxPct)}</p>
+                    <p><span className="text-muted-foreground">Avg dew point:</span> {formatTemperature(window.humidity.averageDewPointF)}</p>
+                  </>
+                ) : null}
+
+                {moduleKey === "solar" ? (
+                  <>
+                    <p><span className="text-muted-foreground">Average solar:</span> {formatSolar(window.solar.averageWm2)}</p>
+                    <p><span className="text-muted-foreground">Peak solar:</span> {formatSolar(window.solar.peakWm2)}</p>
+                    <p><span className="text-muted-foreground">UV peak:</span> {formatUv(window.solar.peakUvIndex)}</p>
+                  </>
+                ) : null}
+
+                {moduleKey === "signal" ? (
+                  <>
+                    <p><span className="text-muted-foreground">Average RSSI:</span> {window.signal.averageRssiDbm?.toFixed(0) ?? "--"} dBm</p>
+                    <p><span className="text-muted-foreground">Websocket uptime:</span> {window.signal.websocketConnectedPct?.toFixed(0) ?? "--"}%</p>
+                    <p><span className="text-muted-foreground">UDP listening:</span> {window.signal.udpListeningPct?.toFixed(0) ?? "--"}%</p>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function Weather() {
   const navigate = useNavigate()
   const { isAdmin } = useAuth()
@@ -89,6 +298,7 @@ export function Weather() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [openModuleKey, setOpenModuleKey] = useState<WeatherModuleKey | null>(null)
 
   const loadDashboard = useCallback(async (options: { silent?: boolean } = {}) => {
     const silent = options.silent === true
@@ -132,6 +342,7 @@ export function Weather() {
   const forecast = dashboard?.forecast
   const station = dashboard?.tempest?.station ?? null
   const tempestsAvailable = dashboard?.tempest?.available === true && station !== null
+  const moduleTelemetry = dashboard?.tempest?.moduleTelemetry ?? null
 
   const tempTrendData = useMemo(() => {
     const observations = Array.isArray(dashboard?.tempest?.observations) ? dashboard.tempest.observations : []
@@ -286,7 +497,13 @@ export function Weather() {
               </CardContent>
             </Card>
 
-            <Card className="border-cyan-300/15 bg-cyan-400/10 text-white shadow-none">
+            <WeatherTelemetryModuleCard
+              enabled={Boolean(moduleTelemetry && tempestsAvailable)}
+              title="Wind Field"
+              preview={modulePreview("wind", moduleTelemetry)}
+              onOpen={() => setOpenModuleKey("wind")}
+              className="border-cyan-300/15 bg-cyan-400/10 text-white shadow-none"
+            >
               <CardHeader className="pb-2">
                 <CardDescription className="text-cyan-100/70">Wind Field</CardDescription>
                 <CardTitle className="text-xl text-white">{formatWind(station?.metrics.windAvgMph ?? forecast.current.windSpeedMph)}</CardTitle>
@@ -298,9 +515,15 @@ export function Weather() {
                     : "Forecast wind speed"}
                 </p>
               </CardContent>
-            </Card>
+            </WeatherTelemetryModuleCard>
 
-            <Card className="border-emerald-300/15 bg-emerald-400/10 text-white shadow-none">
+            <WeatherTelemetryModuleCard
+              enabled={Boolean(moduleTelemetry && tempestsAvailable)}
+              title="Pressure Core"
+              preview={modulePreview("pressure", moduleTelemetry)}
+              onOpen={() => setOpenModuleKey("pressure")}
+              className="border-emerald-300/15 bg-emerald-400/10 text-white shadow-none"
+            >
               <CardHeader className="pb-2">
                 <CardDescription className="text-cyan-100/70">Pressure Core</CardDescription>
                 <CardTitle className="text-xl text-white">{formatPressure(station?.metrics.pressureInHg)}</CardTitle>
@@ -310,9 +533,15 @@ export function Weather() {
                   {tempestsAvailable ? (station?.metrics.pressureTrend || "steady") : "Tempest required"}
                 </p>
               </CardContent>
-            </Card>
+            </WeatherTelemetryModuleCard>
 
-            <Card className="border-amber-300/15 bg-amber-400/10 text-white shadow-none">
+            <WeatherTelemetryModuleCard
+              enabled={Boolean(moduleTelemetry && tempestsAvailable)}
+              title="Hydrology"
+              preview={modulePreview("rain", moduleTelemetry)}
+              onOpen={() => setOpenModuleKey("rain")}
+              className="border-amber-300/15 bg-amber-400/10 text-white shadow-none"
+            >
               <CardHeader className="pb-2">
                 <CardDescription className="text-cyan-100/70">Hydrology</CardDescription>
                 <CardTitle className="text-xl text-white">{formatRain(station?.metrics.rainTodayIn)}</CardTitle>
@@ -322,7 +551,7 @@ export function Weather() {
                   {tempestsAvailable ? `Rate ${formatRain(station?.metrics.rainRateInPerHr)}/hr` : "Live rainfall unavailable"}
                 </p>
               </CardContent>
-            </Card>
+            </WeatherTelemetryModuleCard>
           </div>
         </div>
       </section>
@@ -366,47 +595,79 @@ export function Weather() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-[1.2rem] border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="section-kicker">Humidity</span>
-                  <Activity className="h-4 w-4 text-cyan-500" />
-                </div>
-                <p className="mt-2 text-2xl font-semibold">{formatPercent(station?.metrics.humidityPct ?? forecast.current.humidity)}</p>
-                <p className="mt-1 text-sm text-muted-foreground">Dew point {formatTemperature(station?.metrics.dewPointF)}</p>
-              </div>
+              <WeatherTelemetryModuleCard
+                enabled={Boolean(moduleTelemetry && tempestsAvailable)}
+                title="Humidity"
+                preview={modulePreview("humidity", moduleTelemetry)}
+                onOpen={() => setOpenModuleKey("humidity")}
+                className="border-white/10 bg-white/5 shadow-none"
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="section-kicker">Humidity</span>
+                    <Activity className="h-4 w-4 text-cyan-500" />
+                  </div>
+                  <p className="mt-2 text-2xl font-semibold">{formatPercent(station?.metrics.humidityPct ?? forecast.current.humidity)}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Dew point {formatTemperature(station?.metrics.dewPointF)}</p>
+                </CardContent>
+              </WeatherTelemetryModuleCard>
 
-              <div className="rounded-[1.2rem] border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="section-kicker">Solar</span>
-                  <SunMedium className="h-4 w-4 text-amber-500" />
-                </div>
-                <p className="mt-2 text-2xl font-semibold">{formatSolar(station?.metrics.solarRadiationWm2)}</p>
-                <p className="mt-1 text-sm text-muted-foreground">UV {formatUv(station?.metrics.uvIndex)}</p>
-              </div>
+              <WeatherTelemetryModuleCard
+                enabled={Boolean(moduleTelemetry && tempestsAvailable)}
+                title="Solar"
+                preview={modulePreview("solar", moduleTelemetry)}
+                onOpen={() => setOpenModuleKey("solar")}
+                className="border-white/10 bg-white/5 shadow-none"
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="section-kicker">Solar</span>
+                    <SunMedium className="h-4 w-4 text-amber-500" />
+                  </div>
+                  <p className="mt-2 text-2xl font-semibold">{formatSolar(station?.metrics.solarRadiationWm2)}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">UV {formatUv(station?.metrics.uvIndex)}</p>
+                </CardContent>
+              </WeatherTelemetryModuleCard>
 
-              <div className="rounded-[1.2rem] border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="section-kicker">Signal Path</span>
-                  <RadioTower className="h-4 w-4 text-emerald-500" />
-                </div>
-                <p className="mt-2 text-2xl font-semibold">
-                  {station?.status.websocketConnected ? "WS Live" : tempestsAvailable ? "Snapshot" : "--"}
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  RSSI {station?.status.signalRssi ?? "--"} dBm
-                </p>
-              </div>
+              <WeatherTelemetryModuleCard
+                enabled={Boolean(moduleTelemetry && tempestsAvailable)}
+                title="Signal Path"
+                preview={modulePreview("signal", moduleTelemetry)}
+                onOpen={() => setOpenModuleKey("signal")}
+                className="border-white/10 bg-white/5 shadow-none"
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="section-kicker">Signal Path</span>
+                    <RadioTower className="h-4 w-4 text-emerald-500" />
+                  </div>
+                  <p className="mt-2 text-2xl font-semibold">
+                    {station?.status.websocketConnected ? "WS Live" : tempestsAvailable ? "Snapshot" : "--"}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    RSSI {station?.status.signalRssi ?? "--"} dBm
+                  </p>
+                </CardContent>
+              </WeatherTelemetryModuleCard>
 
-              <div className="rounded-[1.2rem] border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="section-kicker">Lightning</span>
-                  <Zap className="h-4 w-4 text-violet-500" />
-                </div>
-                <p className="mt-2 text-2xl font-semibold">{station?.metrics.lightningCount ?? 0}</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Avg {station?.metrics.lightningAvgDistanceMiles?.toFixed(1) ?? "--"} mi
-                </p>
-              </div>
+              <WeatherTelemetryModuleCard
+                enabled={Boolean(moduleTelemetry && tempestsAvailable)}
+                title="Lightning"
+                preview={modulePreview("lightning", moduleTelemetry)}
+                onOpen={() => setOpenModuleKey("lightning")}
+                className="border-white/10 bg-white/5 shadow-none"
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="section-kicker">Lightning</span>
+                    <Zap className="h-4 w-4 text-violet-500" />
+                  </div>
+                  <p className="mt-2 text-2xl font-semibold">{station?.metrics.lightningCount ?? 0}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Avg {station?.metrics.lightningAvgDistanceMiles?.toFixed(1) ?? "--"} mi
+                  </p>
+                </CardContent>
+              </WeatherTelemetryModuleCard>
             </div>
 
             {!tempestsAvailable && isAdmin ? (
@@ -554,6 +815,19 @@ export function Weather() {
           </CardContent>
         </Card>
       </div>
+
+      {openModuleKey && moduleTelemetry ? (
+        <WeatherModuleTelemetryDialog
+          moduleKey={openModuleKey}
+          telemetry={moduleTelemetry}
+          open={Boolean(openModuleKey)}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) {
+              setOpenModuleKey(null)
+            }
+          }}
+        />
+      ) : null}
 
       {error ? (
         <div className="rounded-[1.2rem] border border-amber-400/20 bg-amber-50/40 p-4 text-sm text-amber-700 dark:bg-amber-950/15 dark:text-amber-300">

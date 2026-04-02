@@ -10,9 +10,11 @@ import {
 } from "lucide-react"
 import { Area, AreaChart, CartesianGrid, Line, XAxis, YAxis } from "recharts"
 import {
+  buildTelemetryChart,
   clearTelemetryData,
   getTelemetryOverview,
   getTelemetrySeries,
+  type TelemetryChartBuilderResult,
   type TelemetryMetricDescriptor,
   type TelemetryMetricStats,
   type TelemetryOverviewPayload,
@@ -24,6 +26,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
 import { cn } from "@/lib/utils"
@@ -115,6 +118,25 @@ function formatOverviewCount(value: number | null | undefined) {
   }
 
   return integerNumber.format(value)
+}
+
+function formatDiskLocation(disk: TelemetryOverviewPayload["disk"] | null | undefined) {
+  const mountOrPath = disk?.mountedOn || disk?.targetPath || ""
+  const filesystem = disk?.filesystem || ""
+
+  if (mountOrPath && filesystem) {
+    return `${mountOrPath} (${filesystem})`
+  }
+
+  if (mountOrPath) {
+    return mountOrPath
+  }
+
+  if (filesystem) {
+    return filesystem
+  }
+
+  return "the platform drive"
 }
 
 function formatBinaryMetricValue(key: string, value: number | null | undefined) {
@@ -287,6 +309,127 @@ function MetricChartCard({ metric, stats, points, color }: MetricChartCardProps)
   )
 }
 
+type ChartBuilderSpotlightProps = {
+  result: TelemetryChartBuilderResult
+  series: TelemetrySeriesPayload | null
+  loading: boolean
+}
+
+function ChartBuilderSpotlight({ result, series, loading }: ChartBuilderSpotlightProps) {
+  const chartMetrics = useMemo(() => {
+    const allowedKeys = new Set(result.chart.metricKeys)
+    return (series?.metrics ?? []).filter((metric) => allowedKeys.has(metric.key))
+  }, [result.chart.metricKeys, series?.metrics])
+
+  const chartData = useMemo(() => {
+    return (series?.points ?? []).map((point) => {
+      const row: Record<string, string | number | null> = {
+        observedAt: point.observedAt,
+        time: formatChartTime(point.observedAt)
+      }
+
+      chartMetrics.forEach((metric) => {
+        row[metric.key] = point.values[metric.key]
+      })
+
+      return row
+    })
+  }, [chartMetrics, series?.points])
+
+  return (
+    <Card className="overflow-hidden border-white/10 bg-slate-950 text-white shadow-xl shadow-slate-950/25">
+      <CardHeader className="gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <Sparkles className="h-5 w-5 text-emerald-400" />
+              {result.chart.title}
+            </CardTitle>
+            <CardDescription className="mt-2 max-w-3xl text-slate-300/80">
+              {result.chart.description}
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary" className="border-white/10 bg-white/10 text-white">
+              {result.source.name}
+            </Badge>
+            <Badge variant="outline" className="border-white/10 text-white">
+              {result.chart.chartType}
+            </Badge>
+            <Badge variant="outline" className="border-white/10 text-white">
+              {result.chart.hours >= 24 ? `${Math.round(result.chart.hours / 24)}d` : `${result.chart.hours}h`}
+            </Badge>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {chartMetrics.map((metric) => (
+            <Badge key={metric.key} variant="outline" className="border-white/10 text-white">
+              {metric.label}
+            </Badge>
+          ))}
+        </div>
+
+        <p className="text-xs text-slate-400">{result.chart.reason}</p>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="flex h-[320px] items-center justify-center text-sm text-slate-300/80">
+            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+            Rendering the AI-built chart
+          </div>
+        ) : chartData.length === 0 || chartMetrics.length === 0 ? (
+          <div className="flex h-[320px] items-center justify-center rounded-[1.5rem] border border-dashed border-white/10 bg-white/5 text-sm text-slate-300/80">
+            No telemetry points matched this chart request yet.
+          </div>
+        ) : (
+          <ChartContainer
+            className="h-[320px] w-full"
+            config={chartMetrics.reduce<Record<string, { label: string; color: string }>>((acc, metric, index) => {
+              acc[metric.key] = {
+                label: metric.label,
+                color: CHART_COLORS[index % CHART_COLORS.length]
+              }
+              return acc
+            }, {})}
+          >
+            <AreaChart data={chartData}>
+              <CartesianGrid stroke="rgba(148, 163, 184, 0.14)" vertical={false} />
+              <XAxis dataKey="time" minTickGap={24} tickLine={false} axisLine={false} />
+              <YAxis tickLine={false} axisLine={false} width={56} />
+              <ChartTooltip
+                content={(
+                  <ChartTooltipContent
+                    formatter={(value, key) => {
+                      const metric = chartMetrics.find((entry) => entry.key === key)
+                      return metric ? formatMetricValue(metric, Number(value)) : String(value)
+                    }}
+                    labelFormatter={(_, payload) => formatDateTime(payload?.[0]?.payload?.observedAt)}
+                  />
+                )}
+              />
+              {chartMetrics.map((metric, index) => (
+                <Area
+                  key={metric.key}
+                  type={metric.binary ? "stepAfter" : "monotone"}
+                  dataKey={metric.key}
+                  stroke={CHART_COLORS[index % CHART_COLORS.length]}
+                  fill={result.chart.chartType === "area" ? CHART_COLORS[index % CHART_COLORS.length] : "transparent"}
+                  fillOpacity={result.chart.chartType === "area" ? 0.14 : 0}
+                  strokeWidth={2.4}
+                  dot={false}
+                  isAnimationActive={false}
+                  connectNulls
+                />
+              ))}
+            </AreaChart>
+          </ChartContainer>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function DataPlatform() {
   const { isAdmin } = useAuth()
   const { toast } = useToast()
@@ -299,6 +442,9 @@ export default function DataPlatform() {
   const [loadingSeries, setLoadingSeries] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [chartPrompt, setChartPrompt] = useState("")
+  const [buildingChart, setBuildingChart] = useState(false)
+  const [chartBuilderResult, setChartBuilderResult] = useState<TelemetryChartBuilderResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const sources = overview?.sources ?? []
@@ -428,6 +574,10 @@ export default function DataPlatform() {
     () => new Map((series?.stats ?? []).map((entry) => [entry.key, entry])),
     [series?.stats]
   )
+  const diskLocation = formatDiskLocation(overview?.disk)
+  const storageFootprintSummary = overview?.disk?.available
+    ? `HomeBrain telemetry currently uses ${formatBytes(overview?.storage?.footprintBytes)} on disk, with ${formatBytes(overview?.disk?.freeBytes)} free out of ${formatBytes(overview?.disk?.totalBytes)} on ${diskLocation}.`
+    : `HomeBrain telemetry currently uses ${formatBytes(overview?.storage?.footprintBytes)} on disk. Drive capacity telemetry is currently unavailable.`
 
   const selectedMetricDescriptors = useMemo(() => {
     if (!selectedSource) {
@@ -500,6 +650,41 @@ export default function DataPlatform() {
       setClearing(false)
     }
   }, [loadOverview, selectedSource, toast])
+
+  const handleBuildChart = useCallback(async () => {
+    const prompt = chartPrompt.trim()
+    if (!prompt) {
+      return
+    }
+
+    setBuildingChart(true)
+
+    try {
+      const response = await buildTelemetryChart({
+        prompt,
+        preferredSourceKey: selectedSourceKey ?? undefined
+      })
+
+      const result = response.data
+      setChartBuilderResult(result)
+      setSelectedSourceKey(result.chart.sourceKey)
+      setSelectedMetricKeys(result.chart.metricKeys)
+      setRangeHours(result.chart.hours)
+      setChartPrompt("")
+      toast({
+        title: "Chart created",
+        description: `${result.chart.title} is now loaded from ${result.source.name}.`
+      })
+    } catch (buildError) {
+      toast({
+        title: "Chart builder failed",
+        description: buildError instanceof Error ? buildError.message : "Unable to build the requested chart.",
+        variant: "destructive"
+      })
+    } finally {
+      setBuildingChart(false)
+    }
+  }, [chartPrompt, selectedSourceKey, toast])
 
   if (loadingOverview && !overview) {
     return (
@@ -580,7 +765,7 @@ export default function DataPlatform() {
                 </CardTitle>
                 <CardDescription className="pt-2 text-slate-300/70">
                   {overview?.disk?.available
-                    ? `${overview?.disk?.usagePercent.toFixed(1)}% used on the host drive`
+                    ? `${overview?.disk?.usagePercent.toFixed(1)}% used on ${diskLocation}`
                     : "Drive capacity telemetry unavailable"}
                 </CardDescription>
               </CardHeader>
@@ -613,9 +798,7 @@ export default function DataPlatform() {
             <Database className="h-5 w-5 text-cyan-500" />
             Storage Footprint
           </CardTitle>
-          <CardDescription>
-            HomeBrain telemetry currently uses {formatBytes(overview?.storage?.footprintBytes)} on disk, with {formatBytes(overview?.disk?.freeBytes)} free out of {formatBytes(overview?.disk?.totalBytes)} on the host drive.
-          </CardDescription>
+          <CardDescription>{storageFootprintSummary}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
@@ -650,6 +833,33 @@ export default function DataPlatform() {
             ))}
           </div>
         </CardContent>
+      </Card>
+
+      <Card className="border-white/10 bg-background/80">
+        <CardHeader className="gap-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-emerald-500" />
+                Natural Language Chart Builder
+              </CardTitle>
+              <CardDescription>
+                Describe the chart you want, and HomeBrain will pick the telemetry source, metrics, and time window for you.
+              </CardDescription>
+            </div>
+            <Button onClick={() => void handleBuildChart()} disabled={buildingChart || !chartPrompt.trim()}>
+              <Sparkles className="h-4 w-4" />
+              {buildingChart ? "Building..." : "Build Chart"}
+            </Button>
+          </div>
+
+          <Textarea
+            value={chartPrompt}
+            onChange={(event) => setChartPrompt(event.target.value)}
+            placeholder='Example: Create a chart showing the master toilet fan on/off history for the last week, or compare rain rate and rain today for the Tempest station over the last month.'
+            className="min-h-[120px]"
+          />
+        </CardHeader>
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -718,6 +928,14 @@ export default function DataPlatform() {
         </Card>
 
         <div className="space-y-6">
+          {chartBuilderResult ? (
+            <ChartBuilderSpotlight
+              result={chartBuilderResult}
+              series={selectedSourceKey === chartBuilderResult.chart.sourceKey ? series : null}
+              loading={loadingSeries && selectedSourceKey === chartBuilderResult.chart.sourceKey}
+            />
+          ) : null}
+
           <Card className="border-white/10 bg-background/80">
             <CardHeader className="gap-4">
               <div className="flex flex-wrap items-start justify-between gap-4">

@@ -137,6 +137,37 @@ export interface WorkflowExecutionHistoryEntry {
   error?: { message?: string; stack?: string; failedAt?: string } | null;
 }
 
+export interface WorkflowRuntimePagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasPreviousPage: boolean;
+  hasNextPage: boolean;
+}
+
+export interface WorkflowRuntimeTelemetry {
+  runningNow: number;
+  executionCount: number;
+  successCount: number;
+  partialSuccessCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  runningCountInRange: number;
+  totalActions: number;
+  successfulActions: number;
+  failedActions: number;
+  averageDurationMs: number | null;
+  failureRatePct: number;
+  lastStartedAt?: string | null;
+  lastCompletedAt?: string | null;
+  timeRange: {
+    hours: number | null;
+    startAt?: string | null;
+    endAt?: string | null;
+  };
+}
+
 export const getWorkflows = async (): Promise<{ success: boolean; workflows: Workflow[]; count: number }> => {
   try {
     const response = await api.get("/api/workflows");
@@ -249,18 +280,51 @@ export const getWorkflowStats = async () => {
   }
 };
 
-export const getWorkflowRuntimeHistory = async (workflowId?: string | null, limit = 50) => {
+export const getWorkflowRuntimeHistory = async (
+  workflowId?: string | null,
+  options: number | { limit?: number; page?: number; hours?: number | null } = 50
+) => {
   try {
     const path = workflowId
       ? `/api/workflows/runtime-history/${workflowId}`
       : "/api/workflows/runtime-history";
+    const normalizedOptions = typeof options === "number"
+      ? { limit: options }
+      : options;
     const response = await api.get(path, {
-      params: { limit }
+      params: {
+        limit: normalizedOptions.limit,
+        page: normalizedOptions.page,
+        hours: normalizedOptions.hours
+      }
     });
     return response.data as {
       success: boolean;
       history: WorkflowExecutionHistoryEntry[];
       count: number;
+      pagination: WorkflowRuntimePagination;
+      timeRange: {
+        hours: number | null;
+        startAt?: string | null;
+        endAt?: string | null;
+      };
+    };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const getWorkflowRuntimeTelemetry = async (options: { workflowId?: string | null; hours?: number | null } = {}) => {
+  try {
+    const response = await api.get("/api/workflows/runtime-telemetry", {
+      params: {
+        workflowId: options.workflowId,
+        hours: options.hours
+      }
+    });
+    return response.data as {
+      success: boolean;
+      telemetry: WorkflowRuntimeTelemetry;
     };
   } catch (error) {
     throw new Error(getApiErrorMessage(error));

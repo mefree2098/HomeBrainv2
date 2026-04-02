@@ -6,6 +6,23 @@ const { requireUser, requireAdmin } = require('./middlewares/auth');
 router.use(requireUser());
 const admin = requireAdmin();
 
+function parsePositiveInt(value, fallback, minimum = 1, maximum = Number.MAX_SAFE_INTEGER) {
+  const numeric = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return Math.min(maximum, Math.max(minimum, numeric));
+}
+
+function parseOptionalHours(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  return parsePositiveInt(value, 24, 1, 24 * 365);
+}
+
 router.get('/', async (req, res) => {
   try {
     const workflows = await workflowService.getAllWorkflows();
@@ -39,14 +56,40 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-router.get('/runtime-history', async (req, res) => {
+router.get('/runtime-telemetry', async (req, res) => {
   try {
-    const limit = Number.parseInt(String(req.query.limit ?? '50'), 10);
-    const history = await workflowService.getWorkflowRuntimeHistory(null, limit);
+    const workflowId = typeof req.query.workflowId === 'string' && req.query.workflowId.trim()
+      ? req.query.workflowId.trim()
+      : null;
+    const hours = parseOptionalHours(req.query.hours);
+    const telemetry = await workflowService.getWorkflowRuntimeTelemetry(workflowId, { hours });
+
     return res.status(200).json({
       success: true,
-      history,
-      count: history.length
+      telemetry
+    });
+  } catch (error) {
+    const statusCode = error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
+    console.error('GET /api/workflows/runtime-telemetry - Error:', error.message);
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to fetch workflow runtime telemetry'
+    });
+  }
+});
+
+router.get('/runtime-history', async (req, res) => {
+  try {
+    const limit = parsePositiveInt(req.query.limit, 50, 1, 100);
+    const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
+    const hours = parseOptionalHours(req.query.hours);
+    const result = await workflowService.getWorkflowRuntimeHistory(null, { limit, page, hours });
+    return res.status(200).json({
+      success: true,
+      history: result.history,
+      count: result.history.length,
+      pagination: result.pagination,
+      timeRange: result.timeRange
     });
   } catch (error) {
     console.error('GET /api/workflows/runtime-history - Error:', error.message);
@@ -59,12 +102,16 @@ router.get('/runtime-history', async (req, res) => {
 
 router.get('/runtime-history/:id', async (req, res) => {
   try {
-    const limit = Number.parseInt(String(req.query.limit ?? '50'), 10);
-    const history = await workflowService.getWorkflowRuntimeHistory(req.params.id, limit);
+    const limit = parsePositiveInt(req.query.limit, 50, 1, 100);
+    const page = parsePositiveInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
+    const hours = parseOptionalHours(req.query.hours);
+    const result = await workflowService.getWorkflowRuntimeHistory(req.params.id, { limit, page, hours });
     return res.status(200).json({
       success: true,
-      history,
-      count: history.length
+      history: result.history,
+      count: result.history.length,
+      pagination: result.pagination,
+      timeRange: result.timeRange
     });
   } catch (error) {
     const statusCode = error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;

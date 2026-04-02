@@ -2,6 +2,13 @@ import { useEffect, useMemo, useState } from "react"
 import { Activity, BarChart3, Clock3, Loader2, Zap } from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
+import {
+  getTelemetrySeries,
+  type TelemetryMetricDescriptor,
+  type TelemetryMetricStats,
+  type TelemetrySeriesPayload,
+  type TelemetryTimelineEvent
+} from "@/api/telemetry"
 import { type AlexaExposureSummary } from "@/api/alexa"
 import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl"
 import { Badge } from "@/components/ui/badge"
@@ -60,6 +67,57 @@ type LiveEnergySnapshot = {
 
 const HISTORY_HOURS = 24
 const HISTORY_LIMIT = 720
+const TELEMETRY_RANGE_OPTIONS = [
+  { label: "24H", hours: 24 },
+  { label: "7D", hours: 24 * 7 },
+  { label: "30D", hours: 24 * 30 },
+  { label: "1Y", hours: 24 * 365 }
+] as const
+
+function formatBinaryMetricValue(key: string, value: number | null | undefined) {
+  if (value == null) {
+    return "--"
+  }
+
+  const active = value >= 0.5
+  switch (key) {
+    case "online":
+      return active ? "Online" : "Offline"
+    case "locked":
+      return active ? "Locked" : "Unlocked"
+    case "contact_open":
+      return active ? "Open" : "Closed"
+    case "motion_active":
+      return active ? "Motion" : "Idle"
+    case "presence_present":
+      return active ? "Present" : "Away"
+    case "water_detected":
+      return active ? "Wet" : "Dry"
+    case "websocket_connected":
+      return active ? "Connected" : "Disconnected"
+    case "udp_listening":
+      return active ? "Listening" : "Inactive"
+    default:
+      return active ? "On" : "Off"
+  }
+}
+
+function formatTelemetryMetricValue(metric: TelemetryMetricDescriptor, value: number | null | undefined) {
+  if (value == null) {
+    return "--"
+  }
+
+  if (metric.binary) {
+    return formatBinaryMetricValue(metric.key, value)
+  }
+
+  const digits = Math.abs(value) >= 100 ? 0 : Math.abs(value) >= 10 ? 1 : 2
+  const rendered = value.toLocaleString([], {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
+  })
+  return metric.unit ? `${rendered} ${metric.unit}` : rendered
+}
 
 function toFiniteNumber(value: unknown): number | null {
   const numeric = Number(value)
@@ -246,6 +304,102 @@ function sameStringList(left: string[], right: string[]) {
   return left.every((value, index) => value === right[index])
 }
 
+type DeviceTelemetryMetricCardProps = {
+  metric: TelemetryMetricDescriptor
+  stats: TelemetryMetricStats | undefined
+  points: TelemetrySeriesPayload["points"]
+}
+
+function DeviceTelemetryMetricCard({ metric, stats, points }: DeviceTelemetryMetricCardProps) {
+  const chartData = useMemo(() => {
+    return points.map((point) => ({
+      observedAt: point.observedAt,
+      value: point.values[metric.key]
+    }))
+  }, [metric.key, points])
+
+  return (
+    <div className="rounded-[1.2rem] border border-white/10 bg-white/5 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-medium text-foreground">{metric.label}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {metric.binary ? "State history" : `Telemetry${metric.unit ? ` in ${metric.unit}` : ""}`}
+          </p>
+        </div>
+        <Badge variant="secondary">{formatTelemetryMetricValue(metric, stats?.latest)}</Badge>
+      </div>
+
+      {chartData.length === 0 ? (
+        <div className="mt-4 rounded-[1rem] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-muted-foreground">
+          No telemetry points in this window.
+        </div>
+      ) : (
+        <ChartContainer
+          className="mt-4 h-[220px] w-full"
+          config={{
+            value: {
+              label: metric.label,
+              color: "#38bdf8"
+            }
+          }}
+        >
+          <LineChart data={chartData}>
+            <CartesianGrid vertical={false} strokeDasharray="4 4" />
+            <XAxis
+              dataKey="observedAt"
+              tickLine={false}
+              axisLine={false}
+              minTickGap={24}
+              tickFormatter={formatChartTick}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              width={metric.binary ? 64 : 52}
+              domain={metric.binary ? [0, 1] : ["auto", "auto"]}
+              tickFormatter={(value) => metric.binary ? formatBinaryMetricValue(metric.key, Number(value)) : String(value)}
+            />
+            <ChartTooltip
+              content={(
+                <ChartTooltipContent
+                  indicator="line"
+                  formatter={(value) => formatTelemetryMetricValue(metric, Number(value))}
+                  labelFormatter={(value) => formatDateTime(typeof value === "string" ? value : "")}
+                />
+              )}
+            />
+            <Line
+              type={metric.binary ? "stepAfter" : "monotone"}
+              dataKey="value"
+              stroke="var(--color-value)"
+              strokeWidth={2.5}
+              dot={false}
+              connectNulls
+              isAnimationActive={false}
+            />
+          </LineChart>
+        </ChartContainer>
+      )}
+
+      <div className="mt-4 grid grid-cols-3 gap-3 text-xs text-muted-foreground">
+        <div>
+          <p className="section-kicker text-muted-foreground">Min</p>
+          <p className="mt-1 text-sm font-medium text-foreground">{formatTelemetryMetricValue(metric, stats?.min)}</p>
+        </div>
+        <div>
+          <p className="section-kicker text-muted-foreground">Avg</p>
+          <p className="mt-1 text-sm font-medium text-foreground">{formatTelemetryMetricValue(metric, stats?.average)}</p>
+        </div>
+        <div>
+          <p className="section-kicker text-muted-foreground">Max</p>
+          <p className="mt-1 text-sm font-medium text-foreground">{formatTelemetryMetricValue(metric, stats?.max)}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function DeviceDetailsDialog({
   device,
   open,
@@ -259,6 +413,11 @@ export function DeviceDetailsDialog({
   const [samples, setSamples] = useState<DeviceEnergySample[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [telemetrySeries, setTelemetrySeries] = useState<TelemetrySeriesPayload | null>(null)
+  const [telemetryLoading, setTelemetryLoading] = useState(false)
+  const [telemetryError, setTelemetryError] = useState<string | null>(null)
+  const [telemetryMetricKeys, setTelemetryMetricKeys] = useState<string[]>([])
+  const [telemetryRangeHours, setTelemetryRangeHours] = useState<number>(24 * 7)
   const [groupInput, setGroupInput] = useState("")
   const [savingGroups, setSavingGroups] = useState(false)
   const { toast } = useToast()
@@ -280,6 +439,15 @@ export function DeviceDetailsDialog({
 
     setGroupInput(currentGroups.join(", "))
   }, [currentGroups, open, device?._id])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    setTelemetryMetricKeys([])
+    setTelemetryRangeHours(24 * 7)
+  }, [device?._id, open])
 
   useEffect(() => {
     if (!open || !device?._id || !liveSnapshot.supportsEnergyMonitoring) {
@@ -393,6 +561,53 @@ export function DeviceDetailsDialog({
     open
   ])
 
+  useEffect(() => {
+    if (!open || !device?._id) {
+      setTelemetrySeries(null)
+      setTelemetryError(null)
+      setTelemetryLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    const loadTelemetry = async () => {
+      setTelemetryLoading(true)
+      setTelemetryError(null)
+
+      try {
+        const response = await getTelemetrySeries({
+          sourceKey: `device:${device._id}`,
+          metricKeys: telemetryMetricKeys.length > 0 ? telemetryMetricKeys : undefined,
+          hours: telemetryRangeHours,
+          maxPoints: telemetryRangeHours >= 24 * 90 ? 320 : 240
+        })
+
+        if (!cancelled) {
+          setTelemetrySeries(response.data)
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          const message = loadError instanceof Error
+            ? loadError.message
+            : "Failed to load device telemetry history."
+          setTelemetryError(message)
+          setTelemetrySeries(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setTelemetryLoading(false)
+        }
+      }
+    }
+
+    void loadTelemetry()
+
+    return () => {
+      cancelled = true
+    }
+  }, [device?._id, open, telemetryMetricKeys, telemetryRangeHours])
+
   const chartData = useMemo(() => {
     return samples
       .filter((sample) => typeof sample?.power?.value === "number")
@@ -415,6 +630,37 @@ export function DeviceDetailsDialog({
     || liveSnapshot.energyTimestamp
     || parseOptionalDate(latestSample?.recordedAt)
     || parseOptionalDate(device?.lastSeen)
+  const telemetryMetricDescriptors = telemetrySeries?.metrics ?? []
+  const telemetryStats = useMemo(
+    () => new Map((telemetrySeries?.stats ?? []).map((entry) => [entry.key, entry])),
+    [telemetrySeries?.stats]
+  )
+  const telemetryEvents = telemetrySeries?.events ?? []
+
+  const handleTelemetryMetricToggle = (metricKey: string) => {
+    setTelemetryMetricKeys((current) => {
+      const baseSelection = current.length > 0
+        ? current
+        : telemetrySeries?.metrics.map((entry) => entry.key) ?? []
+
+      if (baseSelection.includes(metricKey)) {
+        if (baseSelection.length === 1) {
+          return baseSelection
+        }
+        return baseSelection.filter((entry) => entry !== metricKey)
+      }
+
+      if (baseSelection.length >= 4) {
+        toast({
+          title: "Metric limit reached",
+          description: "Choose up to four device telemetry metrics at a time."
+        })
+        return baseSelection
+      }
+
+      return baseSelection.concat(metricKey)
+    })
+  }
 
   const handleSaveGroups = async () => {
     if (!device?._id) {
@@ -723,6 +969,141 @@ export function DeviceDetailsDialog({
                         />
                       </LineChart>
                     </ChartContainer>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border-white/10 bg-white/5">
+                <CardHeader className="gap-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <CardTitle>Full Telemetry History</CardTitle>
+                      <CardDescription>
+                        Unified device telemetry for on/off activity, connectivity, thresholds, and sensor changes.
+                      </CardDescription>
+                    </div>
+                    <Badge variant="outline">
+                      {telemetrySeries?.source.sampleCount?.toLocaleString?.() ?? "0"} stored samples
+                    </Badge>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {TELEMETRY_RANGE_OPTIONS.map((option) => (
+                      <Button
+                        key={option.hours}
+                        type="button"
+                        size="sm"
+                        variant={telemetryRangeHours === option.hours ? "default" : "outline"}
+                        onClick={() => setTelemetryRangeHours(option.hours)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
+
+                  {telemetrySeries?.source ? (
+                    <div className="flex flex-wrap gap-2">
+                      {telemetrySeries.source.availableMetrics.map((metric) => {
+                        const activeMetricKeys = telemetryMetricKeys.length > 0
+                          ? telemetryMetricKeys
+                          : telemetrySeries.metrics.map((entry) => entry.key)
+
+                        return (
+                          <Button
+                            key={metric.key}
+                            type="button"
+                            size="sm"
+                            variant={activeMetricKeys.includes(metric.key) ? "default" : "outline"}
+                            onClick={() => handleTelemetryMetricToggle(metric.key)}
+                          >
+                            {metric.label}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {telemetryLoading ? (
+                    <div className="flex h-52 items-center justify-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading telemetry timeline...
+                    </div>
+                  ) : telemetryError ? (
+                    <div className="rounded-[1.1rem] border border-dashed border-red-500/30 px-4 py-10 text-center text-sm text-red-400">
+                      {telemetryError}
+                    </div>
+                  ) : !telemetrySeries ? (
+                    <div className="rounded-[1.1rem] border border-dashed border-white/10 px-4 py-10 text-center text-sm text-muted-foreground">
+                      This device has not emitted telemetry samples yet.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid gap-4 md:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
+                        <div className="grid gap-4 md:grid-cols-2">
+                          {telemetryMetricDescriptors.map((metric) => (
+                            <DeviceTelemetryMetricCard
+                              key={metric.key}
+                              metric={metric}
+                              stats={telemetryStats.get(metric.key)}
+                              points={telemetrySeries.points}
+                            />
+                          ))}
+                        </div>
+
+                        <div className="rounded-[1.2rem] border border-white/10 bg-white/5 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-medium text-foreground">Activity Timeline</p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                When this device changed state in the selected telemetry window.
+                              </p>
+                            </div>
+                            <Badge variant="secondary">{telemetryEvents.length}</Badge>
+                          </div>
+
+                          {telemetryEvents.length === 0 ? (
+                            <div className="mt-4 rounded-[1rem] border border-dashed border-white/10 px-4 py-8 text-center text-sm text-muted-foreground">
+                              No discrete state transitions were detected in this range.
+                            </div>
+                          ) : (
+                            <div className="mt-4 space-y-3">
+                              {telemetryEvents.slice(0, 14).map((event: TelemetryTimelineEvent) => (
+                                <div key={event.id} className="rounded-[1rem] border border-white/10 bg-black/10 p-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <p className="text-sm font-medium text-foreground">{event.summary}</p>
+                                    <Badge variant="outline">{event.label}</Badge>
+                                  </div>
+                                  <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(event.observedAt)}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
+                          <p className="section-kicker text-muted-foreground">Samples Returned</p>
+                          <p className="mt-2 text-2xl font-semibold">{telemetrySeries.range.pointCount.toLocaleString()}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            From {telemetrySeries.range.rawPointCount.toLocaleString()} raw points.
+                          </p>
+                        </div>
+                        <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
+                          <p className="section-kicker text-muted-foreground">Window</p>
+                          <p className="mt-2 text-2xl font-semibold">
+                            {telemetryRangeHours >= 24 ? `${Math.round(telemetryRangeHours / 24)}d` : `${telemetryRangeHours}h`}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">History across state and metric changes.</p>
+                        </div>
+                        <div className="rounded-[1.1rem] border border-white/10 bg-white/5 p-4">
+                          <p className="section-kicker text-muted-foreground">Last Device Sample</p>
+                          <p className="mt-2 text-lg font-semibold">{formatDateTime(telemetrySeries.source.lastSampleAt)}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">Latest stored telemetry point for this device.</p>
+                        </div>
+                      </div>
+                    </>
                   )}
                 </CardContent>
               </Card>

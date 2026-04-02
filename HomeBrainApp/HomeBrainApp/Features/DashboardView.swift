@@ -223,15 +223,13 @@ private final class DashboardLocationManager: NSObject, ObservableObject, CLLoca
     }
 
     func requestLocation() {
-        guard CLLocationManager.locationServicesEnabled() else {
-            errorMessage = "Location services are disabled on this device."
-            return
-        }
-
         errorMessage = nil
         isRequesting = true
+        handleAuthorizationStatus(manager.authorizationStatus)
+    }
 
-        switch manager.authorizationStatus {
+    private func handleAuthorizationStatus(_ status: CLAuthorizationStatus) {
+        switch status {
         case .authorizedAlways, .authorizedWhenInUse:
             manager.requestLocation()
         case .notDetermined:
@@ -246,18 +244,7 @@ private final class DashboardLocationManager: NSObject, ObservableObject, CLLoca
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        switch manager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse:
-            manager.requestLocation()
-        case .denied, .restricted:
-            isRequesting = false
-            errorMessage = "Allow location access in Settings to use auto-detected weather."
-        case .notDetermined:
-            break
-        @unknown default:
-            isRequesting = false
-            errorMessage = "Location permission is unavailable."
-        }
+        handleAuthorizationStatus(manager.authorizationStatus)
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -268,7 +255,18 @@ private final class DashboardLocationManager: NSObject, ObservableObject, CLLoca
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         isRequesting = false
-        errorMessage = error.localizedDescription
+        if let error = error as? CLError {
+            switch error.code {
+            case .denied:
+                errorMessage = "Allow location access in Settings to use auto-detected weather."
+            case .locationUnknown:
+                errorMessage = "HomeBrain couldn't determine the current location yet. Try again in a moment."
+            default:
+                errorMessage = error.localizedDescription
+            }
+        } else {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

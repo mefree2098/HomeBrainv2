@@ -140,3 +140,36 @@ test('getSystemInfo derives Jetson model from the device tree', async (t) => {
   assert.equal(systemInfo.jetsonRelease, '# R36 (release), REVISION: 4.3');
   assert.equal(systemInfo.osName, 'Ubuntu 22.04.4 LTS');
 });
+
+test('getDiskUsage targets the platform storage path instead of the root filesystem', async () => {
+  const commands = [];
+  const service = new ResourceMonitorService({
+    stat: async (filePath) => {
+      if (filePath === '/mnt/nvme/homebrain') {
+        return {};
+      }
+
+      const error = createMissingFileError();
+      throw error;
+    },
+    execAsync: async (command) => {
+      commands.push(command);
+      return {
+        stdout: '/dev/nvme0n1p1 976762584 262144000 714618584 27% /mnt/nvme\n'
+      };
+    }
+  });
+
+  const disk = await service.getDiskUsage({ targetPath: '/mnt/nvme/homebrain/server/runtime' });
+
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0], "df -kP '/mnt/nvme/homebrain' | tail -1");
+  assert.equal(disk.filesystem, '/dev/nvme0n1p1');
+  assert.equal(disk.mountedOn, '/mnt/nvme');
+  assert.equal(disk.targetPath, '/mnt/nvme/homebrain');
+  assert.equal(disk.usagePercent, 27);
+  assert.equal(disk.total, '932Gi');
+  assert.equal(disk.available, '682Gi');
+  assert.equal(disk.totalGB, 931.51);
+  assert.equal(disk.availableGB, 681.51);
+});

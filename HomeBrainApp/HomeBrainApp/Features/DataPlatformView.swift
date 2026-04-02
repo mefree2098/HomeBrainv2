@@ -31,7 +31,7 @@ private enum TelemetryRangeOption: String, CaseIterable, Identifiable {
     }
 }
 
-private struct TelemetryMetricDescriptor: Identifiable, Equatable {
+private nonisolated struct TelemetryMetricDescriptor: Identifiable, Equatable {
     let key: String
     let label: String
     let unit: String
@@ -49,7 +49,7 @@ private struct TelemetryMetricDescriptor: Identifiable, Equatable {
     }
 }
 
-private struct TelemetrySourceSummary: Identifiable, Equatable {
+private nonisolated struct TelemetrySourceSummary: Identifiable, Equatable {
     let sourceKey: String
     let sourceType: String
     let sourceId: String
@@ -87,7 +87,7 @@ private struct TelemetrySourceSummary: Identifiable, Equatable {
     }
 }
 
-private struct TelemetryOverviewSnapshot {
+private nonisolated struct TelemetryOverviewSnapshot {
     let retentionDays: Int
     let totalSamples: Int
     let sourceCount: Int
@@ -111,7 +111,7 @@ private struct TelemetryOverviewSnapshot {
     }
 }
 
-private struct TelemetryStorageCollection: Identifiable, Equatable {
+private nonisolated struct TelemetryStorageCollection: Identifiable, Equatable {
     let key: String
     let label: String
     let collectionName: String
@@ -141,7 +141,7 @@ private struct TelemetryStorageCollection: Identifiable, Equatable {
     }
 }
 
-private struct TelemetryStorageSummary: Equatable {
+private nonisolated struct TelemetryStorageSummary: Equatable {
     let collectionCount: Int
     let totalDocumentCount: Int
     let logicalSizeBytes: Int
@@ -163,7 +163,7 @@ private struct TelemetryStorageSummary: Equatable {
     }
 }
 
-private struct TelemetryDiskSummary: Equatable {
+private nonisolated struct TelemetryDiskSummary: Equatable {
     let totalBytes: Int
     let usedBytes: Int
     let freeBytes: Int
@@ -174,6 +174,9 @@ private struct TelemetryDiskSummary: Equatable {
     let totalLabel: String
     let usedLabel: String
     let freeLabel: String
+    let filesystem: String
+    let mountedOn: String
+    let targetPath: String
     let available: Bool
 
     static func from(_ object: [String: Any]) -> TelemetryDiskSummary {
@@ -188,12 +191,15 @@ private struct TelemetryDiskSummary: Equatable {
             totalLabel: JSON.string(object, "totalLabel"),
             usedLabel: JSON.string(object, "usedLabel"),
             freeLabel: JSON.string(object, "freeLabel"),
+            filesystem: JSON.string(object, "filesystem"),
+            mountedOn: JSON.string(object, "mountedOn"),
+            targetPath: JSON.string(object, "targetPath"),
             available: JSON.bool(object, "available")
         )
     }
 }
 
-private struct TelemetrySeriesRangeSnapshot {
+private nonisolated struct TelemetrySeriesRangeSnapshot {
     let hours: Int
     let rawPointCount: Int
     let pointCount: Int
@@ -209,7 +215,7 @@ private struct TelemetrySeriesRangeSnapshot {
     }
 }
 
-private struct TelemetrySeriesPoint: Identifiable {
+private nonisolated struct TelemetrySeriesPoint: Identifiable {
     let observedAt: String
     let values: [String: Double]
 
@@ -224,7 +230,7 @@ private struct TelemetrySeriesPoint: Identifiable {
     }
 }
 
-private struct TelemetryMetricStats: Equatable {
+private nonisolated struct TelemetryMetricStats: Equatable {
     let key: String
     let latest: Double?
     let min: Double?
@@ -242,7 +248,7 @@ private struct TelemetryMetricStats: Equatable {
     }
 }
 
-private struct TelemetrySeriesSnapshot {
+private nonisolated struct TelemetrySeriesSnapshot {
     let source: TelemetrySourceSummary
     let metrics: [TelemetryMetricDescriptor]
     let range: TelemetrySeriesRangeSnapshot
@@ -260,7 +266,7 @@ private struct TelemetrySeriesSnapshot {
     }
 }
 
-private func telemetryOptionalDouble(_ value: Any?) -> Double? {
+private nonisolated func telemetryOptionalDouble(_ value: Any?) -> Double? {
     if let value = value as? Double {
         return value
     }
@@ -273,7 +279,7 @@ private func telemetryOptionalDouble(_ value: Any?) -> Double? {
     return nil
 }
 
-private func telemetryStringArray(_ value: Any?) -> [String] {
+private nonisolated func telemetryStringArray(_ value: Any?) -> [String] {
     if let strings = value as? [String] {
         return strings
     }
@@ -288,7 +294,7 @@ private func telemetryStringArray(_ value: Any?) -> [String] {
     return []
 }
 
-private func telemetryIntMap(_ value: Any?) -> [String: Int] {
+private nonisolated func telemetryIntMap(_ value: Any?) -> [String: Int] {
     let object = JSON.object(value)
     var result: [String: Int] = [:]
     object.forEach { key, rawValue in
@@ -303,7 +309,7 @@ private func telemetryIntMap(_ value: Any?) -> [String: Int] {
     return result
 }
 
-private func telemetryNumericMap(_ value: Any?) -> [String: Double] {
+private nonisolated func telemetryNumericMap(_ value: Any?) -> [String: Double] {
     let object = JSON.object(value)
     var result: [String: Double] = [:]
     object.forEach { key, rawValue in
@@ -314,26 +320,26 @@ private func telemetryNumericMap(_ value: Any?) -> [String: Double] {
     return result
 }
 
-private func telemetryFormatDateTime(_ value: String?) -> String {
+private nonisolated func telemetryFormatDateTime(_ value: String?) -> String {
     guard let value, let date = JSON.date(from: value) else {
         return "Unknown"
     }
     return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
 }
 
-private func telemetryFormatChartDate(_ value: Date?) -> String {
+private nonisolated func telemetryFormatChartDate(_ value: Date?) -> String {
     guard let value else { return "--" }
     return value.formatted(.dateTime.month(.abbreviated).day().hour())
 }
 
-private func telemetryFormatCompactCount(_ value: Int) -> String {
+private nonisolated func telemetryFormatCompactCount(_ value: Int) -> String {
     if value >= 1000 {
         return value.formatted(.number.notation(.compactName))
     }
     return value.formatted()
 }
 
-private func telemetryFormatBytes(_ value: Int) -> String {
+private nonisolated func telemetryFormatBytes(_ value: Int) -> String {
     if value < 0 {
         return "--"
     }
@@ -363,7 +369,36 @@ private func telemetryFormatBytes(_ value: Int) -> String {
     return "\(size.formatted(.number.precision(.fractionLength(0...digits)))) \(units[unitIndex])"
 }
 
-private func telemetryBinaryLabel(for metricKey: String, value: Double?) -> String {
+private nonisolated func telemetryDiskLocation(_ disk: TelemetryDiskSummary?) -> String {
+    guard let disk else {
+        return "the platform drive"
+    }
+
+    let mountOrPath: String
+    if !disk.mountedOn.isEmpty {
+        mountOrPath = disk.mountedOn
+    } else if !disk.targetPath.isEmpty {
+        mountOrPath = disk.targetPath
+    } else {
+        mountOrPath = ""
+    }
+
+    if !mountOrPath.isEmpty, !disk.filesystem.isEmpty {
+        return "\(mountOrPath) (\(disk.filesystem))"
+    }
+
+    if !mountOrPath.isEmpty {
+        return mountOrPath
+    }
+
+    if !disk.filesystem.isEmpty {
+        return disk.filesystem
+    }
+
+    return "the platform drive"
+}
+
+private nonisolated func telemetryBinaryLabel(for metricKey: String, value: Double?) -> String {
     guard let value else { return "--" }
     let on = value >= 0.5
 
@@ -387,7 +422,7 @@ private func telemetryBinaryLabel(for metricKey: String, value: Double?) -> Stri
     }
 }
 
-private func telemetryFormatMetricValue(_ metric: TelemetryMetricDescriptor, value: Double?) -> String {
+private nonisolated func telemetryFormatMetricValue(_ metric: TelemetryMetricDescriptor, value: Double?) -> String {
     guard let value else { return "--" }
 
     if metric.binary {
@@ -727,7 +762,7 @@ struct DataPlatformView: View {
                         title: "Drive Free / Total",
                         value: "\(telemetryFormatBytes(overview?.disk.freeBytes ?? 0)) / \(telemetryFormatBytes(overview?.disk.totalBytes ?? 0))",
                         subtitle: overview?.disk.available == true
-                            ? "\(String(format: "%.1f", overview?.disk.usagePercent ?? 0))% used on host drive"
+                            ? "\(String(format: "%.1f", overview?.disk.usagePercent ?? 0))% used on \(telemetryDiskLocation(overview?.disk))"
                             : "Drive telemetry unavailable"
                     )
                     telemetryOverviewTile(title: "Last Ingest", value: telemetryFormatDateTime(overview?.lastSampleAt), subtitle: "Latest observed sample")
@@ -744,7 +779,11 @@ struct DataPlatformView: View {
                         .font(.system(size: 20, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.textPrimary)
 
-                    Text("HomeBrain telemetry currently uses \(telemetryFormatBytes(overview?.storage.footprintBytes ?? 0)) on disk, with \(telemetryFormatBytes(overview?.disk.freeBytes ?? 0)) free out of \(telemetryFormatBytes(overview?.disk.totalBytes ?? 0)) on the host drive.")
+                    Text(
+                        overview?.disk.available == true
+                            ? "HomeBrain telemetry currently uses \(telemetryFormatBytes(overview?.storage.footprintBytes ?? 0)) on disk, with \(telemetryFormatBytes(overview?.disk.freeBytes ?? 0)) free out of \(telemetryFormatBytes(overview?.disk.totalBytes ?? 0)) on \(telemetryDiskLocation(overview?.disk))."
+                            : "HomeBrain telemetry currently uses \(telemetryFormatBytes(overview?.storage.footprintBytes ?? 0)) on disk. Drive capacity telemetry is currently unavailable."
+                    )
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(HBPalette.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
