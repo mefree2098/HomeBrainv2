@@ -58,14 +58,16 @@ test('insteonService runtime command handling writes live engine logs', async (t
   await insteonService._handleRuntimeCommand({
     standard: {
       id: '11.22.33',
+      gatewayId: '44.55.66',
+      messageType: 0,
       command1: '11',
       command2: 'FF'
     }
   });
 
-  assert.deepEqual(persisted?.address, '112233');
-  assert.deepEqual(scheduled?.address, '112233');
-  assert.match(scheduled?.reason || '', /cmd:11/i);
+  assert.equal(persisted, null);
+  assert.deepEqual(scheduled?.address, '445566');
+  assert.match(scheduled?.reason || '', /direct:11\.22\.33:11/i);
 
   const logs = insteonEngineLogService.latest({ limit: 10 });
   assert.ok(logs.some((entry) => (
@@ -73,5 +75,8 @@ test('insteonService runtime command handling writes live engine logs', async (t
     && entry.direction === 'inbound'
     && /inbound runtime command/i.test(entry.message)
     && entry.address === '11.22.33'
+    && entry.details?.sourceAddress === '11.22.33'
+    && entry.details?.targetAddress === '44.55.66'
+    && entry.details?.messageClass === 'direct'
   )));
 });

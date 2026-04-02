@@ -160,66 +160,58 @@ test('_normalizeInsteonInfoPayload maps home-controller info shape into stable f
   assert.equal(normalized.subcategory, 31);
 });
 
-test('_parseRuntimeCommand infers on/off state for incoming runtime events', () => {
-  const onCommand = insteonService._parseRuntimeCommand({
+test('_parseRuntimeCommand treats direct light control as targeting the addressed responder in monitor mode', () => {
+  const directCommand = insteonService._parseRuntimeCommand({
     standard: {
-      id: '11.22.33',
+      id: '38.9A.D0',
+      gatewayId: '38.8A.57',
+      messageType: 0,
       command1: '11',
-      command2: '80'
-    }
-  });
-  const offCommand = insteonService._parseRuntimeCommand({
-    standard: {
-      id: '11.22.33',
-      command1: '13',
-      command2: '00'
+      command2: 'FF'
     }
   });
 
-  assert.ok(onCommand);
-  assert.equal(onCommand.address, '112233');
-  assert.equal(onCommand.inferredState.status, true);
-  assert.equal(onCommand.inferredState.brightness, 50);
-  assert.ok(offCommand);
-  assert.equal(offCommand.inferredState.status, false);
-  assert.equal(offCommand.inferredState.brightness, 0);
+  assert.ok(directCommand);
+  assert.equal(directCommand.address, '389AD0');
+  assert.equal(directCommand.sourceAddress, '389AD0');
+  assert.equal(directCommand.targetAddress, '388A57');
+  assert.equal(directCommand.messageClass, 'direct');
+  assert.equal(directCommand.semanticCommand1, '11');
+  assert.equal(directCommand.inferredState, null);
+  assert.equal(directCommand.stateRefreshRecommended, true);
+  assert.equal(directCommand.expectedStatus, true);
 });
 
-test('_parseRuntimeCommand infers state from unsolicited 0D and 0C switch events', () => {
-  const onCommand = insteonService._parseRuntimeCommand({
+test('_parseRuntimeCommand only treats light status ACKs as authoritative state observations', () => {
+  const statusAck = insteonService._parseRuntimeCommand({
     standard: {
       id: '38.8A.57',
+      gatewayId: '38.9A.D0',
+      messageType: 1,
+      command1: '19',
+      command2: 'D1'
+    }
+  });
+  const reservedAck = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '38.9A.D0',
+      gatewayId: '38.8A.57',
+      messageType: 1,
       command1: '0D',
       command2: 'FF'
     }
   });
-  const offCommand = insteonService._parseRuntimeCommand({
-    standard: {
-      id: '38.9A.48',
-      command1: '0D',
-      command2: '00'
-    }
-  });
-  const offAlternateCommand = insteonService._parseRuntimeCommand({
-    standard: {
-      id: '38.2B.6D',
-      command1: '0C',
-      command2: '00'
-    }
-  });
 
-  assert.ok(onCommand);
-  assert.equal(onCommand.address, '388A57');
-  assert.equal(onCommand.inferredState.status, true);
-  assert.equal(onCommand.inferredState.brightness, 100);
+  assert.ok(statusAck);
+  assert.equal(statusAck.inferredState.status, true);
+  assert.equal(statusAck.inferredState.brightness, 82);
+  assert.equal(statusAck.observedState.address, '388A57');
+  assert.equal(statusAck.stateRefreshRecommended, false);
 
-  assert.ok(offCommand);
-  assert.equal(offCommand.inferredState.status, false);
-  assert.equal(offCommand.inferredState.brightness, 0);
-
-  assert.ok(offAlternateCommand);
-  assert.equal(offAlternateCommand.inferredState.status, false);
-  assert.equal(offAlternateCommand.inferredState.brightness, 0);
+  assert.ok(reservedAck);
+  assert.equal(reservedAck.inferredState, null);
+  assert.equal(reservedAck.observedState, null);
+  assert.equal(reservedAck.stateRefreshRecommended, false);
 });
 
 test('_parseRuntimeCommand treats all-link scene broadcasts as controller events instead of literal brightness bytes', () => {
@@ -227,7 +219,7 @@ test('_parseRuntimeCommand treats all-link scene broadcasts as controller events
     standard: {
       id: '38.89.78',
       messageType: 6,
-      gatewayId: '02',
+      gatewayId: '000002',
       command1: '11',
       command2: '01'
     }
@@ -239,8 +231,9 @@ test('_parseRuntimeCommand treats all-link scene broadcasts as controller events
   assert.equal(broadcastCommand.broadcastGroup, 2);
   assert.equal(broadcastCommand.sceneCommand1, '11');
   assert.equal(broadcastCommand.sceneCommand2, '01');
-  assert.equal(broadcastCommand.inferredState.status, true);
-  assert.equal(broadcastCommand.inferredState.brightness, 100);
+  assert.equal(broadcastCommand.inferredState, null);
+  assert.equal(broadcastCommand.stateRefreshRecommended, true);
+  assert.equal(broadcastCommand.expectedStatus, true);
 });
 
 test('_handleRuntimeCommand queues linked responder refreshes for controller scene broadcasts', async (t) => {
@@ -274,26 +267,129 @@ test('_handleRuntimeCommand queues linked responder refreshes for controller sce
     standard: {
       id: '38.89.78',
       messageType: 6,
-      gatewayId: '02',
+      gatewayId: '000002',
       command1: '11',
       command2: '01'
     }
   });
 
+  assert.equal(persisted.length, 0);
+
+  assert.equal(scheduledRefreshes.length, 1);
+  assert.equal(scheduledRefreshes[0].address, '388A57');
+
+  assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+});
+
+test('_handleRuntimeCommand refreshes the addressed responder for monitor-mode direct light commands', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.9A.D0',
+      gatewayId: '38.8A.57',
+      messageType: 0,
+      command1: '11',
+      command2: 'FF'
+    }
+  });
+
+  assert.equal(persisted.length, 0);
+  assert.equal(scheduledRefreshes.length, 1);
+  assert.equal(scheduledRefreshes[0].address, '388A57');
+  assert.equal(scheduledRefreshes[0].reason, 'direct:38.9A.D0:11');
+  assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+});
+
+test('_handleRuntimeCommand refreshes the addressed responder for all-link cleanup messages', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.89.78',
+      gatewayId: '38.8A.57',
+      messageType: 2,
+      command1: '11',
+      command2: '02'
+    }
+  });
+
+  assert.equal(persisted.length, 0);
+  assert.equal(scheduledRefreshes.length, 1);
+  assert.equal(scheduledRefreshes[0].address, '388A57');
+  assert.equal(scheduledRefreshes[0].reason, 'cleanup:38.89.78:2');
+  assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+});
+
+test('_handleRuntimeCommand persists direct status ACKs without an extra refresh query', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.8A.57',
+      gatewayId: '38.9A.D0',
+      messageType: 1,
+      command1: '19',
+      command2: 'D1'
+    }
+  });
+
   assert.equal(persisted.length, 1);
-  assert.equal(persisted[0].address, '388978');
+  assert.equal(persisted[0].address, '388A57');
   assert.equal(persisted[0].patch.status, true);
-  assert.equal(persisted[0].patch.brightness, 100);
-
-  assert.equal(scheduledRefreshes.length, 2);
-  assert.deepEqual(
-    scheduledRefreshes.map((entry) => entry.address).sort(),
-    ['388978', '388A57'].sort()
-  );
-
-  const responderRefresh = scheduledRefreshes.find((entry) => entry.address === '388A57');
-  assert.ok(responderRefresh);
-  assert.equal(responderRefresh.options.expectedStatus, true);
+  assert.equal(persisted[0].patch.brightness, 82);
+  assert.equal(scheduledRefreshes.length, 0);
 });
 
 test('_confirmDeviceStateByAddress retries level query and persists confirmed state', async (t) => {
