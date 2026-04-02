@@ -27,6 +27,28 @@ const getStoredUser = (): User | null => {
   }
 };
 
+const getAccessTokenCookieOptions = (accessToken: string): string => {
+  const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
+
+  try {
+    const [, payloadSegment = ''] = accessToken.split('.');
+    const normalizedPayload = payloadSegment
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(payloadSegment.length / 4) * 4, '=');
+    const payload = JSON.parse(window.atob(normalizedPayload));
+    const expSeconds = Number(payload?.exp);
+    if (Number.isFinite(expSeconds)) {
+      const maxAge = Math.max(0, Math.floor(expSeconds - (Date.now() / 1000)));
+      return `; Max-Age=${maxAge}; path=/; SameSite=Lax${secureFlag}`;
+    }
+  } catch {
+    // Fall back to a session cookie if the JWT cannot be decoded client-side.
+  }
+
+  return `; path=/; SameSite=Lax${secureFlag}`;
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return !!localStorage.getItem("accessToken");
@@ -38,6 +60,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
     document.cookie = `hbAccessToken=; Max-Age=0; path=/; SameSite=Lax${secureFlag}`;
     document.cookie = `hbSessionToken=; Max-Age=0; path=/; SameSite=Lax${secureFlag}`;
+  };
+
+  const syncAccessTokenCookie = (accessToken: string | null) => {
+    if (!accessToken) {
+      clearAuthCookies();
+      return;
+    }
+
+    document.cookie = `hbAccessToken=${encodeURIComponent(accessToken)}${getAccessTokenCookieOptions(accessToken)}`;
   };
 
   const setStoredUser = (userData: User | null) => {
@@ -71,9 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("accessToken", accessToken);
     setStoredUser(userData);
     setIsLoading(false);
-
-    const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
-    document.cookie = `hbAccessToken=${encodeURIComponent(accessToken)}; path=/; SameSite=Lax${secureFlag}`;
+    syncAccessTokenCookie(accessToken);
   };
 
   const refreshCurrentUser = async () => {
@@ -98,6 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
+        syncAccessTokenCookie(localStorage.getItem("accessToken"));
         const userData = await apiGetCurrentUser();
         if (cancelled) {
           return;

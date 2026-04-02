@@ -34,10 +34,12 @@ test('resolveConnectionTarget parses host:port shorthand as tcp', () => {
 test('listLocalSerialPorts merges serialport list entries with /dev/serial/by-id aliases', async (t) => {
   const originalLoadSerialPortModule = insteonService._loadSerialPortModule;
   const originalGetSerialByIdEntries = insteonService._getSerialByIdEntries;
+  const originalGetFallbackSerialDevicePaths = insteonService._getFallbackSerialDevicePaths;
 
   t.after(() => {
     insteonService._loadSerialPortModule = originalLoadSerialPortModule;
     insteonService._getSerialByIdEntries = originalGetSerialByIdEntries;
+    insteonService._getFallbackSerialDevicePaths = originalGetFallbackSerialDevicePaths;
   });
 
   insteonService._loadSerialPortModule = () => ({
@@ -57,10 +59,38 @@ test('listLocalSerialPorts merges serialport list entries with /dev/serial/by-id
       resolvedPath: '/dev/ttyUSB0'
     }
   ]);
+  insteonService._getFallbackSerialDevicePaths = async () => [];
 
   const ports = await insteonService.listLocalSerialPorts();
   assert.equal(ports.length, 1);
   assert.equal(ports[0].path, '/dev/ttyUSB0');
+  assert.equal(ports[0].stablePath, '/dev/serial/by-id/usb-Insteon_PLM-if00-port0');
+  assert.equal(ports[0].likelyInsteon, true);
+});
+
+test('listLocalSerialPorts includes fallback /dev serial devices when serialport metadata is unavailable', async (t) => {
+  const originalLoadSerialPortModule = insteonService._loadSerialPortModule;
+  const originalGetSerialByIdEntries = insteonService._getSerialByIdEntries;
+  const originalGetFallbackSerialDevicePaths = insteonService._getFallbackSerialDevicePaths;
+
+  t.after(() => {
+    insteonService._loadSerialPortModule = originalLoadSerialPortModule;
+    insteonService._getSerialByIdEntries = originalGetSerialByIdEntries;
+    insteonService._getFallbackSerialDevicePaths = originalGetFallbackSerialDevicePaths;
+  });
+
+  insteonService._loadSerialPortModule = () => null;
+  insteonService._getSerialByIdEntries = async () => ([
+    {
+      symlinkPath: '/dev/serial/by-id/usb-Insteon_PLM-if00-port0',
+      resolvedPath: '/dev/ttyUSB1'
+    }
+  ]);
+  insteonService._getFallbackSerialDevicePaths = async () => ['/dev/ttyUSB1'];
+
+  const ports = await insteonService.listLocalSerialPorts();
+  assert.equal(ports.length, 1);
+  assert.equal(ports[0].path, '/dev/ttyUSB1');
   assert.equal(ports[0].stablePath, '/dev/serial/by-id/usb-Insteon_PLM-if00-port0');
   assert.equal(ports[0].likelyInsteon, true);
 });
@@ -1704,6 +1734,40 @@ test('_validateSerialEndpoint includes stable path when ttyUSB path is used', as
   const result = await insteonService._validateSerialEndpoint('/dev/ttyUSB0');
   assert.equal(result.serialPath, '/dev/ttyUSB0');
   assert.equal(result.stablePath, '/dev/serial/by-id/usb-Insteon_PLM-if00-port0');
+});
+
+test('_validateSerialEndpoint auto-resolves missing ttyUSB targets to the single likely INSTEON port', async (t) => {
+  const originalListLocalSerialPorts = insteonService.listLocalSerialPorts;
+  const originalAccess = fs.promises.access;
+
+  t.after(() => {
+    insteonService.listLocalSerialPorts = originalListLocalSerialPorts;
+    fs.promises.access = originalAccess;
+  });
+
+  insteonService.listLocalSerialPorts = async () => ([
+    {
+      path: '/dev/ttyUSB1',
+      stablePath: '/dev/serial/by-id/usb-Insteon_PLM-if00-port0',
+      aliases: ['/dev/serial/by-id/usb-Insteon_PLM-if00-port0'],
+      likelyInsteon: true
+    }
+  ]);
+
+  fs.promises.access = async (targetPath) => {
+    if (targetPath === '/dev/ttyUSB0') {
+      const error = new Error('not found');
+      error.code = 'ENOENT';
+      throw error;
+    }
+  };
+
+  const result = await insteonService._validateSerialEndpoint('/dev/ttyUSB0');
+  assert.equal(result.serialPath, '/dev/serial/by-id/usb-Insteon_PLM-if00-port0');
+  assert.equal(result.stablePath, '/dev/serial/by-id/usb-Insteon_PLM-if00-port0');
+  assert.equal(result.requestedPath, '/dev/ttyUSB0');
+  assert.equal(result.autoResolved, true);
+  assert.equal(result.autoResolvedReason, 'single-likely-insteon-port');
 });
 
 test('_normalizeInsteonAddress normalizes separator formats', () => {

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const insteonService = require('../services/insteonService');
+const Settings = require('../models/Settings');
 const { requireAdmin } = require('./middlewares/auth');
 
 // Apply authentication to all routes
@@ -59,7 +60,21 @@ router.get('/status', async (req, res) => {
 
   try {
     const status = insteonService.getStatus();
-    res.status(200).json(status);
+    const settings = await Settings.getSettings().catch(() => null);
+    const configuredTarget = typeof settings?.insteonPort === 'string' && settings.insteonPort.trim()
+      ? settings.insteonPort.trim()
+      : null;
+    const resolvedTarget = configuredTarget
+      ? insteonService.resolveConnectionTarget(configuredTarget)
+      : null;
+    const serialTransport = insteonService.getSerialTransportDiagnostics();
+
+    res.status(200).json({
+      ...status,
+      configuredTarget,
+      resolvedTarget,
+      serialTransport
+    });
   } catch (error) {
     console.error('InsteonRoutes: Failed to get PLM status:', error.message);
     console.error(error.stack);

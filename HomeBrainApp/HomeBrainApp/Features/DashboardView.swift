@@ -695,6 +695,30 @@ struct DashboardView: View {
     private var usesHeroSplitLayout: Bool { !usesPortraitCompactLayout && (useLandscapeCompactLayout || layoutWidth >= 860) }
     private var supportsTwoColumnCards: Bool { !usesPortraitCompactLayout && (useLandscapeCompactLayout || layoutWidth >= 820) }
     private var usesCompactWidgetToolbar: Bool { usesPortraitCompactLayout || layoutWidth < 440 }
+    private var weatherInfoDetailWidth: CGFloat {
+        let fallbackWidth = UIScreen.main.bounds.width
+
+        if usesPortraitCompactLayout {
+            let availableWidth = max((contentWidth > 0 ? contentWidth : fallbackWidth) - 28, 0)
+            return min(max(availableWidth, 320), 430)
+        }
+
+        if useLandscapeCompactLayout {
+            let availableWidth = max((contentWidth > 0 ? contentWidth : fallbackWidth) - 40, 0)
+            return min(max(availableWidth, 340), 460)
+        }
+
+        return 380
+    }
+    private var weatherInfoDetailMaxHeight: CGFloat {
+        let screenHeight = UIScreen.main.bounds.height
+
+        if isCompact {
+            return min(max(screenHeight * 0.82, 460), 760)
+        }
+
+        return min(max(screenHeight * 0.7, 360), 620)
+    }
     private var currentDashboardView: DashboardViewItem? {
         dashboardViews.first(where: { $0.id == selectedDashboardViewID }) ?? dashboardViews.first
     }
@@ -3954,6 +3978,7 @@ struct DashboardView: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    @ViewBuilder
     private func weatherInfoPopoverTrigger<Content: View>(
         topic: DashboardWeatherInfoTopic,
         arrowEdge: Edge = .bottom,
@@ -3970,16 +3995,39 @@ struct DashboardView: View {
             }
         )
 
-        return Button {
+        let trigger = Button {
             weatherInfoTopic = weatherInfoTopic == topic ? nil : topic
         } label: {
             content()
         }
         .buttonStyle(.plain)
-        .popover(isPresented: isPresented, attachmentAnchor: .rect(.bounds), arrowEdge: arrowEdge) {
-            weatherInfoPopoverCard(for: topic)
-                .presentationCompactAdaptation(.popover)
+
+        if isCompact {
+            trigger
+                .sheet(isPresented: isPresented) {
+                    weatherInfoDetailContainer(for: topic)
+                        .presentationDetents([.large])
+                        .presentationDragIndicator(.visible)
+                }
+        } else {
+            trigger
+                .popover(isPresented: isPresented, attachmentAnchor: .rect(.bounds), arrowEdge: arrowEdge) {
+                    weatherInfoDetailContainer(for: topic)
+                        .presentationCompactAdaptation(.popover)
+                }
         }
+    }
+
+    private func weatherInfoDetailContainer(for topic: DashboardWeatherInfoTopic) -> some View {
+        ScrollView {
+            weatherInfoPopoverCard(for: topic)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, isCompact ? 16 : 0)
+                .padding(.vertical, isCompact ? 16 : 0)
+        }
+        .scrollIndicators(.visible)
+        .frame(width: weatherInfoDetailWidth, height: weatherInfoDetailMaxHeight, alignment: .topLeading)
+        .frame(maxWidth: isCompact ? .infinity : weatherInfoDetailWidth, maxHeight: isCompact ? .infinity : weatherInfoDetailMaxHeight, alignment: .top)
     }
 
     private func weatherModuleTelemetry(for widgetID: String) -> DashboardTempestModuleTelemetrySummary? {
@@ -4329,7 +4377,7 @@ struct DashboardView: View {
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
-        .frame(width: 320, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
     }

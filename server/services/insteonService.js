@@ -49,6 +49,12 @@ const DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS = 1500;
 const DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS = 50;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS = 450;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1200;
+const INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS = Object.freeze([
+  /^ttyUSB\d+$/i,
+  /^ttyACM\d+$/i,
+  /^tty\.usbserial/i,
+  /^cu\.usbserial/i
+]);
 const INSTEON_LOCAL_BRIDGE_SCRIPT = path.join(__dirname, '..', 'scripts', 'insteon_serial_bridge.py');
 const INSTEON_SERIAL_OPTIONS = Object.freeze({
   baudRate: 19200,
@@ -1132,6 +1138,28 @@ class InsteonService {
     return /(insteon|smarthome|powerlinc|plm|2413u|2413s)/.test(fingerprint);
   }
 
+  _isFallbackSerialDeviceName(fileName) {
+    const normalized = String(fileName || '').trim();
+    if (!normalized) {
+      return false;
+    }
+
+    return INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS.some((pattern) => pattern.test(normalized));
+  }
+
+  async _getFallbackSerialDevicePaths() {
+    try {
+      const fileNames = await fs.promises.readdir('/dev');
+      return fileNames
+        .filter((fileName) => this._isFallbackSerialDeviceName(fileName))
+        .map((fileName) => path.join('/dev', fileName))
+        .sort((left, right) => left.localeCompare(right));
+    } catch (error) {
+      console.warn(`InsteonService: Unable to scan fallback serial devices under /dev: ${error.message}`);
+      return [];
+    }
+  }
+
   async listLocalSerialPorts() {
     const SerialPort = this._loadSerialPortModule();
     let listedPorts = [];
@@ -1204,6 +1232,26 @@ class InsteonService {
       });
     });
 
+    const fallbackDevicePaths = await this._getFallbackSerialDevicePaths();
+    fallbackDevicePaths.forEach((serialPath) => {
+      if (portMap.has(serialPath)) {
+        return;
+      }
+
+      const aliases = byResolvedPath.get(serialPath) || [];
+      portMap.set(serialPath, {
+        path: serialPath,
+        stablePath: aliases[0] || null,
+        aliases,
+        manufacturer: null,
+        friendlyName: null,
+        serialNumber: null,
+        vendorId: null,
+        productId: null,
+        pnpId: null
+      });
+    });
+
     const ports = Array.from(portMap.values()).map((portInfo) => ({
       ...portInfo,
       likelyInsteon: this._isLikelyInsteonPort(portInfo)
@@ -1232,6 +1280,59 @@ class InsteonService {
       .map((port) => port.stablePath || port.path);
 
     return `Detected serial endpoints: ${endpoints.join(', ')}`;
+  }
+
+  _shouldAutoResolveSerialEndpoint(requestedPath) {
+    const normalizedPath = this._normalizeSerialPath(requestedPath);
+    if (!normalizedPath) {
+      return false;
+    }
+
+    return (
+      normalizedPath === DEFAULT_INSTEON_SERIAL_PORT
+      || /^\/dev\/tty(?:USB|ACM)\d+$/i.test(normalizedPath)
+      || normalizedPath.startsWith('/dev/serial/by-id/')
+    );
+  }
+
+  _getAutoResolvedSerialPortCandidate(requestedPath, serialPorts = []) {
+    const normalizedRequestedPath = this._normalizeSerialPath(requestedPath);
+    if (
+      !normalizedRequestedPath
+      || !this._shouldAutoResolveSerialEndpoint(normalizedRequestedPath)
+      || !Array.isArray(serialPorts)
+      || serialPorts.length === 0
+    ) {
+      return null;
+    }
+
+    const uniqueCandidates = serialPorts.filter((port) => {
+      const candidatePath = typeof port?.path === 'string' ? port.path.trim() : '';
+      return Boolean(candidatePath);
+    });
+    if (uniqueCandidates.length === 0) {
+      return null;
+    }
+
+    const likelyCandidates = uniqueCandidates.filter((port) => port?.likelyInsteon === true);
+    const candidates = likelyCandidates.length > 0 ? likelyCandidates : uniqueCandidates;
+    if (candidates.length !== 1) {
+      return null;
+    }
+
+    const candidate = candidates[0];
+    const resolvedPath = String(candidate?.stablePath || candidate?.path || '').trim();
+    if (!resolvedPath || resolvedPath === normalizedRequestedPath) {
+      return null;
+    }
+
+    return {
+      candidate,
+      serialPath: resolvedPath,
+      reason: likelyCandidates.length > 0
+        ? 'single-likely-insteon-port'
+        : 'single-serial-port'
+    };
   }
 
   _normalizeInsteonAddress(rawAddress) {
@@ -6163,26 +6264,58 @@ class InsteonService {
       (port.aliases || []).forEach((alias) => indexedPaths.set(alias, port));
     });
     const matchedPort = indexedPaths.get(normalizedPath) || null;
+    const checkEndpointAccess = async (targetPath) => {
+      await fs.promises.access(targetPath, fs.constants.R_OK | fs.constants.W_OK);
+    };
 
     if (normalizedPath.startsWith('/')) {
+      let fallbackResolutionError = null;
       try {
-        await fs.promises.access(normalizedPath, fs.constants.R_OK | fs.constants.W_OK);
+        await checkEndpointAccess(normalizedPath);
       } catch (error) {
+        const autoResolved = error.code === 'ENOENT'
+          ? this._getAutoResolvedSerialPortCandidate(normalizedPath, serialPorts)
+          : null;
+        if (autoResolved) {
+          try {
+            await checkEndpointAccess(autoResolved.serialPath);
+            return {
+              serialPath: autoResolved.serialPath,
+              stablePath: autoResolved.candidate?.stablePath || null,
+              matchedPort: autoResolved.candidate || null,
+              requestedPath: normalizedPath,
+              autoResolved: true,
+              autoResolvedReason: autoResolved.reason
+            };
+          } catch (fallbackError) {
+            fallbackResolutionError = fallbackError;
+            console.warn(
+              `InsteonService: Failed to auto-resolve missing serial endpoint ${normalizedPath} to ${autoResolved.serialPath}: ${fallbackError.message}`
+            );
+          }
+        }
+
         const hint = this._formatSerialEndpointHints(serialPorts);
+        const fallbackHint = fallbackResolutionError?.message
+          ? ` Auto-detected serial endpoint was also unavailable: ${fallbackResolutionError.message}.`
+          : '';
         if (error.code === 'ENOENT') {
-          throw new Error(`INSTEON serial endpoint "${normalizedPath}" does not exist. ${hint}`);
+          throw new Error(`INSTEON serial endpoint "${normalizedPath}" does not exist.${fallbackHint} ${hint}`);
         }
         if (error.code === 'EACCES') {
-          throw new Error(`Cannot access INSTEON serial endpoint "${normalizedPath}" (permission denied). Ensure the HomeBrain service user is in the dialout group. ${hint}`);
+          throw new Error(`Cannot access INSTEON serial endpoint "${normalizedPath}" (permission denied). Ensure the HomeBrain service user is in the dialout group.${fallbackHint} ${hint}`);
         }
-        throw new Error(`Cannot access INSTEON serial endpoint "${normalizedPath}": ${error.message}. ${hint}`);
+        throw new Error(`Cannot access INSTEON serial endpoint "${normalizedPath}": ${error.message}.${fallbackHint} ${hint}`);
       }
     }
 
     return {
       serialPath: normalizedPath,
       stablePath: matchedPort ? matchedPort.stablePath : null,
-      matchedPort
+      matchedPort,
+      requestedPath: normalizedPath,
+      autoResolved: false,
+      autoResolvedReason: null
     };
   }
 
@@ -6310,6 +6443,11 @@ class InsteonService {
           validatedSerial = await this._validateSerialEndpoint(connection.serialPath);
           connection.serialPath = validatedSerial.serialPath;
           connection.label = validatedSerial.serialPath;
+          if (validatedSerial.autoResolved && validatedSerial.requestedPath !== validatedSerial.serialPath) {
+            console.warn(
+              `InsteonService: Configured serial endpoint ${validatedSerial.requestedPath} is unavailable; auto-resolved to ${validatedSerial.serialPath} (${validatedSerial.autoResolvedReason})`
+            );
+          }
 
           serialPortModule = this._loadSerialPortModule();
           if (serialPortModule) {
@@ -6363,6 +6501,11 @@ class InsteonService {
               transport: this.connectionTransport || connection.transport,
               runtimeTransport
             };
+            if (validatedSerial?.autoResolved && validatedSerial?.requestedPath) {
+              response.requestedPort = validatedSerial.requestedPath;
+              response.resolvedPort = validatedSerial.serialPath;
+              response.autoResolvedPort = true;
+            }
             if (connection.transport === 'serial' && runtimeTransport === 'tcp' && this._isLocalSerialBridgeActive()) {
               response.bridge = {
                 host: this._localSerialBridge.host,
@@ -6416,6 +6559,11 @@ class InsteonService {
               transport: connection.transport,
               runtimeTransport
             };
+            if (validatedSerial?.autoResolved && validatedSerial?.requestedPath) {
+              response.requestedPort = validatedSerial.requestedPath;
+              response.resolvedPort = validatedSerial.serialPath;
+              response.autoResolvedPort = true;
+            }
             if (validatedSerial && validatedSerial.stablePath) {
               response.recommendedStablePort = validatedSerial.stablePath;
             }
@@ -6525,8 +6673,9 @@ class InsteonService {
     console.log('InsteonService: Testing PLM connection');
 
     try {
+      let connectResult = null;
       if (!this.isConnected || !this.hub) {
-        await this.connect();
+        connectResult = await this.connect();
       }
 
       // Get PLM info to verify connection
@@ -6535,6 +6684,7 @@ class InsteonService {
       console.log('InsteonService: Connection test successful');
 
       return {
+        ...(connectResult || {}),
         success: true,
         message: 'Insteon PLM connection is working',
         connected: this.isConnected,

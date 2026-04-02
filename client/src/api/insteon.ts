@@ -191,6 +191,65 @@ export interface InsteonLinkedStatusRunSnapshot {
   error?: string | null;
 }
 
+export interface InsteonConnectionTarget {
+  transport?: 'serial' | 'tcp' | string;
+  serialPath?: string;
+  host?: string;
+  port?: number;
+  label?: string;
+}
+
+export interface InsteonStatusResponse {
+  connected?: boolean;
+  deviceCount?: number;
+  connectionAttempts?: number;
+  transport?: string | null;
+  port?: string | null;
+  lastConnectionError?: string | null;
+  configuredTarget?: string | null;
+  resolvedTarget?: InsteonConnectionTarget | null;
+  serialTransport?: {
+    supported?: boolean;
+    module?: string | null;
+    error?: string | null;
+  } | null;
+  defaults?: {
+    verificationMode?: string;
+    commandAttempts?: number;
+    commandPauseBetweenMs?: number;
+    commandTimeoutMs?: number;
+  };
+  plmQueue?: {
+    depth?: number;
+    active?: {
+      priority?: number;
+      kind?: string;
+      label?: string;
+    } | null;
+  };
+  runtimeMonitoring?: {
+    started?: boolean;
+    inProgress?: boolean;
+    intervalMs?: number;
+    staleAfterMs?: number;
+    offlineStaleAfterMs?: number;
+    batchSize?: number;
+    cooldownMs?: number;
+    coolingDown?: boolean;
+    cooldownRemainingMs?: number;
+    pollTimeoutMs?: number;
+    pollPauseMs?: number;
+    pendingRefreshes?: number;
+  } | null;
+  localSerialBridge?: {
+    active?: boolean;
+    host?: string;
+    port?: number;
+    serialPath?: string;
+    startedAt?: string;
+  } | null;
+}
+
 // Description: Test Insteon PLM connection
 // Endpoint: GET /api/insteon/test
 // Request: {}
@@ -223,7 +282,7 @@ export const getInsteonPLMInfo = async () => {
 // Endpoint: GET /api/insteon/status
 // Request: {}
 // Response: { connected: boolean, deviceCount: number, connectionAttempts: number }
-export const getInsteonStatus = async () => {
+export const getInsteonStatus = async (): Promise<InsteonStatusResponse> => {
   try {
     const response = await api.get('/api/insteon/status');
     return response.data;
