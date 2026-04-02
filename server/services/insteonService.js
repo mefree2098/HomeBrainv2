@@ -10,6 +10,7 @@ const Scene = require('../models/Scene');
 const Settings = require('../models/Settings');
 const Workflow = require('../models/Workflow');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const insteonEngineLogService = require('./insteonEngineLogService');
 
 let cachedWorkflowService = null;
 const getWorkflowService = () => {
@@ -165,6 +166,79 @@ class InsteonService {
     console.log('InsteonService: Initialized');
   }
 
+  _sanitizeEngineLogDetails(details = {}) {
+    if (!details || typeof details !== 'object' || Array.isArray(details)) {
+      return {};
+    }
+
+    return Object.entries(details).reduce((accumulator, [key, value]) => {
+      if (value === undefined) {
+        return accumulator;
+      }
+
+      if (value instanceof Error) {
+        accumulator[key] = {
+          message: value.message,
+          code: value.code || null
+        };
+        return accumulator;
+      }
+
+      if (value instanceof Date) {
+        accumulator[key] = value.toISOString();
+        return accumulator;
+      }
+
+      accumulator[key] = value;
+      return accumulator;
+    }, {});
+  }
+
+  _writeEngineLog(level, message, context = {}) {
+    try {
+      const normalizedAddress = context.address
+        ? this._normalizePossibleInsteonAddress(context.address)
+        : null;
+      const details = this._sanitizeEngineLogDetails({
+        ...(context.details && typeof context.details === 'object' ? context.details : {}),
+        queueDepth: this._plmOperationQueue.length,
+        activeOperation: this._activePlmOperation
+          ? {
+              priority: this._activePlmOperation.priority,
+              kind: this._activePlmOperation.kind,
+              label: this._activePlmOperation.label
+            }
+          : null
+      });
+
+      insteonEngineLogService.publish({
+        level,
+        message,
+        stage: context.stage || null,
+        direction: context.direction || 'internal',
+        operation: context.operation || null,
+        address: normalizedAddress ? this._formatInsteonAddress(normalizedAddress) : null,
+        transport: context.transport || this.connectionTransport || null,
+        target: context.target || this.connectionTarget || null,
+        details
+      });
+    } catch (error) {
+      console.warn(`InsteonService: Failed to publish engine log entry: ${error.message}`);
+    }
+  }
+
+  _logEngineInfo(message, context = {}) {
+    this._writeEngineLog('info', message, context);
+  }
+
+  _logEngineWarn(message, context = {}) {
+    this._writeEngineLog('warn', message, context);
+  }
+
+  _logEngineError(message, context = {}) {
+    this._writeEngineLog('error', message, context);
+  }
+
   _getPlmOperationPriority(priority = 'normal') {
     const normalized = String(priority || 'normal').trim().toLowerCase();
     switch (normalized) {
@@ -210,10 +284,39 @@ class InsteonService {
     }
 
     this._activePlmOperation = nextOperation;
+    const startedAt = Date.now();
+    this._logEngineInfo(`Starting queued PLM operation: ${nextOperation.label}`, {
+      stage: 'queue',
+      operation: nextOperation.kind,
+      details: {
+        priority: nextOperation.priority,
+        sequence: nextOperation.sequence,
+        remainingQueueDepth: this._plmOperationQueue.length
+      }
+    });
     try {
       const result = await nextOperation.executor();
+      this._logEngineInfo(`Completed PLM operation: ${nextOperation.label}`, {
+        stage: 'queue',
+        operation: nextOperation.kind,
+        details: {
+          priority: nextOperation.priority,
+          sequence: nextOperation.sequence,
+          durationMs: Date.now() - startedAt
+        }
+      });
       nextOperation.resolve(result);
     } catch (error) {
+      this._logEngineError(`PLM operation failed: ${nextOperation.label}`, {
+        stage: 'queue',
+        operation: nextOperation.kind,
+        details: {
+          priority: nextOperation.priority,
+          sequence: nextOperation.sequence,
+          durationMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error || 'Unknown error')
+        }
+      });
       nextOperation.reject(error);
     } finally {
       this._activePlmOperation = null;
@@ -241,6 +344,15 @@ class InsteonService {
       ) || (
         left.sequence - right.sequence
       ));
+      this._logEngineInfo(`Queued PLM operation: ${operation.label}`, {
+        stage: 'queue',
+        operation: operation.kind,
+        details: {
+          priority: operation.priority,
+          sequence: operation.sequence,
+          queueDepth: this._plmOperationQueue.length
+        }
+      });
       this._schedulePlmDrain();
     });
   }
@@ -256,6 +368,15 @@ class InsteonService {
 
     while (this._plmOperationQueue.length > 0) {
       const queuedOperation = this._plmOperationQueue.shift();
+      this._logEngineWarn(`Dropping queued PLM operation: ${queuedOperation.label}`, {
+        stage: 'queue',
+        operation: queuedOperation.kind,
+        details: {
+          priority: queuedOperation.priority,
+          sequence: queuedOperation.sequence,
+          error: queueError.message
+        }
+      });
       queuedOperation.reject(queueError);
     }
   }
@@ -268,6 +389,12 @@ class InsteonService {
     try {
       return Boolean(this.hub.cancelInprogress());
     } catch (error) {
+      this._logEngineWarn(`Failed to cancel in-progress PLM command during ${reason}`, {
+        stage: 'command',
+        details: {
+          error: error.message
+        }
+      });
       console.warn(`InsteonService: Unable to cancel in-progress PLM command during ${reason}: ${error.message}`);
       return false;
     }
@@ -315,6 +442,8 @@ class InsteonService {
       ? Math.max(250, Math.round(Number(options.timeoutMs)))
       : 5000;
     const timeoutMessage = String(options.timeoutMessage || `Timeout ${String(options.label || 'PLM operation').toLowerCase()}`);
+    const operationLabel = String(options.label || 'PLM callback operation');
+    const operationKind = options.kind || 'callback_operation';
 
     return this._enqueuePlmOperation(async () => {
       if (!this.isConnected || !this.hub) {
@@ -339,7 +468,17 @@ class InsteonService {
 
         const resolveOnce = finish(resolve);
         const rejectOnce = finish((error) => {
-          reject(error instanceof Error ? error : new Error(String(error || timeoutMessage)));
+          const normalizedError = error instanceof Error ? error : new Error(String(error || timeoutMessage));
+          this._logEngineError(`PLM command failed: ${operationLabel}`, {
+            stage: 'command',
+            direction: 'inbound',
+            operation: operationKind,
+            details: {
+              timeoutMs,
+              error: normalizedError.message
+            }
+          });
+          reject(normalizedError);
         });
 
         const timer = setTimeout(() => {
@@ -348,15 +487,44 @@ class InsteonService {
           }
           const timeoutError = new Error(timeoutMessage);
           timeoutError.code = options.timeoutCode || 'INSTEON_OPERATION_TIMEOUT';
+          this._logEngineWarn(`PLM command timed out: ${operationLabel}`, {
+            stage: 'command',
+            direction: 'outbound',
+            operation: operationKind,
+            details: {
+              timeoutMs,
+              timeoutCode: timeoutError.code
+            }
+          });
           rejectOnce(timeoutError);
         }, timeoutMs);
 
         try {
+          this._logEngineInfo(`Dispatching PLM command: ${operationLabel}`, {
+            stage: 'command',
+            direction: 'outbound',
+            operation: operationKind,
+            details: {
+              timeoutMs,
+              commandTimeoutMs: options.commandTimeoutMs ?? null,
+              commandRetries: options.commandRetries ?? null,
+              nakTimeoutMs: options.nakTimeoutMs ?? null
+            }
+          });
           invoke((error, ...results) => {
             if (error) {
               rejectOnce(error);
               return;
             }
+
+            this._logEngineInfo(`PLM command callback received: ${operationLabel}`, {
+              stage: 'command',
+              direction: 'inbound',
+              operation: operationKind,
+              details: {
+                resultCount: results.length
+              }
+            });
 
             if (results.length <= 1) {
               resolveOnce(results[0]);
@@ -381,6 +549,16 @@ class InsteonService {
       if (!this.isConnected || !this.hub) {
         throw new Error('Not connected to PLM');
       }
+
+      this._logEngineInfo(`Running exclusive PLM operation: ${String(options.label || 'exclusive operation')}`, {
+        stage: 'command',
+        operation: options.kind || 'exclusive_operation',
+        details: {
+          commandTimeoutMs: options.commandTimeoutMs ?? null,
+          commandRetries: options.commandRetries ?? null,
+          nakTimeoutMs: options.nakTimeoutMs ?? null
+        }
+      });
 
       return this._withTemporaryHubCommandConfig({
         commandTimeoutMs: options.commandTimeoutMs,
@@ -758,10 +936,22 @@ class InsteonService {
     this._runtimeErrorListener = (error) => {
       const err = error instanceof Error ? error : new Error(String(error || 'Unknown runtime error'));
       this.lastConnectionError = err.message;
+      this._logEngineError(`Runtime PLM error on ${this.connectionTarget || 'unknown target'}`, {
+        stage: 'connection',
+        details: {
+          error: err.message
+        }
+      });
       console.error(`InsteonService: Runtime PLM error on ${this.connectionTarget || 'unknown target'}: ${err.message}`);
     };
 
     this._runtimeCloseListener = (hadError) => {
+      this._logEngineWarn(`PLM connection closed${hadError ? ' after error' : ''}`, {
+        stage: 'connection',
+        details: {
+          hadError: Boolean(hadError)
+        }
+      });
       console.warn(`InsteonService: PLM connection closed${hadError ? ' after error' : ''}`);
       this._cancelInProgressHubCommandSafe('connection close');
       this.isConnected = false;
@@ -782,6 +972,14 @@ class InsteonService {
 
     this._runtimeCommandListener = (command) => {
       this._handleRuntimeCommand(command).catch((error) => {
+        this._logEngineWarn('Runtime command handling error', {
+          stage: 'runtime',
+          direction: 'inbound',
+          operation: 'runtime_command',
+          details: {
+            error: error.message
+          }
+        });
         console.warn(`InsteonService: Runtime command handling error: ${error.message}`);
       });
     };
@@ -5148,6 +5346,15 @@ class InsteonService {
       ? runtime.shouldCancel
       : null;
     const reportProgress = (message, details = {}) => {
+      const level = typeof details?.level === 'string' ? details.level : 'info';
+      this._writeEngineLog(level, message, {
+        stage: details?.stage || 'sync',
+        operation: 'sync_devices_from_plm',
+        details: {
+          progress: details?.progress ?? null
+        }
+      });
+
       if (!onProgress) {
         return;
       }
@@ -6120,6 +6327,18 @@ class InsteonService {
       return;
     }
 
+    this._logEngineInfo(`Inbound runtime command ${parsed.command1}${parsed.command2 ? `/${parsed.command2}` : ''}`, {
+      stage: 'runtime',
+      direction: 'inbound',
+      operation: 'runtime_command',
+      address: parsed.address,
+      details: {
+        command1: parsed.command1,
+        command2: parsed.command2,
+        inferredState: parsed.inferredState || null
+      }
+    });
+
     if (parsed.inferredState) {
       await this._persistDeviceRuntimeStateByAddress(parsed.address, parsed.inferredState);
     }
@@ -6429,6 +6648,9 @@ class InsteonService {
 
     this._connectPromise = (async () => {
       console.log('InsteonService: Attempting to connect to PLM');
+      this._logEngineInfo('Attempting to connect to INSTEON PLM', {
+        stage: 'connection'
+      });
 
       try {
         const settings = await Settings.getSettings();
@@ -6444,6 +6666,15 @@ class InsteonService {
           connection.serialPath = validatedSerial.serialPath;
           connection.label = validatedSerial.serialPath;
           if (validatedSerial.autoResolved && validatedSerial.requestedPath !== validatedSerial.serialPath) {
+            this._logEngineWarn('Configured INSTEON serial endpoint was unavailable and was auto-resolved', {
+              stage: 'connection',
+              target: validatedSerial.requestedPath,
+              transport: 'serial',
+              details: {
+                resolvedTarget: validatedSerial.serialPath,
+                reason: validatedSerial.autoResolvedReason
+              }
+            });
             console.warn(
               `InsteonService: Configured serial endpoint ${validatedSerial.requestedPath} is unavailable; auto-resolved to ${validatedSerial.serialPath} (${validatedSerial.autoResolvedReason})`
             );
@@ -6462,6 +6693,14 @@ class InsteonService {
               runtimeTransport = 'tcp';
               connection.host = bridgeConnection.host;
               connection.port = bridgeConnection.port;
+              this._logEngineWarn('Native serial transport unavailable, using local TCP bridge', {
+                stage: 'connection',
+                transport: 'tcp',
+                target: `${bridgeConnection.host}:${bridgeConnection.port}`,
+                details: {
+                  serialPath: validatedSerial.serialPath
+                }
+              });
               console.log(
                 `InsteonService: Serial transport unavailable, using local TCP bridge at ${bridgeConnection.host}:${bridgeConnection.port}`
               );
@@ -6552,6 +6791,14 @@ class InsteonService {
             this.connectionTransport = connection.transport;
             this.connectionTarget = targetIdentity;
             console.log('InsteonService: Successfully connected to PLM');
+            this._logEngineInfo('Successfully connected to INSTEON PLM', {
+              stage: 'connection',
+              transport: connection.transport,
+              target: targetIdentity,
+              details: {
+                runtimeTransport
+              }
+            });
             const response = {
               success: true,
               message: 'Successfully connected to Insteon PLM',
@@ -6584,6 +6831,15 @@ class InsteonService {
             cleanup();
             const err = error instanceof Error ? error : new Error(String(error || 'Unknown connection error'));
             this.lastConnectionError = err.message;
+            this._logEngineError('Failed to connect to INSTEON PLM', {
+              stage: 'connection',
+              transport: connection.transport,
+              target: targetIdentity,
+              details: {
+                runtimeTransport,
+                error: err.message
+              }
+            });
             console.error('InsteonService: Connection error:', err.message);
             reject(err);
           };
@@ -6605,6 +6861,14 @@ class InsteonService {
         return await connectionPromise;
       } catch (error) {
         this.connectionAttempts++;
+        this._logEngineError('INSTEON PLM connection attempt failed', {
+          stage: 'connection',
+          details: {
+            attempt: this.connectionAttempts,
+            maxAttempts: this.maxConnectionAttempts,
+            error: error.message
+          }
+        });
         console.error(`InsteonService: Connection failed (attempt ${this.connectionAttempts}/${this.maxConnectionAttempts}):`, error.message);
         console.error(error.stack);
 
@@ -6632,6 +6896,9 @@ class InsteonService {
    */
   async disconnect(options = {}) {
     console.log('InsteonService: Disconnecting from PLM');
+    this._logEngineInfo('Disconnecting from INSTEON PLM', {
+      stage: 'connection'
+    });
 
     try {
       if (options.stopRuntimeMonitoring === true) {
@@ -6653,12 +6920,21 @@ class InsteonService {
       await this._stopLocalSerialBridge({ reason: 'manual disconnect' });
 
       console.log('InsteonService: Successfully disconnected from PLM');
+      this._logEngineInfo('Successfully disconnected from INSTEON PLM', {
+        stage: 'connection'
+      });
 
       return {
         success: true,
         message: 'Successfully disconnected from Insteon PLM'
       };
     } catch (error) {
+      this._logEngineError('Failed to disconnect from INSTEON PLM', {
+        stage: 'connection',
+        details: {
+          error: error.message
+        }
+      });
       console.error('InsteonService: Error during disconnect:', error.message);
       console.error(error.stack);
       throw new Error('Failed to disconnect from Insteon PLM');
@@ -8015,6 +8291,16 @@ class InsteonService {
         console.warn(
           `InsteonService: ${timeoutMessage} on attempt ${attempt}/${retryOptions.attempts}; retrying${retryOptions.pauseBetweenMs > 0 ? ` in ${retryOptions.pauseBetweenMs}ms` : ''}.`
         );
+        this._logEngineWarn(`${timeoutMessage} on attempt ${attempt}/${retryOptions.attempts}; retrying`, {
+          stage: 'command',
+          operation: options.kind || 'control_command',
+          details: {
+            attempt,
+            attempts: retryOptions.attempts,
+            retryPauseMs: retryOptions.pauseBetweenMs,
+            error: lastError.message
+          }
+        });
         if (retryOptions.pauseBetweenMs > 0) {
           await this._sleep(retryOptions.pauseBetweenMs);
         }
@@ -8055,6 +8341,14 @@ class InsteonService {
       : status;
     const summary = this._summarizeHubCommandStatus(normalizedStatus);
     if (summary.negativeAcknowledgement) {
+      this._logEngineWarn(`PLM command negatively acknowledged: ${String(options.label || timeoutMessage)}`, {
+        stage: 'command',
+        direction: 'inbound',
+        operation: options.kind || 'control_command',
+        details: {
+          summary
+        }
+      });
       const error = new Error(timeoutMessage);
       error.code = 'INSTEON_COMMAND_NACK';
       error.details = {
@@ -8064,6 +8358,14 @@ class InsteonService {
     }
 
     if (!summary.acknowledged) {
+      this._logEngineWarn(`PLM command acknowledgement missing: ${String(options.label || timeoutMessage)}`, {
+        stage: 'command',
+        direction: 'inbound',
+        operation: options.kind || 'control_command',
+        details: {
+          summary
+        }
+      });
       const error = new Error(timeoutMessage);
       error.code = 'INSTEON_COMMAND_TIMEOUT';
       error.details = {
@@ -8071,6 +8373,15 @@ class InsteonService {
       };
       throw error;
     }
+
+    this._logEngineInfo(`PLM command acknowledged: ${String(options.label || timeoutMessage)}`, {
+      stage: 'command',
+      direction: 'inbound',
+      operation: options.kind || 'control_command',
+      details: {
+        summary
+      }
+    });
 
     return normalizedStatus;
   }
@@ -8086,6 +8397,15 @@ class InsteonService {
         persistState: true
       });
     } catch (error) {
+      this._logEngineWarn(`Unable to recover device state after command timeout`, {
+        stage: 'command',
+        operation: 'state_recovery',
+        address,
+        details: {
+          expectedStatus: Boolean(expectedStatus),
+          error: error.message
+        }
+      });
       console.warn(
         `InsteonService: Unable to recover device state for ${this._formatInsteonAddress(address)} after command timeout: ${error.message}`
       );
@@ -8550,6 +8870,15 @@ class InsteonService {
       const boundedBrightness = Number.isFinite(numericBrightness)
         ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
         : 100;
+      this._logEngineInfo(`Turn on requested for ${this._formatInsteonAddress(address)} at ${boundedBrightness}%`, {
+        stage: 'control',
+        direction: 'outbound',
+        operation: 'turn_on',
+        address,
+        details: {
+          deviceId: String(device._id)
+        }
+      });
       this._markRecentPlmControlActivity();
       try {
         commandExecution = await this._executeHubCommandWithRetries(
@@ -8575,6 +8904,16 @@ class InsteonService {
             verificationRecovered: true,
             commandAttempts,
             commandRetryCount: Math.max(0, commandAttempts - 1)
+          });
+          this._logEngineWarn(`Turn on recovered after acknowledgement timeout for ${details.insteonAddress}`, {
+            stage: 'control',
+            direction: 'inbound',
+            operation: 'turn_on',
+            address,
+            details: {
+              commandAttempts,
+              warning: error.message
+            }
           });
           return {
             success: true,
@@ -8605,6 +8944,16 @@ class InsteonService {
           confirmed: false,
           commandAttempts: commandExecution.attemptsUsed,
           commandRetryCount: commandExecution.retryCount
+        });
+        this._logEngineInfo(`Turn on acknowledged for ${details.insteonAddress}; async refresh queued`, {
+          stage: 'control',
+          direction: 'inbound',
+          operation: 'turn_on',
+          address,
+          details: {
+            commandAttempts: commandExecution.attemptsUsed,
+            verificationMode
+          }
         });
 
         return {
@@ -8639,6 +8988,16 @@ class InsteonService {
           commandAttempts: commandExecution.attemptsUsed,
           commandRetryCount: commandExecution.retryCount
         });
+        this._logEngineWarn(`Turn on acknowledged for ${details.insteonAddress}; synchronous verification still pending`, {
+          stage: 'control',
+          direction: 'inbound',
+          operation: 'turn_on',
+          address,
+          details: {
+            commandAttempts: commandExecution.attemptsUsed,
+            warning: error.message
+          }
+        });
 
         return {
           success: true,
@@ -8661,6 +9020,16 @@ class InsteonService {
         commandAttempts: commandExecution.attemptsUsed,
         commandRetryCount: commandExecution.retryCount
       });
+      this._logEngineInfo(`Turn on confirmed for ${details.insteonAddress}`, {
+        stage: 'control',
+        direction: 'inbound',
+        operation: 'turn_on',
+        address,
+        details: {
+          commandAttempts: commandExecution.attemptsUsed,
+          confirmedReads: confirmedState.confirmedReads || 1
+        }
+      });
 
       return {
         success: true,
@@ -8672,6 +9041,15 @@ class InsteonService {
         details
       };
     } catch (error) {
+      this._logEngineError('Turn on command failed', {
+        stage: 'control',
+        direction: 'outbound',
+        operation: 'turn_on',
+        details: {
+          deviceId: String(deviceId),
+          error: error.message
+        }
+      });
       console.error('InsteonService: Failed to turn on device:', error.message);
       console.error(error.stack);
       throw error;
@@ -8702,6 +9080,15 @@ class InsteonService {
       }
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
+      this._logEngineInfo(`Turn off requested for ${this._formatInsteonAddress(address)}`, {
+        stage: 'control',
+        direction: 'outbound',
+        operation: 'turn_off',
+        address,
+        details: {
+          deviceId: String(device._id)
+        }
+      });
       let commandExecution = {
         attemptsUsed: 1,
         retryCount: 0
@@ -8732,6 +9119,16 @@ class InsteonService {
             commandAttempts,
             commandRetryCount: Math.max(0, commandAttempts - 1)
           });
+          this._logEngineWarn(`Turn off recovered after acknowledgement timeout for ${details.insteonAddress}`, {
+            stage: 'control',
+            direction: 'inbound',
+            operation: 'turn_off',
+            address,
+            details: {
+              commandAttempts,
+              warning: error.message
+            }
+          });
           return {
             success: true,
             message: `Device turned off via Insteon PLM ${details.insteonAddress} (${commandAttempts > 1 ? `command acknowledgements timed out after ${commandAttempts} attempts` : 'command acknowledgement timed out'}, but status confirmed OFF)`,
@@ -8760,6 +9157,16 @@ class InsteonService {
           confirmed: false,
           commandAttempts: commandExecution.attemptsUsed,
           commandRetryCount: commandExecution.retryCount
+        });
+        this._logEngineInfo(`Turn off acknowledged for ${details.insteonAddress}; async refresh queued`, {
+          stage: 'control',
+          direction: 'inbound',
+          operation: 'turn_off',
+          address,
+          details: {
+            commandAttempts: commandExecution.attemptsUsed,
+            verificationMode
+          }
         });
 
         return {
@@ -8793,6 +9200,16 @@ class InsteonService {
           commandAttempts: commandExecution.attemptsUsed,
           commandRetryCount: commandExecution.retryCount
         });
+        this._logEngineWarn(`Turn off acknowledged for ${details.insteonAddress}; synchronous verification still pending`, {
+          stage: 'control',
+          direction: 'inbound',
+          operation: 'turn_off',
+          address,
+          details: {
+            commandAttempts: commandExecution.attemptsUsed,
+            warning: error.message
+          }
+        });
 
         return {
           success: true,
@@ -8814,6 +9231,16 @@ class InsteonService {
         commandAttempts: commandExecution.attemptsUsed,
         commandRetryCount: commandExecution.retryCount
       });
+      this._logEngineInfo(`Turn off confirmed for ${details.insteonAddress}`, {
+        stage: 'control',
+        direction: 'inbound',
+        operation: 'turn_off',
+        address,
+        details: {
+          commandAttempts: commandExecution.attemptsUsed,
+          confirmedReads: confirmedState.confirmedReads || 1
+        }
+      });
 
       return {
         success: true,
@@ -8825,6 +9252,15 @@ class InsteonService {
         details
       };
     } catch (error) {
+      this._logEngineError('Turn off command failed', {
+        stage: 'control',
+        direction: 'outbound',
+        operation: 'turn_off',
+        details: {
+          deviceId: String(deviceId),
+          error: error.message
+        }
+      });
       console.error('InsteonService: Failed to turn off device:', error.message);
       console.error(error.stack);
       throw error;
