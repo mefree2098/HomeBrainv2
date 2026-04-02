@@ -202,10 +202,16 @@ export interface InsteonConnectionTarget {
 export interface InsteonStatusResponse {
   connected?: boolean;
   deviceCount?: number;
+  inventory?: {
+    cachedDeviceCount?: number | null;
+    persistedDeviceCount?: number | null;
+    linkedDatabaseDeviceCount?: number | null;
+  } | null;
   connectionAttempts?: number;
   transport?: string | null;
   port?: string | null;
   lastConnectionError?: string | null;
+  diagnostics?: string[];
   configuredTarget?: string | null;
   resolvedTarget?: InsteonConnectionTarget | null;
   serialTransport?: {

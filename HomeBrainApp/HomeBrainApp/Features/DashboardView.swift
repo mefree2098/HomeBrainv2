@@ -25,7 +25,7 @@ private struct DashboardTempestStationSnapshot {
     let batteryVolts: Double?
     let websocketConnected: Bool
 
-    static func from(_ payload: Any?) -> DashboardTempestStationSnapshot? {
+    nonisolated static func from(_ payload: Any?) -> DashboardTempestStationSnapshot? {
         let station = JSON.object(payload)
         guard !station.isEmpty else {
             return nil
@@ -57,7 +57,7 @@ private struct DashboardTempestStationSnapshot {
         )
     }
 
-    private static func optionalNumber(_ value: Any?) -> Double? {
+    nonisolated private static func optionalNumber(_ value: Any?) -> Double? {
         if let number = value as? Double {
             return number
         }
@@ -100,7 +100,7 @@ private struct DashboardTempestTelemetryWindowSummary: Identifiable {
 
     var id: String { key }
 
-    static func from(_ payload: Any?) -> DashboardTempestTelemetryWindowSummary? {
+    nonisolated static func from(_ payload: Any?) -> DashboardTempestTelemetryWindowSummary? {
         let object = JSON.object(payload)
         guard !object.isEmpty else {
             return nil
@@ -149,7 +149,7 @@ private struct DashboardTempestModuleTelemetrySummary {
     let stationName: String
     let windows: [DashboardTempestTelemetryWindowSummary]
 
-    static func from(_ payload: Any?) -> DashboardTempestModuleTelemetrySummary? {
+    nonisolated static func from(_ payload: Any?) -> DashboardTempestModuleTelemetrySummary? {
         let object = JSON.object(payload)
         guard !object.isEmpty else {
             return nil
@@ -185,7 +185,7 @@ private struct DashboardWeatherSnapshot {
     let tempest: DashboardTempestStationSnapshot?
     let moduleTelemetry: DashboardTempestModuleTelemetrySummary?
 
-    static func from(_ payload: Any?) -> DashboardWeatherSnapshot? {
+    nonisolated static func from(_ payload: Any?) -> DashboardWeatherSnapshot? {
         let root = JSON.object(payload)
         let location = JSON.object(root["location"])
         let current = JSON.object(root["current"])
@@ -290,7 +290,7 @@ private struct DashboardWeatherSnapshot {
         tempest?.observedAt ?? (fetchedAt.isEmpty ? nil : fetchedAt)
     }
 
-    private static func optionalNumber(_ value: Any?) -> Double? {
+    nonisolated private static func optionalNumber(_ value: Any?) -> Double? {
         if let number = value as? Double {
             return number
         }
@@ -365,7 +365,7 @@ private final class DashboardLocationManager: NSObject, ObservableObject, CLLoca
     }
 }
 
-private func dashboardOptionalInt(_ value: Any?) -> Int? {
+nonisolated private func dashboardOptionalInt(_ value: Any?) -> Int? {
     if let raw = value as? Int {
         return raw
     }
@@ -378,7 +378,7 @@ private func dashboardOptionalInt(_ value: Any?) -> Int? {
     return nil
 }
 
-private func dashboardOptionalDouble(_ value: Any?) -> Double? {
+nonisolated private func dashboardOptionalDouble(_ value: Any?) -> Double? {
     if let raw = value as? Double {
         return raw
     }
@@ -574,7 +574,7 @@ struct DashboardView: View {
         case rename(String)
     }
 
-    private enum DashboardWeatherInfoTopic: Equatable {
+    private enum DashboardWeatherInfoTopic: Equatable, Identifiable {
         case aqi(widgetID: String, value: Double?)
         case uv(widgetID: String, value: Double?)
         case liveWind(widgetID: String, speed: Double?, gust: Double?, direction: Double?)
@@ -587,6 +587,35 @@ struct DashboardView: View {
         case lightning(widgetID: String, count: Double?, averageDistanceMiles: Double?)
         case sunCycle(widgetID: String, sunrise: String?, sunset: String?)
         case rainChance(widgetID: String, chance: Double?, precipitationNow: Double?)
+
+        var id: String {
+            switch self {
+            case let .aqi(widgetID, _):
+                return "aqi-\(widgetID)"
+            case let .uv(widgetID, _):
+                return "uv-\(widgetID)"
+            case let .liveWind(widgetID, _, _, _):
+                return "wind-\(widgetID)"
+            case let .rainfall(widgetID, _, _):
+                return "rain-\(widgetID)"
+            case let .pressure(widgetID, _, _):
+                return "pressure-\(widgetID)"
+            case let .station(widgetID, _, _, _):
+                return "station-\(widgetID)"
+            case let .today(widgetID, _, _, _):
+                return "today-\(widgetID)"
+            case let .humidity(widgetID, _):
+                return "humidity-\(widgetID)"
+            case let .dewPoint(widgetID, _):
+                return "dew-point-\(widgetID)"
+            case let .lightning(widgetID, _, _):
+                return "lightning-\(widgetID)"
+            case let .sunCycle(widgetID, _, _):
+                return "sun-cycle-\(widgetID)"
+            case let .rainChance(widgetID, _, _):
+                return "rain-chance-\(widgetID)"
+            }
+        }
     }
 
     private enum DashboardWeatherTelemetryModuleKey {
@@ -662,6 +691,7 @@ struct DashboardView: View {
     @State private var weatherRequestKeyByWidgetID: [String: String] = [:]
     @State private var weatherLoadingWidgetIDs: Set<String> = []
     @State private var weatherInfoTopic: DashboardWeatherInfoTopic?
+    @State private var weatherInfoPresentationKey = 0
 
     @State private var commandText = ""
     @State private var commandResponse = ""
@@ -695,29 +725,40 @@ struct DashboardView: View {
     private var usesHeroSplitLayout: Bool { !usesPortraitCompactLayout && (useLandscapeCompactLayout || layoutWidth >= 860) }
     private var supportsTwoColumnCards: Bool { !usesPortraitCompactLayout && (useLandscapeCompactLayout || layoutWidth >= 820) }
     private var usesCompactWidgetToolbar: Bool { usesPortraitCompactLayout || layoutWidth < 440 }
+    private var isPresentingWeatherInfoSheet: Binding<Bool> {
+        Binding(
+            get: { weatherInfoTopic != nil },
+            set: { presented in
+                if !presented {
+                    weatherInfoTopic = nil
+                }
+            }
+        )
+    }
     private var weatherInfoDetailWidth: CGFloat {
-        let fallbackWidth = UIScreen.main.bounds.width
-
         if usesPortraitCompactLayout {
-            let availableWidth = max((contentWidth > 0 ? contentWidth : fallbackWidth) - 28, 0)
+            let availableWidth = max((contentWidth > 0 ? contentWidth : 390) - 28, 0)
             return min(max(availableWidth, 320), 430)
         }
 
         if useLandscapeCompactLayout {
-            let availableWidth = max((contentWidth > 0 ? contentWidth : fallbackWidth) - 40, 0)
+            let availableWidth = max((contentWidth > 0 ? contentWidth : 480) - 40, 0)
             return min(max(availableWidth, 340), 460)
         }
 
-        return 380
+        let availableWidth = max((contentWidth > 0 ? contentWidth : 1024) - 88, 0)
+        return min(max(availableWidth * 0.58, 520), 720)
     }
     private var weatherInfoDetailMaxHeight: CGFloat {
-        let screenHeight = UIScreen.main.bounds.height
-
-        if isCompact {
-            return min(max(screenHeight * 0.82, 460), 760)
+        if useLandscapeCompactLayout {
+            return 460
         }
 
-        return min(max(screenHeight * 0.7, 360), 620)
+        if isCompact {
+            return 660
+        }
+
+        return 720
     }
     private var currentDashboardView: DashboardViewItem? {
         dashboardViews.first(where: { $0.id == selectedDashboardViewID }) ?? dashboardViews.first
@@ -1098,6 +1139,25 @@ struct DashboardView: View {
                 try? await Task.sleep(for: .seconds(20))
                 guard !Task.isCancelled else { break }
                 await refreshSecurityStatus()
+            }
+        }
+        .sheet(isPresented: isPresentingWeatherInfoSheet) {
+            if let topic = weatherInfoTopic {
+                NavigationStack {
+                    weatherInfoDetailContainer(for: topic, presentationKey: weatherInfoPresentationKey)
+                        .navigationTitle(weatherInfoSheetTitle(for: topic))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") {
+                                    weatherInfoTopic = nil
+                                }
+                            }
+                        }
+                }
+                .id("weather-info-sheet-\(weatherInfoPresentationKey)-\(topic.id)")
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
             }
         }
         .sheet(isPresented: $showingAddWidgetSheet) {
@@ -3984,50 +4044,118 @@ struct DashboardView: View {
         arrowEdge: Edge = .bottom,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        let isPresented = Binding(
-            get: { weatherInfoTopic == topic },
-            set: { presented in
-                if presented {
-                    weatherInfoTopic = topic
-                } else if weatherInfoTopic == topic {
-                    weatherInfoTopic = nil
-                }
-            }
-        )
-
         let trigger = Button {
-            weatherInfoTopic = weatherInfoTopic == topic ? nil : topic
+            toggleWeatherInfo(topic)
         } label: {
             content()
         }
         .buttonStyle(.plain)
 
-        if isCompact {
-            trigger
-                .sheet(isPresented: isPresented) {
-                    weatherInfoDetailContainer(for: topic)
-                        .presentationDetents([.large])
-                        .presentationDragIndicator(.visible)
-                }
+        trigger
+    }
+
+    private func presentWeatherInfo(_ topic: DashboardWeatherInfoTopic) {
+        weatherInfoPresentationKey &+= 1
+        weatherInfoTopic = topic
+    }
+
+    private func toggleWeatherInfo(_ topic: DashboardWeatherInfoTopic) {
+        if weatherInfoTopic == topic {
+            weatherInfoTopic = nil
         } else {
-            trigger
-                .popover(isPresented: isPresented, attachmentAnchor: .rect(.bounds), arrowEdge: arrowEdge) {
-                    weatherInfoDetailContainer(for: topic)
-                        .presentationCompactAdaptation(.popover)
-                }
+            presentWeatherInfo(topic)
         }
     }
 
-    private func weatherInfoDetailContainer(for topic: DashboardWeatherInfoTopic) -> some View {
-        ScrollView {
-            weatherInfoPopoverCard(for: topic)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, isCompact ? 16 : 0)
-                .padding(.vertical, isCompact ? 16 : 0)
+    private func weatherInfoDetailContainer(for topic: DashboardWeatherInfoTopic, presentationKey: Int) -> some View {
+        let scrollAnchorID = weatherInfoScrollAnchorID(for: topic)
+        let scrollViewID = "weather-info-scroll-\(presentationKey)-\(scrollAnchorID)"
+
+        return ScrollViewReader { scrollProxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear
+                        .frame(height: 1)
+                        .id(scrollAnchorID)
+
+                    weatherInfoPopoverCard(for: topic)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, isCompact ? 16 : 0)
+                        .padding(.vertical, isCompact ? 16 : 0)
+                }
+            }
+            .scrollIndicators(.visible)
+            .frame(width: isCompact ? nil : weatherInfoDetailWidth, height: isCompact ? nil : weatherInfoDetailMaxHeight, alignment: .topLeading)
+            .frame(maxWidth: isCompact ? .infinity : weatherInfoDetailWidth, maxHeight: isCompact ? .infinity : weatherInfoDetailMaxHeight, alignment: .top)
+            .onAppear {
+                DispatchQueue.main.async {
+                    scrollProxy.scrollTo(scrollAnchorID, anchor: .top)
+                }
+            }
+            .task(id: scrollViewID) {
+                await Task.yield()
+                scrollProxy.scrollTo(scrollAnchorID, anchor: .top)
+            }
         }
-        .scrollIndicators(.visible)
-        .frame(width: weatherInfoDetailWidth, height: weatherInfoDetailMaxHeight, alignment: .topLeading)
-        .frame(maxWidth: isCompact ? .infinity : weatherInfoDetailWidth, maxHeight: isCompact ? .infinity : weatherInfoDetailMaxHeight, alignment: .top)
+        .id(scrollViewID)
+    }
+
+    private func weatherInfoScrollAnchorID(for topic: DashboardWeatherInfoTopic) -> String {
+        switch topic {
+        case let .aqi(widgetID, _):
+            return "weather-info-top-aqi-\(widgetID)"
+        case let .uv(widgetID, _):
+            return "weather-info-top-uv-\(widgetID)"
+        case let .liveWind(widgetID, _, _, _):
+            return "weather-info-top-wind-\(widgetID)"
+        case let .rainfall(widgetID, _, _):
+            return "weather-info-top-rain-\(widgetID)"
+        case let .pressure(widgetID, _, _):
+            return "weather-info-top-pressure-\(widgetID)"
+        case let .station(widgetID, _, _, _):
+            return "weather-info-top-station-\(widgetID)"
+        case let .today(widgetID, _, _, _):
+            return "weather-info-top-today-\(widgetID)"
+        case let .humidity(widgetID, _):
+            return "weather-info-top-humidity-\(widgetID)"
+        case let .dewPoint(widgetID, _):
+            return "weather-info-top-dewpoint-\(widgetID)"
+        case let .lightning(widgetID, _, _):
+            return "weather-info-top-lightning-\(widgetID)"
+        case let .sunCycle(widgetID, _, _):
+            return "weather-info-top-suncycle-\(widgetID)"
+        case let .rainChance(widgetID, _, _):
+            return "weather-info-top-rainchance-\(widgetID)"
+        }
+    }
+
+    private func weatherInfoSheetTitle(for topic: DashboardWeatherInfoTopic) -> String {
+        switch topic {
+        case .aqi:
+            return "AQI"
+        case .uv:
+            return "UV"
+        case .liveWind:
+            return "Live Wind"
+        case .rainfall:
+            return "Rain Telemetry"
+        case .pressure:
+            return "Pressure Telemetry"
+        case .station:
+            return "Station Signal"
+        case .today:
+            return "Today"
+        case .humidity:
+            return "Humidity Telemetry"
+        case .dewPoint:
+            return "Dew Point"
+        case .lightning:
+            return "Lightning Telemetry"
+        case .sunCycle:
+            return "Sun Cycle"
+        case .rainChance:
+            return "Rain Chance"
+        }
     }
 
     private func weatherModuleTelemetry(for widgetID: String) -> DashboardTempestModuleTelemetrySummary? {
@@ -4121,7 +4249,7 @@ struct DashboardView: View {
             weatherInfoSectionTitle(title: title, summary: summary)
 
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(telemetry.windows) { window in
+                ForEach(telemetry.windows.sorted { $0.hours < $1.hours }) { window in
                     let copy = weatherTelemetryWindowCopy(module: module, window: window)
 
                     VStack(alignment: .leading, spacing: 6) {

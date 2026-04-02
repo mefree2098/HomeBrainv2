@@ -289,6 +289,43 @@ test('_confirmExpectedDeviceStateByAddress fails when only a transient matching 
   );
 });
 
+test('getStatusSnapshot reports persisted inventory separately from the runtime cache', async (t) => {
+  const originalCountDocuments = Device.countDocuments;
+  const originalDevices = insteonService.devices;
+  const originalConnected = insteonService.isConnected;
+  const originalTransport = insteonService.connectionTransport;
+  const originalPort = insteonService.connectionTarget;
+
+  t.after(() => {
+    Device.countDocuments = originalCountDocuments;
+    insteonService.devices = originalDevices;
+    insteonService.isConnected = originalConnected;
+    insteonService.connectionTransport = originalTransport;
+    insteonService.connectionTarget = originalPort;
+  });
+
+  Device.countDocuments = async (query = {}) => {
+    if (query?.['properties.linkedToCurrentPlm'] === true) {
+      return 2;
+    }
+    return 5;
+  };
+
+  insteonService.devices = new Map([['112233', { _id: 'runtime-device-1' }]]);
+  insteonService.isConnected = true;
+  insteonService.connectionTransport = 'serial';
+  insteonService.connectionTarget = '/dev/serial/by-id/test-plm';
+
+  const snapshot = await insteonService.getStatusSnapshot();
+
+  assert.equal(snapshot.connected, true);
+  assert.equal(snapshot.deviceCount, 5);
+  assert.equal(snapshot.inventory.cachedDeviceCount, 1);
+  assert.equal(snapshot.inventory.persistedDeviceCount, 5);
+  assert.equal(snapshot.inventory.linkedDatabaseDeviceCount, 2);
+  assert.deepEqual(snapshot.diagnostics, []);
+});
+
 test('startRuntimeMonitoring attempts a background connect when tracked Insteon devices exist', async (t) => {
   const originalGetSettings = Settings.getSettings;
   const originalCountDocuments = Device.countDocuments;

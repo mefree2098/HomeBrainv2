@@ -59,7 +59,7 @@ router.get('/status', async (req, res) => {
   console.log('InsteonRoutes: Getting PLM status');
 
   try {
-    const status = insteonService.getStatus();
+    const status = await insteonService.getStatusSnapshot();
     const settings = await Settings.getSettings().catch(() => null);
     const configuredTarget = typeof settings?.insteonPort === 'string' && settings.insteonPort.trim()
       ? settings.insteonPort.trim()

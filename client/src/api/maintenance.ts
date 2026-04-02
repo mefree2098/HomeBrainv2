@@ -1,4 +1,28 @@
 import api from './api';
+import type { InsteonStatusResponse } from './insteon';
+
+export interface InsteonMaintenanceSyncResponse {
+  success?: boolean;
+  message?: string;
+  deviceCount?: number;
+  linkedDeviceCount?: number;
+  created?: number;
+  updated?: number;
+  failed?: number;
+  warnings?: string[];
+  errors?: Array<{
+    address?: string | null;
+    error?: string;
+  }>;
+  diagnostics?: string[];
+  plmInfo?: {
+    deviceId?: string;
+    firmwareVersion?: string | number;
+    deviceCategory?: string | number;
+    subcategory?: string | number;
+  };
+  runtimeStatus?: InsteonStatusResponse | null;
+}
 
 // Description: Clear all fake/demo data from the system
 // Endpoint: DELETE /api/maintenance/fake-data
@@ -51,7 +75,7 @@ export const forceSmartThingsSync = async () => {
 export const forceInsteonSync = async () => {
   try {
     const response = await api.post('/api/maintenance/sync/insteon');
-    return response.data;
+    return response.data as InsteonMaintenanceSyncResponse;
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);
