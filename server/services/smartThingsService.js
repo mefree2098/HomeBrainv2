@@ -768,8 +768,27 @@ class SmartThingsService {
         return settings.smartthingsToken;
       }
 
-      if (!integration.accessToken) {
-        throw new Error('No access token available. Please authorize the application.');
+      const hasAccessToken = Boolean(integration.accessToken);
+      const hasRefreshToken = Boolean(integration.refreshToken);
+
+      if (!hasAccessToken && !hasRefreshToken) {
+        const missingAuthError = new Error('No access token available. Please authorize the application.');
+        await this.persistConnectionStatus({
+          isConnected: false,
+          lastError: missingAuthError.message,
+          reason: 'get-token:missing-credentials'
+        });
+        throw missingAuthError;
+      }
+
+      if (!hasAccessToken && hasRefreshToken) {
+        console.log('SmartThingsService: Access token missing, attempting refresh from stored refresh token');
+        await this.refreshAccessToken();
+        const refreshedIntegration = await SmartThingsIntegration.getIntegration();
+        if (!refreshedIntegration.accessToken) {
+          throw new Error('No access token available after refresh. Please authorize the application.');
+        }
+        return refreshedIntegration.accessToken;
       }
 
       if (integration.isTokenValid()) {

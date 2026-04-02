@@ -185,6 +185,43 @@ test('_parseRuntimeCommand infers on/off state for incoming runtime events', () 
   assert.equal(offCommand.inferredState.brightness, 0);
 });
 
+test('_parseRuntimeCommand infers state from unsolicited 0D and 0C switch events', () => {
+  const onCommand = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '38.8A.57',
+      command1: '0D',
+      command2: 'FF'
+    }
+  });
+  const offCommand = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '38.9A.48',
+      command1: '0D',
+      command2: '00'
+    }
+  });
+  const offAlternateCommand = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '38.2B.6D',
+      command1: '0C',
+      command2: '00'
+    }
+  });
+
+  assert.ok(onCommand);
+  assert.equal(onCommand.address, '388A57');
+  assert.equal(onCommand.inferredState.status, true);
+  assert.equal(onCommand.inferredState.brightness, 100);
+
+  assert.ok(offCommand);
+  assert.equal(offCommand.inferredState.status, false);
+  assert.equal(offCommand.inferredState.brightness, 0);
+
+  assert.ok(offAlternateCommand);
+  assert.equal(offAlternateCommand.inferredState.status, false);
+  assert.equal(offAlternateCommand.inferredState.brightness, 0);
+});
+
 test('_confirmDeviceStateByAddress retries level query and persists confirmed state', async (t) => {
   const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
