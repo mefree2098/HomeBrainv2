@@ -214,6 +214,39 @@ test('_parseRuntimeCommand only treats light status ACKs as authoritative state 
   assert.equal(reservedAck.stateRefreshRecommended, false);
 });
 
+test('_parseRuntimeCommand treats responder acknowledgements for ON/OFF commands as executable state confirmations', () => {
+  const cleanupAck = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '38.8A.57',
+      gatewayId: '38.9A.D0',
+      messageType: 1,
+      command1: '11',
+      command2: '01'
+    }
+  });
+  const offAck = insteonService._parseRuntimeCommand({
+    standard: {
+      id: '38.8A.57',
+      gatewayId: '38.9A.D0',
+      messageType: 1,
+      command1: '13',
+      command2: '00'
+    }
+  });
+
+  assert.ok(cleanupAck);
+  assert.equal(cleanupAck.observedState.address, '388A57');
+  assert.equal(cleanupAck.inferredState.status, true);
+  assert.equal(cleanupAck.inferredState.brightness, undefined);
+  assert.equal(cleanupAck.stateRefreshRecommended, true);
+
+  assert.ok(offAck);
+  assert.equal(offAck.observedState.address, '388A57');
+  assert.equal(offAck.inferredState.status, false);
+  assert.equal(offAck.inferredState.brightness, 0);
+  assert.equal(offAck.stateRefreshRecommended, true);
+});
+
 test('_parseRuntimeCommand treats all-link scene broadcasts as controller events instead of literal brightness bytes', () => {
   const broadcastCommand = insteonService._parseRuntimeCommand({
     standard: {
@@ -392,6 +425,46 @@ test('_handleRuntimeCommand persists direct status ACKs without an extra refresh
   assert.equal(scheduledRefreshes.length, 0);
 });
 
+test('_handleRuntimeCommand persists responder acknowledgements for ON commands and still schedules a verification refresh', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.8A.57',
+      gatewayId: '38.9A.D0',
+      messageType: 1,
+      command1: '11',
+      command2: '01'
+    }
+  });
+
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].address, '388A57');
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[0].patch.brightness, undefined);
+  assert.equal(scheduledRefreshes.length, 1);
+  assert.equal(scheduledRefreshes[0].address, '388A57');
+  assert.equal(scheduledRefreshes[0].reason, 'direct_ack:38.8A.57:11');
+  assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+});
+
 test('_confirmDeviceStateByAddress retries level query and persists confirmed state', async (t) => {
   const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
@@ -431,6 +504,51 @@ test('_confirmDeviceStateByAddress retries level query and persists confirmed st
   assert.ok(persistedPatch);
   assert.equal(persistedPatch.status, true);
   assert.equal(persistedPatch.brightness, 100);
+});
+
+test('_scheduleRuntimeStateRefresh applies a command-inferred fallback state when verification queries time out', async (t) => {
+  const originalConfirmDeviceStateByAddress = insteonService._confirmDeviceStateByAddress;
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalDelayMs = insteonService._runtimeStateRefreshDelayMs;
+  const originalPendingRefreshes = insteonService._pendingRuntimeStateRefreshes;
+
+  t.after(() => {
+    insteonService._confirmDeviceStateByAddress = originalConfirmDeviceStateByAddress;
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._runtimeStateRefreshDelayMs = originalDelayMs;
+    insteonService._pendingRuntimeStateRefreshes = originalPendingRefreshes;
+  });
+
+  insteonService._confirmDeviceStateByAddress = async () => {
+    throw new Error('Timeout getting device status for 38.8A.57');
+  };
+  insteonService._runtimeStateRefreshDelayMs = 0;
+  insteonService._pendingRuntimeStateRefreshes = new Map();
+
+  const persisted = await new Promise((resolve, reject) => {
+    const failTimer = setTimeout(() => {
+      reject(new Error('Timed out waiting for fallback runtime state persistence'));
+    }, 100);
+
+    insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+      clearTimeout(failTimer);
+      resolve({ address, patch });
+      return patch;
+    };
+
+    insteonService._scheduleRuntimeStateRefresh('38.8A.57', 'cleanup:38.96.47:1', {
+      expectedStatus: true,
+      fallbackState: {
+        status: true,
+        isOnline: true
+      }
+    });
+  });
+
+  assert.equal(persisted.address, '388A57');
+  assert.equal(persisted.patch.status, true);
+  assert.equal(persisted.patch.isOnline, true);
+  assert.ok(persisted.patch.lastSeen instanceof Date);
 });
 
 test('_confirmExpectedDeviceStateByAddress requires stable matching reads', async (t) => {

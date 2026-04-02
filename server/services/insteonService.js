@@ -6743,6 +6743,43 @@ class InsteonService {
     return Math.max(0, Math.min(100, normalizedPercent));
   }
 
+  _getRuntimeCommandExpectedStatus(command1) {
+    switch (String(command1 || '').trim().toUpperCase()) {
+      case '11':
+      case '12':
+        return true;
+      case '13':
+      case '14':
+        return false;
+      default:
+        return null;
+    }
+  }
+
+  _buildRuntimeExpectedStatePatch(expectedStatus, options = {}) {
+    if (typeof expectedStatus !== 'boolean') {
+      return null;
+    }
+
+    const nextState = {
+      status: expectedStatus,
+      isOnline: true,
+      lastSeen: new Date()
+    };
+
+    if (!expectedStatus) {
+      nextState.brightness = 0;
+      return nextState;
+    }
+
+    const numericBrightness = Number(options.brightness);
+    if (Number.isFinite(numericBrightness) && numericBrightness > 0) {
+      nextState.brightness = this._normalizeInsteonLevelPercent(numericBrightness);
+    }
+
+    return nextState;
+  }
+
   _stateFromInsteonLevel(level) {
     const boundedPercent = this._normalizeInsteonLevelPercent(level);
     return {
@@ -6850,19 +6887,15 @@ class InsteonService {
   }
 
   _classifyRuntimeStatefulCommand(command1) {
+    const expectedStatus = this._getRuntimeCommandExpectedStatus(command1);
+    if (typeof expectedStatus === 'boolean') {
+      return {
+        refresh: true,
+        expectedStatus
+      };
+    }
+
     switch (String(command1 || '').trim().toUpperCase()) {
-      case '11':
-      case '12':
-        return {
-          refresh: true,
-          expectedStatus: true
-        };
-      case '13':
-      case '14':
-        return {
-          refresh: true,
-          expectedStatus: false
-        };
       case '15':
       case '16':
       case '17':
@@ -6882,6 +6915,13 @@ class InsteonService {
   _extractRuntimeObservedState(messageType, sourceAddress, command1, command2Hex) {
     const numericCommand2 = Number.parseInt(String(command2Hex || '').trim().toUpperCase(), 16);
     if (!Number.isFinite(numericCommand2)) {
+      const acknowledgedStatus = this._getRuntimeCommandExpectedStatus(command1);
+      if ([1, 3].includes(messageType) && typeof acknowledgedStatus === 'boolean') {
+        return {
+          address: sourceAddress,
+          state: this._buildRuntimeExpectedStatePatch(acknowledgedStatus)
+        };
+      }
       return null;
     }
 
@@ -6890,6 +6930,14 @@ class InsteonService {
       return {
         address: sourceAddress,
         state: this._stateFromInsteonLevel(numericCommand2)
+      };
+    }
+
+    const acknowledgedStatus = this._getRuntimeCommandExpectedStatus(command1);
+    if ([1, 3].includes(messageType) && typeof acknowledgedStatus === 'boolean') {
+      return {
+        address: sourceAddress,
+        state: this._buildRuntimeExpectedStatePatch(acknowledgedStatus)
       };
     }
 
@@ -6902,6 +6950,7 @@ class InsteonService {
     }
 
     const formattedSourceAddress = this._formatInsteonAddress(parsed.sourceAddress || parsed.address);
+    const fallbackState = this._buildRuntimeExpectedStatePatch(parsed.expectedStatus);
     const requests = [];
     const addRequest = (address, reason) => {
       const normalizedAddress = this._normalizePossibleInsteonAddress(address);
@@ -6912,7 +6961,8 @@ class InsteonService {
       requests.push({
         address: normalizedAddress,
         reason,
-        expectedStatus: typeof parsed.expectedStatus === 'boolean' ? parsed.expectedStatus : null
+        expectedStatus: typeof parsed.expectedStatus === 'boolean' ? parsed.expectedStatus : null,
+        fallbackState
       });
     };
 
@@ -7154,7 +7204,8 @@ class InsteonService {
 
     responderAddresses.forEach((address) => {
       this._scheduleRuntimeStateRefresh(address, `scene:${this._formatInsteonAddress(parsed.address)}:${parsed.broadcastGroup}`, {
-        expectedStatus
+        expectedStatus,
+        fallbackState: this._buildRuntimeExpectedStatePatch(expectedStatus)
       });
     });
   }
@@ -7204,6 +7255,47 @@ class InsteonService {
           });
         }
       }).catch((error) => {
+        const fallbackState = options?.fallbackState && typeof options.fallbackState === 'object'
+          ? {
+              ...options.fallbackState,
+              lastSeen: options.fallbackState.lastSeen ?? new Date(),
+              isOnline: options.fallbackState.isOnline !== false
+            }
+          : null;
+
+        if (fallbackState) {
+          this._persistDeviceRuntimeStateByAddress(normalizedAddress, fallbackState).then(() => {
+            this._logEngineWarn(`Runtime state refresh (${reason}) failed; applied command-inferred fallback state`, {
+              stage: 'state',
+              direction: 'inbound',
+              operation: 'runtime_state_refresh',
+              address: normalizedAddress,
+              details: {
+                reason,
+                expectedStatus: typeof options.expectedStatus === 'boolean' ? options.expectedStatus : null,
+                fallbackStatus: fallbackState.status,
+                fallbackBrightness: fallbackState.brightness ?? null,
+                error: error.message
+              }
+            });
+          }).catch((persistError) => {
+            this._logEngineWarn(`Runtime state refresh (${reason}) failed`, {
+              stage: 'state',
+              direction: 'inbound',
+              operation: 'runtime_state_refresh',
+              address: normalizedAddress,
+              details: {
+                reason,
+                expectedStatus: typeof options.expectedStatus === 'boolean' ? options.expectedStatus : null,
+                error: error.message,
+                fallbackError: persistError.message
+              }
+            });
+            console.warn(`InsteonService: Runtime state refresh (${reason}) fallback failed for ${this._formatInsteonAddress(normalizedAddress)}: ${persistError.message}`);
+          });
+          return;
+        }
+
         this._logEngineWarn(`Runtime state refresh (${reason}) failed`, {
           stage: 'state',
           direction: 'inbound',
