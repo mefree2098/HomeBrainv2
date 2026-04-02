@@ -69,6 +69,10 @@ class InsteonService {
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
     this._localSerialBridge = null;
+    this._plmOperationQueue = [];
+    this._plmOperationSequence = 0;
+    this._activePlmOperation = null;
+    this._plmDrainScheduled = false;
     this._pendingRuntimeStateRefreshes = new Map();
     this._runtimeMonitoringTimer = null;
     this._runtimeMonitoringStarted = false;
@@ -93,6 +97,274 @@ class InsteonService {
     this._linkedStatusRunRetention = Number(process.env.HOMEBRAIN_LINKED_STATUS_RUN_RETENTION || DEFAULT_LINKED_STATUS_RUN_RETENTION);
     this._linkedStatusRunLogLimit = Number(process.env.HOMEBRAIN_LINKED_STATUS_RUN_LOG_LIMIT || DEFAULT_LINKED_STATUS_RUN_LOG_LIMIT);
     console.log('InsteonService: Initialized');
+  }
+
+  _getPlmOperationPriority(priority = 'normal') {
+    const normalized = String(priority || 'normal').trim().toLowerCase();
+    switch (normalized) {
+      case 'control':
+      case 'high':
+        return 0;
+      case 'confirm':
+        return 1;
+      case 'query':
+      case 'normal':
+        return 2;
+      case 'poll':
+      case 'low':
+        return 3;
+      case 'maintenance':
+      default:
+        return 4;
+    }
+  }
+
+  _schedulePlmDrain() {
+    if (this._plmDrainScheduled) {
+      return;
+    }
+
+    this._plmDrainScheduled = true;
+    queueMicrotask(() => {
+      this._plmDrainScheduled = false;
+      this._drainPlmOperationQueue().catch((error) => {
+        console.warn(`InsteonService: PLM operation queue drain failed: ${error.message}`);
+      });
+    });
+  }
+
+  async _drainPlmOperationQueue() {
+    if (this._activePlmOperation) {
+      return;
+    }
+
+    const nextOperation = this._plmOperationQueue.shift();
+    if (!nextOperation) {
+      return;
+    }
+
+    this._activePlmOperation = nextOperation;
+    try {
+      const result = await nextOperation.executor();
+      nextOperation.resolve(result);
+    } catch (error) {
+      nextOperation.reject(error);
+    } finally {
+      this._activePlmOperation = null;
+      if (this._plmOperationQueue.length > 0) {
+        this._schedulePlmDrain();
+      }
+    }
+  }
+
+  _enqueuePlmOperation(executor, options = {}) {
+    return new Promise((resolve, reject) => {
+      const operation = {
+        sequence: this._plmOperationSequence++,
+        priority: this._getPlmOperationPriority(options.priority),
+        kind: options.kind || 'operation',
+        label: String(options.label || 'PLM operation'),
+        executor,
+        resolve,
+        reject
+      };
+
+      this._plmOperationQueue.push(operation);
+      this._plmOperationQueue.sort((left, right) => (
+        left.priority - right.priority
+      ) || (
+        left.sequence - right.sequence
+      ));
+      this._schedulePlmDrain();
+    });
+  }
+
+  _clearPlmOperationQueue(error = null) {
+    if (this._plmOperationQueue.length === 0) {
+      return;
+    }
+
+    const queueError = error instanceof Error
+      ? error
+      : new Error(String(error || 'PLM connection was interrupted'));
+
+    while (this._plmOperationQueue.length > 0) {
+      const queuedOperation = this._plmOperationQueue.shift();
+      queuedOperation.reject(queueError);
+    }
+  }
+
+  _cancelInProgressHubCommandSafe(reason = 'cleanup') {
+    if (!this.hub || typeof this.hub.cancelInprogress !== 'function') {
+      return false;
+    }
+
+    try {
+      return Boolean(this.hub.cancelInprogress());
+    } catch (error) {
+      console.warn(`InsteonService: Unable to cancel in-progress PLM command during ${reason}: ${error.message}`);
+      return false;
+    }
+  }
+
+  async _withTemporaryHubCommandConfig(config = {}, handler) {
+    const hub = this.hub;
+    if (!hub) {
+      return handler();
+    }
+
+    const previousConfig = {
+      commandTimeout: hub.commandTimeout,
+      commandRetries: hub.commandRetries,
+      nakTimeout: hub.nakTimeout
+    };
+
+    const commandTimeoutMs = Number(config.commandTimeoutMs);
+    const commandRetries = Number(config.commandRetries);
+    const nakTimeoutMs = Number(config.nakTimeoutMs);
+
+    if (Number.isFinite(commandTimeoutMs)) {
+      hub.commandTimeout = Math.max(100, Math.round(commandTimeoutMs));
+    }
+    if (Number.isFinite(commandRetries)) {
+      hub.commandRetries = Math.max(0, Math.min(5, Math.round(commandRetries)));
+    }
+    if (Number.isFinite(nakTimeoutMs)) {
+      hub.nakTimeout = Math.max(5, Math.round(nakTimeoutMs));
+    }
+
+    try {
+      return await handler();
+    } finally {
+      if (this.hub === hub) {
+        hub.commandTimeout = previousConfig.commandTimeout;
+        hub.commandRetries = previousConfig.commandRetries;
+        hub.nakTimeout = previousConfig.nakTimeout;
+      }
+    }
+  }
+
+  async _executeQueuedPlmCallbackOperation(invoke, options = {}) {
+    const timeoutMs = Number.isFinite(Number(options.timeoutMs))
+      ? Math.max(250, Math.round(Number(options.timeoutMs)))
+      : 5000;
+    const timeoutMessage = String(options.timeoutMessage || `Timeout ${String(options.label || 'PLM operation').toLowerCase()}`);
+
+    return this._enqueuePlmOperation(async () => {
+      if (!this.isConnected || !this.hub) {
+        throw new Error('Not connected to PLM');
+      }
+
+      return this._withTemporaryHubCommandConfig({
+        commandTimeoutMs: options.commandTimeoutMs,
+        commandRetries: options.commandRetries,
+        nakTimeoutMs: options.nakTimeoutMs
+      }, async () => new Promise((resolve, reject) => {
+        let settled = false;
+
+        const finish = (handler) => (value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          handler(value);
+        };
+
+        const resolveOnce = finish(resolve);
+        const rejectOnce = finish((error) => {
+          reject(error instanceof Error ? error : new Error(String(error || timeoutMessage)));
+        });
+
+        const timer = setTimeout(() => {
+          if (options.cancelInProgressOnTimeout === true) {
+            this._cancelInProgressHubCommandSafe(timeoutMessage);
+          }
+          const timeoutError = new Error(timeoutMessage);
+          timeoutError.code = options.timeoutCode || 'INSTEON_OPERATION_TIMEOUT';
+          rejectOnce(timeoutError);
+        }, timeoutMs);
+
+        try {
+          invoke((error, ...results) => {
+            if (error) {
+              rejectOnce(error);
+              return;
+            }
+
+            if (results.length <= 1) {
+              resolveOnce(results[0]);
+              return;
+            }
+
+            resolveOnce(results);
+          });
+        } catch (error) {
+          rejectOnce(error);
+        }
+      }));
+    }, {
+      priority: options.priority,
+      kind: options.kind,
+      label: options.label
+    });
+  }
+
+  async _executeQueuedPlmExclusiveOperation(executor, options = {}) {
+    return this._enqueuePlmOperation(async () => {
+      if (!this.isConnected || !this.hub) {
+        throw new Error('Not connected to PLM');
+      }
+
+      return this._withTemporaryHubCommandConfig({
+        commandTimeoutMs: options.commandTimeoutMs,
+        commandRetries: options.commandRetries,
+        nakTimeoutMs: options.nakTimeoutMs
+      }, async () => executor());
+    }, {
+      priority: options.priority,
+      kind: options.kind,
+      label: options.label
+    });
+  }
+
+  _hasPendingHigherPriorityPlmOperation(priority = 'poll') {
+    const threshold = this._getPlmOperationPriority(priority);
+
+    if (this._activePlmOperation && this._activePlmOperation.priority < threshold) {
+      return true;
+    }
+
+    return this._plmOperationQueue.some((operation) => operation.priority < threshold);
+  }
+
+  _summarizeHubCommandStatus(status) {
+    const hubStatus = status && typeof status === 'object'
+      ? status
+      : null;
+
+    return {
+      legacyCallbackSuccess: hubStatus?.legacyCallbackSuccess === true,
+      acknowledged: hubStatus?.ack === true,
+      negativeAcknowledgement: hubStatus?.nack === true,
+      success: hubStatus?.success === true,
+      hasResponse: Boolean(hubStatus?.response),
+      hasStandardResponse: Boolean(hubStatus?.response?.standard),
+      hasExtendedResponse: Boolean(hubStatus?.response?.extended),
+      responseType: hubStatus?.response?.type || null
+    };
+  }
+
+  _getHubLightController(address) {
+    if (this.hub && typeof this.hub.light === 'function') {
+      return this.hub.light(address);
+    }
+
+    return {
+      turnOn: (level, callback) => this.hub.turnOn(address, level, callback),
+      turnOff: (callback) => this.hub.turnOff(address, callback),
+      level: (callback) => this.hub.level(address, callback)
+    };
   }
 
   _loadSerialPortModule() {
@@ -357,11 +629,13 @@ class InsteonService {
 
     this._runtimeCloseListener = (hadError) => {
       console.warn(`InsteonService: PLM connection closed${hadError ? ' after error' : ''}`);
+      this._cancelInProgressHubCommandSafe('connection close');
       this.isConnected = false;
       this.hub = null;
       this.connectionTransport = null;
       this.connectionTarget = null;
       this._clearPendingRuntimeStateRefreshes();
+      this._clearPlmOperationQueue(new Error('PLM connection closed while operations were pending'));
       this._runtimeListenersAttached = false;
       this._runtimeCloseListener = null;
       this._runtimeErrorListener = null;
@@ -522,6 +796,7 @@ class InsteonService {
       updated: 0,
       offlineMarked: 0,
       skipped: 0,
+      deferred: 0,
       errors: 0
     };
 
@@ -543,10 +818,18 @@ class InsteonService {
         continue;
       }
 
+      if (this._hasPendingHigherPriorityPlmOperation('poll')) {
+        summary.deferred += 1;
+        break;
+      }
+
       summary.scanned += 1;
 
       try {
-        const level = await this._queryDeviceLevelByAddress(normalizedAddress, this._runtimeStatePollTimeoutMs);
+        const level = await this._queryDeviceLevelByAddress(normalizedAddress, this._runtimeStatePollTimeoutMs, {
+          priority: 'poll',
+          kind: 'runtime_poll'
+        });
         const nextState = this._stateFromInsteonLevel(level);
         if (this._runtimeStatePatchWouldChange(device, nextState)) {
           await this._persistDeviceRuntimeState(device, nextState);
@@ -586,6 +869,9 @@ class InsteonService {
       }
 
       if (this.isConnected && this.hub) {
+        if (this._hasPendingHigherPriorityPlmOperation('poll')) {
+          return;
+        }
         await this._pollTrackedDeviceStates();
       }
     } catch (error) {
@@ -4892,65 +5178,76 @@ class InsteonService {
       await this.connect();
     }
 
-    this._throwIfISYSyncCancelled(shouldCancel);
-    await this._cancelLinkingSafe();
-    this._throwIfISYSyncCancelled(shouldCancel);
+    const sceneLabel = scene?.name || `Group ${scene?.group || '?'}`;
+    return this._executeQueuedPlmExclusiveOperation(async () => {
+      this._throwIfISYSyncCancelled(shouldCancel);
+      await this._cancelLinkingSafe({ reason: `scene "${sceneLabel}"` });
+      this._throwIfISYSyncCancelled(shouldCancel);
 
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const timeout = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        if (cancelInterval) {
-          clearInterval(cancelInterval);
-        }
-        reject(new Error(`Timeout applying scene "${scene.name}"`));
-      }, timeoutMs + 2000);
-      const cancelInterval = typeof shouldCancel === 'function'
-        ? setInterval(() => {
-            if (settled || !shouldCancel()) {
-              return;
-            }
-            settled = true;
-            clearTimeout(timeout);
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          this._cancelInProgressHubCommandSafe(`scene "${sceneLabel}"`);
+          if (cancelInterval) {
             clearInterval(cancelInterval);
-            reject(this._buildISYSyncCancelledError('ISY migration cancelled while applying scene topology.'));
-          }, 200)
-        : null;
-
-      const settle = (handler) => (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        if (cancelInterval) {
-          clearInterval(cancelInterval);
-        }
-        handler(value);
-      };
-
-      const resolveOnce = settle(resolve);
-      const rejectOnce = settle((error) => reject(error instanceof Error ? error : new Error(String(error))));
-
-      try {
-        this.hub.scene(
-          scene.controller,
-          responders.map(({ id, level, ramp, data }) => ({ id, level, ramp, data })),
-          { group: scene.group, remove: scene.remove },
-          (error) => {
-            if (error) {
-              rejectOnce(new Error(`Scene "${scene.name}" failed: ${error.message}`));
-              return;
-            }
-            resolveOnce({
-              group: scene.group,
-              controller: scene.controller,
-              responderCount: scene.responders.length
-            });
           }
-        );
-      } catch (error) {
-        rejectOnce(error);
-      }
+          reject(new Error(`Timeout applying scene "${sceneLabel}"`));
+        }, timeoutMs + 2000);
+        const cancelInterval = typeof shouldCancel === 'function'
+          ? setInterval(() => {
+              if (settled || !shouldCancel()) {
+                return;
+              }
+              settled = true;
+              clearTimeout(timeout);
+              clearInterval(cancelInterval);
+              this._cancelInProgressHubCommandSafe(`scene "${sceneLabel}" cancellation`);
+              reject(this._buildISYSyncCancelledError('ISY migration cancelled while applying scene topology.'));
+            }, 200)
+          : null;
+
+        const settle = (handler) => (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (cancelInterval) {
+            clearInterval(cancelInterval);
+          }
+          handler(value);
+        };
+
+        const resolveOnce = settle(resolve);
+        const rejectOnce = settle((error) => reject(error instanceof Error ? error : new Error(String(error))));
+
+        try {
+          this.hub.scene(
+            scene.controller,
+            responders.map(({ id, level, ramp, data }) => ({ id, level, ramp, data })),
+            { group: scene.group, remove: scene.remove },
+            (error) => {
+              if (error) {
+                rejectOnce(new Error(`Scene "${sceneLabel}" failed: ${error.message}`));
+                return;
+              }
+              resolveOnce({
+                group: scene.group,
+                controller: scene.controller,
+                responderCount: scene.responders.length
+              });
+            }
+          );
+        } catch (error) {
+          rejectOnce(error);
+        }
+      });
+    }, {
+      priority: 'maintenance',
+      kind: 'topology_scene_write',
+      label: `applying scene "${sceneLabel}"`,
+      commandTimeoutMs: timeoutMs,
+      commandRetries: 0
     });
   }
 
@@ -5057,58 +5354,72 @@ class InsteonService {
     });
   }
 
-  async _cancelLinkingSafe() {
+  async _cancelLinkingSafe(options = {}) {
     if (!this.hub || typeof this.hub.cancelLinking !== 'function') {
-      return;
+      return false;
     }
+
+    const reason = String(options.reason || 'link preparation');
 
     try {
       await this.hub.cancelLinking();
+      return true;
     } catch (error) {
-      console.warn(`InsteonService: Unable to cancel previous linking session: ${error.message}`);
+      console.warn(`InsteonService: Unable to cancel previous linking session during ${reason}: ${error.message}`);
+      return false;
     }
   }
 
   async _executeRemoteLink(address, { group, timeoutMs, controller = false }) {
     const normalizedAddress = this._normalizeInsteonAddress(address);
-    await this._cancelLinkingSafe();
+    const role = controller ? 'as controller' : 'as responder';
 
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const timeout = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        const role = controller ? 'as controller' : 'as responder';
-        reject(new Error(`Timeout linking device ${this._formatInsteonAddress(normalizedAddress)} ${role}`));
-      }, timeoutMs + 2000);
+    return this._executeQueuedPlmExclusiveOperation(async () => {
+      await this._cancelLinkingSafe({
+        reason: `remote link ${this._formatInsteonAddress(normalizedAddress)} ${role}`
+      });
 
-      const settle = (handler) => (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        handler(value);
-      };
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          this._cancelInProgressHubCommandSafe(`remote link ${this._formatInsteonAddress(normalizedAddress)} ${role}`);
+          reject(new Error(`Timeout linking device ${this._formatInsteonAddress(normalizedAddress)} ${role}`));
+        }, timeoutMs + 2000);
 
-      const resolveOnce = settle(resolve);
-      const rejectOnce = settle((error) => reject(error instanceof Error ? error : new Error(String(error))));
+        const settle = (handler) => (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          handler(value);
+        };
 
-      try {
-        this.hub.link(normalizedAddress, { group, controller }, (error, link) => {
-          if (error) {
-            const role = controller ? 'as controller' : 'as responder';
-            rejectOnce(new Error(`Failed to link ${this._formatInsteonAddress(normalizedAddress)} ${role}: ${error.message}`));
-            return;
-          }
-          if (!link) {
-            const role = controller ? 'as controller' : 'as responder';
-            rejectOnce(new Error(`Link command returned no confirmation for ${this._formatInsteonAddress(normalizedAddress)} ${role}`));
-            return;
-          }
-          resolveOnce(link || null);
-        });
-      } catch (error) {
-        rejectOnce(error);
-      }
+        const resolveOnce = settle(resolve);
+        const rejectOnce = settle((error) => reject(error instanceof Error ? error : new Error(String(error))));
+
+        try {
+          this.hub.link(normalizedAddress, { group, controller }, (error, link) => {
+            if (error) {
+              rejectOnce(new Error(`Failed to link ${this._formatInsteonAddress(normalizedAddress)} ${role}: ${error.message}`));
+              return;
+            }
+            if (!link) {
+              rejectOnce(new Error(`Link command returned no confirmation for ${this._formatInsteonAddress(normalizedAddress)} ${role}`));
+              return;
+            }
+            resolveOnce(link || null);
+          });
+        } catch (error) {
+          rejectOnce(error);
+        }
+      });
+    }, {
+      priority: 'maintenance',
+      kind: controller ? 'remote_link_controller' : 'remote_link_responder',
+      label: `linking ${this._formatInsteonAddress(normalizedAddress)} ${role}`,
+      commandTimeoutMs: timeoutMs,
+      commandRetries: 0
     });
   }
 
@@ -5151,59 +5462,71 @@ class InsteonService {
     }
 
     const expectedAddress = this._normalizeInsteonAddress(address);
-    await this._cancelLinkingSafe();
 
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const timeout = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error(`Timeout waiting for manual link of ${this._formatInsteonAddress(expectedAddress)}`));
-      }, timeoutMs + 2000);
+    return this._executeQueuedPlmExclusiveOperation(async () => {
+      await this._cancelLinkingSafe({
+        reason: `manual link ${this._formatInsteonAddress(expectedAddress)}`
+      });
 
-      const settle = (handler) => (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        handler(value);
-      };
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          this._cancelInProgressHubCommandSafe(`manual link ${this._formatInsteonAddress(expectedAddress)}`);
+          reject(new Error(`Timeout waiting for manual link of ${this._formatInsteonAddress(expectedAddress)}`));
+        }, timeoutMs + 2000);
 
-      const resolveOnce = settle(resolve);
-      const rejectOnce = settle((error) => reject(error instanceof Error ? error : new Error(String(error))));
+        const settle = (handler) => (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          handler(value);
+        };
 
-      try {
-        this.hub.link({ group, timeout: timeoutMs }, (error, link) => {
-          if (error) {
-            rejectOnce(new Error(`Manual linking failed: ${error.message}`));
-            return;
-          }
+        const resolveOnce = settle(resolve);
+        const rejectOnce = settle((error) => reject(error instanceof Error ? error : new Error(String(error))));
 
-          const rawLinkedAddress = link && (link.id || link.at || link.address);
-          if (!rawLinkedAddress) {
-            rejectOnce(new Error('Manual linking did not return a linked address'));
-            return;
-          }
+        try {
+          this.hub.link({ group, timeout: timeoutMs }, (error, link) => {
+            if (error) {
+              rejectOnce(new Error(`Manual linking failed: ${error.message}`));
+              return;
+            }
 
-          let linkedAddress;
-          try {
-            linkedAddress = this._normalizeInsteonAddress(String(rawLinkedAddress));
-          } catch (normalizeError) {
-            rejectOnce(new Error(`Manual linking returned an invalid address: ${rawLinkedAddress}`));
-            return;
-          }
+            const rawLinkedAddress = link && (link.id || link.at || link.address);
+            if (!rawLinkedAddress) {
+              rejectOnce(new Error('Manual linking did not return a linked address'));
+              return;
+            }
 
-          if (linkedAddress !== expectedAddress) {
-            rejectOnce(new Error(
-              `Manual linking completed for ${this._formatInsteonAddress(linkedAddress)} but expected ${this._formatInsteonAddress(expectedAddress)}`
-            ));
-            return;
-          }
+            let linkedAddress;
+            try {
+              linkedAddress = this._normalizeInsteonAddress(String(rawLinkedAddress));
+            } catch (normalizeError) {
+              rejectOnce(new Error(`Manual linking returned an invalid address: ${rawLinkedAddress}`));
+              return;
+            }
 
-          resolveOnce(link || null);
-        });
-      } catch (error) {
-        rejectOnce(error);
-      }
+            if (linkedAddress !== expectedAddress) {
+              rejectOnce(new Error(
+                `Manual linking completed for ${this._formatInsteonAddress(linkedAddress)} but expected ${this._formatInsteonAddress(expectedAddress)}`
+              ));
+              return;
+            }
+
+            resolveOnce(link || null);
+          });
+        } catch (error) {
+          rejectOnce(error);
+        }
+      });
+    }, {
+      priority: 'maintenance',
+      kind: 'manual_link_expected_device',
+      label: `waiting for manual link of ${this._formatInsteonAddress(expectedAddress)}`,
+      commandTimeoutMs: timeoutMs,
+      commandRetries: 0
     });
   }
 
@@ -5234,22 +5557,18 @@ class InsteonService {
     const normalizedControllerId = this._normalizeInsteonAddress(controllerAddress);
 
     try {
-      const links = await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error(`Timeout reading link table for ${this._formatInsteonAddress(normalizedAddress)}`));
-        }, 12000);
+      const links = await this._executeQueuedPlmCallbackOperation(
+        (callback) => this.hub.links(normalizedAddress, callback),
+        {
+          priority: 'maintenance',
+          kind: 'device_link_table_read',
+          label: `reading link table for ${this._formatInsteonAddress(normalizedAddress)}`,
+          timeoutMs: 12000,
+          timeoutMessage: `Timeout reading link table for ${this._formatInsteonAddress(normalizedAddress)}`
+        }
+      );
 
-        this.hub.links(normalizedAddress, (error, linkRecords) => {
-          clearTimeout(timeout);
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve(Array.isArray(linkRecords) ? linkRecords : []);
-        });
-      });
-
-      return links.some((link) => {
+      return (Array.isArray(links) ? links : []).some((link) => {
         if (!link || link.isInUse === false || link.controller === true) {
           return false;
         }
@@ -5281,22 +5600,18 @@ class InsteonService {
     const normalizedTargetId = this._normalizeInsteonAddress(targetAddress);
 
     try {
-      const links = await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error(`Timeout reading link table for ${this._formatInsteonAddress(normalizedAddress)}`));
-        }, 12000);
+      const links = await this._executeQueuedPlmCallbackOperation(
+        (callback) => this.hub.links(normalizedAddress, callback),
+        {
+          priority: 'maintenance',
+          kind: 'device_link_table_read',
+          label: `reading link table for ${this._formatInsteonAddress(normalizedAddress)}`,
+          timeoutMs: 12000,
+          timeoutMessage: `Timeout reading link table for ${this._formatInsteonAddress(normalizedAddress)}`
+        }
+      );
 
-        this.hub.links(normalizedAddress, (error, linkRecords) => {
-          clearTimeout(timeout);
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve(Array.isArray(linkRecords) ? linkRecords : []);
-        });
-      });
-
-      return links.some((link) => {
+      return (Array.isArray(links) ? links : []).some((link) => {
         if (!link || link.isInUse === false || link.controller !== true) {
           return false;
         }
@@ -6007,6 +6322,7 @@ class InsteonService {
       }
 
       this._detachRuntimeListeners();
+      this._cancelInProgressHubCommandSafe('manual disconnect');
       if (this.hub && this.hub.close) {
         this.hub.close();
       }
@@ -6016,6 +6332,7 @@ class InsteonService {
       this.devices.clear();
       this.connectionTransport = null;
       this.connectionTarget = null;
+      this._clearPlmOperationQueue(new Error('PLM disconnected while operations were pending'));
       await this._stopLocalSerialBridge({ reason: 'manual disconnect' });
 
       console.log('InsteonService: Successfully disconnected from PLM');
@@ -6080,23 +6397,29 @@ class InsteonService {
         throw new Error('Not connected to PLM');
       }
 
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout getting PLM info'));
-        }, 5000);
+      const info = await this._executeQueuedPlmCallbackOperation(
+        (callback) => this.hub.info(callback),
+        {
+          priority: 'query',
+          kind: 'plm_info',
+          label: 'getting PLM info',
+          timeoutMs: 5750,
+          timeoutMessage: 'Timeout getting PLM info',
+          timeoutCode: 'INSTEON_PLM_INFO_TIMEOUT',
+          commandTimeoutMs: 5000,
+          commandRetries: 0,
+          cancelInProgressOnTimeout: true
+        }
+      );
 
-        this.hub.info((error, info) => {
-          clearTimeout(timeout);
+      if (!info) {
+        const error = new Error('Timeout getting PLM info');
+        error.code = 'INSTEON_PLM_INFO_TIMEOUT';
+        throw error;
+      }
 
-          if (error) {
-            console.error('InsteonService: Error getting PLM info:', error.message);
-            reject(error);
-          } else {
-            console.log('InsteonService: PLM info retrieved successfully');
-            resolve(this._normalizeInsteonInfoPayload(info));
-          }
-        });
-      });
+      console.log('InsteonService: PLM info retrieved successfully');
+      return this._normalizeInsteonInfoPayload(info);
     } catch (error) {
       console.error('InsteonService: Failed to get PLM info:', error.message);
       console.error(error.stack);
@@ -6116,58 +6439,55 @@ class InsteonService {
         await this.connect();
       }
 
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout getting device links'));
-        }, 30000); // 30 seconds for device discovery
+      const links = await this._executeQueuedPlmCallbackOperation(
+        (callback) => this.hub.links(callback),
+        {
+          priority: 'maintenance',
+          kind: 'plm_links',
+          label: 'reading PLM links',
+          timeoutMs: 30000,
+          timeoutMessage: 'Timeout getting device links'
+        }
+      );
 
-        this.hub.links((error, links) => {
-          clearTimeout(timeout);
+      const normalizedLinks = Array.isArray(links) ? links : [];
+      console.log(`InsteonService: Found ${normalizedLinks.length} link records`);
 
-          if (error) {
-            console.error('InsteonService: Error getting device links:', error.message);
-            reject(error);
-          } else {
-            console.log(`InsteonService: Found ${links.length} link records`);
+      const deviceMap = new Map();
+      normalizedLinks.forEach((link) => {
+        if (!link || link.isInUse === false) {
+          return;
+        }
 
-            const deviceMap = new Map();
-            links.forEach((link) => {
-              if (!link || link.isInUse === false) {
-                return;
-              }
+        const rawAddress = typeof link.id === 'string'
+          ? link.id
+          : (typeof link.at === 'string' ? link.at : null);
 
-              const rawAddress = typeof link.id === 'string'
-                ? link.id
-                : (typeof link.at === 'string' ? link.at : null);
+        if (!rawAddress) {
+          return;
+        }
 
-              if (!rawAddress) {
-                return;
-              }
+        let normalizedAddress;
+        try {
+          normalizedAddress = this._normalizeInsteonAddress(rawAddress);
+        } catch (error) {
+          return;
+        }
 
-              let normalizedAddress;
-              try {
-                normalizedAddress = this._normalizeInsteonAddress(rawAddress);
-              } catch (error) {
-                return;
-              }
-
-              if (!deviceMap.has(normalizedAddress)) {
-                deviceMap.set(normalizedAddress, {
-                  address: normalizedAddress,
-                  displayAddress: this._formatInsteonAddress(normalizedAddress),
-                  group: Number.isInteger(link.group) ? link.group : 1,
-                  controller: Boolean(link.controller),
-                  data: link.data
-                });
-              }
-            });
-
-            const devices = Array.from(deviceMap.values());
-            console.log(`InsteonService: Processed ${devices.length} unique linked devices`);
-            resolve(devices);
-          }
-        });
+        if (!deviceMap.has(normalizedAddress)) {
+          deviceMap.set(normalizedAddress, {
+            address: normalizedAddress,
+            displayAddress: this._formatInsteonAddress(normalizedAddress),
+            group: Number.isInteger(link.group) ? link.group : 1,
+            controller: Boolean(link.controller),
+            data: link.data
+          });
+        }
       });
+
+      const devices = Array.from(deviceMap.values());
+      console.log(`InsteonService: Processed ${devices.length} unique linked devices`);
+      return devices;
     } catch (error) {
       console.error('InsteonService: Failed to get linked devices:', error.message);
       console.error(error.stack);
@@ -6783,33 +7103,12 @@ class InsteonService {
     console.log(`InsteonService: Getting info for device ${address}`);
 
     try {
-      if (!this.isConnected || !this.hub) {
-        await this.connect();
-      }
-
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout getting device info'));
-        }, 10000);
-
-        this.hub.info(address, (error, info) => {
-          clearTimeout(timeout);
-
-          if (error) {
-            console.error(`InsteonService: Error getting device ${address} info:`, error.message);
-            // Return basic info even on error
-            resolve({
-              deviceId: this._normalizePossibleInsteonAddress(address),
-              deviceCategory: 0,
-              subcategory: 0,
-              firmwareVersion: 'Unknown'
-            });
-          } else {
-            console.log(`InsteonService: Device ${address} info retrieved`);
-            resolve(this._normalizeInsteonInfoPayload(info, address));
-          }
-        });
+      const info = await this._queryDeviceInfoByAddress(address, 10000, {
+        priority: 'query',
+        kind: 'device_info_public'
       });
+      console.log(`InsteonService: Device ${address} info retrieved`);
+      return info;
     } catch (error) {
       console.error(`InsteonService: Failed to get device info for ${address}:`, error.message);
       // Return basic info instead of throwing
@@ -6822,7 +7121,7 @@ class InsteonService {
     }
   }
 
-  async _queryDeviceLevelByAddress(address, timeoutMs = 5000) {
+  async _queryDeviceLevelByAddress(address, timeoutMs = 5000, options = {}) {
     if (!this.isConnected || !this.hub) {
       await this.connect();
     }
@@ -6830,39 +7129,42 @@ class InsteonService {
     const normalizedAddress = this._normalizeInsteonAddress(address);
     const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 5000;
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        const error = new Error(`Timeout getting device status for ${this._formatInsteonAddress(normalizedAddress)}`);
-        error.code = 'INSTEON_LEVEL_TIMEOUT';
-        error.details = {
-          insteonAddress: this._formatInsteonAddress(normalizedAddress)
-        };
-        reject(error);
-      }, timeoutValue);
+    const level = await this._executeQueuedPlmCallbackOperation(
+      (callback) => this._getHubLightController(normalizedAddress).level(callback),
+      {
+        priority: options.priority || 'query',
+        kind: options.kind || 'level_query',
+        label: `querying level for ${this._formatInsteonAddress(normalizedAddress)}`,
+        timeoutMs: Math.max(timeoutValue + 750, Math.round(timeoutValue * 1.25)),
+        timeoutMessage: `Timeout getting device status for ${this._formatInsteonAddress(normalizedAddress)}`,
+        timeoutCode: 'INSTEON_LEVEL_TIMEOUT',
+        commandTimeoutMs: timeoutValue,
+        commandRetries: 0,
+        cancelInProgressOnTimeout: true
+      }
+    );
 
-      this.hub.level(normalizedAddress, (error, level) => {
-        clearTimeout(timeout);
+    if (level == null) {
+      const error = new Error(`Timeout getting device status for ${this._formatInsteonAddress(normalizedAddress)}`);
+      error.code = 'INSTEON_LEVEL_TIMEOUT';
+      error.details = {
+        insteonAddress: this._formatInsteonAddress(normalizedAddress)
+      };
+      throw error;
+    }
 
-        if (error) {
-          reject(error);
-          return;
-        }
+    const numericLevel = Number(level);
+    if (!Number.isFinite(numericLevel)) {
+      throw new Error(`Invalid level response for ${this._formatInsteonAddress(normalizedAddress)}`);
+    }
 
-        const numericLevel = Number(level);
-        if (!Number.isFinite(numericLevel)) {
-          reject(new Error(`Invalid level response for ${this._formatInsteonAddress(normalizedAddress)}`));
-          return;
-        }
+    // home-controller light.level() returns percentage (0-100).
+    // Some adapters may still surface raw 0-255 values; normalize both.
+    const normalizedPercent = numericLevel > 100
+      ? Math.round((Math.max(0, Math.min(255, numericLevel)) / 255) * 100)
+      : Math.round(numericLevel);
 
-        // home-controller light.level() returns percentage (0-100).
-        // Some adapters may still surface raw 0-255 values; normalize both.
-        const normalizedPercent = numericLevel > 100
-          ? Math.round((Math.max(0, Math.min(255, numericLevel)) / 255) * 100)
-          : Math.round(numericLevel);
-
-        resolve(Math.max(0, Math.min(100, normalizedPercent)));
-      });
-    });
+    return Math.max(0, Math.min(100, normalizedPercent));
   }
 
   async _confirmDeviceStateByAddress(address, options = {}) {
@@ -6881,7 +7183,10 @@ class InsteonService {
     let lastError = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        const level = await this._queryDeviceLevelByAddress(normalizedAddress, timeoutMs);
+        const level = await this._queryDeviceLevelByAddress(normalizedAddress, timeoutMs, {
+          priority: 'query',
+          kind: 'state_confirm'
+        });
         const state = this._stateFromInsteonLevel(level);
         if (persistState) {
           await this._persistDeviceRuntimeStateByAddress(normalizedAddress, state);
@@ -6923,7 +7228,10 @@ class InsteonService {
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        const level = await this._queryDeviceLevelByAddress(normalizedAddress, timeoutMs);
+        const level = await this._queryDeviceLevelByAddress(normalizedAddress, timeoutMs, {
+          priority: 'confirm',
+          kind: 'expected_state_confirm'
+        });
         const state = this._stateFromInsteonLevel(level);
         lastState = state;
 
@@ -7072,6 +7380,7 @@ class InsteonService {
     const code = String(error.code || '').trim().toUpperCase();
     if ([
       'INSTEON_COMMAND_TIMEOUT',
+      'INSTEON_COMMAND_NACK',
       'ETIMEDOUT',
       'ECONNRESET',
       'EPIPE',
@@ -7123,14 +7432,20 @@ class InsteonService {
 
     for (let attempt = 1; attempt <= retryOptions.attempts; attempt += 1) {
       try {
-        await this._executeHubCommandWithTimeout(
+        const hubStatus = await this._executeHubCommandWithTimeout(
           invoke,
           timeoutMessage,
-          retryOptions.timeoutMs
+          retryOptions.timeoutMs,
+          {
+            priority: options.priority || 'control',
+            kind: options.kind || 'control_command',
+            label: options.label || timeoutMessage
+          }
         );
         return {
           attemptsUsed: attempt,
-          retryCount: Math.max(0, attempt - 1)
+          retryCount: Math.max(0, attempt - 1),
+          hubStatus: this._summarizeHubCommandStatus(hubStatus)
         };
       } catch (error) {
         lastError = error instanceof Error
@@ -7160,27 +7475,52 @@ class InsteonService {
     });
   }
 
-  async _executeHubCommandWithTimeout(invoke, timeoutMessage, timeoutMs = 5000) {
+  async _executeHubCommandWithTimeout(invoke, timeoutMessage, timeoutMs = 5000, options = {}) {
     const boundedTimeoutMs = Number.isFinite(Number(timeoutMs))
       ? Math.max(500, Number(timeoutMs))
       : 5000;
+    const status = await this._executeQueuedPlmCallbackOperation(
+      invoke,
+      {
+        priority: options.priority || 'control',
+        kind: options.kind || 'control_command',
+        label: options.label || timeoutMessage,
+        timeoutMs: Math.max(boundedTimeoutMs + 750, Math.round(boundedTimeoutMs * 1.25)),
+        timeoutMessage,
+        timeoutCode: 'INSTEON_COMMAND_TIMEOUT',
+        commandTimeoutMs: boundedTimeoutMs,
+        commandRetries: 0,
+        cancelInProgressOnTimeout: true
+      }
+    );
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        const error = new Error(timeoutMessage);
-        error.code = 'INSTEON_COMMAND_TIMEOUT';
-        reject(error);
-      }, boundedTimeoutMs);
-
-      invoke((error) => {
-        clearTimeout(timeout);
-        if (error) {
-          reject(error);
-          return;
+    const normalizedStatus = status === undefined
+      ? {
+          ack: true,
+          success: true,
+          legacyCallbackSuccess: true
         }
-        resolve();
-      });
-    });
+      : status;
+    const summary = this._summarizeHubCommandStatus(normalizedStatus);
+    if (summary.negativeAcknowledgement) {
+      const error = new Error(timeoutMessage);
+      error.code = 'INSTEON_COMMAND_NACK';
+      error.details = {
+        hubStatus: summary
+      };
+      throw error;
+    }
+
+    if (!summary.acknowledged) {
+      const error = new Error(timeoutMessage);
+      error.code = 'INSTEON_COMMAND_TIMEOUT';
+      error.details = {
+        hubStatus: summary
+      };
+      throw error;
+    }
+
+    return normalizedStatus;
   }
 
   async _recoverCommandStateAfterTimeout(address, expectedStatus) {
@@ -7220,7 +7560,7 @@ class InsteonService {
     };
   }
 
-  async _queryDeviceInfoByAddress(address, timeoutMs = 5000) {
+  async _queryDeviceInfoByAddress(address, timeoutMs = 5000, options = {}) {
     if (!this.isConnected || !this.hub) {
       await this.connect();
     }
@@ -7228,25 +7568,29 @@ class InsteonService {
     const normalizedAddress = this._normalizeInsteonAddress(address);
     const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 5000;
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error(`Timeout getting device info for ${this._formatInsteonAddress(normalizedAddress)}`));
-      }, timeoutValue);
+    const info = await this._executeQueuedPlmCallbackOperation(
+      (callback) => this.hub.info(normalizedAddress, callback),
+      {
+        priority: options.priority || 'query',
+        kind: options.kind || 'device_info_query',
+        label: `querying info for ${this._formatInsteonAddress(normalizedAddress)}`,
+        timeoutMs: Math.max(timeoutValue + 750, Math.round(timeoutValue * 1.25)),
+        timeoutMessage: `Timeout getting device info for ${this._formatInsteonAddress(normalizedAddress)}`,
+        timeoutCode: 'INSTEON_INFO_TIMEOUT',
+        commandTimeoutMs: timeoutValue,
+        commandRetries: 0,
+        cancelInProgressOnTimeout: true
+      }
+    );
 
-      this.hub.info(normalizedAddress, (error, info) => {
-        clearTimeout(timeout);
+    if (!info) {
+      throw new Error(`Timeout getting device info for ${this._formatInsteonAddress(normalizedAddress)}`);
+    }
 
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve(this._normalizeInsteonInfoPayload(info, normalizedAddress));
-      });
-    });
+    return this._normalizeInsteonInfoPayload(info, normalizedAddress);
   }
 
-  async _queryDevicePingByAddress(address, timeoutMs = 3000) {
+  async _queryDevicePingByAddress(address, timeoutMs = 3000, options = {}) {
     if (!this.isConnected || !this.hub) {
       await this.connect();
     }
@@ -7254,32 +7598,26 @@ class InsteonService {
     const normalizedAddress = this._normalizeInsteonAddress(address);
     const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 3000;
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error(`Timeout pinging ${this._formatInsteonAddress(normalizedAddress)}`));
-      }, timeoutValue);
-
-      try {
-        this.hub.ping(normalizedAddress, (error, response) => {
-          clearTimeout(timeout);
-
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          if (!response) {
-            reject(new Error(`No ping response from ${this._formatInsteonAddress(normalizedAddress)}`));
-            return;
-          }
-
-          resolve(response);
-        });
-      } catch (error) {
-        clearTimeout(timeout);
-        reject(error);
+    const response = await this._executeQueuedPlmCallbackOperation(
+      (callback) => this.hub.ping(normalizedAddress, callback),
+      {
+        priority: options.priority || 'query',
+        kind: options.kind || 'device_ping_query',
+        label: `pinging ${this._formatInsteonAddress(normalizedAddress)}`,
+        timeoutMs: Math.max(timeoutValue + 500, Math.round(timeoutValue * 1.2)),
+        timeoutMessage: `Timeout pinging ${this._formatInsteonAddress(normalizedAddress)}`,
+        timeoutCode: 'INSTEON_PING_TIMEOUT',
+        commandTimeoutMs: timeoutValue,
+        commandRetries: 0,
+        cancelInProgressOnTimeout: true
       }
-    });
+    );
+
+    if (!response) {
+      throw new Error(`No ping response from ${this._formatInsteonAddress(normalizedAddress)}`);
+    }
+
+    return response;
   }
 
   async queryLinkedDevicesStatus(payload = {}, runtime = {}) {
@@ -7466,7 +7804,10 @@ class InsteonService {
 
         try {
           throwIfCancelled();
-          const level = await this._queryDeviceLevelByAddress(normalizedAddress, levelTimeoutMs);
+          const level = await this._queryDeviceLevelByAddress(normalizedAddress, levelTimeoutMs, {
+            priority: 'query',
+            kind: 'linked_device_level_query'
+          });
           detail.reachable = true;
           detail.isOnline = true;
           detail.status = level > 0;
@@ -7477,7 +7818,10 @@ class InsteonService {
           const levelMessage = levelError?.message || 'Unknown level-query error';
           try {
             throwIfCancelled();
-            await this._queryDevicePingByAddress(normalizedAddress, pingTimeoutMs);
+            await this._queryDevicePingByAddress(normalizedAddress, pingTimeoutMs, {
+              priority: 'query',
+              kind: 'linked_device_ping_query'
+            });
             detail.reachable = true;
             detail.isOnline = true;
             detail.respondedVia = 'ping';
@@ -7486,7 +7830,10 @@ class InsteonService {
             const pingMessage = pingError?.message || 'Unknown ping-query error';
             try {
               throwIfCancelled();
-              const info = await this._queryDeviceInfoByAddress(normalizedAddress, infoTimeoutMs);
+              const info = await this._queryDeviceInfoByAddress(normalizedAddress, infoTimeoutMs, {
+                priority: 'query',
+                kind: 'linked_device_info_query'
+              });
               detail.reachable = true;
               detail.isOnline = true;
               detail.respondedVia = 'info';
@@ -7587,7 +7934,10 @@ class InsteonService {
       }
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
-      const level = await this._queryDeviceLevelByAddress(address, 5000);
+      const level = await this._queryDeviceLevelByAddress(address, 5000, {
+        priority: 'query',
+        kind: 'device_status_query'
+      });
       const state = this._stateFromInsteonLevel(level);
       await this._persistDeviceRuntimeState(device, state);
 
@@ -7650,9 +8000,14 @@ class InsteonService {
         : 100;
       try {
         commandExecution = await this._executeHubCommandWithRetries(
-          (callback) => this.hub.turnOn(address, boundedBrightness, callback),
+          (callback) => this._getHubLightController(address).turnOn(boundedBrightness, callback),
           'Timeout turning on device',
-          options
+          {
+            ...options,
+            priority: 'control',
+            kind: 'turn_on',
+            label: `turning on ${this._formatInsteonAddress(address)}`
+          }
         );
       } catch (error) {
         const recoveredState = await this._recoverCommandStateAfterTimeout(address, true);
@@ -7698,6 +8053,8 @@ class InsteonService {
         const details = this._buildInsteonControlDetails(device, address, 'turn_on', optimisticState, {
           requestedBrightness: boundedBrightness,
           commandAcknowledged: true,
+          hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
+          hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
           verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
           confirmationWarning: error.message,
           confirmationCode: error.code || null,
@@ -7721,6 +8078,8 @@ class InsteonService {
       const details = this._buildInsteonControlDetails(device, address, 'turn_on', confirmedState, {
         requestedBrightness: boundedBrightness,
         commandAcknowledged: true,
+        hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
+        hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
         verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
         commandAttempts: commandExecution.attemptsUsed,
         commandRetryCount: commandExecution.retryCount
@@ -7773,9 +8132,14 @@ class InsteonService {
 
       try {
         commandExecution = await this._executeHubCommandWithRetries(
-          (callback) => this.hub.turnOff(address, callback),
+          (callback) => this._getHubLightController(address).turnOff(callback),
           'Timeout turning off device',
-          options
+          {
+            ...options,
+            priority: 'control',
+            kind: 'turn_off',
+            label: `turning off ${this._formatInsteonAddress(address)}`
+          }
         );
       } catch (error) {
         const recoveredState = await this._recoverCommandStateAfterTimeout(address, false);
@@ -7819,6 +8183,8 @@ class InsteonService {
 
         const details = this._buildInsteonControlDetails(device, address, 'turn_off', optimisticState, {
           commandAcknowledged: true,
+          hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
+          hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
           verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
           confirmationWarning: error.message,
           confirmationCode: error.code || null,
@@ -7841,6 +8207,8 @@ class InsteonService {
 
       const details = this._buildInsteonControlDetails(device, address, 'turn_off', confirmedState, {
         commandAcknowledged: true,
+        hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
+        hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
         verificationMode: String(options?.verificationMode || 'stable').trim().toLowerCase(),
         commandAttempts: commandExecution.attemptsUsed,
         commandRetryCount: commandExecution.retryCount
@@ -7871,10 +8239,11 @@ class InsteonService {
   async setBrightness(deviceId, brightness, options = {}) {
     console.log(`InsteonService: Setting device ${deviceId} brightness to ${brightness}%`);
 
-    if (brightness === 0) {
+    const numericBrightness = Number(brightness);
+    if (Number.isFinite(numericBrightness) && numericBrightness <= 0) {
       return this.turnOff(deviceId, options);
     } else {
-      return this.turnOn(deviceId, brightness, options);
+      return this.turnOn(deviceId, Number.isFinite(numericBrightness) ? numericBrightness : brightness, options);
     }
   }
 
@@ -7891,32 +8260,68 @@ class InsteonService {
         await this.connect();
       }
 
-      return new Promise((resolve, reject) => {
-        const timeoutMs = timeout * 1000;
-        const timer = setTimeout(() => {
-          reject(new Error('Device linking timeout - no device found'));
-        }, timeoutMs);
+      console.log('InsteonService: PLM is now in linking mode - set device to linking mode within 30 seconds');
+      const timeoutMs = timeout * 1000;
+      const link = await this._executeQueuedPlmExclusiveOperation(async () => {
+        await this._cancelLinkingSafe({ reason: 'manual device link' });
 
-        this.hub.link((error, link) => {
-          clearTimeout(timer);
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const timeoutHandle = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            this._cancelInProgressHubCommandSafe('manual device link');
+            reject(new Error('Device linking timeout - no device found'));
+          }, timeoutMs + 2000);
 
-          if (error) {
-            console.error('InsteonService: Error during device linking:', error.message);
-            reject(error);
-          } else {
-            console.log(`InsteonService: Device linked successfully - Address: ${link.at}`);
-            resolve({
-              success: true,
-              message: 'Device linked successfully',
-              address: link.at,
-              group: link.group,
-              type: link.type
+          const settle = (handler) => (value) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutHandle);
+            handler(value);
+          };
+
+          const resolveOnce = settle(resolve);
+          const rejectOnce = settle((error) => reject(error instanceof Error ? error : new Error(String(error))));
+
+          try {
+            this.hub.link((error, result) => {
+              if (error) {
+                rejectOnce(error);
+                return;
+              }
+              resolveOnce(result);
             });
+          } catch (error) {
+            rejectOnce(error);
           }
         });
-
-        console.log('InsteonService: PLM is now in linking mode - set device to linking mode within 30 seconds');
+      }, {
+        priority: 'maintenance',
+        kind: 'manual_link',
+        label: 'waiting for manual device link',
+        commandTimeoutMs: timeoutMs,
+        commandRetries: 0
       });
+
+      const rawLinkedAddress = link && (link.at || link.id || link.address);
+      if (!rawLinkedAddress) {
+        throw new Error('Device linked successfully but no device address was returned');
+      }
+      const normalizedLinkedAddress = this._normalizePossibleInsteonAddress(rawLinkedAddress);
+      const displayLinkedAddress = normalizedLinkedAddress
+        ? this._formatInsteonAddress(normalizedLinkedAddress)
+        : String(rawLinkedAddress);
+
+      console.log(`InsteonService: Device linked successfully - Address: ${displayLinkedAddress}`);
+      return {
+        success: true,
+        message: 'Device linked successfully',
+        address: rawLinkedAddress,
+        normalizedAddress: normalizedLinkedAddress,
+        group: link.group,
+        type: link.type
+      };
     } catch (error) {
       console.error('InsteonService: Device linking failed:', error.message);
       console.error(error.stack);
@@ -7949,35 +8354,32 @@ class InsteonService {
 
       const address = device.properties.insteonAddress;
 
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout unlinking device'));
-        }, 10000);
+      await this._executeQueuedPlmCallbackOperation(
+        (callback) => this.hub.unlink(address, callback),
+        {
+          priority: 'maintenance',
+          kind: 'unlink_device',
+          label: `unlinking ${this._formatInsteonAddress(address)}`,
+          timeoutMs: 10000,
+          timeoutMessage: 'Timeout unlinking device',
+          cancelInProgressOnTimeout: true
+        }
+      );
 
-        this.hub.unlink(address, (error) => {
-          clearTimeout(timeout);
+      console.log(`InsteonService: Device ${address} unlinked successfully`);
 
-          if (error) {
-            console.error(`InsteonService: Error unlinking device ${address}:`, error.message);
-            reject(error);
-          } else {
-            console.log(`InsteonService: Device ${address} unlinked successfully`);
+      // Delete device from database
+      Device.findByIdAndDelete(deviceId).catch(err =>
+        console.error('Error deleting device from database:', err.message)
+      );
 
-            // Delete device from database
-            Device.findByIdAndDelete(deviceId).catch(err =>
-              console.error('Error deleting device from database:', err.message)
-            );
+      // Remove from cache
+      this.devices.delete(address);
 
-            // Remove from cache
-            this.devices.delete(address);
-
-            resolve({
-              success: true,
-              message: 'Device unlinked and removed'
-            });
-          }
-        });
-      });
+      return {
+        success: true,
+        message: 'Device unlinked and removed'
+      };
     } catch (error) {
       console.error('InsteonService: Device unlinking failed:', error.message);
       console.error(error.stack);

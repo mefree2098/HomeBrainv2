@@ -368,6 +368,7 @@ test('device_control action passes Insteon retry parameters through to command e
 
   assert.equal(receivedOptions.commandAttempts, 3);
   assert.equal(receivedOptions.commandPauseBetweenMs, 1200);
+  assert.equal(receivedOptions.verificationMode, 'fast');
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].success, true);
   assert.equal(result.actionResults[0].details.commandAttempts, 3);

@@ -4,6 +4,27 @@ import CoreLocation
 import SwiftUI
 
 private let tempestConfiguredSecretPlaceholder = "••••••••••••••••"
+private let weatherChartHistoryLimit = 240
+
+private func weatherHexColor(_ value: UInt32, opacity: Double = 1) -> Color {
+    Color(
+        .sRGB,
+        red: Double((value >> 16) & 0xFF) / 255,
+        green: Double((value >> 8) & 0xFF) / 255,
+        blue: Double(value & 0xFF) / 255,
+        opacity: opacity
+    )
+}
+
+private let forecastTemperatureChartColor = weatherHexColor(0x38BDF8)
+private let forecastWindChartColor = weatherHexColor(0xA78BFA)
+private let forecastPrecipitationChartColor = weatherHexColor(0x22C55E)
+private let atmosphericTemperatureChartColor = weatherHexColor(0x22D3EE)
+private let atmosphericFeelsLikeChartColor = weatherHexColor(0xA855F7)
+private let atmosphericDewPointChartColor = weatherHexColor(0x34D399)
+private let windAverageChartColor = weatherHexColor(0x38BDF8)
+private let windGustChartColor = weatherHexColor(0xFB7185)
+private let windRapidChartColor = weatherHexColor(0xFACC15)
 
 private func weatherOptionalDouble(_ value: Any?) -> Double? {
     if let value = value as? Double {
@@ -187,6 +208,98 @@ private struct WeatherHourlySnapshot: Identifiable {
             icon: JSON.string(object, "icon", fallback: "cloudy")
         )
     }
+}
+
+private struct WeatherChartPoint: Identifiable {
+    let id: String
+    let index: Int
+    let label: String
+    let value: Double
+}
+
+private struct WeatherChartSegment: Identifiable {
+    let id: String
+    let points: [WeatherChartPoint]
+}
+
+private func buildWeatherChartSegments<Entry>(
+    from entries: [Entry],
+    value: (Entry) -> Double?,
+    label: (Entry) -> String
+) -> [WeatherChartSegment] {
+    var segments: [WeatherChartSegment] = []
+    var currentPoints: [WeatherChartPoint] = []
+    var segmentIndex = 0
+
+    func flushCurrentSegment() {
+        guard currentPoints.count > 1 else {
+            currentPoints.removeAll(keepingCapacity: true)
+            return
+        }
+
+        segments.append(
+            WeatherChartSegment(
+                id: "segment-\(segmentIndex)",
+                points: currentPoints
+            )
+        )
+        segmentIndex += 1
+        currentPoints.removeAll(keepingCapacity: true)
+    }
+
+    for (index, entry) in entries.enumerated() {
+        guard let entryValue = value(entry) else {
+            flushCurrentSegment()
+            continue
+        }
+
+        currentPoints.append(
+            WeatherChartPoint(
+                id: "point-\(segmentIndex)-\(index)",
+                index: index,
+                label: label(entry),
+                value: entryValue
+            )
+        )
+    }
+
+    flushCurrentSegment()
+    return segments
+}
+
+private func buildWeatherChartPoints<Entry>(
+    from entries: [Entry],
+    value: (Entry) -> Double?,
+    label: (Entry) -> String
+) -> [WeatherChartPoint] {
+    entries.enumerated().compactMap { index, entry in
+        guard let entryValue = value(entry) else {
+            return nil
+        }
+
+        return WeatherChartPoint(
+            id: "point-\(index)",
+            index: index,
+            label: label(entry),
+            value: entryValue
+        )
+    }
+}
+
+private func weatherChartAxisValues(count: Int, desiredCount: Int = 6) -> [Int] {
+    guard count > 0 else { return [] }
+    guard count > desiredCount else { return Array(0..<count) }
+
+    let step = Double(count - 1) / Double(max(desiredCount - 1, 1))
+    var values = Set<Int>()
+
+    for position in 0..<desiredCount {
+        values.insert(Int((Double(position) * step).rounded()))
+    }
+
+    values.insert(0)
+    values.insert(count - 1)
+    return values.sorted()
 }
 
 private struct TempestStationMetricsSnapshot {
@@ -851,15 +964,100 @@ struct WeatherView: View {
         Array((dashboard?.hourlyForecast ?? activeForecast?.hourlyForecast ?? []).prefix(18))
     }
 
+    private var forecastAxisLabels: [String] {
+        forecastTrendData.map { formatTimeOnly($0.time) }
+    }
+
+    private var forecastTemperaturePoints: [WeatherChartPoint] {
+        buildWeatherChartPoints(
+            from: forecastTrendData,
+            value: { $0.temperatureF },
+            label: { formatTimeOnly($0.time) }
+        )
+    }
+
+    private var forecastWindPoints: [WeatherChartPoint] {
+        buildWeatherChartPoints(
+            from: forecastTrendData,
+            value: { $0.windSpeedMph },
+            label: { formatTimeOnly($0.time) }
+        )
+    }
+
+    private var forecastPrecipitationPoints: [WeatherChartPoint] {
+        buildWeatherChartPoints(
+            from: forecastTrendData,
+            value: { $0.precipitationChance },
+            label: { formatTimeOnly($0.time) }
+        )
+    }
+
     private var atmosphericTrendData: [TempestObservationSnapshot] {
-        dashboard?.observations
-            .filter { $0.observationType != "rapid_wind" }
-            .suffix(72)
-            .map { $0 } ?? []
+        Array(
+            (dashboard?.observations ?? [])
+                .filter { $0.observationType != "rapid_wind" }
+                .suffix(weatherChartHistoryLimit)
+        )
+    }
+
+    private var atmosphericAxisLabels: [String] {
+        atmosphericTrendData.map { formatTimeOnly($0.observedAt) }
     }
 
     private var windTrendData: [TempestObservationSnapshot] {
-        dashboard?.observations.suffix(72).map { $0 } ?? []
+        Array((dashboard?.observations ?? []).suffix(weatherChartHistoryLimit))
+    }
+
+    private var windAxisLabels: [String] {
+        windTrendData.map { formatTimeOnly($0.observedAt) }
+    }
+
+    private var atmosphericTemperatureSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: atmosphericTrendData,
+            value: { celsiusToFahrenheit($0.metricDouble("temp_c")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var atmosphericFeelsLikeSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: atmosphericTrendData,
+            value: { celsiusToFahrenheit($0.derivedDouble("feels_like_c")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var atmosphericDewPointSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: atmosphericTrendData,
+            value: { celsiusToFahrenheit($0.derivedDouble("dew_point_c")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var windAverageSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: windTrendData,
+            value: { metersPerSecondToMph($0.metricDouble("wind_avg_mps")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var windGustSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: windTrendData,
+            value: { metersPerSecondToMph($0.metricDouble("wind_gust_mps")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var windRapidSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: windTrendData,
+            value: { metersPerSecondToMph($0.metricDouble("wind_rapid_mps")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
     }
 
     private var recentEvents: [TempestEventSnapshot] {
@@ -1311,54 +1509,44 @@ struct WeatherView: View {
                         )
                     } else {
                         Chart {
-                            ForEach(forecastTrendData) { point in
-                                if let date = point.date, let temperature = point.temperatureF {
-                                    AreaMark(
-                                        x: .value("Time", date),
-                                        y: .value("Temperature", temperature)
-                                    )
-                                    .foregroundStyle(HBPalette.accentBlue.opacity(0.18))
-
-                                    LineMark(
-                                        x: .value("Time", date),
-                                        y: .value("Temperature", temperature)
-                                    )
-                                    .interpolationMethod(.catmullRom)
-                                    .lineStyle(StrokeStyle(lineWidth: 3))
-                                    .foregroundStyle(HBPalette.accentBlue)
-                                }
+                            ForEach(forecastTemperaturePoints) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("Temperature", point.value)
+                                )
+                                .interpolationMethod(.monotone)
+                                .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                                .foregroundStyle(forecastTemperatureChartColor)
                             }
 
-                            ForEach(forecastTrendData) { point in
-                                if let date = point.date, let wind = point.windSpeedMph {
-                                    LineMark(
-                                        x: .value("Time", date),
-                                        y: .value("Wind", wind)
-                                    )
-                                    .interpolationMethod(.catmullRom)
-                                    .lineStyle(StrokeStyle(lineWidth: 2.2))
-                                    .foregroundStyle(HBPalette.accentPurple)
-                                }
+                            ForEach(forecastWindPoints) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("Wind", point.value)
+                                )
+                                .interpolationMethod(.monotone)
+                                .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                                .foregroundStyle(forecastWindChartColor)
                             }
 
-                            ForEach(forecastTrendData) { point in
-                                if let date = point.date, let precipitation = point.precipitationChance {
-                                    BarMark(
-                                        x: .value("Time", date),
-                                        y: .value("Precip", precipitation)
-                                    )
-                                    .foregroundStyle(HBPalette.accentGreen.opacity(0.35))
-                                }
+                            ForEach(forecastPrecipitationPoints) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("Precip", point.value)
+                                )
+                                .interpolationMethod(.monotone)
+                                .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                                .foregroundStyle(forecastPrecipitationChartColor)
                             }
                         }
                         .frame(height: 280)
+                        .chartXScale(domain: 0...max(forecastAxisLabels.count - 1, 0))
                         .chartXAxis {
-                            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
-                                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
-                                    .foregroundStyle(HBPalette.panelStroke.opacity(0.45))
-                                AxisTick()
-                                    .foregroundStyle(HBPalette.panelStroke.opacity(0.6))
-                                AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+                            AxisMarks(values: weatherChartAxisValues(count: forecastAxisLabels.count)) { value in
+                                if let index = value.as(Int.self), forecastAxisLabels.indices.contains(index) {
+                                    AxisValueLabel(forecastAxisLabels[index])
+                                        .foregroundStyle(HBPalette.textMuted)
+                                }
                             }
                         }
                         .chartYAxis {
@@ -1449,38 +1637,77 @@ struct WeatherView: View {
                         )
                     } else {
                         Chart {
-                            ForEach(atmosphericTrendData) { point in
-                                if let date = point.date, let tempF = celsiusToFahrenheit(point.metricDouble("temp_c")) {
-                                    AreaMark(x: .value("Time", date), y: .value("Temperature", tempF))
-                                        .foregroundStyle(HBPalette.accentBlue.opacity(0.18))
-                                    LineMark(x: .value("Time", date), y: .value("Temperature", tempF))
-                                        .foregroundStyle(HBPalette.accentBlue)
-                                        .lineStyle(StrokeStyle(lineWidth: 2.6))
+                            ForEach(atmosphericTemperatureSegments) { segment in
+                                ForEach(segment.points) { point in
+                                    AreaMark(
+                                        x: .value("Sample", point.index),
+                                        y: .value("Temperature", point.value),
+                                        series: .value("Temperature Segment", segment.id)
+                                    )
+                                        .interpolationMethod(.monotone)
+                                        .foregroundStyle(
+                                            LinearGradient(
+                                                colors: [
+                                                    atmosphericTemperatureChartColor.opacity(0.36),
+                                                    atmosphericTemperatureChartColor.opacity(0.04)
+                                                ],
+                                                startPoint: .top,
+                                                endPoint: .bottom
+                                            )
+                                        )
+                                    LineMark(
+                                        x: .value("Sample", point.index),
+                                        y: .value("Temperature", point.value),
+                                        series: .value("Temperature Segment", segment.id)
+                                    )
+                                        .interpolationMethod(.monotone)
+                                        .foregroundStyle(atmosphericTemperatureChartColor)
+                                        .lineStyle(StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
                                 }
                             }
 
-                            ForEach(atmosphericTrendData) { point in
-                                if let date = point.date, let feelsLikeF = celsiusToFahrenheit(point.derivedDouble("feels_like_c")) {
-                                    LineMark(x: .value("Time", date), y: .value("Feels Like", feelsLikeF))
-                                        .foregroundStyle(HBPalette.accentPurple)
-                                        .lineStyle(StrokeStyle(lineWidth: 2.2))
+                            ForEach(atmosphericFeelsLikeSegments) { segment in
+                                ForEach(segment.points) { point in
+                                    LineMark(
+                                        x: .value("Sample", point.index),
+                                        y: .value("Feels Like", point.value),
+                                        series: .value("Feels Like Segment", segment.id)
+                                    )
+                                        .interpolationMethod(.monotone)
+                                        .foregroundStyle(atmosphericFeelsLikeChartColor)
+                                        .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
                                 }
                             }
 
-                            ForEach(atmosphericTrendData) { point in
-                                if let date = point.date, let dewPointF = celsiusToFahrenheit(point.derivedDouble("dew_point_c")) {
-                                    LineMark(x: .value("Time", date), y: .value("Dew Point", dewPointF))
-                                        .foregroundStyle(HBPalette.accentGreen)
-                                        .lineStyle(StrokeStyle(lineWidth: 2))
+                            ForEach(atmosphericDewPointSegments) { segment in
+                                ForEach(segment.points) { point in
+                                    LineMark(
+                                        x: .value("Sample", point.index),
+                                        y: .value("Dew Point", point.value),
+                                        series: .value("Dew Point Segment", segment.id)
+                                    )
+                                        .interpolationMethod(.monotone)
+                                        .foregroundStyle(atmosphericDewPointChartColor)
+                                        .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                                 }
                             }
                         }
                         .frame(height: 300)
+                        .chartXScale(domain: 0...max(atmosphericAxisLabels.count - 1, 0))
                         .chartXAxis {
-                            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                            AxisMarks(values: weatherChartAxisValues(count: atmosphericAxisLabels.count)) { value in
+                                if let index = value.as(Int.self), atmosphericAxisLabels.indices.contains(index) {
+                                    AxisValueLabel(atmosphericAxisLabels[index])
+                                        .foregroundStyle(HBPalette.textMuted)
+                                }
+                            }
+                        }
+                        .chartYAxis {
+                            AxisMarks(position: .leading) {
                                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
-                                    .foregroundStyle(HBPalette.panelStroke.opacity(0.45))
-                                AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+                                    .foregroundStyle(HBPalette.panelStroke.opacity(0.35))
+                                AxisValueLabel()
+                                    .foregroundStyle(HBPalette.textMuted)
                             }
                         }
                     }
@@ -1501,36 +1728,61 @@ struct WeatherView: View {
                         )
                     } else {
                         Chart {
-                            ForEach(windTrendData) { point in
-                                if let date = point.date, let avgMph = metersPerSecondToMph(point.metricDouble("wind_avg_mps")) {
-                                    LineMark(x: .value("Time", date), y: .value("Average", avgMph))
-                                        .foregroundStyle(HBPalette.accentBlue)
-                                        .lineStyle(StrokeStyle(lineWidth: 2.5))
+                            ForEach(windAverageSegments) { segment in
+                                ForEach(segment.points) { point in
+                                    LineMark(
+                                        x: .value("Sample", point.index),
+                                        y: .value("Average", point.value),
+                                        series: .value("Average Segment", segment.id)
+                                    )
+                                        .interpolationMethod(.monotone)
+                                        .foregroundStyle(windAverageChartColor)
+                                        .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
                                 }
                             }
 
-                            ForEach(windTrendData) { point in
-                                if let date = point.date, let gustMph = metersPerSecondToMph(point.metricDouble("wind_gust_mps")) {
-                                    LineMark(x: .value("Time", date), y: .value("Gust", gustMph))
-                                        .foregroundStyle(HBPalette.accentRed)
-                                        .lineStyle(StrokeStyle(lineWidth: 2.3))
+                            ForEach(windGustSegments) { segment in
+                                ForEach(segment.points) { point in
+                                    LineMark(
+                                        x: .value("Sample", point.index),
+                                        y: .value("Gust", point.value),
+                                        series: .value("Gust Segment", segment.id)
+                                    )
+                                        .interpolationMethod(.monotone)
+                                        .foregroundStyle(windGustChartColor)
+                                        .lineStyle(StrokeStyle(lineWidth: 2.3, lineCap: .round, lineJoin: .round))
                                 }
                             }
 
-                            ForEach(windTrendData) { point in
-                                if let date = point.date, let rapidMph = metersPerSecondToMph(point.metricDouble("wind_rapid_mps")) {
-                                    LineMark(x: .value("Time", date), y: .value("Rapid", rapidMph))
-                                        .foregroundStyle(HBPalette.accentOrange)
-                                        .lineStyle(StrokeStyle(lineWidth: 1.8))
+                            ForEach(windRapidSegments) { segment in
+                                ForEach(segment.points) { point in
+                                    LineMark(
+                                        x: .value("Sample", point.index),
+                                        y: .value("Rapid", point.value),
+                                        series: .value("Rapid Segment", segment.id)
+                                    )
+                                        .interpolationMethod(.monotone)
+                                        .foregroundStyle(windRapidChartColor)
+                                        .lineStyle(StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
                                 }
                             }
                         }
                         .frame(height: 300)
+                        .chartXScale(domain: 0...max(windAxisLabels.count - 1, 0))
                         .chartXAxis {
-                            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                            AxisMarks(values: weatherChartAxisValues(count: windAxisLabels.count)) { value in
+                                if let index = value.as(Int.self), windAxisLabels.indices.contains(index) {
+                                    AxisValueLabel(windAxisLabels[index])
+                                        .foregroundStyle(HBPalette.textMuted)
+                                }
+                            }
+                        }
+                        .chartYAxis {
+                            AxisMarks(position: .leading) {
                                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
-                                    .foregroundStyle(HBPalette.panelStroke.opacity(0.45))
-                                AxisValueLabel(format: .dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+                                    .foregroundStyle(HBPalette.panelStroke.opacity(0.35))
+                                AxisValueLabel()
+                                    .foregroundStyle(HBPalette.textMuted)
                             }
                         }
                     }
