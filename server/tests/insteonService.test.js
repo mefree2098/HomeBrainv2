@@ -551,6 +551,75 @@ test('_runRuntimeMonitoringPass polls tracked Insteon light state changes', asyn
   assert.equal(persistedPatches[0].brightness, 100);
 });
 
+test('_runRuntimeMonitoringPass also tracks address-only Insteon devices without source metadata', async (t) => {
+  const originalFind = Device.find;
+  const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalPersistDeviceRuntimeState = insteonService._persistDeviceRuntimeState;
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+  const originalMonitoringStarted = insteonService._runtimeMonitoringStarted;
+  const originalMonitoringInProgress = insteonService._runtimeMonitoringInProgress;
+  const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
+  const originalPollMetadata = insteonService._runtimePollMetadata;
+  const originalStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+  const originalOfflineStaleAfterMs = insteonService._runtimeMonitoringOfflineStaleAfterMs;
+  const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
+  const originalScheduleRuntimeMonitoringPass = insteonService._scheduleRuntimeMonitoringPass;
+
+  t.after(() => {
+    Device.find = originalFind;
+    insteonService._queryDeviceLevelByAddress = originalQueryLevelByAddress;
+    insteonService._persistDeviceRuntimeState = originalPersistDeviceRuntimeState;
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+    insteonService._runtimeMonitoringStarted = originalMonitoringStarted;
+    insteonService._runtimeMonitoringInProgress = originalMonitoringInProgress;
+    insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
+    insteonService._runtimePollMetadata = originalPollMetadata;
+    insteonService._runtimeMonitoringStaleAfterMs = originalStaleAfterMs;
+    insteonService._runtimeMonitoringOfflineStaleAfterMs = originalOfflineStaleAfterMs;
+    insteonService._runtimeMonitoringBatchSize = originalBatchSize;
+    insteonService._scheduleRuntimeMonitoringPass = originalScheduleRuntimeMonitoringPass;
+  });
+
+  const trackedDevice = {
+    _id: 'device-address-only',
+    type: 'light',
+    status: false,
+    brightness: 0,
+    isOnline: true,
+    properties: {
+      insteonAddress: '38.8A.57'
+    }
+  };
+
+  const queriedAddresses = [];
+
+  Device.find = async () => [trackedDevice];
+  insteonService._queryDeviceLevelByAddress = async (address) => {
+    queriedAddresses.push(address);
+    return 100;
+  };
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => {
+    Object.assign(trackedDevice, patch);
+    return trackedDevice;
+  };
+  insteonService._scheduleRuntimeMonitoringPass = () => {};
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService._runtimeMonitoringStarted = true;
+  insteonService._runtimeMonitoringInProgress = false;
+  insteonService._runtimeStatePollPauseMs = 0;
+  insteonService._runtimePollMetadata = new Map();
+  insteonService._runtimeMonitoringStaleAfterMs = 0;
+  insteonService._runtimeMonitoringOfflineStaleAfterMs = 0;
+  insteonService._runtimeMonitoringBatchSize = 10;
+
+  await insteonService._runRuntimeMonitoringPass('test');
+
+  assert.deepEqual(queriedAddresses, ['388A57']);
+});
+
 test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is queued', async (t) => {
   const originalFind = Device.find;
   const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
