@@ -905,7 +905,68 @@ test('syncDevicesFromPLM removes duplicate HomeBrain rows for a PLM-linked addre
   assert.equal(result.deduped, 1);
   assert.equal(result.failed, 0);
   assert.equal(result.warnings.length, 1);
+  assert.match(result.message, /1 duplicate HomeBrain row removed/i);
   assert.match(result.warnings[0], /Removed 1 duplicate HomeBrain row/i);
+});
+
+test('syncDevicesFromPLM final summary explicitly reports zero duplicate rows removed', async (t) => {
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalGetAllLinkedDevices = insteonService.getAllLinkedDevices;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
+  const originalGetDeviceInfo = insteonService.getDeviceInfo;
+  const originalUpsertInsteonDevice = insteonService._upsertInsteonDevice;
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+
+  t.after(() => {
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService.getAllLinkedDevices = originalGetAllLinkedDevices;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
+    insteonService.getDeviceInfo = originalGetDeviceInfo;
+    insteonService._upsertInsteonDevice = originalUpsertInsteonDevice;
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+  });
+
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService.getPLMInfo = async () => ({
+    deviceId: 'AA.BB.CC',
+    firmwareVersion: '9E',
+    deviceCategory: 3,
+    subcategory: 0
+  });
+  insteonService.getAllLinkedDevices = async () => ([
+    {
+      address: '38.8A.57',
+      group: 1,
+      type: 'light'
+    }
+  ]);
+  insteonService._findExistingInsteonDevicesByAddress = async () => [];
+  insteonService.getDeviceInfo = async () => ({
+    deviceId: '388A57',
+    deviceCategory: 1,
+    subcategory: 46,
+    firmwareVersion: '43'
+  });
+  insteonService._upsertInsteonDevice = async () => ({
+    action: 'created',
+    removedDuplicates: 0,
+    device: {
+      _id: 'device-created',
+      name: 'Master Toilet Fan'
+    }
+  });
+
+  const result = await insteonService.syncDevicesFromPLM({ skipExisting: false });
+
+  assert.equal(result.success, true);
+  assert.equal(result.created, 1);
+  assert.equal(result.updated, 0);
+  assert.equal(result.deduped, 0);
+  assert.equal(result.failed, 0);
+  assert.match(result.message, /0 duplicate rows removed/i);
 });
 
 test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is queued', async (t) => {

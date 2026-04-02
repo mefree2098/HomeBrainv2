@@ -165,6 +165,42 @@ test('createDevice rejects a duplicate INSTEON address even when the formatting 
   assert.equal(queries.length, 2);
 });
 
+test('createDevice rejects a duplicate SmartThings device ID', async (t) => {
+  const originalFindOne = Device.findOne;
+
+  t.after(() => {
+    Device.findOne = originalFindOne;
+  });
+
+  Device.findOne = async (query) => {
+    if (query.name && query.room) {
+      return null;
+    }
+
+    assert.equal(query['properties.smartThingsDeviceId'], 'smartthings-device-1');
+    return {
+      _id: 'device-existing',
+      name: 'Front Porch Light',
+      properties: {
+        smartThingsDeviceId: 'smartthings-device-1'
+      }
+    };
+  };
+
+  await assert.rejects(
+    () => deviceService.createDevice({
+      name: 'Manual SmartThings Duplicate',
+      type: 'light',
+      room: 'Porch',
+      properties: {
+        source: 'SmartThings',
+        smartThingsDeviceId: ' smartthings-device-1 '
+      }
+    }),
+    /SmartThings device ID already exists/i
+  );
+});
+
 test('getAllDevices can force-refresh SmartThings lock devices before returning them', async (t) => {
   const originalFind = Device.find;
   const originalBulkWrite = Device.bulkWrite;
@@ -293,4 +329,44 @@ test('updateDevice normalizes and deduplicates device groups', async (t) => {
 
   assert.deepEqual(persistedUpdate.groups, ['Interior Lights', 'alarm shutdown']);
   assert.deepEqual(updated.groups, ['Interior Lights', 'alarm shutdown']);
+});
+
+test('updateDevice rejects a duplicate Tempest station identity', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindOne = Device.findOne;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findOne = originalFindOne;
+  });
+
+  Device.findById = async () => ({
+    _id: 'device-5',
+    name: 'Backyard Weather',
+    room: 'Outside',
+    properties: {}
+  });
+
+  Device.findOne = async (query) => {
+    assert.equal(Array.isArray(query['properties.tempest.stationId'].$in), true);
+    assert.equal(query['properties.tempest.stationId'].$in.includes(42), true);
+    assert.equal(query._id.$ne, 'device-5');
+
+    return {
+      _id: 'tempest-existing',
+      name: 'Existing Tempest Station'
+    };
+  };
+
+  await assert.rejects(
+    () => deviceService.updateDevice('device-5', {
+      properties: {
+        source: 'tempest',
+        tempest: {
+          stationId: '42'
+        }
+      }
+    }),
+    /Tempest station ID already exists/i
+  );
 });

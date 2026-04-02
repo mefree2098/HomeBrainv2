@@ -8276,12 +8276,9 @@ class InsteonService {
       }
 
       const failed = errors.length;
-      const dedupeSummary = deduped > 0
-        ? ` and removed ${deduped} duplicate HomeBrain row${deduped === 1 ? '' : 's'}`
-        : '';
       const message = skipExisting
-        ? `Imported ${created} new INSTEON device${created === 1 ? '' : 's'} from ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}${dedupeSummary}`
-        : `INSTEON sync complete - ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}, ${created} created, ${updated} updated${deduped > 0 ? `, ${deduped} duplicate row${deduped === 1 ? '' : 's'} removed` : ''}, ${failed} failed`;
+        ? `Imported ${created} new INSTEON device${created === 1 ? '' : 's'} from ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}; ${deduped} duplicate HomeBrain row${deduped === 1 ? '' : 's'} removed`
+        : `INSTEON sync complete - ${linkedDeviceCount} PLM-linked device${linkedDeviceCount === 1 ? '' : 's'}, ${created} created, ${updated} updated, ${deduped} duplicate row${deduped === 1 ? '' : 's'} removed, ${failed} failed`;
 
       console.log(`InsteonService: PLM sync complete - ${linkedDeviceCount} linked, ${created} created, ${updated} updated, ${deduped} duplicate rows removed, ${failed} failed, ${skippedDevices.length} skipped`);
       reportProgress(message, {

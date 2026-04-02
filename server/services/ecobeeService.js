@@ -1,6 +1,13 @@
 const axios = require('axios');
 const Device = require('../models/Device');
 const EcobeeIntegration = require('../models/EcobeeIntegration');
+const {
+  buildEcobeeThermostatIdentityQuery,
+  buildEcobeeSensorIdentityQuery,
+  selectCanonicalDevice,
+  mergeDuplicateDeviceGroups,
+  describeDevices
+} = require('./deviceIdentityService');
 
 const DEFAULT_SCOPE = ['smartWrite'];
 
@@ -532,26 +539,23 @@ class EcobeeService {
 
     let query = null;
     if (deviceType === 'thermostat') {
-      query = {
-        'properties.source': 'ecobee',
-        'properties.ecobeeDeviceType': 'thermostat',
-        'properties.ecobeeThermostatIdentifier': mappedDevice.properties.ecobeeThermostatIdentifier
-      };
+      query = buildEcobeeThermostatIdentityQuery(mappedDevice.properties.ecobeeThermostatIdentifier);
     } else if (deviceType === 'sensor') {
-      query = {
-        'properties.source': 'ecobee',
-        'properties.ecobeeDeviceType': 'sensor',
-        'properties.ecobeeSensorKey': mappedDevice.properties.ecobeeSensorKey
-      };
+      query = buildEcobeeSensorIdentityQuery(mappedDevice.properties.ecobeeSensorKey);
     }
 
     if (!query) {
-      return { created: 0, updated: 0, device: null };
+      return { created: 0, updated: 0, deduped: 0, device: null };
     }
 
-    const existing = await Device.findOne(query);
+    const matchingDevices = await Device.find(query);
+    const existing = selectCanonicalDevice(matchingDevices);
+    const duplicateDevices = matchingDevices.filter((candidate) => (
+      String(candidate?._id || '') !== String(existing?._id || '')
+    ));
 
     if (existing) {
+      mergeDuplicateDeviceGroups(existing, duplicateDevices);
       existing.name = mappedDevice.name;
       existing.type = mappedDevice.type;
       existing.room = mappedDevice.room;
@@ -568,11 +572,22 @@ class EcobeeService {
       existing.lastSeen = mappedDevice.lastSeen || new Date();
 
       await existing.save();
-      return { created: 0, updated: 1, device: existing };
+
+      const duplicateIds = duplicateDevices
+        .map((candidate) => String(candidate?._id || ''))
+        .filter(Boolean);
+      if (duplicateIds.length > 0) {
+        await Device.deleteMany({ _id: { $in: duplicateIds } });
+        console.warn(
+          `EcobeeService: Removed ${duplicateIds.length} duplicate HomeBrain row(s) for ${deviceType} ${mappedDevice.properties.ecobeeThermostatIdentifier || mappedDevice.properties.ecobeeSensorKey}: ${describeDevices(duplicateDevices)}`
+        );
+      }
+
+      return { created: 0, updated: 1, deduped: duplicateIds.length, device: existing };
     }
 
     const createdDevice = await Device.create(mappedDevice);
-    return { created: 1, updated: 0, device: createdDevice };
+    return { created: 1, updated: 0, deduped: 0, device: createdDevice };
   }
 
   async syncDevices(options = {}) {
@@ -616,11 +631,13 @@ class EcobeeService {
 
     let created = 0;
     let updated = 0;
+    let deduped = 0;
 
     for (const mappedDevice of mappedDevices) {
       const result = await this.upsertMappedDevice(mappedDevice);
       created += result.created;
       updated += result.updated;
+      deduped += result.deduped || 0;
     }
 
     let removed = 0;
@@ -664,6 +681,7 @@ class EcobeeService {
       deviceCount: mappedDevices.length,
       created,
       updated,
+      deduped,
       removed,
       thermostats
     };

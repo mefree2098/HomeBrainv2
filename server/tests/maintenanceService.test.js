@@ -1,8 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const Device = require('../models/Device');
+const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const maintenanceService = require('../services/maintenanceService');
 const insteonService = require('../services/insteonService');
+const smartThingsService = require('../services/smartThingsService');
 
 test('forceInsteonSync delegates to the PLM sync service and starts runtime monitoring', async (t) => {
   const originalSyncDevicesFromPLM = insteonService.syncDevicesFromPLM;
@@ -20,11 +23,12 @@ test('forceInsteonSync delegates to the PLM sync service and starts runtime moni
     assert.equal(options.skipExisting, false);
     return {
       success: true,
-      message: 'INSTEON sync complete - 2 PLM-linked devices, 1 created, 1 updated, 0 failed',
+      message: 'INSTEON sync complete - 2 PLM-linked devices, 1 created, 1 updated, 0 duplicate rows removed, 0 failed',
       deviceCount: 2,
       linkedDeviceCount: 2,
       created: 1,
       updated: 1,
+      deduped: 0,
       failed: 0,
       warnings: [],
       errors: [],
@@ -49,6 +53,7 @@ test('forceInsteonSync delegates to the PLM sync service and starts runtime moni
   assert.equal(result.linkedDeviceCount, 2);
   assert.equal(result.created, 1);
   assert.equal(result.updated, 1);
+  assert.equal(result.deduped, 0);
   assert.equal(result.failed, 0);
   assert.equal(result.plmInfo.deviceId, '112233');
   assert.deepEqual(startArgs, { immediate: false });
@@ -104,11 +109,12 @@ test('startInsteonSyncRun stores live progress logs and completes with the sync 
 
     return {
       success: true,
-      message: 'INSTEON sync complete - 1 PLM-linked device, 1 created, 0 updated, 0 failed',
+      message: 'INSTEON sync complete - 1 PLM-linked device, 1 created, 0 updated, 0 duplicate rows removed, 0 failed',
       deviceCount: 1,
       linkedDeviceCount: 1,
       created: 1,
       updated: 0,
+      deduped: 0,
       failed: 0,
       warnings: [],
       errors: [],
@@ -141,4 +147,96 @@ test('startInsteonSyncRun stores live progress logs and completes with the sync 
   assert.ok(Array.isArray(snapshot.logs));
   assert.ok(snapshot.logs.some((entry) => /reading plm link database/i.test(entry.message)));
   assert.ok(snapshot.logs.some((entry) => /syncing device 1\/1/i.test(entry.message)));
+});
+
+test('forceSmartThingsSync dedupes duplicate HomeBrain rows for one SmartThings device ID', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalGetDevices = smartThingsService.getDevices;
+  const originalMapSmartThingsDevice = maintenanceService.mapSmartThingsDevice;
+  const originalFind = Device.find;
+  const originalCreate = Device.create;
+  const originalDeleteMany = Device.deleteMany;
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    smartThingsService.getDevices = originalGetDevices;
+    maintenanceService.mapSmartThingsDevice = originalMapSmartThingsDevice;
+    Device.find = originalFind;
+    Device.create = originalCreate;
+    Device.deleteMany = originalDeleteMany;
+  });
+
+  const canonicalDevice = {
+    _id: 'smartthings-canonical',
+    name: 'Front Porch Light',
+    groups: ['Exterior'],
+    properties: {
+      smartThingsDeviceId: 'smartthings-device-1'
+    },
+    createdAt: new Date('2026-04-01T00:00:00Z'),
+    async save() {
+      this.saved = true;
+    }
+  };
+
+  const duplicateDevice = {
+    _id: 'smartthings-duplicate',
+    name: 'Front Porch Light Duplicate',
+    groups: ['Favorites'],
+    properties: {
+      smartThingsDeviceId: 'smartthings-device-1'
+    },
+    createdAt: new Date('2026-04-02T00:00:00Z')
+  };
+
+  const deleteManyCalls = [];
+
+  SmartThingsIntegration.getIntegration = async () => ({
+    async updateSecurityArmState() {}
+  });
+  smartThingsService.getDevices = async () => [{
+    deviceId: 'smartthings-device-1',
+    locationId: 'location-1'
+  }];
+  maintenanceService.mapSmartThingsDevice = async () => ({
+    name: 'Front Porch Light',
+    type: 'light',
+    room: 'Porch',
+    status: true,
+    brightness: 100,
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-device-1'
+    },
+    brand: 'Samsung',
+    model: 'Bulb',
+    isOnline: true,
+    lastSeen: new Date('2026-04-02T12:00:00Z')
+  });
+  Device.find = async (query) => {
+    assert.equal(query['properties.smartThingsDeviceId'], 'smartthings-device-1');
+    return [duplicateDevice, canonicalDevice];
+  };
+  Device.create = async () => {
+    throw new Error('Device.create should not be called when a canonical SmartThings row already exists');
+  };
+  Device.deleteMany = async (query) => {
+    deleteManyCalls.push(query);
+    if (query._id) {
+      return { deletedCount: 1 };
+    }
+    return { deletedCount: 0 };
+  };
+
+  const result = await maintenanceService.forceSmartThingsSync();
+
+  assert.equal(result.success, true);
+  assert.equal(result.updated, 1);
+  assert.equal(result.deduped, 1);
+  assert.deepEqual(canonicalDevice.groups, ['Exterior', 'Favorites']);
+  assert.equal(canonicalDevice.saved, true);
+  assert.equal(deleteManyCalls.length, 2);
+  assert.deepEqual(deleteManyCalls[0], {
+    _id: { $in: ['smartthings-duplicate'] }
+  });
 });
