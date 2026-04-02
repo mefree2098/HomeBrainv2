@@ -41,6 +41,7 @@ const DEFAULT_INSTEON_COMMAND_ATTEMPTS = 3;
 const DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS = 250;
 const DEFAULT_INSTEON_COMMAND_TIMEOUT_MS = 1500;
 const DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE = 'fast';
+const DEFAULT_INSTEON_POST_COMMAND_SETTLE_MS = 700;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_STALE_AFTER_MS = 60000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_OFFLINE_STALE_AFTER_MS = 15000;
@@ -672,11 +673,20 @@ class InsteonService {
       return this.hub.light(address);
     }
 
-    return {
+    const fallbackController = {
       turnOn: (level, callback) => this.hub.turnOn(address, level, callback),
       turnOff: (callback) => this.hub.turnOff(address, callback),
       level: (callback) => this.hub.level(address, callback)
     };
+
+    if (typeof this.hub?.turnOnFast === 'function') {
+      fallbackController.turnOnFast = (callback) => this.hub.turnOnFast(address, callback);
+    }
+    if (typeof this.hub?.turnOffFast === 'function') {
+      fallbackController.turnOffFast = (callback) => this.hub.turnOffFast(address, callback);
+    }
+
+    return fallbackController;
   }
 
   _loadSerialPortModule() {
@@ -8093,6 +8103,9 @@ class InsteonService {
 
   async _confirmExpectedDeviceStateByAddress(address, expectedStatus, options = {}) {
     const normalizedAddress = this._normalizeInsteonAddress(address);
+    const initialDelayMs = Number.isFinite(Number(options.initialDelayMs))
+      ? Math.max(0, Number(options.initialDelayMs))
+      : 0;
     const attempts = Number.isFinite(Number(options.attempts))
       ? Math.max(1, Math.min(8, Number(options.attempts)))
       : 4;
@@ -8113,6 +8126,10 @@ class InsteonService {
     let consecutiveMatches = 0;
     let lastState = null;
     let lastError = null;
+
+    if (initialDelayMs > 0) {
+      await this._sleep(initialDelayMs);
+    }
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
@@ -8255,6 +8272,7 @@ class InsteonService {
         attempts: 2,
         timeoutMs: 1200,
         pauseBetweenMs: 100,
+        initialDelayMs: DEFAULT_INSTEON_POST_COMMAND_SETTLE_MS,
         settleBetweenMatchesMs: 0,
         requiredMatches: 1,
         persistState: true
@@ -8265,6 +8283,7 @@ class InsteonService {
       attempts: 4,
       timeoutMs: 4200,
       pauseBetweenMs: 220,
+      initialDelayMs: DEFAULT_INSTEON_POST_COMMAND_SETTLE_MS,
       settleBetweenMatchesMs: 250,
       requiredMatches: 2,
       persistState: true
@@ -8977,6 +8996,7 @@ class InsteonService {
       }
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
+      const lightController = this._getHubLightController(address);
       let commandExecution = {
         attemptsUsed: 1,
         retryCount: 0
@@ -8985,6 +9005,7 @@ class InsteonService {
       const boundedBrightness = Number.isFinite(numericBrightness)
         ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
         : 100;
+      const useFastOnCommand = boundedBrightness >= 100 && typeof lightController.turnOnFast === 'function';
       this._logEngineInfo(`Turn on requested for ${this._formatInsteonAddress(address)} at ${boundedBrightness}%`, {
         stage: 'control',
         direction: 'outbound',
@@ -8995,19 +9016,22 @@ class InsteonService {
           deviceType: device.type || null,
           deviceModel: device.model || null,
           deviceCategory: device?.properties?.deviceCategory ?? null,
-          deviceSubcategory: device?.properties?.subcategory ?? null
+          deviceSubcategory: device?.properties?.subcategory ?? null,
+          commandVariant: useFastOnCommand ? 'turn_on_fast' : 'turn_on'
         }
       });
       this._markRecentPlmControlActivity();
       try {
         commandExecution = await this._executeHubCommandWithRetries(
-          (callback) => this._getHubLightController(address).turnOn(boundedBrightness, callback),
+          (callback) => (useFastOnCommand
+            ? lightController.turnOnFast(callback)
+            : lightController.turnOn(boundedBrightness, callback)),
           'Timeout turning on device',
           {
             ...options,
             priority: 'control',
             kind: 'turn_on',
-            label: `turning on ${this._formatInsteonAddress(address)}`
+            label: `turning on ${this._formatInsteonAddress(address)}${useFastOnCommand ? ' (fast)' : ''}`
           }
         );
       } catch (error) {
@@ -9201,6 +9225,8 @@ class InsteonService {
       }
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
+      const lightController = this._getHubLightController(address);
+      const useFastOffCommand = typeof lightController.turnOffFast === 'function';
       this._logEngineInfo(`Turn off requested for ${this._formatInsteonAddress(address)}`, {
         stage: 'control',
         direction: 'outbound',
@@ -9211,7 +9237,8 @@ class InsteonService {
           deviceType: device.type || null,
           deviceModel: device.model || null,
           deviceCategory: device?.properties?.deviceCategory ?? null,
-          deviceSubcategory: device?.properties?.subcategory ?? null
+          deviceSubcategory: device?.properties?.subcategory ?? null,
+          commandVariant: useFastOffCommand ? 'turn_off_fast' : 'turn_off'
         }
       });
       let commandExecution = {
@@ -9222,13 +9249,15 @@ class InsteonService {
 
       try {
         commandExecution = await this._executeHubCommandWithRetries(
-          (callback) => this._getHubLightController(address).turnOff(callback),
+          (callback) => (useFastOffCommand
+            ? lightController.turnOffFast(callback)
+            : lightController.turnOff(callback)),
           'Timeout turning off device',
           {
             ...options,
             priority: 'control',
             kind: 'turn_off',
-            label: `turning off ${this._formatInsteonAddress(address)}`
+            label: `turning off ${this._formatInsteonAddress(address)}${useFastOffCommand ? ' (fast)' : ''}`
           }
         );
       } catch (error) {
