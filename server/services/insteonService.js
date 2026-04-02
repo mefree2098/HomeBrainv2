@@ -6394,11 +6394,21 @@ class InsteonService {
     return this._persistDeviceRuntimeState(device, patch);
   }
 
-  _stateFromInsteonLevel(level) {
+  _normalizeInsteonLevelPercent(level) {
     const numericLevel = Number(level);
-    const boundedPercent = Number.isFinite(numericLevel)
-      ? Math.max(0, Math.min(100, Math.round(numericLevel)))
-      : 0;
+    if (!Number.isFinite(numericLevel)) {
+      return 0;
+    }
+
+    const normalizedPercent = numericLevel > 100
+      ? Math.round((Math.max(0, Math.min(255, numericLevel)) / 255) * 100)
+      : Math.round(numericLevel);
+
+    return Math.max(0, Math.min(100, normalizedPercent));
+  }
+
+  _stateFromInsteonLevel(level) {
+    const boundedPercent = this._normalizeInsteonLevelPercent(level);
     return {
       level: boundedPercent,
       status: boundedPercent > 0,
@@ -6408,46 +6418,85 @@ class InsteonService {
     };
   }
 
-  _extractRuntimeBroadcastMetadata(payload, command1, command2Hex) {
+  _describeRuntimeMessageClass(messageType) {
+    switch (messageType) {
+      case 0:
+        return 'direct';
+      case 1:
+        return 'direct_ack';
+      case 2:
+        return 'all_link_cleanup';
+      case 3:
+        return 'all_link_cleanup_ack';
+      case 4:
+        return 'broadcast';
+      case 5:
+        return 'direct_nak';
+      case 6:
+        return 'all_link_broadcast';
+      case 7:
+        return 'all_link_cleanup_nak';
+      default:
+        return 'unknown';
+    }
+  }
+
+  _extractRuntimeMessageMetadata(payload, command1, command2Hex) {
     const messageType = Number(payload?.messageType);
+    const messageClass = this._describeRuntimeMessageClass(messageType);
+    const gatewayId = typeof payload?.gatewayId === 'string'
+      ? payload.gatewayId.trim().toUpperCase()
+      : '';
+    const targetAddress = [0, 1, 2, 3, 5].includes(messageType)
+      ? this._normalizePossibleInsteonAddress(gatewayId)
+      : null;
+
     if (!Number.isInteger(messageType)) {
       return {
         messageType: null,
-        group: null,
+        messageClass: 'unknown',
+        targetAddress: null,
+        broadcastGroup: null,
+        cleanupGroup: null,
         command1: command1 || null,
         command2: command2Hex || null
       };
     }
 
-    const gatewayId = typeof payload?.gatewayId === 'string'
-      ? payload.gatewayId.trim().toUpperCase()
-      : '';
-
     if (messageType === 6 && command1 !== '06') {
-      const group = Number.parseInt(gatewayId, 16);
+      const broadcastGroup = Number.parseInt(gatewayId, 16);
       return {
         messageType,
-        group: Number.isInteger(group) ? group : null,
+        messageClass,
+        targetAddress,
+        broadcastGroup: Number.isInteger(broadcastGroup) ? broadcastGroup : null,
+        cleanupGroup: null,
         command1,
         command2: command2Hex
       };
     }
 
     if (messageType === 6 && gatewayId.length >= 6) {
-      const group = Number.parseInt(gatewayId.slice(4, 6), 16);
+      const broadcastGroup = Number.parseInt(gatewayId.slice(4, 6), 16);
       return {
         messageType,
-        group: Number.isInteger(group) ? group : null,
+        messageClass,
+        targetAddress,
+        broadcastGroup: Number.isInteger(broadcastGroup) ? broadcastGroup : null,
+        cleanupGroup: null,
         command1: gatewayId.slice(0, 2),
         command2: gatewayId.slice(2, 4)
       };
     }
 
     if (messageType === 2 || messageType === 3) {
-      const group = Number.parseInt(command2Hex, 16);
+      const cleanupGroup = Number.parseInt(command2Hex, 16);
       return {
         messageType,
-        group: Number.isInteger(group) ? group : null,
+        messageClass,
+        targetAddress,
+        broadcastGroup: null,
+        cleanupGroup: Number.isInteger(cleanupGroup) ? cleanupGroup : null,
         command1,
         command2: '00'
       };
@@ -6455,32 +6504,102 @@ class InsteonService {
 
     return {
       messageType,
-      group: null,
+      messageClass,
+      targetAddress,
+      broadcastGroup: null,
+      cleanupGroup: null,
       command1,
       command2: command2Hex
     };
   }
 
-  _inferRuntimeStateFromBroadcastCommand(command1) {
-    if (command1 === '11' || command1 === '12') {
-      return {
-        status: true,
-        brightness: 100,
-        isOnline: true,
-        lastSeen: new Date()
-      };
+  _classifyRuntimeStatefulCommand(command1) {
+    switch (String(command1 || '').trim().toUpperCase()) {
+      case '11':
+      case '12':
+        return {
+          refresh: true,
+          expectedStatus: true
+        };
+      case '13':
+      case '14':
+        return {
+          refresh: true,
+          expectedStatus: false
+        };
+      case '15':
+      case '16':
+      case '17':
+      case '18':
+        return {
+          refresh: true,
+          expectedStatus: null
+        };
+      default:
+        return {
+          refresh: false,
+          expectedStatus: null
+        };
+    }
+  }
+
+  _extractRuntimeObservedState(messageType, sourceAddress, command1, command2Hex) {
+    const numericCommand2 = Number.parseInt(String(command2Hex || '').trim().toUpperCase(), 16);
+    if (!Number.isFinite(numericCommand2)) {
+      return null;
     }
 
-    if (command1 === '13' || command1 === '14') {
+    // Light Status Request ACKs carry the current on-level in Command 2.
+    if (messageType === 1 && command1 === '19') {
       return {
-        status: false,
-        brightness: 0,
-        isOnline: true,
-        lastSeen: new Date()
+        address: sourceAddress,
+        state: this._stateFromInsteonLevel(numericCommand2)
       };
     }
 
     return null;
+  }
+
+  _buildRuntimeStateRefreshRequests(parsed) {
+    if (!parsed || parsed.stateRefreshRecommended !== true) {
+      return [];
+    }
+
+    const formattedSourceAddress = this._formatInsteonAddress(parsed.sourceAddress || parsed.address);
+    const requests = [];
+    const addRequest = (address, reason) => {
+      const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+      if (!normalizedAddress) {
+        return;
+      }
+
+      requests.push({
+        address: normalizedAddress,
+        reason,
+        expectedStatus: typeof parsed.expectedStatus === 'boolean' ? parsed.expectedStatus : null
+      });
+    };
+
+    switch (parsed.messageType) {
+      case 0:
+        addRequest(parsed.targetAddress, `direct:${formattedSourceAddress}:${parsed.semanticCommand1}`);
+        break;
+      case 1:
+        addRequest(parsed.sourceAddress, `direct_ack:${formattedSourceAddress}:${parsed.semanticCommand1}`);
+        break;
+      case 2:
+        addRequest(parsed.targetAddress, `cleanup:${formattedSourceAddress}:${parsed.cleanupGroup ?? 'unknown'}`);
+        break;
+      case 3:
+        addRequest(parsed.sourceAddress, `cleanup_ack:${formattedSourceAddress}:${parsed.cleanupGroup ?? 'unknown'}`);
+        break;
+      default:
+        break;
+    }
+
+    return Array.from(new Map(
+      requests.map((request) => [request.address, request])
+    ).values());
   }
 
   _parseRuntimeCommand(command) {
@@ -6489,62 +6608,46 @@ class InsteonService {
       return null;
     }
 
-    const normalizedAddress = this._normalizePossibleInsteonAddress(payload.id);
-    if (!normalizedAddress) {
+    const sourceAddress = this._normalizePossibleInsteonAddress(payload.id);
+    if (!sourceAddress) {
       return null;
     }
 
     const command1 = String(payload.command1 || '').trim().toUpperCase();
     const command2Hex = String(payload.command2 || '').trim().toUpperCase();
-    const command2 = Number.parseInt(command2Hex, 16);
-    const hasNumericCommand2 = Number.isFinite(command2);
-    const broadcastMetadata = this._extractRuntimeBroadcastMetadata(payload, command1, command2Hex);
-
-    let inferredState = null;
-    if (broadcastMetadata.group != null) {
-      inferredState = this._inferRuntimeStateFromBroadcastCommand(broadcastMetadata.command1);
-    } else if (command1 === '11' || command1 === '12' || command1 === '21') {
-      const inferredBrightness = hasNumericCommand2
-        ? Math.round((Math.max(0, Math.min(255, command2)) / 255) * 100)
-        : 100;
-      inferredState = {
-        status: true,
-        brightness: inferredBrightness,
-        isOnline: true,
-        lastSeen: new Date()
-      };
-    } else if (command1 === '13' || command1 === '14') {
-      inferredState = {
-        status: false,
-        brightness: 0,
-        isOnline: true,
-        lastSeen: new Date()
-      };
-    } else if (command1 === '19' && hasNumericCommand2) {
-      inferredState = {
-        status: command2 > 0,
-        brightness: Math.round((Math.max(0, Math.min(255, command2)) / 255) * 100),
-        isOnline: true,
-        lastSeen: new Date()
-      };
-    } else if ((command1 === '0C' || command1 === '0D') && hasNumericCommand2) {
-      inferredState = {
-        status: command2 > 0,
-        brightness: Math.round((Math.max(0, Math.min(255, command2)) / 255) * 100),
-        isOnline: true,
-        lastSeen: new Date()
-      };
-    }
+    const messageMetadata = this._extractRuntimeMessageMetadata(payload, command1, command2Hex);
+    const semanticCommand1 = messageMetadata.broadcastGroup != null && messageMetadata.command1
+      ? messageMetadata.command1
+      : command1;
+    const semanticCommand2 = messageMetadata.broadcastGroup != null && messageMetadata.command2
+      ? messageMetadata.command2
+      : command2Hex;
+    const commandClassification = this._classifyRuntimeStatefulCommand(semanticCommand1);
+    const observedState = this._extractRuntimeObservedState(
+      messageMetadata.messageType,
+      sourceAddress,
+      semanticCommand1,
+      semanticCommand2
+    );
 
     return {
-      address: normalizedAddress,
+      address: sourceAddress,
+      sourceAddress,
+      targetAddress: messageMetadata.targetAddress,
       command1,
       command2: command2Hex,
-      inferredState,
-      messageType: broadcastMetadata.messageType,
-      broadcastGroup: broadcastMetadata.group,
-      sceneCommand1: broadcastMetadata.command1,
-      sceneCommand2: broadcastMetadata.command2
+      semanticCommand1,
+      semanticCommand2,
+      inferredState: observedState?.state || null,
+      observedState,
+      messageType: messageMetadata.messageType,
+      messageClass: messageMetadata.messageClass,
+      broadcastGroup: messageMetadata.broadcastGroup,
+      cleanupGroup: messageMetadata.cleanupGroup,
+      sceneCommand1: messageMetadata.command1,
+      sceneCommand2: messageMetadata.command2,
+      stateRefreshRecommended: commandClassification.refresh,
+      expectedStatus: commandClassification.expectedStatus
     };
   }
 
@@ -6607,18 +6710,93 @@ class InsteonService {
     return addresses.slice();
   }
 
+  async _getRuntimeControllerResponderAddresses(controllerAddress) {
+    const normalizedController = this._normalizePossibleInsteonAddress(controllerAddress);
+    if (!normalizedController) {
+      return [];
+    }
+
+    const cacheKey = `${normalizedController}:*`;
+    const cached = this._runtimeSceneResponderCache.get(cacheKey);
+    if (cached && (Date.now() - cached.cachedAt) < this._runtimeSceneCacheTtlMs) {
+      return cached.addresses.slice();
+    }
+
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const links = await this._executeQueuedPlmCallbackOperation(
+      (callback) => this.hub.links(normalizedController, callback),
+      {
+        priority: 'state_confirm',
+        kind: 'runtime_controller_link_lookup',
+        label: `reading controller links for ${this._formatInsteonAddress(normalizedController)}`,
+        timeoutMs: 12000,
+        timeoutMessage: `Timeout reading controller links for ${this._formatInsteonAddress(normalizedController)}`
+      }
+    );
+
+    const addresses = Array.from(new Set(
+      (Array.isArray(links) ? links : [])
+        .flatMap((link) => {
+          if (!link || link.isInUse === false || link.controller !== true) {
+            return [];
+          }
+
+          const rawId = typeof link.id === 'string'
+            ? link.id
+            : (typeof link.at === 'string' ? link.at : '');
+          if (!rawId) {
+            return [];
+          }
+
+          try {
+            const normalizedLinkedId = this._normalizeInsteonAddress(rawId);
+            return normalizedLinkedId === normalizedController ? [] : [normalizedLinkedId];
+          } catch (error) {
+            return [];
+          }
+        })
+    ));
+
+    this._runtimeSceneResponderCache.set(cacheKey, {
+      addresses,
+      cachedAt: Date.now()
+    });
+
+    return addresses.slice();
+  }
+
   async _scheduleRuntimeSceneResponderRefreshes(parsed) {
     if (!parsed || parsed.broadcastGroup == null || !parsed.sceneCommand1) {
       return;
     }
 
-    const responderAddresses = await this._getRuntimeSceneResponderAddresses(parsed.address, parsed.broadcastGroup);
+    let responderAddresses = [];
+    try {
+      responderAddresses = await this._getRuntimeSceneResponderAddresses(parsed.address, parsed.broadcastGroup);
+    } catch (error) {
+      this._logEngineWarn('Failed to resolve linked responders for controller scene broadcast', {
+        stage: 'runtime',
+        direction: 'internal',
+        operation: 'runtime_scene_refresh',
+        address: parsed.address,
+        details: {
+          group: parsed.broadcastGroup,
+          sceneCommand1: parsed.sceneCommand1,
+          sceneCommand2: parsed.sceneCommand2,
+          error: error.message
+        }
+      });
+      return;
+    }
     if (!Array.isArray(responderAddresses) || responderAddresses.length === 0) {
       return;
     }
 
-    const expectedStatus = typeof parsed.inferredState?.status === 'boolean'
-      ? parsed.inferredState.status
+    const expectedStatus = typeof parsed.expectedStatus === 'boolean'
+      ? parsed.expectedStatus
       : null;
 
     this._logEngineInfo(
@@ -6718,27 +6896,39 @@ class InsteonService {
       stage: 'runtime',
       direction: 'inbound',
       operation: 'runtime_command',
-      address: parsed.address,
+      address: parsed.sourceAddress,
       details: {
+        sourceAddress: this._formatInsteonAddress(parsed.sourceAddress),
+        targetAddress: parsed.targetAddress ? this._formatInsteonAddress(parsed.targetAddress) : null,
         command1: parsed.command1,
         command2: parsed.command2,
+        semanticCommand1: parsed.semanticCommand1,
+        semanticCommand2: parsed.semanticCommand2,
         messageType: parsed.messageType,
+        messageClass: parsed.messageClass,
         broadcastGroup: parsed.broadcastGroup,
+        cleanupGroup: parsed.cleanupGroup,
         sceneCommand1: parsed.sceneCommand1,
         sceneCommand2: parsed.sceneCommand2,
-        inferredState: parsed.inferredState || null
+        inferredState: parsed.inferredState || null,
+        expectedStatus: typeof parsed.expectedStatus === 'boolean' ? parsed.expectedStatus : null
       }
     });
 
-    if (parsed.inferredState) {
-      await this._persistDeviceRuntimeStateByAddress(parsed.address, parsed.inferredState);
+    if (parsed.observedState?.state && parsed.observedState?.address) {
+      await this._persistDeviceRuntimeStateByAddress(parsed.observedState.address, parsed.observedState.state);
     }
 
     if (parsed.broadcastGroup != null && parsed.sceneCommand1) {
       await this._scheduleRuntimeSceneResponderRefreshes(parsed);
     }
 
-    this._scheduleRuntimeStateRefresh(parsed.address, `cmd:${parsed.command1}`);
+    const refreshRequests = this._buildRuntimeStateRefreshRequests(parsed);
+    refreshRequests.forEach((request) => {
+      this._scheduleRuntimeStateRefresh(request.address, request.reason, {
+        expectedStatus: request.expectedStatus
+      });
+    });
   }
 
   _looksLikeInsteonFaderDescriptor(...values) {
@@ -8379,11 +8569,7 @@ class InsteonService {
 
     // home-controller light.level() returns percentage (0-100).
     // Some adapters may still surface raw 0-255 values; normalize both.
-    const normalizedPercent = numericLevel > 100
-      ? Math.round((Math.max(0, Math.min(255, numericLevel)) / 255) * 100)
-      : Math.round(numericLevel);
-
-    const boundedLevel = Math.max(0, Math.min(100, normalizedPercent));
+    const boundedLevel = this._normalizeInsteonLevelPercent(numericLevel);
     this._logEngineInfo(`Observed INSTEON level ${boundedLevel}% for ${this._formatInsteonAddress(normalizedAddress)}`, {
       stage: 'state',
       direction: 'inbound',
