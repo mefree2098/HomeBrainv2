@@ -7159,51 +7159,85 @@ class InsteonService {
       return;
     }
 
+    await this._scheduleRuntimeLinkedResponderRefreshes(parsed.address, parsed.broadcastGroup, {
+      reasonPrefix: 'scene',
+      expectedStatus: typeof parsed.expectedStatus === 'boolean'
+        ? parsed.expectedStatus
+        : null,
+      sceneCommand1: parsed.sceneCommand1,
+      sceneCommand2: parsed.sceneCommand2,
+      logAddress: parsed.address
+    });
+  }
+
+  async _scheduleRuntimeLinkedResponderRefreshes(controllerAddress, group, options = {}) {
+    const normalizedController = this._normalizePossibleInsteonAddress(controllerAddress);
+    const numericGroup = Number(group);
+    if (!normalizedController || !Number.isInteger(numericGroup) || numericGroup <= 0) {
+      return;
+    }
+
+    const excludeAddresses = Array.isArray(options.excludeAddresses)
+      ? Array.from(new Set(
+          options.excludeAddresses
+            .map((address) => this._normalizePossibleInsteonAddress(address))
+            .filter(Boolean)
+        ))
+      : [];
+
     let responderAddresses = [];
     try {
-      responderAddresses = await this._getRuntimeSceneResponderAddresses(parsed.address, parsed.broadcastGroup);
+      responderAddresses = await this._getRuntimeSceneResponderAddresses(normalizedController, numericGroup);
     } catch (error) {
       this._logEngineWarn('Failed to resolve linked responders for controller scene broadcast', {
         stage: 'runtime',
         direction: 'internal',
         operation: 'runtime_scene_refresh',
-        address: parsed.address,
+        address: options.logAddress || normalizedController,
         details: {
-          group: parsed.broadcastGroup,
-          sceneCommand1: parsed.sceneCommand1,
-          sceneCommand2: parsed.sceneCommand2,
+          controllerAddress: this._formatInsteonAddress(normalizedController),
+          group: numericGroup,
+          sceneCommand1: options.sceneCommand1 || null,
+          sceneCommand2: options.sceneCommand2 || null,
           error: error.message
         }
       });
       return;
     }
-    if (!Array.isArray(responderAddresses) || responderAddresses.length === 0) {
+
+    responderAddresses = Array.isArray(responderAddresses)
+      ? responderAddresses.filter((address) => !excludeAddresses.includes(address))
+      : [];
+
+    if (responderAddresses.length === 0) {
       return;
     }
 
-    const expectedStatus = typeof parsed.expectedStatus === 'boolean'
-      ? parsed.expectedStatus
+    const expectedStatus = typeof options.expectedStatus === 'boolean'
+      ? options.expectedStatus
       : null;
 
     this._logEngineInfo(
-      `Queued ${responderAddresses.length} linked responder refresh${responderAddresses.length === 1 ? '' : 'es'} for controller group ${parsed.broadcastGroup}`,
+      `Queued ${responderAddresses.length} linked responder refresh${responderAddresses.length === 1 ? '' : 'es'} for controller group ${numericGroup}`,
       {
         stage: 'runtime',
         direction: 'internal',
         operation: 'runtime_scene_refresh',
-        address: parsed.address,
+        address: options.logAddress || normalizedController,
         details: {
-          group: parsed.broadcastGroup,
-          sceneCommand1: parsed.sceneCommand1,
-          sceneCommand2: parsed.sceneCommand2,
+          controllerAddress: this._formatInsteonAddress(normalizedController),
+          group: numericGroup,
+          sceneCommand1: options.sceneCommand1 || null,
+          sceneCommand2: options.sceneCommand2 || null,
           expectedStatus,
+          excludeAddresses: excludeAddresses.map((address) => this._formatInsteonAddress(address)),
           responders: responderAddresses.map((address) => this._formatInsteonAddress(address))
         }
       }
     );
 
     responderAddresses.forEach((address) => {
-      this._scheduleRuntimeStateRefresh(address, `scene:${this._formatInsteonAddress(parsed.address)}:${parsed.broadcastGroup}`, {
+      this._scheduleRuntimeStateRefresh(address, `${String(options.reasonPrefix || 'scene')}:${this._formatInsteonAddress(normalizedController)}:${numericGroup}`, {
         expectedStatus,
         fallbackState: this._buildRuntimeExpectedStatePatch(expectedStatus)
       });
@@ -7349,12 +7383,31 @@ class InsteonService {
 
     if (parsed.broadcastGroup != null && parsed.sceneCommand1) {
       await this._scheduleRuntimeSceneResponderRefreshes(parsed);
+    } else if (parsed.cleanupGroup != null && parsed.sceneCommand1 && [2, 3].includes(parsed.messageType)) {
+      const cleanupControllerAddress = parsed.messageType === 3
+        ? parsed.targetAddress
+        : parsed.address;
+      const cleanupPrimaryAddress = parsed.messageType === 3
+        ? parsed.sourceAddress
+        : parsed.targetAddress;
+
+      await this._scheduleRuntimeLinkedResponderRefreshes(cleanupControllerAddress, parsed.cleanupGroup, {
+        reasonPrefix: 'cleanup_group',
+        expectedStatus: typeof parsed.expectedStatus === 'boolean'
+          ? parsed.expectedStatus
+          : null,
+        sceneCommand1: parsed.sceneCommand1,
+        sceneCommand2: parsed.sceneCommand2,
+        excludeAddresses: cleanupPrimaryAddress ? [cleanupPrimaryAddress] : [],
+        logAddress: parsed.address
+      });
     }
 
     const refreshRequests = this._buildRuntimeStateRefreshRequests(parsed);
     refreshRequests.forEach((request) => {
       this._scheduleRuntimeStateRefresh(request.address, request.reason, {
-        expectedStatus: request.expectedStatus
+        expectedStatus: request.expectedStatus,
+        fallbackState: request.fallbackState
       });
     });
   }

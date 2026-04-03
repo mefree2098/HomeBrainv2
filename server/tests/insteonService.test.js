@@ -349,15 +349,18 @@ test('_handleRuntimeCommand refreshes the addressed responder for monitor-mode d
   assert.equal(scheduledRefreshes[0].address, '388A57');
   assert.equal(scheduledRefreshes[0].reason, 'direct:38.9A.D0:11');
   assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+  assert.equal(scheduledRefreshes[0].options.fallbackState.status, true);
 });
 
 test('_handleRuntimeCommand refreshes the addressed responder for all-link cleanup messages', async (t) => {
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalGetRuntimeSceneResponderAddresses = insteonService._getRuntimeSceneResponderAddresses;
 
   t.after(() => {
     insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
     insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._getRuntimeSceneResponderAddresses = originalGetRuntimeSceneResponderAddresses;
   });
 
   const persisted = [];
@@ -370,6 +373,7 @@ test('_handleRuntimeCommand refreshes the addressed responder for all-link clean
   insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
     scheduledRefreshes.push({ address, reason, options });
   };
+  insteonService._getRuntimeSceneResponderAddresses = async () => [];
 
   await insteonService._handleRuntimeCommand({
     standard: {
@@ -386,6 +390,63 @@ test('_handleRuntimeCommand refreshes the addressed responder for all-link clean
   assert.equal(scheduledRefreshes[0].address, '388A57');
   assert.equal(scheduledRefreshes[0].reason, 'cleanup:38.89.78:2');
   assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+  assert.equal(scheduledRefreshes[0].options.fallbackState.status, true);
+});
+
+test('_handleRuntimeCommand refreshes linked responders for all-link cleanup groups when monitor mode misses the broadcast', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalGetRuntimeSceneResponderAddresses = insteonService._getRuntimeSceneResponderAddresses;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._getRuntimeSceneResponderAddresses = originalGetRuntimeSceneResponderAddresses;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+  insteonService._getRuntimeSceneResponderAddresses = async (address, group) => {
+    assert.equal(address, '389647');
+    assert.equal(group, 1);
+    return ['71B678', '388A57'];
+  };
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.96.47',
+      gatewayId: '71.B6.78',
+      messageType: 2,
+      command1: '11',
+      command2: '01'
+    }
+  });
+
+  assert.equal(persisted.length, 0);
+  assert.equal(scheduledRefreshes.length, 2);
+  const refreshesByReason = new Map(
+    scheduledRefreshes.map((refresh) => [refresh.reason, refresh])
+  );
+
+  const directCleanupRefresh = refreshesByReason.get('cleanup:38.96.47:1');
+  assert.ok(directCleanupRefresh);
+  assert.equal(directCleanupRefresh.address, '71B678');
+  assert.equal(directCleanupRefresh.options.expectedStatus, true);
+  assert.equal(directCleanupRefresh.options.fallbackState.status, true);
+
+  const linkedCleanupRefresh = refreshesByReason.get('cleanup_group:38.96.47:1');
+  assert.ok(linkedCleanupRefresh);
+  assert.equal(linkedCleanupRefresh.address, '388A57');
+  assert.equal(linkedCleanupRefresh.options.expectedStatus, true);
+  assert.equal(linkedCleanupRefresh.options.fallbackState.status, true);
 });
 
 test('_handleRuntimeCommand persists direct status ACKs without an extra refresh query', async (t) => {
