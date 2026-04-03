@@ -66,11 +66,16 @@ async function createTempService(t, options = {}) {
     await fsp.rm(tempRoot, { recursive: true, force: true });
   });
 
+  const alexaBrokerService = options.alexaBrokerService || {
+    prepareForHostRestart: async () => ({ success: true, shouldResume: false })
+  };
+
   return new PlatformDeployService({
     projectRoot: tempRoot,
     dataDir: path.join(tempRoot, 'deploy-data'),
     runtimeStartedAt: '2026-03-23T12:00:00.000Z',
     runtimePid: 4242,
+    alexaBrokerService,
     ...options
   });
 }
@@ -87,7 +92,14 @@ test('triggerServiceRestart persists expected backend commit before restart hand
   });
 
   const spawnCalls = [];
+  let prepareCalls = 0;
   const service = await createTempService(t, {
+    alexaBrokerService: {
+      prepareForHostRestart: async () => {
+        prepareCalls += 1;
+        return { success: true, shouldResume: true };
+      }
+    },
     spawnProcess: (command, args, options) => {
       spawnCalls.push({ command, args, options });
       const child = new EventEmitter();
@@ -115,6 +127,7 @@ test('triggerServiceRestart persists expected backend commit before restart hand
   assert.equal(persistedRestart.jobId, 'job-1');
   assert.equal(persistedRestart.actor, 'admin@homebrain.test');
   assert.equal(persistedRestart.command, fullCommand);
+  assert.equal(prepareCalls, 1);
   assert.equal(spawnCalls.length, 1);
   assert.equal(spawnCalls[0].command, 'bash');
   assert.deepEqual(spawnCalls[0].args, ['-lc', fullCommand]);

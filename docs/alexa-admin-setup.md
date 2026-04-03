@@ -1,6 +1,6 @@
 # Alexa Admin Setup Guide
 
-Last verified: 2026-04-02
+Last verified: 2026-04-03
 
 This guide is the step-by-step runbook for getting Alexa working with HomeBrain from scratch.
 
@@ -187,6 +187,19 @@ Do not move on until HomeBrain has a valid public origin and TLS.
 
 The broker is the OAuth server and event-dispatch layer. It lives in [`../broker`](../broker).
 
+### Managed path in HomeBrain
+
+HomeBrain now has a built-in broker management UI for the normal admin flow:
+
+- Open `Alexa Broker` in the HomeBrain admin navigation
+- enter the broker variables there
+- use `Deploy Broker` for the end-to-end path
+- `Deploy Broker` saves the broker settings, installs broker dependencies, creates or updates the managed reverse-proxy route, applies the HomeBrain Caddy config, and starts or restarts the broker
+- use `Install Broker`, `Start`, `Stop`, and `Restart` only when you want the individual lifecycle actions
+- pair HomeBrain to the managed broker from that same page
+
+Use the shell commands below only if you intentionally want a manual deployment outside the HomeBrain UI.
+
 ### Broker install
 
 From the repo root:
@@ -256,7 +269,9 @@ HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=15552000 \
 npm run broker
 ```
 
-In production, run it under your normal service manager.
+In production, run it under your normal service manager if you are using the manual path.
+
+If you are using the HomeBrain-managed path, the HomeBrain backend becomes that service manager and stores the broker configuration in HomeBrain instead of relying on shell exports.
 
 ### Broker health check
 

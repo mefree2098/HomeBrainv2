@@ -14,6 +14,7 @@ require('./UserProfile');
 require('./Settings');
 require('./AlexaExposure');
 require('./AlexaBrokerRegistration');
+require('./AlexaBrokerConfig');
 require('./AlexaLinkedAccount');
 require('./AlexaVoiceUser');
 require('./SecurityAlarm');

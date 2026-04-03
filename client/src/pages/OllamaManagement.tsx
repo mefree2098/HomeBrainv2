@@ -32,6 +32,8 @@ import { useToast } from '@/hooks/useToast';
 interface OllamaStatus {
   isInstalled: boolean;
   version: string | null;
+  hostPlatform?: string;
+  hostArch?: string;
   serviceRunning: boolean;
   serviceStatus: string;
   serviceOwner?: string | null;
@@ -467,6 +469,9 @@ export default function OllamaManagement() {
   const isExternalService = status?.serviceStatus === 'running_external';
   const isServiceRunning =
     status?.serviceStatus === 'running' || status?.serviceStatus === 'running_external';
+  const manualStopHint = status?.hostPlatform === 'darwin'
+    ? 'pkill -x Ollama'
+    : 'sudo systemctl stop ollama';
 
   if (loading) {
     return (
@@ -632,7 +637,7 @@ export default function OllamaManagement() {
                     disabled={actionLoading === 'update'}
                   >
                     <CloudArrowDownIcon className="h-4 w-4 mr-1" />
-                    Update Ollama (sudo)
+                    Update Ollama
                   </Button>
                 )}
               </div>
@@ -640,8 +645,8 @@ export default function OllamaManagement() {
           </div>
 
           <p className="mt-4 text-xs text-muted-foreground">
-            Note: this updates the Ollama service binary (requires sudo). To update models, use the
-            Models tab and click Update on a model.
+            Note: this updates the Ollama app/binary and keeps HomeBrain as the service manager. To
+            update models, use the Models tab and click Update on a model.
           </p>
 
           {status.activeModel && (
@@ -660,7 +665,7 @@ export default function OllamaManagement() {
                 </span>
                 . HomeBrain can connect but cannot stop or restart this service. Use&nbsp;
                 <code className="rounded bg-muted px-2 py-1 text-xs">
-                  sudo systemctl stop ollama
+                  {manualStopHint}
                 </code>{' '}
                 (or grant this service sudo access) if you need to control it here.
               </AlertDescription>

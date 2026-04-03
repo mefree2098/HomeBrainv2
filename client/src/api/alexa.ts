@@ -20,6 +20,62 @@ export type AlexaExposureSummary = {
   entity?: Record<string, any> | null;
 };
 
+export type AlexaBrokerServiceStatus = {
+  isInstalled: boolean;
+  serviceStatus: string;
+  serviceRunning: boolean;
+  servicePid: number | null;
+  servicePort: number;
+  bindHost: string;
+  serviceOwner?: string | null;
+  publicBaseUrl?: string;
+  localBaseUrl?: string;
+  displayName?: string;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  oauthClientSecretConfigured?: boolean;
+  eventClientId?: string;
+  eventClientSecret?: string;
+  eventClientSecretConfigured?: boolean;
+  allowedClientIds?: string[];
+  allowedRedirectUris?: string[];
+  storeFile?: string;
+  authCodeTtlMs?: number;
+  accessTokenTtlSeconds?: number;
+  refreshTokenTtlSeconds?: number;
+  lwaTokenUrl?: string;
+  eventGatewayUrl?: string;
+  rateLimitWindowMs?: number;
+  rateLimitMax?: number;
+  allowManualRegistration?: boolean;
+  autoStart?: boolean;
+  resumeAfterHostRestart?: boolean;
+  lastStartedAt?: string | null;
+  lastStoppedAt?: string | null;
+  lastError?: {
+    message?: string;
+    timestamp?: string;
+  } | null;
+  reverseProxy?: {
+    routeId?: string | null;
+    routeExists?: boolean;
+    expectedHostname?: string | null;
+    hostname?: string | null;
+    enabled?: boolean;
+    tlsMode?: string;
+    validationStatus?: string;
+    lastApplyStatus?: string;
+    upstreamHost?: string;
+    upstreamPort?: number;
+    healthCheckPath?: string;
+    matchesConfig?: boolean;
+  };
+  logs?: string[];
+  health?: Record<string, any> | null;
+  healthAvailable?: boolean;
+  healthMessage?: string;
+};
+
 export const getAlexaSummary = async () => {
   try {
     const response = await api.get('/api/alexa');
@@ -143,6 +199,76 @@ export const updateAlexaVoiceUser = async (voiceUserId: string, payload: {
 export const deleteAlexaVoiceUser = async (voiceUserId: string) => {
   try {
     const response = await api.delete(`/api/alexa/voice-users/${encodeURIComponent(voiceUserId)}`);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const getAlexaBrokerServiceStatus = async () => {
+  try {
+    const response = await api.get('/api/alexa/service/status');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const updateAlexaBrokerServiceConfig = async (payload: Record<string, any>) => {
+  try {
+    const response = await api.put('/api/alexa/service/config', payload);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const installAlexaBrokerService = async () => {
+  try {
+    const response = await api.post('/api/alexa/service/install');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const deployAlexaBrokerService = async (payload: { installDependencies?: boolean } = {}) => {
+  try {
+    const response = await api.post('/api/alexa/service/deploy', payload);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const startAlexaBrokerService = async () => {
+  try {
+    const response = await api.post('/api/alexa/service/start');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const stopAlexaBrokerService = async () => {
+  try {
+    const response = await api.post('/api/alexa/service/stop');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const restartAlexaBrokerService = async () => {
+  try {
+    const response = await api.post('/api/alexa/service/restart');
     return response.data;
   } catch (error) {
     console.error(error);

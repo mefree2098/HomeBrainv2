@@ -79,6 +79,16 @@ const PRESET_DEFAULTS: Record<string, Partial<RouteFormState>> = {
     healthCheckPath: "/",
     websocketSupport: true,
     tlsMode: "automatic"
+  },
+  "alexa-broker": {
+    platformKey: "alexa-broker",
+    displayName: "Alexa Broker",
+    upstreamProtocol: "http",
+    upstreamHost: "127.0.0.1",
+    upstreamPort: "4301",
+    healthCheckPath: "/health",
+    websocketSupport: false,
+    tlsMode: "automatic"
   }
 };
 
@@ -205,6 +215,7 @@ function RouteEditor({
                 <SelectContent>
                   <SelectItem value="homebrain">HomeBrain</SelectItem>
                   <SelectItem value="axiom">Axiom</SelectItem>
+                  <SelectItem value="alexa-broker">Alexa Broker</SelectItem>
                   <SelectItem value="custom">Custom</SelectItem>
                 </SelectContent>
               </Select>

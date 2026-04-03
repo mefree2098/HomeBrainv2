@@ -18,7 +18,8 @@ import {
   Waypoints,
   Volume2,
   CloudSun,
-  Database
+  Database,
+  Link2
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -35,6 +36,7 @@ const navigation = [
   { name: 'Workflows', href: '/workflows', icon: Workflow },
   { name: 'Voice Profiles', href: '/voice-profiles', icon: Volume2 },
   { name: 'Voice Devices', href: '/voice-devices', icon: Mic, adminOnly: true },
+  { name: 'Alexa Broker', href: '/alexa-broker', icon: Link2, adminOnly: true },
   { name: 'Users', href: '/users', icon: Users, adminOnly: true },
   { name: 'Ollama / LLM', href: '/ollama', icon: Brain, adminOnly: true },
   { name: 'Whisper STT', href: '/whisper', icon: Cpu, adminOnly: true },

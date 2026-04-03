@@ -17,6 +17,10 @@ SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 CADDY_SERVICE_NAME="${CADDY_SERVICE_NAME:-caddy-api}"
 CADDY_SERVICE_PATH="/etc/systemd/system/${CADDY_SERVICE_NAME}.service"
 CADDY_BOOTSTRAP_PATH="${CADDY_BOOTSTRAP_PATH:-/etc/caddy/Caddyfile}"
+OLLAMA_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/ollama-host-control.sh"
+OLLAMA_HELPER_INSTALL_DIR="/usr/local/lib/homebrain"
+OLLAMA_HELPER_INSTALL_PATH="${OLLAMA_HELPER_INSTALL_DIR}/ollama-host-control.sh"
+DEPLOY_SUDOERS_PATH="/etc/sudoers.d/homebrain-deploy"
 
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -263,6 +267,35 @@ EOF
   print_success "Service installed and enabled."
 }
 
+install_ollama_privileged_helper() {
+  require_repo
+
+  if [[ ! -f "${OLLAMA_HELPER_SOURCE_PATH}" ]]; then
+    print_error "Ollama privilege helper not found at ${OLLAMA_HELPER_SOURCE_PATH}"
+    exit 1
+  fi
+
+  print_status "Installing the HomeBrain Ollama privilege helper..."
+  sudo install -d -m 0755 "${OLLAMA_HELPER_INSTALL_DIR}"
+  sudo install -m 0755 "${OLLAMA_HELPER_SOURCE_PATH}" "${OLLAMA_HELPER_INSTALL_PATH}"
+  sudo chown root:root "${OLLAMA_HELPER_INSTALL_PATH}"
+  print_success "Installed Ollama privilege helper to ${OLLAMA_HELPER_INSTALL_PATH}."
+}
+
+configure_deploy_sudoers() {
+  print_status "Refreshing HomeBrain sudoers access for service management and Ollama updates..."
+  sudo tee "${DEPLOY_SUDOERS_PATH}" >/dev/null <<EOF
+${HOMEBRAIN_USER} ALL=(ALL) NOPASSWD:/usr/bin/systemctl,/bin/systemctl,${OLLAMA_HELPER_INSTALL_PATH} install,${OLLAMA_HELPER_INSTALL_PATH} update,${OLLAMA_HELPER_INSTALL_PATH} stop-system,${OLLAMA_HELPER_INSTALL_PATH} probe
+EOF
+  sudo chmod 0440 "${DEPLOY_SUDOERS_PATH}"
+  print_success "sudoers file written to ${DEPLOY_SUDOERS_PATH}."
+}
+
+refresh_privileges() {
+  install_ollama_privileged_helper
+  configure_deploy_sudoers
+}
+
 start_services() {
   print_status "Starting MongoDB and HomeBrain..."
   sudo systemctl start mongod
@@ -473,6 +506,7 @@ update_homebrain() {
   fi
 
   install_service
+  refresh_privileges
   sudo systemctl restart "${SERVICE_NAME}"
 
   wait_for_homebrain_http 20 1
@@ -597,6 +631,7 @@ Usage: $0 <command>
 
 Commands:
   install-service   Write /etc/systemd/system/homebrain.service
+  refresh-privileges Install the Ollama helper and refresh HomeBrain sudoers
   setup-caddy       Install Caddy as the native public edge service
   start             Start MongoDB and HomeBrain
   stop              Stop HomeBrain
@@ -613,6 +648,7 @@ EOF
 main() {
   case "${1:-}" in
     install-service) install_service ;;
+    refresh-privileges) refresh_privileges ;;
     setup-caddy) setup_caddy ;;
     start) start_services ;;
     stop) stop_services ;;

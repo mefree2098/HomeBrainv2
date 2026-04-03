@@ -3982,10 +3982,15 @@ export function Settings() {
           <TabsContent value="integrations" className="space-y-6">
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Command className="h-5 w-5 text-emerald-600" />
-                  Alexa Integration
-                </CardTitle>
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <CardTitle className="flex items-center gap-2">
+                    <Command className="h-5 w-5 text-emerald-600" />
+                    Alexa Integration
+                  </CardTitle>
+                  <Button type="button" variant="outline" size="sm" onClick={() => navigate("/alexa-broker")}>
+                    Open Broker Manager
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
