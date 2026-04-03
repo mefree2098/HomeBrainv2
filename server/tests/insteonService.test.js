@@ -2067,6 +2067,53 @@ test('_executeHubCommandWithTimeout accepts a late runtime direct acknowledgemen
   assert.equal(result.runtimeAck?.command1, '12');
 });
 
+test('_executeHubCommandWithTimeout accepts a runtime direct acknowledgement that arrives before the modem callback completes', async (t) => {
+  const originalExecuteQueuedPlmCallbackOperation = insteonService._executeQueuedPlmCallbackOperation;
+
+  t.after(() => {
+    insteonService._executeQueuedPlmCallbackOperation = originalExecuteQueuedPlmCallbackOperation;
+    insteonService._clearPendingRuntimeCommandAcks();
+  });
+
+  insteonService._executeQueuedPlmCallbackOperation = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    return {
+      ack: true,
+      success: false
+    };
+  };
+
+  setTimeout(() => {
+    insteonService._resolvePendingRuntimeCommandAcks({
+      messageType: 1,
+      sourceAddress: '112233',
+      expectedStatus: false,
+      semanticCommand1: '14',
+      semanticCommand2: '00',
+      messageClass: 'direct_ack'
+    });
+  }, 20);
+
+  const result = await insteonService._executeHubCommandWithTimeout(
+    () => {},
+    'Timeout turning off device',
+    1500,
+    {
+      priority: 'control',
+      kind: 'turn_off',
+      label: 'turning off 11.22.33 (fast)',
+      requireDeviceResponse: true,
+      runtimeAckAddress: '112233',
+      runtimeAckExpectedStatus: false,
+      runtimeAckTimeoutMs: 200
+    }
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.runtimeAck?.matched, true);
+  assert.equal(result.runtimeAck?.command1, '14');
+});
+
 test('turnOn can recover after command acknowledgement times out if explicitly requested and the device state confirms ON', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
