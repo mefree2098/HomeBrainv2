@@ -156,6 +156,31 @@ function parseCliPullProgressLine(line = '') {
   };
 }
 
+function buildAvailableModelVariantEntries(model = {}) {
+  const baseName = typeof model.name === 'string' ? model.name.trim() : '';
+  const parameterSizes = Array.isArray(model.parameterSizes)
+    ? model.parameterSizes.map((size) => String(size).trim()).filter(Boolean)
+    : [];
+
+  if (!baseName || parameterSizes.length <= 1 || baseName.includes(':')) {
+    return [model];
+  }
+
+  return parameterSizes.map((size) => {
+    const parameterValue = parseParameterTokenToBillions(size);
+
+    return {
+      ...model,
+      name: `${baseName}:${size}`,
+      parameterSizes: [size],
+      parameterSize: size,
+      size,
+      smallestParameterB: Number.isFinite(parameterValue) ? parameterValue : null,
+      nanoFit: Number.isFinite(parameterValue) ? parameterValue <= 8 : Boolean(model.nanoFit)
+    };
+  });
+}
+
 function decodeHtmlEntities(text = '') {
   return String(text)
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number.parseInt(code, 10)))
@@ -3401,7 +3426,8 @@ class OllamaService {
         maxPages
       });
 
-      const finalModels = models.length ? models : this.getFallbackAvailableModels();
+      const expandedModels = models.flatMap((model) => buildAvailableModelVariantEntries(model));
+      const finalModels = expandedModels.length ? expandedModels : this.getFallbackAvailableModels();
       this.availableModelsCache.set(cacheKey, {
         timestamp: Date.now(),
         models: finalModels
@@ -3539,5 +3565,6 @@ module.exports._private = {
   getManualOllamaStopHint,
   summarizeCommandOutput,
   parseOllamaPullProgressEvent,
-  parseCliPullProgressLine
+  parseCliPullProgressLine,
+  buildAvailableModelVariantEntries
 };
