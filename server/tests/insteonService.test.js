@@ -503,7 +503,7 @@ test('_handleRuntimeCommand persists direct status ACKs without an extra refresh
   assert.equal(scheduledRefreshes.length, 0);
 });
 
-test('_handleRuntimeCommand persists responder acknowledgements for ON commands and still schedules a verification refresh', async (t) => {
+test('_handleRuntimeCommand persists responder acknowledgements for ON commands without scheduling a redundant verification refresh', async (t) => {
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
 
@@ -538,10 +538,7 @@ test('_handleRuntimeCommand persists responder acknowledgements for ON commands 
   assert.equal(persisted[0].patch.status, true);
   assert.equal(persisted[0].patch.brightness, 100);
   assert.equal(persisted[0].patch.level, 100);
-  assert.equal(scheduledRefreshes.length, 1);
-  assert.equal(scheduledRefreshes[0].address, '388A57');
-  assert.equal(scheduledRefreshes[0].reason, 'direct_ack:38.8A.57:11');
-  assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+  assert.equal(scheduledRefreshes.length, 0);
 });
 
 test('_pollTrackedDeviceStates does not mark dimmers offline when level queries time out without usable state', async (t) => {
@@ -2112,6 +2109,134 @@ test('_executeHubCommandWithTimeout accepts a runtime direct acknowledgement tha
   assert.equal(result.success, true);
   assert.equal(result.runtimeAck?.matched, true);
   assert.equal(result.runtimeAck?.command1, '14');
+});
+
+test('turnOn treats a late runtime acknowledgement as terminal confirmation without queueing a follow-up state refresh', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteHubCommandWithRetries = insteonService._executeHubCommandWithRetries;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeHubCommandWithRetries = originalExecuteHubCommandWithRetries;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+  });
+
+  let scheduledRefreshCount = 0;
+  let confirmCalls = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    light() {
+      return {
+        turnOnFast() {}
+      };
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._executeHubCommandWithRetries = async () => ({
+    attemptsUsed: 1,
+    retryCount: 0,
+    hubStatus: {
+      acknowledged: true,
+      success: true,
+      lateRuntimeAck: true,
+      hasResponse: false
+    }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._scheduleRuntimeStateRefresh = () => {
+    scheduledRefreshCount += 1;
+  };
+  insteonService._confirmExpectedDeviceStateByAddress = async () => {
+    confirmCalls += 1;
+    throw new Error('should not be called');
+  };
+
+  const result = await insteonService.turnOn('mock-device', 100);
+
+  assert.equal(scheduledRefreshCount, 0);
+  assert.equal(confirmCalls, 0);
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+  assert.equal(result.details.confirmationSource, 'runtime_direct_ack');
+  assert.equal(result.details.verificationMode, 'runtime_direct_ack');
+  assert.match(result.message, /confirmed by device acknowledgement/i);
+});
+
+test('turnOff treats a late runtime acknowledgement as terminal confirmation without queueing a follow-up state refresh', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteHubCommandWithRetries = insteonService._executeHubCommandWithRetries;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeHubCommandWithRetries = originalExecuteHubCommandWithRetries;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+  });
+
+  let scheduledRefreshCount = 0;
+  let confirmCalls = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    light() {
+      return {
+        turnOffFast() {}
+      };
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'SwitchLinc Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._executeHubCommandWithRetries = async () => ({
+    attemptsUsed: 1,
+    retryCount: 0,
+    hubStatus: {
+      acknowledged: true,
+      success: true,
+      lateRuntimeAck: true,
+      hasResponse: false
+    }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._scheduleRuntimeStateRefresh = () => {
+    scheduledRefreshCount += 1;
+  };
+  insteonService._confirmExpectedDeviceStateByAddress = async () => {
+    confirmCalls += 1;
+    throw new Error('should not be called');
+  };
+
+  const result = await insteonService.turnOff('mock-device');
+
+  assert.equal(scheduledRefreshCount, 0);
+  assert.equal(confirmCalls, 0);
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+  assert.equal(result.details.confirmationSource, 'runtime_direct_ack');
+  assert.equal(result.details.verificationMode, 'runtime_direct_ack');
+  assert.match(result.message, /confirmed by device acknowledgement/i);
 });
 
 test('turnOn can recover after command acknowledgement times out if explicitly requested and the device state confirms ON', async (t) => {
