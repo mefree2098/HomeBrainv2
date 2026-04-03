@@ -14,6 +14,8 @@ HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$DEFAULT_HOMEBRAIN_DIR}"
 HOMEBRAIN_USER="${HOMEBRAIN_USER:-${SUDO_USER:-$USER}}"
 SERVICE_NAME="homebrain"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+SERVICE_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+OLLAMA_PRIVILEGE_OVERRIDE_PATH="${SERVICE_DROPIN_DIR}/99-ollama-helper.conf"
 CADDY_SERVICE_NAME="${CADDY_SERVICE_NAME:-caddy-api}"
 CADDY_SERVICE_PATH="/etc/systemd/system/${CADDY_SERVICE_NAME}.service"
 CADDY_BOOTSTRAP_PATH="${CADDY_BOOTSTRAP_PATH:-/etc/caddy/Caddyfile}"
@@ -256,7 +258,7 @@ Restart=always
 RestartSec=5
 TimeoutStopSec=15s
 KillMode=mixed
-NoNewPrivileges=true
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target
@@ -265,6 +267,17 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"
   print_success "Service installed and enabled."
+}
+
+configure_homebrain_ollama_privilege_override() {
+  print_status "Allowing the HomeBrain service to invoke the Ollama helper..."
+  sudo install -d -m 0755 "${SERVICE_DROPIN_DIR}"
+  sudo tee "${OLLAMA_PRIVILEGE_OVERRIDE_PATH}" >/dev/null <<'EOF'
+[Service]
+NoNewPrivileges=false
+EOF
+  sudo systemctl daemon-reload
+  print_success "HomeBrain Ollama privilege override written to ${OLLAMA_PRIVILEGE_OVERRIDE_PATH}."
 }
 
 install_ollama_privileged_helper() {
@@ -292,6 +305,7 @@ EOF
 }
 
 refresh_privileges() {
+  configure_homebrain_ollama_privilege_override
   install_ollama_privileged_helper
   configure_deploy_sudoers
 }

@@ -198,6 +198,21 @@ test('stopService falls back to the external system stop when the tracked pid is
   assert.equal(terminateCalled, false);
 });
 
+test('runNonInteractiveSudoCommand reports NoNewPrivileges with a repair hint', async () => {
+  const service = new OllamaService();
+  service.runShellCommand = async () => {
+    const error = new Error('sudo failed');
+    error.code = 1;
+    error.stderr = 'sudo: The "no new privileges" flag is set, which prevents sudo from running as root.';
+    throw error;
+  };
+
+  await assert.rejects(
+    () => service.runNonInteractiveSudoCommand("'/usr/local/lib/homebrain/ollama-host-control.sh' 'probe'", 'test', 1000),
+    /NoNewPrivileges=true/
+  );
+});
+
 test('manual stop hint uses macOS-friendly guidance on Darwin', () => {
   const hint = _private.getManualOllamaStopHint('darwin');
 
