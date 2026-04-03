@@ -155,6 +155,20 @@ export const pullModel = async (modelName: string) => {
   }
 };
 
+// Description: Get active model pull/download status
+// Endpoint: GET /api/ollama/models/pull/status
+// Request: {}
+// Response: { active: boolean, modelName: string|null, status: string, message: string, percent?: number|null }
+export const getModelPullStatus = async () => {
+  try {
+    const response = await api.get('/api/ollama/models/pull/status');
+    return response.data;
+  } catch (error: any) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
 // Description: Delete a model
 // Endpoint: DELETE /api/ollama/models/:name
 // Request: {}

@@ -246,6 +246,23 @@ router.post('/models/pull', auth, async (req, res) => {
   }
 });
 
+// Description: Get active model pull/download status
+// Endpoint: GET /api/ollama/models/pull/status
+// Request: {}
+// Response: { active: boolean, modelName: string|null, phase: string, status: string, message: string, percent?: number|null, completed?: number|null, total?: number|null }
+router.get('/models/pull/status', auth, async (req, res) => {
+  try {
+    console.log('GET /api/ollama/models/pull/status - Fetching model pull status');
+
+    const status = ollamaService.getModelPullStatus();
+
+    res.status(200).json(status);
+  } catch (error) {
+    console.error('Error fetching model pull status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Description: Delete a model
 // Endpoint: DELETE /api/ollama/models/:name
 // Request: {}

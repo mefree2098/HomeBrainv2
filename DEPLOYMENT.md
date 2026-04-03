@@ -44,7 +44,7 @@ The installer now:
 - installs and enables `caddy-api`
 - seeds the reverse-proxy database state for Caddy management
 - seeds the HomeBrain OIDC identity state for the default Axiom SSO client
-- configures sudo so the HomeBrain UI can restart `homebrain` during Platform Deploy
+- configures the HomeBrain Ollama helper, sudoers entry, and service override so the UI can manage Ollama updates and host-side service restarts safely
 
 HomeBrain no longer owns public `80/443`. Caddy is the intended public ingress.
 
@@ -117,6 +117,28 @@ Health check:
 ```bash
 bash scripts/setup-services.sh health
 ```
+
+Repair HomeBrain's privileged helper access for Ollama management:
+
+```bash
+bash scripts/setup-services.sh refresh-privileges
+```
+
+## Ollama Management
+
+On Linux and Jetson hosts, HomeBrain treats Ollama as a host-level dependency with a HomeBrain-managed runtime. The UI uses a narrow privileged helper to install, update, and stop Ollama when needed, then starts a single managed `ollama serve` process again.
+
+Important paths:
+
+- helper: `/usr/local/lib/homebrain/ollama-host-control.sh`
+- sudoers: `/etc/sudoers.d/homebrain-deploy`
+- systemd override: `/etc/systemd/system/homebrain.service.d/99-ollama-helper.conf`
+
+If a host was installed before this flow existed, run `bash scripts/setup-services.sh refresh-privileges` once, then restart `homebrain`.
+
+More detail:
+
+- [`docs/ollama-management.md`](docs/ollama-management.md)
 
 ## Environment File
 

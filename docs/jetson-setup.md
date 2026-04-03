@@ -18,6 +18,8 @@ bash scripts/install-jetson.sh
 
 The script installs everything HomeBrain needs and creates the production service for you.
 
+It also prepares the Ollama management helper and privilege wiring used by the HomeBrain UI on Jetson hosts.
+
 ## Open HomeBrain
 
 Find the Jetson IP:
@@ -56,4 +58,20 @@ Next steps:
 bash scripts/setup-services.sh status
 bash scripts/setup-services.sh logs follow
 bash scripts/setup-services.sh health
+bash scripts/setup-services.sh refresh-privileges
 ```
+
+## Ollama On Jetson
+
+On Jetson, HomeBrain manages Ollama from the host itself. The Ollama page installs or updates the Ollama binary through a narrow privileged helper, stops any foreign `ollama` system service if needed, and then restarts a single HomeBrain-managed runtime.
+
+If an older Jetson install needs its Ollama helper or service privileges repaired, run:
+
+```bash
+bash scripts/setup-services.sh refresh-privileges
+sudo systemctl restart homebrain
+```
+
+More detail:
+
+- [`ollama-management.md`](ollama-management.md)
