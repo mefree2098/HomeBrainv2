@@ -6,6 +6,19 @@ const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 const SHOULD_LOG_SMARTTHINGS_SYNC = process.env.SMARTTHINGS_SYNC_LOGGING === 'true';
+const ACCESS_TOKEN_SOFT_EXPIRY_GRACE_MS = 5 * 60 * 1000;
+const TRANSIENT_SMARTTHINGS_ERROR_CODES = new Set([
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EAI_AGAIN',
+  'ENETDOWN',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EHOSTUNREACH',
+  'ETIMEDOUT',
+  'TIMEOUT'
+]);
 const DEFAULT_CAPABILITY_SUBSCRIPTIONS = [
   { capability: 'switch', attribute: 'switch' },
   { capability: 'switchLevel', attribute: 'level' },
@@ -581,6 +594,192 @@ class SmartThingsService {
     }
   }
 
+  extractSmartThingsErrorDetails(error) {
+    const responseData = error?.response?.data;
+
+    if (typeof responseData?.error_description === 'string' && responseData.error_description.trim()) {
+      return responseData.error_description.trim();
+    }
+
+    if (typeof responseData?.message === 'string' && responseData.message.trim()) {
+      return responseData.message.trim();
+    }
+
+    if (typeof responseData?.error?.message === 'string' && responseData.error.message.trim()) {
+      return responseData.error.message.trim();
+    }
+
+    if (typeof responseData?.error === 'string' && responseData.error.trim()) {
+      return responseData.error.trim();
+    }
+
+    if (typeof error?.message === 'string' && error.message.trim()) {
+      return error.message.trim();
+    }
+
+    return 'Unknown error';
+  }
+
+  getSmartThingsOAuthErrorCode(error) {
+    const oauthError = error?.response?.data?.error;
+    return typeof oauthError === 'string' ? oauthError.trim().toLowerCase() : '';
+  }
+
+  isTransientSmartThingsError(error) {
+    const status = Number(error?.status ?? error?.response?.status);
+    if (Number.isFinite(status) && ([408, 425, 429].includes(status) || status >= 500)) {
+      return true;
+    }
+
+    const errorCode = String(error?.code || error?.cause?.code || '').trim().toUpperCase();
+    if (TRANSIENT_SMARTTHINGS_ERROR_CODES.has(errorCode)) {
+      return true;
+    }
+
+    const message = this.extractSmartThingsErrorDetails(error).toLowerCase();
+    return !Number.isFinite(status) && (
+      message.includes('timed out')
+      || message.includes('timeout')
+      || message.includes('network error')
+      || message.includes('socket hang up')
+    );
+  }
+
+  isTerminalRefreshFailure(error) {
+    const oauthErrorCode = this.getSmartThingsOAuthErrorCode(error);
+    if (oauthErrorCode === 'invalid_grant') {
+      return true;
+    }
+
+    const message = this.extractSmartThingsErrorDetails(error).toLowerCase();
+    return message.includes('no refresh token available');
+  }
+
+  canUseAccessTokenDuringRefreshGrace(integration) {
+    if (!integration?.accessToken || !integration?.expiresAt) {
+      return false;
+    }
+
+    const softExpiryAt = integration.expiresAt instanceof Date
+      ? integration.expiresAt.getTime()
+      : new Date(integration.expiresAt).getTime();
+
+    if (Number.isNaN(softExpiryAt)) {
+      return false;
+    }
+
+    return (softExpiryAt + ACCESS_TOKEN_SOFT_EXPIRY_GRACE_MS) > Date.now();
+  }
+
+  async clearStoredAccessToken(errorMessage = '') {
+    const integration = await SmartThingsIntegration.getIntegration();
+    if (!integration || typeof integration.save !== 'function') {
+      return false;
+    }
+
+    let changed = false;
+
+    if (integration.accessToken) {
+      integration.accessToken = '';
+      changed = true;
+    }
+
+    if (integration.expiresAt) {
+      integration.expiresAt = null;
+      changed = true;
+    }
+
+    if (typeof errorMessage === 'string' && errorMessage && integration.lastError !== errorMessage) {
+      integration.lastError = errorMessage;
+      changed = true;
+    }
+
+    if (!integration.refreshToken && integration.isConnected !== false) {
+      integration.isConnected = false;
+      changed = true;
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    await integration.save();
+    return true;
+  }
+
+  async recoverFromUnauthorizedRequest(endpoint) {
+    const settings = await Settings.getSettings();
+    const useOAuth = settings?.smartthingsUseOAuth !== false;
+
+    if (!useOAuth) {
+      await this.persistConnectionStatus({
+        isConnected: false,
+        lastError: 'SmartThings token rejected by API',
+        reason: `request-unauthorized:${endpoint}`
+      });
+      return false;
+    }
+
+    const integration = await SmartThingsIntegration.getIntegration();
+
+    if (!integration?.refreshToken) {
+      if (integration && typeof integration.clearTokens === 'function') {
+        await integration.clearTokens('Access token invalid');
+      } else {
+        await this.persistConnectionStatus({
+          isConnected: false,
+          lastError: 'Access token invalid',
+          reason: `request-unauthorized:${endpoint}`
+        });
+      }
+
+      this.lastRecordedConnectionState = false;
+      return false;
+    }
+
+    try {
+      await this.refreshAccessToken();
+      return true;
+    } catch (refreshError) {
+      if (!this.isTerminalRefreshFailure(refreshError)) {
+        await this.clearStoredAccessToken('Access token refresh required');
+      } else {
+        this.lastRecordedConnectionState = false;
+      }
+
+      console.warn(`SmartThingsService: Unauthorized request recovery failed for ${endpoint}: ${refreshError.message}`);
+      return false;
+    }
+  }
+
+  shouldPersistDisconnectedState(error, { settings = null, integration = null } = {}) {
+    if (this.isTransientSmartThingsError(error)) {
+      return false;
+    }
+
+    const message = this.extractSmartThingsErrorDetails(error).toLowerCase();
+    if (
+      message.includes('no access token available')
+      || message.includes('please authorize the application')
+      || message.includes('smartthings oauth is not authorized')
+      || this.isTerminalRefreshFailure(error)
+    ) {
+      return true;
+    }
+
+    const status = Number(error?.status ?? error?.response?.status);
+    const useOAuth = settings?.smartthingsUseOAuth !== false;
+    if (status === 401 && !useOAuth) {
+      return true;
+    }
+
+    if (status === 401 && useOAuth && integration && !integration.refreshToken) {
+      return true;
+    }
+
+    return false;
+  }
+
   /**
    * Get OAuth authorization URL
    * @returns {Promise<string>} Authorization URL
@@ -676,7 +875,7 @@ class SmartThingsService {
       console.log('SmartThingsService: Successfully exchanged code for tokens');
       return response.data;
     } catch (error) {
-      const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error?.message || error.response?.data?.error || error.message;
+      const errorDetails = this.extractSmartThingsErrorDetails(error);
       console.error('SmartThingsService: Error exchanging code for token:', {
         status: error.response?.status,
         data: error.response?.data,
@@ -737,7 +936,7 @@ class SmartThingsService {
       console.log('SmartThingsService: Access token refreshed successfully');
       return response.data;
     } catch (error) {
-      const errorDetails = error.response?.data?.error_description || error.response?.data?.message || error.response?.data?.error?.message || error.response?.data?.error || error.message;
+      const errorDetails = this.extractSmartThingsErrorDetails(error);
       console.error('SmartThingsService: Error refreshing access token:', {
         status: error.response?.status,
         data: error.response?.data,
@@ -745,9 +944,11 @@ class SmartThingsService {
         message: error.message
       });
 
-      // Clear tokens if refresh fails
-      const integration = await SmartThingsIntegration.getIntegration();
-      await integration.clearTokens('Refresh token failed');
+      if (this.isTerminalRefreshFailure(error)) {
+        const integration = await SmartThingsIntegration.getIntegration();
+        await integration.clearTokens('Refresh token failed');
+        this.lastRecordedConnectionState = false;
+      }
 
       throw new Error(`Failed to refresh access token: ${errorDetails || 'Unknown error'}`);
     }
@@ -797,7 +998,15 @@ class SmartThingsService {
 
       // Token is expired, try to refresh
       console.log('SmartThingsService: Access token expired, attempting refresh');
-      await this.refreshAccessToken();
+      try {
+        await this.refreshAccessToken();
+      } catch (error) {
+        if (this.isTransientSmartThingsError(error) && this.canUseAccessTokenDuringRefreshGrace(integration)) {
+          console.warn('SmartThingsService: Refresh failed transiently, using existing SmartThings access token within grace window');
+          return integration.accessToken;
+        }
+        throw error;
+      }
 
       const refreshedIntegration = await SmartThingsIntegration.getIntegration();
       return refreshedIntegration.accessToken;
@@ -849,10 +1058,12 @@ class SmartThingsService {
     }
 
     this.connectionBootstrapInProgress = true;
+    let integration = null;
+    let settings = null;
 
     try {
-      const integration = await SmartThingsIntegration.getIntegration();
-      const settings = await Settings.getSettings();
+      integration = await SmartThingsIntegration.getIntegration();
+      settings = await Settings.getSettings();
       const useOAuth = settings?.smartthingsUseOAuth !== false;
       const hasPatToken = Boolean(settings?.smartthingsToken && settings.smartthingsToken.trim());
       const hasOAuthCredentials = Boolean(
@@ -905,11 +1116,15 @@ class SmartThingsService {
         success: true
       };
     } catch (error) {
-      await this.persistConnectionStatus({
-        isConnected: false,
-        lastError: error.message,
-        reason: `${reason}:probe-failed`
-      });
+      if (this.shouldPersistDisconnectedState(error, { settings, integration })) {
+        await this.persistConnectionStatus({
+          isConnected: false,
+          lastError: error.message,
+          reason: `${reason}:probe-failed`
+        });
+      } else {
+        console.warn(`SmartThingsService: Startup probe failed without invalidating stored authorization: ${error.message}`);
+      }
 
       return {
         success: false,
@@ -927,20 +1142,25 @@ class SmartThingsService {
    * @returns {Promise<Object>} API response
    */
   async makeAuthenticatedRequest(endpoint, options = {}) {
+    const {
+      retryOnUnauthorized = true,
+      ...requestOptions
+    } = options;
+
     try {
       const accessToken = await this.getValidAccessToken();
 
       const config = {
-        ...options,
+        ...requestOptions,
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          ...options.headers
+          ...requestOptions.headers
         },
         timeout: 10000
       };
 
-      const response = await axios({
+      const response = await axios.request({
         url: `${this.baseUrl}${endpoint}`,
         ...config
       });
@@ -968,11 +1188,35 @@ class SmartThingsService {
         console.error(`SmartThingsService: API request failed for ${endpoint}:`, logPayload);
       }
 
-      // If unauthorized, clear tokens and require re-authorization
       if (status === 401) {
+        if (retryOnUnauthorized) {
+          const recovered = await this.recoverFromUnauthorizedRequest(endpoint);
+          if (recovered) {
+            return this.makeAuthenticatedRequest(endpoint, {
+              ...requestOptions,
+              retryOnUnauthorized: false
+            });
+          }
+        }
+
+        const settings = await Settings.getSettings();
         const integration = await SmartThingsIntegration.getIntegration();
-        await integration.clearTokens('Access token invalid');
-        this.lastRecordedConnectionState = false;
+        const useOAuth = settings?.smartthingsUseOAuth !== false;
+
+        if (!useOAuth || !integration?.refreshToken) {
+          if (integration && typeof integration.clearTokens === 'function') {
+            await integration.clearTokens('Access token invalid');
+          } else {
+            await this.persistConnectionStatus({
+              isConnected: false,
+              lastError: 'Access token invalid',
+              reason: `request-unauthorized:${endpoint}`
+            });
+          }
+          this.lastRecordedConnectionState = false;
+        } else {
+          await this.clearStoredAccessToken('Access token invalid');
+        }
       }
 
       const apiError = new Error(`SmartThings API request failed: ${error.response?.data?.message || error.message}`);
@@ -3119,15 +3363,11 @@ class SmartThingsService {
       console.log('SmartThingsService: Testing connection');
 
       const devices = await this.getDevices();
-
-      const integration = await SmartThingsIntegration.getIntegration();
-
-      // Only update if integration has save method (is an actual database document)
-      if (typeof integration.save === 'function') {
-        integration.isConnected = true;
-        integration.lastError = '';
-        await integration.save();
-      }
+      await this.persistConnectionStatus({
+        isConnected: true,
+        lastError: '',
+        reason: 'test-connection'
+      });
 
       console.log('SmartThingsService: Connection test successful');
       return {
@@ -3139,12 +3379,16 @@ class SmartThingsService {
       console.error('SmartThingsService: Connection test failed:', error.message);
 
       const integration = await SmartThingsIntegration.getIntegration();
+      const settings = await Settings.getSettings();
 
-      // Only update if integration has save method (is an actual database document)
-      if (typeof integration.save === 'function') {
-        integration.isConnected = false;
-        integration.lastError = error.message;
-        await integration.save();
+      if (this.shouldPersistDisconnectedState(error, { settings, integration })) {
+        await this.persistConnectionStatus({
+          isConnected: false,
+          lastError: error.message,
+          reason: 'test-connection'
+        });
+      } else {
+        console.warn(`SmartThingsService: Test connection failed without invalidating stored authorization: ${error.message}`);
       }
 
       throw error;

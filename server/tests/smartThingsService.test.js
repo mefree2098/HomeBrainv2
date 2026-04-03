@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const axios = require('axios');
+
+process.env.NODE_ENV = 'test';
 
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
@@ -88,6 +91,191 @@ test('getValidAccessToken marks SmartThings disconnected when no OAuth tokens ar
     lastError: 'No access token available. Please authorize the application.',
     reason: 'get-token:missing-credentials'
   });
+});
+
+test('getValidAccessToken falls back to the soft-expired access token when refresh fails transiently', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalGetSettings = Settings.getSettings;
+  const originalRefreshAccessToken = smartThingsService.refreshAccessToken;
+
+  SmartThingsIntegration.getIntegration = async () => ({
+    accessToken: 'soft-expired-access-token',
+    refreshToken: 'refresh-token-1',
+    expiresAt: new Date(Date.now() - 60 * 1000),
+    isTokenValid: () => false
+  });
+  Settings.getSettings = async () => ({
+    smartthingsUseOAuth: true,
+    smartthingsToken: ''
+  });
+  smartThingsService.refreshAccessToken = async () => {
+    const error = new Error('socket hang up');
+    error.code = 'ECONNRESET';
+    throw error;
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    Settings.getSettings = originalGetSettings;
+    smartThingsService.refreshAccessToken = originalRefreshAccessToken;
+  });
+
+  const token = await smartThingsService.getValidAccessToken();
+
+  assert.equal(token, 'soft-expired-access-token');
+});
+
+test('refreshAccessToken preserves stored tokens on transient SmartThings failures', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalAxiosPost = axios.post;
+
+  let clearTokensCalled = false;
+
+  SmartThingsIntegration.getIntegration = async () => ({
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    refreshToken: 'refresh-token-1',
+    updateTokens: async () => {},
+    clearTokens: async () => {
+      clearTokensCalled = true;
+    }
+  });
+  axios.post = async () => {
+    const error = new Error('timeout');
+    error.code = 'ETIMEDOUT';
+    throw error;
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    axios.post = originalAxiosPost;
+  });
+
+  await assert.rejects(
+    () => smartThingsService.refreshAccessToken(),
+    /Failed to refresh access token: timeout/
+  );
+
+  assert.equal(clearTokensCalled, false);
+});
+
+test('makeAuthenticatedRequest refreshes and retries once after a SmartThings 401', async (t) => {
+  const originalAxiosRequest = axios.request;
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalGetValidAccessToken = smartThingsService.getValidAccessToken;
+  const originalRefreshAccessToken = smartThingsService.refreshAccessToken;
+  const originalPersistConnectionStatus = smartThingsService.persistConnectionStatus;
+  const originalGetSettings = Settings.getSettings;
+
+  let requestCount = 0;
+  let refreshCount = 0;
+  let tokenReads = 0;
+  const persisted = [];
+
+  Settings.getSettings = async () => ({
+    smartthingsUseOAuth: true,
+    smartthingsToken: ''
+  });
+  SmartThingsIntegration.getIntegration = async () => ({
+    refreshToken: 'refresh-token-1'
+  });
+  smartThingsService.getValidAccessToken = async () => {
+    tokenReads += 1;
+    return tokenReads === 1 ? 'stale-token' : 'fresh-token';
+  };
+  smartThingsService.refreshAccessToken = async () => {
+    refreshCount += 1;
+    return {
+      access_token: 'fresh-token'
+    };
+  };
+  smartThingsService.persistConnectionStatus = async (payload) => {
+    persisted.push(payload);
+    return true;
+  };
+  axios.request = async (config) => {
+    requestCount += 1;
+
+    if (requestCount === 1) {
+      assert.equal(config.headers.Authorization, 'Bearer stale-token');
+      const error = new Error('Unauthorized');
+      error.response = {
+        status: 401,
+        data: {
+          message: 'Unauthorized'
+        }
+      };
+      throw error;
+    }
+
+    assert.equal(config.headers.Authorization, 'Bearer fresh-token');
+    return {
+      data: {
+        ok: true
+      }
+    };
+  };
+
+  t.after(() => {
+    axios.request = originalAxiosRequest;
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    smartThingsService.getValidAccessToken = originalGetValidAccessToken;
+    smartThingsService.refreshAccessToken = originalRefreshAccessToken;
+    smartThingsService.persistConnectionStatus = originalPersistConnectionStatus;
+    Settings.getSettings = originalGetSettings;
+  });
+
+  const result = await smartThingsService.makeAuthenticatedRequest('/devices');
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(requestCount, 2);
+  assert.equal(refreshCount, 1);
+  assert.deepEqual(persisted, [{
+    isConnected: true,
+    lastError: '',
+    reason: 'request:/devices'
+  }]);
+});
+
+test('bootstrapConnectionState keeps prior authorization on transient probe failures', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalGetSettings = Settings.getSettings;
+  const originalMakeAuthenticatedRequest = smartThingsService.makeAuthenticatedRequest;
+  const originalPersistConnectionStatus = smartThingsService.persistConnectionStatus;
+
+  const persisted = [];
+
+  SmartThingsIntegration.getIntegration = async () => ({
+    isConfigured: true,
+    accessToken: 'access-token-1',
+    refreshToken: 'refresh-token-1'
+  });
+  Settings.getSettings = async () => ({
+    smartthingsUseOAuth: true,
+    smartthingsToken: ''
+  });
+  smartThingsService.makeAuthenticatedRequest = async () => {
+    const error = new Error('SmartThings startup connection probe timed out after 12000ms');
+    error.code = 'TIMEOUT';
+    throw error;
+  };
+  smartThingsService.persistConnectionStatus = async (payload) => {
+    persisted.push(payload);
+    return true;
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    Settings.getSettings = originalGetSettings;
+    smartThingsService.makeAuthenticatedRequest = originalMakeAuthenticatedRequest;
+    smartThingsService.persistConnectionStatus = originalPersistConnectionStatus;
+  });
+
+  const result = await smartThingsService.bootstrapConnectionState({ reason: 'server-startup' });
+
+  assert.equal(result.success, false);
+  assert.equal(result.error, 'SmartThings startup connection probe timed out after 12000ms');
+  assert.deepEqual(persisted, []);
 });
 
 test('setSecurityArmState allows disarm with only the disarm switch configured', async (t) => {

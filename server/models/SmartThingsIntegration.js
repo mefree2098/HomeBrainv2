@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const trimString = (value) => (typeof value === 'string' ? value.trim() : value ?? '');
+const SMARTTHINGS_TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
 const REQUIRED_SMARTTHINGS_SCOPES = [
   'r:devices:*',
@@ -404,9 +405,7 @@ SmartThingsIntegrationSchema.methods.isTokenValid = function() {
     return false;
   }
 
-  // Check if token expires within the next 5 minutes
-  const expiryBuffer = new Date(Date.now() + 5 * 60 * 1000);
-  return this.expiresAt > expiryBuffer;
+  return this.expiresAt > new Date();
 };
 
 // Method to update OAuth tokens
@@ -422,7 +421,8 @@ SmartThingsIntegrationSchema.methods.updateTokens = async function(tokenData) {
 
   // Set expiration time (subtract 5 minutes for safety buffer)
   if (tokenData.expires_in) {
-    this.expiresAt = new Date(Date.now() + (tokenData.expires_in - 300) * 1000);
+    const safeLifetimeMs = Math.max((Number(tokenData.expires_in) * 1000) - SMARTTHINGS_TOKEN_EXPIRY_BUFFER_MS, 1000);
+    this.expiresAt = new Date(Date.now() + safeLifetimeMs);
   }
 
   this.isConnected = true;
