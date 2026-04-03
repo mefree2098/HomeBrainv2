@@ -1375,7 +1375,7 @@ class InsteonService {
             error: error.message
           }
         });
-        if (device.isOnline !== false) {
+        if (error?.code !== 'INSTEON_LEVEL_TIMEOUT' && device.isOnline !== false) {
           await this._persistDeviceRuntimeStateByAddress(normalizedAddress, { isOnline: false });
           summary.offlineMarked += 1;
         }
@@ -6778,15 +6778,47 @@ class InsteonService {
 
     if (!expectedStatus) {
       nextState.brightness = 0;
+      nextState.level = 0;
       return nextState;
     }
 
     const numericBrightness = Number(options.brightness);
-    if (Number.isFinite(numericBrightness) && numericBrightness > 0) {
-      nextState.brightness = this._normalizeInsteonLevelPercent(numericBrightness);
-    }
+    const normalizedBrightness = Number.isFinite(numericBrightness) && numericBrightness > 0
+      ? this._normalizeInsteonLevelPercent(numericBrightness)
+      : 100;
+    nextState.brightness = Math.max(1, normalizedBrightness);
+    nextState.level = nextState.brightness;
 
     return nextState;
+  }
+
+  async _persistImmediateRuntimeFallbackState(address, fallbackState, options = {}) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress || !fallbackState || typeof fallbackState !== 'object') {
+      return null;
+    }
+
+    const patch = {
+      ...fallbackState,
+      lastSeen: fallbackState.lastSeen ?? new Date(),
+      isOnline: fallbackState.isOnline !== false
+    };
+
+    try {
+      return await this._persistDeviceRuntimeStateByAddress(normalizedAddress, patch);
+    } catch (error) {
+      this._logEngineWarn(`Failed to persist immediate command-inferred runtime state for ${this._formatInsteonAddress(normalizedAddress)}`, {
+        stage: 'state',
+        direction: 'internal',
+        operation: options.operation || 'runtime_state_persist',
+        address: normalizedAddress,
+        details: {
+          reason: options.reason || null,
+          error: error.message
+        }
+      });
+      return null;
+    }
   }
 
   _stateFromInsteonLevel(level) {
@@ -7225,6 +7257,7 @@ class InsteonService {
     const expectedStatus = typeof options.expectedStatus === 'boolean'
       ? options.expectedStatus
       : null;
+    const fallbackState = this._buildRuntimeExpectedStatePatch(expectedStatus);
 
     this._logEngineInfo(
       `Queued ${responderAddresses.length} linked responder refresh${responderAddresses.length === 1 ? '' : 'es'} for controller group ${numericGroup}`,
@@ -7245,12 +7278,22 @@ class InsteonService {
       }
     );
 
-    responderAddresses.forEach((address) => {
+    for (const address of responderAddresses) {
+      if (fallbackState) {
+        // Trust the runtime command immediately; PLM verification is best-effort.
+        // Many live PLM status queries resolve with no usable standard response.
+        // eslint-disable-next-line no-await-in-loop
+        await this._persistImmediateRuntimeFallbackState(address, fallbackState, {
+          operation: 'runtime_scene_refresh',
+          reason: `${String(options.reasonPrefix || 'scene')}:${this._formatInsteonAddress(normalizedController)}:${numericGroup}`
+        });
+      }
+
       this._scheduleRuntimeStateRefresh(address, `${String(options.reasonPrefix || 'scene')}:${this._formatInsteonAddress(normalizedController)}:${numericGroup}`, {
         expectedStatus,
-        fallbackState: this._buildRuntimeExpectedStatePatch(expectedStatus)
+        fallbackState
       });
-    });
+    }
   }
 
   _scheduleRuntimeStateRefresh(address, reason = 'command', options = {}) {
@@ -7413,12 +7456,22 @@ class InsteonService {
     }
 
     const refreshRequests = this._buildRuntimeStateRefreshRequests(parsed);
-    refreshRequests.forEach((request) => {
+    for (const request of refreshRequests) {
+      if (request.fallbackState && (!parsed.observedState || parsed.observedState.address !== request.address)) {
+        // Apply the command-inferred state immediately so a dead status query
+        // does not leave the dimmer visually stuck at its previous level.
+        // eslint-disable-next-line no-await-in-loop
+        await this._persistImmediateRuntimeFallbackState(request.address, request.fallbackState, {
+          operation: 'runtime_command',
+          reason: request.reason
+        });
+      }
+
       this._scheduleRuntimeStateRefresh(request.address, request.reason, {
         expectedStatus: request.expectedStatus,
         fallbackState: request.fallbackState
       });
-    });
+    }
   }
 
   _looksLikeInsteonFaderDescriptor(...values) {

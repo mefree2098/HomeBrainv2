@@ -65,7 +65,17 @@ test('insteonService runtime command handling writes live engine logs', async (t
     }
   });
 
-  assert.equal(persisted, null);
+  assert.deepEqual(persisted, {
+    address: '445566',
+    state: {
+      status: true,
+      brightness: 100,
+      level: 100,
+      isOnline: true,
+      lastSeen: persisted?.state?.lastSeen
+    }
+  });
+  assert.ok(persisted?.state?.lastSeen instanceof Date);
   assert.deepEqual(scheduled?.address, '445566');
   assert.match(scheduled?.reason || '', /direct:11\.22\.33:11/i);
 

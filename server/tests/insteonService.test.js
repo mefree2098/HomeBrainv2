@@ -237,13 +237,15 @@ test('_parseRuntimeCommand treats responder acknowledgements for ON/OFF commands
   assert.ok(cleanupAck);
   assert.equal(cleanupAck.observedState.address, '388A57');
   assert.equal(cleanupAck.inferredState.status, true);
-  assert.equal(cleanupAck.inferredState.brightness, undefined);
+  assert.equal(cleanupAck.inferredState.brightness, 100);
+  assert.equal(cleanupAck.inferredState.level, 100);
   assert.equal(cleanupAck.stateRefreshRecommended, true);
 
   assert.ok(offAck);
   assert.equal(offAck.observedState.address, '388A57');
   assert.equal(offAck.inferredState.status, false);
   assert.equal(offAck.inferredState.brightness, 0);
+  assert.equal(offAck.inferredState.level, 0);
   assert.equal(offAck.stateRefreshRecommended, true);
 });
 
@@ -306,7 +308,10 @@ test('_handleRuntimeCommand queues linked responder refreshes for controller sce
     }
   });
 
-  assert.equal(persisted.length, 0);
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].address, '388A57');
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[0].patch.brightness, 100);
 
   assert.equal(scheduledRefreshes.length, 1);
   assert.equal(scheduledRefreshes[0].address, '388A57');
@@ -344,7 +349,10 @@ test('_handleRuntimeCommand refreshes the addressed responder for monitor-mode d
     }
   });
 
-  assert.equal(persisted.length, 0);
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].address, '388A57');
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[0].patch.brightness, 100);
   assert.equal(scheduledRefreshes.length, 1);
   assert.equal(scheduledRefreshes[0].address, '388A57');
   assert.equal(scheduledRefreshes[0].reason, 'direct:38.9A.D0:11');
@@ -385,7 +393,10 @@ test('_handleRuntimeCommand refreshes the addressed responder for all-link clean
     }
   });
 
-  assert.equal(persisted.length, 0);
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].address, '388A57');
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[0].patch.brightness, 100);
   assert.equal(scheduledRefreshes.length, 1);
   assert.equal(scheduledRefreshes[0].address, '388A57');
   assert.equal(scheduledRefreshes[0].reason, 'cleanup:38.89.78:2');
@@ -430,7 +441,13 @@ test('_handleRuntimeCommand refreshes linked responders for all-link cleanup gro
     }
   });
 
-  assert.equal(persisted.length, 0);
+  assert.equal(persisted.length, 2);
+  assert.deepEqual(
+    persisted.map((entry) => entry.address),
+    ['388A57', '71B678']
+  );
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[1].patch.status, true);
   assert.equal(scheduledRefreshes.length, 2);
   const refreshesByReason = new Map(
     scheduledRefreshes.map((refresh) => [refresh.reason, refresh])
@@ -519,11 +536,66 @@ test('_handleRuntimeCommand persists responder acknowledgements for ON commands 
   assert.equal(persisted.length, 1);
   assert.equal(persisted[0].address, '388A57');
   assert.equal(persisted[0].patch.status, true);
-  assert.equal(persisted[0].patch.brightness, undefined);
+  assert.equal(persisted[0].patch.brightness, 100);
+  assert.equal(persisted[0].patch.level, 100);
   assert.equal(scheduledRefreshes.length, 1);
   assert.equal(scheduledRefreshes[0].address, '388A57');
   assert.equal(scheduledRefreshes[0].reason, 'direct_ack:38.8A.57:11');
   assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+});
+
+test('_pollTrackedDeviceStates does not mark dimmers offline when level queries time out without usable state', async (t) => {
+  const originalDeviceFind = Device.find;
+  const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalMarkRuntimePollAttempt = insteonService._markRuntimePollAttempt;
+  const originalHasPendingHigherPriorityPlmOperation = insteonService._hasPendingHigherPriorityPlmOperation;
+  const originalSelectRuntimePollBatch = insteonService._selectRuntimePollBatch;
+
+  t.after(() => {
+    Device.find = originalDeviceFind;
+    insteonService._queryDeviceLevelByAddress = originalQueryLevel;
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._markRuntimePollAttempt = originalMarkRuntimePollAttempt;
+    insteonService._hasPendingHigherPriorityPlmOperation = originalHasPendingHigherPriorityPlmOperation;
+    insteonService._selectRuntimePollBatch = originalSelectRuntimePollBatch;
+  });
+
+  const trackedDevice = {
+    _id: 'device-1',
+    name: 'Test Dimmer',
+    isOnline: true,
+    lastSeen: new Date('2026-04-02T12:00:00.000Z'),
+    properties: {
+      insteonAddress: '38.8A.57'
+    }
+  };
+
+  const persisted = [];
+  Device.find = async () => [trackedDevice];
+  insteonService._queryDeviceLevelByAddress = async () => {
+    const error = new Error('Timeout getting device status for 38.8A.57');
+    error.code = 'INSTEON_LEVEL_TIMEOUT';
+    throw error;
+  };
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._markRuntimePollAttempt = () => {};
+  insteonService._hasPendingHigherPriorityPlmOperation = () => false;
+  insteonService._selectRuntimePollBatch = (candidates) => ({
+    pollBatch: candidates,
+    effectiveBatchSize: candidates.length,
+    cursorStart: 0
+  });
+
+  const summary = await insteonService._pollTrackedDeviceStates();
+
+  assert.equal(summary.scanned, 1);
+  assert.equal(summary.errors, 1);
+  assert.equal(summary.offlineMarked, 0);
+  assert.equal(persisted.length, 0);
 });
 
 test('_confirmDeviceStateByAddress retries level query and persists confirmed state', async (t) => {
