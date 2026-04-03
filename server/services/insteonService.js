@@ -1163,6 +1163,22 @@ class InsteonService {
     this._pendingRuntimeStateRefreshes.clear();
   }
 
+  _clearPendingRuntimeStateRefresh(address) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress) {
+      return false;
+    }
+
+    const timer = this._pendingRuntimeStateRefreshes.get(normalizedAddress);
+    if (!timer) {
+      return false;
+    }
+
+    clearTimeout(timer);
+    this._pendingRuntimeStateRefreshes.delete(normalizedAddress);
+    return true;
+  }
+
   _clearPendingRuntimeCommandAcks() {
     for (const waiters of this._pendingRuntimeCommandAcks.values()) {
       for (const waiter of waiters) {
@@ -1259,6 +1275,24 @@ class InsteonService {
   _waitForPendingRuntimeCommandAck(address, expectedStatus, options = {}) {
     const pendingAckWaiter = this._createPendingRuntimeCommandAckWaiter(address, expectedStatus, options);
     return pendingAckWaiter ? pendingAckWaiter.promise : Promise.resolve(null);
+  }
+
+  _getControlCommandRuntimeCooldownMs(options = {}) {
+    const commandTimeoutMs = Number.isFinite(Number(options?.commandTimeoutMs))
+      ? Math.max(500, Math.min(30000, Math.round(Number(options.commandTimeoutMs))))
+      : DEFAULT_INSTEON_COMMAND_TIMEOUT_MS;
+    const commandRetries = Number.isFinite(Number(options?.commandRetries))
+      ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
+      : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES;
+    const baseCooldownMs = commandTimeoutMs * Math.max(1, commandRetries + 1);
+    const lateRuntimeAckTimeoutMs = options?.requireDeviceResponse === true
+      ? this._getLateRuntimeAckTimeoutMs(options)
+      : 0;
+
+    return Math.max(
+      this._runtimeMonitoringCooldownMs,
+      baseCooldownMs + lateRuntimeAckTimeoutMs
+    );
   }
 
   _resolvePendingRuntimeCommandAcks(parsed) {
@@ -10722,7 +10756,15 @@ class InsteonService {
           commandVariant: useFastOnCommand ? 'turn_on_fast' : 'turn_on'
         }
       });
-      this._markRecentPlmControlActivity();
+      this._clearPendingRuntimeStateRefresh(address);
+      this._markRecentPlmControlActivity(this._getControlCommandRuntimeCooldownMs({
+        requireDeviceResponse: true,
+        commandTimeoutMs: DEFAULT_INSTEON_COMMAND_TIMEOUT_MS,
+        commandRetries: Number.isFinite(Number(options?.commandRetries))
+          ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
+          : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES,
+        runtimeAckTimeoutMs: options?.runtimeAckTimeoutMs
+      }));
       try {
         commandExecution = await this._executeHubCommandWithRetries(
           (callback) => (useFastOnCommand
@@ -10963,7 +11005,15 @@ class InsteonService {
         attemptsUsed: 1,
         retryCount: 0
       };
-      this._markRecentPlmControlActivity();
+      this._clearPendingRuntimeStateRefresh(address);
+      this._markRecentPlmControlActivity(this._getControlCommandRuntimeCooldownMs({
+        requireDeviceResponse: true,
+        commandTimeoutMs: DEFAULT_INSTEON_COMMAND_TIMEOUT_MS,
+        commandRetries: Number.isFinite(Number(options?.commandRetries))
+          ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
+          : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES,
+        runtimeAckTimeoutMs: options?.runtimeAckTimeoutMs
+      }));
 
       try {
         commandExecution = await this._executeHubCommandWithRetries(

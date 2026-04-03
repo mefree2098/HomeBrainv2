@@ -2420,6 +2420,72 @@ test('turnOff defaults to the fast off opcode when available', async (t) => {
   assert.equal(result.confirmed, true);
 });
 
+test('turnOff clears pending refresh state and extends runtime polling cooldown through the late ACK window', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalMarkRecentPlmControlActivity = insteonService._markRecentPlmControlActivity;
+  const originalPendingRefreshes = insteonService._pendingRuntimeStateRefreshes;
+
+  const staleTimer = setTimeout(() => {}, 60_000);
+  const pendingRefreshes = new Map([
+    ['112233', staleTimer]
+  ]);
+
+  t.after(() => {
+    clearTimeout(staleTimer);
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._markRecentPlmControlActivity = originalMarkRecentPlmControlActivity;
+    insteonService._pendingRuntimeStateRefreshes = originalPendingRefreshes;
+  });
+
+  let capturedCooldownMs = null;
+  insteonService.isConnected = true;
+  insteonService._pendingRuntimeStateRefreshes = pendingRefreshes;
+  insteonService._markRecentPlmControlActivity = (cooldownMs) => {
+    capturedCooldownMs = cooldownMs;
+  };
+  insteonService.hub = {
+    light(_address) {
+      return {
+        turnOff(callback) {
+          callback(null, { ack: true, success: true });
+        },
+        turnOffFast(callback) {
+          callback(null, { ack: true, success: true });
+        }
+      };
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'SwitchLinc Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async (_address, _expectedStatus, options = {}) => ({
+    status: false,
+    brightness: 0,
+    level: 0,
+    confirmedReads: options.requiredMatches || 1
+  });
+
+  const result = await insteonService.turnOff('mock-device', {
+    verificationMode: 'fast',
+    runtimeAckTimeoutMs: 12000
+  });
+
+  assert.equal(pendingRefreshes.has('112233'), false);
+  assert.equal(capturedCooldownMs, 13500);
+  assert.equal(result.success, true);
+});
+
 test('turnOff can force the standard off opcode when explicitly requested', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
