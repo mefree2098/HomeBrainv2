@@ -275,6 +275,8 @@ class DeviceGroupService {
         automationUsageCount: referencedAutomations.length,
         workflowNames: referencedWorkflows.map((workflow) => workflow.name),
         automationNames: referencedAutomations.map((automation) => automation.name),
+        insteonPlmGroup: Number.isInteger(group.insteonPlmGroup) ? group.insteonPlmGroup : null,
+        insteonLastSyncedAt: group.insteonLastSyncedAt || null,
         createdAt: group.createdAt,
         updatedAt: group.updatedAt
       };

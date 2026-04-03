@@ -2,14 +2,17 @@
 
 This note documents how HomeBrain's INSTEON PLM integration works today.
 
-It is intentionally focused on the current implementation in `server/services/insteonService.js`, especially the runtime state pipeline that was corrected on April 2, 2026.
+It is intentionally focused on the current implementation in `server/services/insteonService.js`, especially the runtime state pipeline and managed device-group broadcast support that were corrected on April 2-3, 2026.
 
 ## Main Files
 
 - `server/services/insteonService.js`
 - `server/services/insteonEngineLogService.js`
+- `server/services/workflowExecutionService.js`
+- `server/services/deviceGroupService.js`
 - `server/routes/insteonRoutes.js`
 - `server/scripts/insteon_serial_bridge.py`
+- `server/models/DeviceGroup.js`
 - `server/tests/insteonService.test.js`
 - `server/tests/insteonEngineLogService.test.js`
 
@@ -21,6 +24,148 @@ It is intentionally focused on the current implementation in `server/services/in
 - If a command-inferred ON state is applied, it must include a non-zero `brightness` and `level`.
 - Background runtime poll timeouts must not mark a device offline just because `light.level()` returned no usable state.
 - Device names are not authoritative. A dimmer stays on the dimmer/fader path even if its name contains `fan`.
+- A HomeBrain device group is not automatically an INSTEON group. Simultaneous all-device broadcast only exists after a real PLM ALL-Link group has been created and synchronized for that HomeBrain group.
+
+## Stabilization Findings
+
+This section captures the concrete findings from the April 2-3, 2026 stabilization work that made HomeBrain's
+INSTEON behavior match the reliability expectations set by the ISY.
+
+### What Turned Out To Be Wrong
+
+The final working behavior did not come from one fix. It came from removing several HomeBrain-specific failure
+paths that were stacking together:
+
+1. HomeBrain was treating bare PLM acceptance as almost-good-enough command success even when the actual device had
+   not replied yet.
+2. Real delayed device acknowledgements were arriving after the `home-controller` callback window, but HomeBrain was
+   declaring failure before those runtime ACKs arrived.
+3. After a delayed runtime ACK finally showed up, HomeBrain was still sending redundant `19` verification reads that
+   often returned `rawResult:null`.
+4. Background runtime polling was continuing to hammer the PLM with failing `19` reads even when batches were clearly
+   producing no usable state.
+5. Manual switch traffic aimed at the PLM was initially being resolved onto the PLM target instead of the real source
+   switch row.
+6. Manual switch traffic that arrived as group `1` all-link broadcast / cleanup scene messages was being treated like
+   linked-scene discovery work instead of a local-load state change.
+7. Cleanup traffic could drive follow-up state refreshes against the PLM address instead of the source/controller
+   device.
+8. Duplicate HomeBrain rows for the same INSTEON address could make state persistence look inconsistent even when the
+   runtime event handling was correct.
+9. HomeBrain device groups were originally just database metadata, not real PLM ALL-Link groups, so large group ON/OFF
+   actions were still falling back to per-device control instead of one protocol-level broadcast.
+
+### What Was Not The Root Cause
+
+Several things looked suspicious in the logs but were not the root cause by themselves:
+
+- `rawResult:null` on a `19` level query does not prove the device is offline.
+- A PLM callback with `acknowledged:true` does not prove the target device accepted the command.
+- Missing UI updates do not automatically mean the PLM failed to receive unsolicited traffic.
+- Repeated runtime poll failures do not automatically mean scene parsing is broken.
+
+The raw transport tracing added on April 2, 2026 proved that unsolicited manual-switch packets were reaching
+HomeBrain. The bug was then narrowed to how HomeBrain classified and applied those packets after parse.
+
+### What Actually Fixed Command Reliability
+
+Command control became reliable after these rules were enforced together:
+
+- Full binary ON / OFF prefers fast direct opcodes by default:
+  `12` for full ON and `14` for OFF.
+- A bare PLM ACK is not accepted as device success.
+- Direct ON / OFF requires either:
+  - a usable device response in the command callback, or
+  - a matching delayed runtime `direct_ack`
+- The delayed runtime `direct_ack` waiter is registered before dispatch and kept open for up to `30000ms`.
+- If that delayed runtime ACK arrives, HomeBrain treats it as the terminal success instead of immediately issuing
+  another `19` verification query.
+- While that delayed-ACK window is open, background runtime polling is suppressed so the PLM is not reused for noisy
+  status reads during the period when a real device ACK may still be inbound.
+- Normal UI control defaults to one low-level command attempt with no implicit recovery loop. Retries remain an
+  explicit opt-in for workflow/debug cases.
+
+### What Actually Fixed Large Group ON / OFF
+
+ISY-style simultaneous group control required a different correction than single-device reliability.
+
+The important finding was:
+
+- a HomeBrain device group name by itself is only application metadata
+- an actual INSTEON simultaneous group command requires a real PLM controller group plus responder links in the PLM
+  ALL-Link database
+
+HomeBrain now handles that by managing PLM-backed groups for eligible device groups:
+
+- Binary `turn_on` / `turn_off` on an eligible HomeBrain device group now uses a managed PLM ALL-Link group.
+- The managed PLM group number is lazily allocated from `2..255`.
+- Group `1` is intentionally not used for managed HomeBrain groups because HomeBrain now treats group `1`
+  all-link traffic as local-load/manual-switch traffic from the originating device.
+- Before broadcasting, HomeBrain reconciles the PLM scene membership so the HomeBrain device group and the PLM
+  responder list match.
+- After sync, HomeBrain sends one PLM all-link command for the whole group instead of walking each member one by one.
+- Full binary ON / OFF prefers the fast broadcast variants when the transport supports them.
+- If the group is not fully eligible, HomeBrain falls back to the existing per-device control path instead of forcing
+  partial or unsafe PLM-group behavior.
+
+This matches the INSTEON developer-guide model:
+
+- an ALL-Link Group is a controller plus one-or-more responders
+- lighting responders can execute group-wide ON / OFF / fast ON / fast OFF alias commands
+- a controller group broadcast is the protocol-level way to make many responders move at the same time
+
+### What Actually Fixed Manual Status Updates
+
+Manual switch updates became reliable after these runtime-path rules were enforced together:
+
+- HomeBrain listens to both `command` and `recvCommand`.
+- Lower-level runtime transport tracing confirmed whether a raw `0250` / `0251` frame reached HomeBrain before
+  dispatcher parsing.
+- Direct manual commands aimed at the PLM are applied to the source device, not the PLM target.
+- Group `1` all-link broadcast / cleanup traffic is treated as a local-load state change for the source switch.
+- Those group `1` local-load events do not queue scene-link lookup work.
+- Those group `1` local-load events do not queue PLM self-refreshes such as `querying level for 71.B6.78`.
+- Cleanup traffic that is not a local-load case refreshes the controller/source device when the cleanup target is not
+  an actual HomeBrain device row.
+
+### Polling Findings
+
+Background polling is useful, but it is deliberately not the primary live-state mechanism.
+
+Important findings:
+
+- Runtime command traffic is the first-class live-state path.
+- `19` level polling is only best-effort confirmation.
+- Repeated `INSTEON_LEVEL_TIMEOUT` / `rawResult:null` poll batches should trigger polling backoff, not more PLM spam.
+- Poll failures must not mark devices offline when no usable level state was returned.
+- If manual/runtime command traffic is already applying correct inferred state, poll tuning is not the first thing to
+  change.
+
+### Scene And Local-Load Findings
+
+The trickiest part of the stabilization work was separating true scene-responder refresh behavior from local-load
+traffic that only looked scene-shaped on the wire.
+
+Current rule:
+
+- Group `1` scene traffic from a known source switch is treated as local-load state for that source device first.
+
+That means HomeBrain only falls back to scene-responder refresh logic when the event is actually about linked scene
+members, not when it is the originating local switch press for the controller itself.
+
+### Diagnostic Order That Worked
+
+When a regression appeared, this order was the most effective way to narrow it:
+
+1. Confirm whether raw inbound PLM traffic reached HomeBrain at all.
+2. Confirm whether the runtime command envelope parsed into `Inbound runtime command ...`.
+3. Confirm whether HomeBrain persisted immediate command-inferred state for the correct device row.
+4. Confirm that HomeBrain did not immediately sabotage itself with redundant `19` reads, runtime polling, or scene-link
+   lookups.
+5. Only after that, inspect link topology or higher-level scene membership assumptions.
+
+That diagnostic order mattered because several earlier-looking failures were actually downstream symptoms of a correct
+packet arriving and then being handled incorrectly inside HomeBrain.
 
 ## Connection Model
 
@@ -248,6 +393,69 @@ Important distinction:
 - If direct control works but physical/manual updates never appear as `Inbound runtime command ...` logs, inspect the
   HomeBrain PLM link topology before blaming the device network. A missing device-to-PLM controller link will allow
   direct control to work while preventing unsolicited manual updates from ever reaching HomeBrain.
+
+## Managed Device-Group Broadcasts
+
+HomeBrain now has two distinct ways to control a user-defined device group:
+
+1. Managed INSTEON PLM all-link broadcast
+2. Per-device fallback control
+
+### When Managed PLM Group Broadcast Is Used
+
+`tryControlDeviceGroup()` will only use a managed PLM all-link broadcast when all of these are true:
+
+- the requested action is binary `turn_on` or `turn_off`
+- any requested ON level is effectively `100%`
+- the group has at least two unique INSTEON members
+- every member has a valid INSTEON address
+- every member is linked to the current HomeBrain PLM
+
+If any of those conditions fail, HomeBrain keeps the previous behavior and executes the device group with normal
+per-device control so existing automations do not break.
+
+### How Managed PLM Groups Are Created
+
+HomeBrain device groups are still the user-facing grouping concept, but they can now be backed by a real managed PLM
+group when the group is eligible for INSTEON broadcast.
+
+The sync flow is:
+
+1. Load the HomeBrain `DeviceGroup` record.
+2. Normalize the current INSTEON member set for that HomeBrain group.
+3. Allocate a PLM group number if one has not already been assigned.
+4. Read the PLM controller links for that group.
+5. Remove stale responders that are no longer members of the HomeBrain group.
+6. Reapply the desired responder set to the PLM group.
+7. Persist the HomeBrain-side metadata used to track that managed PLM group.
+
+Persisted metadata:
+
+- `insteonPlmGroup`
+- `insteonMemberSignature`
+- `insteonLastSyncedAt`
+
+### Broadcast Commands Used
+
+Once the managed PLM group is synchronized, HomeBrain issues one group command through the PLM:
+
+- `sceneOn()` or `sceneOnFast()` for group ON
+- `sceneOff()` or `sceneOffFast()` for group OFF
+
+In `home-controller`, these methods wrap the PLM's ALL-Link command path. That is the key difference from the older
+HomeBrain behavior where a "device group" action was just many individual direct commands happening in software.
+
+### Safety Rules
+
+The managed PLM group path was intentionally built to preserve working behavior instead of replacing it blindly.
+
+Safety rules:
+
+- HomeBrain only uses the broadcast path for fully eligible INSTEON groups.
+- Mixed groups continue to use the old per-device path.
+- Partial-dimmer level requests continue to use the old per-device path.
+- A failure while synchronizing or broadcasting a managed PLM group causes HomeBrain to fall back to normal
+  per-device execution instead of failing the whole group action immediately.
 
 ### Verification Modes
 

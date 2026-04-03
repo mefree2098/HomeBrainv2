@@ -320,6 +320,151 @@ test('_handleRuntimeCommand queues linked responder refreshes for controller sce
   assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
 });
 
+test('tryControlDeviceGroup broadcasts a managed PLM scene command for linked INSTEON device groups', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalSyncManagedDeviceGroupScene = insteonService._syncManagedDeviceGroupScene;
+  const originalExecuteQueuedPlmCallbackOperation = insteonService._executeQueuedPlmCallbackOperation;
+  const originalPersistImmediateRuntimeFallbackState = insteonService._persistImmediateRuntimeFallbackState;
+  const originalClearPendingRuntimeStateRefresh = insteonService._clearPendingRuntimeStateRefresh;
+  const originalMarkRecentPlmControlActivity = insteonService._markRecentPlmControlActivity;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    insteonService._syncManagedDeviceGroupScene = originalSyncManagedDeviceGroupScene;
+    insteonService._executeQueuedPlmCallbackOperation = originalExecuteQueuedPlmCallbackOperation;
+    insteonService._persistImmediateRuntimeFallbackState = originalPersistImmediateRuntimeFallbackState;
+    insteonService._clearPendingRuntimeStateRefresh = originalClearPendingRuntimeStateRefresh;
+    insteonService._markRecentPlmControlActivity = originalMarkRecentPlmControlActivity;
+  });
+
+  let receivedGroup = null;
+  let receivedOperation = null;
+  const persisted = [];
+  const clearedAddresses = [];
+
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    sceneOffFast(group, callback) {
+      receivedGroup = group;
+      callback(null, { completed: true });
+    }
+  };
+  insteonService._syncManagedDeviceGroupScene = async () => ({
+    plmGroup: 251,
+    sceneSynchronized: true
+  });
+  insteonService._executeQueuedPlmCallbackOperation = async (invoke, options) => {
+    receivedOperation = options;
+    return await new Promise((resolve, reject) => {
+      invoke((error, result) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(result);
+      });
+    });
+  };
+  insteonService._persistImmediateRuntimeFallbackState = async (address, patch, options) => {
+    persisted.push({ address, patch, options });
+    return true;
+  };
+  insteonService._clearPendingRuntimeStateRefresh = (address) => {
+    clearedAddresses.push(address);
+  };
+  insteonService._markRecentPlmControlActivity = () => {};
+
+  const result = await insteonService.tryControlDeviceGroup(
+    {
+      name: 'Interior Lights',
+      normalizedName: 'interior lights',
+      save: async () => {}
+    },
+    [
+      {
+        _id: 'device-1',
+        name: 'Master Vanity Left',
+        room: 'Primary Bath',
+        properties: {
+          insteonAddress: '38.96.47',
+          linkedToCurrentPlm: true
+        }
+      },
+      {
+        _id: 'device-2',
+        name: 'Master Vanity Right',
+        room: 'Primary Bath',
+        properties: {
+          insteonAddress: '38.93.5B',
+          linkedToCurrentPlm: true
+        }
+      }
+    ],
+    'turn_off',
+    null,
+    {
+      deviceGroup: 'Interior Lights'
+    }
+  );
+
+  assert.equal(receivedGroup, 251);
+  assert.equal(receivedOperation.kind, 'group_turn_off');
+  assert.match(receivedOperation.label, /managed INSTEON group 251/i);
+  assert.equal(result.success, true);
+  assert.equal(result.details.controlMethod, 'insteon_plm_group_broadcast');
+  assert.equal(result.details.insteonPlmGroup, 251);
+  assert.equal(result.details.sceneSynchronized, true);
+  assert.equal(result.details.members.length, 2);
+  assert.deepEqual(clearedAddresses.sort(), ['38935B', '389647']);
+  assert.deepEqual(
+    persisted.map((entry) => entry.address).sort(),
+    ['38935B', '389647']
+  );
+  assert.ok(persisted.every((entry) => entry.patch.status === false));
+});
+
+test('tryControlDeviceGroup returns null when the device group is not entirely eligible for managed INSTEON broadcast', async (t) => {
+  const originalConnect = insteonService.connect;
+
+  t.after(() => {
+    insteonService.connect = originalConnect;
+  });
+
+  insteonService.connect = async () => {
+    throw new Error('connect should not be called for ineligible groups');
+  };
+
+  const result = await insteonService.tryControlDeviceGroup(
+    {
+      name: 'Whole Home',
+      normalizedName: 'whole home',
+      save: async () => {}
+    },
+    [
+      {
+        _id: 'device-1',
+        name: 'Kitchen Light',
+        properties: {
+          insteonAddress: '38.96.47',
+          linkedToCurrentPlm: true
+        }
+      },
+      {
+        _id: 'device-2',
+        name: 'Garage Side Door',
+        properties: {
+          source: 'smartthings'
+        }
+      }
+    ],
+    'turn_off'
+  );
+
+  assert.equal(result, null);
+});
+
 test('_handleRuntimeCommand treats group-1 all-link broadcasts as local-load state updates without scene link lookups', async (t) => {
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
