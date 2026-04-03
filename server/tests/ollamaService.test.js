@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { Readable } = require('node:stream');
 
 const ollamaServiceModule = require('../services/ollamaService');
 const OllamaConfig = require('../models/OllamaConfig');
@@ -217,4 +218,27 @@ test('manual stop hint uses macOS-friendly guidance on Darwin', () => {
   const hint = _private.getManualOllamaStopHint('darwin');
 
   assert.equal(hint, 'pkill -x Ollama');
+});
+
+test('consumePullProgressStream tracks download percent from Ollama streaming events', async () => {
+  const service = new OllamaService();
+
+  service.beginModelPullStatus('qwen2.5:latest', { wasInstalled: false });
+
+  const stream = Readable.from([
+    '{"status":"pulling manifest"}\n',
+    '{"status":"downloading","completed":50,"total":200,"digest":"sha256:test"}\n'
+  ]);
+
+  const finalEvent = await service.consumePullProgressStream('qwen2.5:latest', stream);
+  const status = service.getModelPullStatus();
+
+  assert.equal(finalEvent.status, 'downloading');
+  assert.equal(status.active, true);
+  assert.equal(status.modelName, 'qwen2.5:latest');
+  assert.equal(status.phase, 'downloading');
+  assert.equal(status.percent, 25);
+  assert.equal(status.completed, 50);
+  assert.equal(status.total, 200);
+  assert.equal(status.digest, 'sha256:test');
 });

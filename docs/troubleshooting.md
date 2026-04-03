@@ -100,6 +100,30 @@ Open the `Ollama` page and verify:
 - the service is running
 - a model is available locally
 
+If the UI cannot install, update, or stop Ollama on Linux/Jetson, repair the host helper and restart HomeBrain:
+
+```bash
+cd ~/HomeBrainv2
+bash scripts/setup-services.sh refresh-privileges
+sudo systemctl restart homebrain
+```
+
+Optional checks:
+
+```bash
+sudo -n /usr/local/lib/homebrain/ollama-host-control.sh probe && echo helper-ok
+systemctl show homebrain -p NoNewPrivileges
+```
+
+Expected results:
+
+- `helper-ok`
+- `NoNewPrivileges=no`
+
+More detail:
+
+- [`ollama-management.md`](ollama-management.md)
+
 ## INSTEON / PLM Problems
 
 Important:

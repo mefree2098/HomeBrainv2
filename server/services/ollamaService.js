@@ -24,6 +24,138 @@ const OLLAMA_SEARCH_TIMEOUT_MS = 12000;
 const OLLAMA_CAPABILITY_ALLOWLIST = new Set(['vision', 'tools', 'thinking', 'embedding', 'cloud']);
 const OLLAMA_PRIVILEGED_HELPER_SYSTEM_PATH = '/usr/local/lib/homebrain/ollama-host-control.sh';
 
+function createModelPullStatusState(overrides = {}) {
+  return {
+    active: false,
+    modelName: null,
+    action: null,
+    phase: 'idle',
+    status: 'idle',
+    message: '',
+    percent: null,
+    completed: null,
+    total: null,
+    digest: null,
+    startedAt: null,
+    updatedAt: null,
+    finishedAt: null,
+    success: null,
+    error: null,
+    source: null,
+    wasInstalled: null,
+    modelUpdated: null,
+    ...overrides
+  };
+}
+
+function parseProgressNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function normalizePullPhase(status = '') {
+  const normalized = String(status || '').trim().toLowerCase();
+
+  if (!normalized || normalized === 'idle') {
+    return 'idle';
+  }
+  if (normalized === 'success' || normalized === 'completed') {
+    return 'success';
+  }
+  if (normalized === 'error' || normalized === 'failed') {
+    return 'error';
+  }
+  if (normalized.includes('manifest')) {
+    return normalized.includes('writing') ? 'finalizing' : 'manifest';
+  }
+  if (normalized.includes('download')) {
+    return 'downloading';
+  }
+  if (normalized.includes('verify')) {
+    return 'verifying';
+  }
+  if (normalized.includes('extract')) {
+    return 'extracting';
+  }
+  if (normalized.includes('wait') || normalized.includes('queue')) {
+    return 'queued';
+  }
+  if (normalized.includes('start')) {
+    return 'starting';
+  }
+
+  return 'working';
+}
+
+function clampPercent(value) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(value * 10) / 10));
+}
+
+function parseOllamaPullProgressEvent(event = {}) {
+  if (!event || typeof event !== 'object') {
+    return null;
+  }
+
+  const status = typeof event.status === 'string' ? event.status.trim() : '';
+  const completed = parseProgressNumber(event.completed);
+  const total = parseProgressNumber(event.total);
+  const digest = typeof event.digest === 'string' && event.digest.trim()
+    ? event.digest.trim()
+    : null;
+
+  let percent = null;
+  if (Number.isFinite(completed) && Number.isFinite(total) && total > 0) {
+    percent = clampPercent((completed / total) * 100);
+  }
+
+  const message = status || 'Working...';
+
+  return {
+    status: status || 'working',
+    phase: normalizePullPhase(status),
+    message,
+    completed,
+    total,
+    percent,
+    digest
+  };
+}
+
+function stripAnsiCodes(value = '') {
+  return String(value).replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
+}
+
+function parseCliPullProgressLine(line = '') {
+  const normalized = stripAnsiCodes(String(line || '').replace(/\r/g, '').trim());
+  if (!normalized) {
+    return null;
+  }
+
+  const percentMatch = normalized.match(/(\d{1,3}(?:\.\d+)?)%/);
+  const percent = percentMatch ? clampPercent(Number.parseFloat(percentMatch[1])) : null;
+
+  return {
+    status: normalized,
+    phase: normalizePullPhase(normalized),
+    message: normalized,
+    percent
+  };
+}
+
 function decodeHtmlEntities(text = '') {
   return String(text)
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number.parseInt(code, 10)))
@@ -554,6 +686,7 @@ class OllamaService {
     this.apiUrl = 'http://localhost:11434';
     this.operationLogs = [];
     this.availableModelsCache = new Map();
+    this.modelPullStatus = createModelPullStatusState();
   }
 
   runShellCommand(command, options = {}) {
@@ -697,6 +830,181 @@ class OllamaService {
     return this.operationLogs.slice(-maxLines);
   }
 
+  getModelPullStatus() {
+    return {
+      ...this.modelPullStatus
+    };
+  }
+
+  updateModelPullStatus(patch = {}) {
+    const updatedAt = new Date().toISOString();
+
+    this.modelPullStatus = createModelPullStatusState({
+      ...this.modelPullStatus,
+      ...patch,
+      updatedAt
+    });
+
+    return this.getModelPullStatus();
+  }
+
+  beginModelPullStatus(modelName, { wasInstalled = false } = {}) {
+    const startedAt = new Date().toISOString();
+    const action = wasInstalled ? 'refresh' : 'download';
+
+    return this.updateModelPullStatus({
+      active: true,
+      modelName,
+      action,
+      phase: 'starting',
+      status: 'starting',
+      message: `${wasInstalled ? 'Refreshing' : 'Downloading'} ${modelName}...`,
+      percent: null,
+      completed: null,
+      total: null,
+      digest: null,
+      startedAt,
+      finishedAt: null,
+      success: null,
+      error: null,
+      source: 'homebrain',
+      wasInstalled: Boolean(wasInstalled),
+      modelUpdated: null
+    });
+  }
+
+  applyModelPullProgressEvent(modelName, event, source = 'api') {
+    const parsed = parseOllamaPullProgressEvent(event);
+    if (!parsed) {
+      return this.getModelPullStatus();
+    }
+
+    const current = this.getModelPullStatus();
+
+    return this.updateModelPullStatus({
+      active: true,
+      modelName,
+      source,
+      status: parsed.status || current.status,
+      phase: parsed.phase || current.phase,
+      message: parsed.message || current.message,
+      percent: parsed.percent ?? current.percent,
+      completed: parsed.completed ?? current.completed,
+      total: parsed.total ?? current.total,
+      digest: parsed.digest ?? current.digest,
+      finishedAt: null,
+      success: null,
+      error: null
+    });
+  }
+
+  applyCliPullProgressOutput(modelName, output, source = 'cli') {
+    const lines = String(output || '')
+      .replace(/\r/g, '\n')
+      .split(LOG_LINE_SPLIT_REGEX)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      const parsed = parseCliPullProgressLine(line);
+      if (!parsed) {
+        continue;
+      }
+
+      const current = this.getModelPullStatus();
+      this.updateModelPullStatus({
+        active: true,
+        modelName,
+        source,
+        status: parsed.status || current.status,
+        phase: parsed.phase || current.phase,
+        message: parsed.message || current.message,
+        percent: parsed.percent ?? current.percent,
+        finishedAt: null,
+        success: null,
+        error: null
+      });
+    }
+
+    return this.getModelPullStatus();
+  }
+
+  async consumePullProgressStream(modelName, stream) {
+    return new Promise((resolve, reject) => {
+      let buffer = '';
+      let lastEvent = null;
+
+      const flushLine = (line) => {
+        const trimmed = String(line || '').trim();
+        if (!trimmed) {
+          return;
+        }
+
+        try {
+          const event = JSON.parse(trimmed);
+          lastEvent = event;
+          this.applyModelPullProgressEvent(modelName, event, 'api');
+        } catch (error) {
+          this.applyCliPullProgressOutput(modelName, trimmed, 'api');
+        }
+      };
+
+      if (typeof stream.setEncoding === 'function') {
+        stream.setEncoding('utf8');
+      }
+
+      stream.on('data', (chunk) => {
+        buffer += chunk;
+        const segments = buffer.split(/\r?\n/);
+        buffer = segments.pop() || '';
+
+        for (const segment of segments) {
+          flushLine(segment);
+        }
+      });
+
+      stream.once('error', (error) => {
+        reject(error);
+      });
+
+      stream.once('end', () => {
+        flushLine(buffer);
+        resolve(lastEvent);
+      });
+    });
+  }
+
+  completeModelPullStatus(modelName, result = {}) {
+    return this.updateModelPullStatus({
+      active: false,
+      modelName,
+      phase: 'success',
+      status: 'success',
+      message: result.message || `Model ${modelName} downloaded successfully`,
+      percent: 100,
+      completed: this.modelPullStatus.completed,
+      total: this.modelPullStatus.total,
+      finishedAt: new Date().toISOString(),
+      success: true,
+      error: null,
+      modelUpdated: typeof result.modelUpdated === 'boolean' ? result.modelUpdated : this.modelPullStatus.modelUpdated,
+      wasInstalled: typeof result.wasInstalled === 'boolean' ? result.wasInstalled : this.modelPullStatus.wasInstalled
+    });
+  }
+
+  failModelPullStatus(modelName, message) {
+    return this.updateModelPullStatus({
+      active: false,
+      modelName,
+      phase: 'error',
+      status: 'error',
+      message,
+      finishedAt: new Date().toISOString(),
+      success: false,
+      error: message
+    });
+  }
+
   isUpdateAvailable(currentVersion, latestVersion) {
     const normalizedCurrent = normalizeVersionString(currentVersion);
     const normalizedLatest = normalizeVersionString(latestVersion);
@@ -770,11 +1078,15 @@ class OllamaService {
       }
 
       child.stdout?.on('data', (chunk) => {
-        this.addCommandOutputToOperationLogs('model', chunk.toString(), 'stdout');
+        const output = chunk.toString();
+        this.addCommandOutputToOperationLogs('model', output, 'stdout');
+        this.applyCliPullProgressOutput(modelName, output, 'cli');
       });
 
       child.stderr?.on('data', (chunk) => {
-        this.addCommandOutputToOperationLogs('model', chunk.toString(), 'stderr');
+        const output = chunk.toString();
+        this.addCommandOutputToOperationLogs('model', output, 'stderr');
+        this.applyCliPullProgressOutput(modelName, output, 'cli');
       });
 
       child.once('error', (error) => {
@@ -2494,6 +2806,18 @@ class OllamaService {
       console.log(`Starting download of model: ${modelName}`);
       this.addOperationLog('model', `Starting model pull for ${modelName}`);
 
+      const existingPull = this.getModelPullStatus();
+      if (existingPull.active) {
+        const blockingModel = existingPull.modelName || 'another model';
+        const conflictError = new Error(
+          blockingModel === modelName
+            ? `Model ${modelName} is already downloading`
+            : `Another model download is already in progress: ${blockingModel}`
+        );
+        conflictError.skipModelPullStatus = true;
+        throw conflictError;
+      }
+
       const config = await OllamaConfig.getConfig();
       this.syncApiUrl(config);
 
@@ -2505,9 +2829,17 @@ class OllamaService {
         this.addOperationLog('model', `Pre-pull model state unavailable: ${beforeError.message}`);
       }
 
+      this.beginModelPullStatus(modelName, { wasInstalled: Boolean(modelBefore) });
+
       const serviceStatus = await this.checkServiceStatus();
       if (!serviceStatus.running) {
         this.addOperationLog('model', 'Ollama service is not running. Attempting to start before model pull.');
+        this.updateModelPullStatus({
+          message: 'Starting Ollama before downloading...',
+          status: 'starting_service',
+          phase: 'starting',
+          source: 'homebrain'
+        });
         await this.startService();
       }
 
@@ -2519,14 +2851,16 @@ class OllamaService {
           `${this.apiUrl}/api/pull`,
           {
             model: modelName,
-            stream: false
+            stream: true
           },
           {
-            timeout: 3600000 // 60 minutes timeout for large models
+            timeout: 3600000, // 60 minutes timeout for large models
+            responseType: 'stream'
           }
         );
 
-        statusMessage = response.data?.status || statusMessage;
+        const finalEvent = await this.consumePullProgressStream(modelName, response.data);
+        statusMessage = finalEvent?.status || finalEvent?.message || statusMessage;
       } catch (apiError) {
         const apiDetail =
           apiError?.response?.data?.error ||
@@ -2547,6 +2881,12 @@ class OllamaService {
           'model',
           `Ollama API pull unavailable (${apiDetail}). Falling back to CLI pull.`
         );
+        this.updateModelPullStatus({
+          message: 'Falling back to CLI download...',
+          status: 'cli_fallback',
+          phase: 'working',
+          source: 'cli'
+        });
         await this.pullModelWithCli(modelName);
         statusMessage = 'Pull completed via CLI fallback';
       }
@@ -2579,6 +2919,12 @@ class OllamaService {
 
       this.addOperationLog('model', message);
 
+      this.completeModelPullStatus(modelName, {
+        message,
+        modelUpdated: modelChanged,
+        wasInstalled: Boolean(modelBefore)
+      });
+
       return {
         success: true,
         message,
@@ -2592,6 +2938,10 @@ class OllamaService {
         error?.response?.data?.message ||
         error.message;
       this.addOperationLog('model', `Failed to pull ${modelName}: ${detail}`);
+
+      if (!error?.skipModelPullStatus) {
+        this.failModelPullStatus(modelName, `Failed to download model: ${detail}`);
+      }
 
       if (error?.response?.data?.error) {
         throw new Error(`Failed to download model: ${error.response.data.error}`);
@@ -3187,5 +3537,7 @@ module.exports.OllamaService = OllamaService;
 module.exports._private = {
   matchesOllamaProcessCommand,
   getManualOllamaStopHint,
-  summarizeCommandOutput
+  summarizeCommandOutput,
+  parseOllamaPullProgressEvent,
+  parseCliPullProgressLine
 };

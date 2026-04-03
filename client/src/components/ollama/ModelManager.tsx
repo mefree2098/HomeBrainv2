@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import {
   Dialog,
   DialogContent,
@@ -22,6 +23,7 @@ import {
   getInstalledModels,
   getAvailableModels,
   pullModel,
+  getModelPullStatus,
   deleteModel,
   activateModel,
 } from '@/api/ollama';
@@ -63,11 +65,33 @@ interface ModelManagerProps {
   onModelChange: () => void;
 }
 
+interface ModelPullStatus {
+  active: boolean;
+  modelName: string | null;
+  action?: string | null;
+  phase?: string | null;
+  status?: string | null;
+  message?: string | null;
+  percent?: number | null;
+  completed?: number | null;
+  total?: number | null;
+  digest?: string | null;
+  startedAt?: string | null;
+  updatedAt?: string | null;
+  finishedAt?: string | null;
+  success?: boolean | null;
+  error?: string | null;
+  source?: string | null;
+  wasInstalled?: boolean | null;
+  modelUpdated?: boolean | null;
+}
+
 export default function ModelManager({ activeModel, onModelChange }: ModelManagerProps) {
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [pullStatus, setPullStatus] = useState<ModelPullStatus | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCapabilities, setSelectedCapabilities] = useState<string[]>([]);
@@ -78,6 +102,24 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
   useEffect(() => {
     loadModels();
   }, []);
+
+  useEffect(() => {
+    loadPullStatus();
+  }, []);
+
+  useEffect(() => {
+    if (!pullStatus?.active && !downloadingModel) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      loadPullStatus();
+    }, 1200);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [pullStatus?.active, downloadingModel]);
 
   const loadModels = async () => {
     try {
@@ -100,8 +142,36 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
     }
   };
 
+  const loadPullStatus = async () => {
+    try {
+      const status = await getModelPullStatus();
+      setPullStatus(status);
+    } catch (error) {
+      console.error('Error loading model pull status:', error);
+    }
+  };
+
   const handlePullModel = async (modelName: string, isUpdate = false) => {
     setDownloadingModel(modelName);
+    setPullStatus({
+      active: true,
+      modelName,
+      action: isUpdate ? 'refresh' : 'download',
+      phase: 'starting',
+      status: 'starting',
+      message: `${isUpdate ? 'Refreshing' : 'Downloading'} ${modelName}...`,
+      percent: null,
+      completed: null,
+      total: null,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      finishedAt: null,
+      success: null,
+      error: null,
+      source: 'homebrain',
+      wasInstalled: isUpdate,
+      modelUpdated: null,
+    });
     toast({
       title: isUpdate ? 'Refreshing Model' : 'Downloading Model',
       description: `${isUpdate ? 'Re-pulling tag for' : 'Starting download of'} ${modelName}. This may take several minutes...`,
@@ -117,10 +187,21 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
           `Model ${modelName} ${isUpdate ? 'refreshed' : 'downloaded'} successfully`,
       });
       await loadModels();
+      await loadPullStatus();
       onModelChange();
       setDialogOpen(false);
     } catch (error: any) {
       console.error('Error pulling model:', error);
+      setPullStatus((current) => current && current.modelName === modelName ? {
+        ...current,
+        active: false,
+        phase: 'error',
+        status: 'error',
+        message: error.message || 'Failed to download model',
+        finishedAt: new Date().toISOString(),
+        success: false,
+        error: error.message || 'Failed to download model',
+      } : current);
       toast({
         variant: 'destructive',
         title: 'Error',
@@ -255,6 +336,15 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
     return filtered;
   }, [availableModels, nanoFitOnly, searchQuery, selectedCapabilities, sortMode]);
 
+  const activePullModelName = pullStatus?.modelName || downloadingModel;
+  const activePullPercent = typeof pullStatus?.percent === 'number' ? pullStatus.percent : null;
+  const anyPullActive = Boolean(pullStatus?.active || downloadingModel);
+  const showPullStatus = Boolean(
+    pullStatus &&
+    pullStatus.modelName &&
+    (pullStatus.active || downloadingModel === pullStatus.modelName)
+  );
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -347,9 +437,10 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredAvailableModels.map(model => {
+                  {filteredAvailableModels.map((model) => {
                     const isInstalled = installedModels.some(m => m.name === model.name);
-                    const isDownloading = downloadingModel === model.name;
+                    const isDownloading = activePullModelName === model.name && anyPullActive;
+                    const disablePullAction = anyPullActive && activePullModelName !== model.name;
 
                     return (
                       <TableRow key={model.name}>
@@ -395,18 +486,20 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                               size="sm"
                               variant="outline"
                               onClick={() => handlePullModel(model.name, true)}
-                              disabled={isDownloading}
+                              disabled={isDownloading || disablePullAction}
                             >
-                              {isDownloading ? 'Refreshing...' : 'Re-pull'}
+                              {isDownloading
+                                ? `Refreshing${activePullPercent !== null ? ` ${Math.round(activePullPercent)}%` : '...'}`
+                                : 'Re-pull'}
                             </Button>
                           ) : (
                             <Button
                               size="sm"
                               onClick={() => handlePullModel(model.name)}
-                              disabled={isDownloading}
+                              disabled={isDownloading || disablePullAction}
                             >
                               {isDownloading ? (
-                                'Downloading...'
+                                `Downloading${activePullPercent !== null ? ` ${Math.round(activePullPercent)}%` : '...'}`
                               ) : (
                                 <>
                                   <ArrowDownTrayIcon className="h-4 w-4 mr-1" />
@@ -433,6 +526,46 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
         </Dialog>
       </CardHeader>
       <CardContent>
+        {showPullStatus && pullStatus && (
+          <div className="mb-5 rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="capitalize">
+                    {pullStatus.action === 'refresh' ? 'Refreshing' : 'Downloading'}
+                  </Badge>
+                  {pullStatus.source && (
+                    <Badge variant="outline" className="uppercase tracking-wide text-[10px]">
+                      {pullStatus.source}
+                    </Badge>
+                  )}
+                </div>
+                <p className="font-medium">{pullStatus.modelName}</p>
+                <p className="text-sm text-muted-foreground">
+                  {pullStatus.message || 'Waiting for Ollama progress...'}
+                </p>
+              </div>
+              <div className="text-sm font-medium text-right">
+                {activePullPercent !== null ? `${Math.round(activePullPercent)}%` : 'Working...'}
+              </div>
+            </div>
+            {activePullPercent !== null && (
+              <Progress value={activePullPercent} className="h-2.5" />
+            )}
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+              <span>
+                {typeof pullStatus.completed === 'number' && typeof pullStatus.total === 'number'
+                  ? `${formatBytes(pullStatus.completed)} of ${formatBytes(pullStatus.total)} transferred`
+                  : pullStatus.updatedAt
+                    ? `Last update ${new Date(pullStatus.updatedAt).toLocaleTimeString()}`
+                    : 'Waiting for progress details...'}
+              </span>
+              {pullStatus.phase && (
+                <span className="capitalize">{pullStatus.phase.replace(/_/g, ' ')}</span>
+              )}
+            </div>
+          </div>
+        )}
         {loading ? (
           <p className="text-muted-foreground">Loading models...</p>
         ) : installedModels.length === 0 ? (
@@ -455,8 +588,9 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
               </TableRow>
             </TableHeader>
             <TableBody>
-              {installedModels.map(model => {
+              {installedModels.map((model) => {
                 const isActive = activeModel === model.name;
+                const isDownloading = activePullModelName === model.name && anyPullActive;
 
                 return (
                   <TableRow key={model.name}>
@@ -489,10 +623,10 @@ export default function ModelManager({ activeModel, onModelChange }: ModelManage
                         size="sm"
                         variant="outline"
                         onClick={() => handlePullModel(model.name, true)}
-                        disabled={downloadingModel === model.name}
+                        disabled={isDownloading || (anyPullActive && activePullModelName !== model.name)}
                       >
-                        {downloadingModel === model.name ? (
-                          'Refreshing...'
+                        {isDownloading ? (
+                          `Refreshing${activePullPercent !== null ? ` ${Math.round(activePullPercent)}%` : '...'}`
                         ) : (
                           <>
                             <ArrowPathIcon className="h-4 w-4 mr-1" />

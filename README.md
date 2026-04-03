@@ -68,6 +68,7 @@ Important:
 - Beginner Jetson guide: [`docs/jetson-setup.md`](docs/jetson-setup.md)
 - Full deployment guide: [`DEPLOYMENT.md`](DEPLOYMENT.md)
 - Post-install configuration: [`docs/configuration.md`](docs/configuration.md)
+- Ollama management: [`docs/ollama-management.md`](docs/ollama-management.md)
 - Alexa integration: [`docs/alexa-integration.md`](docs/alexa-integration.md)
 - Admin workflow: [`docs/admin-guide.md`](docs/admin-guide.md)
 - End-user voice usage: [`docs/user-guide.md`](docs/user-guide.md)
@@ -102,9 +103,22 @@ bash scripts/setup-services.sh status
 bash scripts/setup-services.sh logs follow
 bash scripts/setup-services.sh health
 bash scripts/setup-services.sh update
+bash scripts/setup-services.sh refresh-privileges
 ```
 
 Public HTTPS routing is managed from `Reverse Proxy / Domains` in the HomeBrain UI. The built-in `Platform Deploy` flow still deploys HomeBrain in place and keeps working behind Caddy because Caddy stays up while only the `homebrain` app service restarts.
+
+## Ollama Runtime Ownership
+
+On Linux and Jetson hosts, HomeBrain manages the Ollama runtime itself and uses a narrow privileged helper for install, update, and forced-stop operations. If an older host needs its Ollama helper or sudoers entry repaired, run:
+
+```bash
+bash scripts/setup-services.sh refresh-privileges
+```
+
+Details:
+
+- [`docs/ollama-management.md`](docs/ollama-management.md)
 
 ## Development
 
