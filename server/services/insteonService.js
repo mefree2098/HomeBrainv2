@@ -57,6 +57,8 @@ const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS = 450;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1800;
 const DEFAULT_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS = 300000;
+const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_MS = 120000;
+const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_THRESHOLD = 1;
 const INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS = Object.freeze([
   /^ttyUSB\d+$/i,
   /^ttyACM\d+$/i,
@@ -107,6 +109,7 @@ class InsteonService {
     this._runtimeMonitoringStarted = false;
     this._runtimeMonitoringInProgress = false;
     this._runtimeMonitoringCooldownUntil = 0;
+    this._runtimePollTimeoutFailureStreak = 0;
     const resolveBoundedNumber = (value, fallback, minimum, maximum = null) => {
       const numeric = Number(value);
       if (!Number.isFinite(numeric)) {
@@ -1541,6 +1544,53 @@ class InsteonService {
     });
   }
 
+  _getRuntimePollTimeoutBackoffMs() {
+    return Math.max(
+      DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_MS,
+      Math.max(1000, Number(this._runtimeMonitoringIntervalMs) || DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS) * 4
+    );
+  }
+
+  _recordRuntimePollBatchOutcome(summary = {}) {
+    const scanned = Number.isFinite(Number(summary?.scanned))
+      ? Math.max(0, Math.trunc(Number(summary.scanned)))
+      : 0;
+    if (scanned <= 0) {
+      return;
+    }
+
+    const levelTimeouts = Number.isFinite(Number(summary?.levelTimeouts))
+      ? Math.max(0, Math.trunc(Number(summary.levelTimeouts)))
+      : 0;
+    const updated = Number.isFinite(Number(summary?.updated))
+      ? Math.max(0, Math.trunc(Number(summary.updated)))
+      : 0;
+    const fullyTimedOut = levelTimeouts === scanned && updated === 0;
+
+    if (!fullyTimedOut) {
+      this._runtimePollTimeoutFailureStreak = 0;
+      return;
+    }
+
+    this._runtimePollTimeoutFailureStreak += 1;
+    if (this._runtimePollTimeoutFailureStreak < DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_THRESHOLD) {
+      return;
+    }
+
+    const cooldownMs = this._getRuntimePollTimeoutBackoffMs();
+    this._markRecentPlmControlActivity(cooldownMs);
+    this._logEngineWarn('Suspending runtime polling after repeated PLM level-query timeouts', {
+      stage: 'queue',
+      operation: 'runtime_poll',
+      details: {
+        scanned,
+        levelTimeouts,
+        timeoutFailureStreak: this._runtimePollTimeoutFailureStreak,
+        cooldownMs
+      }
+    });
+  }
+
   async _pollTrackedDeviceStates() {
     const devices = await Device.find(this._buildTrackedInsteonDeviceQuery());
     const summary = {
@@ -1551,7 +1601,8 @@ class InsteonService {
       offlineMarked: 0,
       skipped: 0,
       deferred: 0,
-      errors: 0
+      errors: 0,
+      levelTimeouts: 0
     };
     const nowMs = Date.now();
     const pollCandidates = [];
@@ -1640,6 +1691,9 @@ class InsteonService {
       } catch (error) {
         this._markRuntimePollAttempt(normalizedAddress);
         summary.errors += 1;
+        if (error?.code === 'INSTEON_LEVEL_TIMEOUT') {
+          summary.levelTimeouts += 1;
+        }
         this._logEngineWarn(`Runtime poll failed for ${this._formatInsteonAddress(normalizedAddress)}`, {
           stage: 'state',
           direction: 'inbound',
@@ -1662,6 +1716,7 @@ class InsteonService {
       }
     }
 
+    this._recordRuntimePollBatchOutcome(summary);
     return summary;
   }
 
@@ -1715,6 +1770,7 @@ class InsteonService {
     this._runtimeMonitoringStarted = false;
     this._runtimeMonitoringInProgress = false;
     this._runtimeMonitoringCursor = 0;
+    this._runtimePollTimeoutFailureStreak = 0;
     this._clearRuntimeMonitoringTimer();
   }
 
@@ -1745,6 +1801,7 @@ class InsteonService {
 
     const runtimeCursorReset = this._runtimeMonitoringCursor !== 0;
     this._runtimeMonitoringCursor = 0;
+    this._runtimePollTimeoutFailureStreak = 0;
 
     const runtimeCooldownCleared = this._getRuntimeMonitoringCooldownRemainingMs() > 0;
     this._runtimeMonitoringCooldownUntil = 0;
@@ -11599,6 +11656,7 @@ class InsteonService {
         cooldownMs: this._runtimeMonitoringCooldownMs,
         coolingDown: this._isRuntimeMonitoringCoolingDown(),
         cooldownRemainingMs: this._getRuntimeMonitoringCooldownRemainingMs(),
+        timeoutFailureStreak: this._runtimePollTimeoutFailureStreak,
         pollTimeoutMs: this._runtimeStatePollTimeoutMs,
         pollPauseMs: this._runtimeStatePollPauseMs,
         pendingRefreshes: this._pendingRuntimeStateRefreshes.size

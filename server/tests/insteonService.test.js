@@ -546,16 +546,22 @@ test('_pollTrackedDeviceStates does not mark dimmers offline when level queries 
   const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalMarkRuntimePollAttempt = insteonService._markRuntimePollAttempt;
+  const originalMarkRecentPlmControlActivity = insteonService._markRecentPlmControlActivity;
   const originalHasPendingHigherPriorityPlmOperation = insteonService._hasPendingHigherPriorityPlmOperation;
   const originalSelectRuntimePollBatch = insteonService._selectRuntimePollBatch;
+  const originalRuntimeMonitoringIntervalMs = insteonService._runtimeMonitoringIntervalMs;
+  const originalRuntimePollTimeoutFailureStreak = insteonService._runtimePollTimeoutFailureStreak;
 
   t.after(() => {
     Device.find = originalDeviceFind;
     insteonService._queryDeviceLevelByAddress = originalQueryLevel;
     insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
     insteonService._markRuntimePollAttempt = originalMarkRuntimePollAttempt;
+    insteonService._markRecentPlmControlActivity = originalMarkRecentPlmControlActivity;
     insteonService._hasPendingHigherPriorityPlmOperation = originalHasPendingHigherPriorityPlmOperation;
     insteonService._selectRuntimePollBatch = originalSelectRuntimePollBatch;
+    insteonService._runtimeMonitoringIntervalMs = originalRuntimeMonitoringIntervalMs;
+    insteonService._runtimePollTimeoutFailureStreak = originalRuntimePollTimeoutFailureStreak;
   });
 
   const trackedDevice = {
@@ -569,6 +575,7 @@ test('_pollTrackedDeviceStates does not mark dimmers offline when level queries 
   };
 
   const persisted = [];
+  let capturedCooldownMs = null;
   Device.find = async () => [trackedDevice];
   insteonService._queryDeviceLevelByAddress = async () => {
     const error = new Error('Timeout getting device status for 38.8A.57');
@@ -580,19 +587,45 @@ test('_pollTrackedDeviceStates does not mark dimmers offline when level queries 
     return patch;
   };
   insteonService._markRuntimePollAttempt = () => {};
+  insteonService._markRecentPlmControlActivity = (cooldownMs) => {
+    capturedCooldownMs = cooldownMs;
+  };
   insteonService._hasPendingHigherPriorityPlmOperation = () => false;
   insteonService._selectRuntimePollBatch = (candidates) => ({
     pollBatch: candidates,
     effectiveBatchSize: candidates.length,
     cursorStart: 0
   });
+  insteonService._runtimeMonitoringIntervalMs = 30000;
+  insteonService._runtimePollTimeoutFailureStreak = 0;
 
   const summary = await insteonService._pollTrackedDeviceStates();
 
   assert.equal(summary.scanned, 1);
   assert.equal(summary.errors, 1);
+  assert.equal(summary.levelTimeouts, 1);
   assert.equal(summary.offlineMarked, 0);
   assert.equal(persisted.length, 0);
+  assert.equal(capturedCooldownMs, 120000);
+  assert.equal(insteonService._runtimePollTimeoutFailureStreak, 1);
+});
+
+test('_recordRuntimePollBatchOutcome resets the timeout failure streak after a useful polling batch', () => {
+  const originalRuntimePollTimeoutFailureStreak = insteonService._runtimePollTimeoutFailureStreak;
+
+  try {
+    insteonService._runtimePollTimeoutFailureStreak = 3;
+    insteonService._recordRuntimePollBatchOutcome({
+      scanned: 2,
+      errors: 0,
+      levelTimeouts: 0,
+      updated: 1
+    });
+
+    assert.equal(insteonService._runtimePollTimeoutFailureStreak, 0);
+  } finally {
+    insteonService._runtimePollTimeoutFailureStreak = originalRuntimePollTimeoutFailureStreak;
+  }
 });
 
 test('_getRuntimeMonitoringEffectiveBatchSize respects the configured batch size for slow PLM polls', () => {
