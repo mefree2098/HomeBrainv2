@@ -1749,6 +1749,38 @@ test('_executeHubCommandWithTimeout forwards commandRetries into the queued PLM 
   assert.equal(result.ack, true);
 });
 
+test('_executeHubCommandWithTimeout rejects bare PLM ACKs when a device response is required', async (t) => {
+  const originalExecuteQueuedPlmCallbackOperation = insteonService._executeQueuedPlmCallbackOperation;
+
+  t.after(() => {
+    insteonService._executeQueuedPlmCallbackOperation = originalExecuteQueuedPlmCallbackOperation;
+  });
+
+  insteonService._executeQueuedPlmCallbackOperation = async () => ({
+    ack: true,
+    success: false
+  });
+
+  await assert.rejects(
+    insteonService._executeHubCommandWithTimeout(
+      () => {},
+      'Timeout turning on device',
+      1500,
+      {
+        priority: 'control',
+        kind: 'turn_on',
+        label: 'turning on 11.22.33',
+        requireDeviceResponse: true
+      }
+    ),
+    (error) => {
+      assert.equal(error.code, 'INSTEON_DEVICE_NO_RESPONSE');
+      assert.match(error.message, /target device did not respond after PLM ACK/i);
+      return true;
+    }
+  );
+});
+
 test('turnOn can recover after command acknowledgement times out if explicitly requested and the device state confirms ON', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
@@ -1841,6 +1873,55 @@ test('turnOn does not attempt state recovery after a command timeout unless expl
     /Timeout turning on device/
   );
   assert.equal(recoveryCalls, 0);
+});
+
+test('turnOn rejects bare PLM ACKs without persisting an optimistic fallback state', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteQueuedPlmCallbackOperation = insteonService._executeQueuedPlmCallbackOperation;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeQueuedPlmCallbackOperation = originalExecuteQueuedPlmCallbackOperation;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  let persistCalls = 0;
+  let scheduledRefresh = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOn(_address, _level, callback) {
+      callback(null, { ack: true, success: false });
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._executeQueuedPlmCallbackOperation = async () => ({
+    ack: true,
+    success: false
+  });
+  insteonService._persistDeviceRuntimeState = async () => {
+    persistCalls += 1;
+  };
+  insteonService._scheduleRuntimeStateRefresh = () => {
+    scheduledRefresh += 1;
+  };
+
+  await assert.rejects(
+    insteonService.turnOn('mock-device', 100),
+    /target device did not respond after PLM ACK/i
+  );
+  assert.equal(persistCalls, 0);
+  assert.equal(scheduledRefresh, 0);
 });
 
 test('turnOff can still do stable synchronous verification when explicitly requested', async (t) => {
@@ -2107,6 +2188,55 @@ test('turnOff defaults to a single low-level PLM command attempt', async (t) => 
   });
 
   assert.equal(receivedExecutionOptions.commandRetries, 0);
+});
+
+test('turnOff rejects bare PLM ACKs without persisting an optimistic fallback state', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteQueuedPlmCallbackOperation = insteonService._executeQueuedPlmCallbackOperation;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeQueuedPlmCallbackOperation = originalExecuteQueuedPlmCallbackOperation;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  let persistCalls = 0;
+  let scheduledRefresh = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOff(_address, callback) {
+      callback(null, { ack: true, success: false });
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'SwitchLinc Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._executeQueuedPlmCallbackOperation = async () => ({
+    ack: true,
+    success: false
+  });
+  insteonService._persistDeviceRuntimeState = async () => {
+    persistCalls += 1;
+  };
+  insteonService._scheduleRuntimeStateRefresh = () => {
+    scheduledRefresh += 1;
+  };
+
+  await assert.rejects(
+    insteonService.turnOff('mock-device'),
+    /target device did not respond after PLM ACK/i
+  );
+  assert.equal(persistCalls, 0);
+  assert.equal(scheduledRefresh, 0);
 });
 
 test('turnOff retries command timeouts before succeeding', async (t) => {
