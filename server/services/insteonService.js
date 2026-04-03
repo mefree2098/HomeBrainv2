@@ -92,6 +92,8 @@ class InsteonService {
     this._runtimeErrorListener = null;
     this._runtimeCloseListener = null;
     this._runtimeCommandListener = null;
+    this._runtimeRecvCommandListener = null;
+    this._recentRuntimeCommandSignatures = new Map();
     this._connectPromise = null;
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
@@ -1109,12 +1111,17 @@ class InsteonService {
       this._runtimeCloseListener = null;
       this._runtimeErrorListener = null;
       this._runtimeCommandListener = null;
+      this._runtimeRecvCommandListener = null;
+      this._recentRuntimeCommandSignatures.clear();
       if (this._runtimeMonitoringStarted) {
         this._scheduleRuntimeMonitoringPass(1000, 'runtime-close');
       }
     };
 
-    this._runtimeCommandListener = (command) => {
+    const dispatchRuntimeCommand = (command, eventName) => {
+      if (!this._shouldProcessRuntimeCommandEnvelope(command, eventName)) {
+        return;
+      }
       this._handleRuntimeCommand(command).catch((error) => {
         this._logEngineWarn('Runtime command handling error', {
           stage: 'runtime',
@@ -1128,15 +1135,24 @@ class InsteonService {
       });
     };
 
+    this._runtimeCommandListener = (command) => {
+      dispatchRuntimeCommand(command, 'command');
+    };
+    this._runtimeRecvCommandListener = (command) => {
+      dispatchRuntimeCommand(command, 'recvCommand');
+    };
+
     this.hub.on('error', this._runtimeErrorListener);
     this.hub.on('close', this._runtimeCloseListener);
     this.hub.on('command', this._runtimeCommandListener);
+    this.hub.on('recvCommand', this._runtimeRecvCommandListener);
 
     this._runtimeListenersAttached = true;
   }
 
   _detachRuntimeListeners() {
     if (!this.hub || !this._runtimeListenersAttached) {
+      this._recentRuntimeCommandSignatures.clear();
       this._runtimeListenersAttached = false;
       return;
     }
@@ -1150,10 +1166,15 @@ class InsteonService {
     if (this._runtimeCommandListener) {
       this.hub.removeListener('command', this._runtimeCommandListener);
     }
+    if (this._runtimeRecvCommandListener) {
+      this.hub.removeListener('recvCommand', this._runtimeRecvCommandListener);
+    }
 
     this._runtimeCloseListener = null;
     this._runtimeErrorListener = null;
     this._runtimeCommandListener = null;
+    this._runtimeRecvCommandListener = null;
+    this._recentRuntimeCommandSignatures.clear();
     this._clearPendingRuntimeStateRefreshes();
     this._clearPendingRuntimeCommandAcks();
     this._runtimeListenersAttached = false;
@@ -1194,6 +1215,66 @@ class InsteonService {
       }
     }
     this._pendingRuntimeCommandAcks.clear();
+  }
+
+  _buildRuntimeCommandSignature(command) {
+    const payload = command?.standard || command?.extended || null;
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    const messageType = Number(payload.messageType);
+    if (!Number.isInteger(messageType)) {
+      return null;
+    }
+
+    const raw = typeof payload.raw === 'string' && payload.raw.trim()
+      ? payload.raw.trim().toUpperCase()
+      : null;
+    if (raw) {
+      return raw;
+    }
+
+    return [
+      payload.extended === true ? 'extended' : 'standard',
+      String(payload.id || '').trim().toUpperCase(),
+      String(payload.gatewayId || '').trim().toUpperCase(),
+      String(messageType),
+      String(payload.command1 || '').trim().toUpperCase(),
+      String(payload.command2 || '').trim().toUpperCase()
+    ].join(':');
+  }
+
+  _shouldProcessRuntimeCommandEnvelope(command, eventName = 'command') {
+    const payload = command?.standard || command?.extended || null;
+    if (!payload || typeof payload !== 'object') {
+      return false;
+    }
+
+    const messageType = Number(payload.messageType);
+    if (!Number.isInteger(messageType)) {
+      return false;
+    }
+
+    const signature = this._buildRuntimeCommandSignature(command);
+    if (!signature) {
+      return eventName === 'command';
+    }
+
+    const now = Date.now();
+    for (const [key, timestamp] of this._recentRuntimeCommandSignatures.entries()) {
+      if ((now - timestamp) > 1000) {
+        this._recentRuntimeCommandSignatures.delete(key);
+      }
+    }
+
+    const previousTimestamp = this._recentRuntimeCommandSignatures.get(signature);
+    if (Number.isFinite(previousTimestamp) && (now - previousTimestamp) < 1000) {
+      return false;
+    }
+
+    this._recentRuntimeCommandSignatures.set(signature, now);
+    return true;
   }
 
   _buildPendingRuntimeCommandAckKey(address, expectedStatus) {
@@ -1795,6 +1876,7 @@ class InsteonService {
 
     const pollMetadataEntriesCleared = this._runtimePollMetadata.size;
     this._runtimePollMetadata.clear();
+    this._recentRuntimeCommandSignatures.clear();
 
     const runtimeDeviceCacheEntriesCleared = this.devices.size;
     this.devices.clear();
@@ -6857,6 +6939,145 @@ class InsteonService {
       );
       return null;
     }
+  }
+
+  _collectRuntimeLinkAuditAddresses(payload = {}) {
+    const rawAddresses = payload.addresses
+      ?? payload.deviceIds
+      ?? payload.insteonAddresses
+      ?? payload.rawDeviceList
+      ?? payload.rawList
+      ?? null;
+
+    const rawValues = Array.isArray(rawAddresses)
+      ? rawAddresses
+      : (typeof rawAddresses === 'string' ? rawAddresses.split(/[\s,]+/) : []);
+
+    return Array.from(new Set(
+      rawValues
+        .map((value) => this._normalizePossibleInsteonAddress(value))
+        .filter(Boolean)
+    ));
+  }
+
+  async auditRuntimeMonitoringLinks(payload = {}) {
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const group = Number(payload.group ?? payload.linkGroup ?? DEFAULT_ISY_IMPORT_GROUP);
+    if (!Number.isInteger(group) || group < 0 || group > 255) {
+      throw new Error('Runtime link audit group must be an integer between 0 and 255');
+    }
+
+    const requestedAddresses = this._collectRuntimeLinkAuditAddresses(payload);
+    const trackedDevices = requestedAddresses.length === 0
+      ? await Device.find(this._buildTrackedInsteonDeviceQuery())
+        .select('_id name type properties')
+        .lean()
+      : [];
+
+    const targets = new Map();
+    for (const device of trackedDevices) {
+      const normalizedAddress = this._normalizePossibleInsteonAddress(device?.properties?.insteonAddress);
+      if (!normalizedAddress) {
+        continue;
+      }
+
+      targets.set(normalizedAddress, {
+        deviceId: device?._id ? String(device._id) : null,
+        address: normalizedAddress,
+        name: typeof device?.name === 'string' && device.name.trim() ? device.name.trim() : null
+      });
+    }
+
+    for (const address of requestedAddresses) {
+      if (!targets.has(address)) {
+        targets.set(address, {
+          deviceId: null,
+          address,
+          name: null
+        });
+      }
+    }
+
+    if (targets.size === 0) {
+      throw new Error('No valid INSTEON addresses were available for runtime link audit');
+    }
+
+    const plmInfo = await this.getPLMInfo();
+    const normalizedPlmId = this._normalizePossibleInsteonAddress(plmInfo?.deviceId);
+    if (!normalizedPlmId) {
+      throw new Error('PLM device ID unavailable from modem info; unable to audit runtime monitoring links');
+    }
+
+    const results = [];
+    for (const target of targets.values()) {
+      // eslint-disable-next-line no-await-in-loop
+      const responderLinkToPlm = await this._deviceHasResponderLinkToController(target.address, group, normalizedPlmId);
+      // eslint-disable-next-line no-await-in-loop
+      const controllerLinkToPlm = await this._deviceHasControllerLinkToTarget(target.address, group, normalizedPlmId);
+
+      let monitoringStatus = 'ok';
+      let warning = null;
+      if (!responderLinkToPlm && controllerLinkToPlm === false) {
+        monitoringStatus = 'missing_both_links';
+        warning = 'Neither responder nor controller links to the current PLM were found.';
+      } else if (!responderLinkToPlm) {
+        monitoringStatus = 'missing_responder_link';
+        warning = 'The device does not appear as a responder linked to the current PLM.';
+      } else if (controllerLinkToPlm === false) {
+        monitoringStatus = 'missing_controller_link';
+        warning = 'The device-to-PLM controller link is missing, so manual updates will not reach HomeBrain.';
+      } else if (controllerLinkToPlm === null) {
+        monitoringStatus = 'controller_link_unknown';
+        warning = 'The device-to-PLM controller link could not be verified.';
+      }
+
+      results.push({
+        deviceId: target.deviceId,
+        address: target.address,
+        displayAddress: this._formatInsteonAddress(target.address),
+        name: target.name,
+        responderLinkToPlm,
+        controllerLinkToPlm,
+        monitoringStatus,
+        manualUpdatesExpected: monitoringStatus === 'ok',
+        warning
+      });
+    }
+
+    const summary = {
+      audited: results.length,
+      ok: results.filter((entry) => entry.monitoringStatus === 'ok').length,
+      missingResponder: results.filter((entry) => entry.monitoringStatus === 'missing_responder_link').length,
+      missingController: results.filter((entry) => entry.monitoringStatus === 'missing_controller_link').length,
+      missingBoth: results.filter((entry) => entry.monitoringStatus === 'missing_both_links').length,
+      unknownController: results.filter((entry) => entry.monitoringStatus === 'controller_link_unknown').length
+    };
+
+    this._logEngineInfo('Completed INSTEON runtime monitoring link audit', {
+      stage: 'maintenance',
+      details: {
+        group,
+        audited: summary.audited,
+        ok: summary.ok,
+        missingResponder: summary.missingResponder,
+        missingController: summary.missingController,
+        missingBoth: summary.missingBoth,
+        unknownController: summary.unknownController
+      }
+    });
+
+    return {
+      success: true,
+      message: `Audited ${summary.audited} INSTEON device${summary.audited === 1 ? '' : 's'} for HomeBrain PLM monitoring links.`,
+      group,
+      plmDeviceId: normalizedPlmId,
+      plmDisplayAddress: this._formatInsteonAddress(normalizedPlmId),
+      summary,
+      devices: results
+    };
   }
 
   async _isTopologySceneAlreadyLinked(scene, { normalizedPlmId = null } = {}) {

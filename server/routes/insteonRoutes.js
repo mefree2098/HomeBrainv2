@@ -367,6 +367,29 @@ router.post('/maintenance/runtime-monitoring/start', async (req, res) => {
   }
 });
 
+// Description: Audit whether devices have the PLM links required for unsolicited runtime updates
+// Endpoint: POST /api/insteon/maintenance/runtime-links/audit
+// Request: { addresses?: string[]|string, group?: number }
+// Response: { success: boolean, message: string, plmDeviceId: string, summary: object, devices: Array<object> }
+router.post('/maintenance/runtime-links/audit', async (req, res) => {
+  console.log('InsteonRoutes: Auditing INSTEON runtime monitoring links');
+
+  try {
+    const result = await insteonService.auditRuntimeMonitoringLinks(req.body || {});
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to audit INSTEON runtime monitoring links:', error.message);
+    console.error(error.stack);
+    const statusCode = /group must be|no valid insteon addresses|plm device id unavailable/i.test(String(error.message).toLowerCase())
+      ? 400
+      : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 // Description: Soft-reset HomeBrain's PLM transport state by clearing local queues/caches, disconnecting, and reconnecting
 // Endpoint: POST /api/insteon/maintenance/soft-reset
 // Request: { reconnect?: boolean, resumeRuntimeMonitoring?: boolean, pauseBeforeReconnectMs?: number }
