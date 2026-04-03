@@ -1717,6 +1717,38 @@ test('turnOn enables one low-level PLM resend by default', async (t) => {
   assert.equal(receivedExecutionOptions.commandRetries, 1);
 });
 
+test('_executeHubCommandWithTimeout forwards commandRetries into the queued PLM callback operation', async (t) => {
+  const originalExecuteQueuedPlmCallbackOperation = insteonService._executeQueuedPlmCallbackOperation;
+
+  t.after(() => {
+    insteonService._executeQueuedPlmCallbackOperation = originalExecuteQueuedPlmCallbackOperation;
+  });
+
+  let receivedQueueOptions = null;
+  insteonService._executeQueuedPlmCallbackOperation = async (_invoke, options = {}) => {
+    receivedQueueOptions = options;
+    return {
+      ack: true,
+      success: true
+    };
+  };
+
+  const result = await insteonService._executeHubCommandWithTimeout(
+    () => {},
+    'Timeout turning on device',
+    1500,
+    {
+      priority: 'control',
+      kind: 'turn_on',
+      label: 'turning on 11.22.33',
+      commandRetries: 1
+    }
+  );
+
+  assert.equal(receivedQueueOptions.commandRetries, 1);
+  assert.equal(result.ack, true);
+});
+
 test('turnOn can recover after command acknowledgement times out if the device state confirms ON', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;

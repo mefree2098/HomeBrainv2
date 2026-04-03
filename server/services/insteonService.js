@@ -9686,6 +9686,9 @@ class InsteonService {
     const boundedTimeoutMs = Number.isFinite(Number(timeoutMs))
       ? Math.max(500, Number(timeoutMs))
       : 5000;
+    const commandRetries = Number.isFinite(Number(options.commandRetries))
+      ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
+      : 0;
     const status = await this._executeQueuedPlmCallbackOperation(
       invoke,
       {
@@ -9696,7 +9699,7 @@ class InsteonService {
         timeoutMessage,
         timeoutCode: 'INSTEON_COMMAND_TIMEOUT',
         commandTimeoutMs: boundedTimeoutMs,
-        commandRetries: 0,
+        commandRetries,
         cancelInProgressOnTimeout: true
       }
     );
