@@ -1672,7 +1672,7 @@ test('turnOn can return after acknowledgement without synchronous verification',
   assert.equal(result.details.verificationMode, 'ack');
 });
 
-test('turnOn defaults to the standard on opcode even when fast on is available', async (t) => {
+test('turnOn defaults to the fast on opcode for full-on commands when available', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -1725,15 +1725,15 @@ test('turnOn defaults to the standard on opcode even when fast on is available',
     verificationMode: 'fast'
   });
 
-  assert.equal(standardTurnOnCalls, 1);
-  assert.equal(fastTurnOnCalls, 0);
+  assert.equal(standardTurnOnCalls, 0);
+  assert.equal(fastTurnOnCalls, 1);
   assert.equal(receivedConfirmOptions.initialDelayMs, 700);
   assert.equal(receivedConfirmOptions.requiredMatches, 1);
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
 });
 
-test('turnOn can use the fast on opcode when explicitly requested', async (t) => {
+test('turnOn still uses the standard on opcode for partial brightness levels', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -1755,8 +1755,9 @@ test('turnOn can use the fast on opcode when explicitly requested', async (t) =>
   insteonService.hub = {
     light(_address) {
       return {
-        turnOn(_level, _callback) {
+        turnOn(_level, callback) {
           standardTurnOnCalls += 1;
+          callback(null, { ack: true, success: true });
         },
         turnOnFast(callback) {
           fastTurnOnCalls += 1;
@@ -1775,21 +1776,75 @@ test('turnOn can use the fast on opcode when explicitly requested', async (t) =>
     receivedConfirmOptions = options;
     return {
       status: true,
-      brightness: 100,
-      level: 100,
+      brightness: 68,
+      level: 68,
       confirmedReads: 1
     };
   };
 
-  const result = await insteonService.turnOn('mock-device', 100, {
-    useFastOnCommand: true,
+  const result = await insteonService.turnOn('mock-device', 68, {
     verificationMode: 'fast'
   });
 
-  assert.equal(standardTurnOnCalls, 0);
-  assert.equal(fastTurnOnCalls, 1);
+  assert.equal(standardTurnOnCalls, 1);
+  assert.equal(fastTurnOnCalls, 0);
   assert.equal(receivedConfirmOptions.initialDelayMs, 700);
   assert.equal(receivedConfirmOptions.requiredMatches, 1);
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+});
+
+test('turnOn can force the standard on opcode when explicitly requested', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+  });
+
+  let standardTurnOnCalls = 0;
+  let fastTurnOnCalls = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    light(_address) {
+      return {
+        turnOn(_level, callback) {
+          standardTurnOnCalls += 1;
+          callback(null, { ack: true, success: true });
+        },
+        turnOnFast(_callback) {
+          fastTurnOnCalls += 1;
+        }
+      };
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => ({
+    status: true,
+    brightness: 100,
+    level: 100,
+    confirmedReads: 1
+  });
+
+  const result = await insteonService.turnOn('mock-device', 100, {
+    useFastOnCommand: false,
+    verificationMode: 'fast'
+  });
+
+  assert.equal(standardTurnOnCalls, 1);
+  assert.equal(fastTurnOnCalls, 0);
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
 });
@@ -1966,6 +2021,50 @@ test('_executeHubCommandWithTimeout rejects bare PLM ACKs when a device response
       return true;
     }
   );
+});
+
+test('_executeHubCommandWithTimeout accepts a late runtime direct acknowledgement when a device response is required', async (t) => {
+  const originalExecuteQueuedPlmCallbackOperation = insteonService._executeQueuedPlmCallbackOperation;
+
+  t.after(() => {
+    insteonService._executeQueuedPlmCallbackOperation = originalExecuteQueuedPlmCallbackOperation;
+    insteonService._clearPendingRuntimeCommandAcks();
+  });
+
+  insteonService._executeQueuedPlmCallbackOperation = async () => ({
+    ack: true,
+    success: false
+  });
+
+  setTimeout(() => {
+    insteonService._resolvePendingRuntimeCommandAcks({
+      messageType: 1,
+      sourceAddress: '112233',
+      expectedStatus: true,
+      semanticCommand1: '12',
+      semanticCommand2: '00',
+      messageClass: 'direct_ack'
+    });
+  }, 20);
+
+  const result = await insteonService._executeHubCommandWithTimeout(
+    () => {},
+    'Timeout turning on device',
+    1500,
+    {
+      priority: 'control',
+      kind: 'turn_on',
+      label: 'turning on 11.22.33 (fast)',
+      requireDeviceResponse: true,
+      runtimeAckAddress: '112233',
+      runtimeAckExpectedStatus: true,
+      runtimeAckTimeoutMs: 200
+    }
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.runtimeAck?.matched, true);
+  assert.equal(result.runtimeAck?.command1, '12');
 });
 
 test('turnOn can recover after command acknowledgement times out if explicitly requested and the device state confirms ON', async (t) => {
@@ -2219,7 +2318,7 @@ test('turnOff defaults to acknowledgement-only verification', async (t) => {
   assert.equal(result.details.verificationMode, 'ack');
 });
 
-test('turnOff defaults to the standard off opcode even when fast off is available', async (t) => {
+test('turnOff defaults to the fast off opcode when available', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -2268,13 +2367,13 @@ test('turnOff defaults to the standard off opcode even when fast off is availabl
     verificationMode: 'fast'
   });
 
-  assert.equal(standardTurnOffCalls, 1);
-  assert.equal(fastTurnOffCalls, 0);
+  assert.equal(standardTurnOffCalls, 0);
+  assert.equal(fastTurnOffCalls, 1);
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
 });
 
-test('turnOff can use the fast off opcode when explicitly requested', async (t) => {
+test('turnOff can force the standard off opcode when explicitly requested', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -2295,8 +2394,9 @@ test('turnOff can use the fast off opcode when explicitly requested', async (t) 
   insteonService.hub = {
     light(_address) {
       return {
-        turnOff(_callback) {
+        turnOff(callback) {
           standardTurnOffCalls += 1;
+          callback(null, { ack: true, success: true });
         },
         turnOffFast(callback) {
           fastTurnOffCalls += 1;
@@ -2319,12 +2419,12 @@ test('turnOff can use the fast off opcode when explicitly requested', async (t) 
   });
 
   const result = await insteonService.turnOff('mock-device', {
-    useFastOffCommand: true,
+    useFastOffCommand: false,
     verificationMode: 'fast'
   });
 
-  assert.equal(standardTurnOffCalls, 0);
-  assert.equal(fastTurnOffCalls, 1);
+  assert.equal(standardTurnOffCalls, 1);
+  assert.equal(fastTurnOffCalls, 0);
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
 });

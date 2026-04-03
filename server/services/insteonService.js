@@ -55,6 +55,7 @@ const DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS = 2500;
 const DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS = 50;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS = 450;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1800;
+const DEFAULT_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS = 15000;
 const DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS = 300000;
 const INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS = Object.freeze([
   /^ttyUSB\d+$/i,
@@ -98,6 +99,7 @@ class InsteonService {
     this._activePlmOperation = null;
     this._plmDrainScheduled = false;
     this._pendingRuntimeStateRefreshes = new Map();
+    this._pendingRuntimeCommandAcks = new Map();
     this._runtimePollMetadata = new Map();
     this._runtimeSceneResponderCache = new Map();
     this._runtimeMonitoringCursor = 0;
@@ -159,6 +161,12 @@ class InsteonService {
       process.env.HOMEBRAIN_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS,
       DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS,
       500
+    );
+    this._lateRuntimeAckTimeoutMs = resolveBoundedNumber(
+      process.env.HOMEBRAIN_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS,
+      DEFAULT_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS,
+      0,
+      30000
     );
     this._runtimeSceneCacheTtlMs = resolveBoundedNumber(
       process.env.HOMEBRAIN_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS,
@@ -668,7 +676,7 @@ class InsteonService {
       }
     }
 
-    return false;
+    return null;
   }
 
   _shouldUseFastOnCommand(lightController, brightness, options = {}) {
@@ -692,7 +700,7 @@ class InsteonService {
     return this._resolveFastCommandPreference(
       options?.useFastOnCommand ?? options?.useFastCommand,
       ['HOMEBRAIN_INSTEON_USE_FAST_ON_COMMANDS', 'HOMEBRAIN_INSTEON_USE_FAST_DIRECT_COMMANDS']
-    );
+    ) !== false;
   }
 
   _shouldUseFastOffCommand(lightController, options = {}) {
@@ -711,7 +719,7 @@ class InsteonService {
     return this._resolveFastCommandPreference(
       options?.useFastOffCommand ?? options?.useFastCommand,
       ['HOMEBRAIN_INSTEON_USE_FAST_OFF_COMMANDS', 'HOMEBRAIN_INSTEON_USE_FAST_DIRECT_COMMANDS']
-    );
+    ) !== false;
   }
 
   _getDefaultVerificationMode() {
@@ -779,7 +787,8 @@ class InsteonService {
       legacyCallbackSuccess: hubStatus?.legacyCallbackSuccess === true,
       acknowledged: hubStatus?.ack === true,
       negativeAcknowledgement: hubStatus?.nack === true,
-      success: hubStatus?.success === true,
+      success: hubStatus?.success === true || hubStatus?.runtimeAck?.matched === true,
+      lateRuntimeAck: hubStatus?.runtimeAck?.matched === true,
       hasResponse: Boolean(hubStatus?.response),
       hasStandardResponse: Boolean(hubStatus?.response?.standard),
       hasExtendedResponse: Boolean(hubStatus?.response?.extended),
@@ -1088,6 +1097,7 @@ class InsteonService {
       this.connectionTransport = null;
       this.connectionTarget = null;
       this._clearPendingRuntimeStateRefreshes();
+      this._clearPendingRuntimeCommandAcks();
       this._runtimePollMetadata.clear();
       this._runtimeSceneResponderCache.clear();
       this._runtimeMonitoringCursor = 0;
@@ -1142,6 +1152,7 @@ class InsteonService {
     this._runtimeErrorListener = null;
     this._runtimeCommandListener = null;
     this._clearPendingRuntimeStateRefreshes();
+    this._clearPendingRuntimeCommandAcks();
     this._runtimeListenersAttached = false;
   }
 
@@ -1150,6 +1161,108 @@ class InsteonService {
       clearTimeout(timer);
     }
     this._pendingRuntimeStateRefreshes.clear();
+  }
+
+  _clearPendingRuntimeCommandAcks() {
+    for (const waiters of this._pendingRuntimeCommandAcks.values()) {
+      for (const waiter of waiters) {
+        if (waiter?.timer) {
+          clearTimeout(waiter.timer);
+        }
+        if (typeof waiter?.resolve === 'function') {
+          waiter.resolve(null);
+        }
+      }
+    }
+    this._pendingRuntimeCommandAcks.clear();
+  }
+
+  _buildPendingRuntimeCommandAckKey(address, expectedStatus) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress || typeof expectedStatus !== 'boolean') {
+      return null;
+    }
+
+    return `${normalizedAddress}:${expectedStatus ? 'on' : 'off'}`;
+  }
+
+  _getLateRuntimeAckTimeoutMs(options = {}) {
+    const timeoutRaw = Number(options?.runtimeAckTimeoutMs);
+    if (Number.isFinite(timeoutRaw)) {
+      return Math.max(0, Math.min(30000, Math.round(timeoutRaw)));
+    }
+
+    return this._lateRuntimeAckTimeoutMs;
+  }
+
+  _waitForPendingRuntimeCommandAck(address, expectedStatus, options = {}) {
+    const key = this._buildPendingRuntimeCommandAckKey(address, expectedStatus);
+    const timeoutMs = this._getLateRuntimeAckTimeoutMs(options);
+    if (!key || timeoutMs <= 0) {
+      return Promise.resolve(null);
+    }
+
+    return new Promise((resolve) => {
+      const waiters = this._pendingRuntimeCommandAcks.get(key) || [];
+      const waiter = {
+        resolve: (value) => {
+          if (waiter.timer) {
+            clearTimeout(waiter.timer);
+            waiter.timer = null;
+          }
+          resolve(value);
+        },
+        timer: null
+      };
+
+      waiter.timer = setTimeout(() => {
+        const pendingWaiters = this._pendingRuntimeCommandAcks.get(key) || [];
+        const remainingWaiters = pendingWaiters.filter((candidate) => candidate !== waiter);
+        if (remainingWaiters.length > 0) {
+          this._pendingRuntimeCommandAcks.set(key, remainingWaiters);
+        } else {
+          this._pendingRuntimeCommandAcks.delete(key);
+        }
+        resolve(null);
+      }, timeoutMs);
+
+      waiters.push(waiter);
+      this._pendingRuntimeCommandAcks.set(key, waiters);
+    });
+  }
+
+  _resolvePendingRuntimeCommandAcks(parsed) {
+    if (!parsed || parsed.messageType !== 1 || typeof parsed.expectedStatus !== 'boolean') {
+      return 0;
+    }
+
+    const key = this._buildPendingRuntimeCommandAckKey(parsed.sourceAddress, parsed.expectedStatus);
+    if (!key) {
+      return 0;
+    }
+
+    const waiters = this._pendingRuntimeCommandAcks.get(key);
+    if (!Array.isArray(waiters) || waiters.length === 0) {
+      return 0;
+    }
+
+    this._pendingRuntimeCommandAcks.delete(key);
+    const ackPayload = {
+      matched: true,
+      address: parsed.sourceAddress,
+      expectedStatus: parsed.expectedStatus,
+      command1: parsed.semanticCommand1 || parsed.command1 || null,
+      command2: parsed.semanticCommand2 || parsed.command2 || null,
+      messageType: parsed.messageType,
+      messageClass: parsed.messageClass || null,
+      receivedAt: new Date()
+    };
+
+    for (const waiter of waiters) {
+      waiter.resolve(ackPayload);
+    }
+
+    return waiters.length;
   }
 
   _clearRuntimeMonitoringTimer() {
@@ -1554,6 +1667,8 @@ class InsteonService {
   _clearLocalPlmRuntimeCaches(reason = 'maintenance') {
     const pendingRefreshesCleared = this._pendingRuntimeStateRefreshes.size;
     this._clearPendingRuntimeStateRefreshes();
+    const pendingCommandAcksCleared = this._pendingRuntimeCommandAcks.size;
+    this._clearPendingRuntimeCommandAcks();
 
     const sceneCacheEntriesCleared = this._runtimeSceneResponderCache.size;
     this._runtimeSceneResponderCache.clear();
@@ -1574,6 +1689,7 @@ class InsteonService {
       stage: 'maintenance',
       details: {
         pendingRefreshesCleared,
+        pendingCommandAcksCleared,
         sceneCacheEntriesCleared,
         pollMetadataEntriesCleared,
         runtimeDeviceCacheEntriesCleared,
@@ -1584,6 +1700,7 @@ class InsteonService {
 
     return {
       pendingRefreshesCleared,
+      pendingCommandAcksCleared,
       sceneCacheEntriesCleared,
       pollMetadataEntriesCleared,
       runtimeDeviceCacheEntriesCleared,
@@ -1597,8 +1714,10 @@ class InsteonService {
     const droppedQueueDepth = this._plmOperationQueue.length;
     const activeOperation = this._snapshotActivePlmOperation();
     const pendingRefreshesCleared = this._pendingRuntimeStateRefreshes.size;
+    const pendingCommandAcksCleared = this._pendingRuntimeCommandAcks.size;
 
     this._clearPendingRuntimeStateRefreshes();
+    this._clearPendingRuntimeCommandAcks();
     this._clearPlmOperationQueue(new Error(`PLM queue cleared during ${reason}`));
 
     this._logEngineInfo('Cleared queued PLM operations', {
@@ -1606,7 +1725,8 @@ class InsteonService {
       details: {
         reason,
         droppedQueueDepth,
-        pendingRefreshesCleared
+        pendingRefreshesCleared,
+        pendingCommandAcksCleared
       }
     });
 
@@ -1619,6 +1739,7 @@ class InsteonService {
         : 'PLM queue was already empty.',
       droppedQueueDepth,
       pendingRefreshesCleared,
+      pendingCommandAcksCleared,
       activeOperation,
       status
     };
@@ -7763,6 +7884,8 @@ class InsteonService {
       }
     });
 
+    this._resolvePendingRuntimeCommandAcks(parsed);
+
     if (parsed.observedState?.state && parsed.observedState?.address) {
       await this._persistDeviceRuntimeStateByAddress(parsed.observedState.address, parsed.observedState.state);
     }
@@ -9881,7 +10004,10 @@ class InsteonService {
             label: options.label || timeoutMessage,
             requireDeviceResponse: options.requireDeviceResponse === true,
             commandRetries: options.commandRetries,
-            nakTimeoutMs: options.nakTimeoutMs
+            nakTimeoutMs: options.nakTimeoutMs,
+            runtimeAckAddress: options.runtimeAckAddress,
+            runtimeAckExpectedStatus: options.runtimeAckExpectedStatus,
+            runtimeAckTimeoutMs: options.runtimeAckTimeoutMs
           }
         );
         return {
@@ -9993,6 +10119,37 @@ class InsteonService {
     }
 
     if (options.requireDeviceResponse === true && !summary.success) {
+      const lateRuntimeAck = await this._waitForPendingRuntimeCommandAck(
+        options.runtimeAckAddress,
+        options.runtimeAckExpectedStatus,
+        {
+          runtimeAckTimeoutMs: options.runtimeAckTimeoutMs
+        }
+      );
+
+      if (lateRuntimeAck) {
+        this._logEngineInfo(`PLM command confirmed by late runtime device acknowledgement: ${String(options.label || timeoutMessage)}`, {
+          stage: 'command',
+          direction: 'inbound',
+          operation: options.kind || 'control_command',
+          details: {
+            summary,
+            runtimeAck: {
+              address: this._formatInsteonAddress(lateRuntimeAck.address),
+              expectedStatus: lateRuntimeAck.expectedStatus,
+              command1: lateRuntimeAck.command1,
+              command2: lateRuntimeAck.command2,
+              messageClass: lateRuntimeAck.messageClass
+            }
+          }
+        });
+        return {
+          ...normalizedStatus,
+          success: true,
+          runtimeAck: lateRuntimeAck
+        };
+      }
+
       this._logEngineWarn(`PLM command accepted by modem but target device did not respond: ${String(options.label || timeoutMessage)}`, {
         stage: 'command',
         direction: 'inbound',
@@ -10540,6 +10697,9 @@ class InsteonService {
             kind: 'turn_on',
             label: `turning on ${this._formatInsteonAddress(address)}${useFastOnCommand ? ' (fast)' : ''}`,
             requireDeviceResponse: true,
+            runtimeAckAddress: address,
+            runtimeAckExpectedStatus: true,
+            runtimeAckTimeoutMs: options?.runtimeAckTimeoutMs,
             commandRetries: Number.isFinite(Number(options?.commandRetries))
               ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
               : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES
@@ -10779,6 +10939,9 @@ class InsteonService {
             kind: 'turn_off',
             label: `turning off ${this._formatInsteonAddress(address)}${useFastOffCommand ? ' (fast)' : ''}`,
             requireDeviceResponse: true,
+            runtimeAckAddress: address,
+            runtimeAckExpectedStatus: false,
+            runtimeAckTimeoutMs: options?.runtimeAckTimeoutMs,
             commandRetries: Number.isFinite(Number(options?.commandRetries))
               ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
               : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES
