@@ -1,5 +1,7 @@
 # Alexa Integration
 
+If you need a step-by-step admin deployment guide, use [alexa-admin-setup.md](alexa-admin-setup.md). This document is the architecture and rollout note.
+
 HomeBrain now supports a two-layer Alexa architecture:
 
 - Alexa Smart Home for no-keyword control of HomeBrain devices, groups, scenes, and safe manual workflows
@@ -44,6 +46,7 @@ HOMEBRAIN_BROKER_PUBLIC_BASE_URL=https://broker.example.com
 HOMEBRAIN_ALEXA_OAUTH_CLIENT_ID=homebrain-alexa-skill
 HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET=<shared-or-managed-secret>
 HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS=homebrain-alexa-skill
+HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS=https://pitangui.amazon.com/api/skill/link/...,https://layla.amazon.com/api/skill/link/...
 HOMEBRAIN_ALEXA_EVENT_CLIENT_ID=<lwa-client-id>
 HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET=<lwa-client-secret>
 ```
@@ -54,10 +57,12 @@ Useful optional overrides:
 HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json
 HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS=300000
 HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS=3600
-HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=2592000
+HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=15552000
 HOMEBRAIN_ALEXA_LWA_TOKEN_URL=https://api.amazon.com/auth/o2/token
 HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL=https://api.amazonalexa.com/v3/events
 ```
+
+For production, keep Alexa account-linking refresh tokens long-lived and leave the Alexa console PKCE toggle off until the broker OAuth flow is upgraded to support it.
 
 ## Smart Home Lambda Environment
 
@@ -71,11 +76,10 @@ HOMEBRAIN_ALEXA_EVENT_REGION=NA
 
 ## Custom Skill Lambda Environment
 
-The Custom Skill Lambda uses the same broker and should also know which region or locale defaults to apply:
+The current custom-skill Lambda only requires the broker base URL:
 
 ```dotenv
 HOMEBRAIN_BROKER_BASE_URL=https://broker.example.com
-HOMEBRAIN_ALEXA_CUSTOM_DEFAULT_LOCALE=en-US
 ```
 
 ## Setup Flow

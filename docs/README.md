@@ -9,7 +9,9 @@
 ## Day-To-Day Guides
 
 - Admin/operator guide: [`admin-guide.md`](admin-guide.md)
+- Alexa admin setup guide: [`alexa-admin-setup.md`](alexa-admin-setup.md)
 - Alexa integration and rollout guide: [`alexa-integration.md`](alexa-integration.md)
+- INSTEON service internals: [`insteon-service.md`](insteon-service.md)
 - End-user guide: [`user-guide.md`](user-guide.md)
 - Wake-word setup: [`wake-word-setup.md`](wake-word-setup.md)
 - Troubleshooting: [`troubleshooting.md`](troubleshooting.md)

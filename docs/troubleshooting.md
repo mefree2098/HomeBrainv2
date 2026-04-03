@@ -112,6 +112,10 @@ Supported connection styles:
 - local serial path
 - serial-to-TCP bridge
 
+Detailed service behavior and regression notes:
+
+- [`insteon-service.md`](insteon-service.md)
+
 If serial access fails, confirm the host can see the serial device and that the HomeBrain user has permission to use it.
 
 ## MongoDB Problems

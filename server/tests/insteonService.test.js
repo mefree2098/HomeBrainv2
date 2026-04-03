@@ -1458,7 +1458,66 @@ test('turnOn can return after acknowledgement without synchronous verification',
   assert.equal(result.details.verificationMode, 'ack');
 });
 
-test('turnOn uses fast on opcode for full brightness and waits for a post-command settle window', async (t) => {
+test('turnOn defaults to the standard on opcode even when fast on is available', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+  });
+
+  let standardTurnOnCalls = 0;
+  let fastTurnOnCalls = 0;
+  let receivedConfirmOptions = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    light(_address) {
+      return {
+        turnOn(_level, callback) {
+          standardTurnOnCalls += 1;
+          callback(null, { ack: true, success: true });
+        },
+        turnOnFast(callback) {
+          fastTurnOnCalls += 1;
+          callback(null, { ack: true, success: true });
+        }
+      };
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async (_address, _expectedStatus, options = {}) => {
+    receivedConfirmOptions = options;
+    return {
+      status: true,
+      brightness: 100,
+      level: 100,
+      confirmedReads: 1
+    };
+  };
+
+  const result = await insteonService.turnOn('mock-device', 100);
+
+  assert.equal(standardTurnOnCalls, 1);
+  assert.equal(fastTurnOnCalls, 0);
+  assert.equal(receivedConfirmOptions.initialDelayMs, 700);
+  assert.equal(receivedConfirmOptions.requiredMatches, 1);
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+});
+
+test('turnOn can use the fast on opcode when explicitly requested', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -1506,7 +1565,9 @@ test('turnOn uses fast on opcode for full brightness and waits for a post-comman
     };
   };
 
-  const result = await insteonService.turnOn('mock-device', 100);
+  const result = await insteonService.turnOn('mock-device', 100, {
+    useFastOnCommand: true
+  });
 
   assert.equal(standardTurnOnCalls, 0);
   assert.equal(fastTurnOnCalls, 1);
@@ -1658,7 +1719,60 @@ test('turnOff defaults to fast synchronous verification', async (t) => {
   assert.equal(result.details.verificationMode, 'fast');
 });
 
-test('turnOff uses fast off opcode when available', async (t) => {
+test('turnOff defaults to the standard off opcode even when fast off is available', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+  });
+
+  let standardTurnOffCalls = 0;
+  let fastTurnOffCalls = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    light(_address) {
+      return {
+        turnOff(callback) {
+          standardTurnOffCalls += 1;
+          callback(null, { ack: true, success: true });
+        },
+        turnOffFast(callback) {
+          fastTurnOffCalls += 1;
+          callback(null, { ack: true, success: true });
+        }
+      };
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'SwitchLinc Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => ({
+    status: false,
+    brightness: 0,
+    level: 0,
+    confirmedReads: 1
+  });
+
+  const result = await insteonService.turnOff('mock-device');
+
+  assert.equal(standardTurnOffCalls, 1);
+  assert.equal(fastTurnOffCalls, 0);
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+});
+
+test('turnOff can use the fast off opcode when explicitly requested', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -1702,7 +1816,9 @@ test('turnOff uses fast off opcode when available', async (t) => {
     confirmedReads: 1
   });
 
-  const result = await insteonService.turnOff('mock-device');
+  const result = await insteonService.turnOff('mock-device', {
+    useFastOffCommand: true
+  });
 
   assert.equal(standardTurnOffCalls, 0);
   assert.equal(fastTurnOffCalls, 1);
