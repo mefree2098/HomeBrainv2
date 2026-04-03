@@ -1541,6 +1541,243 @@ class InsteonService {
     this._clearRuntimeMonitoringTimer();
   }
 
+  _snapshotActivePlmOperation() {
+    return this._activePlmOperation
+      ? {
+          priority: this._activePlmOperation.priority,
+          kind: this._activePlmOperation.kind,
+          label: this._activePlmOperation.label
+        }
+      : null;
+  }
+
+  _clearLocalPlmRuntimeCaches(reason = 'maintenance') {
+    const pendingRefreshesCleared = this._pendingRuntimeStateRefreshes.size;
+    this._clearPendingRuntimeStateRefreshes();
+
+    const sceneCacheEntriesCleared = this._runtimeSceneResponderCache.size;
+    this._runtimeSceneResponderCache.clear();
+
+    const pollMetadataEntriesCleared = this._runtimePollMetadata.size;
+    this._runtimePollMetadata.clear();
+
+    const runtimeDeviceCacheEntriesCleared = this.devices.size;
+    this.devices.clear();
+
+    const runtimeCursorReset = this._runtimeMonitoringCursor !== 0;
+    this._runtimeMonitoringCursor = 0;
+
+    const runtimeCooldownCleared = this._getRuntimeMonitoringCooldownRemainingMs() > 0;
+    this._runtimeMonitoringCooldownUntil = 0;
+
+    this._logEngineInfo(`Cleared local INSTEON runtime caches (${reason})`, {
+      stage: 'maintenance',
+      details: {
+        pendingRefreshesCleared,
+        sceneCacheEntriesCleared,
+        pollMetadataEntriesCleared,
+        runtimeDeviceCacheEntriesCleared,
+        runtimeCursorReset,
+        runtimeCooldownCleared
+      }
+    });
+
+    return {
+      pendingRefreshesCleared,
+      sceneCacheEntriesCleared,
+      pollMetadataEntriesCleared,
+      runtimeDeviceCacheEntriesCleared,
+      runtimeCursorReset,
+      runtimeCooldownCleared
+    };
+  }
+
+  async clearPlmCommandQueue(options = {}) {
+    const reason = String(options.reason || 'manual maintenance queue clear');
+    const droppedQueueDepth = this._plmOperationQueue.length;
+    const activeOperation = this._snapshotActivePlmOperation();
+    const pendingRefreshesCleared = this._pendingRuntimeStateRefreshes.size;
+
+    this._clearPendingRuntimeStateRefreshes();
+    this._clearPlmOperationQueue(new Error(`PLM queue cleared during ${reason}`));
+
+    this._logEngineInfo('Cleared queued PLM operations', {
+      stage: 'maintenance',
+      details: {
+        reason,
+        droppedQueueDepth,
+        pendingRefreshesCleared
+      }
+    });
+
+    const status = await this.getStatusSnapshot().catch(() => this.getStatus());
+
+    return {
+      success: true,
+      message: droppedQueueDepth > 0
+        ? `Cleared ${droppedQueueDepth} queued PLM operation${droppedQueueDepth === 1 ? '' : 's'}.`
+        : 'PLM queue was already empty.',
+      droppedQueueDepth,
+      pendingRefreshesCleared,
+      activeOperation,
+      status
+    };
+  }
+
+  async cancelActivePlmCommand(options = {}) {
+    const reason = String(options.reason || 'manual maintenance cancellation');
+    const activeOperation = this._snapshotActivePlmOperation();
+    const cancelled = this._cancelInProgressHubCommandSafe(reason);
+
+    if (activeOperation) {
+      this._logEngineWarn(
+        cancelled
+          ? `Requested cancellation of active PLM operation: ${activeOperation.label}`
+          : `Unable to cancel active PLM operation: ${activeOperation.label}`,
+        {
+          stage: 'maintenance',
+          operation: activeOperation.kind,
+          details: {
+            reason,
+            cancelled
+          }
+        }
+      );
+    } else {
+      this._logEngineInfo('No active PLM operation was running when maintenance cancellation was requested', {
+        stage: 'maintenance',
+        details: {
+          reason
+        }
+      });
+    }
+
+    const status = await this.getStatusSnapshot().catch(() => this.getStatus());
+
+    return {
+      success: true,
+      message: activeOperation
+        ? (cancelled
+          ? `Cancellation requested for active PLM operation "${activeOperation.label}".`
+          : `Active PLM operation "${activeOperation.label}" could not be cancelled cleanly.`)
+        : 'No PLM operation was active.',
+      cancelled,
+      activeOperation,
+      status
+    };
+  }
+
+  async setRuntimeMonitoringEnabled(enabled, options = {}) {
+    const shouldEnable = enabled !== false;
+    const wasStarted = this._runtimeMonitoringStarted === true;
+
+    if (shouldEnable) {
+      this.startRuntimeMonitoring({ immediate: options.immediate === true });
+      this._logEngineInfo('Enabled INSTEON runtime monitoring', {
+        stage: 'maintenance',
+        details: {
+          immediate: options.immediate === true
+        }
+      });
+    } else {
+      this.stopRuntimeMonitoring();
+      this._logEngineInfo('Disabled INSTEON runtime monitoring', {
+        stage: 'maintenance'
+      });
+    }
+
+    const status = await this.getStatusSnapshot().catch(() => this.getStatus());
+
+    return {
+      success: true,
+      message: shouldEnable
+        ? 'INSTEON runtime polling resumed.'
+        : 'INSTEON runtime polling paused.',
+      runtimeMonitoring: {
+        wasStarted,
+        started: shouldEnable
+      },
+      status
+    };
+  }
+
+  async softResetPlm(options = {}) {
+    const reconnect = options.reconnect !== false;
+    const resumeRuntimeMonitoring = options.resumeRuntimeMonitoring !== false;
+    const pauseBeforeReconnectMs = Number.isFinite(Number(options.pauseBeforeReconnectMs))
+      ? Math.max(0, Math.min(5000, Math.round(Number(options.pauseBeforeReconnectMs))))
+      : 250;
+    const wasRuntimeMonitoringStarted = this._runtimeMonitoringStarted === true;
+    const hadRuntimeCursor = this._runtimeMonitoringCursor !== 0;
+    const activeOperation = this._snapshotActivePlmOperation();
+
+    this._logEngineWarn('Starting INSTEON PLM soft reset', {
+      stage: 'maintenance',
+      details: {
+        reconnect,
+        wasRuntimeMonitoringStarted,
+        pauseBeforeReconnectMs,
+        hadActiveOperation: Boolean(activeOperation)
+      }
+    });
+
+    this.stopRuntimeMonitoring();
+    const clearedCaches = this._clearLocalPlmRuntimeCaches('soft reset');
+    if (hadRuntimeCursor && !clearedCaches.runtimeCursorReset) {
+      clearedCaches.runtimeCursorReset = true;
+    }
+
+    const cancelledActiveCommand = this._cancelInProgressHubCommandSafe('PLM soft reset');
+    const droppedQueueDepth = this._plmOperationQueue.length;
+    this._clearPlmOperationQueue(new Error('PLM queue cleared during soft reset'));
+
+    const disconnectResult = await this.disconnect({ stopRuntimeMonitoring: false });
+
+    let connectResult = null;
+    if (reconnect) {
+      if (pauseBeforeReconnectMs > 0) {
+        await this._sleep(pauseBeforeReconnectMs);
+      }
+      connectResult = await this.connect();
+    }
+
+    const runtimeMonitoringRestarted = resumeRuntimeMonitoring && wasRuntimeMonitoringStarted;
+    if (runtimeMonitoringRestarted) {
+      this.startRuntimeMonitoring({ immediate: false });
+    }
+
+    const status = await this.getStatusSnapshot().catch(() => this.getStatus());
+
+    this._logEngineInfo('Completed INSTEON PLM soft reset', {
+      stage: 'maintenance',
+      details: {
+        reconnect,
+        cancelledActiveCommand,
+        droppedQueueDepth,
+        runtimeMonitoringRestarted
+      }
+    });
+
+    return {
+      success: true,
+      message: reconnect
+        ? 'INSTEON PLM soft reset completed. HomeBrain cleared local queues/caches, disconnected, and reconnected the PLM transport.'
+        : 'INSTEON PLM soft reset completed. HomeBrain cleared local queues/caches and disconnected the PLM transport.',
+      cancelledActiveCommand,
+      activeOperation,
+      droppedQueueDepth,
+      clearedCaches,
+      disconnectResult,
+      connectResult,
+      runtimeMonitoring: {
+        wasStarted: wasRuntimeMonitoringStarted,
+        started: runtimeMonitoringRestarted,
+        resumed: runtimeMonitoringRestarted
+      },
+      status
+    };
+  }
+
   _normalizeSerialPath(serialPath) {
     if (typeof serialPath !== 'string') {
       return serialPath;
