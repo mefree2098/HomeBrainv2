@@ -423,6 +423,10 @@ function getOllamaPrivilegeRepairHint(platform = process.platform) {
   return 'restore the HomeBrain Ollama sudoers entry';
 }
 
+function isNoNewPrivilegesOutput(output = '') {
+  return String(output || '').toLowerCase().includes('no new privileges');
+}
+
 function parseVersion(value) {
   const normalized = normalizeVersionString(value);
   if (!normalized) {
@@ -1149,6 +1153,12 @@ class OllamaService {
         throw new Error('Stored sudo permissions do not allow this command.');
       }
 
+      if (isNoNewPrivilegesOutput(output)) {
+        throw new Error(
+          `HomeBrain is running with NoNewPrivileges=true, so sudo is blocked. Run "${getOllamaPrivilegeRepairHint()}"`
+        );
+      }
+
       throw new Error(this.buildCommandFailureMessage('sudo command failed', error.code, error.signal, stdout, stderr));
     }
   }
@@ -1212,6 +1222,13 @@ class OllamaService {
         const output = `${stderr || ''}\n${stdout || ''}`;
         if (this.isSudoPromptRequiredOutput(output)) {
           complete(new Error('Unable to use sudo non-interactively.'));
+          return;
+        }
+
+        if (isNoNewPrivilegesOutput(output)) {
+          complete(new Error(
+            `HomeBrain is running with NoNewPrivileges=true, so sudo is blocked. Run "${getOllamaPrivilegeRepairHint()}"`
+          ));
           return;
         }
 
@@ -1289,6 +1306,13 @@ class OllamaService {
             || stderrLower.includes('no tty present')
             || stderrLower.includes('terminal is required')) {
           complete(new Error('Unable to read sudo password in this environment.'));
+          return;
+        }
+
+        if (isNoNewPrivilegesOutput(output)) {
+          complete(new Error(
+            `HomeBrain is running with NoNewPrivileges=true, so sudo is blocked. Run "${getOllamaPrivilegeRepairHint()}"`
+          ));
           return;
         }
 
