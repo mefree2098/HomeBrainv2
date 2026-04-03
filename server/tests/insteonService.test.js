@@ -598,6 +598,27 @@ test('_pollTrackedDeviceStates does not mark dimmers offline when level queries 
   assert.equal(persisted.length, 0);
 });
 
+test('_getRuntimeMonitoringEffectiveBatchSize respects the configured batch size for slow PLM polls', () => {
+  const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
+  const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
+  const originalPollTimeoutMs = insteonService._runtimeStatePollTimeoutMs;
+  const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
+
+  try {
+    insteonService._runtimeMonitoringIntervalMs = 30000;
+    insteonService._runtimeMonitoringBatchSize = 4;
+    insteonService._runtimeStatePollTimeoutMs = 2500;
+    insteonService._runtimeStatePollPauseMs = 50;
+
+    assert.equal(insteonService._getRuntimeMonitoringEffectiveBatchSize(74), 4);
+  } finally {
+    insteonService._runtimeMonitoringIntervalMs = originalIntervalMs;
+    insteonService._runtimeMonitoringBatchSize = originalBatchSize;
+    insteonService._runtimeStatePollTimeoutMs = originalPollTimeoutMs;
+    insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
+  }
+});
+
 test('_confirmDeviceStateByAddress retries level query and persists confirmed state', async (t) => {
   const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
@@ -909,41 +930,47 @@ test('_shouldPollRuntimeState treats address-bearing Insteon fan loads as pollab
   assert.equal(insteonService._shouldPollRuntimeState(trackedFan), true);
 });
 
-test('_getRuntimeMonitoringEffectiveBatchSize scales above the static default for large Insteon inventories', (t) => {
+test('_getRuntimeMonitoringEffectiveBatchSize does not inflate above the configured batch size', (t) => {
   const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
   const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
-  const originalStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+  const originalPollTimeoutMs = insteonService._runtimeStatePollTimeoutMs;
+  const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
 
   t.after(() => {
     insteonService._runtimeMonitoringBatchSize = originalBatchSize;
     insteonService._runtimeMonitoringIntervalMs = originalIntervalMs;
-    insteonService._runtimeMonitoringStaleAfterMs = originalStaleAfterMs;
+    insteonService._runtimeStatePollTimeoutMs = originalPollTimeoutMs;
+    insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
   });
 
   insteonService._runtimeMonitoringBatchSize = 4;
   insteonService._runtimeMonitoringIntervalMs = 30000;
-  insteonService._runtimeMonitoringStaleAfterMs = 60000;
+  insteonService._runtimeStatePollTimeoutMs = 2500;
+  insteonService._runtimeStatePollPauseMs = 50;
 
   assert.equal(insteonService._getRuntimeMonitoringEffectiveBatchSize(4), 4);
-  assert.equal(insteonService._getRuntimeMonitoringEffectiveBatchSize(77), 39);
+  assert.equal(insteonService._getRuntimeMonitoringEffectiveBatchSize(77), 4);
 });
 
 test('_selectRuntimePollBatch rotates across the tracked Insteon inventory instead of reusing the same slice', (t) => {
   const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
   const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
-  const originalStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+  const originalPollTimeoutMs = insteonService._runtimeStatePollTimeoutMs;
+  const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
   const originalCursor = insteonService._runtimeMonitoringCursor;
 
   t.after(() => {
     insteonService._runtimeMonitoringBatchSize = originalBatchSize;
     insteonService._runtimeMonitoringIntervalMs = originalIntervalMs;
-    insteonService._runtimeMonitoringStaleAfterMs = originalStaleAfterMs;
+    insteonService._runtimeStatePollTimeoutMs = originalPollTimeoutMs;
+    insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
     insteonService._runtimeMonitoringCursor = originalCursor;
   });
 
   insteonService._runtimeMonitoringBatchSize = 2;
   insteonService._runtimeMonitoringIntervalMs = 30000;
-  insteonService._runtimeMonitoringStaleAfterMs = 60000;
+  insteonService._runtimeStatePollTimeoutMs = 2500;
+  insteonService._runtimeStatePollPauseMs = 50;
   insteonService._runtimeMonitoringCursor = 0;
 
   const pollCandidates = ['11.22.33', '22.33.44', '33.44.55', '44.55.66', '55.66.77', '66.77.88']
@@ -966,11 +993,11 @@ test('_selectRuntimePollBatch rotates across the tracked Insteon inventory inste
 
   assert.deepEqual(
     firstSelection.pollBatch.map((entry) => entry.normalizedAddress),
-    ['112233', '223344', '334455']
+    ['112233', '223344']
   );
   assert.deepEqual(
     secondSelection.pollBatch.map((entry) => entry.normalizedAddress),
-    ['445566', '556677', '667788']
+    ['334455', '445566']
   );
 });
 
@@ -1507,7 +1534,9 @@ test('turnOn defaults to the standard on opcode even when fast on is available',
     };
   };
 
-  const result = await insteonService.turnOn('mock-device', 100);
+  const result = await insteonService.turnOn('mock-device', 100, {
+    verificationMode: 'fast'
+  });
 
   assert.equal(standardTurnOnCalls, 1);
   assert.equal(fastTurnOnCalls, 0);
@@ -1566,7 +1595,8 @@ test('turnOn can use the fast on opcode when explicitly requested', async (t) =>
   };
 
   const result = await insteonService.turnOn('mock-device', 100, {
-    useFastOnCommand: true
+    useFastOnCommand: true,
+    verificationMode: 'fast'
   });
 
   assert.equal(standardTurnOnCalls, 0);
@@ -1575,6 +1605,116 @@ test('turnOn can use the fast on opcode when explicitly requested', async (t) =>
   assert.equal(receivedConfirmOptions.requiredMatches, 1);
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
+});
+
+test('turnOn defaults to acknowledgement-only verification and carries fallback state into async refresh', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+  });
+
+  let confirmCalls = 0;
+  let scheduledRefresh = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOn(_address, _level, callback) {
+      callback(null, { ack: true, success: true });
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => {
+    confirmCalls += 1;
+    throw new Error('should not be called');
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options = {}) => {
+    scheduledRefresh = { address, reason, options };
+  };
+
+  const result = await insteonService.turnOn('mock-device', 100);
+
+  assert.equal(confirmCalls, 0);
+  assert.deepEqual(scheduledRefresh, {
+    address: '112233',
+    reason: 'turn_on_ack',
+    options: {
+      expectedStatus: true,
+      fallbackState: {
+        status: true,
+        brightness: 100,
+        level: 100,
+        isOnline: true,
+        lastSeen: scheduledRefresh.options.fallbackState.lastSeen
+      }
+    }
+  });
+  assert.ok(scheduledRefresh.options.fallbackState.lastSeen instanceof Date);
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, false);
+  assert.equal(result.details.verificationMode, 'ack');
+});
+
+test('turnOn enables one low-level PLM resend by default', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteHubCommandWithTimeout = insteonService._executeHubCommandWithTimeout;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeHubCommandWithTimeout = originalExecuteHubCommandWithTimeout;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+  });
+
+  let receivedExecutionOptions = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOn(_address, _level, callback) {
+      callback(null, { ack: true, success: true });
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._executeHubCommandWithTimeout = async (_invoke, _timeoutMessage, _timeoutMs, options = {}) => {
+    receivedExecutionOptions = options;
+    return { ack: true, success: true };
+  };
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => ({
+    status: true,
+    brightness: 100,
+    level: 100,
+    confirmedReads: 1
+  });
+
+  await insteonService.turnOn('mock-device', 100, {
+    verificationMode: 'fast'
+  });
+
+  assert.equal(receivedExecutionOptions.commandRetries, 1);
 });
 
 test('turnOn can recover after command acknowledgement times out if the device state confirms ON', async (t) => {
@@ -1672,12 +1812,13 @@ test('turnOff can still do stable synchronous verification when explicitly reque
   assert.equal(result.details.commandAcknowledged, true);
 });
 
-test('turnOff defaults to fast synchronous verification', async (t) => {
+test('turnOff defaults to acknowledgement-only verification', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
   const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
   const originalPersistState = insteonService._persistDeviceRuntimeState;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
 
   t.after(() => {
     insteonService.hub = originalHub;
@@ -1685,9 +1826,11 @@ test('turnOff defaults to fast synchronous verification', async (t) => {
     Device.findById = originalFindById;
     insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
     insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
   });
 
   let confirmCalls = 0;
+  let scheduledRefresh = null;
   insteonService.isConnected = true;
   insteonService.hub = {
     turnOff(_address, callback) {
@@ -1709,14 +1852,22 @@ test('turnOff defaults to fast synchronous verification', async (t) => {
       confirmedReads: 1
     };
   };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options = {}) => {
+    scheduledRefresh = { address, reason, options };
+  };
 
   const result = await insteonService.turnOff('mock-device');
 
-  assert.equal(confirmCalls, 1);
+  assert.equal(confirmCalls, 0);
+  assert.equal(scheduledRefresh.address, '112233');
+  assert.equal(scheduledRefresh.reason, 'turn_off_ack');
+  assert.equal(scheduledRefresh.options.expectedStatus, false);
+  assert.equal(scheduledRefresh.options.fallbackState.status, false);
+  assert.equal(scheduledRefresh.options.fallbackState.brightness, 0);
   assert.equal(result.success, true);
-  assert.equal(result.confirmed, true);
-  assert.match(result.message, /confirmed OFF/i);
-  assert.equal(result.details.verificationMode, 'fast');
+  assert.equal(result.confirmed, false);
+  assert.match(result.message, /async status refresh queued/i);
+  assert.equal(result.details.verificationMode, 'ack');
 });
 
 test('turnOff defaults to the standard off opcode even when fast off is available', async (t) => {
@@ -1764,7 +1915,9 @@ test('turnOff defaults to the standard off opcode even when fast off is availabl
     confirmedReads: 1
   });
 
-  const result = await insteonService.turnOff('mock-device');
+  const result = await insteonService.turnOff('mock-device', {
+    verificationMode: 'fast'
+  });
 
   assert.equal(standardTurnOffCalls, 1);
   assert.equal(fastTurnOffCalls, 0);
@@ -1817,13 +1970,62 @@ test('turnOff can use the fast off opcode when explicitly requested', async (t) 
   });
 
   const result = await insteonService.turnOff('mock-device', {
-    useFastOffCommand: true
+    useFastOffCommand: true,
+    verificationMode: 'fast'
   });
 
   assert.equal(standardTurnOffCalls, 0);
   assert.equal(fastTurnOffCalls, 1);
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
+});
+
+test('turnOff enables one low-level PLM resend by default', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteHubCommandWithTimeout = insteonService._executeHubCommandWithTimeout;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeHubCommandWithTimeout = originalExecuteHubCommandWithTimeout;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+  });
+
+  let receivedExecutionOptions = null;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    turnOff(_address, callback) {
+      callback(null, { ack: true, success: true });
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'SwitchLinc Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 2, subcategory: 31 }
+  });
+  insteonService._executeHubCommandWithTimeout = async (_invoke, _timeoutMessage, _timeoutMs, options = {}) => {
+    receivedExecutionOptions = options;
+    return { ack: true, success: true };
+  };
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => ({
+    status: false,
+    brightness: 0,
+    level: 0,
+    confirmedReads: 1
+  });
+
+  await insteonService.turnOff('mock-device', {
+    verificationMode: 'fast'
+  });
+
+  assert.equal(receivedExecutionOptions.commandRetries, 1);
 });
 
 test('turnOff retries command timeouts before succeeding', async (t) => {

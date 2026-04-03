@@ -40,7 +40,8 @@ const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
 const DEFAULT_INSTEON_COMMAND_ATTEMPTS = 3;
 const DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS = 250;
 const DEFAULT_INSTEON_COMMAND_TIMEOUT_MS = 1500;
-const DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE = 'fast';
+const DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES = 1;
+const DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE = 'ack';
 const DEFAULT_INSTEON_POST_COMMAND_SETTLE_MS = 700;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_STALE_AFTER_MS = 60000;
@@ -1279,19 +1280,24 @@ class InsteonService {
       1000,
       Math.trunc(Number(this._runtimeMonitoringIntervalMs) || DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS)
     );
-    const staleAfterMs = Math.max(
-      intervalMs,
-      Math.trunc(Number(this._runtimeMonitoringStaleAfterMs) || intervalMs)
+    const estimatedPerDeviceMs = Math.max(
+      250,
+      Math.trunc(
+        (Number(this._runtimeStatePollTimeoutMs) || DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS)
+        + (Number(this._runtimeStatePollPauseMs) || DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS)
+        + 100
+      )
     );
-    const targetPassesPerSweep = Math.max(1, Math.floor(staleAfterMs / intervalMs));
-    const dynamicBatchSize = Math.ceil(normalizedEligibleCount / targetPassesPerSweep);
+    const maxBatchPerInterval = Math.max(
+      1,
+      Math.floor(intervalMs / estimatedPerDeviceMs)
+    );
 
+    // Respect the configured batch ceiling. Inflating batches above the admin's
+    // chosen limit can create long poll backlogs that interfere with control traffic.
     return Math.min(
       normalizedEligibleCount,
-      Math.max(
-        configuredBatchSize,
-        Math.min(DEFAULT_INSTEON_RUNTIME_MONITOR_MAX_DYNAMIC_BATCH_SIZE, dynamicBatchSize)
-      )
+      Math.max(1, Math.min(configuredBatchSize, maxBatchPerInterval))
     );
   }
 
@@ -9628,7 +9634,9 @@ class InsteonService {
           {
             priority: options.priority || 'control',
             kind: options.kind || 'control_command',
-            label: options.label || timeoutMessage
+            label: options.label || timeoutMessage,
+            commandRetries: options.commandRetries,
+            nakTimeoutMs: options.nakTimeoutMs
           }
         );
         return {
@@ -10258,7 +10266,10 @@ class InsteonService {
             ...options,
             priority: 'control',
             kind: 'turn_on',
-            label: `turning on ${this._formatInsteonAddress(address)}${useFastOnCommand ? ' (fast)' : ''}`
+            label: `turning on ${this._formatInsteonAddress(address)}${useFastOnCommand ? ' (fast)' : ''}`,
+            commandRetries: Number.isFinite(Number(options?.commandRetries))
+              ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
+              : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES
           }
         );
       } catch (error) {
@@ -10305,7 +10316,8 @@ class InsteonService {
       const verificationMode = this._getVerificationMode(options);
       if (this._shouldSkipSynchronousVerification(verificationMode)) {
         this._scheduleRuntimeStateRefresh(address, 'turn_on_ack', {
-          expectedStatus: true
+          expectedStatus: true,
+          fallbackState: optimisticState
         });
         const details = this._buildInsteonControlDetails(device, address, 'turn_on', optimisticState, {
           requestedBrightness: boundedBrightness,
@@ -10484,7 +10496,10 @@ class InsteonService {
             ...options,
             priority: 'control',
             kind: 'turn_off',
-            label: `turning off ${this._formatInsteonAddress(address)}${useFastOffCommand ? ' (fast)' : ''}`
+            label: `turning off ${this._formatInsteonAddress(address)}${useFastOffCommand ? ' (fast)' : ''}`,
+            commandRetries: Number.isFinite(Number(options?.commandRetries))
+              ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
+              : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES
           }
         );
       } catch (error) {
@@ -10530,7 +10545,8 @@ class InsteonService {
       const verificationMode = this._getVerificationMode(options);
       if (this._shouldSkipSynchronousVerification(verificationMode)) {
         this._scheduleRuntimeStateRefresh(address, 'turn_off_ack', {
-          expectedStatus: false
+          expectedStatus: false,
+          fallbackState: optimisticState
         });
         const details = this._buildInsteonControlDetails(device, address, 'turn_off', optimisticState, {
           commandAcknowledged: true,
