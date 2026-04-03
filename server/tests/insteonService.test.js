@@ -1669,7 +1669,7 @@ test('turnOn defaults to acknowledgement-only verification and carries fallback 
   assert.equal(result.details.verificationMode, 'ack');
 });
 
-test('turnOn enables one low-level PLM resend by default', async (t) => {
+test('turnOn defaults to a single low-level PLM command attempt', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -1714,7 +1714,7 @@ test('turnOn enables one low-level PLM resend by default', async (t) => {
     verificationMode: 'fast'
   });
 
-  assert.equal(receivedExecutionOptions.commandRetries, 1);
+  assert.equal(receivedExecutionOptions.commandRetries, 0);
 });
 
 test('_executeHubCommandWithTimeout forwards commandRetries into the queued PLM callback operation', async (t) => {
@@ -1749,7 +1749,7 @@ test('_executeHubCommandWithTimeout forwards commandRetries into the queued PLM 
   assert.equal(result.ack, true);
 });
 
-test('turnOn can recover after command acknowledgement times out if the device state confirms ON', async (t) => {
+test('turnOn can recover after command acknowledgement times out if explicitly requested and the device state confirms ON', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -1783,7 +1783,10 @@ test('turnOn can recover after command acknowledgement times out if the device s
     confirmedReads: 1
   });
 
-  const result = await insteonService.turnOn('mock-device', 100);
+  const result = await insteonService.turnOn('mock-device', 100, {
+    recoverStateAfterTimeout: true,
+    commandAttempts: 3
+  });
 
   assert.equal(result.success, true);
   assert.equal(result.confirmed, true);
@@ -1792,6 +1795,52 @@ test('turnOn can recover after command acknowledgement times out if the device s
   assert.equal(result.details.commandAcknowledged, false);
   assert.equal(result.details.commandAttempts, 3);
   assert.equal(result.details.verificationRecovered, true);
+});
+
+test('turnOn does not attempt state recovery after a command timeout unless explicitly requested', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalExecuteHubCommandWithTimeout = insteonService._executeHubCommandWithTimeout;
+  const originalRecoverCommandStateAfterTimeout = insteonService._recoverCommandStateAfterTimeout;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._executeHubCommandWithTimeout = originalExecuteHubCommandWithTimeout;
+    insteonService._recoverCommandStateAfterTimeout = originalRecoverCommandStateAfterTimeout;
+  });
+
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Dimmer Test',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._executeHubCommandWithTimeout = async () => {
+    const error = new Error('Timeout turning on device');
+    error.code = 'INSTEON_COMMAND_TIMEOUT';
+    throw error;
+  };
+
+  let recoveryCalls = 0;
+  insteonService._recoverCommandStateAfterTimeout = async () => {
+    recoveryCalls += 1;
+    return {
+      status: true,
+      brightness: 100,
+      level: 100,
+      confirmedReads: 1
+    };
+  };
+
+  await assert.rejects(
+    insteonService.turnOn('mock-device', 100),
+    /Timeout turning on device/
+  );
+  assert.equal(recoveryCalls, 0);
 });
 
 test('turnOff can still do stable synchronous verification when explicitly requested', async (t) => {
@@ -2012,7 +2061,7 @@ test('turnOff can use the fast off opcode when explicitly requested', async (t) 
   assert.equal(result.confirmed, true);
 });
 
-test('turnOff enables one low-level PLM resend by default', async (t) => {
+test('turnOff defaults to a single low-level PLM command attempt', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
   const originalFindById = Device.findById;
@@ -2057,7 +2106,7 @@ test('turnOff enables one low-level PLM resend by default', async (t) => {
     verificationMode: 'fast'
   });
 
-  assert.equal(receivedExecutionOptions.commandRetries, 1);
+  assert.equal(receivedExecutionOptions.commandRetries, 0);
 });
 
 test('turnOff retries command timeouts before succeeding', async (t) => {
