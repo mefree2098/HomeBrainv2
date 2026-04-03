@@ -236,6 +236,8 @@ Important distinction:
 - While that late-ACK window is open, HomeBrain also suppresses background runtime polling for the same PLM so
   the modem is not immediately reused for status queries while a delayed device acknowledgement may still be
   inbound.
+- Manual switch presses that arrive as direct runtime commands aimed at the PLM now resolve to the source device,
+  so HomeBrain updates the actual switch row instead of treating the PLM target as the changed device.
 - If a whole runtime-poll batch comes back as nothing but `INSTEON_LEVEL_TIMEOUT` / `rawResult:null`, HomeBrain
   now backs runtime polling off for a while instead of continuing to hammer the PLM with more useless `19` reads.
 

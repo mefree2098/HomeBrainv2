@@ -322,10 +322,12 @@ test('_handleRuntimeCommand queues linked responder refreshes for controller sce
 test('_handleRuntimeCommand refreshes the addressed responder for monitor-mode direct light commands', async (t) => {
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
 
   t.after(() => {
     insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
     insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
   });
 
   const persisted = [];
@@ -338,6 +340,11 @@ test('_handleRuntimeCommand refreshes the addressed responder for monitor-mode d
   insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
     scheduledRefreshes.push({ address, reason, options });
   };
+  insteonService._findExistingInsteonDevicesByAddress = async (address) => (
+    address === '388A57'
+      ? [{ _id: 'responder-device', properties: { insteonAddress: '38.8A.57' } }]
+      : []
+  );
 
   await insteonService._handleRuntimeCommand({
     standard: {
@@ -356,6 +363,54 @@ test('_handleRuntimeCommand refreshes the addressed responder for monitor-mode d
   assert.equal(scheduledRefreshes.length, 1);
   assert.equal(scheduledRefreshes[0].address, '388A57');
   assert.equal(scheduledRefreshes[0].reason, 'direct:38.9A.D0:11');
+  assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
+  assert.equal(scheduledRefreshes[0].options.fallbackState.status, true);
+});
+
+test('_handleRuntimeCommand refreshes the source device when a direct light command is aimed at the PLM', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+  insteonService._findExistingInsteonDevicesByAddress = async (address) => (
+    address === '389647'
+      ? [{ _id: 'master-vanity', properties: { insteonAddress: '38.96.47' } }]
+      : []
+  );
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.96.47',
+      gatewayId: '71.B6.78',
+      messageType: 0,
+      command1: '11',
+      command2: 'FF'
+    }
+  });
+
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].address, '389647');
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[0].patch.brightness, 100);
+  assert.equal(scheduledRefreshes.length, 1);
+  assert.equal(scheduledRefreshes[0].address, '389647');
+  assert.equal(scheduledRefreshes[0].reason, 'direct:38.96.47:11');
   assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
   assert.equal(scheduledRefreshes[0].options.fallbackState.status, true);
 });
