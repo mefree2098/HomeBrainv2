@@ -239,6 +239,10 @@ Important distinction:
   inbound.
 - Manual switch presses that arrive as direct runtime commands aimed at the PLM now resolve to the source device,
   so HomeBrain updates the actual switch row instead of treating the PLM target as the changed device.
+- Manual switch presses that arrive as group `1` all-link broadcast / cleanup scene traffic are now treated as
+  local-load state changes for the source device. HomeBrain updates the source switch immediately and skips the
+  old scene-link lookup / PLM self-refresh path that could otherwise queue `runtime_scene_link_lookup` work and
+  bogus `state_confirm` reads against the PLM address.
 - If a whole runtime-poll batch comes back as nothing but `INSTEON_LEVEL_TIMEOUT` / `rawResult:null`, HomeBrain
   now backs runtime polling off for a while instead of continuing to hammer the PLM with more useless `19` reads.
 - If direct control works but physical/manual updates never appear as `Inbound runtime command ...` logs, inspect the

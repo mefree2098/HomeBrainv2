@@ -7967,12 +7967,66 @@ class InsteonService {
     return normalizedTargetAddress;
   }
 
-  async _buildRuntimeStateRefreshRequests(parsed) {
+  async _resolveRuntimeCleanupRefreshAddress(parsed) {
+    if (!parsed || parsed.messageType !== 2) {
+      return this._normalizePossibleInsteonAddress(parsed?.targetAddress || null);
+    }
+
+    const normalizedTargetAddress = this._normalizePossibleInsteonAddress(parsed.targetAddress);
+    const normalizedSourceAddress = this._normalizePossibleInsteonAddress(parsed.sourceAddress || parsed.address);
+
+    if (!normalizedTargetAddress) {
+      return normalizedSourceAddress || null;
+    }
+
+    if (!normalizedSourceAddress || normalizedSourceAddress === normalizedTargetAddress) {
+      return normalizedTargetAddress;
+    }
+
+    const [targetDevices, sourceDevices] = await Promise.all([
+      this._findExistingInsteonDevicesByAddress(normalizedTargetAddress),
+      this._findExistingInsteonDevicesByAddress(normalizedSourceAddress)
+    ]);
+
+    if (Array.isArray(targetDevices) && targetDevices.length > 0) {
+      return normalizedTargetAddress;
+    }
+
+    if (Array.isArray(sourceDevices) && sourceDevices.length > 0) {
+      return normalizedSourceAddress;
+    }
+
+    return normalizedTargetAddress;
+  }
+
+  async _shouldTreatRuntimeSceneCommandAsLocalLoad(parsed) {
+    if (!parsed || typeof parsed.expectedStatus !== 'boolean') {
+      return false;
+    }
+
+    const group = Number(parsed.broadcastGroup ?? parsed.cleanupGroup);
+    if (!Number.isInteger(group) || group !== 1) {
+      return false;
+    }
+
+    if (![2, 3, 6].includes(parsed.messageType)) {
+      return false;
+    }
+
+    const sourceDevices = await this._findExistingInsteonDevicesByAddress(parsed.sourceAddress || parsed.address);
+    return Array.isArray(sourceDevices) && sourceDevices.length > 0;
+  }
+
+  async _buildRuntimeStateRefreshRequests(parsed, options = {}) {
     if (!parsed || parsed.stateRefreshRecommended !== true) {
       return [];
     }
 
     if (parsed.messageType === 1 && parsed.observedState?.state) {
+      return [];
+    }
+
+    if (options.localLoadScene === true) {
       return [];
     }
 
@@ -8002,9 +8056,11 @@ class InsteonService {
       case 1:
         addRequest(parsed.sourceAddress, `direct_ack:${formattedSourceAddress}:${parsed.semanticCommand1}`);
         break;
-      case 2:
-        addRequest(parsed.targetAddress, `cleanup:${formattedSourceAddress}:${parsed.cleanupGroup ?? 'unknown'}`);
+      case 2: {
+        const cleanupRefreshAddress = await this._resolveRuntimeCleanupRefreshAddress(parsed);
+        addRequest(cleanupRefreshAddress, `cleanup:${formattedSourceAddress}:${parsed.cleanupGroup ?? 'unknown'}`);
         break;
+      }
       case 3:
         addRequest(parsed.sourceAddress, `cleanup_ack:${formattedSourceAddress}:${parsed.cleanupGroup ?? 'unknown'}`);
         break;
@@ -8441,8 +8497,21 @@ class InsteonService {
       await this._persistDeviceRuntimeStateByAddress(parsed.observedState.address, parsed.observedState.state);
     }
 
+    const treatAsLocalLoadScene = await this._shouldTreatRuntimeSceneCommandAsLocalLoad(parsed);
+    if (treatAsLocalLoadScene) {
+      const localLoadState = this._buildRuntimeExpectedStatePatch(parsed.expectedStatus);
+      if (localLoadState) {
+        await this._persistImmediateRuntimeFallbackState(parsed.sourceAddress || parsed.address, localLoadState, {
+          operation: 'runtime_command',
+          reason: `scene_local:${this._formatInsteonAddress(parsed.sourceAddress || parsed.address)}:${parsed.broadcastGroup ?? parsed.cleanupGroup ?? 1}`
+        });
+      }
+    }
+
     if (parsed.broadcastGroup != null && parsed.sceneCommand1) {
-      await this._scheduleRuntimeSceneResponderRefreshes(parsed);
+      if (!treatAsLocalLoadScene) {
+        await this._scheduleRuntimeSceneResponderRefreshes(parsed);
+      }
     } else if (parsed.cleanupGroup != null && parsed.sceneCommand1 && [2, 3].includes(parsed.messageType)) {
       const cleanupControllerAddress = parsed.messageType === 3
         ? parsed.targetAddress
@@ -8451,19 +8520,23 @@ class InsteonService {
         ? parsed.sourceAddress
         : parsed.targetAddress;
 
-      await this._scheduleRuntimeLinkedResponderRefreshes(cleanupControllerAddress, parsed.cleanupGroup, {
-        reasonPrefix: 'cleanup_group',
-        expectedStatus: typeof parsed.expectedStatus === 'boolean'
-          ? parsed.expectedStatus
-          : null,
-        sceneCommand1: parsed.sceneCommand1,
-        sceneCommand2: parsed.sceneCommand2,
-        excludeAddresses: cleanupPrimaryAddress ? [cleanupPrimaryAddress] : [],
-        logAddress: parsed.address
-      });
+      if (!treatAsLocalLoadScene) {
+        await this._scheduleRuntimeLinkedResponderRefreshes(cleanupControllerAddress, parsed.cleanupGroup, {
+          reasonPrefix: 'cleanup_group',
+          expectedStatus: typeof parsed.expectedStatus === 'boolean'
+            ? parsed.expectedStatus
+            : null,
+          sceneCommand1: parsed.sceneCommand1,
+          sceneCommand2: parsed.sceneCommand2,
+          excludeAddresses: cleanupPrimaryAddress ? [cleanupPrimaryAddress] : [],
+          logAddress: parsed.address
+        });
+      }
     }
 
-    const refreshRequests = await this._buildRuntimeStateRefreshRequests(parsed);
+    const refreshRequests = await this._buildRuntimeStateRefreshRequests(parsed, {
+      localLoadScene: treatAsLocalLoadScene
+    });
     for (const request of refreshRequests) {
       if (request.fallbackState && (!parsed.observedState || parsed.observedState.address !== request.address)) {
         // Apply the command-inferred state immediately so a dead status query
