@@ -17,6 +17,19 @@ const deviceGroupSchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+  insteonPlmGroup: {
+    type: Number,
+    default: null
+  },
+  insteonMemberSignature: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  insteonLastSyncedAt: {
+    type: Date,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now,

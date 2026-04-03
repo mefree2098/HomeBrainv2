@@ -1,6 +1,7 @@
 const https = require('node:https');
 const axios = require('axios');
 const Device = require('../models/Device');
+const DeviceGroup = require('../models/DeviceGroup');
 const Workflow = require('../models/Workflow');
 const deviceService = require('./deviceService');
 const sceneService = require('./sceneService');
@@ -899,6 +900,56 @@ async function executeDeviceGroupControl(groupTarget, action) {
 
   const actionName = getActionName(action);
   const value = getActionValue(actionName, action?.parameters || {});
+  const groupRecord = await DeviceGroup.findOne({
+    normalizedName: groupName.toLowerCase()
+  });
+  const insteonGroupOptions = {
+    ...getInsteonCommandRetryOptions(action, 'insteon'),
+    verificationMode: 'fast',
+    deviceGroup: groupName
+  };
+
+  try {
+    const broadcastResult = await insteonService.tryControlDeviceGroup(
+      groupRecord,
+      devices,
+      actionName,
+      value,
+      insteonGroupOptions
+    );
+
+    if (broadcastResult) {
+      const targetCount = Number(broadcastResult?.details?.targetCount) || 0;
+      return {
+        target: {
+          kind: 'device_group',
+          group: groupName
+        },
+        message: broadcastResult.message,
+        value,
+        details: {
+          kind: 'device_group',
+          group: groupName,
+          executionMode: 'insteon_group_broadcast',
+          concurrency: 1,
+          totalTargets: targetCount,
+          successfulTargets: targetCount,
+          failedTargets: 0,
+          members: Array.isArray(broadcastResult?.details?.members) ? broadcastResult.details.members : [],
+          controlMethod: broadcastResult?.details?.controlMethod || null,
+          verificationMode: broadcastResult?.details?.verificationMode || null,
+          commandVariant: broadcastResult?.details?.commandVariant || null,
+          insteonPlmGroup: broadcastResult?.details?.insteonPlmGroup ?? null,
+          sceneSynchronized: broadcastResult?.details?.sceneSynchronized === true
+        }
+      };
+    }
+  } catch (error) {
+    console.warn(
+      `WorkflowExecutionService: Managed INSTEON group broadcast failed for "${groupName}", falling back to per-device control: ${error.message}`
+    );
+  }
+
   const concurrency = getDeviceGroupConcurrency(devices);
   const memberResults = (await mapWithConcurrency(devices, concurrency, async (device) => {
     const target = device?._id?.toString?.() || null;
@@ -914,10 +965,7 @@ async function executeDeviceGroupControl(groupTarget, action) {
         value,
         {
           action,
-          insteon: {
-            verificationMode: 'fast',
-            deviceGroup: groupName
-          }
+          insteon: insteonGroupOptions
         }
       );
 

@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const axios = require('axios');
 const Insteon = require('home-controller').Insteon;
 const Device = require('../models/Device');
+const DeviceGroup = require('../models/DeviceGroup');
 const Scene = require('../models/Scene');
 const Settings = require('../models/Settings');
 const Workflow = require('../models/Workflow');
@@ -40,6 +41,8 @@ const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
 const DEFAULT_INSTEON_COMMAND_ATTEMPTS = 3;
 const DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS = 250;
 const DEFAULT_INSTEON_COMMAND_TIMEOUT_MS = 1500;
+const DEFAULT_INSTEON_GROUP_COMMAND_TIMEOUT_MS = 3000;
+const DEFAULT_INSTEON_GROUP_SYNC_TIMEOUT_MS = 12000;
 const DEFAULT_INSTEON_CONTROL_COMMAND_ATTEMPTS = 1;
 const DEFAULT_INSTEON_CONTROL_COMMAND_RETRY_PAUSE_MS = 0;
 const DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES = 0;
@@ -729,6 +732,110 @@ class InsteonService {
       options?.useFastOffCommand ?? options?.useFastCommand,
       ['HOMEBRAIN_INSTEON_USE_FAST_OFF_COMMANDS', 'HOMEBRAIN_INSTEON_USE_FAST_DIRECT_COMMANDS']
     ) !== false;
+  }
+
+  _shouldUseFastGroupOnCommand(options = {}) {
+    const explicitVariant = String(options?.commandVariant || '').trim().toLowerCase();
+    if (['fast', 'scene_on_fast', 'turn_on_fast'].includes(explicitVariant)) {
+      return true;
+    }
+    if (['standard', 'normal', 'scene_on', 'turn_on'].includes(explicitVariant)) {
+      return false;
+    }
+
+    return this._resolveFastCommandPreference(
+      options?.useFastGroupOnCommand
+      ?? options?.useFastOnCommand
+      ?? options?.useFastGroupCommand
+      ?? options?.useFastCommand,
+      [
+        'HOMEBRAIN_INSTEON_USE_FAST_GROUP_ON_COMMANDS',
+        'HOMEBRAIN_INSTEON_USE_FAST_GROUP_COMMANDS',
+        'HOMEBRAIN_INSTEON_USE_FAST_ON_COMMANDS',
+        'HOMEBRAIN_INSTEON_USE_FAST_DIRECT_COMMANDS'
+      ]
+    ) !== false;
+  }
+
+  _shouldUseFastGroupOffCommand(options = {}) {
+    const explicitVariant = String(options?.commandVariant || '').trim().toLowerCase();
+    if (['fast', 'scene_off_fast', 'turn_off_fast'].includes(explicitVariant)) {
+      return true;
+    }
+    if (['standard', 'normal', 'scene_off', 'turn_off'].includes(explicitVariant)) {
+      return false;
+    }
+
+    return this._resolveFastCommandPreference(
+      options?.useFastGroupOffCommand
+      ?? options?.useFastOffCommand
+      ?? options?.useFastGroupCommand
+      ?? options?.useFastCommand,
+      [
+        'HOMEBRAIN_INSTEON_USE_FAST_GROUP_OFF_COMMANDS',
+        'HOMEBRAIN_INSTEON_USE_FAST_GROUP_COMMANDS',
+        'HOMEBRAIN_INSTEON_USE_FAST_OFF_COMMANDS',
+        'HOMEBRAIN_INSTEON_USE_FAST_DIRECT_COMMANDS'
+      ]
+    ) !== false;
+  }
+
+  _normalizeInsteonGroupActionName(actionName = '') {
+    const normalized = String(actionName || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    switch (normalized) {
+      case 'turnon':
+        return 'turn_on';
+      case 'turnoff':
+        return 'turn_off';
+      default:
+        return normalized;
+    }
+  }
+
+  _buildInsteonDeviceGroupMembers(devices = []) {
+    if (!Array.isArray(devices) || devices.length < 2) {
+      return null;
+    }
+
+    const seenAddresses = new Set();
+    const members = [];
+
+    for (const device of devices) {
+      const normalizedAddress = this._normalizePossibleInsteonAddress(
+        device?.properties?.insteonAddress || ''
+      );
+      if (!normalizedAddress) {
+        return null;
+      }
+      if (device?.properties?.linkedToCurrentPlm !== true) {
+        return null;
+      }
+      if (seenAddresses.has(normalizedAddress)) {
+        continue;
+      }
+
+      seenAddresses.add(normalizedAddress);
+      members.push({
+        deviceId: device?._id?.toString?.() || String(device?._id || ''),
+        deviceName: device?.name || `Insteon Device ${this._formatInsteonAddress(normalizedAddress)}`,
+        room: device?.room || '',
+        address: normalizedAddress
+      });
+    }
+
+    return members.length >= 2 ? members : null;
+  }
+
+  _buildInsteonDeviceGroupMembershipSignature(members = []) {
+    if (!Array.isArray(members) || members.length === 0) {
+      return '';
+    }
+
+    return members
+      .map((member) => this._normalizePossibleInsteonAddress(member?.address || ''))
+      .filter(Boolean)
+      .sort()
+      .join(',');
   }
 
   _getDefaultVerificationMode() {
@@ -11210,6 +11317,305 @@ class InsteonService {
       console.error(error.stack);
       throw new Error(`Failed to query linked PLM devices: ${error.message}`);
     }
+  }
+
+  async _getPlmControllerLinks() {
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const links = await this._executeQueuedPlmCallbackOperation(
+      (callback) => this.hub.links(callback),
+      {
+        priority: 'query',
+        kind: 'plm_links',
+        label: 'reading PLM links',
+        timeoutMs: DEFAULT_INSTEON_GROUP_SYNC_TIMEOUT_MS,
+        timeoutMessage: 'Timeout reading PLM links'
+      }
+    );
+
+    const normalizedLinks = Array.isArray(links)
+      ? links
+      : links
+        ? [links]
+        : [];
+
+    return normalizedLinks.filter((link) => link && link.isInUse !== false);
+  }
+
+  async _getManagedDeviceGroupResponderAddresses(group) {
+    const numericGroup = Number(group);
+    if (!Number.isInteger(numericGroup) || numericGroup < 0 || numericGroup > 255) {
+      return [];
+    }
+
+    const links = await this._getPlmControllerLinks();
+    const responders = new Set();
+
+    links.forEach((link) => {
+      const normalizedId = this._normalizePossibleInsteonAddress(link?.id || '');
+      if (!normalizedId) {
+        return;
+      }
+      if (link.controller !== true || Number(link.group) !== numericGroup) {
+        return;
+      }
+
+      responders.add(normalizedId);
+    });
+
+    return Array.from(responders);
+  }
+
+  async _allocateManagedDeviceGroupNumber(currentGroup = null) {
+    const numericCurrentGroup = Number(currentGroup);
+    if (Number.isInteger(numericCurrentGroup) && numericCurrentGroup >= 2 && numericCurrentGroup <= 255) {
+      return numericCurrentGroup;
+    }
+
+    const [links, persistedGroups] = await Promise.all([
+      this._getPlmControllerLinks(),
+      DeviceGroup.find({
+        insteonPlmGroup: { $exists: true, $ne: null }
+      }).select('insteonPlmGroup').lean()
+    ]);
+
+    const usedGroups = new Set();
+    links.forEach((link) => {
+      const numericGroup = Number(link?.group);
+      if (link?.controller === true && Number.isInteger(numericGroup) && numericGroup >= 2 && numericGroup <= 255) {
+        usedGroups.add(numericGroup);
+      }
+    });
+    persistedGroups.forEach((groupRecord) => {
+      const numericGroup = Number(groupRecord?.insteonPlmGroup);
+      if (Number.isInteger(numericGroup) && numericGroup >= 2 && numericGroup <= 255) {
+        usedGroups.add(numericGroup);
+      }
+    });
+
+    for (let group = 255; group >= 2; group -= 1) {
+      if (!usedGroups.has(group)) {
+        return group;
+      }
+    }
+
+    throw new Error('No available INSTEON PLM group numbers remain for managed HomeBrain device groups');
+  }
+
+  async _syncManagedDeviceGroupScene(groupRecord, members = []) {
+    if (!groupRecord || typeof groupRecord !== 'object' || typeof groupRecord.save !== 'function') {
+      return null;
+    }
+    if (!Array.isArray(members) || members.length < 2) {
+      return null;
+    }
+
+    let plmGroup = Number(groupRecord?.insteonPlmGroup);
+    if (!Number.isInteger(plmGroup) || plmGroup < 2 || plmGroup > 255) {
+      plmGroup = await this._allocateManagedDeviceGroupNumber();
+      groupRecord.insteonPlmGroup = plmGroup;
+    }
+
+    const membershipSignature = this._buildInsteonDeviceGroupMembershipSignature(members);
+    const existingResponders = await this._getManagedDeviceGroupResponderAddresses(plmGroup);
+    const desiredResponders = new Set(members.map((member) => member.address));
+    const existingResponderSet = new Set(existingResponders);
+    const respondersToRemove = existingResponders.filter((address) => !desiredResponders.has(address));
+    const sceneNeedsSync = (
+      String(groupRecord?.insteonMemberSignature || '') !== membershipSignature
+      || !(groupRecord?.insteonLastSyncedAt instanceof Date)
+      || existingResponders.length !== desiredResponders.size
+      || Array.from(desiredResponders).some((address) => !existingResponderSet.has(address))
+    );
+
+    if (!sceneNeedsSync) {
+      return {
+        plmGroup,
+        membershipSignature,
+        sceneSynchronized: false
+      };
+    }
+
+    const sceneName = `HomeBrain Group ${groupRecord.name || plmGroup}`;
+    if (respondersToRemove.length > 0) {
+      await this._applyTopologyScene({
+        controller: 'gw',
+        group: plmGroup,
+        name: `${sceneName} (remove)`,
+        remove: true,
+        responders: respondersToRemove.map((address) => ({ id: address }))
+      }, {
+        timeoutMs: DEFAULT_INSTEON_GROUP_SYNC_TIMEOUT_MS,
+        responderFallback: true
+      });
+    }
+
+    await this._applyTopologyScene({
+      controller: 'gw',
+      group: plmGroup,
+      name: sceneName,
+      remove: false,
+      responders: members.map((member) => ({
+        id: member.address,
+        level: 100
+      }))
+    }, {
+      timeoutMs: DEFAULT_INSTEON_GROUP_SYNC_TIMEOUT_MS,
+      responderFallback: true
+    });
+
+    groupRecord.insteonMemberSignature = membershipSignature;
+    groupRecord.insteonLastSyncedAt = new Date();
+    await groupRecord.save();
+
+    return {
+      plmGroup,
+      membershipSignature,
+      sceneSynchronized: true
+    };
+  }
+
+  async tryControlDeviceGroup(groupRecord, devices = [], actionName = '', value = null, options = {}) {
+    const normalizedAction = this._normalizeInsteonGroupActionName(actionName);
+    if (!['turn_on', 'turn_off'].includes(normalizedAction)) {
+      return null;
+    }
+
+    const numericValue = Number(value);
+    if (
+      normalizedAction === 'turn_on'
+      && value != null
+      && (!Number.isFinite(numericValue) || Math.max(0, Math.min(100, Math.round(numericValue))) < 100)
+    ) {
+      return null;
+    }
+
+    const members = this._buildInsteonDeviceGroupMembers(devices);
+    if (!members || !groupRecord) {
+      return null;
+    }
+
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const groupSync = await this._syncManagedDeviceGroupScene(groupRecord, members);
+    if (!groupSync?.plmGroup) {
+      return null;
+    }
+
+    const useFastCommand = normalizedAction === 'turn_on'
+      ? this._shouldUseFastGroupOnCommand(options)
+      : this._shouldUseFastGroupOffCommand(options);
+    const methodName = normalizedAction === 'turn_on'
+      ? (useFastCommand && typeof this.hub?.sceneOnFast === 'function' ? 'sceneOnFast' : 'sceneOn')
+      : (useFastCommand && typeof this.hub?.sceneOffFast === 'function' ? 'sceneOffFast' : 'sceneOff');
+
+    if (typeof this.hub?.[methodName] !== 'function') {
+      return null;
+    }
+
+    const commandVariant = methodName === 'sceneOnFast'
+      ? 'scene_on_fast'
+      : methodName === 'sceneOn'
+        ? 'scene_on'
+        : methodName === 'sceneOffFast'
+          ? 'scene_off_fast'
+          : 'scene_off';
+    const groupName = typeof groupRecord?.name === 'string' ? groupRecord.name : null;
+
+    this._logEngineInfo(
+      `${normalizedAction === 'turn_on' ? 'Turn on' : 'Turn off'} requested for managed INSTEON device group ${groupName || groupSync.plmGroup}`,
+      {
+        stage: 'control',
+        direction: 'outbound',
+        operation: normalizedAction,
+        details: {
+          deviceGroup: groupName,
+          insteonPlmGroup: groupSync.plmGroup,
+          targetCount: members.length,
+          commandVariant,
+          sceneSynchronized: groupSync.sceneSynchronized === true
+        }
+      }
+    );
+
+    members.forEach((member) => this._clearPendingRuntimeStateRefresh(member.address));
+    this._markRecentPlmControlActivity(this._runtimeMonitoringCooldownMs);
+
+    const report = await this._executeQueuedPlmCallbackOperation(
+      (callback) => this.hub[methodName](groupSync.plmGroup, callback),
+      {
+        priority: 'control',
+        kind: normalizedAction === 'turn_on' ? 'group_turn_on' : 'group_turn_off',
+        label: `${normalizedAction === 'turn_on' ? 'turning on' : 'turning off'} managed INSTEON group ${groupSync.plmGroup}${methodName.endsWith('Fast') ? ' (fast)' : ''}`,
+        timeoutMs: DEFAULT_INSTEON_GROUP_COMMAND_TIMEOUT_MS,
+        timeoutMessage: `Timeout ${normalizedAction === 'turn_on' ? 'turning on' : 'turning off'} INSTEON group ${groupSync.plmGroup}`,
+        commandTimeoutMs: DEFAULT_INSTEON_COMMAND_TIMEOUT_MS,
+        commandRetries: 0
+      }
+    );
+
+    const optimisticState = this._buildOptimisticCommandState(normalizedAction === 'turn_on');
+    await Promise.all(members.map((member) => (
+      this._persistImmediateRuntimeFallbackState(member.address, optimisticState, {
+        operation: 'group_control',
+        reason: `device_group:${String(groupRecord?.normalizedName || groupName || groupSync.plmGroup)}:${normalizedAction}`
+      })
+    )));
+
+    const memberResults = members.map((member) => ({
+      deviceId: member.deviceId,
+      deviceName: member.deviceName,
+      room: member.room,
+      insteonAddress: this._formatInsteonAddress(member.address),
+      success: true,
+      status: optimisticState.status,
+      brightness: optimisticState.brightness,
+      level: optimisticState.level
+    }));
+
+    const details = {
+      controlMethod: 'insteon_plm_group_broadcast',
+      executionMode: 'linked_group_broadcast',
+      verificationMode: 'broadcast_ack',
+      deviceGroup: groupName,
+      insteonPlmGroup: groupSync.plmGroup,
+      sceneSynchronized: groupSync.sceneSynchronized === true,
+      commandVariant,
+      targetCount: members.length,
+      deviceIds: members.map((member) => member.deviceId),
+      insteonAddresses: members.map((member) => this._formatInsteonAddress(member.address)),
+      members: memberResults,
+      report: report ?? null
+    };
+
+    this._logEngineInfo(
+      `${normalizedAction === 'turn_on' ? 'Turn on' : 'Turn off'} acknowledged for managed INSTEON device group ${groupName || groupSync.plmGroup}`,
+      {
+        stage: 'control',
+        direction: 'inbound',
+        operation: normalizedAction,
+        details: {
+          deviceGroup: groupName,
+          insteonPlmGroup: groupSync.plmGroup,
+          targetCount: members.length,
+          commandVariant
+        }
+      }
+    );
+
+    return {
+      success: true,
+      message: `Executed ${normalizedAction} on device group "${groupName || groupSync.plmGroup}" via INSTEON PLM all-link broadcast (${members.length} devices)`,
+      status: optimisticState.status,
+      brightness: optimisticState.brightness,
+      level: optimisticState.level,
+      confirmed: false,
+      details
+    };
   }
 
   /**

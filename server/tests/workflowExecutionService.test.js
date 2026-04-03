@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 
 const { executeActionSequence } = require('../services/workflowExecutionService');
 const Device = require('../models/Device');
+const DeviceGroup = require('../models/DeviceGroup');
 const insteonService = require('../services/insteonService');
 const Automation = require('../models/Automation');
 
@@ -378,6 +379,7 @@ test('device_control action passes Insteon retry parameters through to command e
 
 test('device_control action can target a device group', async (t) => {
   const originalFind = Device.find;
+  const originalFindOne = DeviceGroup.findOne;
   const originalTurnOff = insteonService.turnOff;
   const receivedTargets = [];
   const receivedOptions = [];
@@ -386,6 +388,7 @@ test('device_control action can target a device group', async (t) => {
 
   t.after(() => {
     Device.find = originalFind;
+    DeviceGroup.findOne = originalFindOne;
     insteonService.turnOff = originalTurnOff;
   });
 
@@ -417,6 +420,7 @@ test('device_control action can target a device group', async (t) => {
       lean: async () => groupDevices
     })
   });
+  DeviceGroup.findOne = async () => null;
 
   insteonService.turnOff = async (target, options) => {
     receivedTargets.push(target);
@@ -452,6 +456,103 @@ test('device_control action can target a device group', async (t) => {
   assert.equal(result.actionResults[0].details.group, 'Interior Lights');
   assert.equal(result.actionResults[0].details.executionMode, 'parallel');
   assert.equal(result.actionResults[0].details.successfulTargets, 2);
+});
+
+test('device_control action uses managed INSTEON group broadcast when the device group has only linked INSTEON members', async (t) => {
+  const originalFind = Device.find;
+  const originalFindOne = DeviceGroup.findOne;
+  const originalTryControlDeviceGroup = insteonService.tryControlDeviceGroup;
+  const originalTurnOff = insteonService.turnOff;
+
+  t.after(() => {
+    Device.find = originalFind;
+    DeviceGroup.findOne = originalFindOne;
+    insteonService.tryControlDeviceGroup = originalTryControlDeviceGroup;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  const groupDevices = [
+    {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Master Vanity Left',
+      type: 'light',
+      room: 'Primary Bath',
+      groups: ['Interior Lights'],
+      properties: {
+        source: 'insteon',
+        insteonAddress: '38.96.47',
+        linkedToCurrentPlm: true
+      }
+    },
+    {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Master Vanity Right',
+      type: 'light',
+      room: 'Primary Bath',
+      groups: ['Interior Lights'],
+      properties: {
+        source: 'insteon',
+        insteonAddress: '38.93.5B',
+        linkedToCurrentPlm: true
+      }
+    }
+  ];
+
+  Device.find = () => ({
+    sort: () => ({
+      lean: async () => groupDevices
+    })
+  });
+  DeviceGroup.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId().toString(),
+    name: 'Interior Lights',
+    normalizedName: 'interior lights'
+  });
+
+  let receivedArgs = null;
+  insteonService.tryControlDeviceGroup = async (groupRecord, devices, actionName, value, options) => {
+    receivedArgs = { groupRecord, devices, actionName, value, options };
+    return {
+      message: 'Executed turn_off on device group "Interior Lights" via INSTEON PLM all-link broadcast (2 devices)',
+      details: {
+        controlMethod: 'insteon_plm_group_broadcast',
+        verificationMode: 'broadcast_ack',
+        commandVariant: 'scene_off_fast',
+        insteonPlmGroup: 251,
+        sceneSynchronized: true,
+        targetCount: 2,
+        members: groupDevices.map((device) => ({
+          deviceId: device._id,
+          deviceName: device.name,
+          room: device.room,
+          insteonAddress: device.properties.insteonAddress,
+          success: true
+        }))
+      }
+    };
+  };
+  insteonService.turnOff = async () => {
+    throw new Error('turnOff should not be called when managed group broadcast succeeds');
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: { kind: 'device_group', group: 'Interior Lights' },
+      parameters: { action: 'turn_off' }
+    }
+  ], { context: {} });
+
+  assert.equal(receivedArgs.groupRecord.name, 'Interior Lights');
+  assert.equal(receivedArgs.actionName, 'turn_off');
+  assert.equal(receivedArgs.value, undefined);
+  assert.equal(receivedArgs.options.deviceGroup, 'Interior Lights');
+  assert.equal(receivedArgs.options.verificationMode, 'fast');
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, true);
+  assert.equal(result.actionResults[0].details.executionMode, 'insteon_group_broadcast');
+  assert.equal(result.actionResults[0].details.successfulTargets, 2);
+  assert.equal(result.actionResults[0].details.insteonPlmGroup, 251);
 });
 
 test('condition expressions can read nested SmartThings property paths', async (t) => {
