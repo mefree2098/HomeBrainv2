@@ -7561,7 +7561,39 @@ class InsteonService {
     return null;
   }
 
-  _buildRuntimeStateRefreshRequests(parsed) {
+  async _resolveRuntimeDirectRefreshAddress(parsed) {
+    if (!parsed || parsed.messageType !== 0) {
+      return this._normalizePossibleInsteonAddress(parsed?.targetAddress || null);
+    }
+
+    const normalizedTargetAddress = this._normalizePossibleInsteonAddress(parsed.targetAddress);
+    const normalizedSourceAddress = this._normalizePossibleInsteonAddress(parsed.sourceAddress || parsed.address);
+
+    if (!normalizedTargetAddress) {
+      return normalizedSourceAddress || null;
+    }
+
+    if (!normalizedSourceAddress || normalizedSourceAddress === normalizedTargetAddress) {
+      return normalizedTargetAddress;
+    }
+
+    const [targetDevices, sourceDevices] = await Promise.all([
+      this._findExistingInsteonDevicesByAddress(normalizedTargetAddress),
+      this._findExistingInsteonDevicesByAddress(normalizedSourceAddress)
+    ]);
+
+    if (Array.isArray(targetDevices) && targetDevices.length > 0) {
+      return normalizedTargetAddress;
+    }
+
+    if (Array.isArray(sourceDevices) && sourceDevices.length > 0) {
+      return normalizedSourceAddress;
+    }
+
+    return normalizedTargetAddress;
+  }
+
+  async _buildRuntimeStateRefreshRequests(parsed) {
     if (!parsed || parsed.stateRefreshRecommended !== true) {
       return [];
     }
@@ -7588,9 +7620,11 @@ class InsteonService {
     };
 
     switch (parsed.messageType) {
-      case 0:
-        addRequest(parsed.targetAddress, `direct:${formattedSourceAddress}:${parsed.semanticCommand1}`);
+      case 0: {
+        const directRefreshAddress = await this._resolveRuntimeDirectRefreshAddress(parsed);
+        addRequest(directRefreshAddress, `direct:${formattedSourceAddress}:${parsed.semanticCommand1}`);
         break;
+      }
       case 1:
         addRequest(parsed.sourceAddress, `direct_ack:${formattedSourceAddress}:${parsed.semanticCommand1}`);
         break;
@@ -8037,7 +8071,7 @@ class InsteonService {
       });
     }
 
-    const refreshRequests = this._buildRuntimeStateRefreshRequests(parsed);
+    const refreshRequests = await this._buildRuntimeStateRefreshRequests(parsed);
     for (const request of refreshRequests) {
       if (request.fallbackState && (!parsed.observedState || parsed.observedState.address !== request.address)) {
         // Apply the command-inferred state immediately so a dead status query

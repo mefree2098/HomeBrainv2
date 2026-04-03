@@ -36,12 +36,14 @@ test('insteonEngineLogService replays the most recent log entries in chronologic
 test('insteonService runtime command handling writes live engine logs', async (t) => {
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalScheduleRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
 
   insteonEngineLogService.reset();
 
   t.after(() => {
     insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
     insteonService._scheduleRuntimeStateRefresh = originalScheduleRefresh;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
     insteonEngineLogService.reset();
   });
 
@@ -54,6 +56,11 @@ test('insteonService runtime command handling writes live engine logs', async (t
   insteonService._scheduleRuntimeStateRefresh = (address, reason) => {
     scheduled = { address, reason };
   };
+  insteonService._findExistingInsteonDevicesByAddress = async (address) => (
+    address === '445566'
+      ? [{ _id: 'target-device', properties: { insteonAddress: '44.55.66' } }]
+      : []
+  );
 
   await insteonService._handleRuntimeCommand({
     standard: {
