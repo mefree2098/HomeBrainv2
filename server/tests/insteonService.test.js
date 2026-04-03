@@ -320,6 +320,58 @@ test('_handleRuntimeCommand queues linked responder refreshes for controller sce
   assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
 });
 
+test('_handleRuntimeCommand treats group-1 all-link broadcasts as local-load state updates without scene link lookups', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalGetRuntimeSceneResponderAddresses = insteonService._getRuntimeSceneResponderAddresses;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._getRuntimeSceneResponderAddresses = originalGetRuntimeSceneResponderAddresses;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+  let responderLookups = 0;
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+  insteonService._getRuntimeSceneResponderAddresses = async () => {
+    responderLookups++;
+    return ['388A57'];
+  };
+  insteonService._findExistingInsteonDevicesByAddress = async (address) => (
+    address === '389647'
+      ? [{ _id: 'master-vanity', properties: { insteonAddress: '38.96.47' } }]
+      : []
+  );
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.96.47',
+      messageType: 6,
+      gatewayId: '000001',
+      command1: '11',
+      command2: '00'
+    }
+  });
+
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].address, '389647');
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[0].patch.brightness, 100);
+  assert.equal(scheduledRefreshes.length, 0);
+  assert.equal(responderLookups, 0);
+});
+
 test('_handleRuntimeCommand refreshes the addressed responder for monitor-mode direct light commands', async (t) => {
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
@@ -618,11 +670,13 @@ test('_handleRuntimeCommand refreshes the addressed responder for all-link clean
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
   const originalGetRuntimeSceneResponderAddresses = insteonService._getRuntimeSceneResponderAddresses;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
 
   t.after(() => {
     insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
     insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
     insteonService._getRuntimeSceneResponderAddresses = originalGetRuntimeSceneResponderAddresses;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
   });
 
   const persisted = [];
@@ -636,6 +690,11 @@ test('_handleRuntimeCommand refreshes the addressed responder for all-link clean
     scheduledRefreshes.push({ address, reason, options });
   };
   insteonService._getRuntimeSceneResponderAddresses = async () => [];
+  insteonService._findExistingInsteonDevicesByAddress = async (address) => (
+    address === '388A57'
+      ? [{ _id: 'responder-device', properties: { insteonAddress: '38.8A.57' } }]
+      : []
+  );
 
   await insteonService._handleRuntimeCommand({
     standard: {
@@ -658,15 +717,69 @@ test('_handleRuntimeCommand refreshes the addressed responder for all-link clean
   assert.equal(scheduledRefreshes[0].options.fallbackState.status, true);
 });
 
-test('_handleRuntimeCommand refreshes linked responders for all-link cleanup groups when monitor mode misses the broadcast', async (t) => {
+test('_handleRuntimeCommand treats group-1 cleanup to the PLM as a local-load state update without responder refreshes', async (t) => {
   const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
   const originalGetRuntimeSceneResponderAddresses = insteonService._getRuntimeSceneResponderAddresses;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
 
   t.after(() => {
     insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
     insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
     insteonService._getRuntimeSceneResponderAddresses = originalGetRuntimeSceneResponderAddresses;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
+  });
+
+  const persisted = [];
+  const scheduledRefreshes = [];
+  let responderLookups = 0;
+
+  insteonService._persistDeviceRuntimeStateByAddress = async (address, patch) => {
+    persisted.push({ address, patch });
+    return patch;
+  };
+  insteonService._scheduleRuntimeStateRefresh = (address, reason, options) => {
+    scheduledRefreshes.push({ address, reason, options });
+  };
+  insteonService._getRuntimeSceneResponderAddresses = async () => {
+    responderLookups++;
+    return ['71B678', '388A57'];
+  };
+  insteonService._findExistingInsteonDevicesByAddress = async (address) => (
+    address === '389647'
+      ? [{ _id: 'master-vanity', properties: { insteonAddress: '38.96.47' } }]
+      : []
+  );
+
+  await insteonService._handleRuntimeCommand({
+    standard: {
+      id: '38.96.47',
+      gatewayId: '71.B6.78',
+      messageType: 2,
+      command1: '11',
+      command2: '01'
+    }
+  });
+
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].address, '389647');
+  assert.equal(persisted[0].patch.status, true);
+  assert.equal(persisted[0].patch.brightness, 100);
+  assert.equal(scheduledRefreshes.length, 0);
+  assert.equal(responderLookups, 0);
+});
+
+test('_handleRuntimeCommand refreshes the controller device instead of the PLM for cleanup groups when the cleanup target is not a HomeBrain device', async (t) => {
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalGetRuntimeSceneResponderAddresses = insteonService._getRuntimeSceneResponderAddresses;
+  const originalFindExistingDevices = insteonService._findExistingInsteonDevicesByAddress;
+
+  t.after(() => {
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._getRuntimeSceneResponderAddresses = originalGetRuntimeSceneResponderAddresses;
+    insteonService._findExistingInsteonDevicesByAddress = originalFindExistingDevices;
   });
 
   const persisted = [];
@@ -681,8 +794,17 @@ test('_handleRuntimeCommand refreshes linked responders for all-link cleanup gro
   };
   insteonService._getRuntimeSceneResponderAddresses = async (address, group) => {
     assert.equal(address, '389647');
-    assert.equal(group, 1);
+    assert.equal(group, 2);
     return ['71B678', '388A57'];
+  };
+  insteonService._findExistingInsteonDevicesByAddress = async (address) => {
+    if (address === '389647') {
+      return [{ _id: 'controller-device', properties: { insteonAddress: '38.96.47' } }];
+    }
+    if (address === '388A57') {
+      return [{ _id: 'responder-device', properties: { insteonAddress: '38.8A.57' } }];
+    }
+    return [];
   };
 
   await insteonService._handleRuntimeCommand({
@@ -691,29 +813,30 @@ test('_handleRuntimeCommand refreshes linked responders for all-link cleanup gro
       gatewayId: '71.B6.78',
       messageType: 2,
       command1: '11',
-      command2: '01'
+      command2: '02'
     }
   });
 
   assert.equal(persisted.length, 2);
   assert.deepEqual(
     persisted.map((entry) => entry.address),
-    ['388A57', '71B678']
+    ['388A57', '389647']
   );
   assert.equal(persisted[0].patch.status, true);
   assert.equal(persisted[1].patch.status, true);
   assert.equal(scheduledRefreshes.length, 2);
+
   const refreshesByReason = new Map(
     scheduledRefreshes.map((refresh) => [refresh.reason, refresh])
   );
 
-  const directCleanupRefresh = refreshesByReason.get('cleanup:38.96.47:1');
+  const directCleanupRefresh = refreshesByReason.get('cleanup:38.96.47:2');
   assert.ok(directCleanupRefresh);
-  assert.equal(directCleanupRefresh.address, '71B678');
+  assert.equal(directCleanupRefresh.address, '389647');
   assert.equal(directCleanupRefresh.options.expectedStatus, true);
   assert.equal(directCleanupRefresh.options.fallbackState.status, true);
 
-  const linkedCleanupRefresh = refreshesByReason.get('cleanup_group:38.96.47:1');
+  const linkedCleanupRefresh = refreshesByReason.get('cleanup_group:38.96.47:2');
   assert.ok(linkedCleanupRefresh);
   assert.equal(linkedCleanupRefresh.address, '388A57');
   assert.equal(linkedCleanupRefresh.options.expectedStatus, true);
