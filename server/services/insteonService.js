@@ -9581,6 +9581,7 @@ class InsteonService {
     const code = String(error.code || '').trim().toUpperCase();
     if ([
       'INSTEON_COMMAND_TIMEOUT',
+      'INSTEON_DEVICE_NO_RESPONSE',
       'INSTEON_COMMAND_NACK',
       'ETIMEDOUT',
       'ECONNRESET',
@@ -9641,6 +9642,7 @@ class InsteonService {
             priority: options.priority || 'control',
             kind: options.kind || 'control_command',
             label: options.label || timeoutMessage,
+            requireDeviceResponse: options.requireDeviceResponse === true,
             commandRetries: options.commandRetries,
             nakTimeoutMs: options.nakTimeoutMs
           }
@@ -9747,6 +9749,23 @@ class InsteonService {
       });
       const error = new Error(timeoutMessage);
       error.code = 'INSTEON_COMMAND_TIMEOUT';
+      error.details = {
+        hubStatus: summary
+      };
+      throw error;
+    }
+
+    if (options.requireDeviceResponse === true && !summary.success) {
+      this._logEngineWarn(`PLM command accepted by modem but target device did not respond: ${String(options.label || timeoutMessage)}`, {
+        stage: 'command',
+        direction: 'inbound',
+        operation: options.kind || 'control_command',
+        details: {
+          summary
+        }
+      });
+      const error = new Error(`${timeoutMessage} (target device did not respond after PLM ACK)`);
+      error.code = 'INSTEON_DEVICE_NO_RESPONSE';
       error.details = {
         hubStatus: summary
       };
@@ -10283,6 +10302,7 @@ class InsteonService {
             priority: 'control',
             kind: 'turn_on',
             label: `turning on ${this._formatInsteonAddress(address)}${useFastOnCommand ? ' (fast)' : ''}`,
+            requireDeviceResponse: true,
             commandRetries: Number.isFinite(Number(options?.commandRetries))
               ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
               : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES
@@ -10521,6 +10541,7 @@ class InsteonService {
             priority: 'control',
             kind: 'turn_off',
             label: `turning off ${this._formatInsteonAddress(address)}${useFastOffCommand ? ' (fast)' : ''}`,
+            requireDeviceResponse: true,
             commandRetries: Number.isFinite(Number(options?.commandRetries))
               ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
               : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES
