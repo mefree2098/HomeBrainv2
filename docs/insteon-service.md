@@ -40,8 +40,9 @@ The runtime listeners are attached to the `home-controller` hub once the PLM con
 - `error`
 - `close`
 - `command`
+- `recvCommand`
 
-The `command` event is the important one for runtime device state.
+`recvCommand` is important because `home-controller` emits it for every inbound standard message, while `command` is only emitted when the packet is not being matched as a response to an in-flight command.
 
 ## PLM Queue
 
@@ -240,6 +241,9 @@ Important distinction:
   so HomeBrain updates the actual switch row instead of treating the PLM target as the changed device.
 - If a whole runtime-poll batch comes back as nothing but `INSTEON_LEVEL_TIMEOUT` / `rawResult:null`, HomeBrain
   now backs runtime polling off for a while instead of continuing to hammer the PLM with more useless `19` reads.
+- If direct control works but physical/manual updates never appear as `Inbound runtime command ...` logs, inspect the
+  HomeBrain PLM link topology before blaming the device network. A missing device-to-PLM controller link will allow
+  direct control to work while preventing unsolicited manual updates from ever reaching HomeBrain.
 
 ### Verification Modes
 
@@ -304,6 +308,7 @@ API routes:
 - `POST /api/insteon/maintenance/clear-queue`
 - `POST /api/insteon/maintenance/runtime-monitoring/stop`
 - `POST /api/insteon/maintenance/runtime-monitoring/start`
+- `POST /api/insteon/maintenance/runtime-links/audit`
 - `POST /api/insteon/maintenance/soft-reset`
 
 What each one does:
@@ -312,6 +317,7 @@ What each one does:
 - `clear-queue`: drops queued PLM work and clears pending runtime refresh timers
 - `runtime-monitoring/stop`: pauses background runtime polling
 - `runtime-monitoring/start`: resumes background runtime polling
+- `runtime-links/audit`: checks whether the current PLM has both responder and controller links needed for unsolicited runtime updates from the specified devices
 - `soft-reset`: clears HomeBrain's local PLM queues/caches, disconnects the PLM transport, reconnects it, and resumes runtime polling if it was already running
 
 Important limitation:

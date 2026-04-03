@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const Device = require('../models/Device');
 const Settings = require('../models/Settings');
@@ -413,6 +414,154 @@ test('_handleRuntimeCommand refreshes the source device when a direct light comm
   assert.equal(scheduledRefreshes[0].reason, 'direct:38.96.47:11');
   assert.equal(scheduledRefreshes[0].options.expectedStatus, true);
   assert.equal(scheduledRefreshes[0].options.fallbackState.status, true);
+});
+
+test('_attachRuntimeListeners processes recvCommand fallback without double-handling the later command event', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalRuntimeListenersAttached = insteonService._runtimeListenersAttached;
+  const originalRuntimeErrorListener = insteonService._runtimeErrorListener;
+  const originalRuntimeCloseListener = insteonService._runtimeCloseListener;
+  const originalRuntimeCommandListener = insteonService._runtimeCommandListener;
+  const originalRuntimeRecvCommandListener = insteonService._runtimeRecvCommandListener;
+  const originalRecentRuntimeCommandSignatures = insteonService._recentRuntimeCommandSignatures;
+  const originalHandleRuntimeCommand = insteonService._handleRuntimeCommand;
+
+  t.after(() => {
+    insteonService._detachRuntimeListeners();
+    insteonService.hub = originalHub;
+    insteonService._runtimeListenersAttached = originalRuntimeListenersAttached;
+    insteonService._runtimeErrorListener = originalRuntimeErrorListener;
+    insteonService._runtimeCloseListener = originalRuntimeCloseListener;
+    insteonService._runtimeCommandListener = originalRuntimeCommandListener;
+    insteonService._runtimeRecvCommandListener = originalRuntimeRecvCommandListener;
+    insteonService._recentRuntimeCommandSignatures = originalRecentRuntimeCommandSignatures;
+    insteonService._handleRuntimeCommand = originalHandleRuntimeCommand;
+  });
+
+  const hub = new EventEmitter();
+  const handledCommands = [];
+
+  insteonService.hub = hub;
+  insteonService._runtimeListenersAttached = false;
+  insteonService._runtimeErrorListener = null;
+  insteonService._runtimeCloseListener = null;
+  insteonService._runtimeCommandListener = null;
+  insteonService._runtimeRecvCommandListener = null;
+  insteonService._recentRuntimeCommandSignatures = new Map();
+  insteonService._handleRuntimeCommand = async (command) => {
+    handledCommands.push(command);
+  };
+
+  insteonService._attachRuntimeListeners();
+
+  const runtimeCommand = {
+    standard: {
+      id: '11.22.33',
+      gatewayId: '44.55.66',
+      messageType: 0,
+      command1: '11',
+      command2: 'FF',
+      raw: '02501122334455660FFF'
+    }
+  };
+
+  hub.emit('recvCommand', runtimeCommand);
+  hub.emit('command', runtimeCommand);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(handledCommands.length, 1);
+  assert.equal(handledCommands[0], runtimeCommand);
+});
+
+test('auditRuntimeMonitoringLinks flags missing controller links as a manual-update risk', async (t) => {
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalResponderLinkCheck = insteonService._deviceHasResponderLinkToController;
+  const originalControllerLinkCheck = insteonService._deviceHasControllerLinkToTarget;
+
+  t.after(() => {
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._deviceHasResponderLinkToController = originalResponderLinkCheck;
+    insteonService._deviceHasControllerLinkToTarget = originalControllerLinkCheck;
+  });
+
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService.getPLMInfo = async () => ({ deviceId: '71.B6.78' });
+  insteonService._deviceHasResponderLinkToController = async (address, group, plmId) => {
+    assert.equal(address, '389647');
+    assert.equal(group, 1);
+    assert.equal(plmId, '71B678');
+    return true;
+  };
+  insteonService._deviceHasControllerLinkToTarget = async (address, group, plmId) => {
+    assert.equal(address, '389647');
+    assert.equal(group, 1);
+    assert.equal(plmId, '71B678');
+    return false;
+  };
+
+  const result = await insteonService.auditRuntimeMonitoringLinks({
+    addresses: ['38.96.47']
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.summary.audited, 1);
+  assert.equal(result.summary.missingController, 1);
+  assert.equal(result.devices[0].displayAddress, '38.96.47');
+  assert.equal(result.devices[0].responderLinkToPlm, true);
+  assert.equal(result.devices[0].controllerLinkToPlm, false);
+  assert.equal(result.devices[0].manualUpdatesExpected, false);
+  assert.equal(result.devices[0].monitoringStatus, 'missing_controller_link');
+  assert.match(result.devices[0].warning, /manual updates will not reach homebrain/i);
+});
+
+test('auditRuntimeMonitoringLinks audits tracked devices when no explicit addresses are provided', async (t) => {
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+  const originalGetPLMInfo = insteonService.getPLMInfo;
+  const originalResponderLinkCheck = insteonService._deviceHasResponderLinkToController;
+  const originalControllerLinkCheck = insteonService._deviceHasControllerLinkToTarget;
+  const originalDeviceFind = Device.find;
+
+  t.after(() => {
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+    insteonService.getPLMInfo = originalGetPLMInfo;
+    insteonService._deviceHasResponderLinkToController = originalResponderLinkCheck;
+    insteonService._deviceHasControllerLinkToTarget = originalControllerLinkCheck;
+    Device.find = originalDeviceFind;
+  });
+
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService.getPLMInfo = async () => ({ deviceId: '71.B6.78' });
+  insteonService._deviceHasResponderLinkToController = async () => true;
+  insteonService._deviceHasControllerLinkToTarget = async () => true;
+  Device.find = () => ({
+    select: () => ({
+      lean: async () => ([
+        {
+          _id: 'device-1',
+          name: 'Master Vanity',
+          properties: { insteonAddress: '38.96.47' }
+        }
+      ])
+    })
+  });
+
+  const result = await insteonService.auditRuntimeMonitoringLinks();
+
+  assert.equal(result.success, true);
+  assert.equal(result.summary.audited, 1);
+  assert.equal(result.summary.ok, 1);
+  assert.equal(result.devices[0].deviceId, 'device-1');
+  assert.equal(result.devices[0].name, 'Master Vanity');
+  assert.equal(result.devices[0].manualUpdatesExpected, true);
+  assert.equal(result.devices[0].monitoringStatus, 'ok');
 });
 
 test('_handleRuntimeCommand refreshes the addressed responder for all-link cleanup messages', async (t) => {
