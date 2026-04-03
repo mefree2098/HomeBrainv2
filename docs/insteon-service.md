@@ -231,6 +231,8 @@ Important distinction:
 - Before failing a modem-acknowledged direct ON/OFF, HomeBrain now pre-registers a matching runtime
   `direct_ack` waiter and keeps it open for up to `30000ms` by default. This covers real delayed device ACKs
   that arrive during the command window or after the `home-controller` callback has already timed out.
+- If that delayed runtime `direct_ack` arrives, HomeBrain now treats it as the terminal ON/OFF confirmation
+  instead of immediately following it with another PLM `19` status read.
 - While that late-ACK window is open, HomeBrain also suppresses background runtime polling for the same PLM so
   the modem is not immediately reused for status queries while a delayed device acknowledgement may still be
   inbound.
@@ -251,6 +253,8 @@ HomeBrain supports two broad patterns:
 - `1` matching read required
 
 Async/ack-style modes skip synchronous verification and instead queue a runtime refresh after the command is acknowledged.
+The exception is when a real runtime device acknowledgement already confirmed the command; in that case HomeBrain
+trusts the device ACK and does not enqueue a redundant `19` verification query.
 
 ### Control Defaults Vs. Explicit Overrides
 

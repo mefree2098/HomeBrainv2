@@ -7509,6 +7509,10 @@ class InsteonService {
       return [];
     }
 
+    if (parsed.messageType === 1 && parsed.observedState?.state) {
+      return [];
+    }
+
     const formattedSourceAddress = this._formatInsteonAddress(parsed.sourceAddress || parsed.address);
     const fallbackState = this._buildRuntimeExpectedStatePatch(parsed.expectedStatus);
     const requests = [];
@@ -10834,6 +10838,38 @@ class InsteonService {
       console.log(`InsteonService: Device ${address} turned on at ${boundedBrightness}%`);
       const optimisticState = this._buildOptimisticCommandState(true, boundedBrightness);
       await this._persistDeviceRuntimeState(device, optimisticState);
+      if (commandExecution.hubStatus?.lateRuntimeAck === true) {
+        const details = this._buildInsteonControlDetails(device, address, 'turn_on', optimisticState, {
+          requestedBrightness: boundedBrightness,
+          commandAcknowledged: true,
+          hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
+          hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
+          verificationMode: 'runtime_direct_ack',
+          confirmationSource: 'runtime_direct_ack',
+          commandAttempts: commandExecution.attemptsUsed,
+          commandRetryCount: commandExecution.retryCount
+        });
+        this._logEngineInfo(`Turn on confirmed for ${details.insteonAddress} via runtime device acknowledgement`, {
+          stage: 'control',
+          direction: 'inbound',
+          operation: 'turn_on',
+          address,
+          details: {
+            commandAttempts: commandExecution.attemptsUsed,
+            confirmationSource: 'runtime_direct_ack'
+          }
+        });
+
+        return {
+          success: true,
+          message: `Device turned on via Insteon PLM ${details.insteonAddress}${commandExecution.attemptsUsed > 1 ? ` after ${commandExecution.attemptsUsed} command attempts` : ''} (confirmed by device acknowledgement)`,
+          status: optimisticState.status,
+          brightness: optimisticState.brightness,
+          level: optimisticState.level,
+          confirmed: true,
+          details
+        };
+      }
       const verificationMode = this._getVerificationMode(options);
       if (this._shouldSkipSynchronousVerification(verificationMode)) {
         this._scheduleRuntimeStateRefresh(address, 'turn_on_ack', {
@@ -11083,6 +11119,37 @@ class InsteonService {
       console.log(`InsteonService: Device ${address} turned off`);
       const optimisticState = this._buildOptimisticCommandState(false);
       await this._persistDeviceRuntimeState(device, optimisticState);
+      if (commandExecution.hubStatus?.lateRuntimeAck === true) {
+        const details = this._buildInsteonControlDetails(device, address, 'turn_off', optimisticState, {
+          commandAcknowledged: true,
+          hubAcknowledged: commandExecution.hubStatus?.acknowledged ?? true,
+          hubResponseReceived: commandExecution.hubStatus?.hasResponse ?? false,
+          verificationMode: 'runtime_direct_ack',
+          confirmationSource: 'runtime_direct_ack',
+          commandAttempts: commandExecution.attemptsUsed,
+          commandRetryCount: commandExecution.retryCount
+        });
+        this._logEngineInfo(`Turn off confirmed for ${details.insteonAddress} via runtime device acknowledgement`, {
+          stage: 'control',
+          direction: 'inbound',
+          operation: 'turn_off',
+          address,
+          details: {
+            commandAttempts: commandExecution.attemptsUsed,
+            confirmationSource: 'runtime_direct_ack'
+          }
+        });
+
+        return {
+          success: true,
+          message: `Device turned off via Insteon PLM ${details.insteonAddress}${commandExecution.attemptsUsed > 1 ? ` after ${commandExecution.attemptsUsed} command attempts` : ''} (confirmed by device acknowledgement)`,
+          status: optimisticState.status,
+          brightness: optimisticState.brightness,
+          level: optimisticState.level,
+          confirmed: true,
+          details
+        };
+      }
       const verificationMode = this._getVerificationMode(options);
       if (this._shouldSkipSynchronousVerification(verificationMode)) {
         this._scheduleRuntimeStateRefresh(address, 'turn_off_ack', {
