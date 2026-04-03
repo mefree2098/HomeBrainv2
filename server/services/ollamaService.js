@@ -1669,11 +1669,26 @@ class OllamaService {
       const currentUser = this.getCurrentUser();
       const serviceOwner = config.serviceOwner || currentUser;
       const isExternalOwner = serviceOwner && serviceOwner !== currentUser;
+      const liveProcesses = await this.listOllamaProcesses();
 
       if (config.servicePid) {
-        candidates.push({ pid: config.servicePid, managed: !isExternalOwner, owner: serviceOwner });
-      } else {
-        const ownedProcess = await this.findOwnedOllamaProcess();
+        const trackedProcess = liveProcesses.find((processInfo) => processInfo.pid === config.servicePid) || null;
+        if (trackedProcess) {
+          candidates.push({
+            pid: trackedProcess.pid,
+            managed: trackedProcess.user === currentUser && !isExternalOwner,
+            owner: trackedProcess.user
+          });
+        } else {
+          this.addOperationLog(
+            'service',
+            `Tracked Ollama pid ${config.servicePid} is no longer present. Falling back to live process discovery.`
+          );
+        }
+      }
+
+      if (candidates.length === 0) {
+        const ownedProcess = liveProcesses.find((processInfo) => processInfo.user === currentUser) || null;
         if (ownedProcess) {
           candidates.push({
             pid: ownedProcess.pid,
@@ -1684,7 +1699,7 @@ class OllamaService {
       }
 
       if (candidates.length === 0) {
-        const processes = await this.listOllamaProcesses();
+        const processes = liveProcesses;
         if (processes.length) {
           const external = processes[0];
           const message = `Ollama service is managed by user "${external.user}". Attempting to stop via system service...`;
