@@ -1811,7 +1811,7 @@ class OllamaService {
     return false;
   }
 
-  async waitForServiceStopped(retries = 12, delayMs = 500) {
+  async waitForServiceStopped(retries = 30, delayMs = 500) {
     for (let attempt = 0; attempt < retries; attempt += 1) {
       const status = await this.checkServiceStatus();
       const processes = await this.listOllamaProcesses();
@@ -1831,7 +1831,7 @@ class OllamaService {
       const owner = processInfo?.user || config.serviceOwner || 'another user';
       const stopHint = getManualOllamaStopHint();
       const failureMessage =
-        `Stop command completed but Ollama is still running as "${owner}". ` +
+        `HomeBrain tried to stop Ollama, but it is still running as "${owner}". ` +
         `Stop the system service manually (for example, "${stopHint}") or grant HomeBrain permission to manage it.`;
 
       config.serviceStatus = 'running_external';
@@ -2203,7 +2203,7 @@ class OllamaService {
             'another user';
           const stopHint = getManualOllamaStopHint();
           const errorMessage =
-            `Ollama is still running as "${remainingOwner}". ` +
+            `HomeBrain tried to stop Ollama, but it is still running as "${remainingOwner}". ` +
             `Refusing to continue the update to avoid multiple instances. ` +
             `Stop it manually (for example, "${stopHint}") or run "${getOllamaPrivilegeRepairHint()}".`;
           this.addOperationLog('update', errorMessage);
