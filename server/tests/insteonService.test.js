@@ -473,6 +473,56 @@ test('_attachRuntimeListeners processes recvCommand fallback without double-hand
   assert.equal(handledCommands[0], runtimeCommand);
 });
 
+test('_attachRuntimeTransportDiagnostics logs inbound standard runtime frames once before dispatcher parsing', (t) => {
+  const originalHub = insteonService.hub;
+  const originalLogEngineInfo = insteonService._logEngineInfo;
+  const originalRuntimeTransportDiagnosticsAttached = insteonService._runtimeTransportDiagnosticsAttached;
+  const originalRuntimeTransportOriginalCheckStatus = insteonService._runtimeTransportOriginalCheckStatus;
+  const originalRecentRuntimeTransportCandidates = insteonService._recentRuntimeTransportCandidates;
+
+  t.after(() => {
+    insteonService._detachRuntimeTransportDiagnostics();
+    insteonService.hub = originalHub;
+    insteonService._logEngineInfo = originalLogEngineInfo;
+    insteonService._runtimeTransportDiagnosticsAttached = originalRuntimeTransportDiagnosticsAttached;
+    insteonService._runtimeTransportOriginalCheckStatus = originalRuntimeTransportOriginalCheckStatus;
+    insteonService._recentRuntimeTransportCandidates = originalRecentRuntimeTransportCandidates;
+  });
+
+  const hub = new EventEmitter();
+  const originalCheckStatus = () => 1;
+  const loggedMessages = [];
+
+  hub.buffer = '';
+  hub._checkStatus = originalCheckStatus;
+  insteonService.hub = hub;
+  insteonService._runtimeTransportDiagnosticsAttached = false;
+  insteonService._runtimeTransportOriginalCheckStatus = null;
+  insteonService._recentRuntimeTransportCandidates = new Map();
+  insteonService._logEngineInfo = (message, context) => {
+    loggedMessages.push({ message, context });
+  };
+
+  insteonService._attachRuntimeTransportDiagnostics();
+
+  hub.buffer = '025038964771B6782B1200';
+  const wrappedCheckStatus = hub._checkStatus;
+  assert.equal(hub._checkStatus(), 1);
+  assert.equal(hub._checkStatus(), 1);
+
+  assert.equal(loggedMessages.length, 1);
+  assert.match(loggedMessages[0].message, /Observed raw inbound PLM standard runtime message before dispatcher parse/i);
+  assert.equal(loggedMessages[0].context.address, '389647');
+  assert.equal(loggedMessages[0].context.details.sourceAddress, '38.96.47');
+  assert.equal(loggedMessages[0].context.details.targetAddress, '71.B6.78');
+  assert.equal(loggedMessages[0].context.details.command1, '12');
+  assert.equal(loggedMessages[0].context.details.command2, '00');
+
+  insteonService._detachRuntimeTransportDiagnostics();
+  assert.notEqual(hub._checkStatus, wrappedCheckStatus);
+  assert.equal(hub._checkStatus(), 1);
+});
+
 test('auditRuntimeMonitoringLinks flags missing controller links as a manual-update risk', async (t) => {
   const originalIsConnected = insteonService.isConnected;
   const originalHub = insteonService.hub;

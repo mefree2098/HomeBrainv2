@@ -59,6 +59,7 @@ const DEFAULT_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS = 300000;
 const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_MS = 120000;
 const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_THRESHOLD = 1;
+const DEFAULT_INSTEON_RUNTIME_TRANSPORT_DIAGNOSTIC_DEDUP_MS = 1500;
 const INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS = Object.freeze([
   /^ttyUSB\d+$/i,
   /^ttyACM\d+$/i,
@@ -94,6 +95,9 @@ class InsteonService {
     this._runtimeCommandListener = null;
     this._runtimeRecvCommandListener = null;
     this._recentRuntimeCommandSignatures = new Map();
+    this._runtimeTransportDiagnosticsAttached = false;
+    this._runtimeTransportOriginalCheckStatus = null;
+    this._recentRuntimeTransportCandidates = new Map();
     this._connectPromise = null;
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
@@ -1098,6 +1102,7 @@ class InsteonService {
       console.warn(`InsteonService: PLM connection closed${hadError ? ' after error' : ''}`);
       this._cancelInProgressHubCommandSafe('connection close');
       this.isConnected = false;
+      this._detachRuntimeTransportDiagnostics();
       this.hub = null;
       this.connectionTransport = null;
       this.connectionTarget = null;
@@ -1150,9 +1155,124 @@ class InsteonService {
     this._runtimeListenersAttached = true;
   }
 
+  _buildRuntimeTransportCandidateSummary(rawFrame) {
+    const normalizedRawFrame = typeof rawFrame === 'string'
+      ? rawFrame.trim().toUpperCase()
+      : '';
+    if (!/^025[01]/.test(normalizedRawFrame)) {
+      return null;
+    }
+
+    const isExtended = normalizedRawFrame.startsWith('0251');
+    const expectedLength = isExtended ? 50 : 22;
+    if (normalizedRawFrame.length < expectedLength) {
+      return null;
+    }
+
+    const sourceAddress = this._normalizePossibleInsteonAddress(normalizedRawFrame.slice(4, 10));
+    const targetAddress = this._normalizePossibleInsteonAddress(normalizedRawFrame.slice(10, 16));
+    const typeFlag = Number.parseInt(normalizedRawFrame.slice(16, 17), 16);
+    const messageType = Number.isInteger(typeFlag) ? (typeFlag >> 1) : null;
+
+    return {
+      raw: normalizedRawFrame.slice(0, expectedLength),
+      extended: isExtended,
+      sourceAddress,
+      targetAddress,
+      messageType,
+      command1: normalizedRawFrame.slice(18, 20) || null,
+      command2: normalizedRawFrame.slice(20, 22) || null
+    };
+  }
+
+  _shouldLogRuntimeTransportCandidate(rawFrame) {
+    const normalizedRawFrame = typeof rawFrame === 'string'
+      ? rawFrame.trim().toUpperCase()
+      : '';
+    if (!normalizedRawFrame) {
+      return false;
+    }
+
+    const now = Date.now();
+    for (const [key, timestamp] of this._recentRuntimeTransportCandidates.entries()) {
+      if ((now - timestamp) > DEFAULT_INSTEON_RUNTIME_TRANSPORT_DIAGNOSTIC_DEDUP_MS) {
+        this._recentRuntimeTransportCandidates.delete(key);
+      }
+    }
+
+    const previousTimestamp = this._recentRuntimeTransportCandidates.get(normalizedRawFrame);
+    if (Number.isFinite(previousTimestamp) && (now - previousTimestamp) < DEFAULT_INSTEON_RUNTIME_TRANSPORT_DIAGNOSTIC_DEDUP_MS) {
+      return false;
+    }
+
+    this._recentRuntimeTransportCandidates.set(normalizedRawFrame, now);
+    return true;
+  }
+
+  _attachRuntimeTransportDiagnostics() {
+    if (!this.hub || this._runtimeTransportDiagnosticsAttached) {
+      return;
+    }
+
+    const originalCheckStatus = typeof this.hub._checkStatus === 'function'
+      ? this.hub._checkStatus.bind(this.hub)
+      : null;
+    if (!originalCheckStatus) {
+      return;
+    }
+
+    this._runtimeTransportOriginalCheckStatus = originalCheckStatus;
+    this.hub._checkStatus = (...args) => {
+      const rawBuffer = typeof this.hub?.buffer === 'string'
+        ? this.hub.buffer.trim().toUpperCase()
+        : '';
+      const candidateSummary = this._buildRuntimeTransportCandidateSummary(rawBuffer);
+
+      if (candidateSummary && this._shouldLogRuntimeTransportCandidate(candidateSummary.raw)) {
+        this._logEngineInfo(
+          `Observed raw inbound PLM ${candidateSummary.extended ? 'extended' : 'standard'} runtime message before dispatcher parse`,
+          {
+            stage: 'transport',
+            direction: 'inbound',
+            operation: 'runtime_transport',
+            address: candidateSummary.sourceAddress,
+            details: {
+              sourceAddress: candidateSummary.sourceAddress
+                ? this._formatInsteonAddress(candidateSummary.sourceAddress)
+                : null,
+              targetAddress: candidateSummary.targetAddress
+                ? this._formatInsteonAddress(candidateSummary.targetAddress)
+                : null,
+              messageType: candidateSummary.messageType,
+              command1: candidateSummary.command1,
+              command2: candidateSummary.command2,
+              raw: candidateSummary.raw,
+              activeOperation: this._snapshotActivePlmOperation()
+            }
+          }
+        );
+      }
+
+      return originalCheckStatus(...args);
+    };
+
+    this._runtimeTransportDiagnosticsAttached = true;
+  }
+
+  _detachRuntimeTransportDiagnostics() {
+    if (this.hub && this._runtimeTransportDiagnosticsAttached && this._runtimeTransportOriginalCheckStatus) {
+      this.hub._checkStatus = this._runtimeTransportOriginalCheckStatus;
+    }
+
+    this._runtimeTransportOriginalCheckStatus = null;
+    this._recentRuntimeTransportCandidates.clear();
+    this._runtimeTransportDiagnosticsAttached = false;
+  }
+
   _detachRuntimeListeners() {
     if (!this.hub || !this._runtimeListenersAttached) {
       this._recentRuntimeCommandSignatures.clear();
+      this._detachRuntimeTransportDiagnostics();
       this._runtimeListenersAttached = false;
       return;
     }
@@ -1175,6 +1295,7 @@ class InsteonService {
     this._runtimeCommandListener = null;
     this._runtimeRecvCommandListener = null;
     this._recentRuntimeCommandSignatures.clear();
+    this._detachRuntimeTransportDiagnostics();
     this._clearPendingRuntimeStateRefreshes();
     this._clearPendingRuntimeCommandAcks();
     this._runtimeListenersAttached = false;
@@ -8895,6 +9016,7 @@ class InsteonService {
             } else {
               this.hub.serial(connection.serialPath, { ...INSTEON_SERIAL_OPTIONS });
             }
+            this._attachRuntimeTransportDiagnostics();
           } catch (error) {
             onError(error);
           }
