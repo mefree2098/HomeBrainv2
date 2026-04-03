@@ -218,12 +218,19 @@ Default command settings:
 - command timeout: `1500ms`
 - default verification mode: `ack`
 - post-command settle window: `700ms`
+- full ON / OFF defaults to fast direct opcodes when the device supports them:
+  `12` for full ON, `14` for OFF
+- partial brightness changes still use standard/ramped direct commands:
+  `11` with a level byte
 
 Important distinction:
 
 - A bare PLM serial ACK is not treated as a successful device command.
 - Direct ON/OFF now requires a target-device response, not just modem acceptance.
 - If logs show `acknowledged:true` but `success:false` and `hasResponse:false`, HomeBrain now fails the command as `target device did not respond after PLM ACK`.
+- Before failing a modem-acknowledged direct ON/OFF, HomeBrain now waits briefly for a matching runtime
+  `direct_ack` from the device. This covers real late device ACKs that arrive on the runtime stream after the
+  `home-controller` callback has already timed out.
 
 ### Verification Modes
 
@@ -250,6 +257,7 @@ Normal UI/device control is intentionally conservative now:
 - no automatic retry loop
 - no automatic state-recovery loop after timeout
 - ack-first verification by default
+- binary ON/OFF prefers fast direct commands by default unless explicitly disabled
 
 Workflows or debug paths can still opt into:
 
