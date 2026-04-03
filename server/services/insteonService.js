@@ -48,10 +48,10 @@ const DEFAULT_INSTEON_RUNTIME_MONITOR_OFFLINE_STALE_AFTER_MS = 15000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_BATCH_SIZE = 4;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_MAX_DYNAMIC_BATCH_SIZE = 50;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_COOLDOWN_MS = 6000;
-const DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS = 1500;
+const DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS = 2500;
 const DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS = 50;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS = 450;
-const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1200;
+const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1800;
 const DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS = 300000;
 const INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS = Object.freeze([
   /^ttyUSB\d+$/i,
@@ -1366,6 +1366,15 @@ class InsteonService {
       } catch (error) {
         this._markRuntimePollAttempt(normalizedAddress);
         summary.errors += 1;
+        this._logEngineWarn(`Runtime poll failed for ${this._formatInsteonAddress(normalizedAddress)}`, {
+          stage: 'state',
+          direction: 'inbound',
+          operation: 'runtime_poll',
+          address: normalizedAddress,
+          details: {
+            error: error.message
+          }
+        });
         if (device.isOnline !== false) {
           await this._persistDeviceRuntimeStateByAddress(normalizedAddress, { isOnline: false });
           summary.offlineMarked += 1;
@@ -9076,6 +9085,16 @@ class InsteonService {
     );
 
     if (level == null) {
+      this._logEngineWarn(`PLM level query returned no usable state for ${this._formatInsteonAddress(normalizedAddress)}`, {
+        stage: 'state',
+        direction: 'inbound',
+        operation: options.kind || 'level_query',
+        address: normalizedAddress,
+        details: {
+          timeoutMs: timeoutValue,
+          rawResult: level
+        }
+      });
       const error = new Error(`Timeout getting device status for ${this._formatInsteonAddress(normalizedAddress)}`);
       error.code = 'INSTEON_LEVEL_TIMEOUT';
       error.details = {
@@ -9086,6 +9105,17 @@ class InsteonService {
 
     const numericLevel = Number(level);
     if (!Number.isFinite(numericLevel)) {
+      this._logEngineWarn(`PLM level query returned an invalid payload for ${this._formatInsteonAddress(normalizedAddress)}`, {
+        stage: 'state',
+        direction: 'inbound',
+        operation: options.kind || 'level_query',
+        address: normalizedAddress,
+        details: {
+          timeoutMs: timeoutValue,
+          rawLevelType: typeof level,
+          rawLevel: level
+        }
+      });
       throw new Error(`Invalid level response for ${this._formatInsteonAddress(normalizedAddress)}`);
     }
 
