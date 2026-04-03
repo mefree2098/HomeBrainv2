@@ -55,7 +55,7 @@ const DEFAULT_INSTEON_RUNTIME_STATE_POLL_TIMEOUT_MS = 2500;
 const DEFAULT_INSTEON_RUNTIME_STATE_POLL_PAUSE_MS = 50;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_DELAY_MS = 450;
 const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1800;
-const DEFAULT_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS = 15000;
+const DEFAULT_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS = 300000;
 const INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS = Object.freeze([
   /^ttyUSB\d+$/i,
@@ -1189,46 +1189,76 @@ class InsteonService {
   _getLateRuntimeAckTimeoutMs(options = {}) {
     const timeoutRaw = Number(options?.runtimeAckTimeoutMs);
     if (Number.isFinite(timeoutRaw)) {
-      return Math.max(0, Math.min(30000, Math.round(timeoutRaw)));
+      return Math.max(0, Math.min(60000, Math.round(timeoutRaw)));
     }
 
     return this._lateRuntimeAckTimeoutMs;
   }
 
-  _waitForPendingRuntimeCommandAck(address, expectedStatus, options = {}) {
+  _createPendingRuntimeCommandAckWaiter(address, expectedStatus, options = {}) {
     const key = this._buildPendingRuntimeCommandAckKey(address, expectedStatus);
     const timeoutMs = this._getLateRuntimeAckTimeoutMs(options);
     if (!key || timeoutMs <= 0) {
-      return Promise.resolve(null);
+      return null;
     }
 
-    return new Promise((resolve) => {
-      const waiters = this._pendingRuntimeCommandAcks.get(key) || [];
-      const waiter = {
-        resolve: (value) => {
-          if (waiter.timer) {
-            clearTimeout(waiter.timer);
-            waiter.timer = null;
-          }
-          resolve(value);
-        },
-        timer: null
-      };
+    let settled = false;
+    let promiseResolve = null;
+    const settle = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (waiter.timer) {
+        clearTimeout(waiter.timer);
+        waiter.timer = null;
+      }
+      if (typeof promiseResolve === 'function') {
+        promiseResolve(value);
+      }
+    };
+    const removeWaiter = () => {
+      const pendingWaiters = this._pendingRuntimeCommandAcks.get(key) || [];
+      const remainingWaiters = pendingWaiters.filter((candidate) => candidate !== waiter);
+      if (remainingWaiters.length > 0) {
+        this._pendingRuntimeCommandAcks.set(key, remainingWaiters);
+      } else {
+        this._pendingRuntimeCommandAcks.delete(key);
+      }
+    };
+    const waiter = {
+      resolve: (value) => {
+        removeWaiter();
+        settle(value);
+      },
+      cancel: () => {
+        removeWaiter();
+        settle(null);
+      },
+      timer: null
+    };
 
+    const promise = new Promise((resolve) => {
+      promiseResolve = resolve;
+      const waiters = this._pendingRuntimeCommandAcks.get(key) || [];
       waiter.timer = setTimeout(() => {
-        const pendingWaiters = this._pendingRuntimeCommandAcks.get(key) || [];
-        const remainingWaiters = pendingWaiters.filter((candidate) => candidate !== waiter);
-        if (remainingWaiters.length > 0) {
-          this._pendingRuntimeCommandAcks.set(key, remainingWaiters);
-        } else {
-          this._pendingRuntimeCommandAcks.delete(key);
-        }
-        resolve(null);
+        removeWaiter();
+        settle(null);
       }, timeoutMs);
 
       waiters.push(waiter);
       this._pendingRuntimeCommandAcks.set(key, waiters);
     });
+
+    return {
+      promise,
+      cancel: waiter.cancel
+    };
+  }
+
+  _waitForPendingRuntimeCommandAck(address, expectedStatus, options = {}) {
+    const pendingAckWaiter = this._createPendingRuntimeCommandAckWaiter(address, expectedStatus, options);
+    return pendingAckWaiter ? pendingAckWaiter.promise : Promise.resolve(null);
   }
 
   _resolvePendingRuntimeCommandAcks(parsed) {
@@ -10061,20 +10091,35 @@ class InsteonService {
       ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
       : 0;
     const totalCommandWindowMs = boundedTimeoutMs * Math.max(1, commandRetries + 1);
-    const status = await this._executeQueuedPlmCallbackOperation(
-      invoke,
-      {
-        priority: options.priority || 'control',
-        kind: options.kind || 'control_command',
-        label: options.label || timeoutMessage,
-        timeoutMs: Math.max(totalCommandWindowMs + 750, Math.round(totalCommandWindowMs * 1.25)),
-        timeoutMessage,
-        timeoutCode: 'INSTEON_COMMAND_TIMEOUT',
-        commandTimeoutMs: boundedTimeoutMs,
-        commandRetries,
-        cancelInProgressOnTimeout: true
-      }
-    );
+    const pendingRuntimeAckWaiter = options.requireDeviceResponse === true
+      ? this._createPendingRuntimeCommandAckWaiter(
+        options.runtimeAckAddress,
+        options.runtimeAckExpectedStatus,
+        {
+          runtimeAckTimeoutMs: options.runtimeAckTimeoutMs
+        }
+      )
+      : null;
+    let status;
+    try {
+      status = await this._executeQueuedPlmCallbackOperation(
+        invoke,
+        {
+          priority: options.priority || 'control',
+          kind: options.kind || 'control_command',
+          label: options.label || timeoutMessage,
+          timeoutMs: Math.max(totalCommandWindowMs + 750, Math.round(totalCommandWindowMs * 1.25)),
+          timeoutMessage,
+          timeoutCode: 'INSTEON_COMMAND_TIMEOUT',
+          commandTimeoutMs: boundedTimeoutMs,
+          commandRetries,
+          cancelInProgressOnTimeout: true
+        }
+      );
+    } catch (error) {
+      pendingRuntimeAckWaiter?.cancel();
+      throw error;
+    }
 
     const normalizedStatus = status === undefined
       ? {
@@ -10085,6 +10130,7 @@ class InsteonService {
       : status;
     const summary = this._summarizeHubCommandStatus(normalizedStatus);
     if (summary.negativeAcknowledgement) {
+      pendingRuntimeAckWaiter?.cancel();
       this._logEngineWarn(`PLM command negatively acknowledged: ${String(options.label || timeoutMessage)}`, {
         stage: 'command',
         direction: 'inbound',
@@ -10102,6 +10148,7 @@ class InsteonService {
     }
 
     if (!summary.acknowledged) {
+      pendingRuntimeAckWaiter?.cancel();
       this._logEngineWarn(`PLM command acknowledgement missing: ${String(options.label || timeoutMessage)}`, {
         stage: 'command',
         direction: 'inbound',
@@ -10119,13 +10166,9 @@ class InsteonService {
     }
 
     if (options.requireDeviceResponse === true && !summary.success) {
-      const lateRuntimeAck = await this._waitForPendingRuntimeCommandAck(
-        options.runtimeAckAddress,
-        options.runtimeAckExpectedStatus,
-        {
-          runtimeAckTimeoutMs: options.runtimeAckTimeoutMs
-        }
-      );
+      const lateRuntimeAck = pendingRuntimeAckWaiter
+        ? await pendingRuntimeAckWaiter.promise
+        : null;
 
       if (lateRuntimeAck) {
         this._logEngineInfo(`PLM command confirmed by late runtime device acknowledgement: ${String(options.label || timeoutMessage)}`, {
@@ -10166,6 +10209,7 @@ class InsteonService {
       throw error;
     }
 
+    pendingRuntimeAckWaiter?.cancel();
     this._logEngineInfo(`PLM command acknowledged: ${String(options.label || timeoutMessage)}`, {
       stage: 'command',
       direction: 'inbound',

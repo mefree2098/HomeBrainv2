@@ -228,9 +228,9 @@ Important distinction:
 - A bare PLM serial ACK is not treated as a successful device command.
 - Direct ON/OFF now requires a target-device response, not just modem acceptance.
 - If logs show `acknowledged:true` but `success:false` and `hasResponse:false`, HomeBrain now fails the command as `target device did not respond after PLM ACK`.
-- Before failing a modem-acknowledged direct ON/OFF, HomeBrain now waits briefly for a matching runtime
-  `direct_ack` from the device. This covers real late device ACKs that arrive on the runtime stream after the
-  `home-controller` callback has already timed out.
+- Before failing a modem-acknowledged direct ON/OFF, HomeBrain now pre-registers a matching runtime
+  `direct_ack` waiter and keeps it open for up to `30000ms` by default. This covers real delayed device ACKs
+  that arrive during the command window or after the `home-controller` callback has already timed out.
 
 ### Verification Modes
 
