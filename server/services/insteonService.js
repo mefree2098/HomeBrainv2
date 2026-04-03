@@ -40,7 +40,9 @@ const INSTEON_LOCAL_BRIDGE_START_TIMEOUT_MS = 8000;
 const DEFAULT_INSTEON_COMMAND_ATTEMPTS = 3;
 const DEFAULT_INSTEON_COMMAND_RETRY_PAUSE_MS = 250;
 const DEFAULT_INSTEON_COMMAND_TIMEOUT_MS = 1500;
-const DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES = 1;
+const DEFAULT_INSTEON_CONTROL_COMMAND_ATTEMPTS = 1;
+const DEFAULT_INSTEON_CONTROL_COMMAND_RETRY_PAUSE_MS = 0;
+const DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES = 0;
 const DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE = 'ack';
 const DEFAULT_INSTEON_POST_COMMAND_SETTLE_MS = 700;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS = 30000;
@@ -9567,6 +9569,10 @@ class InsteonService {
     };
   }
 
+  _shouldAttemptCommandStateRecovery(options = {}) {
+    return options?.recoverStateAfterTimeout === true;
+  }
+
   _isRetryableCommandError(error) {
     if (!error || typeof error !== 'object') {
       return false;
@@ -9689,13 +9695,14 @@ class InsteonService {
     const commandRetries = Number.isFinite(Number(options.commandRetries))
       ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
       : 0;
+    const totalCommandWindowMs = boundedTimeoutMs * Math.max(1, commandRetries + 1);
     const status = await this._executeQueuedPlmCallbackOperation(
       invoke,
       {
         priority: options.priority || 'control',
         kind: options.kind || 'control_command',
         label: options.label || timeoutMessage,
-        timeoutMs: Math.max(boundedTimeoutMs + 750, Math.round(boundedTimeoutMs * 1.25)),
+        timeoutMs: Math.max(totalCommandWindowMs + 750, Math.round(totalCommandWindowMs * 1.25)),
         timeoutMessage,
         timeoutCode: 'INSTEON_COMMAND_TIMEOUT',
         commandTimeoutMs: boundedTimeoutMs,
@@ -10267,6 +10274,12 @@ class InsteonService {
           'Timeout turning on device',
           {
             ...options,
+            commandAttempts: Number.isFinite(Number(options?.commandAttempts))
+              ? Math.max(1, Math.min(5, Math.round(Number(options.commandAttempts))))
+              : DEFAULT_INSTEON_CONTROL_COMMAND_ATTEMPTS,
+            commandPauseBetweenMs: Number.isFinite(Number(options?.commandPauseBetweenMs))
+              ? Math.max(0, Math.min(10_000, Math.round(Number(options.commandPauseBetweenMs))))
+              : DEFAULT_INSTEON_CONTROL_COMMAND_RETRY_PAUSE_MS,
             priority: 'control',
             kind: 'turn_on',
             label: `turning on ${this._formatInsteonAddress(address)}${useFastOnCommand ? ' (fast)' : ''}`,
@@ -10276,39 +10289,41 @@ class InsteonService {
           }
         );
       } catch (error) {
-        const recoveredState = await this._recoverCommandStateAfterTimeout(address, true);
-        if (recoveredState) {
-          const commandAttempts = Number.isFinite(Number(error?.commandAttempts))
-            ? Math.max(1, Number(error.commandAttempts))
-            : 1;
-          const details = this._buildInsteonControlDetails(device, address, 'turn_on', recoveredState, {
-            requestedBrightness: boundedBrightness,
-            commandAcknowledged: false,
-            commandWarning: error.message,
-            verificationRecovered: true,
-            commandAttempts,
-            commandRetryCount: Math.max(0, commandAttempts - 1)
-          });
-          this._logEngineWarn(`Turn on recovered after acknowledgement timeout for ${details.insteonAddress}`, {
-            stage: 'control',
-            direction: 'inbound',
-            operation: 'turn_on',
-            address,
-            details: {
+        if (this._shouldAttemptCommandStateRecovery(options)) {
+          const recoveredState = await this._recoverCommandStateAfterTimeout(address, true);
+          if (recoveredState) {
+            const commandAttempts = Number.isFinite(Number(error?.commandAttempts))
+              ? Math.max(1, Number(error.commandAttempts))
+              : 1;
+            const details = this._buildInsteonControlDetails(device, address, 'turn_on', recoveredState, {
+              requestedBrightness: boundedBrightness,
+              commandAcknowledged: false,
+              commandWarning: error.message,
+              verificationRecovered: true,
               commandAttempts,
-              warning: error.message
-            }
-          });
-          return {
-            success: true,
-            message: `Device turned on via Insteon PLM ${details.insteonAddress} (${commandAttempts > 1 ? `command acknowledgements timed out after ${commandAttempts} attempts` : 'command acknowledgement timed out'}, but status confirmed ON)`,
-            status: recoveredState.status,
-            brightness: recoveredState.brightness,
-            level: recoveredState.level,
-            confirmed: true,
-            warning: error.message,
-            details
-          };
+              commandRetryCount: Math.max(0, commandAttempts - 1)
+            });
+            this._logEngineWarn(`Turn on recovered after acknowledgement timeout for ${details.insteonAddress}`, {
+              stage: 'control',
+              direction: 'inbound',
+              operation: 'turn_on',
+              address,
+              details: {
+                commandAttempts,
+                warning: error.message
+              }
+            });
+            return {
+              success: true,
+              message: `Device turned on via Insteon PLM ${details.insteonAddress} (${commandAttempts > 1 ? `command acknowledgements timed out after ${commandAttempts} attempts` : 'command acknowledgement timed out'}, but status confirmed ON)`,
+              status: recoveredState.status,
+              brightness: recoveredState.brightness,
+              level: recoveredState.level,
+              confirmed: true,
+              warning: error.message,
+              details
+            };
+          }
         }
         throw error;
       }
@@ -10497,6 +10512,12 @@ class InsteonService {
           'Timeout turning off device',
           {
             ...options,
+            commandAttempts: Number.isFinite(Number(options?.commandAttempts))
+              ? Math.max(1, Math.min(5, Math.round(Number(options.commandAttempts))))
+              : DEFAULT_INSTEON_CONTROL_COMMAND_ATTEMPTS,
+            commandPauseBetweenMs: Number.isFinite(Number(options?.commandPauseBetweenMs))
+              ? Math.max(0, Math.min(10_000, Math.round(Number(options.commandPauseBetweenMs))))
+              : DEFAULT_INSTEON_CONTROL_COMMAND_RETRY_PAUSE_MS,
             priority: 'control',
             kind: 'turn_off',
             label: `turning off ${this._formatInsteonAddress(address)}${useFastOffCommand ? ' (fast)' : ''}`,
@@ -10506,38 +10527,40 @@ class InsteonService {
           }
         );
       } catch (error) {
-        const recoveredState = await this._recoverCommandStateAfterTimeout(address, false);
-        if (recoveredState) {
-          const commandAttempts = Number.isFinite(Number(error?.commandAttempts))
-            ? Math.max(1, Number(error.commandAttempts))
-            : 1;
-          const details = this._buildInsteonControlDetails(device, address, 'turn_off', recoveredState, {
-            commandAcknowledged: false,
-            commandWarning: error.message,
-            verificationRecovered: true,
-            commandAttempts,
-            commandRetryCount: Math.max(0, commandAttempts - 1)
-          });
-          this._logEngineWarn(`Turn off recovered after acknowledgement timeout for ${details.insteonAddress}`, {
-            stage: 'control',
-            direction: 'inbound',
-            operation: 'turn_off',
-            address,
-            details: {
+        if (this._shouldAttemptCommandStateRecovery(options)) {
+          const recoveredState = await this._recoverCommandStateAfterTimeout(address, false);
+          if (recoveredState) {
+            const commandAttempts = Number.isFinite(Number(error?.commandAttempts))
+              ? Math.max(1, Number(error.commandAttempts))
+              : 1;
+            const details = this._buildInsteonControlDetails(device, address, 'turn_off', recoveredState, {
+              commandAcknowledged: false,
+              commandWarning: error.message,
+              verificationRecovered: true,
               commandAttempts,
-              warning: error.message
-            }
-          });
-          return {
-            success: true,
-            message: `Device turned off via Insteon PLM ${details.insteonAddress} (${commandAttempts > 1 ? `command acknowledgements timed out after ${commandAttempts} attempts` : 'command acknowledgement timed out'}, but status confirmed OFF)`,
-            status: recoveredState.status,
-            brightness: recoveredState.brightness,
-            level: recoveredState.level,
-            confirmed: true,
-            warning: error.message,
-            details
-          };
+              commandRetryCount: Math.max(0, commandAttempts - 1)
+            });
+            this._logEngineWarn(`Turn off recovered after acknowledgement timeout for ${details.insteonAddress}`, {
+              stage: 'control',
+              direction: 'inbound',
+              operation: 'turn_off',
+              address,
+              details: {
+                commandAttempts,
+                warning: error.message
+              }
+            });
+            return {
+              success: true,
+              message: `Device turned off via Insteon PLM ${details.insteonAddress} (${commandAttempts > 1 ? `command acknowledgements timed out after ${commandAttempts} attempts` : 'command acknowledgement timed out'}, but status confirmed OFF)`,
+              status: recoveredState.status,
+              brightness: recoveredState.brightness,
+              level: recoveredState.level,
+              confirmed: true,
+              warning: error.message,
+              details
+            };
+          }
         }
         throw error;
       }
