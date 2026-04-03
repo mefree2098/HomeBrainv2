@@ -153,6 +153,51 @@ test('stopSystemService prefers the privileged helper command when it is availab
   assert.equal(commands[0], "sudo -n '/usr/local/lib/homebrain/ollama-host-control.sh' 'stop-system'");
 });
 
+test('stopService falls back to the external system stop when the tracked pid is stale', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const config = {
+    servicePid: 1111,
+    serviceOwner: 'matt',
+    serviceStatus: 'running',
+    lastError: null,
+    save: async () => {},
+    setError: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+  });
+
+  service.syncApiUrl = () => {};
+  service.getCurrentUser = () => 'matt';
+  service.listOllamaProcesses = async () => [
+    { pid: 2222, user: 'ollama', command: '/usr/local/bin/ollama serve' }
+  ];
+  service.delay = async () => {};
+
+  let terminateCalled = false;
+  service.terminateManagedProcess = async () => {
+    terminateCalled = true;
+    return { success: true };
+  };
+
+  let stopSystemCalled = false;
+  service.stopSystemService = async () => {
+    stopSystemCalled = true;
+    return { success: true, message: 'Service stopped using helper' };
+  };
+
+  service.finalizeStoppedState = async () => ({ success: true, message: 'Service stopped via system service' });
+
+  const result = await service.stopService();
+
+  assert.equal(result.success, true);
+  assert.equal(stopSystemCalled, true);
+  assert.equal(terminateCalled, false);
+});
+
 test('manual stop hint uses macOS-friendly guidance on Darwin', () => {
   const hint = _private.getManualOllamaStopHint('darwin');
 
