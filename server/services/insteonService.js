@@ -622,6 +622,95 @@ class InsteonService {
     return mapToken(value) || mapToken(fallback) || DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE;
   }
 
+  _parseOptionalBoolean(value) {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    if (typeof value === 'number') {
+      if (value === 1) {
+        return true;
+      }
+      if (value === 0) {
+        return false;
+      }
+      return null;
+    }
+
+    const normalized = String(value).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) {
+      return true;
+    }
+    if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) {
+      return false;
+    }
+
+    return null;
+  }
+
+  _resolveFastCommandPreference(optionValue, envNames = []) {
+    const optionPreference = this._parseOptionalBoolean(optionValue);
+    if (optionPreference != null) {
+      return optionPreference;
+    }
+
+    for (const envName of envNames) {
+      const envPreference = this._parseOptionalBoolean(process.env[envName]);
+      if (envPreference != null) {
+        return envPreference;
+      }
+    }
+
+    return false;
+  }
+
+  _shouldUseFastOnCommand(lightController, brightness, options = {}) {
+    if (typeof lightController?.turnOnFast !== 'function') {
+      return false;
+    }
+
+    const numericBrightness = Number(brightness);
+    if (!Number.isFinite(numericBrightness) || Math.round(numericBrightness) < 100) {
+      return false;
+    }
+
+    const explicitVariant = String(options?.commandVariant || '').trim().toLowerCase();
+    if (['fast', 'fast_on', 'turn_on_fast'].includes(explicitVariant)) {
+      return true;
+    }
+    if (['standard', 'normal', 'turn_on'].includes(explicitVariant)) {
+      return false;
+    }
+
+    return this._resolveFastCommandPreference(
+      options?.useFastOnCommand ?? options?.useFastCommand,
+      ['HOMEBRAIN_INSTEON_USE_FAST_ON_COMMANDS', 'HOMEBRAIN_INSTEON_USE_FAST_DIRECT_COMMANDS']
+    );
+  }
+
+  _shouldUseFastOffCommand(lightController, options = {}) {
+    if (typeof lightController?.turnOffFast !== 'function') {
+      return false;
+    }
+
+    const explicitVariant = String(options?.commandVariant || '').trim().toLowerCase();
+    if (['fast', 'fast_off', 'turn_off_fast'].includes(explicitVariant)) {
+      return true;
+    }
+    if (['standard', 'normal', 'turn_off'].includes(explicitVariant)) {
+      return false;
+    }
+
+    return this._resolveFastCommandPreference(
+      options?.useFastOffCommand ?? options?.useFastCommand,
+      ['HOMEBRAIN_INSTEON_USE_FAST_OFF_COMMANDS', 'HOMEBRAIN_INSTEON_USE_FAST_DIRECT_COMMANDS']
+    );
+  }
+
   _getDefaultVerificationMode() {
     return this._normalizeVerificationMode(
       this._defaultVerificationMode,
@@ -10143,7 +10232,7 @@ class InsteonService {
       const boundedBrightness = Number.isFinite(numericBrightness)
         ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
         : 100;
-      const useFastOnCommand = boundedBrightness >= 100 && typeof lightController.turnOnFast === 'function';
+      const useFastOnCommand = this._shouldUseFastOnCommand(lightController, boundedBrightness, options);
       this._logEngineInfo(`Turn on requested for ${this._formatInsteonAddress(address)} at ${boundedBrightness}%`, {
         stage: 'control',
         direction: 'outbound',
@@ -10364,7 +10453,7 @@ class InsteonService {
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
       const lightController = this._getHubLightController(address);
-      const useFastOffCommand = typeof lightController.turnOffFast === 'function';
+      const useFastOffCommand = this._shouldUseFastOffCommand(lightController, options);
       this._logEngineInfo(`Turn off requested for ${this._formatInsteonAddress(address)}`, {
         stage: 'control',
         direction: 'outbound',
