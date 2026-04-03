@@ -6947,6 +6947,158 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="maintenance" className="space-y-6">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5 text-indigo-600" />
+                  INSTEON PLM Maintenance
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2 text-sm text-muted-foreground">
+                  <p>
+                    These controls act on HomeBrain&apos;s PLM transport state so you can pause polling, clear queued work,
+                    cancel a stuck command, or force a software-side reconnect without digging through the integrations tab.
+                  </p>
+                  <p>
+                    {insteonRuntimeStatus ? (
+                      <>
+                        Runtime status:{" "}
+                        <span className="font-medium text-foreground">
+                          {insteonRuntimeStatus.connected ? "connected" : "disconnected"}
+                        </span>
+                        {` • Polling ${insteonRuntimeStatus.runtimeMonitoring?.started ? "running" : "paused"}`}
+                        {` • Queue depth ${insteonRuntimeStatus.plmQueue?.depth ?? 0}`}
+                        {insteonRuntimeStatus.plmQueue?.active?.label
+                          ? ` • Active ${insteonRuntimeStatus.plmQueue.active.label}`
+                          : ""}
+                      </>
+                    ) : (
+                      "Runtime status has not loaded yet. The maintenance actions are still available."
+                    )}
+                  </p>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleRunInsteonMaintenanceAction("softReset")}
+                    disabled={runningInsteonMaintenanceAction !== ""}
+                    className="w-full"
+                  >
+                    {runningInsteonMaintenanceAction === "softReset" ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Resetting...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Soft Reset PLM
+                      </>
+                    )}
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleRunInsteonMaintenanceAction("cancelActive")}
+                    disabled={runningInsteonMaintenanceAction !== ""}
+                    className="w-full"
+                  >
+                    {runningInsteonMaintenanceAction === "cancelActive" ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Cancelling...
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="h-4 w-4 mr-2" />
+                        Cancel Active
+                      </>
+                    )}
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleRunInsteonMaintenanceAction("clearQueue")}
+                    disabled={runningInsteonMaintenanceAction !== ""}
+                    className="w-full"
+                  >
+                    {runningInsteonMaintenanceAction === "clearQueue" ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Clearing...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Clear Queue
+                      </>
+                    )}
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleRunInsteonMaintenanceAction("pauseRuntime")}
+                    disabled={
+                      runningInsteonMaintenanceAction !== "" ||
+                      insteonRuntimeStatus?.runtimeMonitoring?.started === false
+                    }
+                    className="w-full"
+                  >
+                    {runningInsteonMaintenanceAction === "pauseRuntime" ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Pausing...
+                      </>
+                    ) : (
+                      <>
+                        <Activity className="h-4 w-4 mr-2" />
+                        Pause Polling
+                      </>
+                    )}
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleRunInsteonMaintenanceAction("resumeRuntime")}
+                    disabled={
+                      runningInsteonMaintenanceAction !== "" ||
+                      insteonRuntimeStatus?.runtimeMonitoring?.started === true
+                    }
+                    className="w-full"
+                  >
+                    {runningInsteonMaintenanceAction === "resumeRuntime" ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                        Resuming...
+                      </>
+                    ) : (
+                      <>
+                        <Activity className="h-4 w-4 mr-2" />
+                        Resume Polling
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                <p className="text-[11px] text-muted-foreground">
+                  Soft reset clears HomeBrain&apos;s local PLM queue/cache, disconnects, and reconnects the transport. It does not
+                  physically power-cycle the USB modem.
+                </p>
+              </CardContent>
+            </Card>
+
             {/* Data Management Section */}
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
