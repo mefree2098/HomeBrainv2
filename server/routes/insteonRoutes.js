@@ -281,6 +281,112 @@ router.post('/disconnect', async (req, res) => {
   }
 });
 
+// Description: Request cancellation of the currently active PLM operation
+// Endpoint: POST /api/insteon/maintenance/cancel-active
+// Request: {}
+// Response: { success: boolean, message: string, cancelled: boolean, activeOperation?: object, status?: object }
+router.post('/maintenance/cancel-active', async (_req, res) => {
+  console.log('InsteonRoutes: Cancelling active PLM operation');
+
+  try {
+    const result = await insteonService.cancelActivePlmCommand({
+      reason: 'admin maintenance API request'
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to cancel active PLM operation:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Description: Clear queued PLM operations and pending runtime refresh timers
+// Endpoint: POST /api/insteon/maintenance/clear-queue
+// Request: {}
+// Response: { success: boolean, message: string, droppedQueueDepth: number, pendingRefreshesCleared: number, status?: object }
+router.post('/maintenance/clear-queue', async (_req, res) => {
+  console.log('InsteonRoutes: Clearing queued PLM operations');
+
+  try {
+    const result = await insteonService.clearPlmCommandQueue({
+      reason: 'admin maintenance API request'
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to clear queued PLM operations:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Description: Pause background runtime polling
+// Endpoint: POST /api/insteon/maintenance/runtime-monitoring/stop
+// Request: {}
+// Response: { success: boolean, message: string, runtimeMonitoring: object, status?: object }
+router.post('/maintenance/runtime-monitoring/stop', async (_req, res) => {
+  console.log('InsteonRoutes: Pausing INSTEON runtime monitoring');
+
+  try {
+    const result = await insteonService.setRuntimeMonitoringEnabled(false);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to pause INSTEON runtime monitoring:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Description: Resume background runtime polling
+// Endpoint: POST /api/insteon/maintenance/runtime-monitoring/start
+// Request: { immediate?: boolean }
+// Response: { success: boolean, message: string, runtimeMonitoring: object, status?: object }
+router.post('/maintenance/runtime-monitoring/start', async (req, res) => {
+  console.log('InsteonRoutes: Resuming INSTEON runtime monitoring');
+
+  try {
+    const result = await insteonService.setRuntimeMonitoringEnabled(true, {
+      immediate: req.body?.immediate === true
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to resume INSTEON runtime monitoring:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Description: Soft-reset HomeBrain's PLM transport state by clearing local queues/caches, disconnecting, and reconnecting
+// Endpoint: POST /api/insteon/maintenance/soft-reset
+// Request: { reconnect?: boolean, resumeRuntimeMonitoring?: boolean, pauseBeforeReconnectMs?: number }
+// Response: { success: boolean, message: string, status?: object, ...details }
+router.post('/maintenance/soft-reset', async (req, res) => {
+  console.log('InsteonRoutes: Performing INSTEON PLM soft reset');
+
+  try {
+    const result = await insteonService.softResetPlm(req.body || {});
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to soft-reset INSTEON PLM:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 // Description: Test direct ISY REST API connectivity
 // Endpoint: POST /api/insteon/isy/test
 // Request: { connection?: { host, port?, username, password, useHttps?, ignoreTlsErrors? } } OR top-level equivalents

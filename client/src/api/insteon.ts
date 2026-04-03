@@ -270,6 +270,36 @@ export interface InsteonStatusResponse {
   } | null;
 }
 
+export interface InsteonMaintenanceActionResponse {
+  success: boolean;
+  message?: string;
+  cancelled?: boolean;
+  cancelledActiveCommand?: boolean;
+  droppedQueueDepth?: number;
+  pendingRefreshesCleared?: number;
+  activeOperation?: {
+    priority?: number;
+    kind?: string;
+    label?: string;
+  } | null;
+  clearedCaches?: {
+    pendingRefreshesCleared?: number;
+    sceneCacheEntriesCleared?: number;
+    pollMetadataEntriesCleared?: number;
+    runtimeDeviceCacheEntriesCleared?: number;
+    runtimeCursorReset?: boolean;
+    runtimeCooldownCleared?: boolean;
+  } | null;
+  disconnectResult?: Record<string, unknown> | null;
+  connectResult?: Record<string, unknown> | null;
+  runtimeMonitoring?: {
+    wasStarted?: boolean;
+    started?: boolean;
+    resumed?: boolean;
+  } | null;
+  status?: InsteonStatusResponse | null;
+}
+
 // Description: Test Insteon PLM connection
 // Endpoint: GET /api/insteon/test
 // Request: {}
@@ -427,6 +457,84 @@ export const disconnectFromInsteonPLM = async () => {
     return response.data;
   } catch (error) {
     console.error('Disconnect from Insteon PLM error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Request cancellation of the currently active PLM operation
+// Endpoint: POST /api/insteon/maintenance/cancel-active
+// Request: {}
+// Response: InsteonMaintenanceActionResponse
+export const cancelActiveInsteonPlmCommand = async (): Promise<InsteonMaintenanceActionResponse> => {
+  try {
+    const response = await api.post('/api/insteon/maintenance/cancel-active');
+    return response.data;
+  } catch (error) {
+    console.error('Cancel active Insteon PLM command error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Clear queued PLM operations and pending runtime refresh timers
+// Endpoint: POST /api/insteon/maintenance/clear-queue
+// Request: {}
+// Response: InsteonMaintenanceActionResponse
+export const clearInsteonPlmQueue = async (): Promise<InsteonMaintenanceActionResponse> => {
+  try {
+    const response = await api.post('/api/insteon/maintenance/clear-queue');
+    return response.data;
+  } catch (error) {
+    console.error('Clear Insteon PLM queue error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Pause background runtime polling
+// Endpoint: POST /api/insteon/maintenance/runtime-monitoring/stop
+// Request: {}
+// Response: InsteonMaintenanceActionResponse
+export const pauseInsteonRuntimeMonitoring = async (): Promise<InsteonMaintenanceActionResponse> => {
+  try {
+    const response = await api.post('/api/insteon/maintenance/runtime-monitoring/stop');
+    return response.data;
+  } catch (error) {
+    console.error('Pause Insteon runtime monitoring error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Resume background runtime polling
+// Endpoint: POST /api/insteon/maintenance/runtime-monitoring/start
+// Request: { immediate?: boolean }
+// Response: InsteonMaintenanceActionResponse
+export const resumeInsteonRuntimeMonitoring = async (
+  payload: { immediate?: boolean } = {}
+): Promise<InsteonMaintenanceActionResponse> => {
+  try {
+    const response = await api.post('/api/insteon/maintenance/runtime-monitoring/start', payload || {});
+    return response.data;
+  } catch (error) {
+    console.error('Resume Insteon runtime monitoring error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Soft-reset HomeBrain's PLM transport state by clearing local queues/caches, disconnecting, and reconnecting
+// Endpoint: POST /api/insteon/maintenance/soft-reset
+// Request: { reconnect?: boolean, resumeRuntimeMonitoring?: boolean, pauseBeforeReconnectMs?: number }
+// Response: InsteonMaintenanceActionResponse
+export const softResetInsteonPlm = async (
+  payload: {
+    reconnect?: boolean;
+    resumeRuntimeMonitoring?: boolean;
+    pauseBeforeReconnectMs?: number;
+  } = {}
+): Promise<InsteonMaintenanceActionResponse> => {
+  try {
+    const response = await api.post('/api/insteon/maintenance/soft-reset', payload || {});
+    return response.data;
+  } catch (error) {
+    console.error('Soft reset Insteon PLM error:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };

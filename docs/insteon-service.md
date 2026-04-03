@@ -207,17 +207,23 @@ If you need a stricter status read for troubleshooting, use the explicit status 
 `turnOn()`, `turnOff()`, and `setBrightness()` are built around:
 
 - queued PLM control execution
-- retry-on-timeout
-- immediate optimistic persistence
+- immediate optimistic persistence only after a real device response
 - configurable verification mode
+- optional timeout recovery only when explicitly requested
 
 Default command settings:
 
-- command attempts: `3`
-- retry pause: `250ms`
+- command attempts: `1` for normal direct control
+- retry pause: `0ms` for normal direct control
 - command timeout: `1500ms`
-- default verification mode: `fast`
+- default verification mode: `ack`
 - post-command settle window: `700ms`
+
+Important distinction:
+
+- A bare PLM serial ACK is not treated as a successful device command.
+- Direct ON/OFF now requires a target-device response, not just modem acceptance.
+- If logs show `acknowledged:true` but `success:false` and `hasResponse:false`, HomeBrain now fails the command as `target device did not respond after PLM ACK`.
 
 ### Verification Modes
 
@@ -236,6 +242,23 @@ HomeBrain supports two broad patterns:
 
 Async/ack-style modes skip synchronous verification and instead queue a runtime refresh after the command is acknowledged.
 
+### Control Defaults Vs. Explicit Overrides
+
+Normal UI/device control is intentionally conservative now:
+
+- one direct command attempt
+- no automatic retry loop
+- no automatic state-recovery loop after timeout
+- ack-first verification by default
+
+Workflows or debug paths can still opt into:
+
+- multiple command attempts
+- synchronous stable verification
+- timeout recovery after command failure
+
+Those are explicit per-call choices now, not the default behavior.
+
 ### Optimistic State
 
 After a successful `turnOn()` or `turnOff()` command, the service immediately persists an optimistic state before verification.
@@ -249,6 +272,34 @@ That optimistic state must include:
 - `lastSeen`
 
 This avoids stale UI even when the follow-up status query is inconclusive.
+
+If the command only reaches modem-acknowledged / no-device-response state, HomeBrain does not persist optimistic success anymore.
+
+## PLM Maintenance Controls
+
+HomeBrain now exposes explicit PLM maintenance actions for the cases where the USB PLM transport gets wedged and admins need a clean software-side reset without restarting the whole backend.
+
+API routes:
+
+- `POST /api/insteon/maintenance/cancel-active`
+- `POST /api/insteon/maintenance/clear-queue`
+- `POST /api/insteon/maintenance/runtime-monitoring/stop`
+- `POST /api/insteon/maintenance/runtime-monitoring/start`
+- `POST /api/insteon/maintenance/soft-reset`
+
+What each one does:
+
+- `cancel-active`: asks `home-controller` to cancel the in-progress PLM command if possible
+- `clear-queue`: drops queued PLM work and clears pending runtime refresh timers
+- `runtime-monitoring/stop`: pauses background runtime polling
+- `runtime-monitoring/start`: resumes background runtime polling
+- `soft-reset`: clears HomeBrain's local PLM queues/caches, disconnects the PLM transport, reconnects it, and resumes runtime polling if it was already running
+
+Important limitation:
+
+- These are HomeBrain-side software maintenance actions.
+- They do not power-cycle the physical USB PLM hardware.
+- If a true hardware power cycle is needed, that still has to happen outside HomeBrain.
 
 ## PLM Sync and Device Rows
 

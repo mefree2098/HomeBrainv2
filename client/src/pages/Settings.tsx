@@ -118,6 +118,11 @@ import {
   getInsteonStatus,
   getInsteonSerialPorts,
   testInsteonConnection,
+  cancelActiveInsteonPlmCommand,
+  clearInsteonPlmQueue,
+  pauseInsteonRuntimeMonitoring,
+  resumeInsteonRuntimeMonitoring,
+  softResetInsteonPlm,
   startInsteonLinkedStatusRun,
   getInsteonLinkedStatusRun,
   cancelInsteonLinkedStatusRun,
@@ -346,6 +351,7 @@ export function Settings() {
   const [scanningInsteonPorts, setScanningInsteonPorts] = useState(false)
   const [testingInsteonPlmConnection, setTestingInsteonPlmConnection] = useState(false)
   const [loadingInsteonRuntimeStatus, setLoadingInsteonRuntimeStatus] = useState(false)
+  const [runningInsteonMaintenanceAction, setRunningInsteonMaintenanceAction] = useState<"" | "softReset" | "cancelActive" | "clearQueue" | "pauseRuntime" | "resumeRuntime">("")
   const [queryingInsteonLinkedStatus, setQueryingInsteonLinkedStatus] = useState(false)
   const [cancellingInsteonLinkedStatusQuery, setCancellingInsteonLinkedStatusQuery] = useState(false)
   const [insteonSerialPortCandidates, setInsteonSerialPortCandidates] = useState<InsteonSerialPortCandidate[]>([])
@@ -1366,6 +1372,59 @@ export function Settings() {
     } finally {
       await loadInsteonRuntimeStatus({ quiet: true })
       setTestingInsteonPlmConnection(false)
+    }
+  }
+
+  const handleRunInsteonMaintenanceAction = async (
+    action: "softReset" | "cancelActive" | "clearQueue" | "pauseRuntime" | "resumeRuntime"
+  ) => {
+    setRunningInsteonMaintenanceAction(action)
+    try {
+      let response: any = null
+      let title = "INSTEON maintenance complete"
+
+      switch (action) {
+        case "softReset":
+          response = await softResetInsteonPlm()
+          title = "PLM soft reset complete"
+          break
+        case "cancelActive":
+          response = await cancelActiveInsteonPlmCommand()
+          title = response?.cancelled ? "Active PLM command cancelled" : "No active PLM command cancelled"
+          break
+        case "clearQueue":
+          response = await clearInsteonPlmQueue()
+          title = response?.droppedQueueDepth > 0 ? "PLM queue cleared" : "PLM queue already empty"
+          break
+        case "pauseRuntime":
+          response = await pauseInsteonRuntimeMonitoring()
+          title = "Runtime polling paused"
+          break
+        case "resumeRuntime":
+          response = await resumeInsteonRuntimeMonitoring()
+          title = "Runtime polling resumed"
+          break
+      }
+
+      if (response?.status) {
+        setInsteonRuntimeStatus(response.status)
+      } else {
+        await loadInsteonRuntimeStatus({ quiet: true })
+      }
+
+      toast({
+        title,
+        description: response?.message || "INSTEON maintenance action completed."
+      })
+    } catch (error: any) {
+      console.error("INSTEON maintenance action failed:", error)
+      toast({
+        title: "INSTEON maintenance failed",
+        description: error?.message || "Unable to complete the requested PLM maintenance action.",
+        variant: "destructive"
+      })
+    } finally {
+      setRunningInsteonMaintenanceAction("")
     }
   }
 
@@ -4830,6 +4889,15 @@ export function Settings() {
                               ? ` • Active: ${insteonRuntimeStatus.plmQueue.active.label}`
                               : ""}
                           </p>
+                          <p>
+                            Runtime polling: {insteonRuntimeStatus.runtimeMonitoring?.started ? "running" : "paused"}
+                            {typeof insteonRuntimeStatus.runtimeMonitoring?.batchSize === "number"
+                              ? ` • Batch size: ${insteonRuntimeStatus.runtimeMonitoring.batchSize}`
+                              : ""}
+                            {typeof insteonRuntimeStatus.runtimeMonitoring?.pendingRefreshes === "number"
+                              ? ` • Pending refreshes: ${insteonRuntimeStatus.runtimeMonitoring.pendingRefreshes}`
+                              : ""}
+                          </p>
                           {insteonRuntimeStatus.inventory && (
                             <p>
                               Persisted devices: {formatInsteonInventoryCount(insteonRuntimeStatus.inventory.persistedDeviceCount)}
@@ -4854,6 +4922,91 @@ export function Settings() {
                               Last error: {insteonRuntimeStatus.lastConnectionError}
                             </p>
                           )}
+                          <div className="pt-2 space-y-2">
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRunInsteonMaintenanceAction("softReset")}
+                                disabled={runningInsteonMaintenanceAction !== ""}
+                              >
+                                {runningInsteonMaintenanceAction === "softReset" ? (
+                                  <>
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                    Resetting...
+                                  </>
+                                ) : (
+                                  <>
+                                    <RefreshCw className="h-4 w-4 mr-2" />
+                                    Soft Reset PLM
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRunInsteonMaintenanceAction("cancelActive")}
+                                disabled={runningInsteonMaintenanceAction !== ""}
+                              >
+                                {runningInsteonMaintenanceAction === "cancelActive" ? (
+                                  <>
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                    Cancelling...
+                                  </>
+                                ) : (
+                                  <>
+                                    <XCircle className="h-4 w-4 mr-2" />
+                                    Cancel Active
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRunInsteonMaintenanceAction("clearQueue")}
+                                disabled={runningInsteonMaintenanceAction !== ""}
+                              >
+                                {runningInsteonMaintenanceAction === "clearQueue" ? (
+                                  <>
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                    Clearing...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    Clear Queue
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRunInsteonMaintenanceAction(
+                                  insteonRuntimeStatus.runtimeMonitoring?.started ? "pauseRuntime" : "resumeRuntime"
+                                )}
+                                disabled={runningInsteonMaintenanceAction !== ""}
+                              >
+                                {runningInsteonMaintenanceAction === "pauseRuntime" || runningInsteonMaintenanceAction === "resumeRuntime" ? (
+                                  <>
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                                    Updating...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Activity className="h-4 w-4 mr-2" />
+                                    {insteonRuntimeStatus.runtimeMonitoring?.started ? "Pause Polling" : "Resume Polling"}
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              These are HomeBrain-side PLM maintenance controls. Soft reset clears HomeBrain&apos;s local PLM queue/cache, disconnects, and reconnects the transport. It does not power-cycle the USB modem hardware.
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </div>

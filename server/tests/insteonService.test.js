@@ -849,6 +849,193 @@ test('startRuntimeMonitoring attempts a background connect when tracked Insteon 
   assert.equal(connectCalls, 1);
 });
 
+test('clearPlmCommandQueue clears queued operations and pending runtime refresh timers', async (t) => {
+  const originalQueue = insteonService._plmOperationQueue;
+  const originalPendingRefreshes = insteonService._pendingRuntimeStateRefreshes;
+  const originalGetStatusSnapshot = insteonService.getStatusSnapshot;
+
+  const timer = setTimeout(() => {}, 1000);
+
+  t.after(() => {
+    clearTimeout(timer);
+    insteonService._plmOperationQueue = originalQueue;
+    insteonService._pendingRuntimeStateRefreshes = originalPendingRefreshes;
+    insteonService.getStatusSnapshot = originalGetStatusSnapshot;
+  });
+
+  let rejectedMessage = null;
+  insteonService._pendingRuntimeStateRefreshes = new Map([
+    ['112233', timer]
+  ]);
+  insteonService._plmOperationQueue = [
+    {
+      priority: 1,
+      sequence: 99,
+      kind: 'query',
+      label: 'queued query',
+      executor: async () => null,
+      resolve: () => {},
+      reject: (error) => {
+        rejectedMessage = error.message;
+      }
+    }
+  ];
+  insteonService.getStatusSnapshot = async () => ({ connected: false });
+
+  const result = await insteonService.clearPlmCommandQueue({
+    reason: 'unit test queue clear'
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.droppedQueueDepth, 1);
+  assert.equal(result.pendingRefreshesCleared, 1);
+  assert.equal(insteonService._plmOperationQueue.length, 0);
+  assert.equal(insteonService._pendingRuntimeStateRefreshes.size, 0);
+  assert.match(rejectedMessage, /unit test queue clear/i);
+});
+
+test('cancelActivePlmCommand reports the active operation and cancellation outcome', async (t) => {
+  const originalActiveOperation = insteonService._activePlmOperation;
+  const originalCancelInProgressHubCommandSafe = insteonService._cancelInProgressHubCommandSafe;
+  const originalGetStatusSnapshot = insteonService.getStatusSnapshot;
+
+  t.after(() => {
+    insteonService._activePlmOperation = originalActiveOperation;
+    insteonService._cancelInProgressHubCommandSafe = originalCancelInProgressHubCommandSafe;
+    insteonService.getStatusSnapshot = originalGetStatusSnapshot;
+  });
+
+  insteonService._activePlmOperation = {
+    priority: 0,
+    kind: 'turn_on',
+    label: 'turning on 11.22.33'
+  };
+  insteonService._cancelInProgressHubCommandSafe = () => true;
+  insteonService.getStatusSnapshot = async () => ({ connected: true });
+
+  const result = await insteonService.cancelActivePlmCommand({
+    reason: 'unit test active cancel'
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.cancelled, true);
+  assert.equal(result.activeOperation.label, 'turning on 11.22.33');
+  assert.match(result.message, /cancellation requested/i);
+});
+
+test('softResetPlm clears runtime caches, drops queued work, and reconnects the transport', async (t) => {
+  const originalQueue = insteonService._plmOperationQueue;
+  const originalPendingRefreshes = insteonService._pendingRuntimeStateRefreshes;
+  const originalSceneCache = insteonService._runtimeSceneResponderCache;
+  const originalPollMetadata = insteonService._runtimePollMetadata;
+  const originalDevices = insteonService.devices;
+  const originalCursor = insteonService._runtimeMonitoringCursor;
+  const originalCooldownUntil = insteonService._runtimeMonitoringCooldownUntil;
+  const originalMonitoringStarted = insteonService._runtimeMonitoringStarted;
+  const originalActiveOperation = insteonService._activePlmOperation;
+  const originalCancelInProgressHubCommandSafe = insteonService._cancelInProgressHubCommandSafe;
+  const originalDisconnect = insteonService.disconnect;
+  const originalConnect = insteonService.connect;
+  const originalStartRuntimeMonitoring = insteonService.startRuntimeMonitoring;
+  const originalGetStatusSnapshot = insteonService.getStatusSnapshot;
+
+  const timer = setTimeout(() => {}, 1000);
+
+  t.after(() => {
+    clearTimeout(timer);
+    insteonService._plmOperationQueue = originalQueue;
+    insteonService._pendingRuntimeStateRefreshes = originalPendingRefreshes;
+    insteonService._runtimeSceneResponderCache = originalSceneCache;
+    insteonService._runtimePollMetadata = originalPollMetadata;
+    insteonService.devices = originalDevices;
+    insteonService._runtimeMonitoringCursor = originalCursor;
+    insteonService._runtimeMonitoringCooldownUntil = originalCooldownUntil;
+    insteonService._runtimeMonitoringStarted = originalMonitoringStarted;
+    insteonService._activePlmOperation = originalActiveOperation;
+    insteonService._cancelInProgressHubCommandSafe = originalCancelInProgressHubCommandSafe;
+    insteonService.disconnect = originalDisconnect;
+    insteonService.connect = originalConnect;
+    insteonService.startRuntimeMonitoring = originalStartRuntimeMonitoring;
+    insteonService.getStatusSnapshot = originalGetStatusSnapshot;
+  });
+
+  let queuedRejectMessage = null;
+  let disconnectCalls = 0;
+  let connectCalls = 0;
+  let restartArguments = null;
+
+  insteonService._pendingRuntimeStateRefreshes = new Map([
+    ['112233', timer]
+  ]);
+  insteonService._runtimeSceneResponderCache = new Map([
+    ['112233', { responders: ['334455'] }]
+  ]);
+  insteonService._runtimePollMetadata = new Map([
+    ['112233', Date.now()]
+  ]);
+  insteonService.devices = new Map([
+    ['112233', { _id: 'runtime-device' }]
+  ]);
+  insteonService._runtimeMonitoringCursor = 4;
+  insteonService._runtimeMonitoringCooldownUntil = Date.now() + 5000;
+  insteonService._runtimeMonitoringStarted = true;
+  insteonService._activePlmOperation = {
+    priority: 0,
+    kind: 'turn_on',
+    label: 'turning on 11.22.33'
+  };
+  insteonService._plmOperationQueue = [
+    {
+      priority: 1,
+      sequence: 100,
+      kind: 'query',
+      label: 'queued query',
+      executor: async () => null,
+      resolve: () => {},
+      reject: (error) => {
+        queuedRejectMessage = error.message;
+      }
+    }
+  ];
+  insteonService._cancelInProgressHubCommandSafe = () => true;
+  insteonService.disconnect = async () => {
+    disconnectCalls += 1;
+    return { success: true, message: 'disconnected' };
+  };
+  insteonService.connect = async () => {
+    connectCalls += 1;
+    return { success: true, message: 'connected' };
+  };
+  insteonService.startRuntimeMonitoring = (options = {}) => {
+    restartArguments = options;
+    insteonService._runtimeMonitoringStarted = true;
+  };
+  insteonService.getStatusSnapshot = async () => ({
+    connected: true,
+    runtimeMonitoring: {
+      started: true
+    }
+  });
+
+  const result = await insteonService.softResetPlm({
+    pauseBeforeReconnectMs: 0
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.cancelledActiveCommand, true);
+  assert.equal(result.droppedQueueDepth, 1);
+  assert.equal(result.clearedCaches.pendingRefreshesCleared, 1);
+  assert.equal(result.clearedCaches.sceneCacheEntriesCleared, 1);
+  assert.equal(result.clearedCaches.pollMetadataEntriesCleared, 1);
+  assert.equal(result.clearedCaches.runtimeDeviceCacheEntriesCleared, 1);
+  assert.equal(result.clearedCaches.runtimeCursorReset, true);
+  assert.equal(result.clearedCaches.runtimeCooldownCleared, true);
+  assert.equal(disconnectCalls, 1);
+  assert.equal(connectCalls, 1);
+  assert.deepEqual(restartArguments, { immediate: false });
+  assert.match(queuedRejectMessage, /soft reset/i);
+});
+
 test('_runRuntimeMonitoringPass polls tracked Insteon light state changes', async (t) => {
   const originalFind = Device.find;
   const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
