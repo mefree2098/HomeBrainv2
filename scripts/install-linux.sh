@@ -353,10 +353,8 @@ install_service() {
 }
 
 configure_deploy_sudoers() {
-  print_status "Allowing the HomeBrain UI to restart its own service..."
-  echo "${USER} ALL=(ALL) NOPASSWD:/usr/bin/systemctl,/bin/systemctl" | sudo tee /etc/sudoers.d/homebrain-deploy >/dev/null
-  sudo chmod 0440 /etc/sudoers.d/homebrain-deploy
-  print_success "sudoers file written to /etc/sudoers.d/homebrain-deploy."
+  print_status "Allowing the HomeBrain UI to manage its own service and Ollama updates..."
+  HOMEBRAIN_DIR="${HOMEBRAIN_DIR}" HOMEBRAIN_USER="${USER}" bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" refresh-privileges
 }
 
 configure_firewall() {

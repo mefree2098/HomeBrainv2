@@ -22,6 +22,7 @@ const OLLAMA_SEARCH_MAX_PAGES = 100;
 const OLLAMA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 const OLLAMA_SEARCH_TIMEOUT_MS = 12000;
 const OLLAMA_CAPABILITY_ALLOWLIST = new Set(['vision', 'tools', 'thinking', 'embedding', 'cloud']);
+const OLLAMA_PRIVILEGED_HELPER_SYSTEM_PATH = '/usr/local/lib/homebrain/ollama-host-control.sh';
 
 function decodeHtmlEntities(text = '') {
   return String(text)
@@ -156,6 +157,23 @@ async function isReadableFile(filePath) {
       return false;
     }
     await fsp.access(filePath, fs.constants.R_OK);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function isExecutableFile(filePath) {
+  if (!filePath || typeof filePath !== 'string') {
+    return false;
+  }
+
+  try {
+    const stats = await fsp.stat(filePath);
+    if (!stats.isFile()) {
+      return false;
+    }
+    await fsp.access(filePath, fs.constants.X_OK);
     return true;
   } catch (error) {
     return false;
@@ -348,6 +366,63 @@ function normalizeVersionString(value) {
   return match[1];
 }
 
+function shellEscape(value = '') {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function summarizeCommandOutput(stdout = '', stderr = '', maxLines = 3) {
+  const lines = `${stderr || ''}\n${stdout || ''}`
+    .split(LOG_LINE_SPLIT_REGEX)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, maxLines);
+
+  return lines.join(' | ');
+}
+
+function matchesOllamaProcessCommand(command = '') {
+  const normalized = String(command || '').trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (/\bollama\b[\s\S]*\bserve\b/i.test(normalized)) {
+    return true;
+  }
+
+  if (process.platform === 'darwin') {
+    if (/\/Ollama\.app\/Contents\/MacOS\/Ollama\b/.test(normalized)) {
+      return true;
+    }
+
+    if (/\/Ollama\.app\/Contents\/Resources\/ollama\b/i.test(normalized) && /\bserve\b/i.test(normalized)) {
+      return true;
+    }
+
+    if (normalized === 'Ollama' || /\bOllama\.app\b/.test(normalized)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getManualOllamaStopHint(platform = process.platform) {
+  if (platform === 'darwin') {
+    return 'pkill -x Ollama';
+  }
+
+  return 'sudo systemctl stop ollama';
+}
+
+function getOllamaPrivilegeRepairHint(platform = process.platform) {
+  if (platform === 'linux') {
+    return 'bash scripts/setup-services.sh refresh-privileges';
+  }
+
+  return 'restore the HomeBrain Ollama sudoers entry';
+}
+
 function parseVersion(value) {
   const normalized = normalizeVersionString(value);
   if (!normalized) {
@@ -477,6 +552,96 @@ class OllamaService {
     this.availableModelsCache = new Map();
   }
 
+  runShellCommand(command, options = {}) {
+    return execAsync(command, options);
+  }
+
+  spawnChildProcess(command, args, options = {}) {
+    return spawn(command, args, options);
+  }
+
+  getOllamaBinaryCandidates(config = null) {
+    const candidates = new Set();
+    const homeDir = os.homedir ? os.homedir() : null;
+
+    if (config?.installPath) {
+      candidates.add(config.installPath);
+    }
+
+    candidates.add('/usr/local/bin/ollama');
+    candidates.add('/opt/homebrew/bin/ollama');
+    candidates.add('/usr/bin/ollama');
+    candidates.add('/bin/ollama');
+
+    if (process.platform === 'darwin') {
+      candidates.add('/Applications/Ollama.app/Contents/Resources/ollama');
+      if (homeDir) {
+        candidates.add(path.join(homeDir, 'Applications', 'Ollama.app', 'Contents', 'Resources', 'ollama'));
+      }
+    }
+
+    return Array.from(candidates).filter(Boolean);
+  }
+
+  getOllamaPrivilegedHelperCandidates() {
+    const candidates = new Set();
+    const configuredHelperPath = process.env.HOMEBRAIN_OLLAMA_HELPER_PATH;
+
+    if (configuredHelperPath) {
+      candidates.add(path.resolve(configuredHelperPath));
+    }
+
+    candidates.add(OLLAMA_PRIVILEGED_HELPER_SYSTEM_PATH);
+    candidates.add(path.resolve(__dirname, '..', '..', 'scripts', 'ollama-host-control.sh'));
+
+    return Array.from(candidates).filter(Boolean);
+  }
+
+  async resolveOllamaPrivilegedHelper() {
+    for (const candidate of this.getOllamaPrivilegedHelperCandidates()) {
+      if (await isExecutableFile(candidate)) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  buildPrivilegedHelperCommand(helperPath, action) {
+    return `${shellEscape(helperPath)} ${shellEscape(action)}`;
+  }
+
+  async resolveOllamaBinary(config = null) {
+    try {
+      const { stdout } = await this.runShellCommand('command -v ollama', { timeout: 2000 });
+      const discovered = stdout.trim();
+      if (discovered && await isExecutableFile(discovered)) {
+        if (config && config.installPath !== discovered) {
+          config.installPath = discovered;
+          await config.save();
+        }
+        return discovered;
+      }
+    } catch (error) {
+      // Fall back to known installation paths.
+    }
+
+    for (const candidate of this.getOllamaBinaryCandidates(config)) {
+      if (!(await isExecutableFile(candidate))) {
+        continue;
+      }
+
+      if (config && config.installPath !== candidate) {
+        config.installPath = candidate;
+        await config.save();
+      }
+
+      return candidate;
+    }
+
+    return null;
+  }
+
   syncApiUrl(config) {
     if (config?.configuration?.apiUrl) {
       this.apiUrl = config.configuration.apiUrl;
@@ -570,13 +735,23 @@ class OllamaService {
   }
 
   async pullModelWithCli(modelName, timeoutMs = 3600000) {
+    const config = await OllamaConfig.getConfig().catch(() => null);
+    if (config) {
+      this.syncApiUrl(config);
+    }
+
+    const binaryPath = await this.resolveOllamaBinary(config);
+    if (!binaryPath) {
+      throw new Error('Ollama binary not found');
+    }
+
     return new Promise((resolve, reject) => {
       const env = {
         ...process.env,
         OLLAMA_HOST: this.getOllamaHostForEnv()
       };
 
-      const child = spawn('ollama', ['pull', modelName], { env });
+      const child = this.spawnChildProcess(binaryPath, ['pull', modelName], { env });
       let timedOut = false;
       let timeoutRef = null;
 
@@ -657,12 +832,14 @@ class OllamaService {
   }
 
   async fetchModelsFromCli() {
-    if (!(await commandExists('ollama'))) {
+    const config = await OllamaConfig.getConfig().catch(() => null);
+    const binaryPath = await this.resolveOllamaBinary(config);
+    if (!binaryPath) {
       return [];
     }
 
     try {
-      const { stdout } = await execAsync('ollama list', {
+      const { stdout } = await this.runShellCommand(`${shellEscape(binaryPath)} list`, {
         timeout: 10000,
         maxBuffer: MAX_LOG_BYTES * 2
       });
@@ -826,22 +1003,20 @@ class OllamaService {
   async checkInstallation() {
     try {
       console.log('Checking Ollama installation status...');
-
-      // Check if ollama command exists
-      try {
-        const { stdout } = await execAsync('which ollama', { timeout: 5000 });
-        if (!stdout.trim()) {
-          return { isInstalled: false, version: null };
-        }
-      } catch (error) {
+      const config = await OllamaConfig.getConfig().catch(() => null);
+      const binaryPath = await this.resolveOllamaBinary(config);
+      if (!binaryPath) {
         return { isInstalled: false, version: null };
       }
 
       // Get version
-      const versionCommands = ['ollama --version', 'ollama version'];
+      const versionCommands = [
+        `${shellEscape(binaryPath)} --version`,
+        `${shellEscape(binaryPath)} version`
+      ];
       for (const command of versionCommands) {
         try {
-          const { stdout, stderr } = await execAsync(command, { timeout: 5000 });
+          const { stdout, stderr } = await this.runShellCommand(command, { timeout: 5000 });
           const version = this.extractVersionFromOutput(stdout, stderr);
           console.log(`Ollama is installed, version: ${version}`);
           return { isInstalled: true, version };
@@ -876,7 +1051,7 @@ class OllamaService {
   async detectPrivilegeContext() {
     let currentUser = 'unknown';
     try {
-      const { stdout } = await execAsync('whoami', { timeout: 2000 });
+      const { stdout } = await this.runShellCommand('whoami', { timeout: 2000 });
       currentUser = stdout.trim();
       console.log(`Running as user: ${currentUser}`);
     } catch (error) {
@@ -886,6 +1061,7 @@ class OllamaService {
     const isRoot = currentUser === 'root';
     let hasSudoBinary = false;
     let hasPasswordlessSudo = false;
+    const privilegedHelperPath = await this.resolveOllamaPrivilegedHelper().catch(() => null);
 
     if (!isRoot) {
       hasSudoBinary = await commandExists('sudo');
@@ -893,7 +1069,12 @@ class OllamaService {
         console.log('sudo command not found');
       } else {
         try {
-          await execAsync('sudo -n true', { timeout: 2000 });
+          if (privilegedHelperPath) {
+            const helperProbeCommand = this.buildPrivilegedHelperCommand(privilegedHelperPath, 'probe');
+            await this.runNonInteractiveSudoCommand(helperProbeCommand, 'privilege', 2000);
+          } else {
+            await this.runShellCommand('sudo -n true', { timeout: 2000 });
+          }
           hasPasswordlessSudo = true;
           console.log('sudo command found and user has passwordless sudo privileges');
         } catch (error) {
@@ -906,13 +1087,75 @@ class OllamaService {
       currentUser,
       isRoot,
       hasSudoBinary,
-      hasPasswordlessSudo
+      hasPasswordlessSudo,
+      privilegedHelperPath
     };
   }
 
-  async runSudoShellCommandWithPassword(command, sudoPassword, scope, timeout = 300000) {
+  buildInstallScriptCommand({ disableAutoStart = false } = {}) {
+    const commands = [];
+
+    if (disableAutoStart) {
+      commands.push('export OLLAMA_NO_START=1');
+    }
+
+    commands.push('curl -fsSL https://ollama.com/install.sh | sh');
+    return commands.join('; ');
+  }
+
+  buildCommandFailureMessage(prefix, code, signal, stdout = '', stderr = '') {
+    const summary = summarizeCommandOutput(stdout, stderr);
+    return `${prefix} with code ${code}${signal ? ` (${signal})` : ''}${summary ? `: ${summary}` : ''}`;
+  }
+
+  isSudoPromptRequiredOutput(output = '') {
+    const normalized = String(output || '').toLowerCase();
+    return normalized.includes('a password is required')
+      || normalized.includes('no tty present')
+      || normalized.includes('terminal is required')
+      || normalized.includes('a terminal is required')
+      || normalized.includes('sorry, you must have a tty')
+      || normalized.includes('sorry, try again')
+      || normalized.includes('authentication failure')
+      || normalized.includes('incorrect password');
+  }
+
+  isSudoPermissionDeniedOutput(output = '') {
+    const normalized = String(output || '').toLowerCase();
+    return normalized.includes('is not in the sudoers file')
+      || normalized.includes('not allowed to execute')
+      || normalized.includes('may not run sudo');
+  }
+
+  async runNonInteractiveSudoCommand(command, scope, timeout = 300000) {
+    try {
+      return await this.runShellCommand(`sudo -n ${command}`, {
+        timeout,
+        maxBuffer: 10 * 1024 * 1024
+      });
+    } catch (error) {
+      const stdout = error?.stdout || '';
+      const stderr = error?.stderr || '';
+      const output = `${stderr || ''}\n${stdout || ''}`;
+
+      this.addCommandOutputToOperationLogs(scope, stdout, 'stdout');
+      this.addCommandOutputToOperationLogs(scope, stderr, 'stderr');
+
+      if (this.isSudoPromptRequiredOutput(output)) {
+        throw new Error('Unable to use sudo non-interactively.');
+      }
+
+      if (this.isSudoPermissionDeniedOutput(output)) {
+        throw new Error('Stored sudo permissions do not allow this command.');
+      }
+
+      throw new Error(this.buildCommandFailureMessage('sudo command failed', error.code, error.signal, stdout, stderr));
+    }
+  }
+
+  async runNonInteractiveSudoShellCommand(command, scope, timeout = 300000) {
     return new Promise((resolve, reject) => {
-      const child = spawn('sudo', ['-S', '-p', '', 'sh', '-c', command], {
+      const child = this.spawnChildProcess('sudo', ['-n', 'sh', '-c', command], {
         env: process.env
       });
 
@@ -966,7 +1209,75 @@ class OllamaService {
           return;
         }
 
-        const stderrLower = String(stderr || '').toLowerCase();
+        const output = `${stderr || ''}\n${stdout || ''}`;
+        if (this.isSudoPromptRequiredOutput(output)) {
+          complete(new Error('Unable to use sudo non-interactively.'));
+          return;
+        }
+
+        complete(new Error(this.buildCommandFailureMessage('sudo command failed', code, signal, stdout, stderr)));
+      });
+    });
+  }
+
+  async runSudoShellCommandWithPassword(command, sudoPassword, scope, timeout = 300000) {
+    return new Promise((resolve, reject) => {
+      const child = this.spawnChildProcess('sudo', ['-S', '-p', '', 'sh', '-c', command], {
+        env: process.env
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let finished = false;
+      let timeoutHandle = null;
+
+      const complete = (error, result = null) => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(result);
+      };
+
+      if (timeout > 0) {
+        timeoutHandle = setTimeout(() => {
+          child.kill('SIGTERM');
+          setTimeout(() => child.kill('SIGKILL'), 2000);
+          complete(new Error(`Command timed out after ${timeout}ms`));
+        }, timeout);
+      }
+
+      child.stdout?.on('data', (chunk) => {
+        const text = chunk.toString();
+        stdout += text;
+        this.addCommandOutputToOperationLogs(scope, text, 'stdout');
+      });
+
+      child.stderr?.on('data', (chunk) => {
+        const text = chunk.toString();
+        stderr += text;
+        this.addCommandOutputToOperationLogs(scope, text, 'stderr');
+      });
+
+      child.once('error', (error) => {
+        complete(error);
+      });
+
+      child.once('close', (code, signal) => {
+        if (code === 0) {
+          complete(null, { stdout, stderr });
+          return;
+        }
+
+        const output = `${stderr || ''}\n${stdout || ''}`;
+        const stderrLower = String(output || '').toLowerCase();
         if (stderrLower.includes('sorry, try again')
             || stderrLower.includes('incorrect password')
             || stderrLower.includes('authentication failure')) {
@@ -981,7 +1292,7 @@ class OllamaService {
           return;
         }
 
-        complete(new Error(`sudo command failed with code ${code}${signal ? ` (${signal})` : ''}`));
+        complete(new Error(this.buildCommandFailureMessage('sudo command failed', code, signal, stdout, stderr)));
       });
 
       child.stdin?.write(`${sudoPassword || ''}\n`);
@@ -1006,15 +1317,14 @@ class OllamaService {
         currentUser,
         isRoot,
         hasSudoBinary,
-        hasPasswordlessSudo
+        privilegedHelperPath
       } = await this.detectPrivilegeContext();
       const hasSudoPassword = !isRoot
         && hasSudoBinary
         && typeof sudoPassword === 'string'
         && sudoPassword.length > 0;
 
-      // If we're not root and don't have working sudo, installation cannot proceed
-      if (!isRoot && (!hasSudoBinary || (!hasPasswordlessSudo && !hasSudoPassword))) {
+      if (!isRoot && !hasSudoBinary) {
         const errorMessage = hasSudoBinary
           ? `Ollama installation requires sudo privileges. This service is running as "${currentUser}" and cannot use sudo non-interactively. Re-run installation and provide your sudo password, or configure passwordless sudo for this service user.`
           : `Ollama installation requires root privileges. This system is running as user "${currentUser}" and sudo is not available. Please contact your system administrator for assistance.`;
@@ -1029,30 +1339,101 @@ class OllamaService {
         throw new Error(errorMessage);
       }
 
-      // Prepare installation command
-      const installScriptCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
+      const disableAutoStart = process.platform === 'darwin';
+      const installScriptCommand = this.buildInstallScriptCommand({
+        disableAutoStart
+      });
+      const installHelperCommand = privilegedHelperPath
+        ? this.buildPrivilegedHelperCommand(privilegedHelperPath, 'install')
+        : null;
       let commandResult;
+
       if (isRoot) {
-        console.log('Running Ollama installation script as root...');
-        commandResult = await execAsync(installScriptCommand, {
-          maxBuffer: 10 * 1024 * 1024,
-          timeout: 300000 // 5 minutes timeout
-        });
-      } else if (hasPasswordlessSudo) {
-        console.log('Running Ollama installation script with passwordless sudo...');
-        commandResult = await execAsync('curl -fsSL https://ollama.com/install.sh | sudo sh', {
-          maxBuffer: 10 * 1024 * 1024,
-          timeout: 300000 // 5 minutes timeout
-        });
+        if (installHelperCommand) {
+          console.log('Running Ollama installation helper as root...');
+          this.addOperationLog('install', 'Running installation helper as root');
+          commandResult = await this.runShellCommand(installHelperCommand, {
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 300000
+          });
+        } else {
+          console.log('Running Ollama installation script as root...');
+          this.addOperationLog('install', `Running installation command (${disableAutoStart ? 'root/no-auto-start' : 'root'})`);
+          commandResult = await this.runShellCommand(installScriptCommand, {
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 300000 // 5 minutes timeout
+          });
+        }
+      } else if (installHelperCommand) {
+        try {
+          console.log('Running Ollama installation helper with stored non-interactive sudo...');
+          this.addOperationLog('install', 'Running installation helper (sudo -n)');
+          commandResult = await this.runNonInteractiveSudoCommand(
+            installHelperCommand,
+            'install',
+            300000
+          );
+        } catch (sudoError) {
+          if (
+            sudoError?.message !== 'Unable to use sudo non-interactively.'
+            && sudoError?.message !== 'Stored sudo permissions do not allow this command.'
+          ) {
+            throw sudoError;
+          }
+
+          if (!hasSudoPassword) {
+            const errorMessage =
+              `Ollama installation requires stored HomeBrain admin rights. ` +
+              `This service is running as "${currentUser}" and could not use the HomeBrain Ollama helper non-interactively. ` +
+              `${getOllamaPrivilegeRepairHint()}.`;
+            this.addOperationLog('install', errorMessage);
+            throw new Error(errorMessage);
+          }
+
+          console.log('Running Ollama installation helper with provided sudo password...');
+          this.addOperationLog('install', 'Running installation helper (sudo password provided)');
+          commandResult = await this.runSudoShellCommandWithPassword(
+            installHelperCommand,
+            sudoPassword,
+            'install',
+            300000
+          );
+        }
       } else {
-        console.log('Running Ollama installation script with provided sudo password...');
-        this.addOperationLog('install', 'Running installation command (sudo password provided)');
-        commandResult = await this.runSudoShellCommandWithPassword(
-          installScriptCommand,
-          sudoPassword,
-          'install',
-          300000
-        );
+        try {
+          console.log('Running Ollama installation script with stored non-interactive sudo...');
+          this.addOperationLog(
+            'install',
+            `Running installation command (${disableAutoStart ? 'sudo -n/no-auto-start' : 'sudo -n'})`
+          );
+          commandResult = await this.runNonInteractiveSudoShellCommand(
+            installScriptCommand,
+            'install',
+            300000
+          );
+        } catch (sudoError) {
+          if (sudoError?.message !== 'Unable to use sudo non-interactively.') {
+            throw sudoError;
+          }
+
+          if (!hasSudoPassword) {
+            const errorMessage =
+              `Ollama installation requires stored HomeBrain admin rights. ` +
+              `This service is running as "${currentUser}" and could not use sudo non-interactively. ` +
+              `${getOllamaPrivilegeRepairHint()}.`;
+            this.addOperationLog('install', errorMessage);
+            throw new Error(errorMessage);
+          }
+
+          console.log('Running Ollama installation script with provided sudo password...');
+          this.addOperationLog('install', 'Running installation command (sudo password provided)');
+          commandResult = await this.runSudoShellCommandWithPassword(
+            installScriptCommand,
+            sudoPassword,
+            'install',
+            300000
+          );
+        }
       }
 
       const { stdout, stderr } = commandResult;
@@ -1103,6 +1484,12 @@ class OllamaService {
     try {
       console.log('Starting Ollama service...');
       this.addOperationLog('service', `Starting Ollama service (api: ${this.apiUrl})`);
+      const currentUser = this.getCurrentUser();
+      const binaryPath = await this.resolveOllamaBinary(config);
+
+      if (!binaryPath) {
+        throw new Error('Ollama binary not found');
+      }
 
       const status = await this.checkServiceStatus();
       if (status.running) {
@@ -1157,12 +1544,72 @@ class OllamaService {
         }
       }
 
+      const existingProcesses = await this.listOllamaProcesses();
+      if (existingProcesses.length) {
+        const ownedExisting = existingProcesses.find((proc) => proc.user === currentUser) || null;
+
+        if (ownedExisting) {
+          this.addOperationLog(
+            'service',
+            `Detected existing Ollama process (${ownedExisting.pid}) while API was unavailable. Waiting before starting another instance.`
+          );
+
+          const becameReady = await this.waitForServiceReady(6, 500);
+          if (becameReady) {
+            config.serviceStatus = 'running';
+            config.servicePid = ownedExisting.pid;
+            config.serviceOwner = ownedExisting.user;
+            config.lastError = null;
+            await config.save();
+            return { success: true, message: 'Service already running' };
+          }
+
+          const terminateResult = await this.terminateManagedProcess(ownedExisting.pid);
+          if (!terminateResult.success) {
+            throw new Error('Existing Ollama process is still running. Refusing to start a second instance.');
+          }
+        } else {
+          this.addOperationLog(
+            'service',
+            'Detected external Ollama process while API was unavailable. Attempting to switch back to managed service.'
+          );
+          const stopResult = await this.stopSystemService();
+          if (!stopResult.success) {
+            const external = existingProcesses[0] || null;
+            config.serviceStatus = 'running_external';
+            config.servicePid = external?.pid || null;
+            config.serviceOwner = external?.user || 'external';
+            config.lastError = null;
+            await config.save();
+            return {
+              success: true,
+              message: `Service already running externally (managed by ${config.serviceOwner})`
+            };
+          }
+
+          const stopped = await this.waitForServiceStopped(8, 500);
+          if (!stopped) {
+            const refreshedProcesses = await this.listOllamaProcesses();
+            const external = refreshedProcesses[0] || null;
+            config.serviceStatus = 'running_external';
+            config.servicePid = external?.pid || null;
+            config.serviceOwner = external?.user || 'external';
+            config.lastError = null;
+            await config.save();
+            return {
+              success: true,
+              message: `Service already running externally (managed by ${config.serviceOwner})`
+            };
+          }
+        }
+      }
+
       const childEnv = {
         ...process.env,
         OLLAMA_HOST: this.getOllamaHostForEnv()
       };
 
-      const child = spawn('ollama', ['serve'], {
+      const child = this.spawnChildProcess(binaryPath, ['serve'], {
         detached: true,
         stdio: 'ignore',
         env: childEnv
@@ -1175,7 +1622,7 @@ class OllamaService {
 
       const childPid = child.pid;
       config.servicePid = childPid;
-      config.serviceOwner = this.getCurrentUser();
+      config.serviceOwner = currentUser;
       config.serviceStatus = 'running';
       config.lastError = null;
       await config.save();
@@ -1324,7 +1771,11 @@ class OllamaService {
 
   async stopServiceWithPkill() {
     try {
-      await execAsync('pkill -f "ollama serve"');
+      if (process.platform === 'darwin') {
+        await this.runShellCommand('pkill -f "ollama serve" || pkill -x Ollama');
+      } else {
+        await this.runShellCommand('pkill -f "ollama serve"');
+      }
       console.log('Ollama service stopped using pkill');
       this.addOperationLog('service', 'Stopped Ollama with pkill');
       return { success: true, message: 'Service stopped' };
@@ -1336,36 +1787,13 @@ class OllamaService {
       const errorOutput = `${error.stderr || ''}${error.stdout || ''}`.toLowerCase();
 
       if (errorOutput.includes('operation not permitted') || error.code === 126 || error.code === 127) {
-        console.warn('Initial attempt to stop Ollama failed due to insufficient permissions. Trying sudo...');
-        try {
-          await execAsync('sudo -n pkill -f "ollama serve"');
-          console.log('Ollama service stopped via sudo');
-          this.addOperationLog('service', 'Stopped Ollama with sudo pkill');
-          return { success: true, message: 'Service stopped with elevated privileges' };
-        } catch (sudoError) {
-          const sudoOutput = `${sudoError.stderr || ''}${sudoError.stdout || ''}`.toLowerCase();
-
-          if (sudoError.code === 1 && sudoOutput.includes('no process found')) {
-            return { success: true, message: 'Service was not running' };
-          }
-
-          if (sudoOutput.includes('command not found')) {
-            const message = 'Unable to stop Ollama service: sudo command not available. Please stop the service manually or install sudo.';
-            console.error(message);
-            this.addOperationLog('service', message);
-            throw new Error(message);
-          }
-
-          if (sudoOutput.includes('a password is required') || sudoOutput.includes('permission denied')) {
-            const message = 'Insufficient privileges to stop the Ollama service. Please run "sudo pkill -f \\"ollama serve\\"" manually, add this service to sudoers, or stop the system-level Ollama service (e.g., "sudo systemctl stop ollama").';
-            console.error(message);
-            this.addOperationLog('service', message);
-            throw new Error(message);
-          }
-
-          console.error('Error stopping Ollama service with sudo:', sudoError);
-          throw sudoError;
+        console.warn('Initial attempt to stop Ollama failed due to insufficient permissions. Trying privileged system stop...');
+        const stopResult = await this.stopSystemService();
+        if (stopResult.success) {
+          this.addOperationLog('service', 'Stopped Ollama with privileged system stop');
+          return stopResult;
         }
+        throw new Error(stopResult.message || 'Failed to stop Ollama service with elevated privileges.');
       }
 
       throw error;
@@ -1401,9 +1829,10 @@ class OllamaService {
       const processes = await this.listOllamaProcesses();
       const processInfo = processes[0] || null;
       const owner = processInfo?.user || config.serviceOwner || 'another user';
+      const stopHint = getManualOllamaStopHint();
       const failureMessage =
         `Stop command completed but Ollama is still running as "${owner}". ` +
-        'Stop the system service manually (for example, "sudo systemctl stop ollama") or grant HomeBrain permission to manage it.';
+        `Stop the system service manually (for example, "${stopHint}") or grant HomeBrain permission to manage it.`;
 
       config.serviceStatus = 'running_external';
       config.servicePid = processInfo?.pid || null;
@@ -1434,17 +1863,25 @@ class OllamaService {
 
   async listOllamaProcesses() {
     try {
-      const { stdout } = await execAsync('ps -eo pid=,user=,command= | grep "ollama serve" | grep -v grep');
+      const { stdout } = await this.runShellCommand('ps -eo pid=,user=,command=', {
+        timeout: 5000,
+        maxBuffer: MAX_LOG_BYTES * 4
+      });
       const lines = stdout.split('\n').map(line => line.trim()).filter(Boolean);
       return lines.map((line) => {
         const match = line.match(/^(\d+)\s+(\S+)\s+(.*)$/);
         if (!match) {
           return null;
         }
+        const command = match[3];
+        if (!matchesOllamaProcessCommand(command)) {
+          return null;
+        }
+
         return {
           pid: Number(match[1]),
           user: match[2],
-          command: match[3]
+          command
         };
       }).filter(Boolean);
     } catch (error) {
@@ -1546,27 +1983,41 @@ class OllamaService {
   async stopSystemService() {
     const commands = [];
     const currentUser = this.getCurrentUser();
+    const stopHint = getManualOllamaStopHint();
+    const helperPath = await this.resolveOllamaPrivilegedHelper().catch(() => null);
 
-    if (currentUser === 'root') {
-      commands.push('systemctl stop ollama');
-      commands.push('service ollama stop');
-      if (process.platform === 'darwin') {
+    if (helperPath) {
+      const helperCommand = this.buildPrivilegedHelperCommand(helperPath, 'stop-system');
+      if (currentUser === 'root') {
+        commands.push(helperCommand);
+      }
+      commands.push(`sudo -n ${helperCommand}`);
+    }
+
+    if (process.platform === 'darwin') {
+      commands.push('pkill -x Ollama');
+      commands.push('pkill -f "ollama serve"');
+      if (currentUser === 'root') {
         commands.push('launchctl stop com.ollama.ollama');
       }
-    }
-
-    commands.push('sudo -n systemctl stop ollama');
-    commands.push('sudo -n service ollama stop');
-    if (process.platform === 'darwin') {
+      commands.push('sudo -n pkill -x Ollama');
+      commands.push('sudo -n pkill -f "ollama serve"');
       commands.push('sudo -n launchctl stop com.ollama.ollama');
+    } else {
+      if (currentUser === 'root') {
+        commands.push('systemctl stop ollama');
+        commands.push('service ollama stop');
+      }
+      commands.push('sudo -n systemctl stop ollama');
+      commands.push('sudo -n service ollama stop');
+      commands.push('sudo -n pkill -f "ollama serve"');
     }
-    commands.push('sudo -n pkill -f "ollama serve"');
 
     let lastError = null;
 
     for (const command of commands) {
       try {
-        await execAsync(command);
+        await this.runShellCommand(command);
         console.log(`Executed command: ${command}`);
         this.addOperationLog('service', `Executed stop command: ${command}`);
         return { success: true, message: `Service stopped using "${command}"` };
@@ -1574,7 +2025,7 @@ class OllamaService {
         lastError = error;
         const output = `${error.stderr || ''}${error.stdout || ''}`.toLowerCase();
 
-        if (error.code === 1 && output.includes('no process')) {
+        if (error.code === 1 && (output.includes('no process') || output.includes('not running'))) {
           return { success: true, message: 'Service was not running' };
         }
         if (output.includes('password') || output.includes('permission denied')) {
@@ -1582,7 +2033,8 @@ class OllamaService {
           return {
             success: false,
             message:
-              'Insufficient privileges to stop the Ollama service. Grant HomeBrain sudo access or stop it manually (e.g., "sudo systemctl stop ollama").'
+              `Insufficient privileges to stop the Ollama service. ` +
+              `Run "${getOllamaPrivilegeRepairHint()}" or stop it manually (for example, "${stopHint}").`
           };
         }
         if (output.includes('command not found')) {
@@ -1694,18 +2146,17 @@ class OllamaService {
         currentUser,
         isRoot,
         hasSudoBinary,
-        hasPasswordlessSudo
+        privilegedHelperPath
       } = await this.detectPrivilegeContext();
       const hasSudoPassword = !isRoot
         && hasSudoBinary
         && typeof sudoPassword === 'string'
         && sudoPassword.length > 0;
 
-      // If we're not root and don't have working sudo, update cannot proceed
-      if (!isRoot && (!hasSudoBinary || (!hasPasswordlessSudo && !hasSudoPassword))) {
-        const errorMessage = hasSudoBinary
-          ? `Ollama update requires sudo privileges. This service is running as "${currentUser}" and cannot use sudo non-interactively. Re-run update and provide your sudo password, or configure passwordless sudo for this service user.`
-          : `Ollama update requires root privileges. This system is running as user "${currentUser}" and sudo is not available. Please contact your system administrator for assistance.`;
+      if (!isRoot && !hasSudoBinary) {
+        const errorMessage =
+          `Ollama update requires root privileges. This system is running as user "${currentUser}" ` +
+          'and sudo is not available. Please contact your system administrator for assistance.';
         console.error(errorMessage);
 
         const config = await OllamaConfig.getConfig();
@@ -1727,7 +2178,7 @@ class OllamaService {
           if (!stopResult.success) {
             this.addOperationLog(
               'update',
-              `Pre-update stop did not fully succeed: ${stopResult.message}. Continuing update anyway.`
+              `Pre-update stop did not fully succeed: ${stopResult.message}`
             );
           } else {
             serviceStoppedForUpdate = true;
@@ -1735,37 +2186,130 @@ class OllamaService {
         } catch (stopError) {
           this.addOperationLog(
             'update',
-            `Pre-update stop failed (${stopError.message}). Continuing update anyway.`
+            `Pre-update stop failed (${stopError.message})`
           );
         }
+
+        const [remainingProcesses, postStopStatus] = await Promise.all([
+          this.listOllamaProcesses(),
+          this.checkServiceStatus()
+        ]);
+
+        if (remainingProcesses.length || postStopStatus.running) {
+          const remainingOwner =
+            remainingProcesses[0]?.user ||
+            config.serviceOwner ||
+            currentUser ||
+            'another user';
+          const stopHint = getManualOllamaStopHint();
+          const errorMessage =
+            `Ollama is still running as "${remainingOwner}". ` +
+            `Refusing to continue the update to avoid multiple instances. ` +
+            `Stop it manually (for example, "${stopHint}") or run "${getOllamaPrivilegeRepairHint()}".`;
+          this.addOperationLog('update', errorMessage);
+          throw new Error(errorMessage);
+        }
+
+        serviceStoppedForUpdate = true;
       }
 
-      // Prepare update command
-      const updateScriptCommand = 'curl -fsSL https://ollama.com/install.sh | sh';
+      const disableAutoStart = process.platform === 'darwin';
+      const updateScriptCommand = this.buildInstallScriptCommand({
+        disableAutoStart
+      });
+      const updateHelperCommand = privilegedHelperPath
+        ? this.buildPrivilegedHelperCommand(privilegedHelperPath, 'update')
+        : null;
       let commandResult;
       if (isRoot) {
-        console.log('Running Ollama update script as root...');
-        this.addOperationLog('update', 'Running update command (root)');
-        commandResult = await execAsync(updateScriptCommand, {
-          maxBuffer: 10 * 1024 * 1024,
-          timeout: 300000
-        });
-      } else if (hasPasswordlessSudo) {
-        console.log('Running Ollama update script with passwordless sudo...');
-        this.addOperationLog('update', 'Running update command (passwordless sudo)');
-        commandResult = await execAsync('curl -fsSL https://ollama.com/install.sh | sudo sh', {
-          maxBuffer: 10 * 1024 * 1024,
-          timeout: 300000
-        });
+        if (updateHelperCommand) {
+          console.log('Running Ollama update helper as root...');
+          this.addOperationLog('update', 'Running update helper as root');
+          commandResult = await this.runShellCommand(updateHelperCommand, {
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 300000
+          });
+        } else {
+          console.log('Running Ollama update script as root...');
+          this.addOperationLog(
+            'update',
+            `Running update command (${disableAutoStart ? 'root/no-auto-start' : 'root'})`
+          );
+          commandResult = await this.runShellCommand(updateScriptCommand, {
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 300000
+          });
+        }
+      } else if (updateHelperCommand) {
+        try {
+          console.log('Running Ollama update helper with stored non-interactive sudo...');
+          this.addOperationLog('update', 'Running update helper (sudo -n)');
+          commandResult = await this.runNonInteractiveSudoCommand(
+            updateHelperCommand,
+            'update',
+            300000
+          );
+        } catch (sudoError) {
+          if (
+            sudoError?.message !== 'Unable to use sudo non-interactively.'
+            && sudoError?.message !== 'Stored sudo permissions do not allow this command.'
+          ) {
+            throw sudoError;
+          }
+
+          if (!hasSudoPassword) {
+            const errorMessage =
+              `Ollama update requires stored HomeBrain admin rights. ` +
+              `This service is running as "${currentUser}" and could not use the HomeBrain Ollama helper non-interactively. ` +
+              `${getOllamaPrivilegeRepairHint()}.`;
+            this.addOperationLog('update', errorMessage);
+            throw new Error(errorMessage);
+          }
+
+          console.log('Running Ollama update helper with provided sudo password...');
+          this.addOperationLog('update', 'Running update helper (sudo password provided)');
+          commandResult = await this.runSudoShellCommandWithPassword(
+            updateHelperCommand,
+            sudoPassword,
+            'update',
+            300000
+          );
+        }
       } else {
-        console.log('Running Ollama update script with provided sudo password...');
-        this.addOperationLog('update', 'Running update command (sudo password provided)');
-        commandResult = await this.runSudoShellCommandWithPassword(
-          updateScriptCommand,
-          sudoPassword,
-          'update',
-          300000
-        );
+        try {
+          console.log('Running Ollama update script with stored non-interactive sudo...');
+          this.addOperationLog(
+            'update',
+            `Running update command (${disableAutoStart ? 'sudo -n/no-auto-start' : 'sudo -n'})`
+          );
+          commandResult = await this.runNonInteractiveSudoShellCommand(
+            updateScriptCommand,
+            'update',
+            300000
+          );
+        } catch (sudoError) {
+          if (sudoError?.message !== 'Unable to use sudo non-interactively.') {
+            throw sudoError;
+          }
+
+          if (!hasSudoPassword) {
+            const errorMessage =
+              `Ollama update requires stored HomeBrain admin rights. ` +
+              `This service is running as "${currentUser}" and could not use sudo non-interactively. ` +
+              `${getOllamaPrivilegeRepairHint()}.`;
+            this.addOperationLog('update', errorMessage);
+            throw new Error(errorMessage);
+          }
+
+          console.log('Running Ollama update script with provided sudo password...');
+          this.addOperationLog('update', 'Running update command (sudo password provided)');
+          commandResult = await this.runSudoShellCommandWithPassword(
+            updateScriptCommand,
+            sudoPassword,
+            'update',
+            300000
+          );
+        }
       }
 
       const { stdout, stderr } = commandResult;
@@ -1795,14 +2339,6 @@ class OllamaService {
         this.addOperationLog('update', 'Restarting Ollama service after update');
         await this.startService();
         serviceStoppedForUpdate = false;
-      } else if (serviceWasRunning) {
-        const postUpdateServiceStatus = await this.checkServiceStatus();
-        if (!postUpdateServiceStatus.running) {
-          this.addOperationLog('update', 'Service not detected after update. Attempting to start.');
-          await this.startService();
-        } else {
-          this.addOperationLog('update', 'Service remained running through update.');
-        }
       }
 
       await config.updateInstallation(installStatus.version, true);
@@ -2312,6 +2848,8 @@ class OllamaService {
       return {
         isInstalled: installStatus.isInstalled,
         version: installStatus.version,
+        hostPlatform: process.platform,
+        hostArch: process.arch,
         serviceRunning,
         serviceStatus: config.serviceStatus,
         serviceOwner: config.serviceOwner,
@@ -2606,3 +3144,9 @@ class OllamaService {
 }
 
 module.exports = new OllamaService();
+module.exports.OllamaService = OllamaService;
+module.exports._private = {
+  matchesOllamaProcessCommand,
+  getManualOllamaStopHint,
+  summarizeCommandOutput
+};

@@ -10,6 +10,7 @@ const caddyAdminService = require('./caddyAdminService');
 const reverseProxyService = require('./reverseProxyService');
 const oidcService = require('./oidcService');
 const adminBootstrapService = require('./adminBootstrapService');
+const alexaBrokerService = require('./alexaBrokerService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
 
@@ -92,6 +93,7 @@ class PlatformDeployService {
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
       || 'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart homebrain';
+    this.alexaBrokerService = options.alexaBrokerService || alexaBrokerService;
     this.runtimeSnapshotCaptured = false;
     this.runtimeSnapshot = {
       pid: typeof options.runtimePid === 'number' ? options.runtimePid : process.pid,
@@ -1032,6 +1034,7 @@ class PlatformDeployService {
     const source = typeof options.source === 'string' && options.source.trim()
       ? options.source.trim()
       : (jobId ? 'deploy' : 'manual');
+    const alexaBrokerRestart = await this.alexaBrokerService.prepareForHostRestart();
     const pendingRestart = await this.writePendingRestart({
       jobId: jobId || null,
       actor,
@@ -1046,6 +1049,10 @@ class PlatformDeployService {
       await this.appendJobLog(
         jobId,
         `[${new Date().toISOString()}] [restart] Triggering service restart command: ${fullCommand}\n`
+      );
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [restart] Alexa broker resume after restart: ${alexaBrokerRestart.shouldResume ? 'yes' : 'no'}\n`
       );
       for (const note of notes) {
         await this.appendJobLog(jobId, `[${new Date().toISOString()}] [restart] ${note}\n`);
@@ -1422,6 +1429,7 @@ class PlatformDeployService {
         await runNpmStep('Install root dependencies', ['install', '--include=dev', '--no-audit', '--no-fund']);
         await runNpmStep('Install server dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'server']);
         await runNpmStep('Install client dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'client']);
+        await runNpmStep('Install broker dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'broker']);
       }
 
       await runNpmStep('Ensure server native modules', ['run', 'ensure:native', '--prefix', 'server']);

@@ -1,5 +1,6 @@
 const express = require('express');
 const alexaBridgeService = require('../services/alexaBridgeService');
+const alexaBrokerService = require('../services/alexaBrokerService');
 const alexaCustomSkillService = require('../services/alexaCustomSkillService');
 const { requireAdmin } = require('./middlewares/auth');
 
@@ -18,6 +19,106 @@ async function brokerAuth(req, res, next) {
     });
   }
 }
+
+router.get('/service/status', admin, async (_req, res) => {
+  try {
+    const status = await alexaBrokerService.getStatus();
+    return res.status(200).json({
+      success: true,
+      status
+    });
+  } catch (error) {
+    console.error('GET /api/alexa/service/status - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa broker service status'
+    });
+  }
+});
+
+router.put('/service/config', admin, async (req, res) => {
+  try {
+    const result = await alexaBrokerService.updateConfig(req.body || {});
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('PUT /api/alexa/service/config - Error:', error.message);
+    return res.status(400).json({
+      success: false,
+      error: error.message || 'Failed to update Alexa broker service configuration'
+    });
+  }
+});
+
+router.post('/service/install', admin, async (_req, res) => {
+  try {
+    const result = await alexaBrokerService.install();
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('POST /api/alexa/service/install - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to install Alexa broker dependencies'
+    });
+  }
+});
+
+router.post('/service/deploy', admin, async (req, res) => {
+  try {
+    const result = await alexaBrokerService.deployService({
+      actor: req.user?.email || req.user?._id || 'unknown',
+      installDependencies: req.body?.installDependencies !== false
+    });
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('POST /api/alexa/service/deploy - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to deploy Alexa broker service'
+    });
+  }
+});
+
+router.post('/service/start', admin, async (_req, res) => {
+  try {
+    const result = await alexaBrokerService.startService();
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('POST /api/alexa/service/start - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to start Alexa broker service'
+    });
+  }
+});
+
+router.post('/service/stop', admin, async (_req, res) => {
+  try {
+    const result = await alexaBrokerService.stopService();
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('POST /api/alexa/service/stop - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to stop Alexa broker service'
+    });
+  }
+});
+
+router.post('/service/restart', admin, async (_req, res) => {
+  try {
+    const result = await alexaBrokerService.restartService();
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('POST /api/alexa/service/restart - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to restart Alexa broker service'
+    });
+  }
+});
 
 router.get('/', admin, async (_req, res) => {
   try {

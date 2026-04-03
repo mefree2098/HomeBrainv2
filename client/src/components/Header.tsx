@@ -41,6 +41,7 @@ const ROUTE_META: Record<string, { label: string; detail: string }> = {
   "/voice-devices": { label: "Voice Nexus", detail: "Wake and response mesh" },
   "/voice-profiles": { label: "Voice Profiles", detail: "Assistant identity tuning" },
   "/profiles": { label: "Voice Profiles", detail: "Assistant identity tuning" },
+  "/alexa-broker": { label: "Alexa Broker", detail: "OAuth relay and event hub" },
   "/users": { label: "User Access", detail: "Account and role control" },
   "/settings": { label: "System Configuration", detail: "Core tuning" },
   "/platform-deploy": { label: "Deployment Bay", detail: "Platform rollout status" },

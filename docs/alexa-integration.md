@@ -64,6 +64,8 @@ HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL=https://api.amazonalexa.com/v3/events
 
 For production, keep Alexa account-linking refresh tokens long-lived and leave the Alexa console PKCE toggle off until the broker OAuth flow is upgraded to support it.
 
+HomeBrain can now manage these broker variables through the `Alexa Broker` admin page. The preferred deploy flow there also creates or updates the broker reverse-proxy route and applies the managed Caddy config before restarting the broker. The environment block above is still the reference if you choose the manual shell/service-manager path.
+
 ## Smart Home Lambda Environment
 
 The Smart Home Lambda needs:

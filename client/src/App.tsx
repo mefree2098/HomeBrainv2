@@ -24,6 +24,7 @@ const PlatformDeploy = lazy(() => import("./pages/PlatformDeploy").then((module)
 const ReverseProxyManagement = lazy(() => import("./pages/ReverseProxyManagement"))
 const Operations = lazy(() => import("./pages/Operations").then((module) => ({ default: module.Operations })))
 const SSLManagement = lazy(() => import("./pages/SSLManagement"))
+const AlexaBrokerManagement = lazy(() => import("./pages/AlexaBrokerManagement"))
 const OllamaManagement = lazy(() => import("./pages/OllamaManagement"))
 const WhisperManagement = lazy(() => import("./pages/WhisperManagement"))
 
@@ -67,6 +68,7 @@ function App() {
             <Route path="/profiles" element={withLayout(<UserProfiles />)} />
             <Route path="/users" element={withLayout(<Users />, { adminOnly: true })} />
             <Route path="/settings" element={withLayout(<Settings />, { adminOnly: true })} />
+            <Route path="/alexa-broker" element={withLayout(<AlexaBrokerManagement />, { adminOnly: true })} />
             <Route path="/platform-deploy" element={withLayout(<PlatformDeploy />, { adminOnly: true })} />
             <Route path="/reverse-proxy" element={withLayout(<ReverseProxyManagement />, { adminOnly: true })} />
             <Route path="/operations" element={withLayout(<Operations />, { adminOnly: true })} />

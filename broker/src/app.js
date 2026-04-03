@@ -1528,7 +1528,8 @@ module.exports = {
 if (require.main === module) {
   const app = createApp({ startDispatcher: true });
   const port = Number(process.env.PORT || 4301);
-  app.listen(port, () => {
-    console.log(`HomeBrain Alexa broker listening on port ${port}`);
+  const bindHost = trimString(process.env.HOMEBRAIN_BROKER_BIND_HOST) || '0.0.0.0';
+  app.listen(port, bindHost, () => {
+    console.log(`HomeBrain Alexa broker listening on ${bindHost}:${port}`);
   });
 }

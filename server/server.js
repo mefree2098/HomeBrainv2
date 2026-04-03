@@ -61,6 +61,7 @@ const { shutdownCodexCliService } = require("./services/codexCliService");
 const automationSchedulerService = require("./services/automationSchedulerService");
 const automationRuntimeService = require("./services/automationRuntimeService");
 const alexaBridgeService = require("./services/alexaBridgeService");
+const alexaBrokerService = require("./services/alexaBrokerService");
 const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
 const telemetryService = require("./services/telemetryService");
 const { connectDB } = require("./config/database");
@@ -434,6 +435,16 @@ platformUpdateMonitorService.start();
   }
 })();
 
+// Initialize managed Alexa broker service
+(async () => {
+  try {
+    await alexaBrokerService.initialize();
+    console.log('Alexa Broker Service initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Alexa Broker Service:', error.message);
+  }
+})();
+
 // Prime profile acknowledgment audio in background
 (async () => {
   try {
@@ -509,6 +520,12 @@ async function gracefulShutdown(signal) {
     await whisperService.stopService();
     } catch (error) {
       console.error('Error stopping Whisper service:', error.message);
+    }
+
+    try {
+      await alexaBrokerService.stopService({ preserveResumeAfterHostRestart: true });
+    } catch (error) {
+      console.error('Error stopping Alexa broker service:', error.message);
     }
 
     try {
