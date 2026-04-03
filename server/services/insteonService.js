@@ -1245,6 +1245,38 @@ class InsteonService {
     ].join(':');
   }
 
+  _summarizeRuntimeCommandEnvelope(command) {
+    const payload = command?.standard || command?.extended || null;
+    if (!payload || typeof payload !== 'object') {
+      return {
+        envelopeType: null,
+        sourceAddress: null,
+        targetAddress: null,
+        messageType: null,
+        command1: null,
+        command2: null,
+        raw: null
+      };
+    }
+
+    const messageType = Number(payload.messageType);
+    return {
+      envelopeType: command?.extended ? 'extended' : (command?.standard ? 'standard' : null),
+      sourceAddress: this._normalizePossibleInsteonAddress(payload.id),
+      targetAddress: this._normalizePossibleInsteonAddress(payload.gatewayId),
+      messageType: Number.isInteger(messageType) ? messageType : null,
+      command1: typeof payload.command1 === 'string' && payload.command1.trim()
+        ? payload.command1.trim().toUpperCase()
+        : null,
+      command2: typeof payload.command2 === 'string' && payload.command2.trim()
+        ? payload.command2.trim().toUpperCase()
+        : null,
+      raw: typeof payload.raw === 'string' && payload.raw.trim()
+        ? payload.raw.trim().toUpperCase()
+        : null
+    };
+  }
+
   _shouldProcessRuntimeCommandEnvelope(command, eventName = 'command') {
     const payload = command?.standard || command?.extended || null;
     if (!payload || typeof payload !== 'object') {
@@ -8238,6 +8270,24 @@ class InsteonService {
   async _handleRuntimeCommand(command) {
     const parsed = this._parseRuntimeCommand(command);
     if (!parsed) {
+      const summary = this._summarizeRuntimeCommandEnvelope(command);
+      if (summary.envelopeType) {
+        this._logEngineWarn('Ignored runtime command envelope because it could not be parsed', {
+          stage: 'runtime',
+          direction: 'inbound',
+          operation: 'runtime_command',
+          address: summary.sourceAddress,
+          details: {
+            envelopeType: summary.envelopeType,
+            sourceAddress: summary.sourceAddress ? this._formatInsteonAddress(summary.sourceAddress) : null,
+            targetAddress: summary.targetAddress ? this._formatInsteonAddress(summary.targetAddress) : null,
+            messageType: summary.messageType,
+            command1: summary.command1,
+            command2: summary.command2,
+            raw: summary.raw
+          }
+        });
+      }
       return;
     }
 
