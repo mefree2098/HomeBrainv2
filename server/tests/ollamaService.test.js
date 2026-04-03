@@ -242,3 +242,29 @@ test('consumePullProgressStream tracks download percent from Ollama streaming ev
   assert.equal(status.total, 200);
   assert.equal(status.digest, 'sha256:test');
 });
+
+test('buildAvailableModelVariantEntries expands multi-size model families into explicit tags', () => {
+  const variants = _private.buildAvailableModelVariantEntries({
+    name: 'gemma4',
+    description: 'Gemma 4 family',
+    parameterSizes: ['e2b', 'e4b', '26b', '31b'],
+    parameterSize: 'e2b, e4b, 26b, 31b',
+    size: 'e2b, e4b, 26b, 31b',
+    capabilities: ['vision', 'tools'],
+    nanoFit: true,
+    smallestParameterB: 2
+  });
+
+  assert.deepEqual(
+    variants.map((variant) => variant.name),
+    ['gemma4:e2b', 'gemma4:e4b', 'gemma4:26b', 'gemma4:31b']
+  );
+  assert.deepEqual(
+    variants.map((variant) => variant.parameterSize),
+    ['e2b', 'e4b', '26b', '31b']
+  );
+  assert.deepEqual(
+    variants.map((variant) => variant.nanoFit),
+    [true, true, false, false]
+  );
+});
