@@ -76,6 +76,93 @@ test('generateLinkCode issues one-time pairing code and registerBroker consumes 
   );
 });
 
+test('link codes are consumed case-insensitively for mobile account-link flows', async (t) => {
+  const bridge = new AlexaBridgeService();
+  const registration = {
+    hubId: 'hub-mobile-1',
+    status: 'paired',
+    mode: 'public',
+    brokerBaseUrl: 'https://broker.example.com',
+    brokerClientId: 'broker-client-1',
+    brokerDisplayName: 'HomeBrain Alexa Broker',
+    relayToken: 'relay-token-1',
+    relayTokenHash: 'ignored-in-test',
+    publicOrigin: 'https://hub.example.com',
+    pendingLinkCodes: [],
+    recentActivity: [],
+    lastSeenAt: null,
+    async save() {
+      return this;
+    }
+  };
+
+  const originalEnsureBrokerRegistration = alexaProjectionService.ensureBrokerRegistration;
+  alexaProjectionService.ensureBrokerRegistration = async () => registration;
+
+  t.after(() => {
+    alexaProjectionService.ensureBrokerRegistration = originalEnsureBrokerRegistration;
+  });
+
+  const issued = await bridge.generateLinkCode({
+    actor: 'mobile-user',
+    mode: 'public',
+    ttlMinutes: 10
+  });
+
+  const consumed = await bridge.consumeLinkCodeForAccountLinking(issued.code.toLowerCase(), {
+    brokerClientId: 'homebrain-alexa-skill',
+    actor: 'alexa_oauth'
+  });
+
+  assert.equal(consumed.success, true);
+  assert.equal(consumed.mode, 'public');
+  assert.equal(registration.pendingLinkCodes.length, 0);
+});
+
+test('link codes are consumed when separators are omitted', async (t) => {
+  const bridge = new AlexaBridgeService();
+  const registration = {
+    hubId: 'hub-mobile-2',
+    status: 'paired',
+    mode: 'public',
+    brokerBaseUrl: 'https://broker.example.com',
+    brokerClientId: 'broker-client-1',
+    brokerDisplayName: 'HomeBrain Alexa Broker',
+    relayToken: 'relay-token-2',
+    relayTokenHash: 'ignored-in-test',
+    publicOrigin: 'https://hub.example.com',
+    pendingLinkCodes: [],
+    recentActivity: [],
+    lastSeenAt: null,
+    async save() {
+      return this;
+    }
+  };
+
+  const originalEnsureBrokerRegistration = alexaProjectionService.ensureBrokerRegistration;
+  alexaProjectionService.ensureBrokerRegistration = async () => registration;
+
+  t.after(() => {
+    alexaProjectionService.ensureBrokerRegistration = originalEnsureBrokerRegistration;
+  });
+
+  const issued = await bridge.generateLinkCode({
+    actor: 'mobile-user',
+    mode: 'public',
+    ttlMinutes: 10
+  });
+
+  const condensedCode = issued.code.replace(/-/g, '').toLowerCase();
+  const consumed = await bridge.consumeLinkCodeForAccountLinking(condensedCode, {
+    brokerClientId: 'homebrain-alexa-skill',
+    actor: 'alexa_oauth'
+  });
+
+  assert.equal(consumed.success, true);
+  assert.equal(consumed.mode, 'public');
+  assert.equal(registration.pendingLinkCodes.length, 0);
+});
+
 test('normalizeDirectivePayload extracts Alexa Smart Home directive details', () => {
   const normalized = normalizeDirectivePayload({
     directive: {
