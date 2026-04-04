@@ -165,7 +165,7 @@ export function AlexaExposureControl({
           ) : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[360px] space-y-4">
+      <PopoverContent align="start" portalled={false} className="w-[360px] space-y-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <RadioTower className="h-4 w-4 text-cyan-600" />
