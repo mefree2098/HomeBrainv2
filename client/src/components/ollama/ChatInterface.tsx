@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { sendChatMessage, getChatHistory, clearChatHistory } from '@/api/ollama';
 import {
   ArrowPathIcon,
@@ -31,20 +30,55 @@ export default function ChatInterface({ activeModel }: ChatInterfaceProps) {
   const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
+  const previousRenderedItemCountRef = useRef(0);
   const { toast } = useToast();
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior
+    });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    const renderedItemCount = messages.length + (loading ? 1 : 0);
+    const previousCount = previousRenderedItemCountRef.current;
+    previousRenderedItemCountRef.current = renderedItemCount;
+
+    if (renderedItemCount === 0) {
+      return;
+    }
+
+    if (!shouldAutoScrollRef.current && previousCount > 0) {
+      return;
+    }
+
+    const behavior = previousCount === 0 ? 'auto' : 'smooth';
+    requestAnimationFrame(() => {
+      scrollToBottom(behavior);
+    });
+  }, [messages, loading]);
 
   useEffect(() => {
     loadHistory();
   }, []);
+
+  const handleMessagesScroll = () => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom < 80;
+  };
 
   const loadHistory = async () => {
     try {
@@ -77,6 +111,7 @@ export default function ChatInterface({ activeModel }: ChatInterfaceProps) {
       model: activeModel,
     };
 
+    shouldAutoScrollRef.current = true;
     setMessages(prev => [...prev, userMessage]);
     setInputMessage('');
     setLoading(true);
@@ -113,6 +148,8 @@ export default function ChatInterface({ activeModel }: ChatInterfaceProps) {
   const handleClearHistory = async () => {
     try {
       await clearChatHistory();
+      shouldAutoScrollRef.current = true;
+      previousRenderedItemCountRef.current = 0;
       setMessages([]);
       toast({
         title: 'Success',
@@ -146,9 +183,10 @@ export default function ChatInterface({ activeModel }: ChatInterfaceProps) {
   };
 
   const modelLabel = activeModel || 'No model selected';
+  const hasConversation = messages.length > 0 || loading || loadingHistory;
 
   return (
-    <Card className="flex h-[min(78vh,760px)] flex-col overflow-hidden border-border/70 bg-card/95">
+    <Card className={`flex flex-col overflow-hidden border-border/70 bg-card/95 ${hasConversation ? 'h-[min(74vh,720px)]' : 'min-h-[520px]'}`}>
       <CardHeader className="flex flex-row items-start justify-between gap-4 border-b border-border/50 pb-4">
         <div className="space-y-2">
           <CardTitle className="text-2xl">Chat Playground</CardTitle>
@@ -173,15 +211,19 @@ export default function ChatInterface({ activeModel }: ChatInterfaceProps) {
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col p-0">
         <div className="mx-4 mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/60 bg-muted/20">
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-5 sm:px-6">
+          <div
+            ref={messagesContainerRef}
+            onScroll={handleMessagesScroll}
+            className="min-h-0 flex-1 overflow-y-auto"
+          >
+            <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4 px-4 py-5 sm:px-6">
               {loadingHistory ? (
-                <div className="flex min-h-[200px] items-center justify-center gap-2 text-sm text-muted-foreground">
+                <div className="flex min-h-[200px] flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
                   <ArrowPathIcon className="h-4 w-4 animate-spin" />
                   Loading chat history...
                 </div>
               ) : messages.length === 0 ? (
-                <div className="flex min-h-[260px] flex-col items-center justify-center gap-3 text-center">
+                <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center gap-3 text-center">
                   <SparklesIcon className="h-8 w-8 text-muted-foreground" />
                   <p className="text-base font-medium">No conversation yet</p>
                   <p className="max-w-md text-sm text-muted-foreground">
@@ -238,9 +280,8 @@ export default function ChatInterface({ activeModel }: ChatInterfaceProps) {
                   </div>
                 </div>
               )}
-              <div ref={messagesEndRef} />
             </div>
-          </ScrollArea>
+          </div>
         </div>
 
         <div className="mt-4 border-t border-border/50 bg-card/80 p-4">
