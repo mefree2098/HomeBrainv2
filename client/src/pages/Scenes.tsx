@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   Play,
   Plus,
+  Layers3,
   Moon,
   Sun,
   Shield,
@@ -19,8 +20,8 @@ import {
   Edit,
   Trash2
 } from "lucide-react"
-import { getScenes, activateScene, createScene, createSceneFromNaturalLanguage, updateScene, deleteScene } from "@/api/scenes"
-import { getDevices } from "@/api/devices"
+import { getScenes, activateScene, createScene, createSceneFromNaturalLanguage, updateScene, deleteScene, type SceneRecord } from "@/api/scenes"
+import { getDeviceGroups, getDevices, type DeviceGroupSummary, type DeviceRecord } from "@/api/devices"
 import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
@@ -37,8 +38,9 @@ export function Scenes() {
     getExposure,
     saveExposure
   } = useAlexaExposureRegistry(isAdmin)
-  const [scenes, setScenes] = useState([])
-  const [devices, setDevices] = useState([])
+  const [scenes, setScenes] = useState<SceneRecord[]>([])
+  const [devices, setDevices] = useState<DeviceRecord[]>([])
+  const [groups, setGroups] = useState<DeviceGroupSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isNaturalLanguageDialogOpen, setIsNaturalLanguageDialogOpen] = useState(false)
@@ -57,13 +59,15 @@ export function Scenes() {
     const fetchData = async () => {
       try {
         console.log('Fetching scenes and devices data')
-        const [scenesData, devicesData] = await Promise.all([
+        const [scenesData, devicesData, groupsData] = await Promise.all([
           getScenes(),
-          getDevices()
+          getDevices(),
+          getDeviceGroups()
         ])
         
         setScenes(scenesData.scenes)
         setDevices(devicesData.devices)
+        setGroups(groupsData.groups)
       } catch (error) {
         console.error('Failed to fetch data:', error)
         toast({
@@ -464,7 +468,9 @@ export function Scenes() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>{scene.deviceActions?.length || scene.devices?.length || 0} devices</span>
+                  <span>
+                    {(scene.deviceActions?.length || 0) + (scene.groupActions?.length || 0)} action{((scene.deviceActions?.length || 0) + (scene.groupActions?.length || 0)) === 1 ? "" : "s"}
+                  </span>
                   <span>
                     {(getExposure('scene', scene._id)?.enabled)
                       ? "Alexa enabled"
@@ -520,6 +526,13 @@ export function Scenes() {
                   </div>
                 ) : null}
 
+                {(scene.groupActions?.length || 0) > 0 ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
+                    <Layers3 className="h-4 w-4" />
+                    Includes {scene.groupActions?.length || 0} device group action{(scene.groupActions?.length || 0) === 1 ? "" : "s"}
+                  </div>
+                ) : null}
+
                 <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-gray-800 p-2 rounded">
                   <strong>Voice command:</strong> "Hey Anna, activate {scene.name}"
                 </div>
@@ -535,6 +548,7 @@ export function Scenes() {
         onOpenChange={setIsEditDialogOpen}
         scene={selectedScene}
         devices={devices}
+        groups={groups}
         onSave={handleUpdateScene}
       />
 

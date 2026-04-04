@@ -197,23 +197,19 @@ export const activateModel = async (modelName: string) => {
   }
 };
 
-// Description: Update the installed-model roles used by HomeBrain and spam filtering
+// Description: Update the single shared local model used by HomeBrain and spam filtering
 // Endpoint: POST /api/ollama/models/roles
-// Request: { homebrainLocalLlmModel: string, spamFilterLocalLlmModel: string }
-// Response: { success: boolean, homebrainLocalLlmModel: string, spamFilterLocalLlmModel: string }
-export const updateModelRoles = async (
-  homebrainLocalLlmModel: string,
-  spamFilterLocalLlmModel: string
-) => {
+// Request: { modelName: string }
+// Response: { success: boolean, modelName: string, activeModel: string, homebrainLocalLlmModel: string, spamFilterLocalLlmModel: string }
+export const updateModelRoles = async (modelName: string) => {
   try {
     const response = await api.post('/api/ollama/models/roles', {
-      homebrainLocalLlmModel,
-      spamFilterLocalLlmModel,
+      modelName,
     });
     return response.data;
   } catch (error: any) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 

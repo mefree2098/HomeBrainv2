@@ -16,6 +16,22 @@ const deviceActionSchema = new mongoose.Schema({
   },
 }, { _id: false });
 
+const groupActionSchema = new mongoose.Schema({
+  groupId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'DeviceGroup',
+    required: true,
+  },
+  action: {
+    type: String,
+    required: true,
+    enum: ['turn_on', 'turn_off', 'set_brightness', 'set_temperature', 'lock', 'unlock', 'open', 'close'],
+  },
+  value: {
+    type: mongoose.Schema.Types.Mixed,
+  },
+}, { _id: false });
+
 const schema = new mongoose.Schema({
   name: {
     type: String,
@@ -28,6 +44,7 @@ const schema = new mongoose.Schema({
     maxlength: 500,
   },
   deviceActions: [deviceActionSchema],
+  groupActions: [groupActionSchema],
   active: {
     type: Boolean,
     default: false,

@@ -329,6 +329,41 @@ test('deleteModel starts Ollama and uses the API delete endpoint before falling 
   assert.equal(config.activeModel, null);
 });
 
+test('setActiveModel synchronizes the shared local model assignments', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const originalGetSettings = Settings.getSettings;
+
+  const config = {
+    activeModel: null,
+    setActiveModel: async (modelName) => {
+      config.activeModel = modelName;
+    }
+  };
+  const settings = {
+    localLlmModel: '',
+    homebrainLocalLlmModel: '',
+    spamFilterLocalLlmModel: '',
+    save: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  Settings.getSettings = async () => settings;
+
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+    Settings.getSettings = originalGetSettings;
+  });
+
+  const result = await service.setActiveModel('gemma4:e2b');
+
+  assert.equal(result.success, true);
+  assert.equal(result.activeModel, 'gemma4:e2b');
+  assert.equal(settings.localLlmModel, 'gemma4:e2b');
+  assert.equal(settings.homebrainLocalLlmModel, 'gemma4:e2b');
+  assert.equal(settings.spamFilterLocalLlmModel, 'gemma4:e2b');
+});
+
 test('chat starts Ollama before sending a request when the service is down', async (t) => {
   const service = new OllamaService();
   const originalGetConfig = OllamaConfig.getConfig;
@@ -368,6 +403,44 @@ test('chat starts Ollama before sending a request when the service is down', asy
 
   assert.equal(started, true);
   assert.equal(result.message, 'Hello from Gemma');
+});
+
+test('chat requests keep the shared model loaded after responding', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const originalAxiosPost = axios.post;
+
+  const config = {
+    addChatMessage: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+    axios.post = originalAxiosPost;
+  });
+
+  service.syncApiUrl = () => {};
+  service.checkServiceStatus = async () => ({ running: true, error: null });
+
+  let requestBody = null;
+  axios.post = async (_url, body) => {
+    requestBody = body;
+    return {
+      data: {
+        message: { content: 'Hello from Gemma' },
+        done: true,
+        total_duration: 1,
+        load_duration: 2,
+        prompt_eval_duration: 3,
+        eval_duration: 4
+      }
+    };
+  };
+
+  await service.chat('gemma4:e2b', [{ role: 'user', content: 'Hi' }]);
+
+  assert.equal(requestBody.keep_alive, '-1');
 });
 
 test('chat turns a generic 503 into an actionable Ollama diagnostic', async (t) => {

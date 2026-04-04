@@ -7,6 +7,7 @@ const Workflow = require('../models/Workflow');
 const Automation = require('../models/Automation');
 const deviceGroupService = require('../services/deviceGroupService');
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
+const insteonService = require('../services/insteonService');
 
 const GROUP_ID = '507f191e810c19729de860ac';
 const EMPTY_GROUP_ID = '507f191e810c19729de860ad';
@@ -143,6 +144,107 @@ test('DeviceGroup model normalizes the name during validation', async () => {
 
   assert.equal(group.name, 'Interior Lights');
   assert.equal(group.normalizedName, 'interior lights');
+});
+
+test('listGroups resolves nested child groups into master group summaries', async (t) => {
+  const originalDeviceFind = Device.find;
+  const originalDeviceGroupFind = DeviceGroup.find;
+  const originalWorkflowFind = Workflow.find;
+  const originalAutomationFind = Automation.find;
+
+  t.after(() => {
+    Device.find = originalDeviceFind;
+    DeviceGroup.find = originalDeviceGroupFind;
+    Workflow.find = originalWorkflowFind;
+    Automation.find = originalAutomationFind;
+  });
+
+  const childOneId = '507f191e810c19729de860ae';
+  const childTwoId = '507f191e810c19729de860af';
+  const masterId = '507f191e810c19729de860b0';
+  const devices = [
+    {
+      _id: DEVICE_ID,
+      name: 'Hall Light',
+      room: 'Hall',
+      type: 'light',
+      groups: ['Interior Lights'],
+      properties: { source: 'insteon' }
+    },
+    {
+      _id: '507f191e810c19729de860ab',
+      name: 'Porch Light',
+      room: 'Porch',
+      type: 'light',
+      groups: ['Exterior Lights'],
+      properties: { source: 'smartthings' }
+    }
+  ];
+  const groups = [
+    {
+      _id: childOneId,
+      name: 'Interior Lights',
+      normalizedName: 'interior lights',
+      description: '',
+      childGroupIds: [],
+      createdAt: new Date('2026-04-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-01T00:00:00.000Z')
+    },
+    {
+      _id: childTwoId,
+      name: 'Exterior Lights',
+      normalizedName: 'exterior lights',
+      description: '',
+      childGroupIds: [],
+      createdAt: new Date('2026-04-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-01T00:00:00.000Z')
+    },
+    {
+      _id: masterId,
+      name: 'Whole Home Lights',
+      normalizedName: 'whole home lights',
+      description: 'Composite HomeBrain group',
+      childGroupIds: [childOneId, childTwoId],
+      createdAt: new Date('2026-04-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-01T00:00:00.000Z')
+    }
+  ];
+
+  Device.find = () => ({
+    lean: async () => devices
+  });
+  DeviceGroup.find = () => ({
+    lean: async () => groups,
+    sort() {
+      return {
+        lean: async () => groups
+      };
+    }
+  });
+  Workflow.find = () => ({
+    select() {
+      return {
+        lean: async () => []
+      };
+    }
+  });
+  Automation.find = () => ({
+    select() {
+      return {
+        lean: async () => []
+      };
+    }
+  });
+
+  const result = await deviceGroupService.listGroups();
+  const masterGroup = result.find((group) => group._id === masterId);
+  assert.ok(masterGroup);
+  assert.equal(masterGroup.groupKind, 'master');
+  assert.equal(masterGroup.directDeviceCount, 0);
+  assert.equal(masterGroup.deviceCount, 2);
+  assert.deepEqual(masterGroup.childGroupIds, [childOneId, childTwoId]);
+  assert.deepEqual(masterGroup.childGroups.map((group) => group.name), ['Interior Lights', 'Exterior Lights']);
+  assert.deepEqual(masterGroup.sources, ['insteon', 'smartthings']);
 });
 
 test('updateGroup renames the group across devices, workflows, and standalone automations', async (t) => {
@@ -327,4 +429,93 @@ test('deleteGroup rejects removing a group that is still referenced by workflows
     deviceGroupService.deleteGroup(GROUP_ID),
     /Cannot delete device group "Interior Lights" because it is used by 2 workflow\(s\) and 1 standalone automation\(s\)/
   );
+});
+
+test('deleteGroup clears managed INSTEON state before deleting the group', async (t) => {
+  const originalGetGroupById = deviceGroupService.getGroupById;
+  const originalDeviceGroupFindById = DeviceGroup.findById;
+  const originalSyncManagedDeviceGroupMembership = insteonService.syncManagedDeviceGroupMembership;
+  const originalDeviceFind = Device.find;
+  const originalDeviceBulkWrite = Device.bulkWrite;
+  const originalDeviceGroupDeleteOne = DeviceGroup.deleteOne;
+  const originalAlexaExposureDeleteOne = require('../models/AlexaExposure').deleteOne;
+  const originalNormalizeDevices = deviceUpdateEmitter.normalizeDevices;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  let syncCall = null;
+  let bulkOps = null;
+  let deletedGroupId = null;
+  let deletedExposure = null;
+
+  t.after(() => {
+    deviceGroupService.getGroupById = originalGetGroupById;
+    DeviceGroup.findById = originalDeviceGroupFindById;
+    insteonService.syncManagedDeviceGroupMembership = originalSyncManagedDeviceGroupMembership;
+    Device.find = originalDeviceFind;
+    Device.bulkWrite = originalDeviceBulkWrite;
+    DeviceGroup.deleteOne = originalDeviceGroupDeleteOne;
+    require('../models/AlexaExposure').deleteOne = originalAlexaExposureDeleteOne;
+    deviceUpdateEmitter.normalizeDevices = originalNormalizeDevices;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  deviceGroupService.getGroupById = async () => ({
+    _id: GROUP_ID,
+    name: 'Interior Lights',
+    workflowUsageCount: 0,
+    automationUsageCount: 0,
+    parentGroupIds: [],
+    parentGroupNames: []
+  });
+  DeviceGroup.findById = async () => ({
+    _id: GROUP_ID,
+    name: 'Interior Lights',
+    normalizedName: 'interior lights',
+    childGroupIds: [],
+    insteonPlmGroup: 251,
+    insteonMemberSignature: '11.22.33,44.55.66',
+    insteonLastSyncedAt: new Date('2026-04-01T00:00:00.000Z')
+  });
+  insteonService.syncManagedDeviceGroupMembership = async (groupRecord, devices) => {
+    syncCall = {
+      groupRecord,
+      devices
+    };
+    return { sceneCleared: true };
+  };
+  Device.find = () => ({
+    lean: async () => [
+      {
+        _id: DEVICE_ID,
+        name: 'Hall Light',
+        groups: ['Interior Lights', 'Security']
+      }
+    ]
+  });
+  Device.bulkWrite = async (ops) => {
+    bulkOps = ops;
+  };
+  DeviceGroup.deleteOne = async ({ _id }) => {
+    deletedGroupId = _id;
+  };
+  require('../models/AlexaExposure').deleteOne = async (query) => {
+    deletedExposure = query;
+  };
+  deviceUpdateEmitter.normalizeDevices = (devices) => devices;
+  deviceUpdateEmitter.emit = () => {};
+
+  const result = await deviceGroupService.deleteGroup(GROUP_ID);
+
+  assert.ok(syncCall);
+  assert.equal(syncCall.groupRecord.name, 'Interior Lights');
+  assert.deepEqual(syncCall.devices, []);
+  assert.ok(Array.isArray(bulkOps));
+  assert.equal(bulkOps.length, 1);
+  assert.deepEqual(bulkOps[0].updateOne.update.$set.groups, ['Security']);
+  assert.equal(deletedGroupId, GROUP_ID);
+  assert.deepEqual(deletedExposure, {
+    entityType: 'device_group',
+    entityId: GROUP_ID
+  });
+  assert.equal(result.success, true);
 });

@@ -16,7 +16,7 @@ import {
   deleteDeviceGroup,
   getDeviceGroups,
   getDevices,
-  setDeviceGroupDevices,
+  setDeviceGroupMembership,
   updateDeviceGroup,
   type DeviceGroupSummary,
   type DeviceRecord
@@ -98,10 +98,12 @@ export function DeviceGroups() {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [groupSearch, setGroupSearch] = useState("")
   const [deviceSearch, setDeviceSearch] = useState("")
+  const [childGroupSearch, setChildGroupSearch] = useState("")
   const [deviceRoomFilter, setDeviceRoomFilter] = useState("all")
   const [detailName, setDetailName] = useState("")
   const [detailDescription, setDetailDescription] = useState("")
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
+  const [selectedChildGroupIds, setSelectedChildGroupIds] = useState<string[]>([])
   const [savingDetails, setSavingDetails] = useState(false)
   const [savingMembership, setSavingMembership] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
@@ -162,10 +164,18 @@ export function DeviceGroups() {
   useEffect(() => {
     setDetailName(selectedGroup?.name || "")
     setDetailDescription(selectedGroup?.description || "")
-    setSelectedDeviceIds(selectedGroup?.deviceIds || [])
+    setSelectedDeviceIds(selectedGroup?.directDeviceIds || [])
+    setSelectedChildGroupIds(selectedGroup?.childGroupIds || [])
     setDeviceSearch("")
+    setChildGroupSearch("")
     setDeviceRoomFilter("all")
-  }, [selectedGroupId, selectedGroup?.description, selectedGroup?.deviceIds, selectedGroup?.name])
+  }, [
+    selectedGroupId,
+    selectedGroup?.childGroupIds,
+    selectedGroup?.description,
+    selectedGroup?.directDeviceIds,
+    selectedGroup?.name
+  ])
 
   const filteredGroups = useMemo(() => {
     const search = groupSearch.trim().toLowerCase()
@@ -216,7 +226,29 @@ export function DeviceGroups() {
     })
   }, [deviceRoomFilter, deviceSearch, devices])
 
+  const filteredChildGroups = useMemo(() => {
+    const search = childGroupSearch.trim().toLowerCase()
+    return groups.filter((group) => {
+      if (group._id === selectedGroupId) {
+        return false
+      }
+
+      if (!search) {
+        return true
+      }
+
+      const haystack = [
+        group.name,
+        group.description,
+        group.groupKind,
+        ...group.sources
+      ].join(" ").toLowerCase()
+      return haystack.includes(search)
+    })
+  }, [childGroupSearch, groups, selectedGroupId])
+
   const selectedDeviceIdSet = useMemo(() => new Set(selectedDeviceIds), [selectedDeviceIds])
+  const selectedChildGroupIdSet = useMemo(() => new Set(selectedChildGroupIds), [selectedChildGroupIds])
 
   const detailDirty = Boolean(
     selectedGroup
@@ -224,7 +256,10 @@ export function DeviceGroups() {
   )
   const membershipDirty = Boolean(
     selectedGroup
-    && JSON.stringify([...selectedDeviceIds].sort()) !== JSON.stringify([...(selectedGroup.deviceIds || [])].sort())
+    && (
+      JSON.stringify([...selectedDeviceIds].sort()) !== JSON.stringify([...(selectedGroup.directDeviceIds || [])].sort())
+      || JSON.stringify([...selectedChildGroupIds].sort()) !== JSON.stringify([...(selectedGroup.childGroupIds || [])].sort())
+    )
   )
 
   const stats = useMemo(() => {
@@ -331,11 +366,14 @@ export function DeviceGroups() {
 
     setSavingMembership(true)
     try {
-      const response = await setDeviceGroupDevices(selectedGroup._id, selectedDeviceIds)
+      const response = await setDeviceGroupMembership(selectedGroup._id, {
+        deviceIds: selectedDeviceIds,
+        childGroupIds: selectedChildGroupIds
+      })
       applyGroupUpdate(response.group)
       toast({
         title: "Membership updated",
-        description: `Updated devices in "${response.group.name}".`
+        description: `Updated devices and child groups in "${response.group.name}".`
       })
     } catch (error) {
       toast({
@@ -390,6 +428,18 @@ export function DeviceGroups() {
     })
   }
 
+  const toggleChildGroupMembership = (groupId: string, checked: boolean) => {
+    setSelectedChildGroupIds((prev) => {
+      const next = new Set(prev)
+      if (checked) {
+        next.add(groupId)
+      } else {
+        next.delete(groupId)
+      }
+      return Array.from(next)
+    })
+  }
+
   const selectFilteredDevices = () => {
     setSelectedDeviceIds((prev) => {
       const next = new Set(prev)
@@ -417,7 +467,7 @@ export function DeviceGroups() {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Device Groups</h1>
           <p className="mt-1 text-muted-foreground">
-            Build reusable groups for automations and AI workflow creation, then manage membership device-by-device.
+            Build direct platform groups, then compose them into HomeBrain master groups for workflows and scenes.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -477,7 +527,7 @@ export function DeviceGroups() {
             <div>
               <CardTitle>Groups</CardTitle>
               <CardDescription>
-                Search and select a group to manage its details and device membership.
+                Search and select a group to manage its details, direct devices, and nested child groups.
               </CardDescription>
             </div>
             <div className="relative">
@@ -515,8 +565,12 @@ export function DeviceGroups() {
                         <Badge variant="outline">{group.deviceCount}</Badge>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
+                        <Badge variant="secondary">{group.groupKind}</Badge>
                         {group.workflowUsageCount > 0 ? (
                           <Badge variant="secondary">{group.workflowUsageCount} workflow{group.workflowUsageCount === 1 ? "" : "s"}</Badge>
+                        ) : null}
+                        {group.childGroupIds.length > 0 ? (
+                          <Badge variant="outline">{group.childGroupIds.length} child group{group.childGroupIds.length === 1 ? "" : "s"}</Badge>
                         ) : null}
                         {group.rooms.slice(0, 2).map((room) => (
                           <Badge key={room} variant="outline">{room}</Badge>
@@ -543,7 +597,7 @@ export function DeviceGroups() {
               <CardHeader>
                 <CardTitle>Group Details</CardTitle>
                 <CardDescription>
-                  Rename the group, describe what it represents, and review where it is already being used.
+                  Rename the group, describe what it represents, and review whether it is a direct platform group or a HomeBrain master group.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -564,12 +618,21 @@ export function DeviceGroups() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-3 sm:grid-cols-3">
                     <div className="rounded-2xl border bg-muted/20 p-4">
-                      <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Devices</div>
+                      <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Effective devices</div>
                       <div className="mt-2 text-2xl font-semibold">{selectedGroup.deviceCount}</div>
                       <div className="mt-1 text-xs text-muted-foreground">
                         Across {selectedGroup.rooms.length || 0} room{selectedGroup.rooms.length === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border bg-muted/20 p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Composition</div>
+                      <div className="mt-2 text-2xl font-semibold capitalize">{selectedGroup.groupKind}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {selectedGroup.directDeviceCount} direct device{selectedGroup.directDeviceCount === 1 ? "" : "s"},
+                        {" "}
+                        {selectedGroup.childGroupIds.length} child group{selectedGroup.childGroupIds.length === 1 ? "" : "s"}
                       </div>
                     </div>
                     <div className="rounded-2xl border bg-muted/20 p-4">
@@ -595,6 +658,44 @@ export function DeviceGroups() {
                     </div>
                   </div>
                 ) : null}
+
+                <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/15 p-4">
+                  <div className="text-sm font-medium">Structure</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="secondary" className="capitalize">{selectedGroup.groupKind}</Badge>
+                    {selectedGroup.sources.map((source) => (
+                      <Badge key={source} variant="outline">{source}</Badge>
+                    ))}
+                    {selectedGroup.insteonPlmGroup ? (
+                      <Badge variant="outline">PLM Group {selectedGroup.insteonPlmGroup}</Badge>
+                    ) : null}
+                  </div>
+                  {selectedGroup.childGroups.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedGroup.childGroups.map((group) => (
+                        <Badge key={group._id} variant="outline">
+                          {group.name} ({group.groupKind})
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">
+                      This group currently has no nested child groups.
+                    </div>
+                  )}
+                  {selectedGroup.parentGroupNames.length > 0 ? (
+                    <div className="text-xs text-muted-foreground">
+                      Nested inside: {selectedGroup.parentGroupNames.join(", ")}
+                    </div>
+                  ) : null}
+                  <div className="text-xs text-muted-foreground">
+                    {selectedGroup.containsNestedGroups
+                      ? "Composite groups stay HomeBrain-managed and dispatch each child group through its own platform path."
+                      : selectedGroup.insteonPlmGroup
+                        ? "This direct group is currently backed by an INSTEON PLM group for fast broadcast control."
+                        : "Direct groups can be promoted into PLM-managed INSTEON groups when all direct members are linked INSTEON devices."}
+                  </div>
+                </div>
 
                 <div className="rounded-2xl border border-border/70 bg-muted/15 p-4">
                   <div className="mb-3 flex items-start justify-between gap-3">
@@ -643,7 +744,7 @@ export function DeviceGroups() {
                   <div>
                     <CardTitle>Group Membership</CardTitle>
                     <CardDescription>
-                      Search devices, then check them into or out of this group.
+                      Manage this group’s direct devices and optional child groups. Workflows can target the parent once and HomeBrain will fan out execution.
                     </CardDescription>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -661,6 +762,73 @@ export function DeviceGroups() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/15 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                      <div className="font-medium">Child Groups</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Use child groups to build a HomeBrain master group that fans out to platform-specific subgroups.
+                      </div>
+                    </div>
+                    <div className="relative w-full lg:max-w-xs">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={childGroupSearch}
+                        onChange={(event) => setChildGroupSearch(event.target.value)}
+                        placeholder="Search child groups"
+                        className="pl-9"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/60 px-4 py-3 text-sm">
+                    <div>
+                      {selectedChildGroupIds.length} child group{selectedChildGroupIds.length === 1 ? "" : "s"} selected
+                    </div>
+                    <div className="text-muted-foreground">
+                      Showing {filteredChildGroups.length} of {Math.max(groups.length - 1, 0)} available groups
+                    </div>
+                  </div>
+
+                  <ScrollArea className="h-56 rounded-2xl border border-border/70 bg-background/60">
+                    <div className="space-y-2 p-3">
+                      {filteredChildGroups.length > 0 ? filteredChildGroups.map((group) => {
+                        const checked = selectedChildGroupIdSet.has(group._id)
+
+                        return (
+                          <label
+                            key={group._id}
+                            className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${checked
+                              ? "border-cyan-300 bg-cyan-50/60 dark:border-cyan-500/40 dark:bg-cyan-500/10"
+                              : "border-border/70 bg-background hover:border-cyan-200 hover:bg-muted/25"
+                            }`}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(value) => toggleChildGroupMembership(group._id, value === true)}
+                              className="mt-1"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium">{group.name}</span>
+                                <Badge variant="secondary" className="capitalize">{group.groupKind}</Badge>
+                                <Badge variant="outline">{group.deviceCount} device{group.deviceCount === 1 ? "" : "s"}</Badge>
+                              </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {group.description || "No description yet."}
+                              </div>
+                            </div>
+                          </label>
+                        )
+                      }) : (
+                        <div className="rounded-2xl border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">
+                          No child groups match the current search.
+                        </div>
+                      )}
+                    </div>
+                  </ScrollArea>
+                </div>
+
                 <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -686,7 +854,7 @@ export function DeviceGroups() {
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-muted/15 px-4 py-3 text-sm">
                   <div>
-                    {selectedDeviceIds.length} device{selectedDeviceIds.length === 1 ? "" : "s"} selected for this group
+                    {selectedDeviceIds.length} direct device{selectedDeviceIds.length === 1 ? "" : "s"} selected for this group
                   </div>
                   <div className="text-muted-foreground">
                     Showing {filteredDevices.length} of {devices.length} devices
@@ -743,7 +911,7 @@ export function DeviceGroups() {
             <CardContent className="py-16 text-center">
               <div className="text-lg font-semibold">No group selected</div>
               <p className="mt-2 text-sm text-muted-foreground">
-                Create your first group or pick one from the list to start managing device membership.
+                Create your first group or pick one from the list to start managing direct devices and nested child groups.
               </p>
             </CardContent>
           </Card>
@@ -755,7 +923,7 @@ export function DeviceGroups() {
           <DialogHeader>
             <DialogTitle>Create Device Group</DialogTitle>
             <DialogDescription>
-              Groups become reusable targets for workflows and AI-generated automations.
+              Groups become reusable targets for workflows and can later be composed into master HomeBrain groups.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

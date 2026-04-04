@@ -671,9 +671,7 @@ export function Settings() {
             response.settings.homebrainLocalLlmModel ||
             response.settings.localLlmModel ||
             "llama2-7b"
-          const resolvedSpamFilterModel =
-            response.settings.spamFilterLocalLlmModel ||
-            resolvedHomeBrainModel
+          const resolvedSpamFilterModel = resolvedHomeBrainModel
 
           // Update form values with loaded settings, handle masked sensitive fields
           Object.entries(response.settings).forEach(([key, value]) => {
@@ -1207,6 +1205,7 @@ export function Settings() {
       }
 
       delete settingsToSave.localLlmModel
+      settingsToSave.spamFilterLocalLlmModel = settingsToSave.homebrainLocalLlmModel
 
       const normalizedCodexHome = (settingsToSave.codexHome || "").toString().trim()
       const normalizedCodexHomeProfile = normalizedCodexHome ? "custom" : "local"
@@ -6820,7 +6819,7 @@ export function Settings() {
                   </div>
                   
                   <div className="rounded-md border border-green-200/70 bg-white/70 p-3 text-xs text-muted-foreground dark:border-green-900/60 dark:bg-slate-950/30">
-                    Model role assignment now lives on the Ollama page. Use <code>Ollama / Models</code> to choose the HomeBrain model and the spam-filter model. This settings page only keeps the local endpoint configuration.
+                    Shared local model selection now lives on the Ollama page. Use <code>Ollama / Models</code> to choose the single Ollama model HomeBrain and Axiom spam filtering will share. This settings page only keeps the local endpoint configuration.
                   </div>
                 </div>
               </CardContent>

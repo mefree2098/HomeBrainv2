@@ -39,6 +39,7 @@ interface OllamaStatus {
   serviceOwner?: string | null;
   installedModels: any[];
   activeModel: string | null;
+  sharedLocalLlmModel?: string | null;
   homebrainLocalLlmModel?: string | null;
   spamFilterLocalLlmModel?: string | null;
   updateAvailable: boolean;
@@ -60,8 +61,7 @@ export default function OllamaManagement() {
   const [logReturnedCount, setLogReturnedCount] = useState(0);
   const [logTruncated, setLogTruncated] = useState(false);
   const [logFetchedOnce, setLogFetchedOnce] = useState(false);
-  const [selectedHomeBrainModel, setSelectedHomeBrainModel] = useState('');
-  const [selectedSpamModel, setSelectedSpamModel] = useState('');
+  const [selectedSharedModel, setSelectedSharedModel] = useState('');
   const [roleSelectionsDirty, setRoleSelectionsDirty] = useState(false);
   const [savingModelRoles, setSavingModelRoles] = useState(false);
   const { toast } = useToast();
@@ -96,16 +96,12 @@ export default function OllamaManagement() {
     }
 
     const fallbackHomeBrainModel =
+      status.sharedLocalLlmModel ||
       status.homebrainLocalLlmModel ||
       status.activeModel ||
       status.installedModels?.[0]?.name ||
       '';
-    const fallbackSpamModel =
-      status.spamFilterLocalLlmModel ||
-      fallbackHomeBrainModel;
-
-    setSelectedHomeBrainModel(fallbackHomeBrainModel);
-    setSelectedSpamModel(fallbackSpamModel);
+    setSelectedSharedModel(fallbackHomeBrainModel);
   }, [
     roleSelectionsDirty,
     status,
@@ -436,30 +432,30 @@ export default function OllamaManagement() {
   };
 
   const handleSaveModelRoles = async () => {
-    if (!selectedHomeBrainModel || !selectedSpamModel) {
+    if (!selectedSharedModel) {
       toast({
         variant: 'destructive',
-        title: 'Models required',
-        description: 'Select both the HomeBrain model and the spam filter model.',
+        title: 'Model required',
+        description: 'Select the shared local model HomeBrain should use.',
       });
       return;
     }
 
     setSavingModelRoles(true);
     try {
-      await updateModelRoles(selectedHomeBrainModel, selectedSpamModel);
+      await updateModelRoles(selectedSharedModel);
       setRoleSelectionsDirty(false);
       toast({
-        title: 'Model roles saved',
-        description: 'HomeBrain and spam-filter model assignments were updated.',
+        title: 'Shared model saved',
+        description: 'HomeBrain chat, automation, and Axiom spam filtering now use the same Ollama model.',
       });
       await loadStatus();
     } catch (error: any) {
-      console.error('Error saving model roles:', error);
+      console.error('Error saving shared model:', error);
       toast({
         variant: 'destructive',
         title: 'Save failed',
-        description: error.message || 'Failed to save model roles',
+        description: error.message || 'Failed to save the shared model',
       });
     } finally {
       setSavingModelRoles(false);
@@ -686,75 +682,50 @@ export default function OllamaManagement() {
         <TabsContent value="models" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Model Roles</CardTitle>
+              <CardTitle>Shared Model</CardTitle>
               <CardDescription>
-                Choose which installed Ollama models HomeBrain uses for its own local tasks and for external spam filtering requests.
+                Choose the single Ollama model HomeBrain will use for chat, local automation, and Axiom spam filtering.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {status.installedModels.length === 0 ? (
                 <Alert>
                   <AlertDescription>
-                    Install at least one model before assigning HomeBrain or spam-filter roles.
+                    Install at least one model before selecting the shared local model.
                   </AlertDescription>
                 </Alert>
               ) : (
                 <>
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-4 md:grid-cols-1">
                     <div className="space-y-2">
-                      <label className="text-sm font-medium">HomeBrain Model</label>
+                      <label className="text-sm font-medium">Shared Local Model</label>
                       <Select
-                        value={selectedHomeBrainModel || undefined}
+                        value={selectedSharedModel || undefined}
                         onValueChange={(value) => {
-                          setSelectedHomeBrainModel(value);
+                          setSelectedSharedModel(value);
                           setRoleSelectionsDirty(true);
                         }}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select a HomeBrain model" />
+                          <SelectValue placeholder="Select a shared local model" />
                         </SelectTrigger>
                         <SelectContent>
                           {status.installedModels.map((model) => (
-                            <SelectItem key={`homebrain-${model.name}`} value={model.name}>
+                            <SelectItem key={`shared-${model.name}`} value={model.name}>
                               {model.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">
-                        Used for HomeBrain local inference such as voice interpretation and automation reasoning.
-                      </p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Spam Filter Model</label>
-                      <Select
-                        value={selectedSpamModel || undefined}
-                        onValueChange={(value) => {
-                          setSelectedSpamModel(value);
-                          setRoleSelectionsDirty(true);
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a spam filter model" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {status.installedModels.map((model) => (
-                            <SelectItem key={`spam-${model.name}`} value={model.name}>
-                              {model.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">
-                        Used by <code>/api/ollama/spam/filter</code> for Axiom or other mail-processing clients.
+                        This one model is used for HomeBrain local inference, the chat playground, and <code>/api/ollama/spam/filter</code> for Axiom.
                       </p>
                     </div>
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
                     <p className="text-xs text-muted-foreground">
-                      The active model remains the default for the Ollama chat playground. Role assignments are separate.
+                      Saving here also sets the active Ollama model so the Nano only has one shared local model path to manage.
                     </p>
                     <div className="flex gap-2">
                       <Button
@@ -763,15 +734,12 @@ export default function OllamaManagement() {
                         disabled={!roleSelectionsDirty || savingModelRoles}
                         onClick={() => {
                           const fallbackHomeBrainModel =
+                            status.sharedLocalLlmModel ||
                             status.homebrainLocalLlmModel ||
                             status.activeModel ||
                             status.installedModels?.[0]?.name ||
                             '';
-                          const fallbackSpamModel =
-                            status.spamFilterLocalLlmModel ||
-                            fallbackHomeBrainModel;
-                          setSelectedHomeBrainModel(fallbackHomeBrainModel);
-                          setSelectedSpamModel(fallbackSpamModel);
+                          setSelectedSharedModel(fallbackHomeBrainModel);
                           setRoleSelectionsDirty(false);
                         }}
                       >
@@ -788,7 +756,7 @@ export default function OllamaManagement() {
                             Saving...
                           </>
                         ) : (
-                          'Save Roles'
+                          'Save Shared Model'
                         )}
                       </Button>
                     </div>

@@ -320,20 +320,23 @@ SettingsSchema.statics.getSettings = async function() {
   const spamFilterLocalModel = typeof settings.spamFilterLocalLlmModel === 'string'
     ? settings.spamFilterLocalLlmModel.trim()
     : '';
+  const sharedLocalModel = homebrainLocalModel || legacyLocalModel || spamFilterLocalModel;
 
-  if (!homebrainLocalModel && legacyLocalModel) {
-    settings.homebrainLocalLlmModel = legacyLocalModel;
-    updated = true;
-  }
+  if (sharedLocalModel) {
+    if (legacyLocalModel !== sharedLocalModel) {
+      settings.localLlmModel = sharedLocalModel;
+      updated = true;
+    }
 
-  if (!settings.localLlmModel && homebrainLocalModel) {
-    settings.localLlmModel = homebrainLocalModel;
-    updated = true;
-  }
+    if (homebrainLocalModel !== sharedLocalModel) {
+      settings.homebrainLocalLlmModel = sharedLocalModel;
+      updated = true;
+    }
 
-  if (!spamFilterLocalModel && (homebrainLocalModel || legacyLocalModel)) {
-    settings.spamFilterLocalLlmModel = homebrainLocalModel || legacyLocalModel;
-    updated = true;
+    if (spamFilterLocalModel !== sharedLocalModel) {
+      settings.spamFilterLocalLlmModel = sharedLocalModel;
+      updated = true;
+    }
   }
 
   const codexHomeProfile = typeof settings.codexHomeProfile === 'string'

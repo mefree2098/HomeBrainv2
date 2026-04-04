@@ -109,14 +109,14 @@ function parseJsonObject(rawResponse) {
 }
 
 function resolveSpamFilterLocalModel(settings) {
-  const spamModel = normalizeString(settings?.spamFilterLocalLlmModel, MAX_SUBJECT_LENGTH);
-  if (spamModel) {
-    return spamModel;
-  }
-
   const homebrainModel = normalizeString(settings?.homebrainLocalLlmModel, MAX_SUBJECT_LENGTH);
   if (homebrainModel) {
     return homebrainModel;
+  }
+
+  const spamModel = normalizeString(settings?.spamFilterLocalLlmModel, MAX_SUBJECT_LENGTH);
+  if (spamModel) {
+    return spamModel;
   }
 
   return normalizeString(settings?.localLlmModel, MAX_SUBJECT_LENGTH);
@@ -210,7 +210,7 @@ class SpamFilterService {
     }
 
     if (!model) {
-      throw new Error('Spam filter local model is not configured');
+      throw new Error('Shared local Ollama model is not configured for spam filtering');
     }
 
     const email = normalizeEmailPayload(payload);
