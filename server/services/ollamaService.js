@@ -1141,6 +1141,29 @@ class OllamaService {
     });
   }
 
+  async deleteModelWithCli(modelName, timeoutMs = 30000) {
+    const config = await OllamaConfig.getConfig().catch(() => null);
+    if (config) {
+      this.syncApiUrl(config);
+    }
+
+    const binaryPath = await this.resolveOllamaBinary(config);
+    if (!binaryPath) {
+      throw new Error('Ollama binary not found');
+    }
+
+    const env = {
+      ...process.env,
+      OLLAMA_HOST: this.getOllamaHostForEnv()
+    };
+
+    await this.runShellCommand(`${shellEscape(binaryPath)} rm ${shellEscape(modelName)}`, {
+      env,
+      timeout: timeoutMs,
+      maxBuffer: MAX_LOG_BYTES * 2
+    });
+  }
+
   transformApiModels(models = []) {
     return models.map((model) => {
       const modelName = model.name || '';
@@ -2982,14 +3005,54 @@ class OllamaService {
   async deleteModel(modelName) {
     try {
       console.log(`Deleting model: ${modelName}`);
+      this.addOperationLog('model', `Deleting model ${modelName}`);
 
-      const deleteCommand = `ollama rm ${modelName}`;
-      await execAsync(deleteCommand, { timeout: 30000 });
+      const config = await OllamaConfig.getConfig();
+      this.syncApiUrl(config);
+
+      const serviceStatus = await this.checkServiceStatus();
+      if (!serviceStatus.running) {
+        this.addOperationLog('model', 'Ollama service is not running. Attempting to start before deleting model.');
+        await this.startService();
+      }
+
+      let usedCliFallback = false;
+      try {
+        await axios.delete(`${this.apiUrl}/api/delete`, {
+          data: {
+            model: modelName
+          },
+          timeout: 30000
+        });
+      } catch (apiError) {
+        const apiDetail =
+          apiError?.response?.data?.error ||
+          apiError?.response?.data?.message ||
+          apiError.message;
+
+        const shouldFallbackToCli =
+          apiError?.response?.status === 404 ||
+          apiError?.response?.status === 405 ||
+          /unknown field|not found|unsupported/i.test(String(apiDetail || ''));
+
+        if (!shouldFallbackToCli) {
+          throw apiError;
+        }
+
+        usedCliFallback = true;
+        this.addOperationLog(
+          'model',
+          `Ollama API delete unavailable (${apiDetail}). Falling back to CLI delete.`
+        );
+        await this.deleteModelWithCli(modelName);
+      }
 
       console.log(`Model ${modelName} deleted successfully`);
+      if (usedCliFallback) {
+        console.log(`Model ${modelName} was deleted using CLI fallback`);
+      }
 
       // Refresh model list
-      const config = await OllamaConfig.getConfig();
       await this.listModels();
 
       // If deleted model was active, clear active model
