@@ -1,9 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Readable } = require('node:stream');
+const axios = require('axios');
 
 const ollamaServiceModule = require('../services/ollamaService');
 const OllamaConfig = require('../models/OllamaConfig');
+const Settings = require('../models/Settings');
 
 const { OllamaService, _private } = ollamaServiceModule;
 
@@ -267,4 +269,62 @@ test('buildAvailableModelVariantEntries expands multi-size model families into e
     variants.map((variant) => variant.nanoFit),
     [true, true, false, false]
   );
+});
+
+test('deleteModel starts Ollama and uses the API delete endpoint before falling back to CLI', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const originalGetSettings = Settings.getSettings;
+  const originalAxiosDelete = axios.delete;
+
+  const config = {
+    activeModel: 'gemma4:e2b',
+    save: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  Settings.getSettings = async () => ({
+    localLlmModel: '',
+    homebrainLocalLlmModel: '',
+    spamFilterLocalLlmModel: '',
+    save: async () => {}
+  });
+
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+    Settings.getSettings = originalGetSettings;
+    axios.delete = originalAxiosDelete;
+  });
+
+  service.syncApiUrl = () => {};
+  service.checkServiceStatus = async () => ({ running: false });
+
+  let started = false;
+  service.startService = async () => {
+    started = true;
+    return { success: true };
+  };
+
+  let deletedUrl = null;
+  let deletedPayload = null;
+  axios.delete = async (url, options = {}) => {
+    deletedUrl = url;
+    deletedPayload = options?.data || null;
+    return { data: { status: 'success' } };
+  };
+
+  let listModelsCalled = false;
+  service.listModels = async () => {
+    listModelsCalled = true;
+    return [];
+  };
+
+  const result = await service.deleteModel('gemma4:e2b');
+
+  assert.equal(result.success, true);
+  assert.equal(started, true);
+  assert.equal(listModelsCalled, true);
+  assert.equal(deletedUrl, `${service.apiUrl}/api/delete`);
+  assert.deepEqual(deletedPayload, { model: 'gemma4:e2b' });
+  assert.equal(config.activeModel, null);
 });
