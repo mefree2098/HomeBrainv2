@@ -621,6 +621,7 @@ export function DeviceDetailsDialog({
   const [telemetryRangeHours, setTelemetryRangeHours] = useState<number>(24 * 7)
   const [groupInput, setGroupInput] = useState("")
   const [savingGroups, setSavingGroups] = useState(false)
+  const [activeTab, setActiveTab] = useState<"overview" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
 
@@ -649,6 +650,14 @@ export function DeviceDetailsDialog({
 
     setTelemetryMetricKeys([])
     setTelemetryRangeHours(24 * 7)
+  }, [device?._id, open])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    setActiveTab("overview")
   }, [device?._id, open])
 
   useEffect(() => {
@@ -967,89 +976,148 @@ export function DeviceDetailsDialog({
             </Card>
           </div>
         ) : (
-          <Tabs defaultValue="overview" className="flex min-h-0 flex-1 flex-col">
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as "overview" | "alexa" | "history")}
+            className="flex min-h-0 flex-1 flex-col"
+          >
             <div className="relative shrink-0 border-b border-white/10 px-4 pb-4 pt-14 sm:px-7 sm:pb-6 sm:pt-6">
               <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.24),transparent_42%),radial-gradient(circle_at_top_right,rgba(125,211,252,0.12),transparent_36%)] opacity-80 sm:h-40" />
-              <DialogHeader className="relative space-y-4 text-left sm:space-y-5">
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(240px,0.85fr)]">
-                  <div className="rounded-[1.5rem] border border-white/10 bg-[linear-gradient(135deg,rgba(32,73,108,0.34),rgba(12,20,40,0.14))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5">
-                    <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.2rem] border border-white/10 bg-white/8 shadow-[0_18px_48px_rgba(4,12,28,0.34)] sm:h-14 sm:w-14 sm:rounded-[1.4rem]">
-                        <HeroIcon className="h-5 w-5 text-cyan-200 sm:h-6 sm:w-6" />
+              <div className="relative space-y-4 sm:space-y-5">
+                <TabsList className={cn(
+                  "grid w-full rounded-2xl border border-white/10 bg-black/25 p-1 sm:w-fit sm:min-w-[320px] sm:inline-grid",
+                  isAdmin && onAlexaExposureUpdated ? "grid-cols-3" : "grid-cols-2"
+                )}>
+                  <TabsTrigger value="overview" className="w-full rounded-xl">Overview</TabsTrigger>
+                  {isAdmin && onAlexaExposureUpdated ? (
+                    <TabsTrigger value="alexa" className="w-full rounded-xl">Alexa</TabsTrigger>
+                  ) : null}
+                  <TabsTrigger value="history" className="w-full rounded-xl">History</TabsTrigger>
+                </TabsList>
+
+                {activeTab === "overview" ? (
+                  <DialogHeader className="space-y-4 text-left sm:space-y-5">
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(240px,0.85fr)]">
+                      <div className="rounded-[1.5rem] border border-white/10 bg-[linear-gradient(135deg,rgba(32,73,108,0.34),rgba(12,20,40,0.14))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5">
+                        <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.2rem] border border-white/10 bg-white/8 shadow-[0_18px_48px_rgba(4,12,28,0.34)] sm:h-14 sm:w-14 sm:rounded-[1.4rem]">
+                            <HeroIcon className="h-5 w-5 text-cyan-200 sm:h-6 sm:w-6" />
+                          </div>
+                          <div className="min-w-0">
+                            <DialogTitle className="font-body text-[clamp(1.65rem,4.8vw,3rem)] font-semibold leading-[0.94] tracking-[-0.07em] text-white">
+                              {device.name}
+                            </DialogTitle>
+                            <DialogDescription className="mt-2 text-sm text-white/62 sm:text-base">
+                              {`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                            </DialogDescription>
+                          </div>
+                        </div>
+                        <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/74 sm:text-[0.95rem]">
+                          {overviewCopy}
+                        </p>
                       </div>
-                      <div className="min-w-0">
-                        <DialogTitle className="font-body text-[clamp(1.65rem,4.8vw,3rem)] font-semibold leading-[0.94] tracking-[-0.07em] text-white">
-                          {device.name}
-                        </DialogTitle>
-                        <DialogDescription className="mt-2 text-sm text-white/62 sm:text-base">
-                          {`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
-                        </DialogDescription>
+
+                      <div className="rounded-[1.5rem] border border-white/10 bg-black/18 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-5">
+                        <p className="section-kicker text-white/45">Status Summary</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <DeviceStatusPill
+                            label={primaryStateLabel}
+                            tone={device?.status ? "emerald" : "sky"}
+                          />
+                          <DeviceStatusPill
+                            label={connectivityLabel}
+                            tone={device?.isOnline === false ? "amber" : "sky"}
+                          />
+                          <DeviceStatusPill
+                            label={liveSnapshot.supportsEnergyMonitoring ? "Energy telemetry" : "Control profile"}
+                          />
+                        </div>
+
+                        <div className="mt-4 space-y-3">
+                          <div className="flex items-center justify-between gap-3 border-b border-white/6 pb-3 text-sm">
+                            <span className="text-white/52">Room</span>
+                            <span className="font-medium text-white">{device.room || "Unassigned"}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 border-b border-white/6 pb-3 text-sm">
+                            <span className="text-white/52">Last contact</span>
+                            <span className="font-medium text-white">{formatDateTime(device.lastSeen)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 text-sm">
+                            <span className="text-white/52">Groups</span>
+                            <span className="font-medium text-white">{groupSummary}</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/74 sm:text-[0.95rem]">
-                      {overviewCopy}
-                    </p>
-                  </div>
 
-                  <div className="rounded-[1.5rem] border border-white/10 bg-black/18 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-5">
-                    <p className="section-kicker text-white/45">Status Summary</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <DeviceStatusPill
-                        label={primaryStateLabel}
-                        tone={device?.status ? "emerald" : "sky"}
-                      />
-                      <DeviceStatusPill
-                        label={connectivityLabel}
-                        tone={device?.isOnline === false ? "amber" : "sky"}
-                      />
-                      <DeviceStatusPill
-                        label={liveSnapshot.supportsEnergyMonitoring ? "Energy telemetry" : "Control profile"}
-                      />
+                    <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+                      {overviewStats.map((item) => (
+                        <DeviceOverviewStatCard
+                          key={item.label}
+                          label={item.label}
+                          value={item.value}
+                          hint={item.hint}
+                          icon={item.icon}
+                          tone={item.tone}
+                        />
+                      ))}
                     </div>
+                  </DialogHeader>
+                ) : (
+                  <DialogHeader className="text-left">
+                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+                      <div className="rounded-[1.5rem] border border-white/10 bg-[linear-gradient(135deg,rgba(32,73,108,0.28),rgba(12,20,40,0.18))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5">
+                        <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.2rem] border border-white/10 bg-white/8 sm:h-14 sm:w-14 sm:rounded-[1.4rem]">
+                            <HeroIcon className="h-5 w-5 text-cyan-200 sm:h-6 sm:w-6" />
+                          </div>
+                          <div className="min-w-0">
+                            <DialogTitle className="font-body text-[clamp(1.5rem,4vw,2.3rem)] font-semibold leading-[0.96] tracking-[-0.06em] text-white">
+                              {device.name}
+                            </DialogTitle>
+                            <DialogDescription className="mt-2 text-sm text-white/62 sm:text-base">
+                              {`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                            </DialogDescription>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <DeviceStatusPill
+                                label={primaryStateLabel}
+                                tone={device?.status ? "emerald" : "sky"}
+                              />
+                              <DeviceStatusPill
+                                label={connectivityLabel}
+                                tone={device?.isOnline === false ? "amber" : "sky"}
+                              />
+                              <DeviceStatusPill
+                                label={activeTab === "alexa" ? "Alexa editor" : "History view"}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
 
-                    <div className="mt-4 space-y-3">
-                      <div className="flex items-center justify-between gap-3 border-b border-white/6 pb-3 text-sm">
-                        <span className="text-white/52">Room</span>
-                        <span className="font-medium text-white">{device.room || "Unassigned"}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3 border-b border-white/6 pb-3 text-sm">
-                        <span className="text-white/52">Last contact</span>
-                        <span className="font-medium text-white">{formatDateTime(device.lastSeen)}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3 text-sm">
-                        <span className="text-white/52">Groups</span>
-                        <span className="font-medium text-white">{groupSummary}</span>
+                      <div className="rounded-[1.5rem] border border-white/10 bg-black/18 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-5">
+                        <p className="section-kicker text-white/45">
+                          {activeTab === "alexa" ? "Alexa Summary" : "History Summary"}
+                        </p>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                          <div className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
+                            <p className="text-[11px] uppercase tracking-[0.16em] text-white/45">Room</p>
+                            <p className="mt-2 text-sm font-medium text-white">{device.room || "Unassigned"}</p>
+                          </div>
+                          <div className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
+                            <p className="text-[11px] uppercase tracking-[0.16em] text-white/45">Last contact</p>
+                            <p className="mt-2 text-sm font-medium text-white">{formatDateTime(device.lastSeen)}</p>
+                          </div>
+                          <div className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
+                            <p className="text-[11px] uppercase tracking-[0.16em] text-white/45">Groups</p>
+                            <p className="mt-2 text-sm font-medium text-white">{groupSummary}</p>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
-                  {overviewStats.map((item) => (
-                    <DeviceOverviewStatCard
-                      key={item.label}
-                      label={item.label}
-                      value={item.value}
-                      hint={item.hint}
-                      icon={item.icon}
-                      tone={item.tone}
-                    />
-                  ))}
-                </div>
-              </DialogHeader>
-            </div>
-
-            <div className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-7">
-              <TabsList className={cn(
-                "grid w-full sm:inline-flex sm:w-auto",
-                isAdmin && onAlexaExposureUpdated ? "grid-cols-3" : "grid-cols-2"
-              )}>
-                <TabsTrigger value="overview" className="w-full sm:w-auto">Overview</TabsTrigger>
-                {isAdmin && onAlexaExposureUpdated ? (
-                  <TabsTrigger value="alexa" className="w-full sm:w-auto">Alexa</TabsTrigger>
-                ) : null}
-                <TabsTrigger value="history" className="w-full sm:w-auto">History</TabsTrigger>
-              </TabsList>
+                  </DialogHeader>
+                )}
+              </div>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4 sm:px-7 sm:pb-7 sm:pt-5">
@@ -1381,55 +1449,53 @@ export function DeviceDetailsDialog({
 
               {isAdmin && onAlexaExposureUpdated ? (
                 <TabsContent value="alexa" className="mt-0 space-y-5">
-                  <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)]">
-                    <Card className="border-cyan-400/15 bg-cyan-500/[0.06]">
+                  <Card className="border-cyan-400/15 bg-cyan-500/[0.06]">
+                    <CardHeader className="pb-4">
+                      <CardTitle className="font-body text-[1.2rem] tracking-[-0.05em] text-white">Alexa exposure</CardTitle>
+                      <CardDescription>
+                        Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <AlexaExposureControl
+                        entityType="device"
+                        entityId={device._id}
+                        entityName={device.name}
+                        exposure={alexaExposure}
+                        loading={alexaExposureLoading}
+                        defaultRoomHint={device.room}
+                        compact={false}
+                        onSave={onAlexaExposureUpdated}
+                      />
+                    </CardContent>
+                  </Card>
+
+                  <div className="grid gap-5 xl:grid-cols-2">
+                    <Card className="border-white/10 bg-black/20">
                       <CardHeader className="pb-4">
-                        <CardTitle className="font-body text-[1.2rem] tracking-[-0.05em] text-white">Alexa exposure</CardTitle>
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Discovery notes</CardTitle>
                         <CardDescription>
-                          Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint.
+                          Keep Alexa names short, distinct, and easy to say out loud.
                         </CardDescription>
                       </CardHeader>
-                      <CardContent>
-                        <AlexaExposureControl
-                          entityType="device"
-                          entityId={device._id}
-                          entityName={device.name}
-                          exposure={alexaExposure}
-                          loading={alexaExposureLoading}
-                          defaultRoomHint={device.room}
-                          compact={false}
-                          onSave={onAlexaExposureUpdated}
-                        />
+                      <CardContent className="space-y-3 text-sm text-muted-foreground">
+                        <p>Use a simple friendly name such as <span className="font-medium text-white">Master Bedroom TV</span> instead of the full HomeBrain device label.</p>
+                        <p>Add aliases people naturally say, and use the room hint to help Alexa disambiguate duplicate names.</p>
+                        <p>After saving, run discovery again from the Alexa broker page if Alexa does not pick the change up immediately.</p>
                       </CardContent>
                     </Card>
 
-                    <div className="space-y-5">
-                      <Card className="border-white/10 bg-black/20">
-                        <CardHeader className="pb-4">
-                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Discovery notes</CardTitle>
-                          <CardDescription>
-                            Keep Alexa names short, distinct, and easy to say out loud.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3 text-sm text-muted-foreground">
-                          <p>Use a simple friendly name such as <span className="font-medium text-white">Master Bedroom TV</span> instead of the full HomeBrain device label.</p>
-                          <p>Add aliases people naturally say, and use the room hint to help Alexa disambiguate duplicate names.</p>
-                          <p>After saving, run discovery again from the Alexa broker page if Alexa does not pick the change up immediately.</p>
-                        </CardContent>
-                      </Card>
-
-                      <Card className="border-white/10 bg-black/20">
-                        <CardHeader className="pb-4">
-                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Current device context</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-0">
-                          <DeviceDetailRow label="Current state" value={primaryStateLabel} />
-                          <DeviceDetailRow label="Room" value={device.room || "Unassigned"} />
-                          <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
-                          <DeviceDetailRow label="Groups" value={groupSummary} />
-                        </CardContent>
-                      </Card>
-                    </div>
+                    <Card className="border-white/10 bg-black/20">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Current device context</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-0">
+                        <DeviceDetailRow label="Current state" value={primaryStateLabel} />
+                        <DeviceDetailRow label="Room" value={device.room || "Unassigned"} />
+                        <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
+                        <DeviceDetailRow label="Groups" value={groupSummary} />
+                      </CardContent>
+                    </Card>
                   </div>
                 </TabsContent>
               ) : null}

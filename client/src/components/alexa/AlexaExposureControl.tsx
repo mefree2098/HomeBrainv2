@@ -318,7 +318,10 @@ export function AlexaExposureControl({
     return (
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={enabled ? "default" : "outline"} className={cn(enabled && "bg-cyan-600 text-white hover:bg-cyan-700")}>
+          <Badge
+            variant={draft.enabled ? "default" : "outline"}
+            className={cn(draft.enabled && "bg-cyan-600 text-white hover:bg-cyan-700")}
+          >
             {triggerLabel}
           </Badge>
           {loading ? (
