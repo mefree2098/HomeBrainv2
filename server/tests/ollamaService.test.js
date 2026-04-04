@@ -328,3 +328,86 @@ test('deleteModel starts Ollama and uses the API delete endpoint before falling 
   assert.deepEqual(deletedPayload, { model: 'gemma4:e2b' });
   assert.equal(config.activeModel, null);
 });
+
+test('chat starts Ollama before sending a request when the service is down', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const originalAxiosPost = axios.post;
+
+  const config = {
+    addChatMessage: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+    axios.post = originalAxiosPost;
+  });
+
+  service.syncApiUrl = () => {};
+  service.checkServiceStatus = async () => ({ running: false, error: 'Service not running' });
+
+  let started = false;
+  service.startService = async () => {
+    started = true;
+    return { success: true };
+  };
+
+  axios.post = async () => ({
+    data: {
+      message: { content: 'Hello from Gemma' },
+      done: true,
+      total_duration: 1,
+      load_duration: 2,
+      prompt_eval_duration: 3,
+      eval_duration: 4
+    }
+  });
+
+  const result = await service.chat('gemma4:e4b', [{ role: 'user', content: 'Hi' }]);
+
+  assert.equal(started, true);
+  assert.equal(result.message, 'Hello from Gemma');
+});
+
+test('chat turns a generic 503 into an actionable Ollama diagnostic', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const originalAxiosPost = axios.post;
+
+  const config = {
+    addChatMessage: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+    axios.post = originalAxiosPost;
+  });
+
+  service.syncApiUrl = () => {};
+  service.checkServiceStatus = async () => ({ running: true, error: null });
+  service.getServiceLogs = async () => ({
+    lines: [
+      'Apr 04 12:00:00 annaai ollama[1234]: llama runner process has terminated: signal: killed'
+    ]
+  });
+
+  axios.post = async () => {
+    const error = new Error('Request failed with status code 503');
+    error.response = {
+      status: 503,
+      data: {}
+    };
+    throw error;
+  };
+
+  await assert.rejects(
+    () => service.chat('gemma4:e4b', [{ role: 'user', content: 'Hi' }]),
+    (error) => {
+      assert.equal(error.status, 503);
+      assert.match(error.message, /llama runner process has terminated: signal: killed/i);
+      return true;
+    }
+  );
+});

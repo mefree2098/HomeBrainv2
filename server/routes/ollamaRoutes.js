@@ -392,7 +392,7 @@ router.post('/chat', auth, async (req, res) => {
     res.status(200).json(result);
   } catch (error) {
     console.error('Error during chat:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -425,7 +425,7 @@ router.post('/generate', auth, async (req, res) => {
     res.status(200).json(result);
   } catch (error) {
     console.error('Error during generation:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 

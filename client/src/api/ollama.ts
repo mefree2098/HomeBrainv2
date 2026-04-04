@@ -10,7 +10,7 @@ export const getOllamaStatus = async () => {
     return response.data;
   } catch (error: any) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
@@ -45,7 +45,7 @@ export const installOllama = async (sudoPassword?: string) => {
     return response.data;
   } catch (error: any) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
@@ -59,7 +59,7 @@ export const startOllamaService = async () => {
     return response.data;
   } catch (error: any) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
@@ -73,7 +73,7 @@ export const stopOllamaService = async () => {
     return response.data;
   } catch (error: any) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
@@ -235,7 +235,7 @@ export const sendChatMessage = async (
     return response.data;
   } catch (error: any) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
@@ -252,7 +252,7 @@ export const generateText = async (prompt: string, modelName?: string) => {
     return response.data;
   } catch (error: any) {
     console.error(error);
-    throw new Error(error?.response?.data?.error || error.message);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 

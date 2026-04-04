@@ -181,6 +181,127 @@ function buildAvailableModelVariantEntries(model = {}) {
   });
 }
 
+function compactWhitespace(value = '') {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function extractOllamaApiPayloadMessage(payload) {
+  if (!payload) {
+    return '';
+  }
+
+  if (Buffer.isBuffer(payload)) {
+    return extractOllamaApiPayloadMessage(payload.toString('utf8'));
+  }
+
+  if (typeof payload === 'string') {
+    const trimmed = compactWhitespace(payload);
+    if (!trimmed) {
+      return '';
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      const parsedMessage = extractOllamaApiPayloadMessage(parsed);
+      if (parsedMessage) {
+        return parsedMessage;
+      }
+    } catch (error) {
+      // Keep the original string when it is not JSON.
+    }
+
+    return trimmed;
+  }
+
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      const message = extractOllamaApiPayloadMessage(item);
+      if (message) {
+        return message;
+      }
+    }
+    return '';
+  }
+
+  if (typeof payload === 'object') {
+    for (const key of ['error', 'message', 'detail']) {
+      const message = extractOllamaApiPayloadMessage(payload[key]);
+      if (message) {
+        return message;
+      }
+    }
+
+    return '';
+  }
+
+  return compactWhitespace(payload);
+}
+
+function isGenericHttpStatusMessage(message = '', status = null) {
+  const normalized = compactWhitespace(message).toLowerCase();
+  if (!normalized || !Number.isFinite(status)) {
+    return !normalized;
+  }
+
+  return normalized === `request failed with status code ${status}`
+    || normalized === `chat failed: request failed with status code ${status}`
+    || normalized === `generation failed: request failed with status code ${status}`
+    || normalized === `ollama returned http ${status}`;
+}
+
+function normalizeOllamaDiagnosticLine(line = '') {
+  return compactWhitespace(
+    String(line || '')
+      .replace(/^\[[^\]]+\]\s+\[[^\]]+\]\s*/, '')
+      .replace(/^[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+(?:\[\d+\])?:\s*/, '')
+  );
+}
+
+function findRelevantOllamaDiagnosticLine(lines = []) {
+  const interestingPatterns = [
+    /out of memory/i,
+    /not enough memory/i,
+    /insufficient.*memory/i,
+    /runner process/i,
+    /terminated/i,
+    /signal:/i,
+    /failed to load/i,
+    /load.*model/i,
+    /no compatible gpu/i,
+    /cuda/i,
+    /metal/i,
+    /model requires/i,
+    /unavailable/i,
+    /error/i
+  ];
+  const ignoredPatterns = [
+    /^GET \//,
+    /^POST \//,
+    /^Checking Ollama service status/i,
+    /^Sending chat request/i,
+    /^Generating text with model/i
+  ];
+
+  const normalizedLines = Array.isArray(lines)
+    ? lines
+      .map((line) => normalizeOllamaDiagnosticLine(line))
+      .filter(Boolean)
+    : [];
+
+  for (let index = normalizedLines.length - 1; index >= 0; index -= 1) {
+    const line = normalizedLines[index];
+    if (ignoredPatterns.some((pattern) => pattern.test(line))) {
+      continue;
+    }
+
+    if (interestingPatterns.some((pattern) => pattern.test(line))) {
+      return line;
+    }
+  }
+
+  return '';
+}
+
 function decodeHtmlEntities(text = '') {
   return String(text)
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number.parseInt(code, 10)))
@@ -808,6 +929,43 @@ class OllamaService {
     if (config?.configuration?.apiUrl) {
       this.apiUrl = config.configuration.apiUrl;
     }
+  }
+
+  async ensureServiceRunningForApi(scope, actionDescription) {
+    const serviceStatus = await this.checkServiceStatus();
+    if (!serviceStatus.running) {
+      this.addOperationLog(
+        scope,
+        `Ollama service is not running. Attempting to start before ${actionDescription}.`
+      );
+      await this.startService();
+    }
+  }
+
+  async buildOllamaApiRequestError(actionLabel, modelName, error) {
+    const status = Number.isFinite(Number(error?.response?.status))
+      ? Number(error.response.status)
+      : null;
+    const responseDetail = extractOllamaApiPayloadMessage(error?.response?.data);
+    const fallbackDetail = compactWhitespace(error?.message || '');
+    let detail = responseDetail || fallbackDetail || 'Unknown error';
+
+    if (status === 503 && isGenericHttpStatusMessage(detail, 503)) {
+      const logPayload = await this.getServiceLogs({ lines: 80 }).catch(() => null);
+      const diagnosticLine = findRelevantOllamaDiagnosticLine(logPayload?.lines || []);
+
+      if (diagnosticLine) {
+        detail = diagnosticLine;
+      } else {
+        detail = `Ollama returned HTTP 503 while trying to load or serve ${modelName}. This usually means the model could not be loaded or the Ollama service is temporarily unavailable.`;
+      }
+    }
+
+    const wrappedError = new Error(`${actionLabel} failed: ${detail}`);
+    if (status) {
+      wrappedError.status = status;
+    }
+    return wrappedError;
   }
 
   addOperationLog(scope, message) {
@@ -3130,6 +3288,7 @@ class OllamaService {
 
       const config = await OllamaConfig.getConfig();
       this.syncApiUrl(config);
+      await this.ensureServiceRunningForApi('chat', `chatting with ${modelName}`);
 
       const requestBody = {
         model: modelName,
@@ -3168,10 +3327,7 @@ class OllamaService {
       };
     } catch (error) {
       console.error(`Error during chat with ${modelName}:`, error);
-      if (error.response?.data) {
-        throw new Error(`Chat failed: ${error.response.data.error || error.message}`);
-      }
-      throw new Error(`Chat failed: ${error.message}`);
+      throw await this.buildOllamaApiRequestError('Chat', modelName, error);
     }
   }
 
@@ -3183,6 +3339,7 @@ class OllamaService {
       console.log(`Generating text with model: ${modelName}`);
       const config = await OllamaConfig.getConfig();
       this.syncApiUrl(config);
+      await this.ensureServiceRunningForApi('generate', `generating text with ${modelName}`);
 
       const response = await axios.post(
         `${this.apiUrl}/api/generate`,
@@ -3204,7 +3361,7 @@ class OllamaService {
       };
     } catch (error) {
       console.error(`Error during generation with ${modelName}:`, error);
-      throw new Error(`Generation failed: ${error.message}`);
+      throw await this.buildOllamaApiRequestError('Generation', modelName, error);
     }
   }
 
@@ -3629,5 +3786,8 @@ module.exports._private = {
   summarizeCommandOutput,
   parseOllamaPullProgressEvent,
   parseCliPullProgressLine,
-  buildAvailableModelVariantEntries
+  buildAvailableModelVariantEntries,
+  extractOllamaApiPayloadMessage,
+  isGenericHttpStatusMessage,
+  findRelevantOllamaDiagnosticLine
 };
