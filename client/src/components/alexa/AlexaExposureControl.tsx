@@ -153,19 +153,32 @@ export function AlexaExposureControl({
         </p>
       </div>
 
-      <div className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+      <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
         <div className="space-y-1">
           <Label htmlFor={`alexa-enabled-${entityType}-${entityId}`}>Expose in Alexa</Label>
           <p className="text-xs text-muted-foreground">
-            Disable this to hide the entity from discovery without deleting the configuration.
+            Enable discovery for this entity, or disable it without deleting the saved Alexa naming.
           </p>
         </div>
-        <Switch
-          id={`alexa-enabled-${entityType}-${entityId}`}
-          checked={enabled}
-          onCheckedChange={setEnabled}
-          disabled={controlsDisabled}
-        />
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant={enabled ? "default" : "outline"}
+            className={cn(enabled && "bg-cyan-600 text-white hover:bg-cyan-700")}
+            onClick={() => setEnabled(true)}
+            disabled={controlsDisabled}
+          >
+            Enable in Alexa
+          </Button>
+          <Button
+            type="button"
+            variant={!enabled ? "secondary" : "outline"}
+            onClick={() => setEnabled(false)}
+            disabled={controlsDisabled}
+          >
+            Keep Hidden
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-2">
