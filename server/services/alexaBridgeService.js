@@ -604,6 +604,13 @@ class AlexaBridgeService {
       }
     });
 
+    const persistedRegistration = await this.ensureRegistration();
+    if (persistedRegistration.brokerBaseUrl !== brokerBaseUrl) {
+      persistedRegistration.brokerBaseUrl = brokerBaseUrl;
+      persistedRegistration.lastSeenAt = new Date();
+      await persistedRegistration.save();
+    }
+
     await this.appendActivity(await this.ensureRegistration(), {
       direction: 'outbound',
       type: 'broker_pair_requested',
