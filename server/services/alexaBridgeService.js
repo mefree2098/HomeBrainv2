@@ -39,6 +39,14 @@ function generateReadableLinkCode() {
   return `HBAX-${randomCodeSegment()}-${randomCodeSegment()}-${randomCodeSegment()}`;
 }
 
+function normalizeLinkCode(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[−–—]/g, '-')
+    .replace(/[^a-z0-9]/gi, '')
+    .toUpperCase();
+}
+
 function pruneLinkCodes(codes = []) {
   const now = Date.now();
   return (Array.isArray(codes) ? codes : [])
@@ -51,7 +59,7 @@ function pruneLinkCodes(codes = []) {
 
 function consumePendingLinkCode(codes = [], providedCode) {
   const pendingCodes = pruneLinkCodes(codes);
-  const normalizedCodeHash = sha256(String(providedCode || '').trim());
+  const normalizedCodeHash = sha256(normalizeLinkCode(providedCode));
   const matchingCode = pendingCodes.find((entry) => secureEqual(entry.codeHash, normalizedCodeHash));
 
   return {
@@ -483,7 +491,7 @@ class AlexaBridgeService {
     registration.pendingLinkCodes = pruneLinkCodes([
       ...(Array.isArray(registration.pendingLinkCodes) ? registration.pendingLinkCodes : []),
       {
-        codeHash: sha256(code),
+        codeHash: sha256(normalizeLinkCode(code)),
         codePreview: code.slice(-4),
         mode: mode === 'public' ? 'public' : 'private',
         createdBy: actor,
