@@ -215,6 +215,20 @@ function buildAuthorizeErrorRedirect(redirectUri, error, description, state) {
   return target.toString();
 }
 
+function getDefaultHubReference(resolvedHub = null, explicitRef = '') {
+  const requestedRef = trimString(explicitRef);
+  if (requestedRef) {
+    return requestedRef;
+  }
+
+  const publicOrigin = trimString(resolvedHub?.registration?.publicOrigin);
+  if (publicOrigin) {
+    return publicOrigin;
+  }
+
+  return trimString(resolvedHub?.hubId);
+}
+
 function safeOrigin(value) {
   try {
     return sanitizeBaseUrl(value);
@@ -425,6 +439,7 @@ async function requireAlexaAuth(store, req, options = {}) {
 }
 
 function renderAuthorizePage({ oauth = {}, error = '', brokerDisplayName = getBrokerDisplayName(), resolvedHub = null }) {
+  const defaultHubReference = getDefaultHubReference(resolvedHub, oauth.hubRef);
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -455,7 +470,7 @@ function renderAuthorizePage({ oauth = {}, error = '', brokerDisplayName = getBr
         <input type="hidden" name="scope" value="${htmlEscape(oauth.scope)}" />
         <input type="hidden" name="state" value="${htmlEscape(oauth.state)}" />
         <label for="hubRef">HomeBrain Hub ID or Public Origin</label>
-        <input id="hubRef" name="hubRef" value="${htmlEscape(oauth.hubRef || resolvedHub?.hubId || resolvedHub?.registration?.publicOrigin || '')}" placeholder="hub-123 or https://home.example.com" required />
+        <input id="hubRef" name="hubRef" value="${htmlEscape(defaultHubReference)}" placeholder="hub-123 or https://home.example.com" />
         <label for="linkCode">Alexa Pairing Code</label>
         <input id="linkCode" name="linkCode" autocomplete="one-time-code" placeholder="HBAX-XXXX-XXXX-XXXX" required />
         <label for="locale">Locale</label>
@@ -758,10 +773,11 @@ function createApp(options = {}) {
           scope: trimString(req.query.scope) || 'smart_home',
           state,
           locale: trimString(req.query.locale) || 'en-US',
-          hubRef: requestedHubRef || resolvedHub?.hubId || ''
+          hubRef: getDefaultHubReference(resolvedHub, requestedHubRef)
         }
       }));
     } catch (error) {
+      console.warn(`[broker] Alexa authorize request rejected: ${error.message}`);
       if (safeRedirectUri) {
         return res.redirect(buildAuthorizeErrorRedirect(safeRedirectUri, 'invalid_request', error.message, state));
       }
@@ -855,6 +871,7 @@ function createApp(options = {}) {
       }
       return res.redirect(target.toString());
     } catch (error) {
+      console.warn(`[broker] Alexa authorize form submit failed: ${error.message}`);
       if (safeRedirectUri) {
         return res.redirect(buildAuthorizeErrorRedirect(safeRedirectUri, 'access_denied', error.message, state));
       }
@@ -920,6 +937,7 @@ function createApp(options = {}) {
         error_description: `Unsupported grant_type ${grantType || '(empty)'}`
       });
     } catch (error) {
+      console.warn(`[broker] Alexa token exchange failed: ${error.message}`);
       return res.status(400).json({
         error: 'invalid_grant',
         error_description: error.message
