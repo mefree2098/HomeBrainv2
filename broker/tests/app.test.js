@@ -450,6 +450,96 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   assert.equal(persistedHub.registration.linkAccountUrl, `${hub.baseUrl}/api/alexa/broker/link-account`);
 });
 
+test('authorize page prefers the paired public origin over the hub id when pre-filling hubRef', async (t) => {
+  const relayToken = 'relay-prefill-secret';
+
+  const hubServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+
+    const body = chunks.length > 0
+      ? JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      : {};
+
+    if (req.url === '/api/alexa/broker/register' && req.method === 'POST') {
+      assert.equal(body.linkCode, 'HBAX-REGISTER');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        hubId: 'hub-prefill',
+        relayToken,
+        mode: 'private',
+        publicOrigin: 'https://hub.example.com',
+        endpoints: {
+          health: '/api/alexa/broker/health',
+          catalog: '/api/alexa/broker/catalog',
+          execute: '/api/alexa/broker/execute',
+          state: '/api/alexa/broker/state',
+          accounts: '/api/alexa/broker/accounts',
+          linkAccount: '/api/alexa/broker/link-account'
+        }
+      }));
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false,
+      error: `Unhandled hub route ${req.method} ${req.url}`
+    }));
+  });
+
+  const brokerStoreFile = path.join(os.tmpdir(), `homebrain-broker-prefill-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  const brokerStore = new BrokerStore({ filePath: brokerStoreFile });
+  const previousAllowedRedirectUris = process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS;
+  const previousAllowedClientIds = process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS;
+  process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS = 'http://127.0.0.1/callback';
+  process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS = 'homebrain-alexa-skill';
+
+  const brokerServer = http.createServer(createApp({
+    store: brokerStore,
+    startDispatcher: false,
+    autoKickDispatcher: false
+  }));
+
+  const hub = await listen(hubServer);
+  const broker = await listen(brokerServer);
+
+  t.after(async () => {
+    process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS = previousAllowedRedirectUris;
+    process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS = previousAllowedClientIds;
+    await Promise.all([
+      close(broker.server),
+      close(hub.server)
+    ]);
+    await fs.rm(brokerStoreFile, { force: true });
+  });
+
+  const registerResponse = await fetch(`${broker.baseUrl}/api/alexa/hubs/register`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      hubBaseUrl: hub.baseUrl,
+      linkCode: 'HBAX-REGISTER',
+      brokerClientId: 'homebrain-alexa-skill'
+    })
+  });
+
+  assert.equal(registerResponse.status, 200);
+
+  const authorizeResponse = await fetch(`${broker.baseUrl}/api/oauth/alexa/authorize?response_type=code&client_id=homebrain-alexa-skill&redirect_uri=${encodeURIComponent('http://127.0.0.1/callback')}&scope=smart_home&state=state-123`, {
+    method: 'GET'
+  });
+
+  assert.equal(authorizeResponse.status, 200);
+  const page = await authorizeResponse.text();
+  assert.match(page, /value="https:\/\/hub\.example\.com"/);
+});
+
 test('broker custom dispatch resolves the linked hub and relays Alexa custom skill requests', async (t) => {
   const relayToken = 'relay-custom-secret';
   const hubCalls = [];
