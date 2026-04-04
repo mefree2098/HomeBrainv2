@@ -1289,6 +1289,29 @@ export function DeviceDetailsDialog({
                       </CardContent>
                     </Card>
 
+                    {isAdmin && onAlexaExposureUpdated ? (
+                      <Card className="border-cyan-400/15 bg-cyan-500/[0.06]">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Alexa exposure</CardTitle>
+                          <CardDescription>
+                            Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <AlexaExposureControl
+                            entityType="device"
+                            entityId={device._id}
+                            entityName={device.name}
+                            exposure={alexaExposure}
+                            loading={alexaExposureLoading}
+                            defaultRoomHint={device.room}
+                            compact={false}
+                            onSave={onAlexaExposureUpdated}
+                          />
+                        </CardContent>
+                      </Card>
+                    ) : null}
+
                     <Card className="border-white/10 bg-black/20">
                       <CardHeader className="pb-4">
                         <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Workflow groups</CardTitle>
@@ -1369,29 +1392,6 @@ export function DeviceDetailsDialog({
                         </div>
                       </CardContent>
                     </Card>
-
-                    {isAdmin && onAlexaExposureUpdated ? (
-                      <Card className="border-white/10 bg-black/20">
-                        <CardHeader className="pb-4">
-                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Alexa exposure</CardTitle>
-                          <CardDescription>
-                            Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <AlexaExposureControl
-                            entityType="device"
-                            entityId={device._id}
-                            entityName={device.name}
-                            exposure={alexaExposure}
-                            loading={alexaExposureLoading}
-                            defaultRoomHint={device.room}
-                            compact={false}
-                            onSave={onAlexaExposureUpdated}
-                          />
-                        </CardContent>
-                      </Card>
-                    ) : null}
                   </div>
                 </div>
               </TabsContent>
