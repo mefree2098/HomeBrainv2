@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
+const axios = require('axios');
 
 const ReverseProxyRoute = require('../models/ReverseProxyRoute');
 const ReverseProxySettings = require('../models/ReverseProxySettings');
@@ -382,4 +383,74 @@ test('getCertificationReadiness summarizes public-release blockers and passes', 
   assert.equal(readiness.reverseProxy.hostname, 'hub.example.com');
   assert.equal(readiness.certificate.status, 'issued');
   assert.ok(readiness.checks.some((entry) => entry.key === 'tls_certificate' && entry.status === 'pass'));
+});
+
+test('pairWithBroker preserves the requested broker control URL after registration', async (t) => {
+  const bridge = new AlexaBridgeService();
+  const originalGetSummary = bridge.getSummary.bind(bridge);
+  const registration = {
+    hubId: 'hub-local-pair',
+    status: 'paired',
+    mode: 'public',
+    brokerBaseUrl: 'https://alexa-broker.example.com',
+    brokerClientId: 'homebrain-alexa-skill',
+    brokerDisplayName: 'HomeBrain Alexa Broker',
+    relayToken: 'relay-token',
+    relayTokenHash: 'relay-token-hash',
+    publicOrigin: 'https://hub.example.com',
+    pendingLinkCodes: [],
+    recentActivity: [],
+    lastSeenAt: null,
+    async save() {
+      return this;
+    }
+  };
+
+  const originalEnsureBrokerRegistration = alexaProjectionService.ensureBrokerRegistration;
+  const previousOrigin = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+  const previousAxiosPost = axios.post;
+
+  alexaProjectionService.ensureBrokerRegistration = async () => registration;
+  bridge.getSummary = async () => ({
+    hubId: registration.hubId,
+    brokerBaseUrl: registration.brokerBaseUrl,
+    status: registration.status,
+    mode: registration.mode
+  });
+  process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://hub.example.com';
+  axios.post = async (url, body) => {
+    assert.equal(url, 'http://127.0.0.1:4301/api/alexa/hubs/register');
+    assert.equal(body.hubBaseUrl, 'https://hub.example.com');
+    assert.equal(body.linkCode, 'HBAX-LOCAL-PAIR');
+
+    // Simulate the broker callback path having already overwritten the stored
+    // broker URL with its public origin before pairWithBroker resumes locally.
+    registration.brokerBaseUrl = 'https://alexa-broker.example.com';
+
+    return {
+      data: {
+        success: true,
+        hub: {
+          hubId: registration.hubId
+        }
+      }
+    };
+  };
+
+  t.after(() => {
+    alexaProjectionService.ensureBrokerRegistration = originalEnsureBrokerRegistration;
+    bridge.getSummary = originalGetSummary;
+    process.env.HOMEBRAIN_PUBLIC_BASE_URL = previousOrigin;
+    axios.post = previousAxiosPost;
+  });
+
+  const result = await bridge.pairWithBroker({
+    brokerBaseUrl: 'http://127.0.0.1:4301',
+    linkCode: 'HBAX-LOCAL-PAIR',
+    mode: 'public',
+    brokerClientId: 'homebrain-alexa-skill'
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(registration.brokerBaseUrl, 'http://127.0.0.1:4301');
 });
