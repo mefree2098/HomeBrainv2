@@ -1040,8 +1040,14 @@ export function DeviceDetailsDialog({
             </div>
 
             <div className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-7">
-              <TabsList className="grid w-full grid-cols-2 sm:inline-flex sm:w-auto">
+              <TabsList className={cn(
+                "grid w-full sm:inline-flex sm:w-auto",
+                isAdmin && onAlexaExposureUpdated ? "grid-cols-3" : "grid-cols-2"
+              )}>
                 <TabsTrigger value="overview" className="w-full sm:w-auto">Overview</TabsTrigger>
+                {isAdmin && onAlexaExposureUpdated ? (
+                  <TabsTrigger value="alexa" className="w-full sm:w-auto">Alexa</TabsTrigger>
+                ) : null}
                 <TabsTrigger value="history" className="w-full sm:w-auto">History</TabsTrigger>
               </TabsList>
             </div>
@@ -1289,29 +1295,6 @@ export function DeviceDetailsDialog({
                       </CardContent>
                     </Card>
 
-                    {isAdmin && onAlexaExposureUpdated ? (
-                      <Card className="border-cyan-400/15 bg-cyan-500/[0.06]">
-                        <CardHeader className="pb-4">
-                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Alexa exposure</CardTitle>
-                          <CardDescription>
-                            Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          <AlexaExposureControl
-                            entityType="device"
-                            entityId={device._id}
-                            entityName={device.name}
-                            exposure={alexaExposure}
-                            loading={alexaExposureLoading}
-                            defaultRoomHint={device.room}
-                            compact={false}
-                            onSave={onAlexaExposureUpdated}
-                          />
-                        </CardContent>
-                      </Card>
-                    ) : null}
-
                     <Card className="border-white/10 bg-black/20">
                       <CardHeader className="pb-4">
                         <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Workflow groups</CardTitle>
@@ -1395,6 +1378,61 @@ export function DeviceDetailsDialog({
                   </div>
                 </div>
               </TabsContent>
+
+              {isAdmin && onAlexaExposureUpdated ? (
+                <TabsContent value="alexa" className="mt-0 space-y-5">
+                  <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(300px,0.85fr)]">
+                    <Card className="border-cyan-400/15 bg-cyan-500/[0.06]">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="font-body text-[1.2rem] tracking-[-0.05em] text-white">Alexa exposure</CardTitle>
+                        <CardDescription>
+                          Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <AlexaExposureControl
+                          entityType="device"
+                          entityId={device._id}
+                          entityName={device.name}
+                          exposure={alexaExposure}
+                          loading={alexaExposureLoading}
+                          defaultRoomHint={device.room}
+                          compact={false}
+                          onSave={onAlexaExposureUpdated}
+                        />
+                      </CardContent>
+                    </Card>
+
+                    <div className="space-y-5">
+                      <Card className="border-white/10 bg-black/20">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Discovery notes</CardTitle>
+                          <CardDescription>
+                            Keep Alexa names short, distinct, and easy to say out loud.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3 text-sm text-muted-foreground">
+                          <p>Use a simple friendly name such as <span className="font-medium text-white">Master Bedroom TV</span> instead of the full HomeBrain device label.</p>
+                          <p>Add aliases people naturally say, and use the room hint to help Alexa disambiguate duplicate names.</p>
+                          <p>After saving, run discovery again from the Alexa broker page if Alexa does not pick the change up immediately.</p>
+                        </CardContent>
+                      </Card>
+
+                      <Card className="border-white/10 bg-black/20">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Current device context</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-0">
+                          <DeviceDetailRow label="Current state" value={primaryStateLabel} />
+                          <DeviceDetailRow label="Room" value={device.room || "Unassigned"} />
+                          <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
+                          <DeviceDetailRow label="Groups" value={groupSummary} />
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </div>
+                </TabsContent>
+              ) : null}
 
               <TabsContent value="history" className="mt-0 space-y-5">
                 <Card className="border-white/10 bg-black/20">

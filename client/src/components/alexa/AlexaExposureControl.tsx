@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Command, Loader2, RadioTower } from "lucide-react";
 import { type AlexaExposureEntityType, type AlexaExposureSummary } from "@/api/alexa";
 import { Badge } from "@/components/ui/badge";
@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Switch } from "@/components/ui/switch";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
 
@@ -55,15 +55,25 @@ const normalizeAliasList = (value: string | string[]) => {
 
 const buildInitialState = (
   exposure: AlexaExposureSummary | null | undefined,
-  entityName: string,
   defaultRoomHint = "",
   defaultAliases: string[] = []
 ) => ({
   enabled: exposure?.enabled === true,
   friendlyName: exposure?.friendlyName || "",
   aliasesInput: normalizeAliasList(exposure?.aliases || defaultAliases).join(", "),
-  roomHint: exposure?.roomHint || defaultRoomHint || "",
-  fallbackName: entityName
+  roomHint: exposure?.roomHint || defaultRoomHint || ""
+});
+
+const serializeExposureState = (state: {
+  enabled: boolean;
+  friendlyName: string;
+  aliasesInput: string;
+  roomHint: string;
+}) => JSON.stringify({
+  enabled: state.enabled,
+  friendlyName: normalizeName(state.friendlyName),
+  aliases: normalizeAliasList(state.aliasesInput),
+  roomHint: normalizeName(state.roomHint)
 });
 
 export function AlexaExposureControl({
@@ -81,42 +91,59 @@ export function AlexaExposureControl({
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [enabled, setEnabled] = useState(false);
-  const [friendlyName, setFriendlyName] = useState("");
-  const [aliasesInput, setAliasesInput] = useState("");
-  const [roomHint, setRoomHint] = useState("");
+  const entityKey = `${entityType}:${entityId}`;
+  const initialState = useMemo(
+    () => buildInitialState(exposure, defaultRoomHint, defaultAliases),
+    [
+      defaultAliases,
+      defaultRoomHint,
+      exposure?.aliases,
+      exposure?.enabled,
+      exposure?.friendlyName,
+      exposure?.roomHint
+    ]
+  );
+  const [baseline, setBaseline] = useState(initialState);
+  const [draft, setDraft] = useState(initialState);
+  const lastEntityKeyRef = useRef(entityKey);
 
-  useEffect(() => {
-    const next = buildInitialState(exposure, entityName, defaultRoomHint, defaultAliases);
-    setEnabled(next.enabled);
-    setFriendlyName(next.friendlyName);
-    setAliasesInput(next.aliasesInput);
-    setRoomHint(next.roomHint);
-  }, [defaultAliases, defaultRoomHint, entityName, exposure?.aliases, exposure?.enabled, exposure?.friendlyName, exposure?.roomHint, entityId, entityType]);
-
-  const aliases = useMemo(() => normalizeAliasList(aliasesInput), [aliasesInput]);
+  const aliases = useMemo(() => normalizeAliasList(draft.aliasesInput), [draft.aliasesInput]);
   const issueCount = (exposure?.validationErrors?.length || 0) + (exposure?.validationWarnings?.length || 0);
   const hasErrors = (exposure?.validationErrors?.length || 0) > 0;
-  const effectiveName = friendlyName.trim() || entityName;
-  const dirty = useMemo(() => {
-    const initial = buildInitialState(exposure, entityName, defaultRoomHint, defaultAliases);
-    return (
-      enabled !== initial.enabled
-      || normalizeName(friendlyName) !== normalizeName(initial.friendlyName)
-      || JSON.stringify(aliases) !== JSON.stringify(normalizeAliasList(initial.aliasesInput))
-      || normalizeName(roomHint) !== normalizeName(initial.roomHint)
-    );
-  }, [aliases, defaultAliases, defaultRoomHint, enabled, entityName, exposure, friendlyName, roomHint]);
+  const effectiveName = draft.friendlyName.trim() || entityName;
+  const dirty = useMemo(
+    () => serializeExposureState(draft) !== serializeExposureState(baseline),
+    [baseline, draft]
+  );
+
+  useEffect(() => {
+    const entityChanged = lastEntityKeyRef.current !== entityKey;
+    lastEntityKeyRef.current = entityKey;
+
+    if (entityChanged || !dirty) {
+      setBaseline(initialState);
+      setDraft(initialState);
+    }
+  }, [dirty, entityKey, initialState]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
+      const nextBaseline = {
+        enabled: draft.enabled,
+        friendlyName: normalizeName(draft.friendlyName),
+        aliasesInput: aliases.join(", "),
+        roomHint: normalizeName(draft.roomHint)
+      };
+
       await onSave({
-        enabled,
-        friendlyName: normalizeName(friendlyName),
+        enabled: nextBaseline.enabled,
+        friendlyName: nextBaseline.friendlyName,
         aliases,
-        roomHint: normalizeName(roomHint)
+        roomHint: nextBaseline.roomHint
       });
+      setBaseline(nextBaseline);
+      setDraft(nextBaseline);
       setOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to save Alexa settings.";
@@ -132,7 +159,7 @@ export function AlexaExposureControl({
 
   const triggerLabel = loading
     ? "Alexa"
-    : enabled
+    : draft.enabled
       ? "Alexa On"
       : "Alexa Off";
 
@@ -160,33 +187,55 @@ export function AlexaExposureControl({
             Enable discovery for this entity, or disable it without deleting the saved Alexa naming.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant={enabled ? "default" : "outline"}
-            className={cn(enabled && "bg-cyan-600 text-white hover:bg-cyan-700")}
-            onClick={() => setEnabled(true)}
-            disabled={controlsDisabled}
+        <RadioGroup
+          value={draft.enabled ? "enabled" : "hidden"}
+          onValueChange={(value) => setDraft((current) => ({ ...current, enabled: value === "enabled" }))}
+          className="gap-2"
+          disabled={controlsDisabled}
+        >
+          <label
+            htmlFor={`alexa-enabled-${entityType}-${entityId}`}
+            className={cn(
+              "flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-3 py-3 transition-colors",
+              draft.enabled && "border-cyan-400/40 bg-cyan-500/[0.08]"
+            )}
           >
-            Enable in Alexa
-          </Button>
-          <Button
-            type="button"
-            variant={!enabled ? "secondary" : "outline"}
-            onClick={() => setEnabled(false)}
-            disabled={controlsDisabled}
+            <RadioGroupItem
+              id={`alexa-enabled-${entityType}-${entityId}`}
+              value="enabled"
+              className="mt-0.5 border-cyan-300 text-cyan-300"
+            />
+            <div>
+              <div className="font-medium text-white">Enable in Alexa</div>
+              <p className="mt-1 text-xs text-muted-foreground">Show this device during Alexa discovery.</p>
+            </div>
+          </label>
+          <label
+            htmlFor={`alexa-hidden-${entityType}-${entityId}`}
+            className={cn(
+              "flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-3 py-3 transition-colors",
+              !draft.enabled && "border-white/20 bg-white/[0.06]"
+            )}
           >
-            Keep Hidden
-          </Button>
-        </div>
+            <RadioGroupItem
+              id={`alexa-hidden-${entityType}-${entityId}`}
+              value="hidden"
+              className="mt-0.5"
+            />
+            <div>
+              <div className="font-medium text-white">Keep hidden</div>
+              <p className="mt-1 text-xs text-muted-foreground">Preserve naming here without exposing it to Alexa.</p>
+            </div>
+          </label>
+        </RadioGroup>
       </div>
 
       <div className="space-y-2">
         <Label htmlFor={`alexa-name-${entityType}-${entityId}`}>Friendly name</Label>
         <Input
           id={`alexa-name-${entityType}-${entityId}`}
-          value={friendlyName}
-          onChange={(event) => setFriendlyName(event.target.value)}
+          value={draft.friendlyName}
+          onChange={(event) => setDraft((current) => ({ ...current, friendlyName: event.target.value }))}
           placeholder={entityName}
           disabled={controlsDisabled}
         />
@@ -199,8 +248,8 @@ export function AlexaExposureControl({
         <Label htmlFor={`alexa-aliases-${entityType}-${entityId}`}>Aliases</Label>
         <Input
           id={`alexa-aliases-${entityType}-${entityId}`}
-          value={aliasesInput}
-          onChange={(event) => setAliasesInput(event.target.value)}
+          value={draft.aliasesInput}
+          onChange={(event) => setDraft((current) => ({ ...current, aliasesInput: event.target.value }))}
           placeholder="Movie lights, lounge lights"
           disabled={controlsDisabled}
         />
@@ -213,8 +262,8 @@ export function AlexaExposureControl({
         <Label htmlFor={`alexa-room-${entityType}-${entityId}`}>Room hint</Label>
         <Input
           id={`alexa-room-${entityType}-${entityId}`}
-          value={roomHint}
-          onChange={(event) => setRoomHint(event.target.value)}
+          value={draft.roomHint}
+          onChange={(event) => setDraft((current) => ({ ...current, roomHint: event.target.value }))}
           placeholder={defaultRoomHint || "Living Room"}
           disabled={controlsDisabled}
         />
@@ -296,12 +345,12 @@ export function AlexaExposureControl({
       <PopoverTrigger asChild>
         <Button
           type="button"
-          variant={enabled ? "default" : "outline"}
+          variant={draft.enabled ? "default" : "outline"}
           size={compact ? "sm" : "default"}
           disabled={disabled || loading}
           className={cn(
             "gap-2",
-            enabled && "bg-cyan-600 hover:bg-cyan-700 text-white",
+            draft.enabled && "bg-cyan-600 hover:bg-cyan-700 text-white",
             hasErrors && "border-amber-300 text-amber-700 hover:text-amber-800 dark:border-amber-500/40 dark:text-amber-200"
           )}
         >
