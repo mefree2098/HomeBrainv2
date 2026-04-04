@@ -136,6 +136,148 @@ export function AlexaExposureControl({
       ? "Alexa On"
       : "Alexa Off";
 
+  const controlsDisabled = disabled || loading || saving;
+
+  const editorContent = (
+    <>
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <RadioTower className="h-4 w-4 text-cyan-600" />
+          <div className="text-sm font-semibold">Alexa Exposure</div>
+          <Badge variant="outline" className="ml-auto">
+            {entityType.replace("_", " ")}
+          </Badge>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Configure how <span className="font-medium text-foreground">{entityName}</span> appears to Alexa.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+        <div className="space-y-1">
+          <Label htmlFor={`alexa-enabled-${entityType}-${entityId}`}>Expose in Alexa</Label>
+          <p className="text-xs text-muted-foreground">
+            Disable this to hide the entity from discovery without deleting the configuration.
+          </p>
+        </div>
+        <Switch
+          id={`alexa-enabled-${entityType}-${entityId}`}
+          checked={enabled}
+          onCheckedChange={setEnabled}
+          disabled={controlsDisabled}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor={`alexa-name-${entityType}-${entityId}`}>Friendly name</Label>
+        <Input
+          id={`alexa-name-${entityType}-${entityId}`}
+          value={friendlyName}
+          onChange={(event) => setFriendlyName(event.target.value)}
+          placeholder={entityName}
+          disabled={controlsDisabled}
+        />
+        <p className="text-xs text-muted-foreground">
+          Alexa will hear this as <span className="font-medium text-foreground">{effectiveName}</span>.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor={`alexa-aliases-${entityType}-${entityId}`}>Aliases</Label>
+        <Input
+          id={`alexa-aliases-${entityType}-${entityId}`}
+          value={aliasesInput}
+          onChange={(event) => setAliasesInput(event.target.value)}
+          placeholder="Movie lights, lounge lights"
+          disabled={controlsDisabled}
+        />
+        <p className="text-xs text-muted-foreground">
+          Comma-separated alternate names. Duplicate names are removed automatically.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor={`alexa-room-${entityType}-${entityId}`}>Room hint</Label>
+        <Input
+          id={`alexa-room-${entityType}-${entityId}`}
+          value={roomHint}
+          onChange={(event) => setRoomHint(event.target.value)}
+          placeholder={defaultRoomHint || "Living Room"}
+          disabled={controlsDisabled}
+        />
+      </div>
+
+      {exposure?.endpointId ? (
+        <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Endpoint ID</div>
+          <div className="mt-1 break-all font-mono text-xs">{exposure.endpointId}</div>
+        </div>
+      ) : null}
+
+      {(exposure?.validationErrors?.length || 0) > 0 ? (
+        <div className="space-y-2 rounded-lg border border-amber-300/80 bg-amber-50/80 p-3 dark:border-amber-500/30 dark:bg-amber-500/10">
+          <div className="flex items-center gap-2 text-sm font-medium text-amber-800 dark:text-amber-100">
+            <AlertCircle className="h-4 w-4" />
+            Validation errors
+          </div>
+          <div className="space-y-1 text-xs text-amber-800/90 dark:text-amber-100/90">
+            {(exposure?.validationErrors || []).map((message) => (
+              <p key={message}>{message}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {(exposure?.validationWarnings?.length || 0) > 0 ? (
+        <div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3">
+          <div className="text-sm font-medium">Warnings</div>
+          <div className="space-y-1 text-xs text-muted-foreground">
+            {(exposure?.validationWarnings || []).map((message) => (
+              <p key={message}>{message}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex justify-end">
+        <Button type="button" onClick={() => void handleSave()} disabled={controlsDisabled || !dirty}>
+          {saving ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Saving
+            </>
+          ) : "Save Alexa Settings"}
+        </Button>
+      </div>
+    </>
+  );
+
+  if (!compact) {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={enabled ? "default" : "outline"} className={cn(enabled && "bg-cyan-600 text-white hover:bg-cyan-700")}>
+            {triggerLabel}
+          </Badge>
+          {loading ? (
+            <Badge variant="secondary">
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              Loading
+            </Badge>
+          ) : null}
+          {issueCount > 0 ? (
+            <Badge variant={hasErrors ? "destructive" : "secondary"}>
+              {issueCount} issue{issueCount === 1 ? "" : "s"}
+            </Badge>
+          ) : null}
+        </div>
+        <div className="space-y-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+          {editorContent}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -165,112 +307,8 @@ export function AlexaExposureControl({
           ) : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" portalled={false} className="w-[360px] space-y-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <RadioTower className="h-4 w-4 text-cyan-600" />
-            <div className="text-sm font-semibold">Alexa Exposure</div>
-            <Badge variant="outline" className="ml-auto">
-              {entityType.replace("_", " ")}
-            </Badge>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Configure how <span className="font-medium text-foreground">{entityName}</span> appears to Alexa.
-          </p>
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-          <div className="space-y-1">
-            <Label htmlFor={`alexa-enabled-${entityType}-${entityId}`}>Expose in Alexa</Label>
-            <p className="text-xs text-muted-foreground">
-              Disable this to hide the entity from discovery without deleting the configuration.
-            </p>
-          </div>
-          <Switch
-            id={`alexa-enabled-${entityType}-${entityId}`}
-            checked={enabled}
-            onCheckedChange={setEnabled}
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor={`alexa-name-${entityType}-${entityId}`}>Friendly name</Label>
-          <Input
-            id={`alexa-name-${entityType}-${entityId}`}
-            value={friendlyName}
-            onChange={(event) => setFriendlyName(event.target.value)}
-            placeholder={entityName}
-          />
-          <p className="text-xs text-muted-foreground">
-            Alexa will hear this as <span className="font-medium text-foreground">{effectiveName}</span>.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor={`alexa-aliases-${entityType}-${entityId}`}>Aliases</Label>
-          <Input
-            id={`alexa-aliases-${entityType}-${entityId}`}
-            value={aliasesInput}
-            onChange={(event) => setAliasesInput(event.target.value)}
-            placeholder="Movie lights, lounge lights"
-          />
-          <p className="text-xs text-muted-foreground">
-            Comma-separated alternate names. Duplicate names are removed automatically.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor={`alexa-room-${entityType}-${entityId}`}>Room hint</Label>
-          <Input
-            id={`alexa-room-${entityType}-${entityId}`}
-            value={roomHint}
-            onChange={(event) => setRoomHint(event.target.value)}
-            placeholder={defaultRoomHint || "Living Room"}
-          />
-        </div>
-
-        {exposure?.endpointId ? (
-          <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-            <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Endpoint ID</div>
-            <div className="mt-1 break-all font-mono text-xs">{exposure.endpointId}</div>
-          </div>
-        ) : null}
-
-        {(exposure?.validationErrors?.length || 0) > 0 ? (
-          <div className="space-y-2 rounded-lg border border-amber-300/80 bg-amber-50/80 p-3 dark:border-amber-500/30 dark:bg-amber-500/10">
-            <div className="flex items-center gap-2 text-sm font-medium text-amber-800 dark:text-amber-100">
-              <AlertCircle className="h-4 w-4" />
-              Validation errors
-            </div>
-            <div className="space-y-1 text-xs text-amber-800/90 dark:text-amber-100/90">
-              {(exposure?.validationErrors || []).map((message) => (
-                <p key={message}>{message}</p>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {(exposure?.validationWarnings?.length || 0) > 0 ? (
-          <div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3">
-            <div className="text-sm font-medium">Warnings</div>
-            <div className="space-y-1 text-xs text-muted-foreground">
-              {(exposure?.validationWarnings || []).map((message) => (
-                <p key={message}>{message}</p>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="flex justify-end">
-          <Button type="button" onClick={() => void handleSave()} disabled={saving || !dirty}>
-            {saving ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Saving
-              </>
-            ) : "Save Alexa Settings"}
-          </Button>
-        </div>
+      <PopoverContent align="start" className="w-[360px] space-y-4">
+        {editorContent}
       </PopoverContent>
     </Popover>
   );
