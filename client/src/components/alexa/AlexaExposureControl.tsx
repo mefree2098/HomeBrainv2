@@ -28,6 +28,8 @@ type Props = {
   }) => Promise<AlexaExposureSummary | null | undefined>;
 };
 
+const EMPTY_ALIASES: string[] = [];
+
 const normalizeName = (value: string) => value.trim().replace(/\s+/g, " ");
 
 const normalizeAliasList = (value: string | string[]) => {
@@ -82,7 +84,7 @@ export function AlexaExposureControl({
   entityName,
   exposure,
   defaultRoomHint = "",
-  defaultAliases = [],
+  defaultAliases = EMPTY_ALIASES,
   compact = false,
   loading = false,
   disabled = false,
@@ -103,6 +105,10 @@ export function AlexaExposureControl({
       exposure?.roomHint
     ]
   );
+  const initialStateSignature = useMemo(
+    () => serializeExposureState(initialState),
+    [initialState]
+  );
   const [baseline, setBaseline] = useState(initialState);
   const [draft, setDraft] = useState(initialState);
   const lastEntityKeyRef = useRef(entityKey);
@@ -119,12 +125,13 @@ export function AlexaExposureControl({
   useEffect(() => {
     const entityChanged = lastEntityKeyRef.current !== entityKey;
     lastEntityKeyRef.current = entityKey;
+    const baselineChanged = serializeExposureState(baseline) !== initialStateSignature;
 
-    if (entityChanged || !dirty) {
+    if (entityChanged || (!dirty && baselineChanged)) {
       setBaseline(initialState);
       setDraft(initialState);
     }
-  }, [dirty, entityKey, initialState]);
+  }, [baseline, dirty, entityKey, initialState, initialStateSignature]);
 
   const handleSave = async () => {
     setSaving(true);
