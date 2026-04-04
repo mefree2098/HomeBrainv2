@@ -148,3 +148,61 @@ test('deployService starts the broker before applying the managed reverse proxy 
 
   assert.deepEqual(calls, ['start', 'route']);
 });
+
+test('getStatus clears stale lastError once the broker is healthy again', async () => {
+  const config = {
+    isInstalled: true,
+    serviceStatus: 'error',
+    servicePid: 1234,
+    serviceOwner: 'matt',
+    servicePort: 4301,
+    bindHost: '127.0.0.1',
+    lastError: {
+      message: 'Old failure',
+      timestamp: new Date('2026-04-04T18:00:00.000Z')
+    },
+    saveCalls: 0,
+    async save() {
+      this.saveCalls += 1;
+    },
+    toSanitized() {
+      return {
+        isInstalled: this.isInstalled,
+        serviceStatus: this.serviceStatus,
+        servicePid: this.servicePid,
+        serviceOwner: this.serviceOwner,
+        servicePort: this.servicePort,
+        bindHost: this.bindHost,
+        lastError: this.lastError
+      };
+    }
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test',
+    configModel: {
+      getConfig: async () => config
+    }
+  });
+
+  service.getConfig = async () => config;
+  service.probeHealth = async () => ({
+    available: true,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    health: { ok: true },
+    message: ''
+  });
+  service.findManagedReverseProxyRoute = async () => null;
+  service.child = {
+    pid: 4321,
+    exitCode: null,
+    killed: false
+  };
+
+  const status = await service.getStatus();
+
+  assert.equal(status.serviceStatus, 'running');
+  assert.equal(status.lastError, null);
+  assert.equal(config.lastError, null);
+  assert.ok(config.saveCalls >= 1);
+});

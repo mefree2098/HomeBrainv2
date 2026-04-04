@@ -803,6 +803,10 @@ class AlexaBrokerService {
     }
 
     if (this.isChildAlive()) {
+      if (config.lastError) {
+        config.lastError = null;
+        await config.save();
+      }
       return {
         success: true,
         message: 'Alexa broker is already running',
@@ -816,6 +820,7 @@ class AlexaBrokerService {
       config.servicePid = null;
       config.serviceOwner = null;
       config.resumeAfterHostRestart = false;
+      config.lastError = null;
       await config.save();
       return {
         success: true,
@@ -993,6 +998,11 @@ class AlexaBrokerService {
         config.servicePid = null;
         config.serviceOwner = null;
       }
+      await config.save();
+    }
+
+    if (serviceRunning && config.lastError) {
+      config.lastError = null;
       await config.save();
     }
 
