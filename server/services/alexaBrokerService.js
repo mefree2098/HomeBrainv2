@@ -773,14 +773,14 @@ class AlexaBrokerService {
       installResult = await this.install();
     }
 
+    const serviceResult = this.isChildAlive()
+      ? await this.restartService()
+      : await this.startService();
+
     const reverseProxyResult = await this.ensureManagedReverseProxyRoute({
       actor,
       applyConfig: true
     });
-
-    const serviceResult = this.isChildAlive()
-      ? await this.restartService()
-      : await this.startService();
 
     return {
       success: true,

@@ -113,3 +113,38 @@ test('prepareForHostRestart preserves managed broker runtime state across host r
   assert.equal(config.resumeAfterHostRestart, true);
   assert.ok(config.saveCalls >= 1);
 });
+
+test('deployService starts the broker before applying the managed reverse proxy route', async () => {
+  const calls = [];
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+
+  service.getConfig = async () => ({
+    isInstalled: true,
+    publicBaseUrl: 'https://alexa-broker.example.com',
+    bindHost: '127.0.0.1',
+    servicePort: 4301
+  });
+  service.install = async () => {
+    calls.push('install');
+    return { success: true };
+  };
+  service.isChildAlive = () => false;
+  service.startService = async () => {
+    calls.push('start');
+    return { status: { serviceStatus: 'running' } };
+  };
+  service.restartService = async () => {
+    calls.push('restart');
+    return { status: { serviceStatus: 'running' } };
+  };
+  service.ensureManagedReverseProxyRoute = async () => {
+    calls.push('route');
+    return { success: true };
+  };
+
+  await service.deployService({ actor: 'test', installDependencies: false });
+
+  assert.deepEqual(calls, ['start', 'route']);
+});
