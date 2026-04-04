@@ -938,7 +938,16 @@ class OllamaService {
       ? process.env.HOMEBRAIN_OLLAMA_KEEP_ALIVE.trim()
       : '';
 
-    return configured || DEFAULT_MANAGED_OLLAMA_KEEP_ALIVE;
+    const effectiveValue = configured || DEFAULT_MANAGED_OLLAMA_KEEP_ALIVE;
+    if (/^-?\d+$/.test(effectiveValue)) {
+      return Number.parseInt(effectiveValue, 10);
+    }
+
+    if (/^-?\d+\.\d+$/.test(effectiveValue)) {
+      return Number.parseFloat(effectiveValue);
+    }
+
+    return effectiveValue;
   }
 
   getManagedRequestTimeoutMs() {
