@@ -440,7 +440,7 @@ test('chat requests keep the shared model loaded after responding', async (t) =>
 
   await service.chat('gemma4:e2b', [{ role: 'user', content: 'Hi' }]);
 
-  assert.equal(requestBody.keep_alive, '-1');
+  assert.equal(requestBody.keep_alive, -1);
 });
 
 test('chat turns a generic 503 into an actionable Ollama diagnostic', async (t) => {

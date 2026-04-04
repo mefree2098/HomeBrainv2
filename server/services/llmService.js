@@ -415,10 +415,17 @@ function resolveLocalOllamaKeepAlive(requestConfig = {}) {
   if (requestConfig && Object.prototype.hasOwnProperty.call(requestConfig, 'ollamaKeepAlive')) {
     const value = requestConfig.ollamaKeepAlive;
     if (typeof value === 'number' && Number.isFinite(value)) {
-      return String(value);
+      return value;
     }
     if (typeof value === 'string' && value.trim()) {
-      return value.trim();
+      const trimmed = value.trim();
+      if (/^-?\d+$/.test(trimmed)) {
+        return Number.parseInt(trimmed, 10);
+      }
+      if (/^-?\d+\.\d+$/.test(trimmed)) {
+        return Number.parseFloat(trimmed);
+      }
+      return trimmed;
     }
   }
 
@@ -426,7 +433,14 @@ function resolveLocalOllamaKeepAlive(requestConfig = {}) {
     ? process.env.HOMEBRAIN_OLLAMA_KEEP_ALIVE.trim()
     : '';
 
-  return configured || DEFAULT_LOCAL_KEEP_ALIVE;
+  const effectiveValue = configured || DEFAULT_LOCAL_KEEP_ALIVE;
+  if (/^-?\d+$/.test(effectiveValue)) {
+    return Number.parseInt(effectiveValue, 10);
+  }
+  if (/^-?\d+\.\d+$/.test(effectiveValue)) {
+    return Number.parseFloat(effectiveValue);
+  }
+  return effectiveValue;
 }
 
 async function getLocalModelRuntimeInfo(baseUrl, requestedModel) {
