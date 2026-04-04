@@ -1,12 +1,202 @@
 const Scene = require('../models/Scene');
 const Device = require('../models/Device');
+const DeviceGroup = require('../models/DeviceGroup');
 const AlexaExposure = require('../models/AlexaExposure');
-const deviceService = require('./deviceService');
+
+function sanitizeString(value) {
+  return typeof value === 'string' ? value.trim() : String(value || '').trim();
+}
+
+function toIdString(value) {
+  return sanitizeString(value?._id?.toString?.() || value?.toString?.() || value);
+}
 
 /**
  * Service for managing smart home scenes
  */
 class SceneService {
+  _applyScenePopulates(query) {
+    return query
+      .populate('deviceActions.deviceId', 'name type room location status')
+      .populate('groupActions.groupId', 'name normalizedName description');
+  }
+
+  async _populateSceneDocument(scene) {
+    if (!scene || typeof scene.populate !== 'function') {
+      return scene;
+    }
+
+    await scene.populate('deviceActions.deviceId', 'name type room location status');
+    await scene.populate('groupActions.groupId', 'name normalizedName description');
+    return scene;
+  }
+
+  async _validateDeviceActions(deviceActions = []) {
+    for (const action of deviceActions) {
+      if (!action.deviceId || !action.action) {
+        throw new Error('Each device action must have deviceId and action');
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const device = await Device.findById(action.deviceId);
+      if (!device) {
+        throw new Error(`Device with ID ${action.deviceId} not found`);
+      }
+    }
+  }
+
+  async _validateGroupActions(groupActions = []) {
+    for (const action of groupActions) {
+      if (!action.groupId || !action.action) {
+        throw new Error('Each group action must have groupId and action');
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const group = await DeviceGroup.findById(action.groupId);
+      if (!group) {
+        throw new Error(`Device group with ID ${action.groupId} not found`);
+      }
+    }
+  }
+
+  async _normalizeSceneActions(sceneData = {}) {
+    let deviceActions = Array.isArray(sceneData.deviceActions) ? sceneData.deviceActions : [];
+    const groupActions = Array.isArray(sceneData.groupActions) ? sceneData.groupActions : [];
+
+    if (sceneData.devices && Array.isArray(sceneData.devices)) {
+      console.log('SceneService: Converting devices array to deviceActions for backward compatibility');
+
+      const existingDevices = await Device.find({ _id: { $in: sceneData.devices } });
+      if (existingDevices.length !== sceneData.devices.length) {
+        throw new Error('One or more devices not found');
+      }
+
+      deviceActions = sceneData.devices.map((deviceId) => ({
+        deviceId,
+        action: 'turn_on',
+        value: null
+      }));
+    }
+
+    await this._validateDeviceActions(deviceActions);
+    await this._validateGroupActions(groupActions);
+
+    return {
+      deviceActions: deviceActions.map((action) => ({
+        deviceId: action.deviceId,
+        action: action.action,
+        value: Object.prototype.hasOwnProperty.call(action, 'value') ? action.value : null
+      })),
+      groupActions: groupActions.map((action) => ({
+        groupId: action.groupId,
+        action: action.action,
+        value: Object.prototype.hasOwnProperty.call(action, 'value') ? action.value : null
+      }))
+    };
+  }
+
+  _buildSceneActionDefinitions(scene) {
+    const definitions = [];
+
+    (Array.isArray(scene?.deviceActions) ? scene.deviceActions : []).forEach((action) => {
+      const targetId = toIdString(action?.deviceId);
+      if (!targetId) {
+        return;
+      }
+
+      definitions.push({
+        kind: 'device',
+        targetId,
+        action: sanitizeString(action?.action),
+        value: Object.prototype.hasOwnProperty.call(action || {}, 'value') ? action.value : null
+      });
+    });
+
+    (Array.isArray(scene?.groupActions) ? scene.groupActions : []).forEach((action) => {
+      const targetId = toIdString(action?.groupId);
+      if (!targetId) {
+        return;
+      }
+
+      definitions.push({
+        kind: 'group',
+        targetId,
+        action: sanitizeString(action?.action),
+        value: Object.prototype.hasOwnProperty.call(action || {}, 'value') ? action.value : null
+      });
+    });
+
+    return definitions;
+  }
+
+  _buildWorkflowActionsForScene(actionDefinitions = []) {
+    return actionDefinitions.map((definition) => ({
+      type: 'device_control',
+      target: definition.kind === 'group'
+        ? { kind: 'device_group', group: definition.targetId }
+        : definition.targetId,
+      parameters: {
+        action: definition.action,
+        ...(definition.value !== undefined ? { value: definition.value } : {})
+      }
+    }));
+  }
+
+  _summarizeSceneExecution(execution = {}, actionDefinitions = [], populatedScene = null) {
+    const actionResults = Array.isArray(execution.actionResults) ? execution.actionResults : [];
+    const deviceNameById = new Map(
+      (Array.isArray(populatedScene?.deviceActions) ? populatedScene.deviceActions : [])
+        .map((action) => [toIdString(action?.deviceId), sanitizeString(action?.deviceId?.name)])
+        .filter(([deviceId]) => Boolean(deviceId))
+    );
+    const groupNameById = new Map(
+      (Array.isArray(populatedScene?.groupActions) ? populatedScene.groupActions : [])
+        .map((action) => [toIdString(action?.groupId), sanitizeString(action?.groupId?.name)])
+        .filter(([groupId]) => Boolean(groupId))
+    );
+
+    const deviceActions = [];
+    const groupActions = [];
+
+    actionResults.forEach((result) => {
+      const definition = actionDefinitions[result.actionIndex];
+      if (!definition) {
+        return;
+      }
+
+      const base = {
+        action: definition.action,
+        value: definition.value,
+        status: result.success ? 'executed' : 'failed',
+        ...(result.success ? {} : { error: result.error || result.message || 'Action failed' }),
+        ...(result.details && typeof result.details === 'object' ? { details: result.details } : {})
+      };
+
+      if (definition.kind === 'device') {
+        deviceActions.push({
+          ...base,
+          deviceId: definition.targetId,
+          deviceName: deviceNameById.get(definition.targetId) || definition.targetId
+        });
+      } else if (definition.kind === 'group') {
+        groupActions.push({
+          ...base,
+          groupId: definition.targetId,
+          groupName: groupNameById.get(definition.targetId)
+            || sanitizeString(result?.details?.group || result?.target?.group || definition.targetId)
+        });
+      }
+    });
+
+    return {
+      actionResults,
+      deviceActions,
+      groupActions,
+      successfulActions: Number(execution.successfulActions) || 0,
+      failedActions: Number(execution.failedActions) || 0,
+      status: execution.status || 'success'
+    };
+  }
   
   /**
    * Get all scenes from the database
@@ -15,9 +205,9 @@ class SceneService {
   async getAllScenes() {
     try {
       console.log('SceneService: Fetching all scenes from database');
-      const scenes = await Scene.find()
-        .populate('deviceActions.deviceId', 'name type location status')
-        .sort({ createdAt: -1 });
+      const scenes = await this._applyScenePopulates(
+        Scene.find().sort({ createdAt: -1 })
+      );
       
       console.log(`SceneService: Found ${scenes.length} scenes`);
       return scenes;
@@ -35,8 +225,9 @@ class SceneService {
   async getSceneById(sceneId) {
     try {
       console.log(`SceneService: Fetching scene with ID: ${sceneId}`);
-      const scene = await Scene.findById(sceneId)
-        .populate('deviceActions.deviceId', 'name type location status');
+      const scene = await this._applyScenePopulates(
+        Scene.findById(sceneId)
+      );
       
       if (!scene) {
         throw new Error('Scene not found');
@@ -71,44 +262,13 @@ class SceneService {
         throw new Error('Scene name is required');
       }
 
-      // Handle backward compatibility: convert devices array to deviceActions
-      let deviceActions = sceneData.deviceActions || [];
-      if (sceneData.devices && Array.isArray(sceneData.devices)) {
-        console.log('SceneService: Converting devices array to deviceActions for backward compatibility');
-        
-        // Validate that all device IDs exist
-        const existingDevices = await Device.find({ _id: { $in: sceneData.devices } });
-        if (existingDevices.length !== sceneData.devices.length) {
-          throw new Error('One or more devices not found');
-        }
-
-        // Convert to deviceActions with default actions
-        deviceActions = sceneData.devices.map(deviceId => ({
-          deviceId,
-          action: 'turn_on', // Default action for backward compatibility
-          value: null
-        }));
-      }
-
-      // Validate device actions if provided
-      if (deviceActions.length > 0) {
-        for (const action of deviceActions) {
-          if (!action.deviceId || !action.action) {
-            throw new Error('Each device action must have deviceId and action');
-          }
-          
-          // Verify device exists
-          const device = await Device.findById(action.deviceId);
-          if (!device) {
-            throw new Error(`Device with ID ${action.deviceId} not found`);
-          }
-        }
-      }
+      const { deviceActions, groupActions } = await this._normalizeSceneActions(sceneData);
 
       const newScene = new Scene({
         name: sceneData.name.trim(),
         description: sceneData.description ? sceneData.description.trim() : '',
         deviceActions,
+        groupActions,
         category: sceneData.category || 'custom',
         icon: sceneData.icon || 'home',
         color: sceneData.color || '#3b82f6',
@@ -119,8 +279,7 @@ class SceneService {
       const savedScene = await newScene.save();
       console.log(`SceneService: Scene created successfully with ID: ${savedScene._id}`);
       
-      // Populate device information before returning
-      await savedScene.populate('deviceActions.deviceId', 'name type location status');
+      await this._populateSceneDocument(savedScene);
       
       return savedScene;
     } catch (error) {
@@ -156,42 +315,23 @@ class SceneService {
       const updatedScene = await scene.save();
       console.log(`SceneService: Scene "${scene.name}" activated successfully`);
 
-      // Populate device information
-      await updatedScene.populate('deviceActions.deviceId', 'name type location status');
-
-      // Execute device actions through the existing device control service so scenes and Alexa share the same behavior.
-      const deviceActions = [];
-      for (const action of updatedScene.deviceActions) {
-        try {
-          console.log(`SceneService: Executing action ${action.action} on device ${action.deviceId.name}`);
-          const controlledDevice = await deviceService.controlDevice(
-            action.deviceId._id.toString(),
-            action.action,
-            action.value
-          );
-          deviceActions.push({
-            deviceId: action.deviceId._id,
-            deviceName: controlledDevice?.name || action.deviceId.name,
-            action: action.action,
-            value: action.value,
-            status: 'executed'
-          });
-        } catch (actionError) {
-          console.error(`SceneService: Failed to execute action on device ${action.deviceId.name}:`, actionError);
-          deviceActions.push({
-            deviceId: action.deviceId._id,
-            deviceName: action.deviceId.name,
-            action: action.action,
-            value: action.value,
-            status: 'failed',
-            error: actionError.message
-          });
+      const actionDefinitions = this._buildSceneActionDefinitions(updatedScene);
+      const workflowActions = this._buildWorkflowActionsForScene(actionDefinitions);
+      const { executeActionSequence } = require('./workflowExecutionService');
+      const execution = await executeActionSequence(workflowActions, {
+        context: {
+          sceneId: sceneId.toString()
         }
-      }
+      });
+      await this._populateSceneDocument(updatedScene);
+      const executionSummary = this._summarizeSceneExecution(execution, actionDefinitions, updatedScene);
 
       return {
         scene: updatedScene,
-        deviceActions,
+        deviceActions: executionSummary.deviceActions,
+        groupActions: executionSummary.groupActions,
+        actionResults: executionSummary.actionResults,
+        status: executionSummary.status,
         message: `Scene "${scene.name}" activated successfully`
       };
     } catch (error) {
@@ -215,20 +355,18 @@ class SceneService {
         throw new Error('Scene not found');
       }
 
-      // Handle device actions validation if provided
-      if (updateData.deviceActions) {
-        for (const action of updateData.deviceActions) {
-          if (action.deviceId) {
-            const device = await Device.findById(action.deviceId);
-            if (!device) {
-              throw new Error(`Device with ID ${action.deviceId} not found`);
-            }
-          }
-        }
+      if (updateData.deviceActions !== undefined || updateData.groupActions !== undefined || updateData.devices !== undefined) {
+        const normalizedActions = await this._normalizeSceneActions({
+          devices: updateData.devices,
+          deviceActions: updateData.deviceActions !== undefined ? updateData.deviceActions : scene.deviceActions,
+          groupActions: updateData.groupActions !== undefined ? updateData.groupActions : scene.groupActions
+        });
+        updateData.deviceActions = normalizedActions.deviceActions;
+        updateData.groupActions = normalizedActions.groupActions;
       }
 
       // Update fields
-      const allowedUpdates = ['name', 'description', 'deviceActions', 'category', 'icon', 'color'];
+      const allowedUpdates = ['name', 'description', 'deviceActions', 'groupActions', 'category', 'icon', 'color'];
       for (const field of allowedUpdates) {
         if (updateData[field] !== undefined) {
           scene[field] = updateData[field];
@@ -238,8 +376,7 @@ class SceneService {
       const updatedScene = await scene.save();
       console.log(`SceneService: Scene "${scene.name}" updated successfully`);
       
-      // Populate device information
-      await updatedScene.populate('deviceActions.deviceId', 'name type location status');
+      await this._populateSceneDocument(updatedScene);
       
       return updatedScene;
     } catch (error) {
@@ -459,6 +596,7 @@ Return ONLY the JSON object, nothing else:`;
         name: parsedScene.name,
         description: parsedScene.description || description.trim(),
         deviceActions: parsedScene.deviceActions,
+        groupActions: Array.isArray(parsedScene.groupActions) ? parsedScene.groupActions : [],
         category: parsedScene.category || 'custom',
         icon: parsedScene.icon || 'home',
         color: parsedScene.color || '#3b82f6'

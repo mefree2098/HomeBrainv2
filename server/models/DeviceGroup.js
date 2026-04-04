@@ -17,6 +17,10 @@ const deviceGroupSchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+  childGroupIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'DeviceGroup'
+  }],
   insteonPlmGroup: {
     type: Number,
     default: null

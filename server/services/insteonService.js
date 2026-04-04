@@ -11477,6 +11477,104 @@ class InsteonService {
     };
   }
 
+  async _clearManagedDeviceGroupScene(groupRecord) {
+    if (!groupRecord || typeof groupRecord !== 'object' || typeof groupRecord.save !== 'function') {
+      return null;
+    }
+
+    const plmGroup = Number(groupRecord?.insteonPlmGroup);
+    const hasPersistedMetadata = (
+      (Number.isInteger(plmGroup) && plmGroup >= 2 && plmGroup <= 255)
+      || Boolean(String(groupRecord?.insteonMemberSignature || '').trim())
+      || groupRecord?.insteonLastSyncedAt instanceof Date
+    );
+
+    if (!hasPersistedMetadata) {
+      return {
+        plmGroup: Number.isInteger(plmGroup) ? plmGroup : null,
+        sceneCleared: false
+      };
+    }
+
+    if (Number.isInteger(plmGroup) && plmGroup >= 2 && plmGroup <= 255) {
+      const existingResponders = await this._getManagedDeviceGroupResponderAddresses(plmGroup);
+      if (existingResponders.length > 0) {
+        await this._applyTopologyScene({
+          controller: 'gw',
+          group: plmGroup,
+          name: `HomeBrain Group ${groupRecord.name || plmGroup} (remove)`,
+          remove: true,
+          responders: existingResponders.map((address) => ({ id: address }))
+        }, {
+          timeoutMs: DEFAULT_INSTEON_GROUP_SYNC_TIMEOUT_MS,
+          responderFallback: true
+        });
+      }
+    }
+
+    groupRecord.insteonPlmGroup = null;
+    groupRecord.insteonMemberSignature = '';
+    groupRecord.insteonLastSyncedAt = null;
+    await groupRecord.save();
+
+    return {
+      plmGroup: Number.isInteger(plmGroup) ? plmGroup : null,
+      sceneCleared: true
+    };
+  }
+
+  async syncManagedDeviceGroupMembership(groupRecord, devices = []) {
+    if (!groupRecord || typeof groupRecord !== 'object' || typeof groupRecord.save !== 'function') {
+      return null;
+    }
+
+    const members = this._buildInsteonDeviceGroupMembers(devices);
+    const hasPersistedMetadata = (
+      (Number.isInteger(Number(groupRecord?.insteonPlmGroup)) && Number(groupRecord?.insteonPlmGroup) >= 2 && Number(groupRecord?.insteonPlmGroup) <= 255)
+      || Boolean(String(groupRecord?.insteonMemberSignature || '').trim())
+      || groupRecord?.insteonLastSyncedAt instanceof Date
+    );
+
+    if (!members) {
+      if (!hasPersistedMetadata) {
+        return null;
+      }
+
+      if (!this.isConnected || !this.hub) {
+        await this.connect();
+      }
+
+      return this._clearManagedDeviceGroupScene(groupRecord);
+    }
+
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    return this._syncManagedDeviceGroupScene(groupRecord, members);
+  }
+
+  async clearManagedDeviceGroup(groupRecord) {
+    if (!groupRecord || typeof groupRecord !== 'object' || typeof groupRecord.save !== 'function') {
+      return null;
+    }
+
+    const hasPersistedMetadata = (
+      (Number.isInteger(Number(groupRecord?.insteonPlmGroup)) && Number(groupRecord?.insteonPlmGroup) >= 2 && Number(groupRecord?.insteonPlmGroup) <= 255)
+      || Boolean(String(groupRecord?.insteonMemberSignature || '').trim())
+      || groupRecord?.insteonLastSyncedAt instanceof Date
+    );
+    if (!hasPersistedMetadata) {
+      return null;
+    }
+
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    return this._clearManagedDeviceGroupScene(groupRecord);
+  }
+
   async tryControlDeviceGroup(groupRecord, devices = [], actionName = '', value = null, options = {}) {
     const normalizedAction = this._normalizeInsteonGroupActionName(actionName);
     if (!['turn_on', 'turn_off'].includes(normalizedAction)) {

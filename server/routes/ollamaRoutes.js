@@ -24,32 +24,53 @@ router.get('/status', auth, async (req, res) => {
 
     const statusPromise = ollamaService.getStatus();
 
-    const status = await Promise.race([statusPromise, timeoutPromise]).catch(error => {
+    const status = await Promise.race([statusPromise, timeoutPromise]).catch(async (error) => {
       console.error('Status check timed out or failed:', error.message);
-      // Return default status if check fails
+      const cachedConfig = await OllamaConfig.getConfig().catch(() => null);
+      const cachedSettings = await settingsService.getSettings().catch(() => null);
+      const cachedSharedModel =
+        cachedSettings?.homebrainLocalLlmModel ||
+        cachedSettings?.localLlmModel ||
+        cachedSettings?.spamFilterLocalLlmModel ||
+        cachedConfig?.activeModel ||
+        null;
+      const cachedServiceStatus = cachedConfig?.serviceStatus || 'unknown';
+      const cachedInstalled = Boolean(
+        cachedConfig?.isInstalled ||
+        cachedConfig?.version ||
+        cachedServiceStatus !== 'not_installed' ||
+        (Array.isArray(cachedConfig?.installedModels) && cachedConfig.installedModels.length > 0)
+      );
+
       return {
-        isInstalled: false,
-        version: null,
-        serviceRunning: false,
-        serviceStatus: 'not_installed',
-        installedModels: [],
-        activeModel: null,
-        configuration: {
+        isInstalled: cachedInstalled,
+        version: cachedConfig?.version || null,
+        hostPlatform: process.platform,
+        hostArch: process.arch,
+        serviceRunning: cachedServiceStatus === 'running' || cachedServiceStatus === 'running_external',
+        serviceStatus: cachedServiceStatus,
+        serviceOwner: cachedConfig?.serviceOwner || null,
+        installedModels: Array.isArray(cachedConfig?.installedModels) ? cachedConfig.installedModels : [],
+        activeModel: cachedConfig?.activeModel || cachedSharedModel,
+        sharedLocalLlmModel: cachedSharedModel,
+        homebrainLocalLlmModel: cachedSharedModel,
+        spamFilterLocalLlmModel: cachedSharedModel,
+        configuration: cachedConfig?.configuration || {
           apiUrl: 'http://localhost:11434',
           maxConcurrentRequests: 1,
           contextLength: 2048,
           gpuLayers: -1
         },
-        updateAvailable: false,
-        latestVersion: null,
-        lastUpdateCheck: null,
-        statistics: {
+        updateAvailable: Boolean(cachedConfig?.updateAvailable),
+        latestVersion: cachedConfig?.latestVersion || null,
+        lastUpdateCheck: cachedConfig?.lastUpdateCheck || null,
+        statistics: cachedConfig?.statistics || {
           totalChats: 0,
           totalTokensProcessed: 0,
           averageResponseTime: 0
         },
         lastError: {
-          message: 'Status check timeout - Ollama may not be accessible',
+          message: `Live status unavailable: ${error.message}`,
           timestamp: new Date()
         }
       };
@@ -305,21 +326,25 @@ router.post('/models/activate', auth, async (req, res) => {
   }
 });
 
-// Description: Update HomeBrain/spam local model role assignments
+// Description: Update the single shared local model used by HomeBrain, chat, and spam filtering
 // Endpoint: POST /api/ollama/models/roles
-// Request: { homebrainLocalLlmModel: string, spamFilterLocalLlmModel: string }
-// Response: { success: boolean, homebrainLocalLlmModel: string, spamFilterLocalLlmModel: string }
+// Request: { modelName?: string, homebrainLocalLlmModel?: string, spamFilterLocalLlmModel?: string }
+// Response: { success: boolean, modelName: string, activeModel: string, homebrainLocalLlmModel: string, spamFilterLocalLlmModel: string }
 router.post('/models/roles', auth, async (req, res) => {
   try {
+    const requestedModelName = typeof req.body?.modelName === 'string'
+      ? req.body.modelName.trim()
+      : '';
     const homebrainLocalLlmModel = typeof req.body?.homebrainLocalLlmModel === 'string'
       ? req.body.homebrainLocalLlmModel.trim()
       : '';
     const spamFilterLocalLlmModel = typeof req.body?.spamFilterLocalLlmModel === 'string'
       ? req.body.spamFilterLocalLlmModel.trim()
       : '';
+    const modelName = requestedModelName || homebrainLocalLlmModel || spamFilterLocalLlmModel;
 
-    if (!homebrainLocalLlmModel || !spamFilterLocalLlmModel) {
-      return res.status(400).json({ error: 'Both HomeBrain and spam filter models are required.' });
+    if (!modelName) {
+      return res.status(400).json({ error: 'A shared model is required.' });
     }
 
     const config = await OllamaConfig.getConfig();
@@ -330,27 +355,27 @@ router.post('/models/roles', auth, async (req, res) => {
         .filter(Boolean)
     );
 
-    const missingModels = [homebrainLocalLlmModel, spamFilterLocalLlmModel]
-      .filter((modelName) => !installedModelNames.has(modelName));
-
-    if (missingModels.length) {
+    if (!installedModelNames.has(modelName)) {
       return res.status(400).json({
-        error: `Model not installed in Ollama: ${missingModels.join(', ')}`
+        error: `Model not installed in Ollama: ${modelName}`
       });
     }
 
-    const settings = await settingsService.updateSettings({
-      homebrainLocalLlmModel,
-      spamFilterLocalLlmModel
+    await settingsService.updateSettings({
+      homebrainLocalLlmModel: modelName,
+      spamFilterLocalLlmModel: modelName
     });
+    await ollamaService.setActiveModel(modelName);
 
     res.status(200).json({
       success: true,
-      homebrainLocalLlmModel: settings.homebrainLocalLlmModel || settings.localLlmModel || homebrainLocalLlmModel,
-      spamFilterLocalLlmModel: settings.spamFilterLocalLlmModel || spamFilterLocalLlmModel
+      modelName,
+      activeModel: modelName,
+      homebrainLocalLlmModel: modelName,
+      spamFilterLocalLlmModel: modelName
     });
   } catch (error) {
-    console.error('Error updating Ollama model roles:', error);
+    console.error('Error updating shared Ollama model:', error);
     res.status(500).json({ error: error.message });
   }
 });

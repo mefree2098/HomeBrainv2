@@ -102,14 +102,14 @@ router.get('/:id', async (req, res) => {
 
 // Description: Create a new scene
 // Endpoint: POST /api/scenes
-// Request: { name: string, description?: string, devices?: Array<string>, deviceActions?: Array<object>, category?: string, icon?: string, color?: string }
+// Request: { name: string, description?: string, devices?: Array<string>, deviceActions?: Array<object>, groupActions?: Array<object>, category?: string, icon?: string, color?: string }
 // Response: { success: boolean, message: string, scene: object }
 router.post('/', admin, async (req, res) => {
   try {
     console.log('SceneRoutes: POST /api/scenes - Creating new scene');
     console.log('SceneRoutes: Scene data received:', req.body);
 
-    const { name, description, devices, deviceActions, category, icon, color } = req.body;
+    const { name, description, devices, deviceActions, groupActions, category, icon, color } = req.body;
 
     if (!name || name.trim() === '') {
       return res.status(400).json({
@@ -123,6 +123,7 @@ router.post('/', admin, async (req, res) => {
       description: description ? description.trim() : '',
       devices: devices || [],
       deviceActions: deviceActions || [],
+      groupActions: groupActions || [],
       category: category || 'custom',
       icon: icon || 'home',
       color: color || '#3b82f6'
@@ -219,7 +220,10 @@ router.post('/activate', async (req, res) => {
       success: true,
       message: result.message,
       scene: result.scene,
-      deviceActions: result.deviceActions
+      deviceActions: result.deviceActions,
+      groupActions: result.groupActions,
+      actionResults: result.actionResults,
+      status: result.status
     });
   } catch (error) {
     console.error('SceneRoutes: Error activating scene:', error.message);
@@ -230,7 +234,7 @@ router.post('/activate', async (req, res) => {
         success: false,
         error: error.message
       });
-    } else if (error.message.includes('required')) {
+    } else if (error.message.includes('required') || error.message.includes('not found')) {
       res.status(400).json({
         success: false,
         error: error.message
@@ -288,7 +292,7 @@ router.put('/:id', admin, async (req, res) => {
         success: false,
         error: error.message
       });
-    } else if (error.message.includes('required') || error.message.includes('cannot be empty')) {
+    } else if (error.message.includes('required') || error.message.includes('cannot be empty') || error.message.includes('not found')) {
       res.status(400).json({
         success: false,
         error: error.message

@@ -23,6 +23,8 @@ const OLLAMA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
 const OLLAMA_SEARCH_TIMEOUT_MS = 12000;
 const OLLAMA_CAPABILITY_ALLOWLIST = new Set(['vision', 'tools', 'thinking', 'embedding', 'cloud']);
 const OLLAMA_PRIVILEGED_HELPER_SYSTEM_PATH = '/usr/local/lib/homebrain/ollama-host-control.sh';
+const DEFAULT_MANAGED_OLLAMA_KEEP_ALIVE = '-1';
+const DEFAULT_MANAGED_OLLAMA_REQUEST_TIMEOUT_MS = 300000;
 
 function createModelPullStatusState(overrides = {}) {
   return {
@@ -929,6 +931,23 @@ class OllamaService {
     if (config?.configuration?.apiUrl) {
       this.apiUrl = config.configuration.apiUrl;
     }
+  }
+
+  getManagedRequestKeepAlive() {
+    const configured = typeof process.env.HOMEBRAIN_OLLAMA_KEEP_ALIVE === 'string'
+      ? process.env.HOMEBRAIN_OLLAMA_KEEP_ALIVE.trim()
+      : '';
+
+    return configured || DEFAULT_MANAGED_OLLAMA_KEEP_ALIVE;
+  }
+
+  getManagedRequestTimeoutMs() {
+    const configured = Number.parseInt(process.env.HOMEBRAIN_OLLAMA_REQUEST_TIMEOUT_MS || '', 10);
+    if (Number.isFinite(configured) && configured >= 10000) {
+      return configured;
+    }
+
+    return DEFAULT_MANAGED_OLLAMA_REQUEST_TIMEOUT_MS;
   }
 
   async ensureServiceRunningForApi(scope, actionDescription) {
@@ -2148,8 +2167,14 @@ class OllamaService {
 
       const childEnv = {
         ...process.env,
-        OLLAMA_HOST: this.getOllamaHostForEnv()
+        OLLAMA_HOST: this.getOllamaHostForEnv(),
+        OLLAMA_KEEP_ALIVE: process.env.HOMEBRAIN_OLLAMA_KEEP_ALIVE?.trim() || DEFAULT_MANAGED_OLLAMA_KEEP_ALIVE
       };
+
+      if (process.platform === 'linux' && process.arch === 'arm64') {
+        childEnv.OLLAMA_MAX_LOADED_MODELS = process.env.HOMEBRAIN_OLLAMA_MAX_LOADED_MODELS?.trim() || '1';
+        childEnv.OLLAMA_NUM_PARALLEL = process.env.HOMEBRAIN_OLLAMA_NUM_PARALLEL?.trim() || '1';
+      }
 
       const child = this.spawnChildProcess(binaryPath, ['serve'], {
         detached: true,
@@ -3242,7 +3267,7 @@ class OllamaService {
           await settings.save();
         }
       } catch (settingsError) {
-        console.warn(`OllamaService: Failed to clear deleted-model role assignments for ${modelName}: ${settingsError.message}`);
+        console.warn(`OllamaService: Failed to clear deleted shared-model assignments for ${modelName}: ${settingsError.message}`);
       }
 
       return { success: true, message: `Model ${modelName} deleted successfully` };
@@ -3262,13 +3287,15 @@ class OllamaService {
       const config = await OllamaConfig.getConfig();
       await config.setActiveModel(modelName);
 
-      // Preserve explicit HomeBrain/spam model role assignments. Activation only changes the Ollama default.
+      // In single-model mode, activating a model updates every HomeBrain local-model assignment.
       try {
         const settings = await Settings.getSettings();
         settings.localLlmModel = modelName;
+        settings.homebrainLocalLlmModel = modelName;
+        settings.spamFilterLocalLlmModel = modelName;
         await settings.save();
       } catch (settingsError) {
-        console.warn(`OllamaService: Failed to sync Settings.localLlmModel to ${modelName}: ${settingsError.message}`);
+        console.warn(`OllamaService: Failed to sync shared local model to ${modelName}: ${settingsError.message}`);
       }
 
       console.log(`Active model set to ${modelName}`);
@@ -3293,14 +3320,15 @@ class OllamaService {
       const requestBody = {
         model: modelName,
         messages: messages,
-        stream: stream
+        stream: stream,
+        keep_alive: this.getManagedRequestKeepAlive()
       };
 
       const response = await axios.post(
         `${this.apiUrl}/api/chat`,
         requestBody,
         {
-          timeout: 120000, // 2 minutes
+          timeout: this.getManagedRequestTimeoutMs(),
           responseType: stream ? 'stream' : 'json'
         }
       );
@@ -3346,9 +3374,10 @@ class OllamaService {
         {
           model: modelName,
           prompt: prompt,
-          stream: false
+          stream: false,
+          keep_alive: this.getManagedRequestKeepAlive()
         },
-        { timeout: 120000 }
+        { timeout: this.getManagedRequestTimeoutMs() }
       );
 
       console.log(`Generation complete for ${modelName}`);
@@ -3479,6 +3508,8 @@ class OllamaService {
 
       const settings = await Settings.getSettings();
 
+      const sharedLocalLlmModel = settings.homebrainLocalLlmModel || settings.localLlmModel || settings.spamFilterLocalLlmModel || null;
+
       return {
         isInstalled: installStatus.isInstalled,
         version: installStatus.version,
@@ -3489,8 +3520,9 @@ class OllamaService {
         serviceOwner: config.serviceOwner,
         installedModels: config.installedModels,
         activeModel: config.activeModel,
-        homebrainLocalLlmModel: settings.homebrainLocalLlmModel || settings.localLlmModel || null,
-        spamFilterLocalLlmModel: settings.spamFilterLocalLlmModel || settings.homebrainLocalLlmModel || settings.localLlmModel || null,
+        sharedLocalLlmModel,
+        homebrainLocalLlmModel: sharedLocalLlmModel,
+        spamFilterLocalLlmModel: sharedLocalLlmModel,
         configuration: config.configuration,
         updateAvailable: config.updateAvailable,
         latestVersion: config.latestVersion,

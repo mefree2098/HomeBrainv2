@@ -85,6 +85,31 @@ test('validateSceneExposure blocks restricted scene devices', () => {
   assert.ok(result.validationErrors.some((entry) => entry.includes('lock')));
 });
 
+test('validateSceneExposure accepts a scene backed by safe device groups', () => {
+  const result = validateSceneExposure({
+    _id: 'scene-2',
+    name: 'All Lights Off',
+    groupActions: [
+      { groupId: 'group-1', action: 'turn_off', value: null }
+    ]
+  }, {
+    devicesById: new Map([
+      ['device-1', { _id: 'device-1', name: 'Lamp', type: 'light', status: true, brightness: 60, isOnline: true }],
+      ['device-2', { _id: 'device-2', name: 'Porch Light', type: 'light', status: true, brightness: 100, isOnline: true }]
+    ]),
+    groupsById: new Map([
+      ['group-1', {
+        _id: 'group-1',
+        name: 'Whole Home Lights',
+        deviceIds: ['device-1', 'device-2']
+      }]
+    ])
+  });
+
+  assert.equal(result.validationErrors.length, 0);
+  assert.equal(result.devices.length, 2);
+});
+
 test('validateWorkflowExposure accepts safe manual workflows and rejects unsupported actions', () => {
   const safeWorkflow = validateWorkflowExposure({
     _id: 'workflow-1',

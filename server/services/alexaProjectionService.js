@@ -568,31 +568,65 @@ function buildGroupStateProperties(memberDevices = [], traits = inferGroupTraits
   return properties;
 }
 
-function validateSceneExposure(scene, devicesById = new Map()) {
+function validateSceneExposure(scene, sceneContext = new Map()) {
+  const devicesById = sceneContext instanceof Map
+    ? sceneContext
+    : (sceneContext?.devicesById || new Map());
+  const groupsById = sceneContext instanceof Map
+    ? new Map()
+    : (sceneContext?.groupsById || new Map());
   const validationErrors = [];
   const validationWarnings = [];
   const resolvedDevices = [];
+  const seenDeviceIds = new Set();
 
   if (!scene) {
     validationErrors.push('Scene could not be found');
     return { validationErrors, validationWarnings, devices: resolvedDevices };
   }
 
-  if (!Array.isArray(scene.deviceActions) || scene.deviceActions.length === 0) {
+  const hasDeviceActions = Array.isArray(scene.deviceActions) && scene.deviceActions.length > 0;
+  const hasGroupActions = Array.isArray(scene.groupActions) && scene.groupActions.length > 0;
+
+  if (!hasDeviceActions && !hasGroupActions) {
     validationErrors.push(`Scene "${scene.name}" has no actions to expose to Alexa`);
     return { validationErrors, validationWarnings, devices: resolvedDevices };
   }
 
-  scene.deviceActions.forEach((action) => {
+  (scene.deviceActions || []).forEach((action) => {
     const deviceId = toObjectIdString(action?.deviceId?._id || action?.deviceId);
     const device = devicesById.get(deviceId);
-    if (device) {
+    if (device && !seenDeviceIds.has(deviceId)) {
+      seenDeviceIds.add(deviceId);
       resolvedDevices.push(device);
     }
     const restrictedReason = getRestrictedDeviceReason(device);
     if (restrictedReason) {
       validationErrors.push(restrictedReason);
     }
+  });
+
+  (scene.groupActions || []).forEach((action) => {
+    const groupId = toObjectIdString(action?.groupId?._id || action?.groupId);
+    const group = groupsById.get(groupId);
+    if (!group) {
+      validationErrors.push(`Scene "${scene.name}" references a device group that could not be found`);
+      return;
+    }
+
+    (Array.isArray(group.deviceIds) ? group.deviceIds : []).forEach((deviceId) => {
+      const normalizedDeviceId = toObjectIdString(deviceId);
+      const device = devicesById.get(normalizedDeviceId);
+      if (device && !seenDeviceIds.has(normalizedDeviceId)) {
+        seenDeviceIds.add(normalizedDeviceId);
+        resolvedDevices.push(device);
+      }
+
+      const restrictedReason = getRestrictedDeviceReason(device);
+      if (restrictedReason) {
+        validationErrors.push(restrictedReason);
+      }
+    });
   });
 
   return {
@@ -604,6 +638,7 @@ function validateSceneExposure(scene, devicesById = new Map()) {
 
 function resolveWorkflowTargetDevices(action, context = {}) {
   const devicesById = context.devicesById || new Map();
+  const groupsById = context.groupsById || new Map();
   const groupsByNormalizedName = context.groupsByNormalizedName || new Map();
   const scenesById = context.scenesById || new Map();
 
@@ -618,10 +653,27 @@ function resolveWorkflowTargetDevices(action, context = {}) {
       return [null];
     }
 
-    return (scene.deviceActions || []).map((sceneAction) => {
+    const devices = [];
+
+    (scene.deviceActions || []).forEach((sceneAction) => {
       const deviceId = toObjectIdString(sceneAction?.deviceId?._id || sceneAction?.deviceId);
-      return devicesById.get(deviceId) || null;
+      devices.push(devicesById.get(deviceId) || null);
     });
+
+    (scene.groupActions || []).forEach((sceneAction) => {
+      const groupId = toObjectIdString(sceneAction?.groupId?._id || sceneAction?.groupId);
+      const group = groupsById.get(groupId);
+      if (!group) {
+        devices.push(null);
+        return;
+      }
+
+      (Array.isArray(group.deviceIds) ? group.deviceIds : []).forEach((deviceId) => {
+        devices.push(devicesById.get(toObjectIdString(deviceId)) || null);
+      });
+    });
+
+    return devices;
   }
 
   if (action.type !== 'device_control') {
@@ -960,7 +1012,7 @@ class AlexaProjectionService {
         };
       }
     } else if (exposure.entityType === 'scene') {
-      const sceneValidation = validateSceneExposure(entity, context.devicesById);
+      const sceneValidation = validateSceneExposure(entity, context);
       validation = mergeValidation(exposure, sceneValidation);
       if (validation.validationErrors.length === 0) {
         endpoint = buildSceneEndpoint(entity, exposure, context.hubId, validation);

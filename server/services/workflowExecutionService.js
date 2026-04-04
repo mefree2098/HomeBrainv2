@@ -1,9 +1,9 @@
 const https = require('node:https');
 const axios = require('axios');
 const Device = require('../models/Device');
-const DeviceGroup = require('../models/DeviceGroup');
 const Workflow = require('../models/Workflow');
 const deviceService = require('./deviceService');
+const deviceGroupService = require('./deviceGroupService');
 const sceneService = require('./sceneService');
 const insteonService = require('./insteonService');
 const { resolveDeviceProperty } = require('../utils/devicePropertyResolver');
@@ -882,72 +882,61 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
   };
 }
 
-async function executeDeviceGroupControl(groupTarget, action) {
-  const groupName = sanitizeString(groupTarget?.group);
-  if (!groupName) {
-    throw new Error('Device group target is required');
-  }
-
-  const devices = await Device.find({
-    groups: { $regex: new RegExp(`^${escapeRegexLiteral(groupName)}$`, 'i') }
-  })
-    .sort({ room: 1, name: 1 })
-    .lean();
-
+async function executeResolvedDeviceGroupUnit({
+  groupName,
+  groupRecord,
+  devices,
+  action,
+  actionName,
+  value,
+  insteonGroupOptions,
+  allowManagedInsteonGroup = true
+}) {
   if (!Array.isArray(devices) || devices.length === 0) {
     throw new Error(`Device group "${groupName}" has no matching devices`);
   }
 
-  const actionName = getActionName(action);
-  const value = getActionValue(actionName, action?.parameters || {});
-  const groupRecord = await DeviceGroup.findOne({
-    normalizedName: groupName.toLowerCase()
-  });
-  const insteonGroupOptions = {
-    ...getInsteonCommandRetryOptions(action, 'insteon'),
-    verificationMode: 'fast',
-    deviceGroup: groupName
-  };
-
-  try {
-    const broadcastResult = await insteonService.tryControlDeviceGroup(
-      groupRecord,
-      devices,
-      actionName,
-      value,
-      insteonGroupOptions
-    );
-
-    if (broadcastResult) {
-      const targetCount = Number(broadcastResult?.details?.targetCount) || 0;
-      return {
-        target: {
-          kind: 'device_group',
-          group: groupName
-        },
-        message: broadcastResult.message,
+  if (allowManagedInsteonGroup) {
+    try {
+      const broadcastResult = await insteonService.tryControlDeviceGroup(
+        groupRecord,
+        devices,
+        actionName,
         value,
-        details: {
-          kind: 'device_group',
-          group: groupName,
-          executionMode: 'insteon_group_broadcast',
-          concurrency: 1,
-          totalTargets: targetCount,
-          successfulTargets: targetCount,
-          failedTargets: 0,
-          members: Array.isArray(broadcastResult?.details?.members) ? broadcastResult.details.members : [],
-          controlMethod: broadcastResult?.details?.controlMethod || null,
-          verificationMode: broadcastResult?.details?.verificationMode || null,
-          commandVariant: broadcastResult?.details?.commandVariant || null,
-          insteonPlmGroup: broadcastResult?.details?.insteonPlmGroup ?? null,
-          sceneSynchronized: broadcastResult?.details?.sceneSynchronized === true
-        }
-      };
+        insteonGroupOptions
+      );
+
+      if (broadcastResult) {
+        const targetCount = Number(broadcastResult?.details?.targetCount) || 0;
+        return {
+          target: {
+            kind: 'device_group',
+            group: groupName
+          },
+          message: broadcastResult.message,
+          value,
+          details: {
+            kind: 'device_group',
+            group: groupName,
+            executionMode: 'insteon_group_broadcast',
+            concurrency: 1,
+            totalTargets: targetCount,
+            successfulTargets: targetCount,
+            failedTargets: 0,
+            members: Array.isArray(broadcastResult?.details?.members) ? broadcastResult.details.members : [],
+            controlMethod: broadcastResult?.details?.controlMethod || null,
+            verificationMode: broadcastResult?.details?.verificationMode || null,
+            commandVariant: broadcastResult?.details?.commandVariant || null,
+            insteonPlmGroup: broadcastResult?.details?.insteonPlmGroup ?? null,
+            sceneSynchronized: broadcastResult?.details?.sceneSynchronized === true
+          }
+        };
+      }
+    } catch (error) {
+      console.warn(
+        `WorkflowExecutionService: Managed INSTEON group broadcast failed for "${groupName}", falling back to per-device control: ${error.message}`
+      );
     }
-  } catch (error) {
-    console.warn(
-      `WorkflowExecutionService: Managed INSTEON group broadcast failed for "${groupName}", falling back to per-device control: ${error.message}`
-    );
   }
 
   const concurrency = getDeviceGroupConcurrency(devices);
@@ -1016,6 +1005,121 @@ async function executeDeviceGroupControl(groupTarget, action) {
       group: groupName
     },
     message: `Executed ${actionName} on device group "${groupName}" (${successfulTargets} devices)`,
+    value,
+    details
+  };
+}
+
+async function executeDeviceGroupControl(groupTarget, action) {
+  const requestedGroupName = sanitizeString(groupTarget?.group);
+  if (!requestedGroupName) {
+    throw new Error('Device group target is required');
+  }
+
+  const executionPlan = await deviceGroupService.resolveGroupExecutionPlanByName(requestedGroupName);
+  const rootGroupName = sanitizeString(executionPlan?.rootGroup?.name) || requestedGroupName;
+  const actionName = getActionName(action);
+  const value = getActionValue(actionName, action?.parameters || {});
+  const insteonGroupOptions = {
+    ...getInsteonCommandRetryOptions(action, 'insteon'),
+    verificationMode: 'fast',
+    deviceGroup: rootGroupName
+  };
+
+  if (!executionPlan.containsNestedGroups && executionPlan.units.length <= 1) {
+    const unit = executionPlan.units[0] || null;
+    return executeResolvedDeviceGroupUnit({
+      groupName: rootGroupName,
+      groupRecord: executionPlan.rootGroup,
+      devices: executionPlan.devices,
+      action,
+      actionName,
+      value,
+      insteonGroupOptions,
+      allowManagedInsteonGroup: unit?.allowManagedInsteonGroup !== false
+    });
+  }
+
+  const unitResults = [];
+
+  for (const unit of executionPlan.units) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await executeResolvedDeviceGroupUnit({
+        groupName: unit.groupName,
+        groupRecord: unit.groupRecord,
+        devices: unit.devices,
+        action,
+        actionName,
+        value,
+        insteonGroupOptions: {
+          ...insteonGroupOptions,
+          deviceGroup: unit.groupName
+        },
+        allowManagedInsteonGroup: unit.allowManagedInsteonGroup
+      });
+      unitResults.push(result);
+    } catch (error) {
+      unitResults.push({
+        target: {
+          kind: 'device_group',
+          group: unit.groupName
+        },
+        message: error.message || `Failed to execute ${actionName} on "${unit.groupName}"`,
+        value,
+        details: error.details || {
+          kind: 'device_group',
+          group: unit.groupName,
+          executionMode: 'error',
+          concurrency: 1,
+          totalTargets: unit.devices.length,
+          successfulTargets: 0,
+          failedTargets: unit.devices.length,
+          members: []
+        }
+      });
+    }
+  }
+
+  const unitDetails = unitResults.map((result) => ({
+    group: sanitizeString(result?.details?.group) || sanitizeString(result?.target?.group),
+    executionMode: result?.details?.executionMode || null,
+    totalTargets: Number(result?.details?.totalTargets) || 0,
+    successfulTargets: Number(result?.details?.successfulTargets) || 0,
+    failedTargets: Number(result?.details?.failedTargets) || 0,
+    message: sanitizeString(result?.message),
+    members: Array.isArray(result?.details?.members) ? result.details.members : []
+  }));
+
+  const totalTargets = unitDetails.reduce((sum, unit) => sum + unit.totalTargets, 0);
+  const successfulTargets = unitDetails.reduce((sum, unit) => sum + unit.successfulTargets, 0);
+  const failedTargets = unitDetails.reduce((sum, unit) => sum + unit.failedTargets, 0);
+  const details = {
+    kind: 'device_group',
+    group: rootGroupName,
+    executionMode: 'nested_group_plan',
+    unitCount: unitDetails.length,
+    totalTargets,
+    successfulTargets,
+    failedTargets,
+    units: unitDetails
+  };
+
+  if (failedTargets > 0) {
+    const firstFailure = unitDetails.find((unit) => unit.failedTargets > 0);
+    const error = new Error(
+      `Executed ${actionName} on device group "${rootGroupName}" with ${failedTargets} failure${failedTargets === 1 ? '' : 's'}${firstFailure?.message ? `: ${firstFailure.message}` : ''}`
+    );
+    error.details = details;
+    throw error;
+  }
+
+  return {
+    target: {
+      kind: 'device_group',
+      group: rootGroupName
+    },
+    message: `Executed ${actionName} on device group "${rootGroupName}" (${successfulTargets} devices across ${unitDetails.length} group unit${unitDetails.length === 1 ? '' : 's'})`,
     value,
     details
   };

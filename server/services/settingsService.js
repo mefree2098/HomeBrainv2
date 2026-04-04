@@ -88,16 +88,18 @@ class SettingsService {
         }
       });
 
-      if (typeof sanitizedUpdates.homebrainLocalLlmModel === 'string') {
-        sanitizedUpdates.homebrainLocalLlmModel = sanitizedUpdates.homebrainLocalLlmModel.trim();
-        sanitizedUpdates.localLlmModel = sanitizedUpdates.homebrainLocalLlmModel;
-      } else if (typeof sanitizedUpdates.localLlmModel === 'string') {
-        sanitizedUpdates.localLlmModel = sanitizedUpdates.localLlmModel.trim();
-        sanitizedUpdates.homebrainLocalLlmModel = sanitizedUpdates.localLlmModel;
-      }
+      const sharedLocalModelCandidate = [
+        sanitizedUpdates.homebrainLocalLlmModel,
+        sanitizedUpdates.localLlmModel,
+        sanitizedUpdates.spamFilterLocalLlmModel
+      ]
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .find(Boolean);
 
-      if (typeof sanitizedUpdates.spamFilterLocalLlmModel === 'string') {
-        sanitizedUpdates.spamFilterLocalLlmModel = sanitizedUpdates.spamFilterLocalLlmModel.trim();
+      if (sharedLocalModelCandidate) {
+        sanitizedUpdates.localLlmModel = sharedLocalModelCandidate;
+        sanitizedUpdates.homebrainLocalLlmModel = sharedLocalModelCandidate;
+        sanitizedUpdates.spamFilterLocalLlmModel = sharedLocalModelCandidate;
       }
 
       ['codexPath', 'codexHome', 'codexAwsVolumeRoot', 'codexModel', 'openaiModel', 'anthropicModel', 'localLlmEndpoint']

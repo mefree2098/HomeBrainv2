@@ -5,9 +5,9 @@ const mongoose = require('mongoose');
 
 const { executeActionSequence } = require('../services/workflowExecutionService');
 const Device = require('../models/Device');
-const DeviceGroup = require('../models/DeviceGroup');
 const insteonService = require('../services/insteonService');
 const Automation = require('../models/Automation');
+const deviceGroupService = require('../services/deviceGroupService');
 
 test('condition edge=change executes onFalseActions when condition transitions to false', async () => {
   const stateKey = `test-condition-false-${Date.now()}`;
@@ -378,8 +378,8 @@ test('device_control action passes Insteon retry parameters through to command e
 });
 
 test('device_control action can target a device group', async (t) => {
-  const originalFind = Device.find;
-  const originalFindOne = DeviceGroup.findOne;
+  const originalResolveGroupExecutionPlanByName = deviceGroupService.resolveGroupExecutionPlanByName;
+  const originalTryControlDeviceGroup = insteonService.tryControlDeviceGroup;
   const originalTurnOff = insteonService.turnOff;
   const receivedTargets = [];
   const receivedOptions = [];
@@ -387,8 +387,8 @@ test('device_control action can target a device group', async (t) => {
   let maxInFlight = 0;
 
   t.after(() => {
-    Device.find = originalFind;
-    DeviceGroup.findOne = originalFindOne;
+    deviceGroupService.resolveGroupExecutionPlanByName = originalResolveGroupExecutionPlanByName;
+    insteonService.tryControlDeviceGroup = originalTryControlDeviceGroup;
     insteonService.turnOff = originalTurnOff;
   });
 
@@ -415,12 +415,29 @@ test('device_control action can target a device group', async (t) => {
     }
   ];
 
-  Device.find = () => ({
-    sort: () => ({
-      lean: async () => groupDevices
-    })
+  deviceGroupService.resolveGroupExecutionPlanByName = async () => ({
+    rootGroup: {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Interior Lights',
+      normalizedName: 'interior lights'
+    },
+    devices: groupDevices,
+    units: [
+      {
+        groupId: new mongoose.Types.ObjectId().toString(),
+        groupName: 'Interior Lights',
+        groupRecord: {
+          _id: new mongoose.Types.ObjectId().toString(),
+          name: 'Interior Lights',
+          normalizedName: 'interior lights'
+        },
+        devices: groupDevices,
+        allowManagedInsteonGroup: true
+      }
+    ],
+    containsNestedGroups: false
   });
-  DeviceGroup.findOne = async () => null;
+  insteonService.tryControlDeviceGroup = async () => null;
 
   insteonService.turnOff = async (target, options) => {
     receivedTargets.push(target);
@@ -459,14 +476,12 @@ test('device_control action can target a device group', async (t) => {
 });
 
 test('device_control action uses managed INSTEON group broadcast when the device group has only linked INSTEON members', async (t) => {
-  const originalFind = Device.find;
-  const originalFindOne = DeviceGroup.findOne;
+  const originalResolveGroupExecutionPlanByName = deviceGroupService.resolveGroupExecutionPlanByName;
   const originalTryControlDeviceGroup = insteonService.tryControlDeviceGroup;
   const originalTurnOff = insteonService.turnOff;
 
   t.after(() => {
-    Device.find = originalFind;
-    DeviceGroup.findOne = originalFindOne;
+    deviceGroupService.resolveGroupExecutionPlanByName = originalResolveGroupExecutionPlanByName;
     insteonService.tryControlDeviceGroup = originalTryControlDeviceGroup;
     insteonService.turnOff = originalTurnOff;
   });
@@ -498,15 +513,24 @@ test('device_control action uses managed INSTEON group broadcast when the device
     }
   ];
 
-  Device.find = () => ({
-    sort: () => ({
-      lean: async () => groupDevices
-    })
-  });
-  DeviceGroup.findOne = async () => ({
+  const rootGroup = {
     _id: new mongoose.Types.ObjectId().toString(),
     name: 'Interior Lights',
     normalizedName: 'interior lights'
+  };
+  deviceGroupService.resolveGroupExecutionPlanByName = async () => ({
+    rootGroup,
+    devices: groupDevices,
+    units: [
+      {
+        groupId: rootGroup._id,
+        groupName: rootGroup.name,
+        groupRecord: rootGroup,
+        devices: groupDevices,
+        allowManagedInsteonGroup: true
+      }
+    ],
+    containsNestedGroups: false
   });
 
   let receivedArgs = null;
@@ -553,6 +577,136 @@ test('device_control action uses managed INSTEON group broadcast when the device
   assert.equal(result.actionResults[0].details.executionMode, 'insteon_group_broadcast');
   assert.equal(result.actionResults[0].details.successfulTargets, 2);
   assert.equal(result.actionResults[0].details.insteonPlmGroup, 251);
+});
+
+test('device_control action can execute a nested master group across subgroup units', async (t) => {
+  const originalResolveGroupExecutionPlanByName = deviceGroupService.resolveGroupExecutionPlanByName;
+  const originalTryControlDeviceGroup = insteonService.tryControlDeviceGroup;
+  const originalTurnOff = insteonService.turnOff;
+  const directTargets = [];
+
+  t.after(() => {
+    deviceGroupService.resolveGroupExecutionPlanByName = originalResolveGroupExecutionPlanByName;
+    insteonService.tryControlDeviceGroup = originalTryControlDeviceGroup;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  const insteonDevices = [
+    {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Hall Lamp',
+      room: 'Hall',
+      type: 'light',
+      properties: {
+        source: 'insteon',
+        insteonAddress: '11.22.33',
+        linkedToCurrentPlm: true
+      }
+    },
+    {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Kitchen Lamp',
+      room: 'Kitchen',
+      type: 'light',
+      properties: {
+        source: 'insteon',
+        insteonAddress: '22.33.44',
+        linkedToCurrentPlm: true
+      }
+    }
+  ];
+  const directFallbackDevice = {
+    _id: new mongoose.Types.ObjectId().toString(),
+    name: 'Porch Light',
+    room: 'Porch',
+    type: 'light',
+    properties: {
+      source: 'insteon'
+    }
+  };
+
+  deviceGroupService.resolveGroupExecutionPlanByName = async () => ({
+    rootGroup: {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Whole Home Lighting',
+      normalizedName: 'whole home lighting'
+    },
+    devices: [...insteonDevices, directFallbackDevice],
+    units: [
+      {
+        groupId: new mongoose.Types.ObjectId().toString(),
+        groupName: 'Interior Insteon',
+        groupRecord: {
+          _id: new mongoose.Types.ObjectId().toString(),
+          name: 'Interior Insteon',
+          normalizedName: 'interior insteon'
+        },
+        devices: insteonDevices,
+        allowManagedInsteonGroup: true
+      },
+      {
+        groupId: new mongoose.Types.ObjectId().toString(),
+        groupName: 'Exterior Direct',
+        groupRecord: {
+          _id: new mongoose.Types.ObjectId().toString(),
+          name: 'Exterior Direct',
+          normalizedName: 'exterior direct'
+        },
+        devices: [directFallbackDevice],
+        allowManagedInsteonGroup: false
+      }
+    ],
+    containsNestedGroups: true
+  });
+
+  insteonService.tryControlDeviceGroup = async (_groupRecord, devices, actionName) => {
+    if (actionName !== 'turn_off') {
+      return null;
+    }
+
+    return {
+      message: `Executed turn_off on device group "Interior Insteon" via INSTEON PLM all-link broadcast (${devices.length} devices)`,
+      details: {
+        controlMethod: 'insteon_plm_group_broadcast',
+        verificationMode: 'broadcast_ack',
+        commandVariant: 'scene_off_fast',
+        insteonPlmGroup: 250,
+        sceneSynchronized: true,
+        targetCount: devices.length,
+        members: devices.map((device) => ({
+          deviceId: device._id,
+          deviceName: device.name,
+          room: device.room,
+          success: true
+        }))
+      }
+    };
+  };
+
+  insteonService.turnOff = async (target) => {
+    directTargets.push(target);
+    return {
+      message: `Device turned off via Insteon PLM ${target}`,
+      details: {
+        controlMethod: 'direct_fallback'
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: { kind: 'device_group', group: 'Whole Home Lighting' },
+      parameters: { action: 'turn_off' }
+    }
+  ], { context: {} });
+
+  assert.deepEqual(directTargets, [directFallbackDevice._id]);
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].details.executionMode, 'nested_group_plan');
+  assert.equal(result.actionResults[0].details.unitCount, 2);
+  assert.equal(result.actionResults[0].details.successfulTargets, 3);
+  assert.equal(result.actionResults[0].details.failedTargets, 0);
 });
 
 test('condition expressions can read nested SmartThings property paths', async (t) => {

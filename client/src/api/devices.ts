@@ -28,9 +28,24 @@ export type DeviceGroupSummary = {
   name: string;
   normalizedName: string;
   description: string;
+  groupKind: 'direct' | 'master' | 'hybrid';
+  containsNestedGroups: boolean;
   deviceCount: number;
   deviceIds: string[];
   deviceNames: string[];
+  directDeviceCount: number;
+  directDeviceIds: string[];
+  directDeviceNames: string[];
+  childGroupIds: string[];
+  childGroups: Array<{
+    _id: string;
+    name: string;
+    normalizedName: string;
+    groupKind: 'direct' | 'master' | 'hybrid';
+    deviceCount: number;
+  }>;
+  parentGroupIds: string[];
+  parentGroupNames: string[];
   rooms: string[];
   types: string[];
   sources: string[];
@@ -38,6 +53,8 @@ export type DeviceGroupSummary = {
   automationUsageCount: number;
   workflowNames: string[];
   automationNames: string[];
+  insteonPlmGroup?: number | null;
+  insteonLastSyncedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -116,6 +133,7 @@ export const createDeviceGroup = async (payload: {
   name: string;
   description?: string;
   deviceIds?: string[];
+  childGroupIds?: string[];
 }) => {
   try {
     console.log('Creating device group via API:', payload);
@@ -133,6 +151,8 @@ export const updateDeviceGroup = async (
   payload: {
     name?: string;
     description?: string;
+    deviceIds?: string[];
+    childGroupIds?: string[];
   }
 ) => {
   try {
@@ -155,6 +175,24 @@ export const setDeviceGroupDevices = async (groupId: string, deviceIds: string[]
   } catch (error) {
     console.error('Error updating device group membership:', error);
     throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const setDeviceGroupMembership = async (
+  groupId: string,
+  payload: {
+    deviceIds?: string[];
+    childGroupIds?: string[];
+  }
+) => {
+  try {
+    console.log('Updating device group membership via API:', groupId, payload)
+    const response = await api.put(`/api/device-groups/${groupId}/membership`, payload)
+    console.log('Successfully updated device group membership via API')
+    return response.data.data as { group: DeviceGroupSummary };
+  } catch (error) {
+    console.error('Error updating device group membership:', error)
+    throw new Error(error?.response?.data?.error || error.message)
   }
 }
 

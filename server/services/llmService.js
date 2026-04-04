@@ -35,6 +35,7 @@ const DEFAULT_OPENAI_MODEL = 'gpt-5.2-codex';
 const OPENAI_MAX_OUTPUT_TOKENS = 1024;
 const DEFAULT_LOCAL_TIMEOUT_MS = 30000;
 const DEFAULT_PROVIDER_PRIORITY = ['local', 'codex', 'openai', 'anthropic'];
+const DEFAULT_LOCAL_KEEP_ALIVE = '-1';
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -410,6 +411,24 @@ function mergeLocalOllamaRequestOptions(baseOptions, overrides = {}) {
   return merged;
 }
 
+function resolveLocalOllamaKeepAlive(requestConfig = {}) {
+  if (requestConfig && Object.prototype.hasOwnProperty.call(requestConfig, 'ollamaKeepAlive')) {
+    const value = requestConfig.ollamaKeepAlive;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  const configured = typeof process.env.HOMEBRAIN_OLLAMA_KEEP_ALIVE === 'string'
+    ? process.env.HOMEBRAIN_OLLAMA_KEEP_ALIVE.trim()
+    : '';
+
+  return configured || DEFAULT_LOCAL_KEEP_ALIVE;
+}
+
 async function getLocalModelRuntimeInfo(baseUrl, requestedModel) {
   try {
     const response = await axios.get(`${baseUrl}/api/ps`, { timeout: 1500 });
@@ -571,6 +590,7 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
   const baseRequestOptions = await buildLocalOllamaOptions();
   const requestOptions = mergeLocalOllamaRequestOptions(baseRequestOptions, requestConfig.ollamaOptions);
   const requestFormat = requestConfig.ollamaFormat || DEFAULT_OLLAMA_FORMAT;
+  const requestKeepAlive = resolveLocalOllamaKeepAlive(requestConfig);
   const requestTimeoutMs = sanitizeNumeric(requestConfig.timeoutMs, {
     min: 3000,
     max: 60000,
@@ -617,7 +637,7 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
   }
 
   if (candidateModels.length === 0) {
-    throw new Error('No local LLM models available. Install a model with "ollama pull <model>" or configure Settings.localLlmModel.');
+    throw new Error('No local LLM models available. Install a model with "ollama pull <model>" and choose the shared Ollama model on the Ollama page.');
   }
 
   if (strictModel && installedModels.length > 0) {
@@ -648,7 +668,8 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
           message,
           requestOptions,
           requestTimeoutMs,
-          requestFormat
+          requestFormat,
+          requestKeepAlive
         );
       } catch (formatError) {
         if (
@@ -663,7 +684,8 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
             message,
             requestOptions,
             requestTimeoutMs,
-            DEFAULT_OLLAMA_FORMAT
+            DEFAULT_OLLAMA_FORMAT,
+            requestKeepAlive
           );
         } else {
           throw formatError;
@@ -710,7 +732,8 @@ async function attemptLocalModelRequest(
   message,
   requestOptions,
   requestTimeoutMs = DEFAULT_LOCAL_TIMEOUT_MS,
-  requestFormat = DEFAULT_OLLAMA_FORMAT
+  requestFormat = DEFAULT_OLLAMA_FORMAT,
+  requestKeepAlive = DEFAULT_LOCAL_KEEP_ALIVE
 ) {
   const headers = { 'Content-Type': 'application/json' };
   let lastError = null;
@@ -730,7 +753,8 @@ async function attemptLocalModelRequest(
     format: requestFormat,
     messages: chatMessages,
     options: sanitizedOptions,
-    stream: false
+    stream: false,
+    keep_alive: requestKeepAlive
   };
 
   try {
@@ -766,7 +790,8 @@ async function attemptLocalModelRequest(
       prompt: promptWithInstruction,
       format: requestFormat,
       options: sanitizedOptions,
-      stream: false
+      stream: false,
+      keep_alive: requestKeepAlive
     }, {
       timeout: requestTimeoutMs,
       headers

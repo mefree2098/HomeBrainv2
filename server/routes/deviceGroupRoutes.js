@@ -58,7 +58,12 @@ router.post('/', admin, async (req, res) => {
   } catch (error) {
     console.error('POST /api/device-groups - Error:', error.message);
     console.error(error.stack);
-    const statusCode = error.message.includes('required') || error.message.includes('already exists')
+    const statusCode = error.message.includes('required')
+      || error.message.includes('already exists')
+      || error.message.includes('Unknown device IDs')
+      || error.message.includes('Unknown child group IDs')
+      || error.message.includes('cannot contain itself')
+      || error.message.includes('cannot be nested in a cycle')
       ? 400
       : 500;
     return res.status(statusCode).json({
@@ -82,6 +87,10 @@ router.put('/:id', admin, async (req, res) => {
     const statusCode = error.message.includes('Invalid')
       || error.message.includes('required')
       || error.message.includes('already exists')
+      || error.message.includes('Unknown device IDs')
+      || error.message.includes('Unknown child group IDs')
+      || error.message.includes('cannot contain itself')
+      || error.message.includes('cannot be nested in a cycle')
         ? 400
         : error.message.includes('not found')
           ? 404
@@ -106,6 +115,59 @@ router.put('/:id/devices', admin, async (req, res) => {
     console.error(error.stack);
     const statusCode = error.message.includes('Invalid')
       || error.message.includes('Unknown device IDs')
+        ? 400
+        : error.message.includes('not found')
+          ? 404
+          : 500;
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to update device group membership'
+    });
+  }
+});
+
+router.put('/:id/children', admin, async (req, res) => {
+  try {
+    const group = await deviceGroupService.setGroupChildGroups(req.params.id, req.body?.childGroupIds || []);
+    return res.status(200).json({
+      success: true,
+      message: `Updated child groups for "${group.name}"`,
+      data: { group }
+    });
+  } catch (error) {
+    console.error(`PUT /api/device-groups/${req.params.id}/children - Error:`, error.message);
+    console.error(error.stack);
+    const statusCode = error.message.includes('Invalid')
+      || error.message.includes('Unknown child group IDs')
+      || error.message.includes('cannot contain itself')
+      || error.message.includes('cannot be nested in a cycle')
+        ? 400
+        : error.message.includes('not found')
+          ? 404
+          : 500;
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to update child groups'
+    });
+  }
+});
+
+router.put('/:id/membership', admin, async (req, res) => {
+  try {
+    const group = await deviceGroupService.setGroupMembership(req.params.id, req.body || {});
+    return res.status(200).json({
+      success: true,
+      message: `Updated membership for "${group.name}"`,
+      data: { group }
+    });
+  } catch (error) {
+    console.error(`PUT /api/device-groups/${req.params.id}/membership - Error:`, error.message);
+    console.error(error.stack);
+    const statusCode = error.message.includes('Invalid')
+      || error.message.includes('Unknown device IDs')
+      || error.message.includes('Unknown child group IDs')
+      || error.message.includes('cannot contain itself')
+      || error.message.includes('cannot be nested in a cycle')
         ? 400
         : error.message.includes('not found')
           ? 404

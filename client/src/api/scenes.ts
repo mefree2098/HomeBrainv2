@@ -1,5 +1,29 @@
 import api from './api';
 
+export type SceneDeviceAction = {
+  deviceId: string | { _id: string; name?: string };
+  action: string;
+  value?: any;
+};
+
+export type SceneGroupAction = {
+  groupId: string | { _id: string; name?: string; normalizedName?: string };
+  action: string;
+  value?: any;
+};
+
+export type SceneRecord = {
+  _id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  icon?: string;
+  color?: string;
+  active?: boolean;
+  deviceActions?: SceneDeviceAction[];
+  groupActions?: SceneGroupAction[];
+};
+
 // Description: Get all scenes
 // Endpoint: GET /api/scenes
 // Request: {}
@@ -32,9 +56,15 @@ export const activateScene = async (data: { sceneId: string }) => {
 
 // Description: Create a new scene
 // Endpoint: POST /api/scenes
-// Request: { name: string, description: string, devices: Array<string>, deviceActions?: Array<object> }
+// Request: { name: string, description: string, devices: Array<string>, deviceActions?: Array<object>, groupActions?: Array<object> }
 // Response: { success: boolean, scene: object }
-export const createScene = async (data: { name: string; description: string; devices: Array<string>; deviceActions?: Array<any> }) => {
+export const createScene = async (data: {
+  name: string;
+  description: string;
+  devices: Array<string>;
+  deviceActions?: SceneDeviceAction[];
+  groupActions?: SceneGroupAction[];
+}) => {
   console.log('Creating scene:', data)
   try {
     const response = await api.post('/api/scenes', data);
@@ -62,12 +92,13 @@ export const createSceneFromNaturalLanguage = async (data: { description: string
 
 // Description: Update existing scene
 // Endpoint: PUT /api/scenes/:id
-// Request: { name?: string, description?: string, deviceActions?: Array<object>, category?: string, icon?: string, color?: string }
+// Request: { name?: string, description?: string, deviceActions?: Array<object>, groupActions?: Array<object>, category?: string, icon?: string, color?: string }
 // Response: { success: boolean, message: string, scene: object }
 export const updateScene = async (id: string, data: {
   name?: string;
   description?: string;
-  deviceActions?: Array<any>;
+  deviceActions?: SceneDeviceAction[];
+  groupActions?: SceneGroupAction[];
   category?: string;
   icon?: string;
   color?: string;
