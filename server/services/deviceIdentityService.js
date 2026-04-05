@@ -102,6 +102,11 @@ function normalizePlatformIdentityProperties(properties = {}) {
     normalizedProperties.harmonyHubIp = harmonyHubIp;
   }
 
+  const harmonyRemoteId = trimString(normalizedProperties.harmonyRemoteId);
+  if (harmonyRemoteId) {
+    normalizedProperties.harmonyRemoteId = harmonyRemoteId;
+  }
+
   const harmonyActivityId = trimString(normalizedProperties.harmonyActivityId);
   if (harmonyActivityId) {
     normalizedProperties.harmonyActivityId = harmonyActivityId;
@@ -158,29 +163,55 @@ function buildSmartThingsDeviceIdentityQuery(deviceId) {
   };
 }
 
-function buildHarmonyActivityIdentityQuery(hubIp, activityId) {
-  const normalizedHubIp = normalizeHost(hubIp);
+function buildHarmonyActivityIdentityQuery(hubIp, activityId, remoteId = null) {
+  const normalizedHubIdentity = buildHarmonyHubIdentityQuery(hubIp, remoteId);
   const normalizedActivityId = trimString(activityId);
-  if (!normalizedHubIp || !normalizedActivityId) {
+  if (!normalizedHubIdentity || !normalizedActivityId) {
     return null;
   }
 
   return {
-    'properties.harmonyHubIp': normalizedHubIp,
+    ...normalizedHubIdentity,
     'properties.harmonyActivityId': normalizedActivityId
   };
 }
 
-function buildHarmonyDeviceIdentityQuery(hubIp, deviceId) {
-  const normalizedHubIp = normalizeHost(hubIp);
+function buildHarmonyDeviceIdentityQuery(hubIp, deviceId, remoteId = null) {
+  const normalizedHubIdentity = buildHarmonyHubIdentityQuery(hubIp, remoteId);
   const normalizedDeviceId = trimString(deviceId);
-  if (!normalizedHubIp || !normalizedDeviceId) {
+  if (!normalizedHubIdentity || !normalizedDeviceId) {
     return null;
   }
 
   return {
-    'properties.harmonyHubIp': normalizedHubIp,
+    ...normalizedHubIdentity,
     'properties.harmonyDeviceId': normalizedDeviceId
+  };
+}
+
+function buildHarmonyHubIdentityQuery(hubIp, remoteId = null) {
+  const normalizedHubIp = normalizeHost(hubIp);
+  const normalizedRemoteId = trimString(remoteId);
+  const clauses = [];
+
+  if (normalizedRemoteId) {
+    clauses.push({ 'properties.harmonyRemoteId': normalizedRemoteId });
+  }
+
+  if (normalizedHubIp) {
+    clauses.push({ 'properties.harmonyHubIp': normalizedHubIp });
+  }
+
+  if (clauses.length === 0) {
+    return null;
+  }
+
+  if (clauses.length === 1) {
+    return clauses[0];
+  }
+
+  return {
+    $or: clauses
   };
 }
 
@@ -250,7 +281,8 @@ function buildIdentityDescriptors(properties = {}) {
 
   const harmonyQuery = buildHarmonyActivityIdentityQuery(
     normalizedProperties.harmonyHubIp,
-    normalizedProperties.harmonyActivityId
+    normalizedProperties.harmonyActivityId,
+    normalizedProperties.harmonyRemoteId
   );
   if (harmonyQuery) {
     descriptors.push({
@@ -262,7 +294,8 @@ function buildIdentityDescriptors(properties = {}) {
 
   const harmonyDeviceQuery = buildHarmonyDeviceIdentityQuery(
     normalizedProperties.harmonyHubIp,
-    normalizedProperties.harmonyDeviceId
+    normalizedProperties.harmonyDeviceId,
+    normalizedProperties.harmonyRemoteId
   );
   if (harmonyDeviceQuery) {
     descriptors.push({

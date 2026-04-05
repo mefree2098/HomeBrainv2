@@ -364,3 +364,102 @@ test('syncDevices updates Harmony raw device metadata while preserving custom de
   });
   assert.equal(deleteManyCalls.length, 2);
 });
+
+test('syncDevices migrates a legacy Harmony raw device row onto stable remoteId identity', async (t) => {
+  const originalFind = Device.find;
+  const originalCreate = Device.create;
+  const originalDeleteMany = Device.deleteMany;
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.create = originalCreate;
+    Device.deleteMany = originalDeleteMany;
+  });
+
+  const service = new HarmonyService();
+  service.discoverHubs = async () => [{ ip: '192.168.1.50' }];
+  service.getHubSnapshot = async () => ({
+    ip: '192.168.1.50',
+    friendlyName: 'Bedroom Hub',
+    remoteId: 'remote-bedroom',
+    currentActivityId: '-1',
+    currentActivityLabel: 'Off',
+    activities: [],
+    devices: [
+      {
+        id: '77',
+        label: 'Amazon Fire TV',
+        manufacturer: 'Amazon',
+        model: 'Fire TV',
+        commands: [
+          { name: 'PowerToggle', label: 'PowerToggle', action: 'IR_POWER_TOGGLE' },
+          { name: 'Play', label: 'Play', action: 'IR_PLAY' },
+          { name: 'Pause', label: 'Pause', action: 'IR_PAUSE' }
+        ]
+      }
+    ]
+  });
+  service.mergeKnownHubs = async () => [];
+  service.syncActivityStates = async () => ({ success: true });
+
+  const legacyDevice = {
+    _id: 'legacy-fire-tv',
+    name: 'Amazon Fire TV',
+    type: 'switch',
+    room: 'Bedroom Hub',
+    status: false,
+    groups: ['Media'],
+    brand: 'Amazon',
+    model: 'Fire TV',
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: 'bedroom-hub.local',
+      harmonyHubName: 'Bedroom Hub',
+      harmonyDeviceLabel: 'Amazon Fire TV',
+      harmonyRepeatPowerCommands: true
+    },
+    createdAt: new Date('2026-04-03T00:00:00Z'),
+    async save() {
+      this.saved = true;
+    }
+  };
+
+  const deleteManyCalls = [];
+
+  Device.find = async (query) => {
+    if (query['properties.harmonyDeviceId']) {
+      assert.equal(query['properties.harmonyDeviceId'], '77');
+      assert.deepEqual(query.$or, [
+        { 'properties.harmonyRemoteId': 'remote-bedroom' },
+        { 'properties.harmonyHubIp': '192.168.1.50' }
+      ]);
+      return [];
+    }
+
+    if (query.name === 'Amazon Fire TV') {
+      assert.equal(query.room, 'Bedroom Hub');
+      return [legacyDevice];
+    }
+
+    throw new Error(`Unexpected Device.find query: ${JSON.stringify(query)}`);
+  };
+  Device.create = async () => {
+    throw new Error('Device.create should not be called when a legacy Harmony row can be migrated');
+  };
+  Device.deleteMany = async (query) => {
+    deleteManyCalls.push(query);
+    return { deletedCount: 0 };
+  };
+
+  const result = await service.syncDevices({ timeoutMs: 1 });
+
+  assert.equal(result.success, true);
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 1);
+  assert.equal(legacyDevice.saved, true);
+  assert.equal(legacyDevice.properties.harmonyDeviceId, '77');
+  assert.equal(legacyDevice.properties.harmonyRemoteId, 'remote-bedroom');
+  assert.equal(legacyDevice.properties.harmonyHubIp, '192.168.1.50');
+  assert.equal(legacyDevice.properties.harmonyRepeatPowerCommands, true);
+  assert.equal(deleteManyCalls.length, 2);
+});

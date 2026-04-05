@@ -249,8 +249,28 @@ function toUniqueHostList(values = []) {
   return result;
 }
 
+function trimHarmonyValue(value) {
+  return (value || '').toString().trim();
+}
+
 function normalizeCommandName(value) {
   return (value || '').toString().trim().toLowerCase();
+}
+
+function mergeUniqueDevices(...collections) {
+  const merged = new Map();
+
+  collections
+    .flat()
+    .filter(Boolean)
+    .forEach((device, index) => {
+      const key = trimHarmonyValue(device?._id) || `fallback-${index}`;
+      if (!merged.has(key)) {
+        merged.set(key, device);
+      }
+    });
+
+  return Array.from(merged.values());
 }
 
 function toDateOrNull(value) {
@@ -1249,6 +1269,7 @@ class HarmonyService {
         harmonyEntityType: HARMONY_ENTITY_TYPES.DEVICE,
         harmonyHubIp: snapshot.ip,
         harmonyHubName: snapshot.friendlyName,
+        harmonyRemoteId: trimHarmonyValue(snapshot?.remoteId) || null,
         harmonyDeviceId: (device?.id || '').toString(),
         harmonyDeviceLabel: (device?.label || device?.id || 'Unknown device').toString(),
         harmonyCommandCount: commands.length,
@@ -1267,18 +1288,158 @@ class HarmonyService {
     };
   }
 
+  async findMatchingHarmonyActivityRows(snapshot, activity, identityQuery = null) {
+    const exactMatches = identityQuery
+      ? await Device.find(identityQuery)
+      : [];
+    const hubRoom = (snapshot?.friendlyName || 'Harmony').toString();
+    const activityId = trimHarmonyValue(activity?.id);
+    const activityLabel = trimHarmonyValue(activity?.label);
+    const activityName = `${hubRoom} - ${activityLabel || activityId || 'Activity'}`;
+    const snapshotRemoteId = trimHarmonyValue(snapshot?.remoteId);
+    const snapshotHubName = normalizeCommandName(snapshot?.friendlyName);
+    const shouldCheckFallback = exactMatches.length === 0 || Boolean(snapshotRemoteId);
+
+    if (!shouldCheckFallback) {
+      return exactMatches;
+    }
+
+    const fallbackCandidates = await Device.find({
+      'properties.source': 'harmony',
+      room: hubRoom,
+      name: activityName,
+      $or: [
+        { 'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.ACTIVITY },
+        {
+          'properties.harmonyEntityType': { $exists: false },
+          'properties.harmonyDeviceId': { $exists: false }
+        }
+      ]
+    });
+
+    const filteredFallback = fallbackCandidates.filter((candidate) => {
+      const existingProperties = candidate?.properties && typeof candidate.properties === 'object'
+        ? candidate.properties
+        : {};
+      const existingDeviceId = trimHarmonyValue(existingProperties.harmonyDeviceId);
+      const existingActivityId = trimHarmonyValue(existingProperties.harmonyActivityId);
+      const existingRemoteId = trimHarmonyValue(existingProperties.harmonyRemoteId);
+      const existingActivityLabel = normalizeCommandName(existingProperties.harmonyActivityLabel);
+      const existingHubName = normalizeCommandName(existingProperties.harmonyHubName || candidate?.room);
+
+      if (existingDeviceId) {
+        return false;
+      }
+      if (existingActivityId && activityId && existingActivityId !== activityId) {
+        return false;
+      }
+      if (snapshotRemoteId && existingRemoteId && existingRemoteId !== snapshotRemoteId) {
+        return false;
+      }
+      if (activityLabel && existingActivityLabel && existingActivityLabel !== normalizeCommandName(activityLabel)) {
+        return false;
+      }
+      if (snapshotHubName && existingHubName && existingHubName !== snapshotHubName) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return mergeUniqueDevices(exactMatches, filteredFallback);
+  }
+
+  async findMatchingHarmonyDeviceRows(snapshot, device, identityQuery = null) {
+    const exactMatches = identityQuery
+      ? await Device.find(identityQuery)
+      : [];
+    const hubRoom = (snapshot?.friendlyName || 'Harmony').toString();
+    const harmonyDeviceId = trimHarmonyValue(device?.id);
+    const deviceLabel = trimHarmonyValue(device?.label || harmonyDeviceId || 'Harmony Device');
+    const snapshotRemoteId = trimHarmonyValue(snapshot?.remoteId);
+    const snapshotHubName = normalizeCommandName(snapshot?.friendlyName);
+    const deviceLabelKey = normalizeCommandName(deviceLabel);
+    const manufacturerKey = normalizeCommandName(device?.manufacturer);
+    const modelKey = normalizeCommandName(device?.model);
+    const shouldCheckFallback = exactMatches.length === 0 || Boolean(snapshotRemoteId);
+
+    if (!shouldCheckFallback) {
+      return exactMatches;
+    }
+
+    const fallbackCandidates = await Device.find({
+      'properties.source': 'harmony',
+      room: hubRoom,
+      name: deviceLabel,
+      $or: [
+        { 'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.DEVICE },
+        {
+          'properties.harmonyEntityType': { $exists: false },
+          'properties.harmonyActivityId': { $exists: false }
+        }
+      ]
+    });
+
+    const hasConflictingKnownIdentity = fallbackCandidates.some((candidate) => {
+      const existingDeviceId = trimHarmonyValue(candidate?.properties?.harmonyDeviceId);
+      return existingDeviceId && existingDeviceId !== harmonyDeviceId;
+    });
+
+    const filteredFallback = hasConflictingKnownIdentity
+      ? []
+      : fallbackCandidates.filter((candidate) => {
+        const existingProperties = candidate?.properties && typeof candidate.properties === 'object'
+          ? candidate.properties
+          : {};
+        const existingActivityId = trimHarmonyValue(existingProperties.harmonyActivityId);
+        const existingDeviceId = trimHarmonyValue(existingProperties.harmonyDeviceId);
+        const existingRemoteId = trimHarmonyValue(existingProperties.harmonyRemoteId);
+        const existingDeviceLabel = normalizeCommandName(existingProperties.harmonyDeviceLabel || candidate?.name);
+        const existingHubName = normalizeCommandName(existingProperties.harmonyHubName || candidate?.room);
+        const candidateBrand = normalizeCommandName(candidate?.brand);
+        const candidateModel = normalizeCommandName(candidate?.model);
+
+        if (existingActivityId) {
+          return false;
+        }
+        if (existingDeviceId && harmonyDeviceId && existingDeviceId !== harmonyDeviceId) {
+          return false;
+        }
+        if (snapshotRemoteId && existingRemoteId && existingRemoteId !== snapshotRemoteId) {
+          return false;
+        }
+        if (deviceLabelKey && existingDeviceLabel && existingDeviceLabel !== deviceLabelKey) {
+          return false;
+        }
+        if (snapshotHubName && existingHubName && existingHubName !== snapshotHubName) {
+          return false;
+        }
+        if (manufacturerKey && candidateBrand && candidateBrand !== manufacturerKey) {
+          return false;
+        }
+        if (modelKey && candidateModel && candidateModel !== modelKey) {
+          return false;
+        }
+
+        return true;
+      });
+
+    return mergeUniqueDevices(exactMatches, filteredFallback);
+  }
+
   async upsertDiscoveredDevice({
     identityQuery,
+    matchingDevices = null,
     payload,
     preserveStatus = false,
     summary,
     duplicateLabel = 'Harmony row'
   }) {
-    const matchingDevices = identityQuery
-      ? await Device.find(identityQuery)
-      : [];
-    const existing = selectCanonicalDevice(matchingDevices);
-    const duplicateDevices = matchingDevices.filter((candidate) => (
+    const discoveredMatches = Array.isArray(matchingDevices)
+      ? matchingDevices
+      : (identityQuery ? await Device.find(identityQuery) : []);
+    const existing = selectCanonicalDevice(discoveredMatches);
+    const duplicateDevices = discoveredMatches.filter((candidate) => (
       String(candidate?._id || '') !== String(existing?._id || '')
     ));
 
@@ -1593,6 +1754,7 @@ class HarmonyService {
         harmonyEntityType: HARMONY_ENTITY_TYPES.ACTIVITY,
         harmonyHubIp: snapshot.ip,
         harmonyHubName: snapshot.friendlyName,
+        harmonyRemoteId: trimHarmonyValue(snapshot?.remoteId) || null,
         harmonyActivityId: activityId,
         harmonyActivityLabel: activity.label,
         harmonyActivityType: activity.activityTypeDisplayName || null,
@@ -1668,10 +1830,16 @@ class HarmonyService {
           for (const activity of snapshot.activities) {
             activityIds.push(activity.id.toString());
             const payload = this.buildHarmonyActivityDevice(snapshot, activity);
-            const identityQuery = buildHarmonyActivityIdentityQuery(snapshot.ip, activity.id.toString());
+            const identityQuery = buildHarmonyActivityIdentityQuery(
+              snapshot.ip,
+              activity.id.toString(),
+              snapshot.remoteId
+            );
+            const matchingDevices = await this.findMatchingHarmonyActivityRows(snapshot, activity, identityQuery);
             // Preserve any custom properties while keeping activity state authoritative.
             await this.upsertDiscoveredDevice({
               identityQuery,
+              matchingDevices,
               payload,
               preserveStatus: false,
               summary,
@@ -1686,14 +1854,18 @@ class HarmonyService {
             }
 
             deviceIds.push(harmonyDeviceId);
-            const identityQuery = buildHarmonyDeviceIdentityQuery(snapshot.ip, harmonyDeviceId);
-            const existing = identityQuery
-              ? selectCanonicalDevice(await Device.find(identityQuery))
-              : null;
+            const identityQuery = buildHarmonyDeviceIdentityQuery(
+              snapshot.ip,
+              harmonyDeviceId,
+              snapshot.remoteId
+            );
+            const matchingDevices = await this.findMatchingHarmonyDeviceRows(snapshot, device, identityQuery);
+            const existing = selectCanonicalDevice(matchingDevices);
             const payload = this.buildHarmonyCommandDevice(snapshot, device, existing);
 
             await this.upsertDiscoveredDevice({
               identityQuery,
+              matchingDevices,
               payload,
               preserveStatus: true,
               summary,

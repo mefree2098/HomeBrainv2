@@ -33,10 +33,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle
+  DialogContent
 } from "@/components/ui/dialog"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Input } from "@/components/ui/input"
@@ -534,6 +531,80 @@ function DeviceDetailRow({ label, value, mono = false }: DeviceDetailRowProps) {
   )
 }
 
+type DeviceTabHeroRow = {
+  label: string
+  value: string
+}
+
+type DeviceTabHeroProps = {
+  icon: LucideIcon
+  eyebrow: string
+  title: string
+  subtitle: string
+  description: string
+  pills: Array<{
+    label: string
+    tone?: DeviceStatusPillProps["tone"]
+  }>
+  summaryTitle: string
+  summaryRows: DeviceTabHeroRow[]
+}
+
+function DeviceTabHero({
+  icon: Icon,
+  eyebrow,
+  title,
+  subtitle,
+  description,
+  pills,
+  summaryTitle,
+  summaryRows
+}: DeviceTabHeroProps) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.9fr)]">
+      <Card className="border-white/10 bg-[linear-gradient(135deg,rgba(32,73,108,0.34),rgba(12,20,40,0.14))]">
+        <CardContent className="p-6 sm:p-7">
+          <p className="section-kicker text-white/45">{eyebrow}</p>
+          <div className="mt-4 flex min-w-0 items-start gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.2rem] border border-white/10 bg-white/8 shadow-[0_18px_48px_rgba(4,12,28,0.34)] sm:h-14 sm:w-14 sm:rounded-[1.4rem]">
+              <Icon className="h-5 w-5 text-cyan-200 sm:h-6 sm:w-6" />
+            </div>
+            <div className="min-w-0">
+              <p className="font-body text-[clamp(1.6rem,4.8vw,3rem)] font-semibold leading-[0.94] tracking-[-0.07em] text-white">
+                {title}
+              </p>
+              <p className="mt-2 text-sm text-white/62 sm:text-base">{subtitle}</p>
+            </div>
+          </div>
+          <p className="mt-4 max-w-3xl text-sm leading-relaxed text-white/74 sm:text-[0.95rem]">
+            {description}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {pills.map((pill) => (
+              <DeviceStatusPill
+                key={`${eyebrow}-${pill.label}`}
+                label={pill.label}
+                tone={pill.tone}
+              />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-white/10 bg-black/18">
+        <CardContent className="p-6 sm:p-7">
+          <p className="section-kicker text-white/45">{summaryTitle}</p>
+          <div className="mt-4 space-y-0">
+            {summaryRows.map((row) => (
+              <DeviceDetailRow key={`${summaryTitle}-${row.label}`} label={row.label} value={row.value} />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 function DeviceTelemetryMetricCard({ metric, stats, points }: DeviceTelemetryMetricCardProps) {
   const chartData = useMemo(() => {
     return points.map((point) => ({
@@ -649,7 +720,7 @@ export function DeviceDetailsDialog({
   const [selectedHarmonyCommand, setSelectedHarmonyCommand] = useState("")
   const [harmonyHoldMs, setHarmonyHoldMs] = useState(0)
   const [sendingHarmonyCommand, setSendingHarmonyCommand] = useState(false)
-  const [activeTab, setActiveTab] = useState<"overview" | "alexa" | "history">("overview")
+  const [activeTab, setActiveTab] = useState<"overview" | "controls" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
 
@@ -937,6 +1008,51 @@ export function DeviceDetailsDialog({
   const telemetrySampleCountLabel = telemetrySeries?.source?.sampleCount != null
     ? telemetrySeries.source.sampleCount.toLocaleString()
     : "0"
+  const harmonyHubLabel = String(
+    ((device?.properties as Record<string, unknown> | undefined)?.harmonyHubName
+      || (device?.properties as Record<string, unknown> | undefined)?.harmonyHubIp
+      || "Unknown hub")
+  )
+  const harmonyPowerSummary = [
+    harmonyPowerCommands.on ? `On: ${harmonyPowerCommands.on}` : "",
+    harmonyPowerCommands.off ? `Off: ${harmonyPowerCommands.off}` : "",
+    harmonyPowerCommands.toggle ? `Toggle: ${harmonyPowerCommands.toggle}` : ""
+  ].filter(Boolean).join(" • ") || "No power command mapping discovered yet"
+  const overviewHeroRows: DeviceTabHeroRow[] = [
+    { label: "Room", value: device?.room || "Unassigned" },
+    { label: "Last contact", value: formatDateTime(device?.lastSeen) },
+    { label: "Groups", value: groupSummary }
+  ]
+  const controlsHeroRows: DeviceTabHeroRow[] = [
+    { label: "Source", value: getSourceLabel(device) },
+    {
+      label: harmonyCommandDevice ? "Harmony commands" : "Control surface",
+      value: harmonyCommandDevice
+        ? `${harmonyCommandCount} discovered`
+        : "Device settings and workflow groups"
+    },
+    {
+      label: harmonyCommandDevice ? "Quick controls" : "Groups",
+      value: harmonyCommandDevice
+        ? (harmonyPrimaryQuickActions.length > 0
+            ? harmonyPrimaryQuickActions.map((entry) => entry.label).join(" • ")
+            : "Command picker available")
+        : groupSummary
+    }
+  ]
+  const alexaHeroRows: DeviceTabHeroRow[] = [
+    { label: "Room hint", value: device?.room || "Unassigned" },
+    { label: "Current groups", value: groupSummary },
+    { label: "HomeBrain source", value: getSourceLabel(device) }
+  ]
+  const historyHeroRows: DeviceTabHeroRow[] = [
+    {
+      label: "Primary window",
+      value: liveSnapshot.supportsEnergyMonitoring ? `Last ${HISTORY_HOURS}h power preview` : "State-first history"
+    },
+    { label: "Telemetry metrics", value: `${telemetryMetricCount} available` },
+    { label: "Stored samples", value: telemetrySampleCountLabel }
+  ]
   const overviewStats = [
     {
       label: "State",
@@ -1135,150 +1251,65 @@ export function DeviceDetailsDialog({
         ) : (
           <Tabs
             value={activeTab}
-            onValueChange={(value) => setActiveTab(value as "overview" | "alexa" | "history")}
+            onValueChange={(value) => setActiveTab(value as "overview" | "controls" | "alexa" | "history")}
             className="flex min-h-0 flex-1 flex-col"
           >
-            <div className="relative shrink-0 border-b border-white/10 px-4 pb-4 pt-14 sm:px-7 sm:pb-6 sm:pt-6">
+            <div className="relative shrink-0 border-b border-white/10 px-4 pb-4 pt-14 sm:px-7 sm:pb-5 sm:pt-6">
               <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.24),transparent_42%),radial-gradient(circle_at_top_right,rgba(125,211,252,0.12),transparent_36%)] opacity-80 sm:h-40" />
-              <div className="relative space-y-4 sm:space-y-5">
+              <div className="relative flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <TabsList className={cn(
                   "grid w-full rounded-2xl border border-white/10 bg-black/25 p-1 sm:w-fit sm:min-w-[320px] sm:inline-grid",
-                  isAdmin && onAlexaExposureUpdated ? "grid-cols-3" : "grid-cols-2"
+                  isAdmin && onAlexaExposureUpdated ? "grid-cols-4" : "grid-cols-3"
                 )}>
                   <TabsTrigger value="overview" className="w-full rounded-xl">Overview</TabsTrigger>
+                  <TabsTrigger value="controls" className="w-full rounded-xl">Controls</TabsTrigger>
                   {isAdmin && onAlexaExposureUpdated ? (
                     <TabsTrigger value="alexa" className="w-full rounded-xl">Alexa</TabsTrigger>
                   ) : null}
                   <TabsTrigger value="history" className="w-full rounded-xl">History</TabsTrigger>
                 </TabsList>
-
-                {activeTab === "overview" ? (
-                  <DialogHeader className="space-y-4 text-left sm:space-y-5">
-                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(240px,0.85fr)]">
-                      <div className="rounded-[1.5rem] border border-white/10 bg-[linear-gradient(135deg,rgba(32,73,108,0.34),rgba(12,20,40,0.14))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5">
-                        <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.2rem] border border-white/10 bg-white/8 shadow-[0_18px_48px_rgba(4,12,28,0.34)] sm:h-14 sm:w-14 sm:rounded-[1.4rem]">
-                            <HeroIcon className="h-5 w-5 text-cyan-200 sm:h-6 sm:w-6" />
-                          </div>
-                          <div className="min-w-0">
-                            <DialogTitle className="font-body text-[clamp(1.65rem,4.8vw,3rem)] font-semibold leading-[0.94] tracking-[-0.07em] text-white">
-                              {device.name}
-                            </DialogTitle>
-                            <DialogDescription className="mt-2 text-sm text-white/62 sm:text-base">
-                              {`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
-                            </DialogDescription>
-                          </div>
-                        </div>
-                        <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/74 sm:text-[0.95rem]">
-                          {overviewCopy}
-                        </p>
-                      </div>
-
-                      <div className="rounded-[1.5rem] border border-white/10 bg-black/18 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-5">
-                        <p className="section-kicker text-white/45">Status Summary</p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <DeviceStatusPill
-                            label={primaryStateLabel}
-                            tone={device?.status ? "emerald" : "sky"}
-                          />
-                          <DeviceStatusPill
-                            label={connectivityLabel}
-                            tone={device?.isOnline === false ? "amber" : "sky"}
-                          />
-                          <DeviceStatusPill
-                            label={liveSnapshot.supportsEnergyMonitoring ? "Energy telemetry" : "Control profile"}
-                          />
-                        </div>
-
-                        <div className="mt-4 space-y-3">
-                          <div className="flex items-center justify-between gap-3 border-b border-white/6 pb-3 text-sm">
-                            <span className="text-white/52">Room</span>
-                            <span className="font-medium text-white">{device.room || "Unassigned"}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3 border-b border-white/6 pb-3 text-sm">
-                            <span className="text-white/52">Last contact</span>
-                            <span className="font-medium text-white">{formatDateTime(device.lastSeen)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3 text-sm">
-                            <span className="text-white/52">Groups</span>
-                            <span className="font-medium text-white">{groupSummary}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
-                      {overviewStats.map((item) => (
-                        <DeviceOverviewStatCard
-                          key={item.label}
-                          label={item.label}
-                          value={item.value}
-                          hint={item.hint}
-                          icon={item.icon}
-                          tone={item.tone}
-                        />
-                      ))}
-                    </div>
-                  </DialogHeader>
-                ) : (
-                  <DialogHeader className="text-left">
-                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-                      <div className="rounded-[1.5rem] border border-white/10 bg-[linear-gradient(135deg,rgba(32,73,108,0.28),rgba(12,20,40,0.18))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5">
-                        <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.2rem] border border-white/10 bg-white/8 sm:h-14 sm:w-14 sm:rounded-[1.4rem]">
-                            <HeroIcon className="h-5 w-5 text-cyan-200 sm:h-6 sm:w-6" />
-                          </div>
-                          <div className="min-w-0">
-                            <DialogTitle className="font-body text-[clamp(1.5rem,4vw,2.3rem)] font-semibold leading-[0.96] tracking-[-0.06em] text-white">
-                              {device.name}
-                            </DialogTitle>
-                            <DialogDescription className="mt-2 text-sm text-white/62 sm:text-base">
-                              {`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
-                            </DialogDescription>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <DeviceStatusPill
-                                label={primaryStateLabel}
-                                tone={device?.status ? "emerald" : "sky"}
-                              />
-                              <DeviceStatusPill
-                                label={connectivityLabel}
-                                tone={device?.isOnline === false ? "amber" : "sky"}
-                              />
-                              <DeviceStatusPill
-                                label={activeTab === "alexa" ? "Alexa editor" : "History view"}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-[1.5rem] border border-white/10 bg-black/18 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-5">
-                        <p className="section-kicker text-white/45">
-                          {activeTab === "alexa" ? "Alexa Summary" : "History Summary"}
-                        </p>
-                        <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                          <div className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
-                            <p className="text-[11px] uppercase tracking-[0.16em] text-white/45">Room</p>
-                            <p className="mt-2 text-sm font-medium text-white">{device.room || "Unassigned"}</p>
-                          </div>
-                          <div className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
-                            <p className="text-[11px] uppercase tracking-[0.16em] text-white/45">Last contact</p>
-                            <p className="mt-2 text-sm font-medium text-white">{formatDateTime(device.lastSeen)}</p>
-                          </div>
-                          <div className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
-                            <p className="text-[11px] uppercase tracking-[0.16em] text-white/45">Groups</p>
-                            <p className="mt-2 text-sm font-medium text-white">{groupSummary}</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </DialogHeader>
-                )}
+                <div className="text-right text-xs text-white/42">
+                  {activeTab === "overview"
+                    ? "System overview"
+                    : activeTab === "controls"
+                      ? "Direct device controls"
+                      : activeTab === "alexa"
+                        ? "Voice exposure"
+                        : "Telemetry history"}
+                </div>
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4 sm:px-7 sm:pb-7 sm:pt-5">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-5 sm:px-7 sm:pb-7 sm:pt-6">
               <TabsContent value="overview" className="mt-0 space-y-5">
+                <DeviceTabHero
+                  icon={HeroIcon}
+                  eyebrow="System overview"
+                  title={device.name}
+                  subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                  description={overviewCopy}
+                  pills={[
+                    { label: primaryStateLabel, tone: device?.status ? "emerald" : "sky" },
+                    { label: connectivityLabel, tone: device?.isOnline === false ? "amber" : "sky" },
+                    { label: liveSnapshot.supportsEnergyMonitoring ? "Energy telemetry" : "Control profile" }
+                  ]}
+                  summaryTitle="Status summary"
+                  summaryRows={overviewHeroRows}
+                />
+
+                <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+                  {overviewStats.map((item) => (
+                    <DeviceOverviewStatCard
+                      key={item.label}
+                      label={item.label}
+                      value={item.value}
+                      hint={item.hint}
+                      icon={item.icon}
+                      tone={item.tone}
+                    />
+                  ))}
+                </div>
+
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
                   <div className="space-y-5">
                     <Card className="border-white/10 bg-black/20">
@@ -1559,88 +1590,30 @@ export function DeviceDetailsDialog({
                         <DeviceDetailRow label="Groups" value={groupSummary} />
                       </CardContent>
                     </Card>
+                  </div>
+                </div>
+              </TabsContent>
 
-                    <Card className="border-white/10 bg-black/20">
-                      <CardHeader className="pb-4">
-                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Workflow groups</CardTitle>
-                        <CardDescription>
-                          Assign reusable group names so workflows can target this device without repeating raw device IDs.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
-                          <p className="section-kicker text-white/45">Assigned Now</p>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {draftGroups.length > 0 ? draftGroups.map((group) => (
-                              <Badge key={group} variant="secondary" className="border-white/10 bg-white/[0.08] text-white/82">
-                                {group}
-                              </Badge>
-                            )) : (
-                              <span className="text-sm text-muted-foreground">No groups assigned yet.</span>
-                            )}
-                          </div>
-                        </div>
+              <TabsContent value="controls" className="mt-0 space-y-5">
+                <DeviceTabHero
+                  icon={HeroIcon}
+                  eyebrow="Direct controls"
+                  title={device.name}
+                  subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                  description={harmonyCommandDevice
+                    ? "Use the full Harmony command surface here instead of squeezing it under the overview. Quick actions, direct command sending, and power-command behavior now live on their own page."
+                    : "This tab keeps device-facing controls, grouping, and source-specific options together so operational changes are separate from overview and telemetry."}
+                  pills={[
+                    { label: primaryStateLabel, tone: device?.status ? "emerald" : "sky" },
+                    { label: connectivityLabel, tone: device?.isOnline === false ? "amber" : "sky" },
+                    { label: harmonyCommandDevice ? "Harmony remote" : "Device settings" }
+                  ]}
+                  summaryTitle="Control surface"
+                  summaryRows={controlsHeroRows}
+                />
 
-                        <div className="space-y-2">
-                          <Label htmlFor="device-group-input">Comma-separated groups</Label>
-                          <Input
-                            id="device-group-input"
-                            className="bg-black/20"
-                            value={groupInput}
-                            onChange={(event) => setGroupInput(event.target.value)}
-                            placeholder="Interior Lights, Alarm Shutdown"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Separate names with commas. Groups make scene and workflow targeting much cleaner.
-                          </p>
-                        </div>
-
-                        {suggestedGroups.length > 0 ? (
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                              <Sparkles className="h-3.5 w-3.5" />
-                              Existing groups you can reuse
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              {suggestedGroups.slice(0, 12).map((group) => (
-                                <Button
-                                  key={group}
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 border-white/10 bg-white/[0.04] text-white/80 hover:text-white"
-                                  onClick={() => appendSuggestedGroup(group)}
-                                >
-                                  {group}
-                                </Button>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                          <p className="text-xs text-muted-foreground">
-                            {groupsChanged
-                              ? `${draftGroups.length} group${draftGroups.length === 1 ? "" : "s"} ready to save.`
-                              : "No unsaved group changes."}
-                          </p>
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={handleSaveGroups}
-                            disabled={!groupsChanged || savingGroups}
-                          >
-                            {savingGroups ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Saving
-                              </>
-                            ) : "Save groups"}
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
+                  <div className="space-y-5">
                     {harmonyCommandDevice ? (
                       <Card className="border-white/10 bg-black/20">
                         <CardHeader className="pb-4">
@@ -1737,7 +1710,25 @@ export function DeviceDetailsDialog({
                           </div>
                         </CardContent>
                       </Card>
-                    ) : null}
+                    ) : (
+                      <Card className="border-white/10 bg-black/20">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Control routing</CardTitle>
+                          <CardDescription>
+                            This device does not expose a Harmony-style remote command catalog, so HomeBrain focuses on grouped actions and source-aware workflow control here.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                            <p className="section-kicker text-white/45">Source</p>
+                            <p className="mt-3 text-xl font-semibold tracking-[-0.05em] text-white">{getSourceLabel(device)}</p>
+                            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                              Direct manual controls depend on what the backing integration exposes. Workflow groups and automation targeting are still available below.
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
 
                     {harmonyCommandDevice ? (
                       <Card className="border-white/10 bg-black/20">
@@ -1765,11 +1756,7 @@ export function DeviceDetailsDialog({
                           </div>
 
                           <div className="rounded-[1.15rem] border border-cyan-400/12 bg-cyan-400/[0.07] px-4 py-3 text-sm leading-relaxed text-cyan-50/88">
-                            {[
-                              harmonyPowerCommands.on ? `Power on: ${harmonyPowerCommands.on}` : "Power on command not found",
-                              harmonyPowerCommands.off ? `Power off: ${harmonyPowerCommands.off}` : "Power off command not found",
-                              harmonyPowerCommands.toggle ? `Toggle fallback: ${harmonyPowerCommands.toggle}` : ""
-                            ].filter(Boolean).join(" • ")}
+                            {harmonyPowerSummary}
                           </div>
 
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1796,11 +1783,130 @@ export function DeviceDetailsDialog({
                       </Card>
                     ) : null}
                   </div>
+
+                  <div className="space-y-5">
+                    <Card className="border-white/10 bg-black/20">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Workflow groups</CardTitle>
+                        <CardDescription>
+                          Assign reusable group names so workflows can target this device without repeating raw device IDs.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                          <p className="section-kicker text-white/45">Assigned Now</p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {draftGroups.length > 0 ? draftGroups.map((group) => (
+                              <Badge key={group} variant="secondary" className="border-white/10 bg-white/[0.08] text-white/82">
+                                {group}
+                              </Badge>
+                            )) : (
+                              <span className="text-sm text-muted-foreground">No groups assigned yet.</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="device-group-input">Comma-separated groups</Label>
+                          <Input
+                            id="device-group-input"
+                            className="bg-black/20"
+                            value={groupInput}
+                            onChange={(event) => setGroupInput(event.target.value)}
+                            placeholder="Interior Lights, Alarm Shutdown"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Separate names with commas. Groups make scene and workflow targeting much cleaner.
+                          </p>
+                        </div>
+
+                        {suggestedGroups.length > 0 ? (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Sparkles className="h-3.5 w-3.5" />
+                              Existing groups you can reuse
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {suggestedGroups.slice(0, 12).map((group) => (
+                                <Button
+                                  key={group}
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 border-white/10 bg-white/[0.04] text-white/80 hover:text-white"
+                                  onClick={() => appendSuggestedGroup(group)}
+                                >
+                                  {group}
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-xs text-muted-foreground">
+                            {groupsChanged
+                              ? `${draftGroups.length} group${draftGroups.length === 1 ? "" : "s"} ready to save.`
+                              : "No unsaved group changes."}
+                          </p>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={handleSaveGroups}
+                            disabled={!groupsChanged || savingGroups}
+                          >
+                            {savingGroups ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Saving
+                              </>
+                            ) : "Save groups"}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-white/10 bg-black/20">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Control snapshot</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-0">
+                        <DeviceDetailRow label="Current state" value={primaryStateLabel} />
+                        <DeviceDetailRow label="Connectivity" value={connectivityLabel} />
+                        <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
+                        {getSourceLabel(device) === "Harmony" ? (
+                          <DeviceDetailRow label="Harmony hub" value={harmonyHubLabel} />
+                        ) : null}
+                        {harmonyCommandDevice ? (
+                          <DeviceDetailRow label="Power commands" value={harmonyPowerSummary} />
+                        ) : null}
+                        {harmonyCommandDevice ? (
+                          <DeviceDetailRow label="Quick controls" value={controlsHeroRows[2]?.value || "Command picker available"} />
+                        ) : null}
+                        <DeviceDetailRow label="Groups" value={groupSummary} />
+                      </CardContent>
+                    </Card>
+                  </div>
                 </div>
               </TabsContent>
 
               {isAdmin && onAlexaExposureUpdated ? (
                 <TabsContent value="alexa" className="mt-0 space-y-5">
+                  <DeviceTabHero
+                    icon={HeroIcon}
+                    eyebrow="Voice exposure"
+                    title={device.name}
+                    subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                    description="Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint, without burying the editor below a fixed overview slab."
+                    pills={[
+                      { label: primaryStateLabel, tone: device?.status ? "emerald" : "sky" },
+                      { label: connectivityLabel, tone: device?.isOnline === false ? "amber" : "sky" },
+                      { label: "Alexa editor" }
+                    ]}
+                    summaryTitle="Alexa summary"
+                    summaryRows={alexaHeroRows}
+                  />
+
                   <Card className="border-cyan-400/15 bg-cyan-500/[0.06]">
                     <CardHeader className="pb-4">
                       <CardTitle className="font-body text-[1.2rem] tracking-[-0.05em] text-white">Alexa exposure</CardTitle>
@@ -1853,6 +1959,23 @@ export function DeviceDetailsDialog({
               ) : null}
 
               <TabsContent value="history" className="mt-0 space-y-5">
+                <DeviceTabHero
+                  icon={HeroIcon}
+                  eyebrow="Telemetry history"
+                  title={device.name}
+                  subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                  description={liveSnapshot.supportsEnergyMonitoring
+                    ? "Use the full history surface for trend validation, telemetry filtering, and timeline review without keeping the overview locked in place above it."
+                    : "This device does not expose live energy telemetry, so the history view focuses on stored state changes, metric coverage, and telemetry timelines."}
+                  pills={[
+                    { label: primaryStateLabel, tone: device?.status ? "emerald" : "sky" },
+                    { label: connectivityLabel, tone: device?.isOnline === false ? "amber" : "sky" },
+                    { label: "History view" }
+                  ]}
+                  summaryTitle="History summary"
+                  summaryRows={historyHeroRows}
+                />
+
                 <Card className="border-white/10 bg-black/20">
                   <CardHeader>
                     <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Power usage trend</CardTitle>
