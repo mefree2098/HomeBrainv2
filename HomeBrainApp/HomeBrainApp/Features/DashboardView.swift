@@ -6235,13 +6235,12 @@ struct DashboardView: View {
 
     private func listenForDashboardDeviceUpdates() async {
         while !Task.isCancelled {
-            guard let streamURL = session.apiClient.streamURL("/api/devices/stream"),
-                  let accessToken = session.accessToken,
-                  !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard let streamURL = session.apiClient.streamURL("/api/devices/stream") else {
                 return
             }
 
             do {
+                let accessToken = try await session.validAccessToken()
                 var request = URLRequest(url: streamURL)
                 request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
                 request.setValue("text/event-stream", forHTTPHeaderField: "Accept")

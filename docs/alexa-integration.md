@@ -2,6 +2,8 @@
 
 If you need a step-by-step admin deployment guide, use [alexa-admin-setup.md](alexa-admin-setup.md). This document is the architecture and rollout note.
 
+Last verified: 2026-04-05
+
 HomeBrain now supports a two-layer Alexa architecture:
 
 - Alexa Smart Home for no-keyword control of HomeBrain devices, groups, scenes, and safe manual workflows
@@ -35,7 +37,12 @@ Before pairing Alexa publicly, the HomeBrain hub should have:
 - a working reverse-proxy route for that hostname
 - a valid TLS certificate being served for that hostname
 
-HomeBrain surfaces these checks in `Settings > Integrations > Alexa`.
+HomeBrain surfaces these checks in `Alexa Broker`.
+
+Current UI naming:
+
+- `Alexa Broker` is the broker/service/readiness page
+- entity exposure is configured from the `Alexa` tab inside device, group, scene, and workflow detail views
 
 ## Broker Environment
 
@@ -66,6 +73,13 @@ For production, keep Alexa account-linking refresh tokens long-lived and leave t
 
 HomeBrain can now manage these broker variables through the `Alexa Broker` admin page. The preferred deploy flow there also creates or updates the broker reverse-proxy route and applies the managed Caddy config before restarting the broker. The environment block above is still the reference if you choose the manual shell/service-manager path.
 
+Operational notes from the validated setup:
+
+- `Deploy Broker` already includes the install step.
+- A broker deploy can fail if any enabled reverse-proxy route in HomeBrain is invalid, because HomeBrain will not apply Caddy while invalid enabled routes exist.
+- The broker public hostname must resolve in public DNS before Alexa mobile account linking can load.
+- For the managed broker, Alexa uses the public broker origin, but HomeBrain pairing and internal catalog/state/execute sync should use the local managed broker control URL, normally `http://127.0.0.1:4301`.
+
 ## Smart Home Lambda Environment
 
 The Smart Home Lambda needs:
@@ -87,13 +101,18 @@ HOMEBRAIN_BROKER_BASE_URL=https://broker.example.com
 ## Setup Flow
 
 1. Configure the HomeBrain public origin and reverse proxy.
-2. Open `Settings > Integrations > Alexa`.
-3. Generate a private or public pairing code.
-4. Pair the HomeBrain hub with the Alexa broker.
-5. Link the Alexa skill through Amazon account linking.
-6. Accept the Alexa proactive-events grant.
-7. Force discovery sync if needed.
-8. Expose devices, groups, scenes, and eligible workflows to Alexa.
+2. Open `Alexa Broker`.
+3. Configure and `Deploy Broker`.
+4. Build and upload the Smart Home Lambda with handler `lambda/src/handler.handler`.
+5. Add the Alexa Smart Home trigger/permission to the Lambda.
+6. Configure Alexa account linking and copy the full Alexa redirect URLs into HomeBrain.
+7. Pair the HomeBrain hub to the managed broker using the local broker control URL.
+8. Link the Alexa skill through Amazon account linking.
+9. Accept the Alexa proactive-events grant.
+10. Expose devices, groups, scenes, and eligible workflows to Alexa.
+11. Force discovery sync if needed.
+
+Pairing and household linking each consume their own one-time public `HBAX-...` code.
 
 ## What Smart Home Supports
 
@@ -167,3 +186,19 @@ Use the Alexa settings page to inspect:
 - public-release readiness checks
 
 The broker also exposes metrics and audit surfaces for deeper troubleshooting.
+
+If Smart Home discovery succeeds but control fails, inspect components in this order:
+
+1. Lambda CloudWatch logs
+2. broker `Recent Alexa activity`
+3. HomeBrain service logs for `/api/alexa/broker/execute`
+4. the exposed entity's Alexa configuration
+
+Two especially useful failure signatures from the validated rollout are:
+
+- `Cannot find module 'index'`
+  - Lambda handler is wrong or the ZIP was uploaded with the wrong layout
+- `POST /api/alexa/broker/execute - Error: Alexa directive endpoint ID is required`
+  - broker/HomeBrain are on an older execute payload shape and need the current code
+
+Current code also uses a fast Harmony control response path for Alexa power directives so Harmony-backed activity devices do not fail voice control while waiting on an immediate post-command re-poll.

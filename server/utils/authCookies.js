@@ -3,7 +3,7 @@ const SESSION_TOKEN_COOKIE_NAME = 'hbSessionToken';
 
 const SECURE_COOKIE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
 const ACCESS_TOKEN_COOKIE_MAX_AGE = Number(process.env.ACCESS_TOKEN_COOKIE_MAX_AGE || 60 * 60 * 1000);
-const SESSION_TOKEN_COOKIE_MAX_AGE = Number(process.env.SESSION_TOKEN_COOKIE_MAX_AGE || 30 * 24 * 60 * 60 * 1000);
+const SESSION_TOKEN_COOKIE_MAX_AGE = Number(process.env.SESSION_TOKEN_COOKIE_MAX_AGE || 365 * 24 * 60 * 60 * 1000);
 
 function getCookieValue(req, name) {
   const rawCookies = req?.headers?.cookie;

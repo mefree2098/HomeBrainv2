@@ -92,7 +92,8 @@ final class APIClient {
         urlRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         urlRequest.setValue("no-cache", forHTTPHeaderField: "Pragma")
 
-        if authorized, let accessToken = sessionStore.accessToken {
+        if authorized {
+            let accessToken = try await sessionStore.validAccessToken()
             urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         }
 
@@ -135,7 +136,7 @@ final class APIClient {
             let message = parseErrorMessage(from: payload)
             if statusCode == 401 || statusCode == 403 {
                 if authorized {
-                    sessionStore.expireAuthentication()
+                    sessionStore.expireAuthentication(message: message)
                 }
                 throw APIError.unauthorized
             }

@@ -1,6 +1,6 @@
 # Alexa Admin Setup Guide
 
-Last verified: 2026-04-03
+Last verified: 2026-04-05
 
 This guide is the step-by-step runbook for getting Alexa working with HomeBrain from scratch.
 
@@ -172,13 +172,13 @@ HomeBrain's Alexa readiness checks expect:
 
 In the HomeBrain UI, check:
 
-`Settings > Integrations > Alexa`
+`Alexa Broker`
 
 The important cards are:
 
-- `Hub Status`
-- `Certification Readiness`
-- `TLS Certificate`
+- `Readiness and Activity`
+- `TLS`
+- `Reverse Proxy`
 - `Reverse Proxy Route`
 
 Do not move on until HomeBrain has a valid public origin and TLS.
@@ -197,6 +197,13 @@ HomeBrain now has a built-in broker management UI for the normal admin flow:
 - `Deploy Broker` saves the broker settings, installs broker dependencies, creates or updates the managed reverse-proxy route, applies the HomeBrain Caddy config, and starts or restarts the broker
 - use `Install Broker`, `Start`, `Stop`, and `Restart` only when you want the individual lifecycle actions
 - pair HomeBrain to the managed broker from that same page
+
+Important deployment notes from the validated setup:
+
+- `Deploy Broker` already includes the install step. Use `Install Broker` only if you explicitly want to install dependencies without doing a full deploy.
+- Broker deploys can fail if any enabled reverse-proxy route in HomeBrain is invalid, because HomeBrain will not apply Caddy while invalid enabled routes exist.
+- The broker public hostname must resolve in public DNS before Alexa mobile account linking can work.
+- For the managed broker, Alexa uses the public broker origin, but HomeBrain pairing and internal broker control should use the local managed control URL, normally `http://127.0.0.1:4301`.
 
 Use the shell commands below only if you intentionally want a manual deployment outside the HomeBrain UI.
 
@@ -233,6 +240,27 @@ HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json
 HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS=3600
 HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=15552000
 HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS=300000
+```
+
+### Recommended managed-broker field values
+
+If you are using the HomeBrain `Alexa Broker` form instead of shell environment variables, the normal same-host managed values are:
+
+- `Public Broker Base URL`: `https://alexa-broker.example.com`
+- `Broker Display Name`: `HomeBrain Alexa Broker`
+- `Bind Host`: `127.0.0.1`
+- `Port`: `4301`
+- `OAuth Client ID`: `homebrain-alexa-skill`
+- `OAuth Client Secret`: a long random secret shared with the Alexa developer console
+- `Event Client ID`: copied later from Alexa `Permissions > Send Alexa Events`
+- `Event Client Secret`: copied later from Alexa `Permissions > Send Alexa Events`
+- `Allowed Client IDs`: `homebrain-alexa-skill`
+- `Allowed Redirect URIs`: paste the full Alexa redirect URLs exactly as shown in the Alexa developer console, one per line
+
+Example macOS command to generate a strong OAuth client secret:
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
 ```
 
 ### What the broker stores
@@ -363,6 +391,18 @@ HOMEBRAIN_ALEXA_EVENT_REGION=NA
 
 You usually do not need to set this if the function is deployed in the correct AWS region, because the code falls back to `AWS_REGION`.
 
+### Add the Alexa trigger permission in Lambda
+
+After creating the Smart Home Lambda, add an Alexa trigger:
+
+1. Open the Lambda function in AWS.
+2. Add trigger `Alexa`.
+3. Choose product `Alexa Smart Home`.
+4. Paste the Smart Home skill ID from the Alexa developer console.
+5. Save the trigger.
+
+If you skip this, the Alexa developer console can reject the Lambda ARN even when the ARN itself is otherwise correct.
+
 ## 9. Create the Alexa Smart Home skill
 
 In the Alexa developer console:
@@ -442,11 +482,13 @@ On the Alexa developer console Account Linking page:
 
 Once account linking is enabled, the console will show `Alexa Redirect URLs`.
 
-You must copy every redirect URL shown there into the broker allowlist:
+You must copy every redirect URL shown there into the broker allowlist exactly as shown:
 
 ```dotenv
 HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS=https://pitangui.amazon.com/api/skill/link/...,https://layla.amazon.com/api/skill/link/...,https://alexa.amazon.co.jp/api/skill/link/...
 ```
+
+Do not invent or truncate these URLs. Amazon appends your account-specific vendor segment, so the full values must come from the Alexa developer console.
 
 If you add more locales later, revisit this page and update the allowlist with every newly shown redirect URL.
 
@@ -472,7 +514,7 @@ HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET=<value copied from Alexa developer console>
 
 These are not the same as `HOMEBRAIN_ALEXA_OAUTH_CLIENT_ID` and `HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET`.
 
-After updating the broker env, restart the broker.
+After updating the broker env, restart the broker or use `Deploy Broker` again from HomeBrain.
 
 ## 13. Pair the HomeBrain hub with the broker
 
@@ -480,12 +522,13 @@ This is done from HomeBrain, not from Alexa.
 
 In HomeBrain:
 
-1. Go to `Settings > Integrations > Alexa`.
-2. Click `Generate Public Link Code`.
-3. Copy the `HBAX-...` code.
-4. Enter the broker base URL, for example `https://alexa-broker.example.com`.
-5. Paste the code into `Pairing Code`.
-6. Click `Pair Broker`.
+1. Open `Alexa Broker`.
+2. Click `Use Managed Broker URL`.
+3. Confirm `Broker Control URL` is the local managed endpoint, usually `http://127.0.0.1:4301`.
+4. Click `Generate Public Link Code`.
+5. Copy the `HBAX-...` code.
+6. Paste the code into `HomeBrain Pairing Code`.
+7. Click `Pair Broker`.
 
 What should happen:
 
@@ -494,13 +537,19 @@ What should happen:
 - HomeBrain stores the broker registration
 - the broker stores the hub registration and relay token
 
-After pairing, the HomeBrain Alexa page should show:
+After pairing, the `Alexa Broker` page should show:
 
-- `Hub Status: Paired (public)` for production
-- broker base URL populated
+- `HomeBrain Pairing: Paired (public)` for production
+- `Broker Mode: pass`
+- no warning that HomeBrain is paired to the public broker origin instead of the managed broker control URL
 - no pairing errors in recent activity
 
 If it does not show as paired, do not move on.
+
+Important:
+
+- Broker pairing and Alexa household linking each consume their own one-time public `HBAX-...` code.
+- Current builds accept these codes case-insensitively and also accept them without dashes, but it is still best to copy them exactly as shown.
 
 ## 14. Expose HomeBrain entities to Alexa
 
@@ -512,6 +561,14 @@ Use the Alexa exposure controls in:
 - Device Groups
 - Scenes
 - Workflows
+
+On current builds, the intended path is:
+
+- open the entity details
+- switch to the `Alexa` tab
+- enable Alexa exposure there
+- set friendly name, aliases, and room hint
+- save
 
 Each entity can be configured with:
 
@@ -530,7 +587,7 @@ Examples:
 
 After exposing entities, run:
 
-`Settings > Integrations > Alexa > Force Discovery Sync`
+`Alexa Broker > Force Discovery Sync`
 
 That pushes the current HomeBrain catalog to the broker.
 
@@ -546,16 +603,17 @@ Do not reuse the code that was already consumed during broker pairing.
 
 ### Household-linking flow
 
-1. In HomeBrain, go to `Settings > Integrations > Alexa`.
+1. In HomeBrain, open `Alexa Broker`.
 2. Click `Generate Public Link Code`.
 3. Keep that `HBAX-...` code ready.
-4. In the Alexa app, enable the Smart Home skill.
-5. Alexa opens the broker's account-linking page.
-6. On that page, enter:
-   - the HomeBrain hub ID or HomeBrain public origin
+4. In the Alexa developer console, make sure the Smart Home skill is in development testing.
+5. In the Alexa mobile app, go to `Skills & Games > Your Skills > Dev` and enable the Smart Home skill.
+6. Alexa opens the broker's account-linking page.
+7. On that page, enter:
+   - the HomeBrain public origin, for example `https://homebrain.example.com`, or the HomeBrain hub ID
    - the one-time HomeBrain link code
    - locale if needed
-7. Submit the form.
+8. Submit the form.
 
 What should happen:
 
@@ -566,9 +624,11 @@ What should happen:
 - if `Send Alexa Events` is enabled, Alexa sends `AcceptGrant`
 - the broker stores the permission grant for proactive events
 
+Current builds try to prefill the public HomeBrain origin on the broker account-linking page when only one paired hub exists.
+
 ### How to verify success
 
-Back in HomeBrain `Settings > Integrations > Alexa`, confirm:
+Back in HomeBrain `Alexa Broker`, confirm:
 
 - `Linked Households` is greater than `0`
 - `Permission Grants` shows at least `1 active`
@@ -607,6 +667,8 @@ If discovery or control fails, check:
 - HomeBrain `Linked Households`
 - HomeBrain `Permission Grants`
 - broker `/health`
+
+When a newly discovered device appears in the Alexa app, Alexa may also ask you to assign it to an Alexa room/group. That list comes from Alexa's own household/group model, not from HomeBrain.
 
 ## 17. Optional: set up the HomeBrain Alexa custom skill
 
@@ -650,7 +712,7 @@ In the Alexa developer console:
 
 - The custom skill returns a link-account response if no access token is present.
 - Voice users only appear in HomeBrain after someone actually uses the custom skill.
-- After a voice is discovered, map it in `Settings > Integrations > Alexa`.
+- After a voice is discovered, map it from the HomeBrain Alexa admin surfaces.
 - If you want HomeBrain-served audio clips, configure `HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET` or `JWT_SECRET` on the HomeBrain server and keep `HOMEBRAIN_PUBLIC_BASE_URL` valid.
 
 ## 18. Recommended production settings
@@ -701,11 +763,13 @@ Check:
 
 - `HOMEBRAIN_PUBLIC_BASE_URL` is set
 - HomeBrain public origin is HTTPS
-- the broker base URL is correct
+- the broker public hostname resolves publicly in DNS
+- the broker control URL in HomeBrain is set to the managed local endpoint when using the managed broker
 - the link code is fresh and not already consumed
 - the broker is publicly reachable
 - HomeBrain can reach the broker
 - the broker can call HomeBrain back on `/api/alexa/broker/register`
+- there are no unrelated invalid enabled reverse-proxy routes blocking Caddy apply during `Deploy Broker`
 
 ### Problem: Alexa app account linking fails immediately
 
@@ -718,6 +782,8 @@ Check:
 - every Alexa redirect URL shown in the console is present in `HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS`
 - `PKCE Authorization` is disabled
 - the broker login page is reachable on mobile
+
+If the Alexa mobile app says it cannot find the broker hostname, fix public DNS for the broker hostname first.
 
 ### Problem: account linking works only when Send Alexa Events is off
 
@@ -734,6 +800,7 @@ Check:
 Check:
 
 - the entity is exposed in HomeBrain
+- the exposure was saved from the entity's `Alexa` tab
 - the exposure has no blocking validation errors
 - the entity type is supported
 - the device/group/scene/workflow name is valid
@@ -751,6 +818,29 @@ Check:
 - HomeBrain state is being updated locally
 - the projected properties are marked proactive in the discovery response
 - the broker is sending `Alexa.ChangeReport` events
+
+### Problem: Alexa says the device did not respond even though HomeBrain can trigger it
+
+Check:
+
+- HomeBrain and broker are on the current Alexa fixes from 2026-04-05 or later
+- the HomeBrain logs do not show:
+
+```text
+POST /api/alexa/broker/execute - Error: Alexa directive endpoint ID is required
+```
+
+- the HomeBrain server and broker were both restarted after updating code
+
+Current builds also use a fast Harmony response path for Alexa power directives so Harmony-backed activity devices do not fail voice control while waiting on an immediate post-command re-poll.
+
+### Problem: Lambda logs show `Cannot find module 'index'`
+
+Check:
+
+- the uploaded ZIP preserved the repo-relative layout
+- the Lambda handler is exactly `lambda/src/handler.handler`
+- you did not upload only the contents of `lambda/src`
 
 HomeBrain's broker already knows the correct event gateway URLs:
 
@@ -800,14 +890,14 @@ These are current implementation realities, not guesswork:
 If Alexa breaks in the future, inspect components in this order:
 
 1. HomeBrain UI:
-   - `Settings > Integrations > Alexa`
+   - `Alexa Broker`
    - check pairing, linked households, grants, queue, readiness, and recent activity
 2. Broker health:
    - `GET /health`
 3. Smart Home Lambda CloudWatch logs:
    - confirm `Discover`, `ReportState`, control directives, and `AcceptGrant`
 4. Broker audit and queue:
-   - use the HomeBrain Alexa page to inspect broker audit and queue state
+   - use the `Alexa Broker` page to inspect broker audit and queue state
 5. Exposure configuration:
    - confirm the entity is still enabled for Alexa and valid
 

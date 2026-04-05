@@ -577,7 +577,7 @@ final class VoiceAssistantManager: ObservableObject {
     private func playWakeAcknowledgment(for wakeWord: String) async {
         let trimmedWakeWord = wakeWord.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedWakeWord.isEmpty else { return }
-        guard let request = makeWakeAcknowledgmentRequest(wakeWord: trimmedWakeWord) else { return }
+        guard let request = await makeWakeAcknowledgmentRequest(wakeWord: trimmedWakeWord) else { return }
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -610,7 +610,7 @@ final class VoiceAssistantManager: ObservableObject {
         }
     }
 
-    private func makeWakeAcknowledgmentRequest(wakeWord: String) -> URLRequest? {
+    private func makeWakeAcknowledgmentRequest(wakeWord: String) async -> URLRequest? {
         guard let sessionStore else { return nil }
         let trimmedBase = sessionStore.serverURLString
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -623,7 +623,7 @@ final class VoiceAssistantManager: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        if let accessToken = sessionStore.accessToken {
+        if let accessToken = try? await sessionStore.validAccessToken() {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         }
 
