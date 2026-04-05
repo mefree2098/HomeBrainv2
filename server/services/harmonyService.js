@@ -6,6 +6,7 @@ const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const eventStreamService = require('./eventStreamService');
 const {
   buildHarmonyActivityIdentityQuery,
+  buildHarmonyDeviceIdentityQuery,
   selectCanonicalDevice,
   mergeDuplicateDeviceGroups,
   describeDevices
@@ -17,6 +18,10 @@ const DEFAULT_DISCOVERY_INCOMING_PORT = Number(process.env.HARMONY_DISCOVERY_INC
 const DEFAULT_DISCOVERY_TARGET_PORT = Number(process.env.HARMONY_DISCOVERY_TARGET_PORT || 5224);
 const DEFAULT_DISCOVERY_INTERVAL_MS = Number(process.env.HARMONY_DISCOVERY_INTERVAL_MS || 1000);
 const MAX_HOLD_COMMAND_MS = 5000;
+const HARMONY_ENTITY_TYPES = {
+  ACTIVITY: 'activity',
+  DEVICE: 'device'
+};
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -103,6 +108,53 @@ function mergeHubSources(...sources) {
   }
 
   return ordered.filter((part) => parts.has(part)).join('+');
+}
+
+function normalizeHarmonyEntityType(value) {
+  const normalized = (value || '').toString().trim().toLowerCase();
+  if (normalized === HARMONY_ENTITY_TYPES.ACTIVITY || normalized === HARMONY_ENTITY_TYPES.DEVICE) {
+    return normalized;
+  }
+
+  return '';
+}
+
+function compactHarmonyCommandKey(value) {
+  return normalizeCommandName(value).replace(/[^a-z0-9]/g, '');
+}
+
+function buildHarmonyActivityMatch(hubIp, extraMatch = {}) {
+  const normalizedHubIp = normalizeHost(hubIp);
+  const baseMatch = {
+    'properties.source': 'harmony',
+    ...(normalizedHubIp ? { 'properties.harmonyHubIp': normalizedHubIp } : {})
+  };
+
+  return {
+    ...baseMatch,
+    ...extraMatch,
+    $or: [
+      { 'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.ACTIVITY },
+      {
+        'properties.harmonyEntityType': { $exists: false },
+        'properties.harmonyActivityId': { $exists: true }
+      }
+    ]
+  };
+}
+
+function buildHarmonyDeviceMatch(hubIp, extraMatch = {}) {
+  const normalizedHubIp = normalizeHost(hubIp);
+  const baseMatch = {
+    'properties.source': 'harmony',
+    ...(normalizedHubIp ? { 'properties.harmonyHubIp': normalizedHubIp } : {})
+  };
+
+  return {
+    ...baseMatch,
+    ...extraMatch,
+    'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.DEVICE
+  };
 }
 
 class HarmonyService {
@@ -373,10 +425,9 @@ class HarmonyService {
 
     const grouped = await Device.aggregate([
       {
-        $match: {
-          'properties.source': 'harmony',
+        $match: buildHarmonyActivityMatch(null, {
           'properties.harmonyHubIp': { $in: normalizedIps }
-        }
+        })
       },
       {
         $group: {
@@ -423,8 +474,7 @@ class HarmonyService {
     }
 
     const device = await Device.findOne({
-      'properties.source': 'harmony',
-      'properties.harmonyHubIp': normalizedHubIp,
+      ...buildHarmonyActivityMatch(normalizedHubIp),
       'properties.harmonyActivityId': normalizedActivityId
     }).select('properties.harmonyActivityLabel name');
 
@@ -756,6 +806,74 @@ class HarmonyService {
     return Array.from(commandMap.values());
   }
 
+  extractPowerCommands(commands = []) {
+    const normalizedCommands = Array.isArray(commands) ? commands : [];
+    const powerCommands = {
+      on: null,
+      off: null,
+      toggle: null
+    };
+
+    const scoreCommand = (command, kind) => {
+      const keys = [
+        compactHarmonyCommandKey(command?.name),
+        compactHarmonyCommandKey(command?.label)
+      ].filter(Boolean);
+
+      if (keys.length === 0) {
+        return 0;
+      }
+
+      const exactMatches = {
+        on: new Set(['poweron', 'on', 'deviceon']),
+        off: new Set(['poweroff', 'off', 'deviceoff']),
+        toggle: new Set(['powertoggle', 'toggle', 'power'])
+      };
+      const prefixMatches = {
+        on: ['poweron', 'deviceon'],
+        off: ['poweroff', 'deviceoff'],
+        toggle: ['powertoggle']
+      };
+
+      let bestScore = 0;
+      keys.forEach((key) => {
+        if (exactMatches[kind].has(key)) {
+          bestScore = Math.max(bestScore, 100);
+        }
+
+        if (prefixMatches[kind].some((prefix) => key.startsWith(prefix))) {
+          bestScore = Math.max(bestScore, 90);
+        }
+
+        if (kind === 'toggle' && key.includes('toggle') && key.includes('power')) {
+          bestScore = Math.max(bestScore, 80);
+        }
+
+        if (kind !== 'toggle' && key.includes('power') && key.endsWith(kind)) {
+          bestScore = Math.max(bestScore, 75);
+        }
+      });
+
+      return bestScore;
+    };
+
+    normalizedCommands.forEach((command) => {
+      ['on', 'off', 'toggle'].forEach((kind) => {
+        const nextScore = scoreCommand(command, kind);
+        if (nextScore <= 0) {
+          return;
+        }
+
+        const currentScore = scoreCommand(powerCommands[kind], kind);
+        if (!powerCommands[kind] || nextScore > currentScore) {
+          powerCommands[kind] = command;
+        }
+      });
+    });
+
+    return powerCommands;
+  }
+
   normalizeActivities(config = {}) {
     const activities = Array.isArray(config?.activity) ? config.activity : [];
     return activities
@@ -779,6 +897,137 @@ class HarmonyService {
       model: (device?.model || '').toString(),
       commands: this.extractDeviceCommands(device)
     }));
+  }
+
+  buildHarmonyCommandDevice(snapshot, device, existing = null) {
+    const commands = Array.isArray(device?.commands) ? device.commands : [];
+    const powerCommands = this.extractPowerCommands(commands);
+    const previousStatus = typeof existing?.status === 'boolean' ? existing.status : false;
+
+    return {
+      name: (device?.label || device?.id || 'Harmony Device').toString(),
+      type: 'switch',
+      room: snapshot.friendlyName || 'Harmony',
+      status: previousStatus,
+      brightness: 0,
+      properties: {
+        source: 'harmony',
+        harmonyEntityType: HARMONY_ENTITY_TYPES.DEVICE,
+        harmonyHubIp: snapshot.ip,
+        harmonyHubName: snapshot.friendlyName,
+        harmonyDeviceId: (device?.id || '').toString(),
+        harmonyDeviceLabel: (device?.label || device?.id || 'Unknown device').toString(),
+        harmonyCommandCount: commands.length,
+        harmonyPowerCommands: {
+          on: powerCommands.on?.name || null,
+          off: powerCommands.off?.name || null,
+          toggle: powerCommands.toggle?.name || null
+        }
+      },
+      brand: (device?.manufacturer || 'Logitech Harmony').toString(),
+      model: (device?.model || 'Hub Device').toString(),
+      isOnline: true,
+      lastSeen: new Date()
+    };
+  }
+
+  async upsertDiscoveredDevice({
+    identityQuery,
+    payload,
+    preserveStatus = false,
+    summary,
+    duplicateLabel = 'Harmony row'
+  }) {
+    const matchingDevices = identityQuery
+      ? await Device.find(identityQuery)
+      : [];
+    const existing = selectCanonicalDevice(matchingDevices);
+    const duplicateDevices = matchingDevices.filter((candidate) => (
+      String(candidate?._id || '') !== String(existing?._id || '')
+    ));
+
+    if (!existing) {
+      await Device.create(payload);
+      if (summary) {
+        summary.created += 1;
+      }
+      return { created: true };
+    }
+
+    mergeDuplicateDeviceGroups(existing, duplicateDevices);
+    existing.name = payload.name;
+    existing.type = payload.type;
+    existing.room = payload.room;
+    existing.brightness = payload.brightness;
+    existing.brand = payload.brand;
+    existing.model = payload.model;
+    existing.isOnline = payload.isOnline !== false;
+    existing.lastSeen = payload.lastSeen || new Date();
+    if (!preserveStatus || typeof existing.status !== 'boolean') {
+      existing.status = payload.status;
+    }
+    existing.properties = {
+      ...(existing?.properties && typeof existing.properties === 'object'
+        ? existing.properties
+        : {}),
+      ...(payload?.properties && typeof payload.properties === 'object'
+        ? payload.properties
+        : {})
+    };
+    await existing.save();
+
+    const duplicateIds = duplicateDevices
+      .map((candidate) => String(candidate?._id || ''))
+      .filter(Boolean);
+    if (duplicateIds.length > 0) {
+      await Device.deleteMany({ _id: { $in: duplicateIds } });
+      if (summary) {
+        summary.deduped += duplicateIds.length;
+      }
+      console.warn(
+        `HarmonyService: Removed ${duplicateIds.length} duplicate HomeBrain ${duplicateLabel}(s): ${describeDevices(duplicateDevices)}`
+      );
+    }
+
+    if (summary) {
+      summary.updated += 1;
+    }
+
+    return { created: false, existing };
+  }
+
+  findConfigDevice(devices = [], deviceIdOrName = '') {
+    const normalizedDeviceKey = normalizeCommandName(deviceIdOrName);
+    if (!normalizedDeviceKey) {
+      return null;
+    }
+
+    return (Array.isArray(devices) ? devices : []).find((device) => {
+      const id = normalizeCommandName(device?.id);
+      const label = normalizeCommandName(device?.label);
+      return id === normalizedDeviceKey || label === normalizedDeviceKey;
+    }) || null;
+  }
+
+  resolvePowerCommand(commands = [], desiredState = 'off', options = {}) {
+    const powerCommands = this.extractPowerCommands(commands);
+    const normalizedState = desiredState === 'on' ? 'on' : 'off';
+    const explicitCommand = powerCommands[normalizedState];
+    if (explicitCommand) {
+      return {
+        command: explicitCommand,
+        kind: normalizedState
+      };
+    }
+
+    if (options.allowToggleFallback === true && powerCommands.toggle) {
+      return {
+        command: powerCommands.toggle,
+        kind: 'toggle'
+      };
+    }
+
+    return null;
   }
 
   async getHubSnapshot(hubIp, options = {}) {
@@ -1005,6 +1254,7 @@ class HarmonyService {
       brightness: 0,
       properties: {
         source: 'harmony',
+        harmonyEntityType: HARMONY_ENTITY_TYPES.ACTIVITY,
         harmonyHubIp: snapshot.ip,
         harmonyHubName: snapshot.friendlyName,
         harmonyActivityId: activityId,
@@ -1026,8 +1276,7 @@ class HarmonyService {
     }
 
     const devices = await Device.find({
-      'properties.source': 'harmony',
-      'properties.harmonyHubIp': normalizedHubIp
+      ...buildHarmonyActivityMatch(normalizedHubIp)
     });
 
     const changed = [];
@@ -1076,63 +1325,60 @@ class HarmonyService {
 
       for (const hub of discovered) {
         try {
-          const snapshot = await this.getHubSnapshot(hub.ip, { includeCommands: false });
+          const snapshot = await this.getHubSnapshot(hub.ip, { includeCommands: true });
           const activityIds = [];
+          const deviceIds = [];
 
           for (const activity of snapshot.activities) {
             activityIds.push(activity.id.toString());
             const payload = this.buildHarmonyActivityDevice(snapshot, activity);
             const identityQuery = buildHarmonyActivityIdentityQuery(snapshot.ip, activity.id.toString());
-            const matchingDevices = identityQuery
-              ? await Device.find(identityQuery)
-              : [];
-            const existing = selectCanonicalDevice(matchingDevices);
-            const duplicateDevices = matchingDevices.filter((candidate) => (
-              String(candidate?._id || '') !== String(existing?._id || '')
-            ));
-            if (!existing) {
-              await Device.create(payload);
-              summary.created += 1;
-            } else {
-              mergeDuplicateDeviceGroups(existing, duplicateDevices);
-              existing.name = payload.name;
-              existing.type = payload.type;
-              existing.room = payload.room;
-              existing.status = payload.status;
-              existing.properties = payload.properties;
-              existing.brand = payload.brand;
-              existing.model = payload.model;
-              existing.isOnline = true;
-              existing.lastSeen = new Date();
-              await existing.save();
-
-              const duplicateIds = duplicateDevices
-                .map((candidate) => String(candidate?._id || ''))
-                .filter(Boolean);
-              if (duplicateIds.length > 0) {
-                await Device.deleteMany({ _id: { $in: duplicateIds } });
-                summary.deduped += duplicateIds.length;
-                console.warn(
-                  `HarmonyService: Removed ${duplicateIds.length} duplicate HomeBrain row(s) for hub ${snapshot.ip} activity ${activity.id}: ${describeDevices(duplicateDevices)}`
-                );
-              }
-
-              summary.updated += 1;
-            }
+            // Preserve any custom properties while keeping activity state authoritative.
+            await this.upsertDiscoveredDevice({
+              identityQuery,
+              payload,
+              preserveStatus: false,
+              summary,
+              duplicateLabel: `activity row(s) for hub ${snapshot.ip} activity ${activity.id}`
+            });
           }
 
-          const staleResult = await Device.deleteMany({
-            'properties.source': 'harmony',
-            'properties.harmonyHubIp': snapshot.ip,
+          for (const device of Array.isArray(snapshot.devices) ? snapshot.devices : []) {
+            const harmonyDeviceId = (device?.id || '').toString();
+            if (!harmonyDeviceId) {
+              continue;
+            }
+
+            deviceIds.push(harmonyDeviceId);
+            const identityQuery = buildHarmonyDeviceIdentityQuery(snapshot.ip, harmonyDeviceId);
+            const existing = identityQuery
+              ? selectCanonicalDevice(await Device.find(identityQuery))
+              : null;
+            const payload = this.buildHarmonyCommandDevice(snapshot, device, existing);
+
+            await this.upsertDiscoveredDevice({
+              identityQuery,
+              payload,
+              preserveStatus: true,
+              summary,
+              duplicateLabel: `device row(s) for hub ${snapshot.ip} device ${harmonyDeviceId}`
+            });
+          }
+
+          const staleActivityResult = await Device.deleteMany(buildHarmonyActivityMatch(snapshot.ip, {
             'properties.harmonyActivityId': { $nin: activityIds }
-          });
-          summary.removed += staleResult.deletedCount || 0;
+          }));
+          const staleDeviceResult = await Device.deleteMany(buildHarmonyDeviceMatch(snapshot.ip, {
+            'properties.harmonyDeviceId': { $nin: deviceIds }
+          }));
+          summary.removed += (staleActivityResult.deletedCount || 0) + (staleDeviceResult.deletedCount || 0);
 
           summary.hubsSynced += 1;
           summary.details.push({
             hubIp: snapshot.ip,
             friendlyName: snapshot.friendlyName,
             activityCount: snapshot.activities.length,
+            deviceCount: deviceIds.length,
             success: true
           });
 
@@ -1189,10 +1435,7 @@ class HarmonyService {
     }
 
     const activeId = activeActivityId != null ? activeActivityId.toString() : '-1';
-    const devices = await Device.find({
-      'properties.source': 'harmony',
-      'properties.harmonyHubIp': normalizedHubIp
-    });
+    const devices = await Device.find(buildHarmonyActivityMatch(normalizedHubIp));
 
     const changed = [];
     for (const device of devices) {
@@ -1390,6 +1633,77 @@ class HarmonyService {
     };
   }
 
+  async sendPowerCommand(hubIp, deviceIdOrName, powerState, options = {}) {
+    const normalizedHubIp = normalizeHost(hubIp);
+    const normalizedDeviceKey = normalizeCommandName(deviceIdOrName);
+    const desiredState = powerState === 'on' ? 'on' : 'off';
+    const repeatCountRaw = Number(options.repeatCount || 1);
+    const repeatCount = Number.isFinite(repeatCountRaw)
+      ? Math.max(1, Math.min(4, Math.trunc(repeatCountRaw)))
+      : 1;
+    const allowToggleFallback = options.allowToggleFallback === true;
+
+    if (!normalizedHubIp || !normalizedDeviceKey) {
+      throw new Error('Harmony hub and device are required');
+    }
+
+    const result = await this.withClient(normalizedHubIp, async (client) => {
+      const config = await client.getAvailableCommands();
+      const devices = Array.isArray(config?.device) ? config.device : [];
+      const targetDevice = this.findConfigDevice(devices, deviceIdOrName);
+
+      if (!targetDevice) {
+        throw new Error(`Harmony device "${deviceIdOrName}" was not found on hub ${normalizedHubIp}`);
+      }
+
+      const commands = this.extractDeviceCommands(targetDevice);
+      const resolved = this.resolvePowerCommand(commands, desiredState, { allowToggleFallback });
+      if (!resolved?.command?.action) {
+        throw new Error(
+          `No Harmony power-${desiredState} command was found on device ${targetDevice.label || targetDevice.id}`
+        );
+      }
+
+      const sendCount = resolved.kind === 'toggle' ? 1 : repeatCount;
+      for (let attempt = 0; attempt < sendCount; attempt += 1) {
+        // Harmony expects a press/release pair for each invocation.
+        // eslint-disable-next-line no-await-in-loop
+        await client.send('holdAction', resolved.command.action, 0);
+      }
+
+      return {
+        deviceId: targetDevice.id.toString(),
+        deviceName: targetDevice.label || targetDevice.id.toString(),
+        command: resolved.command.name,
+        commandKind: resolved.kind,
+        repeatCount: sendCount,
+        desiredState
+      };
+    });
+
+    void eventStreamService.publishSafe({
+      type: 'harmony.command.send',
+      source: 'harmony',
+      category: 'integration',
+      payload: {
+        hubIp: normalizedHubIp,
+        deviceId: result.deviceId,
+        deviceName: result.deviceName,
+        command: result.command,
+        commandKind: result.commandKind,
+        repeatCount: result.repeatCount,
+        desiredState: result.desiredState
+      },
+      tags: ['harmony', 'command', 'power']
+    });
+
+    return {
+      success: true,
+      hubIp: normalizedHubIp,
+      ...result
+    };
+  }
+
   async sendDeviceCommand(hubIp, deviceIdOrName, commandName, holdMs = 0) {
     const normalizedHubIp = normalizeHost(hubIp);
     const normalizedDeviceKey = normalizeCommandName(deviceIdOrName);
@@ -1404,12 +1718,7 @@ class HarmonyService {
     const result = await this.withClient(normalizedHubIp, async (client) => {
       const config = await client.getAvailableCommands();
       const devices = Array.isArray(config?.device) ? config.device : [];
-
-      const targetDevice = devices.find((device) => {
-        const id = normalizeCommandName(device?.id);
-        const label = normalizeCommandName(device?.label);
-        return id === normalizedDeviceKey || label === normalizedDeviceKey;
-      });
+      const targetDevice = this.findConfigDevice(devices, deviceIdOrName);
 
       if (!targetDevice) {
         throw new Error(`Harmony device "${deviceIdOrName}" was not found on hub ${normalizedHubIp}`);

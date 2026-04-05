@@ -204,8 +204,143 @@ test('syncDevices dedupes duplicate HomeBrain rows for a Harmony activity', asyn
   assert.equal(result.deduped, 1);
   assert.deepEqual(canonicalDevice.groups, ['Media', 'Favorites']);
   assert.equal(canonicalDevice.saved, true);
-  assert.equal(deleteManyCalls.length, 2);
+  assert.equal(deleteManyCalls.length, 3);
   assert.deepEqual(deleteManyCalls[0], {
     _id: { $in: ['harmony-duplicate'] }
   });
+});
+
+test('sendPowerCommand resolves Harmony power commands and repeats explicit power commands when requested', async () => {
+  const sentCommands = [];
+  const fakeClient = {
+    remoteId: 'remote-1',
+    async getAvailableCommands() {
+      return {
+        device: [
+          {
+            id: '55',
+            label: 'Projector',
+            controlGroup: [
+              {
+                function: [
+                  { name: 'PowerOn', label: 'PowerOn', action: 'IR_POWER_ON' },
+                  { name: 'PowerOff', label: 'PowerOff', action: 'IR_POWER_OFF' }
+                ]
+              }
+            ]
+          }
+        ]
+      };
+    },
+    async send(action, body, holdMs) {
+      sentCommands.push({ action, body, holdMs });
+    },
+    end() {}
+  };
+
+  const service = new HarmonyService({
+    getHarmonyClient: async () => fakeClient
+  });
+
+  const result = await service.sendPowerCommand('192.168.1.50', '55', 'off', { repeatCount: 2 });
+
+  assert.equal(result.success, true);
+  assert.equal(result.deviceId, '55');
+  assert.equal(result.command, 'PowerOff');
+  assert.equal(result.commandKind, 'off');
+  assert.equal(result.repeatCount, 2);
+  assert.deepEqual(sentCommands, [
+    { action: 'holdAction', body: 'IR_POWER_OFF', holdMs: 0 },
+    { action: 'holdAction', body: 'IR_POWER_OFF', holdMs: 0 }
+  ]);
+});
+
+test('syncDevices updates Harmony raw device metadata while preserving custom device options', async (t) => {
+  const originalFind = Device.find;
+  const originalCreate = Device.create;
+  const originalDeleteMany = Device.deleteMany;
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.create = originalCreate;
+    Device.deleteMany = originalDeleteMany;
+  });
+
+  const service = new HarmonyService();
+  service.discoverHubs = async () => [{ ip: '192.168.1.50' }];
+  service.getHubSnapshot = async () => ({
+    ip: '192.168.1.50',
+    friendlyName: 'Family Room',
+    currentActivityId: '-1',
+    currentActivityLabel: 'Off',
+    activities: [],
+    devices: [
+      {
+        id: '55',
+        label: 'Projector',
+        manufacturer: 'Epson',
+        model: 'Cinema 1080',
+        commands: [
+          { name: 'PowerOn', label: 'PowerOn', action: 'IR_POWER_ON' },
+          { name: 'PowerOff', label: 'PowerOff', action: 'IR_POWER_OFF' }
+        ]
+      }
+    ]
+  });
+  service.mergeKnownHubs = async () => [];
+  service.syncActivityStates = async () => ({ success: true });
+
+  const canonicalDevice = {
+    _id: 'harmony-projector-1',
+    name: 'Projector',
+    type: 'switch',
+    room: 'Family Room',
+    status: true,
+    groups: ['Media'],
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: '192.168.1.50',
+      harmonyEntityType: 'device',
+      harmonyDeviceId: '55',
+      harmonyRepeatPowerCommands: true
+    },
+    createdAt: new Date('2026-04-01T00:00:00Z'),
+    async save() {
+      this.saved = true;
+    }
+  };
+
+  const deleteManyCalls = [];
+
+  Device.find = async (query) => {
+    if (query['properties.harmonyDeviceId']) {
+      assert.equal(query['properties.harmonyHubIp'], '192.168.1.50');
+      assert.equal(query['properties.harmonyDeviceId'], '55');
+      return [canonicalDevice];
+    }
+
+    throw new Error(`Unexpected Device.find query: ${JSON.stringify(query)}`);
+  };
+  Device.create = async () => {
+    throw new Error('Device.create should not be called when a canonical Harmony raw device already exists');
+  };
+  Device.deleteMany = async (query) => {
+    deleteManyCalls.push(query);
+    return { deletedCount: 0 };
+  };
+
+  const result = await service.syncDevices({ timeoutMs: 1 });
+
+  assert.equal(result.success, true);
+  assert.equal(result.updated, 1);
+  assert.equal(canonicalDevice.saved, true);
+  assert.equal(canonicalDevice.status, true);
+  assert.equal(canonicalDevice.properties.harmonyRepeatPowerCommands, true);
+  assert.equal(canonicalDevice.properties.harmonyEntityType, 'device');
+  assert.deepEqual(canonicalDevice.properties.harmonyPowerCommands, {
+    on: 'PowerOn',
+    off: 'PowerOff',
+    toggle: null
+  });
+  assert.equal(deleteManyCalls.length, 2);
 });

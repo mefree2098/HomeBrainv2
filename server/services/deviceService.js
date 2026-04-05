@@ -446,7 +446,7 @@ class DeviceService {
           const refreshedOnline = await this.refreshHarmonyOnlineStatus(device);
           if (!refreshedOnline) {
             const harmonyHubIp = device?.properties?.harmonyHubIp || 'unknown-hub';
-            console.warn(`DeviceService: Harmony activity on hub ${harmonyHubIp} still reports offline; attempting command anyway`);
+            console.warn(`DeviceService: Harmony device on hub ${harmonyHubIp} still reports offline; attempting command anyway`);
           }
         } else if (isInsteon) {
           const insteonAddress = device?.properties?.insteonAddress || 'unknown-device';
@@ -671,7 +671,7 @@ class DeviceService {
           deviceUpdateEmitter.emit('devices:update', optimisticPayload);
         }
 
-        if (!skipPostActionVerification) {
+        if (!skipPostActionVerification && this.isHarmonyActivityDevice(device)) {
           const remoteUpdate = await this.pollHarmonyState(device, expectedStatus);
           if (remoteUpdate) {
             Object.assign(updateData, remoteUpdate);
@@ -958,9 +958,33 @@ class DeviceService {
 
   isHarmonyDevice(device) {
     const source = (device?.properties?.source || '').toString().toLowerCase();
-    return source === 'harmony' &&
-      !!device?.properties?.harmonyHubIp &&
-      !!device?.properties?.harmonyActivityId;
+    return source === 'harmony' && !!device?.properties?.harmonyHubIp;
+  }
+
+  isHarmonyActivityDevice(device) {
+    if (!this.isHarmonyDevice(device)) {
+      return false;
+    }
+
+    const entityType = (device?.properties?.harmonyEntityType || '').toString().trim().toLowerCase();
+    if (entityType === 'activity') {
+      return true;
+    }
+
+    return !entityType && !!device?.properties?.harmonyActivityId;
+  }
+
+  isHarmonyCommandDevice(device) {
+    if (!this.isHarmonyDevice(device)) {
+      return false;
+    }
+
+    const entityType = (device?.properties?.harmonyEntityType || '').toString().trim().toLowerCase();
+    if (entityType === 'device') {
+      return true;
+    }
+
+    return !entityType && !!device?.properties?.harmonyDeviceId && !device?.properties?.harmonyActivityId;
   }
 
   isEcobeeDevice(device) {
@@ -1103,28 +1127,68 @@ class DeviceService {
 
   async controlHarmonyDevice(device, normalizedAction, commandValue, updateData) {
     const harmonyHubIp = device?.properties?.harmonyHubIp;
-    const harmonyActivityId = device?.properties?.harmonyActivityId;
-    if (!harmonyHubIp || !harmonyActivityId) {
-      throw new Error('Harmony hub/activity is not configured for this device');
+    if (!harmonyHubIp) {
+      throw new Error('Harmony hub is not configured for this device');
     }
 
+    if (this.isHarmonyActivityDevice(device)) {
+      const harmonyActivityId = device?.properties?.harmonyActivityId;
+      if (!harmonyActivityId) {
+        throw new Error('Harmony hub/activity is not configured for this device');
+      }
+
+      switch (normalizedAction) {
+        case 'toggle':
+        case 'turnon':
+          if (normalizedAction === 'turnon' || commandValue) {
+            await harmonyService.startActivity(harmonyHubIp, harmonyActivityId.toString());
+          } else {
+            await harmonyService.turnOffHub(harmonyHubIp);
+          }
+          break;
+
+        case 'turnoff':
+          await harmonyService.turnOffHub(harmonyHubIp);
+          break;
+
+        default:
+          throw new Error('Harmony activity devices support only turn_on, turn_off, and toggle actions');
+      }
+
+      updateData.isOnline = true;
+      updateData.lastSeen = new Date();
+      return;
+    }
+
+    if (!this.isHarmonyCommandDevice(device)) {
+      throw new Error('Harmony device type is not supported for direct control');
+    }
+
+    const harmonyDeviceId = device?.properties?.harmonyDeviceId || device?.properties?.harmonyDeviceLabel;
+    if (!harmonyDeviceId) {
+      throw new Error('Harmony device command target is not configured for this device');
+    }
+
+    let desiredState = null;
     switch (normalizedAction) {
       case 'toggle':
+        desiredState = commandValue ? 'on' : 'off';
+        break;
       case 'turnon':
-        if (normalizedAction === 'turnon' || commandValue) {
-          await harmonyService.startActivity(harmonyHubIp, harmonyActivityId.toString());
-        } else {
-          await harmonyService.turnOffHub(harmonyHubIp);
-        }
+        desiredState = 'on';
         break;
-
       case 'turnoff':
-        await harmonyService.turnOffHub(harmonyHubIp);
+        desiredState = 'off';
         break;
-
       default:
-        throw new Error('Harmony activity devices support only turn_on, turn_off, and toggle actions');
+        throw new Error('Harmony direct devices support only turn_on, turn_off, and toggle actions');
     }
+
+    const repeatPowerCommands = Boolean(device?.properties?.harmonyRepeatPowerCommands);
+    await harmonyService.sendPowerCommand(harmonyHubIp, harmonyDeviceId.toString(), desiredState, {
+      repeatCount: repeatPowerCommands ? 2 : 1,
+      allowToggleFallback: normalizedAction === 'toggle'
+    });
 
     updateData.isOnline = true;
     updateData.lastSeen = new Date();
@@ -1132,7 +1196,7 @@ class DeviceService {
 
   async pollHarmonyState(device, expectedStatus) {
     const harmonyHubIp = device?.properties?.harmonyHubIp;
-    if (!harmonyHubIp) {
+    if (!harmonyHubIp || !this.isHarmonyActivityDevice(device)) {
       return null;
     }
 

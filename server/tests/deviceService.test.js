@@ -7,6 +7,7 @@ const deviceService = require('../services/deviceService');
 const deviceEnergySampleService = require('../services/deviceEnergySampleService');
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
 const insteonService = require('../services/insteonService');
+const harmonyService = require('../services/harmonyService');
 
 test('controlDevice routes Insteon turn_on through insteon service and skips generic DB write path', async (t) => {
   const originalFindById = Device.findById;
@@ -189,6 +190,82 @@ test('controlDevice skips Harmony refresh and verification when fast control opt
   assert.equal(persistedUpdate.status, true);
   assert.equal(persistedUpdate.isOnline, true);
   assert.equal(emitted.length >= 1, true);
+});
+
+test('controlDevice routes Harmony raw devices through direct power commands and honors repeat-power settings', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalEnsureHarmonyState = deviceService.ensureHarmonyState;
+  const originalSendPowerCommand = harmonyService.sendPowerCommand;
+  const originalPollHarmonyState = deviceService.pollHarmonyState;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.ensureHarmonyState = originalEnsureHarmonyState;
+    harmonyService.sendPowerCommand = originalSendPowerCommand;
+    deviceService.pollHarmonyState = originalPollHarmonyState;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const harmonyDevice = {
+    _id: 'device-harmony-projector',
+    name: 'Projector',
+    type: 'switch',
+    status: true,
+    isOnline: true,
+    properties: {
+      source: 'harmony',
+      harmonyEntityType: 'device',
+      harmonyHubIp: '192.168.1.50',
+      harmonyDeviceId: '55',
+      harmonyRepeatPowerCommands: true
+    }
+  };
+
+  let persistedUpdate = null;
+  let sendPowerCommandArgs = null;
+  let pollHarmonyCalls = 0;
+
+  Device.findById = async () => ({ ...harmonyDevice });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return {
+      ...harmonyDevice,
+      ...update
+    };
+  };
+  deviceService.ensureHarmonyState = async () => {};
+  harmonyService.sendPowerCommand = async (hubIp, deviceId, desiredState, options) => {
+    sendPowerCommandArgs = { hubIp, deviceId, desiredState, options };
+    return { success: true };
+  };
+  deviceService.pollHarmonyState = async () => {
+    pollHarmonyCalls += 1;
+    return {
+      status: true,
+      isOnline: true
+    };
+  };
+  deviceUpdateEmitter.emit = () => {};
+
+  const updated = await deviceService.controlDevice('device-harmony-projector', 'turn_off');
+
+  assert.deepEqual(sendPowerCommandArgs, {
+    hubIp: '192.168.1.50',
+    deviceId: '55',
+    desiredState: 'off',
+    options: {
+      repeatCount: 2,
+      allowToggleFallback: false
+    }
+  });
+  assert.equal(pollHarmonyCalls, 0);
+  assert.equal(updated.status, false);
+  assert.equal(updated.isOnline, true);
+  assert.equal(persistedUpdate.status, false);
+  assert.equal(persistedUpdate.isOnline, true);
 });
 
 test('supportsBrightnessControl treats fan-labeled Insteon devices like fader switches', () => {

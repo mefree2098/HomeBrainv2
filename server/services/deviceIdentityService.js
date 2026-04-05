@@ -63,6 +63,15 @@ const normalizeInteger = (value) => {
   return Math.trunc(numeric);
 };
 
+const normalizeHarmonyEntityType = (value) => {
+  const normalized = trimString(value).toLowerCase();
+  if (normalized === 'activity' || normalized === 'device') {
+    return normalized;
+  }
+
+  return '';
+};
+
 function normalizePlatformIdentityProperties(properties = {}) {
   const normalizedProperties = properties && typeof properties === 'object'
     ? { ...properties }
@@ -96,6 +105,16 @@ function normalizePlatformIdentityProperties(properties = {}) {
   const harmonyActivityId = trimString(normalizedProperties.harmonyActivityId);
   if (harmonyActivityId) {
     normalizedProperties.harmonyActivityId = harmonyActivityId;
+  }
+
+  const harmonyDeviceId = trimString(normalizedProperties.harmonyDeviceId);
+  if (harmonyDeviceId) {
+    normalizedProperties.harmonyDeviceId = harmonyDeviceId;
+  }
+
+  const harmonyEntityType = normalizeHarmonyEntityType(normalizedProperties.harmonyEntityType);
+  if (harmonyEntityType) {
+    normalizedProperties.harmonyEntityType = harmonyEntityType;
   }
 
   const ecobeeDeviceType = trimString(normalizedProperties.ecobeeDeviceType).toLowerCase();
@@ -149,6 +168,19 @@ function buildHarmonyActivityIdentityQuery(hubIp, activityId) {
   return {
     'properties.harmonyHubIp': normalizedHubIp,
     'properties.harmonyActivityId': normalizedActivityId
+  };
+}
+
+function buildHarmonyDeviceIdentityQuery(hubIp, deviceId) {
+  const normalizedHubIp = normalizeHost(hubIp);
+  const normalizedDeviceId = trimString(deviceId);
+  if (!normalizedHubIp || !normalizedDeviceId) {
+    return null;
+  }
+
+  return {
+    'properties.harmonyHubIp': normalizedHubIp,
+    'properties.harmonyDeviceId': normalizedDeviceId
   };
 }
 
@@ -225,6 +257,18 @@ function buildIdentityDescriptors(properties = {}) {
       label: 'Harmony hub/activity',
       query: harmonyQuery,
       errorMessage: 'A HomeBrain device with this Harmony hub/activity already exists'
+    });
+  }
+
+  const harmonyDeviceQuery = buildHarmonyDeviceIdentityQuery(
+    normalizedProperties.harmonyHubIp,
+    normalizedProperties.harmonyDeviceId
+  );
+  if (harmonyDeviceQuery) {
+    descriptors.push({
+      label: 'Harmony hub/device',
+      query: harmonyDeviceQuery,
+      errorMessage: 'A HomeBrain device with this Harmony hub/device already exists'
     });
   }
 
@@ -400,6 +444,7 @@ module.exports = {
   ensureUniquePlatformIdentity,
   buildSmartThingsDeviceIdentityQuery,
   buildHarmonyActivityIdentityQuery,
+  buildHarmonyDeviceIdentityQuery,
   buildEcobeeThermostatIdentityQuery,
   buildEcobeeSensorIdentityQuery,
   buildTempestStationIdentityQuery,

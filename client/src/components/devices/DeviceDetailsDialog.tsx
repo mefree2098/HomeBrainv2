@@ -41,6 +41,7 @@ import {
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
@@ -200,6 +201,43 @@ function getSourceLabel(device: DeviceLike | null): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ")
+}
+
+function getHarmonyEntityType(device: DeviceLike | null): string {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const explicitType = (properties?.harmonyEntityType || "").toString().trim().toLowerCase()
+  if (explicitType === "activity" || explicitType === "device") {
+    return explicitType
+  }
+
+  if (properties?.harmonyActivityId) {
+    return "activity"
+  }
+
+  if (properties?.harmonyDeviceId) {
+    return "device"
+  }
+
+  return ""
+}
+
+function isHarmonyCommandDevice(device: DeviceLike | null) {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const source = (properties?.source || "").toString().trim().toLowerCase()
+  return source === "harmony" && getHarmonyEntityType(device) === "device"
+}
+
+function getHarmonyPowerCommands(device: DeviceLike | null) {
+  const properties = device?.properties as Record<string, any> | undefined
+  const powerCommands = properties?.harmonyPowerCommands && typeof properties.harmonyPowerCommands === "object"
+    ? properties.harmonyPowerCommands
+    : {}
+
+  return {
+    on: typeof powerCommands.on === "string" ? powerCommands.on.trim() : "",
+    off: typeof powerCommands.off === "string" ? powerCommands.off.trim() : "",
+    toggle: typeof powerCommands.toggle === "string" ? powerCommands.toggle.trim() : ""
+  }
 }
 
 function getFormattedInsteonAddress(device: DeviceLike | null): string | null {
@@ -621,12 +659,20 @@ export function DeviceDetailsDialog({
   const [telemetryRangeHours, setTelemetryRangeHours] = useState<number>(24 * 7)
   const [groupInput, setGroupInput] = useState("")
   const [savingGroups, setSavingGroups] = useState(false)
+  const [harmonyRepeatPowerCommands, setHarmonyRepeatPowerCommands] = useState(false)
+  const [savingHarmonyOptions, setSavingHarmonyOptions] = useState(false)
   const [activeTab, setActiveTab] = useState<"overview" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
 
   const liveSnapshot = useMemo(() => getLiveEnergySnapshot(device), [device])
   const insteonAddress = useMemo(() => getFormattedInsteonAddress(device), [device])
+  const harmonyCommandDevice = useMemo(() => isHarmonyCommandDevice(device), [device])
+  const harmonyPowerCommands = useMemo(() => getHarmonyPowerCommands(device), [device])
+  const harmonyEntityType = useMemo(() => getHarmonyEntityType(device), [device])
+  const harmonyRepeatPowerCommandsSaved = Boolean(
+    (device?.properties as Record<string, unknown> | undefined)?.harmonyRepeatPowerCommands
+  )
   const currentGroups = useMemo(() => normalizeGroupList(device?.groups), [device?.groups])
   const draftGroups = useMemo(() => normalizeGroupList(groupInput), [groupInput])
   const suggestedGroups = useMemo(() => {
@@ -634,6 +680,7 @@ export function DeviceDetailsDialog({
     return normalizeGroupList(availableGroups).filter((group) => !activeKeys.has(group.toLowerCase()))
   }, [availableGroups, draftGroups])
   const groupsChanged = !sameStringList(currentGroups, draftGroups)
+  const harmonyOptionsChanged = harmonyCommandDevice && harmonyRepeatPowerCommands !== harmonyRepeatPowerCommandsSaved
 
   useEffect(() => {
     if (!open) {
@@ -642,6 +689,14 @@ export function DeviceDetailsDialog({
 
     setGroupInput(currentGroups.join(", "))
   }, [currentGroups, open, device?._id])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    setHarmonyRepeatPowerCommands(harmonyRepeatPowerCommandsSaved)
+  }, [device?._id, harmonyRepeatPowerCommandsSaved, open])
 
   useEffect(() => {
     if (!open) {
@@ -956,6 +1011,43 @@ export function DeviceDetailsDialog({
       })
     } finally {
       setSavingGroups(false)
+    }
+  }
+
+  const handleSaveHarmonyOptions = async () => {
+    if (!device?._id || !harmonyCommandDevice) {
+      return
+    }
+
+    setSavingHarmonyOptions(true)
+    try {
+      const response = await updateDevice(device._id, {
+        properties: {
+          harmonyRepeatPowerCommands
+        }
+      })
+      const updatedDevice = (response?.device || response) as DeviceLike
+      onDeviceUpdated?.(updatedDevice)
+      setHarmonyRepeatPowerCommands(Boolean(
+        (updatedDevice?.properties as Record<string, unknown> | undefined)?.harmonyRepeatPowerCommands
+      ))
+      toast({
+        title: "Harmony options updated",
+        description: harmonyRepeatPowerCommands
+          ? `${device.name} will now send power on/off commands twice when HomeBrain controls it.`
+          : `${device.name} will send a single power on/off command again.`
+      })
+    } catch (saveError) {
+      const message = saveError instanceof Error
+        ? saveError.message
+        : "Failed to update Harmony device options."
+      toast({
+        title: "Unable to save Harmony options",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setSavingHarmonyOptions(false)
     }
   }
 
@@ -1355,6 +1447,34 @@ export function DeviceDetailsDialog({
                         <DeviceDetailRow label="Room" value={device.room || "Unassigned"} />
                         <DeviceDetailRow label="Type" value={deviceTypeLabel} />
                         <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
+                        {getSourceLabel(device) === "Harmony" && harmonyEntityType ? (
+                          <DeviceDetailRow
+                            label="Harmony target"
+                            value={harmonyEntityType === "activity" ? "Activity" : "Device"}
+                          />
+                        ) : null}
+                        {getSourceLabel(device) === "Harmony" ? (
+                          <DeviceDetailRow
+                            label="Harmony hub"
+                            value={String(
+                              ((device.properties as Record<string, unknown> | undefined)?.harmonyHubName
+                                || (device.properties as Record<string, unknown> | undefined)?.harmonyHubIp
+                                || "Unknown hub")
+                            )}
+                          />
+                        ) : null}
+                        {harmonyCommandDevice ? (
+                          <DeviceDetailRow
+                            label="Power commands"
+                            value={
+                              [
+                                harmonyPowerCommands.on ? `On: ${harmonyPowerCommands.on}` : "",
+                                harmonyPowerCommands.off ? `Off: ${harmonyPowerCommands.off}` : "",
+                                harmonyPowerCommands.toggle ? `Toggle: ${harmonyPowerCommands.toggle}` : ""
+                              ].filter(Boolean).join(" • ") || "No power command mapping discovered yet"
+                            }
+                          />
+                        ) : null}
                         {insteonAddress ? (
                           <DeviceDetailRow label="INSTEON address" value={insteonAddress} mono />
                         ) : null}
@@ -1443,6 +1563,63 @@ export function DeviceDetailsDialog({
                         </div>
                       </CardContent>
                     </Card>
+
+                    {harmonyCommandDevice ? (
+                      <Card className="border-white/10 bg-black/20">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Harmony custom options</CardTitle>
+                          <CardDescription>
+                            Tune how HomeBrain sends power commands for this Harmony-backed device in workflows, scenes, and direct controls.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="space-y-1">
+                                <p className="font-medium text-white">Send power on/off commands twice</p>
+                                <p className="text-sm leading-relaxed text-muted-foreground">
+                                  Useful for projectors and AV gear that occasionally miss a single Harmony power command. HomeBrain will send the discovered power on/off command twice for this device.
+                                </p>
+                              </div>
+                              <Switch
+                                checked={harmonyRepeatPowerCommands}
+                                onCheckedChange={setHarmonyRepeatPowerCommands}
+                                aria-label="Send Harmony power commands twice"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="rounded-[1.15rem] border border-cyan-400/12 bg-cyan-400/[0.07] px-4 py-3 text-sm leading-relaxed text-cyan-50/88">
+                            {[
+                              harmonyPowerCommands.on ? `Power on: ${harmonyPowerCommands.on}` : "Power on command not found",
+                              harmonyPowerCommands.off ? `Power off: ${harmonyPowerCommands.off}` : "Power off command not found",
+                              harmonyPowerCommands.toggle ? `Toggle fallback: ${harmonyPowerCommands.toggle}` : ""
+                            ].filter(Boolean).join(" • ")}
+                          </div>
+
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-xs text-muted-foreground">
+                              {harmonyOptionsChanged
+                                ? "Harmony command behavior has unsaved changes."
+                                : "No unsaved Harmony option changes."}
+                            </p>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={handleSaveHarmonyOptions}
+                              disabled={!harmonyOptionsChanged || savingHarmonyOptions}
+                            >
+                              {savingHarmonyOptions ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Saving
+                                </>
+                              ) : "Save Harmony options"}
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ) : null}
                   </div>
                 </div>
               </TabsContent>

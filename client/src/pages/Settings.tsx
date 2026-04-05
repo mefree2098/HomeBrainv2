@@ -5571,7 +5571,7 @@ export function Settings() {
                         {loadingHarmonyStatus
                           ? "Checking Harmony Hub status..."
                           : harmonyStatus
-                            ? `${harmonyStatus.knownHubCount ?? harmonyStatus.discoveredCount ?? 0} hubs known, ${harmonyStatus.discoveredCount ?? 0} currently discovered, ${harmonyStatus.trackedDevices ?? 0} Harmony Hub activity devices tracked`
+                            ? `${harmonyStatus.knownHubCount ?? harmonyStatus.discoveredCount ?? 0} hubs known, ${harmonyStatus.discoveredCount ?? 0} currently discovered, ${harmonyStatus.trackedDevices ?? 0} Harmony Hub devices tracked`
                             : "Status unavailable"}
                       </p>
                     </div>
