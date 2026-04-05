@@ -253,8 +253,29 @@ function trimHarmonyValue(value) {
   return (value || '').toString().trim();
 }
 
+function escapeRegex(value) {
+  return trimHarmonyValue(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripHarmonyDuplicateSuffix(value) {
+  return trimHarmonyValue(value).replace(/\s*\(\d+\)\s*$/, '');
+}
+
+function buildHarmonyDuplicateNameMatch(value) {
+  const normalized = stripHarmonyDuplicateSuffix(value);
+  if (!normalized) {
+    return null;
+  }
+
+  return new RegExp(`^${escapeRegex(normalized)}(?: \\(\\d+\\))?$`, 'i');
+}
+
 function normalizeCommandName(value) {
   return (value || '').toString().trim().toLowerCase();
+}
+
+function normalizeHarmonyDuplicateName(value) {
+  return normalizeCommandName(stripHarmonyDuplicateSuffix(value));
 }
 
 function mergeUniqueDevices(...collections) {
@@ -317,37 +338,77 @@ function compactHarmonyCommandKey(value) {
   return normalizeCommandName(value).replace(/[^a-z0-9]/g, '');
 }
 
-function buildHarmonyActivityMatch(hubIp, extraMatch = {}) {
+function buildHarmonyHubMatch(hubIp, remoteId = null) {
   const normalizedHubIp = normalizeHost(hubIp);
-  const baseMatch = {
-    'properties.source': 'harmony',
-    ...(normalizedHubIp ? { 'properties.harmonyHubIp': normalizedHubIp } : {})
-  };
+  const normalizedRemoteId = trimHarmonyValue(remoteId);
+
+  if (normalizedRemoteId && normalizedHubIp) {
+    return {
+      $or: [
+        { 'properties.harmonyRemoteId': normalizedRemoteId },
+        { 'properties.harmonyHubIp': normalizedHubIp }
+      ]
+    };
+  }
+  if (normalizedRemoteId) {
+    return { 'properties.harmonyRemoteId': normalizedRemoteId };
+  }
+  if (normalizedHubIp) {
+    return { 'properties.harmonyHubIp': normalizedHubIp };
+  }
+
+  return null;
+}
+
+function buildHarmonyActivityMatch(hubIp, extraMatch = {}, remoteId = null) {
+  const clauses = [
+    { 'properties.source': 'harmony' },
+    {
+      $or: [
+        { 'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.ACTIVITY },
+        {
+          'properties.harmonyEntityType': { $exists: false },
+          'properties.harmonyActivityId': { $exists: true }
+        }
+      ]
+    }
+  ];
+  const hubMatch = buildHarmonyHubMatch(hubIp, remoteId);
+  if (hubMatch) {
+    clauses.push(hubMatch);
+  }
+  if (extraMatch && Object.keys(extraMatch).length > 0) {
+    clauses.push(extraMatch);
+  }
+
+  if (clauses.length === 1) {
+    return clauses[0];
+  }
 
   return {
-    ...baseMatch,
-    ...extraMatch,
-    $or: [
-      { 'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.ACTIVITY },
-      {
-        'properties.harmonyEntityType': { $exists: false },
-        'properties.harmonyActivityId': { $exists: true }
-      }
-    ]
+    $and: clauses
   };
 }
 
-function buildHarmonyDeviceMatch(hubIp, extraMatch = {}) {
-  const normalizedHubIp = normalizeHost(hubIp);
-  const baseMatch = {
-    'properties.source': 'harmony',
-    ...(normalizedHubIp ? { 'properties.harmonyHubIp': normalizedHubIp } : {})
-  };
+function buildHarmonyDeviceMatch(hubIp, extraMatch = {}, remoteId = null) {
+  const clauses = [
+    { 'properties.source': 'harmony' },
+    { 'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.DEVICE }
+  ];
+  const hubMatch = buildHarmonyHubMatch(hubIp, remoteId);
+  if (hubMatch) {
+    clauses.push(hubMatch);
+  }
+  if (extraMatch && Object.keys(extraMatch).length > 0) {
+    clauses.push(extraMatch);
+  }
+
+  if (clauses.length === 1) {
+    return clauses[0];
+  }
 
   return {
-    ...baseMatch,
-    ...extraMatch,
-    'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.DEVICE
+    $and: clauses
   };
 }
 
@@ -1296,6 +1357,7 @@ class HarmonyService {
     const activityId = trimHarmonyValue(activity?.id);
     const activityLabel = trimHarmonyValue(activity?.label);
     const activityName = `${hubRoom} - ${activityLabel || activityId || 'Activity'}`;
+    const activityLabelKey = normalizeHarmonyDuplicateName(activityLabel);
     const snapshotRemoteId = trimHarmonyValue(snapshot?.remoteId);
     const snapshotHubName = normalizeCommandName(snapshot?.friendlyName);
     const shouldCheckFallback = exactMatches.length === 0 || Boolean(snapshotRemoteId);
@@ -1304,10 +1366,15 @@ class HarmonyService {
       return exactMatches;
     }
 
+    const activityNameMatch = buildHarmonyDuplicateNameMatch(activityName);
+    if (!activityNameMatch) {
+      return exactMatches;
+    }
+
     const fallbackCandidates = await Device.find({
       'properties.source': 'harmony',
       room: hubRoom,
-      name: activityName,
+      name: activityNameMatch,
       $or: [
         { 'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.ACTIVITY },
         {
@@ -1324,7 +1391,7 @@ class HarmonyService {
       const existingDeviceId = trimHarmonyValue(existingProperties.harmonyDeviceId);
       const existingActivityId = trimHarmonyValue(existingProperties.harmonyActivityId);
       const existingRemoteId = trimHarmonyValue(existingProperties.harmonyRemoteId);
-      const existingActivityLabel = normalizeCommandName(existingProperties.harmonyActivityLabel);
+      const existingActivityLabel = normalizeHarmonyDuplicateName(existingProperties.harmonyActivityLabel || candidate?.name);
       const existingHubName = normalizeCommandName(existingProperties.harmonyHubName || candidate?.room);
 
       if (existingDeviceId) {
@@ -1336,7 +1403,7 @@ class HarmonyService {
       if (snapshotRemoteId && existingRemoteId && existingRemoteId !== snapshotRemoteId) {
         return false;
       }
-      if (activityLabel && existingActivityLabel && existingActivityLabel !== normalizeCommandName(activityLabel)) {
+      if (activityLabelKey && existingActivityLabel && existingActivityLabel !== activityLabelKey) {
         return false;
       }
       if (snapshotHubName && existingHubName && existingHubName !== snapshotHubName) {
@@ -1358,7 +1425,7 @@ class HarmonyService {
     const deviceLabel = trimHarmonyValue(device?.label || harmonyDeviceId || 'Harmony Device');
     const snapshotRemoteId = trimHarmonyValue(snapshot?.remoteId);
     const snapshotHubName = normalizeCommandName(snapshot?.friendlyName);
-    const deviceLabelKey = normalizeCommandName(deviceLabel);
+    const deviceLabelKey = normalizeHarmonyDuplicateName(deviceLabel);
     const manufacturerKey = normalizeCommandName(device?.manufacturer);
     const modelKey = normalizeCommandName(device?.model);
     const shouldCheckFallback = exactMatches.length === 0 || Boolean(snapshotRemoteId);
@@ -1367,10 +1434,15 @@ class HarmonyService {
       return exactMatches;
     }
 
+    const deviceNameMatch = buildHarmonyDuplicateNameMatch(deviceLabel);
+    if (!deviceNameMatch) {
+      return exactMatches;
+    }
+
     const fallbackCandidates = await Device.find({
       'properties.source': 'harmony',
       room: hubRoom,
-      name: deviceLabel,
+      name: deviceNameMatch,
       $or: [
         { 'properties.harmonyEntityType': HARMONY_ENTITY_TYPES.DEVICE },
         {
@@ -1394,7 +1466,7 @@ class HarmonyService {
         const existingActivityId = trimHarmonyValue(existingProperties.harmonyActivityId);
         const existingDeviceId = trimHarmonyValue(existingProperties.harmonyDeviceId);
         const existingRemoteId = trimHarmonyValue(existingProperties.harmonyRemoteId);
-        const existingDeviceLabel = normalizeCommandName(existingProperties.harmonyDeviceLabel || candidate?.name);
+        const existingDeviceLabel = normalizeHarmonyDuplicateName(existingProperties.harmonyDeviceLabel || candidate?.name);
         const existingHubName = normalizeCommandName(existingProperties.harmonyHubName || candidate?.room);
         const candidateBrand = normalizeCommandName(candidate?.brand);
         const candidateModel = normalizeCommandName(candidate?.model);
@@ -1875,10 +1947,10 @@ class HarmonyService {
 
           const staleActivityResult = await Device.deleteMany(buildHarmonyActivityMatch(snapshot.ip, {
             'properties.harmonyActivityId': { $nin: activityIds }
-          }));
+          }, snapshot.remoteId));
           const staleDeviceResult = await Device.deleteMany(buildHarmonyDeviceMatch(snapshot.ip, {
             'properties.harmonyDeviceId': { $nin: deviceIds }
-          }));
+          }, snapshot.remoteId));
           summary.removed += (staleActivityResult.deletedCount || 0) + (staleDeviceResult.deletedCount || 0);
 
           summary.hubsSynced += 1;

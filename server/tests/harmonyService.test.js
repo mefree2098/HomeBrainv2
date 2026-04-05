@@ -436,8 +436,10 @@ test('syncDevices migrates a legacy Harmony raw device row onto stable remoteId 
       return [];
     }
 
-    if (query.name === 'Amazon Fire TV') {
+    if (query.name instanceof RegExp) {
       assert.equal(query.room, 'Bedroom Hub');
+      assert.equal(query.name.test('Amazon Fire TV'), true);
+      assert.equal(query.name.test('Amazon Fire TV (2)'), true);
       return [legacyDevice];
     }
 
@@ -462,4 +464,125 @@ test('syncDevices migrates a legacy Harmony raw device row onto stable remoteId 
   assert.equal(legacyDevice.properties.harmonyHubIp, '192.168.1.50');
   assert.equal(legacyDevice.properties.harmonyRepeatPowerCommands, true);
   assert.equal(deleteManyCalls.length, 2);
+});
+
+test('syncDevices removes Harmony raw device rows with auto-numbered duplicate names', async (t) => {
+  const originalFind = Device.find;
+  const originalCreate = Device.create;
+  const originalDeleteMany = Device.deleteMany;
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.create = originalCreate;
+    Device.deleteMany = originalDeleteMany;
+  });
+
+  const service = new HarmonyService();
+  service.discoverHubs = async () => [{ ip: '192.168.1.50' }];
+  service.getHubSnapshot = async () => ({
+    ip: '192.168.1.50',
+    friendlyName: 'Bedroom Hub',
+    remoteId: 'remote-bedroom',
+    currentActivityId: '-1',
+    currentActivityLabel: 'Off',
+    activities: [],
+    devices: [
+      {
+        id: '77',
+        label: 'Amazon Fire TV',
+        manufacturer: 'Amazon',
+        model: 'Fire TV',
+        commands: [
+          { name: 'Play', label: 'Play', action: 'IR_PLAY' },
+          { name: 'Pause', label: 'Pause', action: 'IR_PAUSE' }
+        ]
+      }
+    ]
+  });
+  service.mergeKnownHubs = async () => [];
+  service.syncActivityStates = async () => ({ success: true });
+
+  const canonicalDevice = {
+    _id: 'fire-tv-canonical',
+    name: 'Amazon Fire TV',
+    type: 'switch',
+    room: 'Bedroom Hub',
+    status: false,
+    groups: ['Media'],
+    brand: 'Amazon',
+    model: 'Fire TV',
+    properties: {
+      source: 'harmony',
+      harmonyEntityType: 'device',
+      harmonyHubIp: '192.168.1.50',
+      harmonyRemoteId: 'remote-bedroom',
+      harmonyDeviceId: '77',
+      harmonyDeviceLabel: 'Amazon Fire TV'
+    },
+    createdAt: new Date('2026-04-01T00:00:00Z'),
+    async save() {
+      this.saved = true;
+    }
+  };
+
+  const duplicateDevice = {
+    _id: 'fire-tv-duplicate',
+    name: 'Amazon Fire TV (2)',
+    type: 'switch',
+    room: 'Bedroom Hub',
+    status: false,
+    groups: ['Favorites'],
+    brand: 'Amazon',
+    model: 'Fire TV',
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: 'bedroom-hub.local',
+      harmonyDeviceLabel: 'Amazon Fire TV'
+    },
+    createdAt: new Date('2026-04-02T00:00:00Z')
+  };
+
+  const deleteManyCalls = [];
+
+  Device.find = async (query) => {
+    if (query['properties.harmonyDeviceId']) {
+      assert.equal(query['properties.harmonyDeviceId'], '77');
+      assert.deepEqual(query.$or, [
+        { 'properties.harmonyRemoteId': 'remote-bedroom' },
+        { 'properties.harmonyHubIp': '192.168.1.50' }
+      ]);
+      return [canonicalDevice];
+    }
+
+    if (query.name instanceof RegExp) {
+      assert.equal(query.room, 'Bedroom Hub');
+      assert.equal(query.name.test('Amazon Fire TV'), true);
+      assert.equal(query.name.test('Amazon Fire TV (2)'), true);
+      return [canonicalDevice, duplicateDevice];
+    }
+
+    throw new Error(`Unexpected Device.find query: ${JSON.stringify(query)}`);
+  };
+  Device.create = async () => {
+    throw new Error('Device.create should not be called when a duplicate-numbered Harmony row already exists');
+  };
+  Device.deleteMany = async (query) => {
+    deleteManyCalls.push(query);
+    if (query._id) {
+      return { deletedCount: 1 };
+    }
+    return { deletedCount: 0 };
+  };
+
+  const result = await service.syncDevices({ timeoutMs: 1 });
+
+  assert.equal(result.success, true);
+  assert.equal(result.updated, 1);
+  assert.equal(result.deduped, 1);
+  assert.equal(canonicalDevice.saved, true);
+  assert.equal(canonicalDevice.name, 'Amazon Fire TV');
+  assert.deepEqual(canonicalDevice.groups, ['Media', 'Favorites']);
+  assert.deepEqual(deleteManyCalls[0], {
+    _id: { $in: ['fire-tv-duplicate'] }
+  });
 });
