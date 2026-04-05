@@ -282,7 +282,12 @@ test('syncDevices updates Harmony raw device metadata while preserving custom de
         model: 'Cinema 1080',
         commands: [
           { name: 'PowerOn', label: 'PowerOn', action: 'IR_POWER_ON' },
-          { name: 'PowerOff', label: 'PowerOff', action: 'IR_POWER_OFF' }
+          { name: 'PowerOff', label: 'PowerOff', action: 'IR_POWER_OFF' },
+          { name: 'VolumeUp', label: 'VolumeUp', action: 'IR_VOLUME_UP' },
+          { name: 'VolumeDown', label: 'VolumeDown', action: 'IR_VOLUME_DOWN' },
+          { name: 'Mute', label: 'Mute', action: 'IR_MUTE' },
+          { name: 'DirectionUp', label: 'DirectionUp', action: 'IR_UP' },
+          { name: 'Select', label: 'Select', action: 'IR_SELECT' }
         ]
       }
     ]
@@ -337,6 +342,21 @@ test('syncDevices updates Harmony raw device metadata while preserving custom de
   assert.equal(canonicalDevice.status, true);
   assert.equal(canonicalDevice.properties.harmonyRepeatPowerCommands, true);
   assert.equal(canonicalDevice.properties.harmonyEntityType, 'device');
+  assert.equal(Array.isArray(canonicalDevice.properties.harmonyCommands), true);
+  assert.deepEqual(canonicalDevice.properties.harmonyCommands.slice(0, 5), [
+    { name: 'PowerOff', label: 'PowerOff', category: 'power', capability: null },
+    { name: 'PowerOn', label: 'PowerOn', category: 'power', capability: null },
+    { name: 'Mute', label: 'Mute', category: 'volume', capability: 'mute' },
+    { name: 'VolumeDown', label: 'VolumeDown', category: 'volume', capability: 'volume_down' },
+    { name: 'VolumeUp', label: 'VolumeUp', category: 'volume', capability: 'volume_up' }
+  ]);
+  assert.deepEqual(canonicalDevice.properties.harmonyControlCommands, {
+    volume_up: 'VolumeUp',
+    volume_down: 'VolumeDown',
+    mute: 'Mute',
+    direction_up: 'DirectionUp',
+    select: 'Select'
+  });
   assert.deepEqual(canonicalDevice.properties.harmonyPowerCommands, {
     on: 'PowerOn',
     off: 'PowerOff',

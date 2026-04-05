@@ -34,8 +34,20 @@ import { useToast } from "@/hooks/useToast"
 import { useFavorites } from "@/hooks/useFavorites"
 import { useDeviceRealtime } from "@/hooks/useDeviceRealtime"
 import { useAuth } from "@/contexts/AuthContext"
+import {
+  getHarmonyControlCommands,
+  getHarmonyPowerCommands,
+  isHarmonyCommandDevice
+} from "@/lib/harmony"
 
 const THERMOSTAT_MODES = ['auto', 'cool', 'heat', 'off'] as const
+const HARMONY_CARD_COMMANDS = [
+  { key: 'volume_down', label: 'Vol -' },
+  { key: 'mute', label: 'Mute' },
+  { key: 'volume_up', label: 'Vol +' },
+  { key: 'play', label: 'Play' },
+  { key: 'pause', label: 'Pause' }
+] as const
 
 const normalizeThermostatMode = (value: unknown): string => {
   if (typeof value !== 'string') {
@@ -316,6 +328,67 @@ const formatSourceLabel = (source: string): string => {
     .join(' ')
 }
 
+const supportsHarmonyPowerControl = (device: any): boolean => {
+  if (!isHarmonyCommandDevice(device)) {
+    return false
+  }
+
+  const powerCommands = getHarmonyPowerCommands(device)
+  return Boolean(powerCommands.on || powerCommands.off || powerCommands.toggle)
+}
+
+const getHarmonyPowerAction = (device: any): string | null => {
+  if (!isHarmonyCommandDevice(device)) {
+    return null
+  }
+
+  const powerCommands = getHarmonyPowerCommands(device)
+  if (powerCommands.on && powerCommands.off) {
+    return device?.status ? 'turn_off' : 'turn_on'
+  }
+  if (powerCommands.toggle) {
+    return 'toggle'
+  }
+  if (powerCommands.on) {
+    return 'turn_on'
+  }
+  if (powerCommands.off) {
+    return 'turn_off'
+  }
+
+  return null
+}
+
+const getHarmonyPowerActionLabel = (device: any): string => {
+  const action = getHarmonyPowerAction(device)
+  if (action === 'toggle') {
+    return 'Toggle Power'
+  }
+  if (action === 'turn_off') {
+    return 'Turn Off'
+  }
+  return 'Turn On'
+}
+
+const getHarmonyQuickCardActions = (device: any) => {
+  const controlCommands = getHarmonyControlCommands(device)
+
+  return HARMONY_CARD_COMMANDS
+    .map((definition) => {
+      const command = controlCommands[definition.key]
+      if (!command) {
+        return null
+      }
+
+      return {
+        key: definition.key,
+        label: definition.label,
+        command
+      }
+    })
+    .filter((entry): entry is { key: string; label: string; command: string } => Boolean(entry))
+}
+
 interface DevicesProps {
   embedded?: boolean
   initialFocusDeviceId?: string | null
@@ -499,7 +572,7 @@ export function Devices({
     return source === 'insteon' && !!device?.properties?.insteonAddress
   }, [])
 
-  const applyControlOptimistically = useCallback((deviceId: string, action: string, value?: number | string) => {
+  const applyControlOptimistically = useCallback((deviceId: string, action: string, value?: unknown) => {
     const normalizedMode = normalizeThermostatMode(value)
     const applyToDevice = (device: any) => {
       if (!device || device._id !== deviceId) {
@@ -563,7 +636,7 @@ export function Devices({
     })))
   }, [])
 
-  const normalizeServerDeviceForAction = useCallback((updatedDevice: any, action: string, value?: number | string) => {
+  const normalizeServerDeviceForAction = useCallback((updatedDevice: any, action: string, value?: unknown) => {
     if (!updatedDevice || typeof updatedDevice !== 'object') {
       return updatedDevice
     }
@@ -653,7 +726,7 @@ export function Devices({
     return null
   }
 
-  const handleDeviceControl = async (deviceId: string, action: string, value?: number | string) => {
+  const handleDeviceControl = async (deviceId: string, action: string, value?: unknown) => {
     setPendingControls(prev => ({ ...prev, [deviceId]: true }))
     setControlFeedback(prev => {
       const next = { ...prev }
@@ -672,7 +745,7 @@ export function Devices({
 
     try {
       console.log('Controlling device:', { deviceId, action, value })
-      const payload: { deviceId: string; action: string; value?: number | string } = { deviceId, action }
+      const payload: { deviceId: string; action: string; value?: unknown } = { deviceId, action }
       if (value !== undefined) {
         payload.value = value
       }
@@ -953,6 +1026,63 @@ export function Devices({
     )
   }
 
+  const renderHarmonyCommandDeviceControls = (device: any, compact = false) => {
+    const quickActions = getHarmonyQuickCardActions(device)
+    const powerAction = getHarmonyPowerAction(device)
+    const isPending = !!pendingControls[device._id]
+
+    return (
+      <div className="space-y-3">
+        {quickActions.length > 0 ? (
+          <div className="grid grid-cols-3 gap-2">
+            {quickActions.map((entry) => (
+              <Button
+                key={entry.key}
+                onClick={() => handleDeviceControl(device._id, 'harmony_command', { command: entry.command, holdMs: 0 })}
+                variant="outline"
+                size={compact ? "sm" : "default"}
+                disabled={isPending}
+              >
+                {entry.label}
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-border/70 px-3 py-3 text-xs text-muted-foreground">
+            Harmony remote commands are available for this device in Details.
+          </div>
+        )}
+
+        {powerAction ? (
+          <Button
+            onClick={() => handleDeviceControl(device._id, powerAction)}
+            variant={device.status ? "default" : "outline"}
+            className="w-full"
+            size={compact ? "sm" : "default"}
+            disabled={isPending}
+          >
+            {powerAction === 'toggle' ? (
+              <>
+                <Power className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
+                {getHarmonyPowerActionLabel(device)}
+              </>
+            ) : device.status ? (
+              <>
+                <PowerOff className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
+                Turn Off
+              </>
+            ) : (
+              <>
+                <Power className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
+                Turn On
+              </>
+            )}
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
+
   const sourceOptions = Array.from(new Set([
     ...DEFAULT_SOURCE_OPTIONS,
     ...devices.map(getDeviceSource)
@@ -1203,6 +1333,8 @@ export function Devices({
             renderThermostatControls(device)
           ) : supportsLightFade(device) ? (
             renderLightControls(device)
+          ) : isHarmonyCommandDevice(device) ? (
+            renderHarmonyCommandDeviceControls(device)
           ) : (
             <Button
               onClick={() => handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')}
@@ -1239,7 +1371,11 @@ export function Devices({
               ? `Voice: "Hey Anna, set ${device.name} to ${getThermostatTargetTemperature(device)} degrees"`
               : supportsLightFade(device)
                 ? `Voice: "Hey Anna, fade ${device.name} to 30 percent" or "set ${device.name} to blue"`
-                : `Voice: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
+                : isHarmonyCommandDevice(device)
+                  ? supportsHarmonyPowerControl(device)
+                    ? `Power controls are available here, and extra Harmony commands like volume or media buttons live in Details.`
+                    : `This Harmony device exposes remote commands in Details instead of a simple on/off power toggle.`
+                  : `Voice: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
           </div>
         </CardContent>
       </Card>
@@ -1450,16 +1586,32 @@ export function Devices({
                                 )
                                 return
                               }
-                              handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')
+                              if (isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device)) {
+                                setDetailDeviceId(device._id)
+                                return
+                              }
+                              handleDeviceControl(device._id, getHarmonyPowerAction(device) || (device.status ? 'turn_off' : 'turn_on'))
                             }}
                             variant={device.type === 'thermostat'
                               ? (getThermostatMode(device) !== 'off' ? "default" : "outline")
-                              : (device.status ? "default" : "outline")}
+                              : (isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device)
+                                ? "outline"
+                                : (device.status ? "default" : "outline"))}
                             size="sm"
                             disabled={!!pendingControls[device._id]}
                             className="min-w-[8.5rem]"
                           >
-                            {(device.type === 'thermostat' ? getThermostatMode(device) !== 'off' : device.status) ? (
+                            {isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device) ? (
+                              <>
+                                <BarChart3 className="h-4 w-4 mr-2" />
+                                Remote
+                              </>
+                            ) : isHarmonyCommandDevice(device) && getHarmonyPowerAction(device) === 'toggle' ? (
+                              <>
+                                <Power className="h-4 w-4 mr-2" />
+                                {getHarmonyPowerActionLabel(device)}
+                              </>
+                            ) : (device.type === 'thermostat' ? getThermostatMode(device) !== 'off' : device.status) ? (
                               <>
                                 <PowerOff className="h-4 w-4 mr-2" />
                                 Turn Off
@@ -1537,6 +1689,8 @@ export function Devices({
                             renderThermostatControls(device, true)
                           ) : supportsLightFade(device) ? (
                             renderLightControls(device, true)
+                          ) : isHarmonyCommandDevice(device) ? (
+                            renderHarmonyCommandDeviceControls(device, true)
                           ) : (
                             <Button
                               onClick={() => handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')}

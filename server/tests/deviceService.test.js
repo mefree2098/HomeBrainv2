@@ -268,6 +268,70 @@ test('controlDevice routes Harmony raw devices through direct power commands and
   assert.equal(persistedUpdate.isOnline, true);
 });
 
+test('controlDevice routes Harmony raw device commands through sendDeviceCommand', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalEnsureHarmonyState = deviceService.ensureHarmonyState;
+  const originalSendDeviceCommand = harmonyService.sendDeviceCommand;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.ensureHarmonyState = originalEnsureHarmonyState;
+    harmonyService.sendDeviceCommand = originalSendDeviceCommand;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const harmonyDevice = {
+    _id: 'device-harmony-receiver',
+    name: 'Receiver',
+    type: 'switch',
+    status: true,
+    isOnline: true,
+    properties: {
+      source: 'harmony',
+      harmonyEntityType: 'device',
+      harmonyHubIp: '192.168.1.50',
+      harmonyDeviceId: '91'
+    }
+  };
+
+  let persistedUpdate = null;
+  let sendDeviceCommandArgs = null;
+
+  Device.findById = async () => ({ ...harmonyDevice });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return {
+      ...harmonyDevice,
+      ...update
+    };
+  };
+  deviceService.ensureHarmonyState = async () => {};
+  harmonyService.sendDeviceCommand = async (hubIp, deviceId, command, holdMs) => {
+    sendDeviceCommandArgs = { hubIp, deviceId, command, holdMs };
+    return { success: true };
+  };
+  deviceUpdateEmitter.emit = () => {};
+
+  const updated = await deviceService.controlDevice('device-harmony-receiver', 'harmony_command', {
+    command: 'VolumeUp',
+    holdMs: 250
+  });
+
+  assert.deepEqual(sendDeviceCommandArgs, {
+    hubIp: '192.168.1.50',
+    deviceId: '91',
+    command: 'VolumeUp',
+    holdMs: 250
+  });
+  assert.equal(updated.status, true);
+  assert.equal(updated.isOnline, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(persistedUpdate, 'status'), false);
+  assert.equal(persistedUpdate.isOnline, true);
+});
+
 test('supportsBrightnessControl treats fan-labeled Insteon devices like fader switches', () => {
   const supportsBrightness = deviceService.supportsBrightnessControl({
     _id: 'device-fan',

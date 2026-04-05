@@ -22,6 +22,180 @@ const HARMONY_ENTITY_TYPES = {
   ACTIVITY: 'activity',
   DEVICE: 'device'
 };
+const HARMONY_COMMAND_CATEGORY_ORDER = Object.freeze([
+  'power',
+  'volume',
+  'channel',
+  'navigation',
+  'transport',
+  'menu',
+  'input',
+  'numeric',
+  'other'
+]);
+const HARMONY_CONTROL_MATCHERS = Object.freeze([
+  {
+    capability: 'volume_up',
+    category: 'volume',
+    exact: ['volumeup', 'volup', 'raisevolume'],
+    startsWith: ['volumeup'],
+    textAll: [['volume', 'up'], ['vol', 'up'], ['raise', 'volume']]
+  },
+  {
+    capability: 'volume_down',
+    category: 'volume',
+    exact: ['volumedown', 'voldown', 'lowervolume'],
+    startsWith: ['volumedown'],
+    textAll: [['volume', 'down'], ['vol', 'down'], ['lower', 'volume']]
+  },
+  {
+    capability: 'mute',
+    category: 'volume',
+    exact: ['mute', 'volumemute', 'audiomute', 'mutetoggle'],
+    startsWith: ['mute'],
+    textAll: [['mute']]
+  },
+  {
+    capability: 'channel_up',
+    category: 'channel',
+    exact: ['channelup', 'chup', 'pageup'],
+    startsWith: ['channelup'],
+    textAll: [['channel', 'up'], ['channel', 'plus'], ['ch', 'up']]
+  },
+  {
+    capability: 'channel_down',
+    category: 'channel',
+    exact: ['channeldown', 'chdown', 'pagedown'],
+    startsWith: ['channeldown'],
+    textAll: [['channel', 'down'], ['channel', 'minus'], ['ch', 'down']]
+  },
+  {
+    capability: 'direction_up',
+    category: 'navigation',
+    exact: ['directionup', 'navigateup', 'navigationup', 'cursorup', 'arrowup', 'up'],
+    startsWith: ['directionup', 'navigateup', 'navigationup', 'cursorup'],
+    textAll: [['direction', 'up'], ['navigate', 'up'], ['navigation', 'up'], ['cursor', 'up'], ['arrow', 'up']]
+  },
+  {
+    capability: 'direction_down',
+    category: 'navigation',
+    exact: ['directiondown', 'navigatedown', 'navigationdown', 'cursordown', 'arrowdown', 'down'],
+    startsWith: ['directiondown', 'navigatedown', 'navigationdown', 'cursordown'],
+    textAll: [['direction', 'down'], ['navigate', 'down'], ['navigation', 'down'], ['cursor', 'down'], ['arrow', 'down']]
+  },
+  {
+    capability: 'direction_left',
+    category: 'navigation',
+    exact: ['directionleft', 'navigateleft', 'navigationleft', 'cursorleft', 'arrowleft', 'left'],
+    startsWith: ['directionleft', 'navigateleft', 'navigationleft', 'cursorleft'],
+    textAll: [['direction', 'left'], ['navigate', 'left'], ['navigation', 'left'], ['cursor', 'left'], ['arrow', 'left']]
+  },
+  {
+    capability: 'direction_right',
+    category: 'navigation',
+    exact: ['directionright', 'navigateright', 'navigationright', 'cursorright', 'arrowright', 'right'],
+    startsWith: ['directionright', 'navigateright', 'navigationright', 'cursorright'],
+    textAll: [['direction', 'right'], ['navigate', 'right'], ['navigation', 'right'], ['cursor', 'right'], ['arrow', 'right']]
+  },
+  {
+    capability: 'select',
+    category: 'navigation',
+    exact: ['select', 'ok', 'enter'],
+    startsWith: ['select'],
+    textAll: [['select'], [' ok '], ['enter']]
+  },
+  {
+    capability: 'back',
+    category: 'menu',
+    exact: ['back', 'return'],
+    startsWith: ['back'],
+    textAll: [['back'], ['return']]
+  },
+  {
+    capability: 'home',
+    category: 'menu',
+    exact: ['home'],
+    startsWith: ['home'],
+    textAll: [['home']]
+  },
+  {
+    capability: 'menu',
+    category: 'menu',
+    exact: ['menu', 'options', 'popupmenu'],
+    startsWith: ['menu'],
+    textAll: [['menu'], ['options']]
+  },
+  {
+    capability: 'guide',
+    category: 'menu',
+    exact: ['guide', 'programguide'],
+    startsWith: ['guide'],
+    textAll: [['guide']]
+  },
+  {
+    capability: 'info',
+    category: 'menu',
+    exact: ['info', 'display'],
+    startsWith: ['info'],
+    textAll: [['info'], ['display']]
+  },
+  {
+    capability: 'play',
+    category: 'transport',
+    exact: ['play'],
+    startsWith: ['play'],
+    textAll: [['play']]
+  },
+  {
+    capability: 'pause',
+    category: 'transport',
+    exact: ['pause'],
+    startsWith: ['pause'],
+    textAll: [['pause']]
+  },
+  {
+    capability: 'stop',
+    category: 'transport',
+    exact: ['stop'],
+    startsWith: ['stop'],
+    textAll: [['stop']]
+  },
+  {
+    capability: 'record',
+    category: 'transport',
+    exact: ['record', 'rec'],
+    startsWith: ['record'],
+    textAll: [['record']]
+  },
+  {
+    capability: 'rewind',
+    category: 'transport',
+    exact: ['rewind', 'reverse'],
+    startsWith: ['rewind'],
+    textAll: [['rewind'], ['reverse']]
+  },
+  {
+    capability: 'fast_forward',
+    category: 'transport',
+    exact: ['fastforward', 'ffwd', 'forward'],
+    startsWith: ['fastforward'],
+    textAll: [['fast', 'forward']]
+  },
+  {
+    capability: 'skip_back',
+    category: 'transport',
+    exact: ['skipback', 'previous', 'prev'],
+    startsWith: ['skipback'],
+    textAll: [['skip', 'back'], ['skip', 'previous']]
+  },
+  {
+    capability: 'skip_forward',
+    category: 'transport',
+    exact: ['skipforward', 'next'],
+    startsWith: ['skipforward'],
+    textAll: [['skip', 'forward'], ['skip', 'next']]
+  }
+]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -874,6 +1048,164 @@ class HarmonyService {
     return powerCommands;
   }
 
+  scoreHarmonyCommandMatcher(command, matcher = {}) {
+    const compactKeys = [
+      compactHarmonyCommandKey(command?.name),
+      compactHarmonyCommandKey(command?.label)
+    ].filter(Boolean);
+    const normalizedText = [
+      normalizeCommandName(command?.name),
+      normalizeCommandName(command?.label)
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const paddedText = ` ${normalizedText} `;
+
+    let bestScore = 0;
+
+    compactKeys.forEach((key) => {
+      if (Array.isArray(matcher.exact) && matcher.exact.includes(key)) {
+        bestScore = Math.max(bestScore, 100);
+      }
+
+      if (Array.isArray(matcher.startsWith) && matcher.startsWith.some((prefix) => key.startsWith(prefix))) {
+        bestScore = Math.max(bestScore, 90);
+      }
+    });
+
+    if (Array.isArray(matcher.textAll)) {
+      matcher.textAll.forEach((terms) => {
+        if (Array.isArray(terms) && terms.every((term) => paddedText.includes(` ${normalizeCommandName(term)} `) || normalizedText.includes(normalizeCommandName(term)))) {
+          bestScore = Math.max(bestScore, 80);
+        }
+      });
+    }
+
+    if (Array.isArray(matcher.textAny) && matcher.textAny.some((term) => normalizedText.includes(normalizeCommandName(term)))) {
+      bestScore = Math.max(bestScore, 65);
+    }
+
+    return bestScore;
+  }
+
+  classifyHarmonyCommand(command = {}) {
+    const compactKeys = [
+      compactHarmonyCommandKey(command?.name),
+      compactHarmonyCommandKey(command?.label)
+    ].filter(Boolean);
+    const normalizedText = [
+      normalizeCommandName(command?.name),
+      normalizeCommandName(command?.label)
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    let bestMatch = {
+      category: 'other',
+      capability: null,
+      score: 0
+    };
+
+    compactKeys.forEach((key) => {
+      const digitMatch = key.match(/^(?:number|num|digit|numpad)?([0-9])$/);
+      if (digitMatch) {
+        bestMatch = {
+          category: 'numeric',
+          capability: `digit_${digitMatch[1]}`,
+          score: 100
+        };
+      }
+    });
+
+    if (bestMatch.score < 100) {
+      HARMONY_CONTROL_MATCHERS.forEach((matcher) => {
+        const score = this.scoreHarmonyCommandMatcher(command, matcher);
+        if (score > bestMatch.score) {
+          bestMatch = {
+            category: matcher.category,
+            capability: matcher.capability,
+            score
+          };
+        }
+      });
+    }
+
+    if (bestMatch.score > 0) {
+      return bestMatch;
+    }
+
+    if (/(^|\s)(hdmi|input|source|tv|aux|game|blu-ray|bluray)(\s|$)/i.test(normalizedText)) {
+      return {
+        category: 'input',
+        capability: null,
+        score: 60
+      };
+    }
+
+    if (normalizedText.includes('power')) {
+      return {
+        category: 'power',
+        capability: null,
+        score: 50
+      };
+    }
+
+    return bestMatch;
+  }
+
+  buildHarmonyCommandCatalog(commands = []) {
+    const normalizedCommands = Array.isArray(commands) ? commands : [];
+
+    return normalizedCommands
+      .map((command) => {
+        const classification = this.classifyHarmonyCommand(command);
+        const name = (command?.name || '').toString().trim();
+        if (!name) {
+          return null;
+        }
+
+        return {
+          name,
+          label: (command?.label || name).toString(),
+          category: classification.category || 'other',
+          capability: classification.capability || null
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => {
+        const leftCategoryIndex = HARMONY_COMMAND_CATEGORY_ORDER.indexOf(left.category);
+        const rightCategoryIndex = HARMONY_COMMAND_CATEGORY_ORDER.indexOf(right.category);
+        if (leftCategoryIndex !== rightCategoryIndex) {
+          return (leftCategoryIndex === -1 ? HARMONY_COMMAND_CATEGORY_ORDER.length : leftCategoryIndex)
+            - (rightCategoryIndex === -1 ? HARMONY_COMMAND_CATEGORY_ORDER.length : rightCategoryIndex);
+        }
+
+        return left.label.localeCompare(right.label);
+      });
+  }
+
+  extractControlCommands(commands = []) {
+    const controlCommands = {};
+    const bestScores = new Map();
+
+    (Array.isArray(commands) ? commands : []).forEach((command) => {
+      const classification = this.classifyHarmonyCommand(command);
+      if (!classification?.capability || classification.score <= 0) {
+        return;
+      }
+
+      const existingScore = bestScores.get(classification.capability) || 0;
+      if (existingScore >= classification.score) {
+        return;
+      }
+
+      controlCommands[classification.capability] = command.name;
+      bestScores.set(classification.capability, classification.score);
+    });
+
+    return controlCommands;
+  }
+
   normalizeActivities(config = {}) {
     const activities = Array.isArray(config?.activity) ? config.activity : [];
     return activities
@@ -902,6 +1234,8 @@ class HarmonyService {
   buildHarmonyCommandDevice(snapshot, device, existing = null) {
     const commands = Array.isArray(device?.commands) ? device.commands : [];
     const powerCommands = this.extractPowerCommands(commands);
+    const commandCatalog = this.buildHarmonyCommandCatalog(commands);
+    const controlCommands = this.extractControlCommands(commands);
     const previousStatus = typeof existing?.status === 'boolean' ? existing.status : false;
 
     return {
@@ -918,6 +1252,8 @@ class HarmonyService {
         harmonyDeviceId: (device?.id || '').toString(),
         harmonyDeviceLabel: (device?.label || device?.id || 'Unknown device').toString(),
         harmonyCommandCount: commands.length,
+        harmonyCommands: commandCatalog,
+        harmonyControlCommands: controlCommands,
         harmonyPowerCommands: {
           on: powerCommands.on?.name || null,
           off: powerCommands.off?.name || null,

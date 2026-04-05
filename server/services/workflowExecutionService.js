@@ -270,6 +270,34 @@ function getActionName(action) {
 }
 
 function getActionValue(actionName, parameters = {}) {
+  if (actionName === 'harmony_command' || actionName === 'harmonycommand') {
+    if (typeof parameters.value === 'string' && parameters.value.trim()) {
+      return {
+        command: parameters.value.trim(),
+        holdMs: Number.isFinite(Number(parameters.harmonyHoldMs ?? parameters.holdMs))
+          ? Math.max(0, Math.round(Number(parameters.harmonyHoldMs ?? parameters.holdMs)))
+          : 0
+      };
+    }
+
+    if (parameters.value && typeof parameters.value === 'object' && !Array.isArray(parameters.value)) {
+      return parameters.value;
+    }
+
+    const command = sanitizeString(
+      parameters.harmonyCommand ||
+      parameters.command
+    );
+    if (command) {
+      return {
+        command,
+        holdMs: Number.isFinite(Number(parameters.harmonyHoldMs ?? parameters.holdMs))
+          ? Math.max(0, Math.round(Number(parameters.harmonyHoldMs ?? parameters.holdMs)))
+          : 0
+      };
+    }
+  }
+
   if (Object.prototype.hasOwnProperty.call(parameters, 'value')) {
     return parameters.value;
   }
@@ -426,7 +454,20 @@ function describeWorkflowAction(action, options = {}) {
 
   switch (actionType) {
     case 'device_control': {
-      const actionName = humanizeActionToken(getActionName(action));
+      const rawActionName = getActionName(action);
+      if (rawActionName === 'harmony_command' || rawActionName === 'harmonycommand') {
+        const commandLabel = sanitizeString(
+          action?.parameters?.harmonyCommandLabel ||
+          action?.parameters?.harmonyCommand ||
+          action?.parameters?.command ||
+          action?.parameters?.value?.command ||
+          action?.parameters?.value
+        );
+        const prefix = commandLabel ? `Send ${commandLabel}` : 'Send Harmony command';
+        return targetLabel ? `${prefix} ${targetLabel}` : prefix;
+      }
+
+      const actionName = humanizeActionToken(rawActionName);
       const prefix = actionName ? capitalizeLabel(actionName) : 'Control device';
       return targetLabel ? `${prefix} ${targetLabel}` : prefix;
     }
@@ -1079,6 +1120,12 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
   const controlMessage = typeof controlResult?.message === 'string' && controlResult.message.trim()
     ? controlResult.message.trim()
     : null;
+  const harmonyCommandName = actionName === 'harmony_command' || actionName === 'harmonycommand'
+    ? sanitizeString(value?.command || value)
+    : '';
+  const actionLabel = harmonyCommandName
+    ? `Harmony command ${harmonyCommandName}`
+    : actionName;
   const controlDetails = controlResult && typeof controlResult === 'object'
     ? {
         ...((controlResult.details && typeof controlResult.details === 'object')
@@ -1093,8 +1140,8 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
   return {
     target: target.toString(),
     message: controlMessage
-      ? `Executed ${actionName} on ${device.name}: ${controlMessage}`
-      : `Executed ${actionName} on ${device.name}`,
+      ? `Executed ${actionLabel} on ${device.name}: ${controlMessage}`
+      : `Executed ${actionLabel} on ${device.name}`,
     value,
     details: {
       source,

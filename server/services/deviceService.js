@@ -10,6 +10,7 @@ const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const {
   ensureUniquePlatformIdentity
 } = require('./deviceIdentityService');
+const MAX_HARMONY_COMMAND_HOLD_MS = 5000;
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 let cachedInsteonService = null;
@@ -598,6 +599,13 @@ class DeviceService {
           commandValue = 'close';
           break;
 
+        case 'harmonycommand':
+          if (!isHarmony) {
+            throw new Error('Harmony raw device commands are only available for Harmony-backed devices');
+          }
+          commandValue = value;
+          break;
+
         default:
           throw new Error(`Unknown action: ${action}`);
       }
@@ -1042,6 +1050,44 @@ class DeviceService {
     };
   }
 
+  parseHarmonyCommandPayload(value) {
+    if (typeof value === 'string') {
+      return {
+        command: value.trim(),
+        holdMs: 0
+      };
+    }
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {
+        command: '',
+        holdMs: 0
+      };
+    }
+
+    const command = (
+      value.command ||
+      value.name ||
+      value.harmonyCommand ||
+      value.label ||
+      ''
+    ).toString().trim();
+    const holdMsRaw = Number(
+      Object.prototype.hasOwnProperty.call(value, 'holdMs')
+        ? value.holdMs
+        : (Object.prototype.hasOwnProperty.call(value, 'hold')
+          ? value.hold
+          : 0)
+    );
+
+    return {
+      command,
+      holdMs: Number.isFinite(holdMsRaw)
+        ? Math.max(0, Math.min(MAX_HARMONY_COMMAND_HOLD_MS, Math.round(holdMsRaw)))
+        : 0
+    };
+  }
+
   async controlInsteonDevice(device, normalizedAction, value) {
     const insteonAddress = device?.properties?.insteonAddress;
     if (!insteonAddress) {
@@ -1171,6 +1217,21 @@ class DeviceService {
 
     let desiredState = null;
     switch (normalizedAction) {
+      case 'harmonycommand': {
+        const { command, holdMs } = this.parseHarmonyCommandPayload(commandValue);
+        if (!command) {
+          throw new Error('Harmony command name is required');
+        }
+
+        await harmonyService.sendDeviceCommand(
+          harmonyHubIp,
+          harmonyDeviceId.toString(),
+          command,
+          holdMs
+        );
+        break;
+      }
+
       case 'toggle':
         desiredState = commandValue ? 'on' : 'off';
         break;
@@ -1181,14 +1242,16 @@ class DeviceService {
         desiredState = 'off';
         break;
       default:
-        throw new Error('Harmony direct devices support only turn_on, turn_off, and toggle actions');
+        throw new Error('Harmony direct devices support turn_on, turn_off, toggle, and harmony_command actions');
     }
 
-    const repeatPowerCommands = Boolean(device?.properties?.harmonyRepeatPowerCommands);
-    await harmonyService.sendPowerCommand(harmonyHubIp, harmonyDeviceId.toString(), desiredState, {
-      repeatCount: repeatPowerCommands ? 2 : 1,
-      allowToggleFallback: normalizedAction === 'toggle'
-    });
+    if (desiredState) {
+      const repeatPowerCommands = Boolean(device?.properties?.harmonyRepeatPowerCommands);
+      await harmonyService.sendPowerCommand(harmonyHubIp, harmonyDeviceId.toString(), desiredState, {
+        repeatCount: repeatPowerCommands ? 2 : 1,
+        allowToggleFallback: normalizedAction === 'toggle'
+      });
+    }
 
     updateData.isOnline = true;
     updateData.lastSeen = new Date();

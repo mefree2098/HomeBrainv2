@@ -212,7 +212,7 @@ export const deleteDeviceGroup = async (groupId: string) => {
 // Endpoint: POST /api/devices/control
 // Request: { deviceId: string, action: string, value?: number | string }
 // Response: { success: boolean, data: { device: Device } }
-export const controlDevice = async (data: { deviceId: string; action: string; value?: number | string }) => {
+export const controlDevice = async (data: { deviceId: string; action: string; value?: unknown }) => {
   try {
     console.log('Controlling device:', data);
     const response = await api.post('/api/devices/control', data);

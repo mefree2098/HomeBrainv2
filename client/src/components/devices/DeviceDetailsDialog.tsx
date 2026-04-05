@@ -18,7 +18,7 @@ import {
   Zap
 } from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
-import { getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
+import { controlDevice, getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
 import {
   getTelemetrySeries,
   type TelemetryMetricDescriptor,
@@ -41,10 +41,21 @@ import {
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
+import {
+  getHarmonyCommandCount,
+  getHarmonyCommandLabel,
+  getHarmonyCommandMetadata,
+  getHarmonyControlCommands,
+  getHarmonyEntityType,
+  getHarmonyPowerCommands,
+  groupHarmonyCommands,
+  isHarmonyCommandDevice
+} from "@/lib/harmony"
 import { cn } from "@/lib/utils"
 
 type DeviceLike = {
@@ -92,6 +103,17 @@ const TELEMETRY_RANGE_OPTIONS = [
   { label: "7D", hours: 24 * 7 },
   { label: "30D", hours: 24 * 30 },
   { label: "1Y", hours: 24 * 365 }
+] as const
+const HARMONY_PRIMARY_COMMANDS = [
+  { key: "volume_down", label: "Vol -" },
+  { key: "mute", label: "Mute" },
+  { key: "volume_up", label: "Vol +" },
+  { key: "play", label: "Play" },
+  { key: "pause", label: "Pause" },
+  { key: "stop", label: "Stop" },
+  { key: "back", label: "Back" },
+  { key: "home", label: "Home" },
+  { key: "menu", label: "Menu" }
 ] as const
 
 function formatBinaryMetricValue(key: string, value: number | null | undefined) {
@@ -201,43 +223,6 @@ function getSourceLabel(device: DeviceLike | null): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ")
-}
-
-function getHarmonyEntityType(device: DeviceLike | null): string {
-  const properties = device?.properties as Record<string, unknown> | undefined
-  const explicitType = (properties?.harmonyEntityType || "").toString().trim().toLowerCase()
-  if (explicitType === "activity" || explicitType === "device") {
-    return explicitType
-  }
-
-  if (properties?.harmonyActivityId) {
-    return "activity"
-  }
-
-  if (properties?.harmonyDeviceId) {
-    return "device"
-  }
-
-  return ""
-}
-
-function isHarmonyCommandDevice(device: DeviceLike | null) {
-  const properties = device?.properties as Record<string, unknown> | undefined
-  const source = (properties?.source || "").toString().trim().toLowerCase()
-  return source === "harmony" && getHarmonyEntityType(device) === "device"
-}
-
-function getHarmonyPowerCommands(device: DeviceLike | null) {
-  const properties = device?.properties as Record<string, any> | undefined
-  const powerCommands = properties?.harmonyPowerCommands && typeof properties.harmonyPowerCommands === "object"
-    ? properties.harmonyPowerCommands
-    : {}
-
-  return {
-    on: typeof powerCommands.on === "string" ? powerCommands.on.trim() : "",
-    off: typeof powerCommands.off === "string" ? powerCommands.off.trim() : "",
-    toggle: typeof powerCommands.toggle === "string" ? powerCommands.toggle.trim() : ""
-  }
 }
 
 function getFormattedInsteonAddress(device: DeviceLike | null): string | null {
@@ -661,6 +646,9 @@ export function DeviceDetailsDialog({
   const [savingGroups, setSavingGroups] = useState(false)
   const [harmonyRepeatPowerCommands, setHarmonyRepeatPowerCommands] = useState(false)
   const [savingHarmonyOptions, setSavingHarmonyOptions] = useState(false)
+  const [selectedHarmonyCommand, setSelectedHarmonyCommand] = useState("")
+  const [harmonyHoldMs, setHarmonyHoldMs] = useState(0)
+  const [sendingHarmonyCommand, setSendingHarmonyCommand] = useState(false)
   const [activeTab, setActiveTab] = useState<"overview" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
@@ -669,10 +657,30 @@ export function DeviceDetailsDialog({
   const insteonAddress = useMemo(() => getFormattedInsteonAddress(device), [device])
   const harmonyCommandDevice = useMemo(() => isHarmonyCommandDevice(device), [device])
   const harmonyPowerCommands = useMemo(() => getHarmonyPowerCommands(device), [device])
+  const harmonyCommands = useMemo(() => getHarmonyCommandMetadata(device), [device])
+  const groupedHarmonyCommands = useMemo(() => groupHarmonyCommands(harmonyCommands), [harmonyCommands])
+  const harmonyControlCommands = useMemo(() => getHarmonyControlCommands(device), [device])
   const harmonyEntityType = useMemo(() => getHarmonyEntityType(device), [device])
+  const harmonyCommandCount = useMemo(() => getHarmonyCommandCount(device), [device])
   const harmonyRepeatPowerCommandsSaved = Boolean(
     (device?.properties as Record<string, unknown> | undefined)?.harmonyRepeatPowerCommands
   )
+  const harmonyPrimaryQuickActions = useMemo(() => {
+    return HARMONY_PRIMARY_COMMANDS
+      .map((definition) => {
+        const commandName = harmonyControlCommands[definition.key]
+        if (!commandName) {
+          return null
+        }
+
+        return {
+          key: definition.key,
+          label: definition.label,
+          commandName
+        }
+      })
+      .filter((entry): entry is { key: string; label: string; commandName: string } => Boolean(entry))
+  }, [harmonyControlCommands])
   const currentGroups = useMemo(() => normalizeGroupList(device?.groups), [device?.groups])
   const draftGroups = useMemo(() => normalizeGroupList(groupInput), [groupInput])
   const suggestedGroups = useMemo(() => {
@@ -697,6 +705,18 @@ export function DeviceDetailsDialog({
 
     setHarmonyRepeatPowerCommands(harmonyRepeatPowerCommandsSaved)
   }, [device?._id, harmonyRepeatPowerCommandsSaved, open])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const firstCommand = harmonyCommands[0]?.name || ""
+    const selectedExists = harmonyCommands.some((command) => command.name === selectedHarmonyCommand)
+
+    setSelectedHarmonyCommand(selectedExists ? selectedHarmonyCommand : firstCommand)
+    setHarmonyHoldMs((current) => Math.max(0, Number.isFinite(Number(current)) ? Math.round(Number(current)) : 0))
+  }, [harmonyCommands, open, selectedHarmonyCommand])
 
   useEffect(() => {
     if (!open) {
@@ -1048,6 +1068,51 @@ export function DeviceDetailsDialog({
       })
     } finally {
       setSavingHarmonyOptions(false)
+    }
+  }
+
+  const handleSendHarmonyCommand = async (commandName: string, options: { holdMs?: number; label?: string } = {}) => {
+    if (!device?._id || !harmonyCommandDevice) {
+      return
+    }
+
+    const normalizedCommand = commandName.trim()
+    if (!normalizedCommand) {
+      toast({
+        title: "Choose a command",
+        description: "Select a Harmony device command before sending it.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setSendingHarmonyCommand(true)
+    try {
+      const response = await controlDevice({
+        deviceId: device._id,
+        action: "harmony_command",
+        value: {
+          command: normalizedCommand,
+          holdMs: Math.max(0, Math.round(Number(options.holdMs ?? harmonyHoldMs) || 0))
+        }
+      })
+      const updatedDevice = (response?.device || response) as DeviceLike
+      onDeviceUpdated?.(updatedDevice)
+      toast({
+        title: "Harmony command sent",
+        description: `${options.label || getHarmonyCommandLabel(device, normalizedCommand) || normalizedCommand} was sent to ${device.name}.`
+      })
+    } catch (sendError) {
+      const message = sendError instanceof Error
+        ? sendError.message
+        : "Failed to send Harmony command."
+      toast({
+        title: "Unable to send Harmony command",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setSendingHarmonyCommand(false)
     }
   }
 
@@ -1465,6 +1530,12 @@ export function DeviceDetailsDialog({
                         ) : null}
                         {harmonyCommandDevice ? (
                           <DeviceDetailRow
+                            label="Harmony commands"
+                            value={`${harmonyCommandCount} discovered`}
+                          />
+                        ) : null}
+                        {harmonyCommandDevice ? (
+                          <DeviceDetailRow
                             label="Power commands"
                             value={
                               [
@@ -1473,6 +1544,12 @@ export function DeviceDetailsDialog({
                                 harmonyPowerCommands.toggle ? `Toggle: ${harmonyPowerCommands.toggle}` : ""
                               ].filter(Boolean).join(" • ") || "No power command mapping discovered yet"
                             }
+                          />
+                        ) : null}
+                        {harmonyCommandDevice && harmonyPrimaryQuickActions.length > 0 ? (
+                          <DeviceDetailRow
+                            label="Quick controls"
+                            value={harmonyPrimaryQuickActions.map((entry) => entry.label).join(" • ")}
                           />
                         ) : null}
                         {insteonAddress ? (
@@ -1563,6 +1640,104 @@ export function DeviceDetailsDialog({
                         </div>
                       </CardContent>
                     </Card>
+
+                    {harmonyCommandDevice ? (
+                      <Card className="border-white/10 bg-black/20">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Harmony controls</CardTitle>
+                          <CardDescription>
+                            Send any Harmony device command HomeBrain discovered for this device, with quick buttons for the commands that were recognized automatically.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          {harmonyPrimaryQuickActions.length > 0 ? (
+                            <div className="space-y-3">
+                              <p className="section-kicker text-white/45">Quick Actions</p>
+                              <div className="grid gap-2 sm:grid-cols-3">
+                                {harmonyPrimaryQuickActions.map((entry) => (
+                                  <Button
+                                    key={entry.key}
+                                    type="button"
+                                    variant="outline"
+                                    className="justify-center border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
+                                    onClick={() => handleSendHarmonyCommand(entry.commandName, { label: entry.label, holdMs: 0 })}
+                                    disabled={sendingHarmonyCommand}
+                                  >
+                                    {entry.label}
+                                  </Button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="rounded-[1.15rem] border border-dashed border-white/10 px-4 py-4 text-sm text-muted-foreground">
+                              No common quick controls were auto-detected for this Harmony device, but you can still send any discovered command below.
+                            </div>
+                          )}
+
+                          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_160px_auto]">
+                            <div className="space-y-2">
+                              <Label>Harmony command</Label>
+                              <Select
+                                value={selectedHarmonyCommand}
+                                onValueChange={setSelectedHarmonyCommand}
+                                disabled={sendingHarmonyCommand || harmonyCommands.length === 0}
+                              >
+                                <SelectTrigger className="bg-black/20">
+                                  <SelectValue placeholder="Select a Harmony command" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {groupedHarmonyCommands.map((group) => (
+                                    <div key={group.category}>
+                                      <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{group.label}</div>
+                                      {group.commands.map((command) => (
+                                        <SelectItem key={command.name} value={command.name}>
+                                          {command.label}
+                                        </SelectItem>
+                                      ))}
+                                    </div>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>Hold (ms)</Label>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={5000}
+                                className="bg-black/20"
+                                value={String(Math.max(0, harmonyHoldMs))}
+                                onChange={(event) => setHarmonyHoldMs(Math.max(0, Math.min(5000, Math.round(Number(event.target.value) || 0))))}
+                                disabled={sendingHarmonyCommand}
+                              />
+                            </div>
+
+                            <div className="flex items-end">
+                              <Button
+                                type="button"
+                                className="w-full sm:w-auto"
+                                onClick={() => handleSendHarmonyCommand(selectedHarmonyCommand)}
+                                disabled={sendingHarmonyCommand || !selectedHarmonyCommand}
+                              >
+                                {sendingHarmonyCommand ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Sending
+                                  </>
+                                ) : "Send command"}
+                              </Button>
+                            </div>
+                          </div>
+
+                          <div className="rounded-[1.15rem] border border-cyan-400/12 bg-cyan-400/[0.07] px-4 py-3 text-sm leading-relaxed text-cyan-50/88">
+                            {selectedHarmonyCommand
+                              ? `${getHarmonyCommandLabel(device, selectedHarmonyCommand)} will be sent${harmonyHoldMs > 0 ? ` with a ${harmonyHoldMs} ms hold` : " as a normal tap"}.`
+                              : `${harmonyCommandCount} Harmony command${harmonyCommandCount === 1 ? "" : "s"} discovered for this device.`}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ) : null}
 
                     {harmonyCommandDevice ? (
                       <Card className="border-white/10 bg-black/20">

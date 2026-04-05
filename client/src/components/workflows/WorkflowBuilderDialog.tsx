@@ -28,6 +28,13 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import type { DeviceGroupSummary } from "@/api/devices";
 import type { Workflow, WorkflowAction, WorkflowActionTarget, WorkflowTriggerType } from "@/api/workflows";
+import {
+  getHarmonyCommandMetadata,
+  getHarmonyPowerCommands,
+  groupHarmonyCommands,
+  isHarmonyCommandDevice,
+  type HarmonyCommandMetadata
+} from "@/lib/harmony";
 
 type DeviceLite = {
   _id: string;
@@ -87,6 +94,19 @@ const ACTION_LABELS: Record<WorkflowAction["type"], string> = {
   repeat: "Repeat",
   isy_network_resource: "ISY network resource",
   http_request: "HTTP request"
+};
+const DEVICE_ACTION_LABELS: Record<string, string> = {
+  turn_on: "Turn on",
+  turn_off: "Turn off",
+  toggle: "Toggle",
+  set_brightness: "Set brightness",
+  set_color: "Set color",
+  set_temperature: "Set temperature",
+  lock: "Lock",
+  unlock: "Unlock",
+  open: "Open",
+  close: "Close",
+  harmony_command: "Send Harmony command"
 };
 
 type TriggerPropertyKind = "boolean" | "number" | "string";
@@ -407,10 +427,15 @@ function getDefaultDeviceTarget(triggerType: WorkflowTriggerType, devices: Devic
 }
 
 function buildDefaultAction(triggerType: WorkflowTriggerType, devices: DeviceLite[]): WorkflowAction {
+  const target = getDefaultDeviceTarget(triggerType, devices);
+  const targetDevice = typeof target === "string" ? devices.find((device) => device._id === target) : null;
   return {
     type: "device_control",
-    target: getDefaultDeviceTarget(triggerType, devices),
-    parameters: { action: "turn_on" }
+    target,
+    parameters: buildDeviceControlParameters({
+      targetDevice,
+      desiredAction: undefined
+    }).parameters
   };
 }
 
@@ -487,12 +512,44 @@ function buildGraph(triggerType: WorkflowTriggerType, actions: WorkflowAction[])
   return { nodes, edges };
 }
 
-function getDeviceActionChoices(deviceType: string, source: string = "local") {
-  if ((source || "").toLowerCase() === "harmony") {
+function getDeviceSource(device: DeviceLite | null | undefined) {
+  return String(
+    ((device?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
+  ).trim().toLowerCase();
+}
+
+function getHarmonyCommandOptions(device: DeviceLite | null | undefined) {
+  return isHarmonyCommandDevice(device) ? getHarmonyCommandMetadata(device) : [];
+}
+
+function getDeviceActionChoices(device: DeviceLite | null | undefined) {
+  const source = getDeviceSource(device);
+  if (source === "harmony") {
+    if (isHarmonyCommandDevice(device)) {
+      const powerCommands = getHarmonyPowerCommands(device);
+      const harmonyCommands = getHarmonyCommandOptions(device);
+      const choices: string[] = [];
+
+      if (powerCommands.on) {
+        choices.push("turn_on");
+      }
+      if (powerCommands.off) {
+        choices.push("turn_off");
+      }
+      if (powerCommands.toggle || (powerCommands.on && powerCommands.off)) {
+        choices.push("toggle");
+      }
+      if (harmonyCommands.length > 0) {
+        choices.push("harmony_command");
+      }
+
+      return choices.length > 0 ? choices : ["harmony_command"];
+    }
+
     return ["turn_on", "turn_off", "toggle"];
   }
 
-  switch ((deviceType || "").toLowerCase()) {
+  switch ((device?.type || "").toLowerCase()) {
     case "light":
       return ["turn_on", "turn_off", "set_brightness", "set_color"];
     case "thermostat":
@@ -510,24 +567,118 @@ function getDeviceActionChoices(deviceType: string, source: string = "local") {
   }
 }
 
+function getCommonHarmonyCommandOptions(devices: DeviceLite[]) {
+  if (!Array.isArray(devices) || devices.length === 0) {
+    return [] as HarmonyCommandMetadata[];
+  }
+
+  const [firstDevice, ...remainingDevices] = devices;
+  const firstCommands = getHarmonyCommandOptions(firstDevice);
+  if (firstCommands.length === 0) {
+    return [];
+  }
+
+  return firstCommands.filter((command) => (
+    remainingDevices.every((device) => (
+      getHarmonyCommandOptions(device).some((candidate) => candidate.name === command.name)
+    ))
+  ));
+}
+
 function getCommonDeviceActionChoices(devices: DeviceLite[]) {
   if (!Array.isArray(devices) || devices.length === 0) {
     return ["turn_on", "turn_off"];
   }
 
-  const choiceSets = devices.map((device) =>
-    getDeviceActionChoices(
-      device?.type || "switch",
-      ((device?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
-    )
-  );
-
+  const choiceSets = devices.map((device) => getDeviceActionChoices(device));
   const [firstChoices, ...remainingChoices] = choiceSets;
   const sharedChoices = firstChoices.filter((choice) =>
     remainingChoices.every((choices) => choices.includes(choice))
   );
 
-  return sharedChoices.length > 0 ? sharedChoices : firstChoices;
+  const filteredChoices = sharedChoices.filter((choice) =>
+    choice !== "harmony_command" || getCommonHarmonyCommandOptions(devices).length > 0
+  );
+
+  return filteredChoices.length > 0 ? filteredChoices : firstChoices;
+}
+
+function getDeviceActionChoiceLabel(choice: string) {
+  return DEVICE_ACTION_LABELS[choice] || choice.replace(/_/g, " ");
+}
+
+function clampActionNumber(value: unknown, fallback: number, minimum: number, maximum: number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return Math.max(minimum, Math.min(maximum, Math.round(numeric)));
+}
+
+function buildDeviceControlParameters(options: {
+  targetDevice?: DeviceLite | null;
+  targetGroupDevices?: DeviceLite[];
+  desiredAction?: string;
+  currentParameters?: Record<string, unknown>;
+}) {
+  const currentParameters = options.currentParameters || {};
+  const targetGroupDevices = Array.isArray(options.targetGroupDevices) ? options.targetGroupDevices : [];
+  const actionChoices = targetGroupDevices.length > 0
+    ? getCommonDeviceActionChoices(targetGroupDevices)
+    : getDeviceActionChoices(options.targetDevice);
+  const harmonyCommands = targetGroupDevices.length > 0
+    ? getCommonHarmonyCommandOptions(targetGroupDevices)
+    : getHarmonyCommandOptions(options.targetDevice);
+  const fallbackAction = actionChoices[0] || "turn_on";
+  const requestedAction = typeof options.desiredAction === "string" && actionChoices.includes(options.desiredAction)
+    ? options.desiredAction
+    : fallbackAction;
+  const nextParameters: Record<string, unknown> = {
+    action: requestedAction
+  };
+
+  if (requestedAction === "set_brightness" || (requestedAction === "turn_on" && actionChoices.includes("set_brightness"))) {
+    const brightness = clampActionNumber(currentParameters.brightness ?? currentParameters.value, 100, 0, 100);
+    nextParameters.brightness = brightness;
+    nextParameters.value = brightness;
+  }
+
+  if (requestedAction === "set_temperature") {
+    nextParameters.temperature = clampActionNumber(currentParameters.temperature, 72, -50, 150);
+  }
+
+  if (requestedAction === "harmony_command") {
+    const requestedCommand = typeof currentParameters.harmonyCommand === "string" && currentParameters.harmonyCommand.trim()
+      ? currentParameters.harmonyCommand.trim()
+      : (typeof currentParameters.value === "object" && currentParameters.value && !Array.isArray(currentParameters.value)
+        ? String((currentParameters.value as Record<string, unknown>).command || "").trim()
+        : "");
+    const selectedCommand = harmonyCommands.some((command) => command.name === requestedCommand)
+      ? requestedCommand
+      : (harmonyCommands[0]?.name || "");
+    const selectedCommandOption = harmonyCommands.find((command) => command.name === selectedCommand) || null;
+    const holdMs = clampActionNumber(
+      currentParameters.harmonyHoldMs
+        ?? (typeof currentParameters.value === "object" && currentParameters.value && !Array.isArray(currentParameters.value)
+          ? (currentParameters.value as Record<string, unknown>).holdMs
+          : 0),
+      0,
+      0,
+      5000
+    );
+
+    nextParameters.harmonyCommand = selectedCommand;
+    nextParameters.harmonyCommandLabel = selectedCommandOption?.label || selectedCommand;
+    nextParameters.harmonyHoldMs = holdMs;
+  }
+
+  return {
+    actionChoices,
+    harmonyCommands,
+    parameters: nextParameters,
+    supportsTurnOnValue: actionChoices.includes("set_brightness")
+  };
 }
 
 function formatActionVerb(value: unknown) {
@@ -663,6 +814,15 @@ function describeAction(
         : isDeviceGroupTarget(action.target)
           ? getDeviceGroupLabel(getDeviceGroupName(action.target))
           : getDeviceLabel(devices, typeof action.target === "string" ? action.target : null);
+      if (String(action.parameters?.action || "") === "harmony_command") {
+        const commandLabel = String(
+          action.parameters?.harmonyCommandLabel
+          || action.parameters?.harmonyCommand
+          || "Harmony command"
+        );
+        const holdMs = Math.max(0, Number(action.parameters?.harmonyHoldMs) || 0);
+        return `${targetLabel} -> send ${commandLabel}${holdMs > 0 ? ` (${holdMs} ms hold)` : ""}.`;
+      }
       const verb = formatActionVerb(action.parameters?.action);
       if (verb === "set brightness") {
         return `${targetLabel} -> ${verb} to ${String(action.parameters?.brightness ?? action.parameters?.value ?? 100)}.`;
@@ -841,7 +1001,11 @@ export function WorkflowBuilderDialog({
     setActions((prev) => prev.filter((_, actionIndex) => actionIndex !== index));
   };
 
-  const updateAction = (index: number, patch: Partial<WorkflowAction>) => {
+  const updateAction = (
+    index: number,
+    patch: Partial<WorkflowAction>,
+    options: { replaceParameters?: boolean } = {}
+  ) => {
     setActions((prev) => prev.map((action, actionIndex) => {
       if (actionIndex !== index) {
         return action;
@@ -849,10 +1013,12 @@ export function WorkflowBuilderDialog({
       return {
         ...action,
         ...patch,
-        parameters: {
-          ...(action.parameters || {}),
-          ...(patch.parameters || {})
-        }
+        parameters: options.replaceParameters
+          ? { ...(patch.parameters || {}) }
+          : {
+              ...(action.parameters || {}),
+              ...(patch.parameters || {})
+            }
       };
     }));
   };
@@ -897,20 +1063,26 @@ export function WorkflowBuilderDialog({
   };
 
   const handleActionTypeChange = (index: number, nextType: WorkflowAction["type"]) => {
+    const defaultTarget = nextType === "scene_activate"
+      ? scenes[0]?._id || null
+      : nextType === "device_control"
+        ? getDefaultDeviceTarget(triggerType, devices)
+        : null;
+    const defaultDevice = typeof defaultTarget === "string"
+      ? devices.find((device) => device._id === defaultTarget) || null
+      : null;
     const nextAction: WorkflowAction = {
       type: nextType,
-      target: nextType === "scene_activate"
-        ? scenes[0]?._id || null
-        : nextType === "device_control"
-          ? getDefaultDeviceTarget(triggerType, devices)
-          : null,
+      target: defaultTarget,
       parameters: nextType === "delay"
         ? { seconds: 3 }
         : nextType === "notification"
           ? { message: "" }
           : nextType === "condition"
             ? {}
-            : { action: "turn_on" }
+            : buildDeviceControlParameters({
+                targetDevice: defaultDevice
+              }).parameters
     };
     setActions((prev) => prev.map((item, actionIndex) => actionIndex === index ? nextAction : item));
   };
@@ -1389,15 +1561,32 @@ export function WorkflowBuilderDialog({
                         ? triggerDeviceId || ""
                         : (typeof action.target === "string" ? action.target : "");
                       const targetDevice = devices.find((device) => device._id === targetDeviceId);
-                      const actionChoices = targetGroup
-                        ? getCommonDeviceActionChoices(targetGroup.devices)
-                        : getDeviceActionChoices(
-                            targetDevice?.type || "switch",
-                            ((targetDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
-                          );
-                      const actionValue = String(action.parameters?.action || actionChoices[0]);
+                      const actionConfig = buildDeviceControlParameters({
+                        targetDevice,
+                        targetGroupDevices: targetGroup?.devices,
+                        desiredAction: typeof action.parameters?.action === "string" ? action.parameters.action : undefined,
+                        currentParameters: action.parameters || {}
+                      });
+                      const actionChoices = actionConfig.actionChoices;
+                      const harmonyCommandOptions = actionConfig.harmonyCommands;
+                      const actionValue = String(
+                        (typeof action.parameters?.action === "string" && actionChoices.includes(action.parameters.action)
+                          ? action.parameters.action
+                          : actionConfig.parameters.action)
+                        || actionChoices[0]
+                        || "turn_on"
+                      );
+                      const selectedHarmonyCommand = typeof action.parameters?.harmonyCommand === "string"
+                        && harmonyCommandOptions.some((command) => command.name === action.parameters?.harmonyCommand)
+                        ? action.parameters.harmonyCommand
+                        : String(actionConfig.parameters.harmonyCommand || "");
                       const showNumericValue = action.type === "device_control"
-                        && (actionValue === "set_brightness" || actionValue === "set_temperature" || actionValue === "turn_on");
+                        && (
+                          actionValue === "set_brightness"
+                          || actionValue === "set_temperature"
+                          || (actionValue === "turn_on" && actionConfig.supportsTurnOnValue)
+                        );
+                      const showHarmonyCommandFields = action.type === "device_control" && actionValue === "harmony_command";
 
                       return (
                         <Card key={`${action.type}-${index}`} className="overflow-hidden">
@@ -1474,23 +1663,18 @@ export function WorkflowBuilderDialog({
                                             : value;
                                         const updatedDevice = devices.find((device) => device._id === updatedDeviceId);
                                         const updatedGroup = selectedGroup ? deviceGroupsByName.get(selectedGroup.toLowerCase()) : undefined;
-                                        const choices = updatedGroup
-                                          ? getCommonDeviceActionChoices(updatedGroup.devices)
-                                          : getDeviceActionChoices(
-                                              updatedDevice?.type || "switch",
-                                              ((updatedDevice?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
-                                            );
+                                        const nextParameters = buildDeviceControlParameters({
+                                          targetDevice: updatedDevice,
+                                          targetGroupDevices: updatedGroup?.devices
+                                        }).parameters;
                                         updateAction(index, {
                                           target: usesTriggeringDevice
                                             ? buildTriggeringDeviceTarget()
                                             : selectedGroup
                                               ? buildDeviceGroupTarget(selectedGroup)
                                               : value,
-                                          parameters: {
-                                            ...action.parameters,
-                                            action: choices[0]
-                                          }
-                                        });
+                                          parameters: nextParameters
+                                        }, { replaceParameters: true });
                                       }}
                                     >
                                       <SelectTrigger>
@@ -1540,7 +1724,14 @@ export function WorkflowBuilderDialog({
                                     <Label>Device action</Label>
                                     <Select
                                       value={actionValue}
-                                      onValueChange={(value) => updateAction(index, { parameters: { ...action.parameters, action: value } })}
+                                      onValueChange={(value) => updateAction(index, {
+                                        parameters: buildDeviceControlParameters({
+                                          targetDevice,
+                                          targetGroupDevices: targetGroup?.devices,
+                                          desiredAction: value,
+                                          currentParameters: action.parameters || {}
+                                        }).parameters
+                                      }, { replaceParameters: true })}
                                     >
                                       <SelectTrigger>
                                         <SelectValue />
@@ -1548,7 +1739,7 @@ export function WorkflowBuilderDialog({
                                       <SelectContent>
                                         {actionChoices.map((choice) => (
                                           <SelectItem key={choice} value={choice}>
-                                            {choice.replace(/_/g, " ")}
+                                            {getDeviceActionChoiceLabel(choice)}
                                           </SelectItem>
                                         ))}
                                       </SelectContent>
@@ -1575,6 +1766,77 @@ export function WorkflowBuilderDialog({
                                             updateAction(index, { parameters: { ...action.parameters, brightness: numeric, value: numeric } });
                                           }
                                         }}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+
+                                {showHarmonyCommandFields && (
+                                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_180px]">
+                                    <div className="space-y-2">
+                                      <Label>Harmony command</Label>
+                                      <Select
+                                        value={selectedHarmonyCommand}
+                                        onValueChange={(value) => {
+                                          const selectedCommand = harmonyCommandOptions.find((command) => command.name === value) || null;
+                                          updateAction(index, {
+                                            parameters: buildDeviceControlParameters({
+                                              targetDevice,
+                                              targetGroupDevices: targetGroup?.devices,
+                                              desiredAction: "harmony_command",
+                                              currentParameters: {
+                                                ...(action.parameters || {}),
+                                                harmonyCommand: value,
+                                                harmonyCommandLabel: selectedCommand?.label || value,
+                                                harmonyHoldMs: Number(action.parameters?.harmonyHoldMs) || 0
+                                              }
+                                            }).parameters
+                                          }, { replaceParameters: true });
+                                        }}
+                                      >
+                                        <SelectTrigger>
+                                          <SelectValue placeholder="Select Harmony command" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {groupHarmonyCommands(harmonyCommandOptions).map((group) => (
+                                            <div key={group.category}>
+                                              <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{group.label}</div>
+                                              {group.commands.map((command) => (
+                                                <SelectItem key={command.name} value={command.name}>
+                                                  {command.label}
+                                                </SelectItem>
+                                              ))}
+                                            </div>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                      {harmonyCommandOptions.length > 0 ? (
+                                        <p className="text-xs text-muted-foreground">
+                                          {harmonyCommandOptions.length} Harmony command{harmonyCommandOptions.length === 1 ? "" : "s"} detected for this target.
+                                        </p>
+                                      ) : null}
+                                    </div>
+
+                                    <div className="space-y-2">
+                                      <Label>Hold (ms)</Label>
+                                      <Input
+                                        type="number"
+                                        min={0}
+                                        max={5000}
+                                        value={String(Math.max(0, Number(action.parameters?.harmonyHoldMs) || 0))}
+                                        onChange={(event) => updateAction(index, {
+                                          parameters: buildDeviceControlParameters({
+                                            targetDevice,
+                                            targetGroupDevices: targetGroup?.devices,
+                                            desiredAction: "harmony_command",
+                                            currentParameters: {
+                                              ...(action.parameters || {}),
+                                              harmonyCommand: selectedHarmonyCommand,
+                                              harmonyCommandLabel: harmonyCommandOptions.find((command) => command.name === selectedHarmonyCommand)?.label || selectedHarmonyCommand,
+                                              harmonyHoldMs: Math.max(0, Math.min(5000, Math.round(Number(event.target.value) || 0)))
+                                            }
+                                          }).parameters
+                                        }, { replaceParameters: true })}
                                       />
                                     </div>
                                   </div>
