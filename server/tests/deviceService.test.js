@@ -109,6 +109,88 @@ test('controlDevice routes Insteon toggle to turnOff when current status is on',
   assert.equal(updated.brightness, 0);
 });
 
+test('controlDevice skips Harmony refresh and verification when fast control options are set', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalEnsureHarmonyState = deviceService.ensureHarmonyState;
+  const originalRefreshHarmonyOnlineStatus = deviceService.refreshHarmonyOnlineStatus;
+  const originalControlHarmonyDevice = deviceService.controlHarmonyDevice;
+  const originalPollHarmonyState = deviceService.pollHarmonyState;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.ensureHarmonyState = originalEnsureHarmonyState;
+    deviceService.refreshHarmonyOnlineStatus = originalRefreshHarmonyOnlineStatus;
+    deviceService.controlHarmonyDevice = originalControlHarmonyDevice;
+    deviceService.pollHarmonyState = originalPollHarmonyState;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const harmonyDevice = {
+    _id: 'device-harmony-1',
+    name: 'Master Bedroom TV',
+    type: 'switch',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: '192.168.1.50',
+      harmonyActivityId: '123456'
+    }
+  };
+
+  let ensureHarmonyCalls = 0;
+  let pollHarmonyCalls = 0;
+  let controlHarmonyCalls = 0;
+  const emitted = [];
+  let persistedUpdate = null;
+
+  Device.findById = async () => ({ ...harmonyDevice });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return {
+      ...harmonyDevice,
+      ...update,
+      status: update.status,
+      isOnline: update.isOnline
+    };
+  };
+  deviceService.ensureHarmonyState = async () => {
+    ensureHarmonyCalls += 1;
+  };
+  deviceService.refreshHarmonyOnlineStatus = async () => true;
+  deviceService.controlHarmonyDevice = async (_device, _action, _value, updateData) => {
+    controlHarmonyCalls += 1;
+    updateData.isOnline = true;
+  };
+  deviceService.pollHarmonyState = async () => {
+    pollHarmonyCalls += 1;
+    return {
+      status: false,
+      isOnline: true
+    };
+  };
+  deviceUpdateEmitter.emit = (eventName, payload) => {
+    emitted.push({ eventName, payload });
+  };
+
+  const updated = await deviceService.controlDevice('device-harmony-1', 'turn_on', undefined, {
+    skipIntegrationRefresh: true,
+    skipPostActionVerification: true
+  });
+
+  assert.equal(ensureHarmonyCalls, 0);
+  assert.equal(controlHarmonyCalls, 1);
+  assert.equal(pollHarmonyCalls, 0);
+  assert.equal(updated.status, true);
+  assert.equal(updated.isOnline, true);
+  assert.equal(persistedUpdate.status, true);
+  assert.equal(persistedUpdate.isOnline, true);
+  assert.equal(emitted.length >= 1, true);
+});
+
 test('supportsBrightnessControl treats fan-labeled Insteon devices like fader switches', () => {
   const supportsBrightness = deviceService.supportsBrightnessControl({
     _id: 'device-fan',

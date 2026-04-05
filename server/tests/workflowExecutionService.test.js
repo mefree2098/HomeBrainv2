@@ -466,7 +466,7 @@ test('device_control action can target a device group', async (t) => {
   assert.ok(maxInFlight > 1);
   assert.deepEqual(
     receivedOptions.map((entry) => entry?.verificationMode),
-    ['fast', 'fast']
+    ['ack', 'ack']
   );
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].success, true);
@@ -571,7 +571,7 @@ test('device_control action uses managed INSTEON group broadcast when the device
   assert.equal(receivedArgs.actionName, 'turn_off');
   assert.equal(receivedArgs.value, undefined);
   assert.equal(receivedArgs.options.deviceGroup, 'Interior Lights');
-  assert.equal(receivedArgs.options.verificationMode, 'fast');
+  assert.equal(receivedArgs.options.verificationMode, 'ack');
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].success, true);
   assert.equal(result.actionResults[0].details.executionMode, 'insteon_group_broadcast');

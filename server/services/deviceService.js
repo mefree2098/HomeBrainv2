@@ -390,7 +390,7 @@ class DeviceService {
    * @param {*} value - Value for the action (optional)
    * @returns {Promise<Object>} Updated device
    */
-  async controlDevice(deviceId, action, value) {
+  async controlDevice(deviceId, action, value, options = {}) {
     try {
       console.log('DeviceService: Controlling device:', deviceId, 'action:', action, 'value:', value);
 
@@ -409,18 +409,20 @@ class DeviceService {
       const isHarmony = this.isHarmonyDevice(device);
       const isEcobee = this.isEcobeeDevice(device);
       const isInsteon = this.isInsteonDevice(device);
+      const skipIntegrationRefresh = options?.skipIntegrationRefresh === true;
+      const skipPostActionVerification = options?.skipPostActionVerification === true;
 
-      if (isSmartThings) {
+      if (isSmartThings && !skipIntegrationRefresh) {
         await this.ensureSmartThingsState({ immediate: true });
       }
-      if (isHarmony) {
+      if (isHarmony && !skipIntegrationRefresh) {
         await this.ensureHarmonyState({ immediate: true });
       }
-      if (isEcobee) {
+      if (isEcobee && !skipIntegrationRefresh) {
         await this.ensureEcobeeState({ immediate: true });
       }
 
-      if (isHarmony && normalizedAction === 'toggle') {
+      if (isHarmony && normalizedAction === 'toggle' && !skipIntegrationRefresh) {
         const refreshedDevice = await Device.findById(deviceId);
         if (refreshedDevice) {
           device = refreshedDevice;
@@ -669,9 +671,11 @@ class DeviceService {
           deviceUpdateEmitter.emit('devices:update', optimisticPayload);
         }
 
-        const remoteUpdate = await this.pollHarmonyState(device, expectedStatus);
-        if (remoteUpdate) {
-          Object.assign(updateData, remoteUpdate);
+        if (!skipPostActionVerification) {
+          const remoteUpdate = await this.pollHarmonyState(device, expectedStatus);
+          if (remoteUpdate) {
+            Object.assign(updateData, remoteUpdate);
+          }
         }
 
         if (updateData.isOnline === undefined) {

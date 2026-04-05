@@ -810,9 +810,19 @@ class AlexaBridgeService {
   async executeDeviceDirective(record, namespace, name, payload) {
     const deviceId = record.exposure.entityId;
     const currentProperties = record.endpoint?.state?.properties || [];
+    const isHarmonyDevice = deviceService.isHarmonyDevice(record.entity);
 
     if (namespace === 'Alexa.PowerController') {
-      await deviceService.controlDevice(deviceId, name === 'TurnOn' ? 'turn_on' : 'turn_off');
+      const controlOptions = isHarmonyDevice
+        ? {
+            // Alexa control responses need to come back fast and should not be
+            // blocked on an immediate Harmony hub re-poll after the command has
+            // already been accepted.
+            skipIntegrationRefresh: true,
+            skipPostActionVerification: true
+          }
+        : undefined;
+      await deviceService.controlDevice(deviceId, name === 'TurnOn' ? 'turn_on' : 'turn_off', undefined, controlOptions);
       return;
     }
 

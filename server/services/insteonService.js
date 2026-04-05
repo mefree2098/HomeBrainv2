@@ -807,9 +807,6 @@ class InsteonService {
       if (!normalizedAddress) {
         return null;
       }
-      if (device?.properties?.linkedToCurrentPlm !== true) {
-        return null;
-      }
       if (seenAddresses.has(normalizedAddress)) {
         continue;
       }
@@ -11807,6 +11804,8 @@ class InsteonService {
         ? Math.max(0, Math.min(100, Math.round(numericBrightness)))
         : 100;
       const useFastOnCommand = this._shouldUseFastOnCommand(lightController, boundedBrightness, options);
+      const verificationMode = this._getVerificationMode(options);
+      const requireDeviceResponse = !this._shouldSkipSynchronousVerification(verificationMode);
       this._logEngineInfo(`Turn on requested for ${this._formatInsteonAddress(address)} at ${boundedBrightness}%`, {
         stage: 'control',
         direction: 'outbound',
@@ -11823,7 +11822,7 @@ class InsteonService {
       });
       this._clearPendingRuntimeStateRefresh(address);
       this._markRecentPlmControlActivity(this._getControlCommandRuntimeCooldownMs({
-        requireDeviceResponse: true,
+        requireDeviceResponse,
         commandTimeoutMs: DEFAULT_INSTEON_COMMAND_TIMEOUT_MS,
         commandRetries: Number.isFinite(Number(options?.commandRetries))
           ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
@@ -11847,7 +11846,7 @@ class InsteonService {
             priority: 'control',
             kind: 'turn_on',
             label: `turning on ${this._formatInsteonAddress(address)}${useFastOnCommand ? ' (fast)' : ''}`,
-            requireDeviceResponse: true,
+            requireDeviceResponse,
             runtimeAckAddress: address,
             runtimeAckExpectedStatus: true,
             runtimeAckTimeoutMs: options?.runtimeAckTimeoutMs,
@@ -11931,7 +11930,6 @@ class InsteonService {
           details
         };
       }
-      const verificationMode = this._getVerificationMode(options);
       if (this._shouldSkipSynchronousVerification(verificationMode)) {
         this._scheduleRuntimeStateRefresh(address, 'turn_on_ack', {
           expectedStatus: true,
@@ -12084,6 +12082,8 @@ class InsteonService {
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
       const lightController = this._getHubLightController(address);
       const useFastOffCommand = this._shouldUseFastOffCommand(lightController, options);
+      const verificationMode = this._getVerificationMode(options);
+      const requireDeviceResponse = !this._shouldSkipSynchronousVerification(verificationMode);
       this._logEngineInfo(`Turn off requested for ${this._formatInsteonAddress(address)}`, {
         stage: 'control',
         direction: 'outbound',
@@ -12104,7 +12104,7 @@ class InsteonService {
       };
       this._clearPendingRuntimeStateRefresh(address);
       this._markRecentPlmControlActivity(this._getControlCommandRuntimeCooldownMs({
-        requireDeviceResponse: true,
+        requireDeviceResponse,
         commandTimeoutMs: DEFAULT_INSTEON_COMMAND_TIMEOUT_MS,
         commandRetries: Number.isFinite(Number(options?.commandRetries))
           ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
@@ -12129,7 +12129,7 @@ class InsteonService {
             priority: 'control',
             kind: 'turn_off',
             label: `turning off ${this._formatInsteonAddress(address)}${useFastOffCommand ? ' (fast)' : ''}`,
-            requireDeviceResponse: true,
+            requireDeviceResponse,
             runtimeAckAddress: address,
             runtimeAckExpectedStatus: false,
             runtimeAckTimeoutMs: options?.runtimeAckTimeoutMs,
@@ -12211,7 +12211,6 @@ class InsteonService {
           details
         };
       }
-      const verificationMode = this._getVerificationMode(options);
       if (this._shouldSkipSynchronousVerification(verificationMode)) {
         this._scheduleRuntimeStateRefresh(address, 'turn_off_ack', {
           expectedStatus: false,

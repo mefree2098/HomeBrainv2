@@ -199,6 +199,82 @@ test('alexaColorToHex converts Alexa HSB colors into HomeBrain hex strings', () 
   }), '#00ff00');
 });
 
+test('executeDirective uses fast Harmony power control for Alexa responses', async (t) => {
+  const bridge = new AlexaBridgeService();
+  const deviceService = require('../services/deviceService');
+
+  const originalGetCatalogEntryByEndpointId = alexaProjectionService.getCatalogEntryByEndpointId;
+  const originalGetStateForEndpoint = alexaProjectionService.getStateForEndpoint;
+  const originalControlDevice = deviceService.controlDevice;
+
+  t.after(() => {
+    alexaProjectionService.getCatalogEntryByEndpointId = originalGetCatalogEntryByEndpointId;
+    alexaProjectionService.getStateForEndpoint = originalGetStateForEndpoint;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  alexaProjectionService.getCatalogEntryByEndpointId = async () => ({
+    exposure: {
+      entityType: 'device',
+      entityId: 'device-harmony-1'
+    },
+    entity: {
+      _id: 'device-harmony-1',
+      type: 'switch',
+      properties: {
+        source: 'harmony',
+        harmonyHubIp: '192.168.1.50',
+        harmonyActivityId: '123456'
+      }
+    },
+    validationErrors: [],
+    endpoint: {
+      state: {
+        properties: []
+      }
+    }
+  });
+  alexaProjectionService.getStateForEndpoint = async () => ({
+    properties: [],
+    connectivity: 'OK'
+  });
+
+  let receivedCall = null;
+  deviceService.controlDevice = async (...args) => {
+    receivedCall = args;
+    return {
+      _id: 'device-harmony-1',
+      status: true,
+      isOnline: true
+    };
+  };
+
+  const result = await bridge.executeDirective({
+    directive: {
+      header: {
+        namespace: 'Alexa.PowerController',
+        name: 'TurnOn',
+        correlationToken: 'corr-1'
+      },
+      endpoint: {
+        endpointId: 'hb:hub-1:device:device-harmony-1'
+      },
+      payload: {}
+    }
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(receivedCall, [
+    'device-harmony-1',
+    'turn_on',
+    undefined,
+    {
+      skipIntegrationRefresh: true,
+      skipPostActionVerification: true
+    }
+  ]);
+});
+
 test('getBrokerDeliveryStatus and flushBrokerEvents proxy broker delivery state through relay auth', async (t) => {
   const bridge = new AlexaBridgeService();
   const brokerCalls = [];

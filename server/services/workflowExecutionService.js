@@ -280,7 +280,7 @@ function getActionValue(actionName, parameters = {}) {
   return undefined;
 }
 
-function getInsteonCommandRetryOptions(action, source = '') {
+function getInsteonCommandRetryOptions(action, source = '', defaults = {}) {
   if (String(source || '').trim().toLowerCase() !== 'insteon') {
     return {};
   }
@@ -315,6 +315,7 @@ function getInsteonCommandRetryOptions(action, source = '') {
       : DEFAULT_WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS
   );
   const verificationMode = sanitizeString(parameters.verificationMode || parameters.verifyMode).toLowerCase();
+  const defaultVerificationMode = sanitizeString(defaults?.verificationMode).toLowerCase();
 
   return {
     commandAttempts: retryCount + 1,
@@ -324,7 +325,7 @@ function getInsteonCommandRetryOptions(action, source = '') {
           commandTimeoutMs: Math.max(500, Math.min(20_000, Math.round(commandTimeoutRaw)))
         }
       : {}),
-    verificationMode: verificationMode || 'fast'
+    verificationMode: verificationMode || defaultVerificationMode || 'fast'
   };
 }
 
@@ -1021,8 +1022,9 @@ async function executeDeviceGroupControl(groupTarget, action) {
   const actionName = getActionName(action);
   const value = getActionValue(actionName, action?.parameters || {});
   const insteonGroupOptions = {
-    ...getInsteonCommandRetryOptions(action, 'insteon'),
-    verificationMode: 'fast',
+    ...getInsteonCommandRetryOptions(action, 'insteon', {
+      verificationMode: 'ack'
+    }),
     deviceGroup: rootGroupName
   };
 
