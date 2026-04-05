@@ -51,6 +51,7 @@ import {
   getHarmonyEntityType,
   getHarmonyPowerCommands,
   groupHarmonyCommands,
+  isHarmonyExcludedFromHomeBrain,
   isHarmonyCommandDevice
 } from "@/lib/harmony"
 import { cn } from "@/lib/utils"
@@ -716,6 +717,7 @@ export function DeviceDetailsDialog({
   const [groupInput, setGroupInput] = useState("")
   const [savingGroups, setSavingGroups] = useState(false)
   const [harmonyRepeatPowerCommands, setHarmonyRepeatPowerCommands] = useState(false)
+  const [harmonyExcludeFromHomeBrain, setHarmonyExcludeFromHomeBrain] = useState(false)
   const [savingHarmonyOptions, setSavingHarmonyOptions] = useState(false)
   const [selectedHarmonyCommand, setSelectedHarmonyCommand] = useState("")
   const [harmonyHoldMs, setHarmonyHoldMs] = useState(0)
@@ -736,6 +738,7 @@ export function DeviceDetailsDialog({
   const harmonyRepeatPowerCommandsSaved = Boolean(
     (device?.properties as Record<string, unknown> | undefined)?.harmonyRepeatPowerCommands
   )
+  const harmonyExcludeFromHomeBrainSaved = isHarmonyExcludedFromHomeBrain(device)
   const harmonyPrimaryQuickActions = useMemo(() => {
     return HARMONY_PRIMARY_COMMANDS
       .map((definition) => {
@@ -759,7 +762,10 @@ export function DeviceDetailsDialog({
     return normalizeGroupList(availableGroups).filter((group) => !activeKeys.has(group.toLowerCase()))
   }, [availableGroups, draftGroups])
   const groupsChanged = !sameStringList(currentGroups, draftGroups)
-  const harmonyOptionsChanged = harmonyCommandDevice && harmonyRepeatPowerCommands !== harmonyRepeatPowerCommandsSaved
+  const harmonyOptionsChanged = harmonyCommandDevice && (
+    harmonyRepeatPowerCommands !== harmonyRepeatPowerCommandsSaved
+    || harmonyExcludeFromHomeBrain !== harmonyExcludeFromHomeBrainSaved
+  )
 
   useEffect(() => {
     if (!open) {
@@ -775,7 +781,8 @@ export function DeviceDetailsDialog({
     }
 
     setHarmonyRepeatPowerCommands(harmonyRepeatPowerCommandsSaved)
-  }, [device?._id, harmonyRepeatPowerCommandsSaved, open])
+    setHarmonyExcludeFromHomeBrain(harmonyExcludeFromHomeBrainSaved)
+  }, [device?._id, harmonyExcludeFromHomeBrainSaved, harmonyRepeatPowerCommandsSaved, open])
 
   useEffect(() => {
     if (!open) {
@@ -1159,7 +1166,8 @@ export function DeviceDetailsDialog({
     try {
       const response = await updateDevice(device._id, {
         properties: {
-          harmonyRepeatPowerCommands
+          harmonyRepeatPowerCommands,
+          harmonyExcludeFromHomeBrain
         }
       })
       const updatedDevice = (response?.device || response) as DeviceLike
@@ -1167,12 +1175,18 @@ export function DeviceDetailsDialog({
       setHarmonyRepeatPowerCommands(Boolean(
         (updatedDevice?.properties as Record<string, unknown> | undefined)?.harmonyRepeatPowerCommands
       ))
+      setHarmonyExcludeFromHomeBrain(isHarmonyExcludedFromHomeBrain(updatedDevice))
       toast({
         title: "Harmony options updated",
-        description: harmonyRepeatPowerCommands
-          ? `${device.name} will now send power on/off commands twice when HomeBrain controls it.`
-          : `${device.name} will send a single power on/off command again.`
+        description: harmonyExcludeFromHomeBrain
+          ? `${device.name} is now excluded from normal HomeBrain device and workflow lists.`
+          : harmonyRepeatPowerCommands
+            ? `${device.name} will now send power on/off commands twice when HomeBrain controls it.`
+            : `${device.name} will send a single power on/off command again.`
       })
+      if (harmonyExcludeFromHomeBrain) {
+        onOpenChange(false)
+      }
     } catch (saveError) {
       const message = saveError instanceof Error
         ? saveError.message
@@ -1735,7 +1749,7 @@ export function DeviceDetailsDialog({
                         <CardHeader className="pb-4">
                           <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Harmony custom options</CardTitle>
                           <CardDescription>
-                            Tune how HomeBrain sends power commands for this Harmony-backed device in workflows, scenes, and direct controls.
+                            Tune how HomeBrain sends power commands and whether this Harmony-backed raw device should appear in normal HomeBrain surfaces.
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
@@ -1755,8 +1769,26 @@ export function DeviceDetailsDialog({
                             </div>
                           </div>
 
+                          <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="space-y-1">
+                                <p className="font-medium text-white">Exclude this Harmony device from HomeBrain</p>
+                                <p className="text-sm leading-relaxed text-muted-foreground">
+                                  Useful when Harmony still has a stale or duplicate raw device entry that you do not want showing up in HomeBrain device lists and workflow pickers.
+                                </p>
+                              </div>
+                              <Switch
+                                checked={harmonyExcludeFromHomeBrain}
+                                onCheckedChange={setHarmonyExcludeFromHomeBrain}
+                                aria-label="Exclude this Harmony device from HomeBrain"
+                              />
+                            </div>
+                          </div>
+
                           <div className="rounded-[1.15rem] border border-cyan-400/12 bg-cyan-400/[0.07] px-4 py-3 text-sm leading-relaxed text-cyan-50/88">
-                            {harmonyPowerSummary}
+                            {harmonyExcludeFromHomeBrain
+                              ? "This Harmony raw device will be hidden from normal HomeBrain device and workflow surfaces after you save."
+                              : harmonyPowerSummary}
                           </div>
 
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

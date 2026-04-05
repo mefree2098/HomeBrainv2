@@ -37,7 +37,8 @@ import { useAuth } from "@/contexts/AuthContext"
 import {
   getHarmonyControlCommands,
   getHarmonyPowerCommands,
-  isHarmonyCommandDevice
+  isHarmonyCommandDevice,
+  isHarmonyExcludedFromHomeBrain
 } from "@/lib/harmony"
 
 const THERMOSTAT_MODES = ['auto', 'cool', 'heat', 'off'] as const
@@ -437,7 +438,7 @@ export function Devices({
     const roomMap = new Map<string, any[]>()
 
     deviceList.forEach((device: any) => {
-      if (!device || !device._id) {
+      if (!device || !device._id || isHarmonyExcludedFromHomeBrain(device)) {
         return
       }
 
@@ -1107,7 +1108,7 @@ export function Devices({
         : device.type === filterType)
     const matchesSource = filterSource === "all" || deviceSource === filterSource
 
-    return matchesSearch && matchesType && matchesSource
+    return !isHarmonyExcludedFromHomeBrain(device) && matchesSearch && matchesType && matchesSource
   }
 
   const sortDevices = (deviceList: any[]) => {

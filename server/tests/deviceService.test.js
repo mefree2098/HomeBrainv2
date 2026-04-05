@@ -492,9 +492,11 @@ test('getAllDevices can force-refresh SmartThings lock devices before returning 
   const devices = await deviceService.getAllDevices({ type: 'lock' }, { refreshSmartThings: true });
 
   assert.equal(queries.length, 3);
-  assert.equal(queries[0].type, 'lock');
+  assert.equal(queries[0].$and[0].type, 'lock');
+  assert.match(JSON.stringify(queries[0]), /harmonyExcludeFromHomeBrain/);
   assert.equal(queries[1]._id.$in[0], 'device-3');
-  assert.equal(queries[2].type, 'lock');
+  assert.equal(queries[2].$and[0].type, 'lock');
+  assert.match(JSON.stringify(queries[2]), /harmonyExcludeFromHomeBrain/);
   assert.ok(Array.isArray(bulkOps));
   assert.equal(bulkOps.length, 1);
   assert.equal(Array.isArray(recordedSamples), true);
@@ -504,6 +506,30 @@ test('getAllDevices can force-refresh SmartThings lock devices before returning 
   assert.equal(emitted[0].eventName, 'devices:update');
   assert.equal(devices.length, 1);
   assert.equal(devices[0].status, false);
+});
+
+test('getAllDevices hides Harmony devices excluded from HomeBrain unless explicitly requested', async (t) => {
+  const originalFind = Device.find;
+
+  t.after(() => {
+    Device.find = originalFind;
+  });
+
+  const queries = [];
+
+  Device.find = (query = {}) => {
+    queries.push(query);
+    return {
+      sort: async () => []
+    };
+  };
+
+  await deviceService.getAllDevices({ source: 'harmony' });
+  await deviceService.getAllDevices({ source: 'harmony' }, { includeExcludedHarmony: true });
+
+  assert.equal(queries.length, 2);
+  assert.match(JSON.stringify(queries[0]), /harmonyExcludeFromHomeBrain/);
+  assert.doesNotMatch(JSON.stringify(queries[1]), /harmonyExcludeFromHomeBrain/);
 });
 
 test('updateDevice normalizes and deduplicates device groups', async (t) => {

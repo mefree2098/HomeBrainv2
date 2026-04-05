@@ -79,6 +79,11 @@ export function isHarmonyCommandDevice(device: HarmonyDeviceLike): boolean {
   return isHarmonyDevice(device) && getHarmonyEntityType(device) === "device"
 }
 
+export function isHarmonyExcludedFromHomeBrain(device: HarmonyDeviceLike): boolean {
+  const properties = getProperties(device)
+  return properties.harmonyExcludeFromHomeBrain === true
+}
+
 export function getHarmonyPowerCommands(device: HarmonyDeviceLike): HarmonyPowerCommands {
   const properties = getProperties(device)
   const powerCommands = properties.harmonyPowerCommands && typeof properties.harmonyPowerCommands === "object"

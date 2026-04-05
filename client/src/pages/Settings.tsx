@@ -2,6 +2,7 @@ import { useState, useEffect, ChangeEvent, forwardRef, type ComponentProps } fro
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { getDevices, updateDevice } from "@/api/devices"
 import { Input as BaseInput } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -327,6 +328,7 @@ export function Settings() {
   })
   const [harmonyStatus, setHarmonyStatus] = useState<any>(null)
   const [harmonyHubs, setHarmonyHubs] = useState<any[]>([])
+  const [excludedHarmonyDevices, setExcludedHarmonyDevices] = useState<any[]>([])
   const [alexaSummary, setAlexaSummary] = useState<any>(null)
   const [loadingAlexaSummary, setLoadingAlexaSummary] = useState(false)
   const [generatingAlexaCode, setGeneratingAlexaCode] = useState<"private" | "public" | "">("")
@@ -342,6 +344,7 @@ export function Settings() {
   const [savingAlexaVoiceUserKey, setSavingAlexaVoiceUserKey] = useState("")
   const [loadingHarmonyStatus, setLoadingHarmonyStatus] = useState(false)
   const [loadingHarmonyHubs, setLoadingHarmonyHubs] = useState(false)
+  const [restoringHarmonyDeviceId, setRestoringHarmonyDeviceId] = useState("")
   const [discoveringHarmony, setDiscoveringHarmony] = useState(false)
   const [syncingHarmonyState, setSyncingHarmonyState] = useState(false)
   const [harmonyQuickActionKey, setHarmonyQuickActionKey] = useState("")
@@ -1009,8 +1012,24 @@ export function Settings() {
   }
 
   const loadHarmonyOverview = async () => {
-    await loadHarmonyStatus()
-    await loadHarmonyHubs({ includeCommands: false })
+    const loadExcludedHarmonyDevices = async () => {
+      try {
+        const response = await getDevices({ source: "harmony", includeExcludedHarmony: true })
+        const devices = Array.isArray(response?.devices) ? response.devices : []
+        setExcludedHarmonyDevices(
+          devices.filter((device: any) => device?.properties?.harmonyExcludeFromHomeBrain === true)
+        )
+      } catch (error) {
+        console.warn("Failed to load excluded Harmony devices:", error)
+        setExcludedHarmonyDevices([])
+      }
+    }
+
+    await Promise.all([
+      loadHarmonyStatus(),
+      loadHarmonyHubs({ includeCommands: false }),
+      loadExcludedHarmonyDevices()
+    ])
   }
 
   const handleDiscoverHarmony = async () => {
@@ -1133,6 +1152,31 @@ export function Settings() {
       })
     } finally {
       setHarmonyQuickActionKey("")
+    }
+  }
+
+  const handleRestoreExcludedHarmonyDevice = async (deviceId: string, deviceName: string) => {
+    setRestoringHarmonyDeviceId(deviceId)
+    try {
+      await updateDevice(deviceId, {
+        properties: {
+          harmonyExcludeFromHomeBrain: false
+        }
+      })
+      toast({
+        title: "Harmony device restored",
+        description: `${deviceName} is visible in normal HomeBrain device lists again.`
+      })
+      await loadHarmonyOverview()
+    } catch (error) {
+      console.error("Failed to restore excluded Harmony device:", error)
+      toast({
+        title: "Failed to restore Harmony device",
+        description: error instanceof Error ? error.message : "Unable to restore the excluded Harmony device.",
+        variant: "destructive"
+      })
+    } finally {
+      setRestoringHarmonyDeviceId("")
     }
   }
 
@@ -5694,6 +5738,37 @@ export function Settings() {
                       )}
                     </Button>
                   </div>
+
+                  {excludedHarmonyDevices.length > 0 ? (
+                    <div className="rounded border border-amber-200/70 bg-amber-50/50 p-3 dark:border-amber-900/60 dark:bg-amber-950/20">
+                      <p className="text-sm font-medium">Excluded Harmony devices</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        These Harmony raw devices are hidden from normal HomeBrain device and workflow lists, but you can restore them here.
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        {excludedHarmonyDevices.map((device: any) => (
+                          <div key={device._id} className="flex flex-col gap-2 rounded border bg-white/70 p-3 dark:bg-slate-900/40 md:flex-row md:items-center md:justify-between">
+                            <div>
+                              <p className="text-sm font-medium">{device.name || "Unnamed Harmony device"}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {(device.room || "Unassigned").toString()}
+                                {device?.properties?.harmonyDeviceId ? ` • Harmony device ${device.properties.harmonyDeviceId}` : ""}
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRestoreExcludedHarmonyDevice(device._id, device.name || "Harmony device")}
+                              disabled={restoringHarmonyDeviceId === device._id}
+                            >
+                              {restoringHarmonyDeviceId === device._id ? "Restoring..." : "Restore to HomeBrain"}
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
 
                   {harmonyHubs.length > 0 ? (
                     <div className="space-y-2">

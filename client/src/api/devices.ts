@@ -6,6 +6,7 @@ type DeviceFilters = {
   status?: boolean;
   isOnline?: boolean;
   source?: string;
+  includeExcludedHarmony?: boolean;
 }
 
 export type DeviceRecord = {
@@ -92,6 +93,7 @@ export const getDevices = async (filters?: DeviceFilters) => {
     if (filters?.status !== undefined) params.append('status', filters.status.toString());
     if (filters?.isOnline !== undefined) params.append('isOnline', filters.isOnline.toString());
     if (filters?.source) params.append('source', filters.source);
+    if (filters?.includeExcludedHarmony) params.append('includeExcludedHarmony', 'true');
     
     const queryString = params.toString();
     const url = queryString ? `/api/devices?${queryString}` : '/api/devices';

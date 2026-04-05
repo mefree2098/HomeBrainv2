@@ -13,6 +13,12 @@ const {
 const MAX_HARMONY_COMMAND_HOLD_MS = 5000;
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const HARMONY_VISIBLE_DEVICE_QUERY = Object.freeze({
+  $or: [
+    { 'properties.harmonyExcludeFromHomeBrain': { $exists: false } },
+    { 'properties.harmonyExcludeFromHomeBrain': { $ne: true } }
+  ]
+});
 let cachedInsteonService = null;
 const getInsteonService = () => {
   if (!cachedInsteonService) {
@@ -49,6 +55,30 @@ function normalizeDeviceGroups(groups) {
   });
 
   return normalized;
+}
+
+function mergeMongoQuery(baseQuery = {}, extraQuery = {}) {
+  const baseHasKeys = baseQuery && typeof baseQuery === 'object' && Object.keys(baseQuery).length > 0;
+  const extraHasKeys = extraQuery && typeof extraQuery === 'object' && Object.keys(extraQuery).length > 0;
+
+  if (!baseHasKeys) {
+    return extraHasKeys ? { ...extraQuery } : {};
+  }
+  if (!extraHasKeys) {
+    return { ...baseQuery };
+  }
+
+  return {
+    $and: [baseQuery, extraQuery]
+  };
+}
+
+function buildVisibleDeviceQuery(filters = {}, options = {}) {
+  if (options.includeExcludedHarmony === true) {
+    return { ...filters };
+  }
+
+  return mergeMongoQuery(filters, HARMONY_VISIBLE_DEVICE_QUERY);
 }
 
 async function ensureDeviceGroupRegistryEntries(groups = []) {
@@ -129,11 +159,12 @@ class DeviceService {
         }
       }
       
-      let devices = await Device.find(query).sort({ room: 1, name: 1 });
+      const visibilityQuery = buildVisibleDeviceQuery(query, options);
+      let devices = await Device.find(visibilityQuery).sort({ room: 1, name: 1 });
 
       if (options.refreshSmartThings) {
         await this.refreshSmartThingsDevices(devices);
-        devices = await Device.find(query).sort({ room: 1, name: 1 });
+        devices = await Device.find(visibilityQuery).sort({ room: 1, name: 1 });
       }
 
       console.log(`DeviceService: Found ${devices.length} devices`);
@@ -1816,7 +1847,7 @@ class DeviceService {
 
       this.scheduleIntegrationRefresh({ reason: 'getDevicesByRoom' });
 
-      const devices = await Device.find().sort({ room: 1, name: 1 });
+      const devices = await Device.find(buildVisibleDeviceQuery()).sort({ room: 1, name: 1 });
       
       // Group devices by room
       const roomMap = {};
@@ -1852,16 +1883,19 @@ class DeviceService {
 
       this.scheduleIntegrationRefresh({ reason: 'getDeviceStats' });
 
-      const totalDevices = await Device.countDocuments();
-      const onlineDevices = await Device.countDocuments({ isOnline: true });
-      const activeDevices = await Device.countDocuments({ status: true });
+      const visibleDeviceQuery = buildVisibleDeviceQuery();
+      const totalDevices = await Device.countDocuments(visibleDeviceQuery);
+      const onlineDevices = await Device.countDocuments(buildVisibleDeviceQuery({ isOnline: true }));
+      const activeDevices = await Device.countDocuments(buildVisibleDeviceQuery({ status: true }));
       
       const devicesByType = await Device.aggregate([
+        { $match: visibleDeviceQuery },
         { $group: { _id: '$type', count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ]);
       
       const devicesByRoom = await Device.aggregate([
+        { $match: visibleDeviceQuery },
         { $group: { _id: '$room', count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ]);
