@@ -1069,9 +1069,10 @@ export function Settings() {
     try {
       const response = await syncHarmonyDevices(6000)
       if (response.success) {
+        const deduped = response.deduped ?? 0
         toast({
-          title: "Harmony Hub activity devices synced",
-          description: `${response.created ?? 0} created, ${response.updated ?? 0} updated, ${response.removed ?? 0} removed.`
+          title: "Harmony devices synced",
+          description: `${response.created ?? 0} created, ${response.updated ?? 0} updated, ${response.removed ?? 0} removed, ${deduped} deduped.`
         })
       }
       await loadHarmonyOverview()
@@ -3979,6 +3980,25 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="integrations" className="space-y-6">
+            <Tabs defaultValue="alexa" className="space-y-6">
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold">Integration Settings</h2>
+                <p className="text-sm text-muted-foreground">
+                  Choose a tab to jump directly to the integration you want to configure.
+                </p>
+              </div>
+
+              <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 p-1">
+                <TabsTrigger value="alexa">Alexa</TabsTrigger>
+                <TabsTrigger value="tempest">Tempest</TabsTrigger>
+                <TabsTrigger value="devices">Device Integrations</TabsTrigger>
+                <TabsTrigger value="ecobee">Ecobee</TabsTrigger>
+                <TabsTrigger value="keys">API Keys</TabsTrigger>
+                <TabsTrigger value="ai">AI / LLM</TabsTrigger>
+                <TabsTrigger value="priority">LLM Priority</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="alexa" className="space-y-6">
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -4681,9 +4701,13 @@ export function Settings() {
                 </p>
               </CardContent>
             </Card>
+              </TabsContent>
 
-            <TempestIntegrationCard />
+              <TabsContent value="tempest" className="space-y-6">
+                <TempestIntegrationCard />
+              </TabsContent>
 
+              <TabsContent value="devices" className="space-y-6">
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -6247,7 +6271,9 @@ export function Settings() {
             </div>
           </CardContent>
         </Card>
+              </TabsContent>
 
+              <TabsContent value="ecobee" className="space-y-6">
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -6407,7 +6433,9 @@ export function Settings() {
                 </div>
               </CardContent>
             </Card>
+              </TabsContent>
 
+              <TabsContent value="keys" className="space-y-6">
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -6451,7 +6479,9 @@ export function Settings() {
                 </div>
               </CardContent>
             </Card>
+              </TabsContent>
 
+              <TabsContent value="ai" className="space-y-6">
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -6824,7 +6854,9 @@ export function Settings() {
                 </div>
               </CardContent>
             </Card>
+              </TabsContent>
 
+              <TabsContent value="priority" className="space-y-6">
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -6916,6 +6948,8 @@ export function Settings() {
                 </div>
               </CardContent>
             </Card>
+              </TabsContent>
+            </Tabs>
           </TabsContent>
 
           <TabsContent value="security" className="space-y-6">

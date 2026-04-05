@@ -1360,11 +1360,6 @@ class HarmonyService {
     const activityLabelKey = normalizeHarmonyDuplicateName(activityLabel);
     const snapshotRemoteId = trimHarmonyValue(snapshot?.remoteId);
     const snapshotHubName = normalizeCommandName(snapshot?.friendlyName);
-    const shouldCheckFallback = exactMatches.length === 0 || Boolean(snapshotRemoteId);
-
-    if (!shouldCheckFallback) {
-      return exactMatches;
-    }
 
     const activityNameMatch = buildHarmonyDuplicateNameMatch(activityName);
     if (!activityNameMatch) {
@@ -1428,11 +1423,6 @@ class HarmonyService {
     const deviceLabelKey = normalizeHarmonyDuplicateName(deviceLabel);
     const manufacturerKey = normalizeCommandName(device?.manufacturer);
     const modelKey = normalizeCommandName(device?.model);
-    const shouldCheckFallback = exactMatches.length === 0 || Boolean(snapshotRemoteId);
-
-    if (!shouldCheckFallback) {
-      return exactMatches;
-    }
 
     const deviceNameMatch = buildHarmonyDuplicateNameMatch(deviceLabel);
     if (!deviceNameMatch) {

@@ -184,6 +184,12 @@ test('syncDevices dedupes duplicate HomeBrain rows for a Harmony activity', asyn
       return [duplicateDevice, canonicalDevice];
     }
 
+    if (query.name instanceof RegExp) {
+      assert.equal(query.room, 'Family Room');
+      assert.equal(query.name.test('Family Room - Watch TV'), true);
+      return [duplicateDevice, canonicalDevice];
+    }
+
     throw new Error(`Unexpected Device.find query: ${JSON.stringify(query)}`);
   };
   Device.create = async () => {
@@ -321,6 +327,12 @@ test('syncDevices updates Harmony raw device metadata while preserving custom de
     if (query['properties.harmonyDeviceId']) {
       assert.equal(query['properties.harmonyHubIp'], '192.168.1.50');
       assert.equal(query['properties.harmonyDeviceId'], '55');
+      return [canonicalDevice];
+    }
+
+    if (query.name instanceof RegExp) {
+      assert.equal(query.room, 'Family Room');
+      assert.equal(query.name.test('Projector'), true);
       return [canonicalDevice];
     }
 
@@ -581,6 +593,123 @@ test('syncDevices removes Harmony raw device rows with auto-numbered duplicate n
   assert.equal(result.deduped, 1);
   assert.equal(canonicalDevice.saved, true);
   assert.equal(canonicalDevice.name, 'Amazon Fire TV');
+  assert.deepEqual(canonicalDevice.groups, ['Media', 'Favorites']);
+  assert.deepEqual(deleteManyCalls[0], {
+    _id: { $in: ['fire-tv-duplicate'] }
+  });
+});
+
+test('syncDevices removes Harmony raw duplicates even when hub remoteId is unavailable', async (t) => {
+  const originalFind = Device.find;
+  const originalCreate = Device.create;
+  const originalDeleteMany = Device.deleteMany;
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.create = originalCreate;
+    Device.deleteMany = originalDeleteMany;
+  });
+
+  const service = new HarmonyService();
+  service.discoverHubs = async () => [{ ip: '192.168.1.50' }];
+  service.getHubSnapshot = async () => ({
+    ip: '192.168.1.50',
+    friendlyName: 'Bedroom Hub',
+    remoteId: null,
+    currentActivityId: '-1',
+    currentActivityLabel: 'Off',
+    activities: [],
+    devices: [
+      {
+        id: '77',
+        label: 'Amazon Fire TV',
+        manufacturer: 'Amazon',
+        model: 'Fire TV',
+        commands: [
+          { name: 'Play', label: 'Play', action: 'IR_PLAY' },
+          { name: 'Pause', label: 'Pause', action: 'IR_PAUSE' }
+        ]
+      }
+    ]
+  });
+  service.mergeKnownHubs = async () => [];
+  service.syncActivityStates = async () => ({ success: true });
+
+  const canonicalDevice = {
+    _id: 'fire-tv-canonical',
+    name: 'Amazon Fire TV',
+    type: 'switch',
+    room: 'Bedroom Hub',
+    status: false,
+    groups: ['Media'],
+    brand: 'Amazon',
+    model: 'Fire TV',
+    properties: {
+      source: 'harmony',
+      harmonyEntityType: 'device',
+      harmonyHubIp: '192.168.1.50',
+      harmonyDeviceId: '77',
+      harmonyDeviceLabel: 'Amazon Fire TV'
+    },
+    createdAt: new Date('2026-04-01T00:00:00Z'),
+    async save() {
+      this.saved = true;
+    }
+  };
+
+  const duplicateDevice = {
+    _id: 'fire-tv-duplicate',
+    name: 'Amazon Fire TV (2)',
+    type: 'switch',
+    room: 'Bedroom Hub',
+    status: false,
+    groups: ['Favorites'],
+    brand: 'Amazon',
+    model: 'Fire TV',
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: 'bedroom-hub.local',
+      harmonyDeviceId: '77',
+      harmonyDeviceLabel: 'Amazon Fire TV'
+    },
+    createdAt: new Date('2026-04-02T00:00:00Z')
+  };
+
+  const deleteManyCalls = [];
+
+  Device.find = async (query) => {
+    if (query['properties.harmonyDeviceId']) {
+      assert.equal(query['properties.harmonyDeviceId'], '77');
+      assert.equal(query['properties.harmonyHubIp'], '192.168.1.50');
+      return [canonicalDevice];
+    }
+
+    if (query.name instanceof RegExp) {
+      assert.equal(query.room, 'Bedroom Hub');
+      assert.equal(query.name.test('Amazon Fire TV'), true);
+      assert.equal(query.name.test('Amazon Fire TV (2)'), true);
+      return [canonicalDevice, duplicateDevice];
+    }
+
+    throw new Error(`Unexpected Device.find query: ${JSON.stringify(query)}`);
+  };
+  Device.create = async () => {
+    throw new Error('Device.create should not be called when a hostname-drift Harmony duplicate exists');
+  };
+  Device.deleteMany = async (query) => {
+    deleteManyCalls.push(query);
+    if (query._id) {
+      return { deletedCount: 1 };
+    }
+    return { deletedCount: 0 };
+  };
+
+  const result = await service.syncDevices({ timeoutMs: 1 });
+
+  assert.equal(result.success, true);
+  assert.equal(result.updated, 1);
+  assert.equal(result.deduped, 1);
+  assert.equal(canonicalDevice.saved, true);
   assert.deepEqual(canonicalDevice.groups, ['Media', 'Favorites']);
   assert.deepEqual(deleteManyCalls[0], {
     _id: { $in: ['fire-tv-duplicate'] }
