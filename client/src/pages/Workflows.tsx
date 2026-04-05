@@ -25,6 +25,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl";
 import { useToast } from "@/hooks/useToast";
 import { WorkflowBuilderDialog } from "@/components/workflows/WorkflowBuilderDialog";
@@ -70,6 +71,8 @@ type SceneLite = {
   _id: string;
   name: string;
 };
+
+type WorkflowStudioTab = "overview" | "workflows" | "logs";
 
 const errorMessage = (error: unknown, fallback: string) => {
   if (error instanceof Error && error.message) {
@@ -585,6 +588,7 @@ export function Workflows() {
   const [runtimeHistoryLimit, setRuntimeHistoryLimit] = useState<number>(50);
   const [runtimeHistoryHours, setRuntimeHistoryHours] = useState<number>(24);
   const [runtimeHistoryPage, setRuntimeHistoryPage] = useState<number>(1);
+  const [activeTab, setActiveTab] = useState<WorkflowStudioTab>("overview");
 
   const loadRuntimeData = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!options.silent) {
@@ -1052,6 +1056,7 @@ export function Workflows() {
     try {
       const response = await createWorkflow(payload);
       setWorkflows((prev) => [response.workflow, ...prev]);
+      setActiveTab("workflows");
       toast({
         title: "Template created",
         description: `${response.workflow.name} is ready.`
@@ -1073,6 +1078,7 @@ export function Workflows() {
         setWorkflows((prev) => prev.map((workflow) => (
           workflow._id === selectedWorkflow._id ? response.workflow : workflow
         )));
+        setActiveTab("workflows");
         toast({
           title: "Workflow updated",
           description: response.message
@@ -1080,6 +1086,7 @@ export function Workflows() {
       } else {
         const response = await createWorkflow(payload);
         setWorkflows((prev) => [response.workflow, ...prev]);
+        setActiveTab("workflows");
         toast({
           title: "Workflow created",
           description: response.message
@@ -1248,6 +1255,7 @@ export function Workflows() {
       }
 
       setWorkflows((prev) => [...created, ...prev]);
+      setActiveTab("workflows");
       toast({
         title: "Import complete",
         description: `Imported ${created.length} workflow(s).`
@@ -1284,6 +1292,7 @@ export function Workflows() {
 
         if (createdWorkflows.length > 0) {
           setWorkflows((prev) => [...createdWorkflows, ...prev]);
+          setActiveTab("workflows");
         }
 
         toast({
@@ -1319,6 +1328,7 @@ export function Workflows() {
       setWorkflows((prev) => prev.map((workflow) => (
         workflow._id === workflowToRevise._id ? result.workflow : workflow
       )));
+      setActiveTab("workflows");
       setReviseDialogOpen(false);
       setWorkflowToRevise(null);
       setRevisePrompt("");
@@ -1403,604 +1413,622 @@ export function Workflows() {
         onChange={(event) => void handleImportWorkflows(event)}
       />
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Total</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{stats.total}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Enabled</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{stats.enabled}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Disabled</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{stats.disabled}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Voice Ready</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{stats.withVoiceAliases}</CardContent>
-        </Card>
-      </div>
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as WorkflowStudioTab)}
+        className="space-y-6"
+      >
+        <TabsList className="grid h-auto w-full max-w-xl grid-cols-3 rounded-2xl border border-border/70 bg-background/80 p-1">
+          <TabsTrigger value="overview" className="w-full rounded-xl">Overview</TabsTrigger>
+          <TabsTrigger value="workflows" className="w-full rounded-xl">Workflows</TabsTrigger>
+          <TabsTrigger value="logs" className="w-full rounded-xl">Logs</TabsTrigger>
+        </TabsList>
 
-      {isAdmin ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4" />
-              Quick Templates
-            </CardTitle>
-            <CardDescription>
-              Start from a proven template, then customize in the visual builder.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {TEMPLATE_DEFINITIONS.map((template) => (
-              <button
-                key={template.id}
-                type="button"
-                className="rounded-md border p-3 text-left transition hover:border-blue-300 hover:bg-blue-50/60 dark:hover:bg-blue-950/20"
-                onClick={() => void createTemplateWorkflow(template.id)}
-              >
-                <div className="mb-1 font-medium">{template.name}</div>
-                <p className="text-xs text-muted-foreground">{template.description}</p>
-              </button>
-            ))}
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="rounded-[1.5rem] border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          Standard users can run workflows and use command chat, but only admins can create or reconfigure workflow templates.
-        </div>
-      )}
+        <TabsContent value="overview" className="mt-0 space-y-6">
+          <div className="grid gap-4 md:grid-cols-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Total</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-semibold">{stats.total}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Enabled</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-semibold">{stats.enabled}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Disabled</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-semibold">{stats.disabled}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Voice Ready</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-semibold">{stats.withVoiceAliases}</CardContent>
+            </Card>
+          </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {isAdmin ? (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4" />
-                Create with AI
-              </CardTitle>
-              <CardDescription>
-                Describe a new workflow in plain English. For existing workflows, use the AI revise action on that workflow card.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Textarea
-                value={nlPrompt}
-                onChange={(event) => setNlPrompt(event.target.value)}
-                placeholder="Every weekday at 6:30 AM, turn on kitchen lights and set thermostat to 71."
-              />
-              <Button onClick={() => void handleCreateFromText()} disabled={creatingFromText || !nlPrompt.trim()}>
-                <Wand2 className="mr-2 h-4 w-4" />
-                {creatingFromText ? "Creating..." : "Generate Workflow"}
-              </Button>
-            </CardContent>
-          </Card>
-        ) : null}
+          {isAdmin ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4" />
+                  Quick Templates
+                </CardTitle>
+                <CardDescription>
+                  Start from a proven template, then customize in the visual builder.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {TEMPLATE_DEFINITIONS.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    className="rounded-md border p-3 text-left transition hover:border-blue-300 hover:bg-blue-50/60 dark:hover:bg-blue-950/20"
+                    onClick={() => void createTemplateWorkflow(template.id)}
+                  >
+                    <div className="mb-1 font-medium">{template.name}</div>
+                    <p className="text-xs text-muted-foreground">{template.description}</p>
+                  </button>
+                ))}
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="rounded-[1.5rem] border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+              Standard users can run workflows and use command chat, but only admins can create or reconfigure workflow templates.
+            </div>
+          )}
 
-        <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MessageSquareText className="h-4 w-4" />
-                Chat/Voice Command
-              </CardTitle>
-              <CardDescription>
-              Use the same command parser as remote voice devices to create, revise, or run workflows from text.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Input
-                value={chatCommand}
-                onChange={(event) => setChatCommand(event.target.value)}
-                placeholder={isAdmin
-                ? 'Try: "fix the Alarm Armed workflow so it uses the Interior Lights group"'
-                : 'Try: "turn on the living room lights"'}
-              />
-            <Button onClick={() => void handleRunChatCommand()} disabled={runningChatCommand || !chatCommand.trim()}>
-              <Bot className="mr-2 h-4 w-4" />
-              {runningChatCommand ? "Processing..." : "Send Command"}
-            </Button>
-            {lastChatResult ? (
-              <div className="rounded-md border bg-muted/40 p-3 text-sm">{lastChatResult}</div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {isAdmin ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4" />
+                    Create with AI
+                  </CardTitle>
+                  <CardDescription>
+                    Describe a new workflow in plain English. For existing workflows, use the AI revise action on that workflow card.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Textarea
+                    value={nlPrompt}
+                    onChange={(event) => setNlPrompt(event.target.value)}
+                    placeholder="Every weekday at 6:30 AM, turn on kitchen lights and set thermostat to 71."
+                  />
+                  <Button onClick={() => void handleCreateFromText()} disabled={creatingFromText || !nlPrompt.trim()}>
+                    <Wand2 className="mr-2 h-4 w-4" />
+                    {creatingFromText ? "Creating..." : "Generate Workflow"}
+                  </Button>
+                </CardContent>
+              </Card>
             ) : null}
-          </CardContent>
-        </Card>
-      </div>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="h-4 w-4" />
-                Automation Runtime
-              </CardTitle>
-              <CardDescription>
-                Live execution state, recent trigger evaluations, and runtime logs for workflow-backed automations.
-              </CardDescription>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className={cn(activityConnected && "border-cyan-300 text-cyan-700 dark:text-cyan-200")}>
-                {activityConnected ? "Live connected" : "Live reconnecting"}
-              </Badge>
-              <Button variant="outline" size="sm" onClick={() => void loadRuntimeData()} disabled={runtimeRefreshing}>
-                {runtimeRefreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                Refresh Runtime
-              </Button>
-            </div>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <MessageSquareText className="h-4 w-4" />
+                  Chat/Voice Command
+                </CardTitle>
+                <CardDescription>
+                  Use the same command parser as remote voice devices to create, revise, or run workflows from text.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Input
+                  value={chatCommand}
+                  onChange={(event) => setChatCommand(event.target.value)}
+                  placeholder={isAdmin
+                    ? 'Try: "fix the Alarm Armed workflow so it uses the Interior Lights group"'
+                    : 'Try: "turn on the living room lights"'}
+                />
+                <Button onClick={() => void handleRunChatCommand()} disabled={runningChatCommand || !chatCommand.trim()}>
+                  <Bot className="mr-2 h-4 w-4" />
+                  {runningChatCommand ? "Processing..." : "Send Command"}
+                </Button>
+                {lastChatResult ? (
+                  <div className="rounded-md border bg-muted/40 p-3 text-sm">{lastChatResult}</div>
+                ) : null}
+              </CardContent>
+            </Card>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-            {[
-              {
-                title: "Running Now",
-                value: (runtimeTelemetry?.runningNow ?? runningExecutions.length).toLocaleString(),
-                subtitle: "Live workflow executions"
-              },
-              {
-                title: "Logs in Range",
-                value: (runtimeTelemetry?.executionCount ?? runtimePagination?.total ?? runtimeHistory.length).toLocaleString(),
-                subtitle: `${runtimeWindowLabel}${runtimeTelemetry?.cancelledCount ? ` · ${runtimeTelemetry.cancelledCount} stopped` : ""}`
-              },
-              {
-                title: "Succeeded",
-                value: (runtimeTelemetry?.successCount ?? 0).toLocaleString(),
-                subtitle: "Completed successfully"
-              },
-              {
-                title: "Failed",
-                value: (runtimeTelemetry?.failedCount ?? 0).toLocaleString(),
-                subtitle: runtimeTelemetry ? `${runtimeTelemetry.failureRatePct}% failure rate` : "Execution failures"
-              },
-              {
-                title: "Partial",
-                value: (runtimeTelemetry?.partialSuccessCount ?? 0).toLocaleString(),
-                subtitle: "Completed with issues"
-              },
-              {
-                title: "Avg Duration",
-                value: runtimeTelemetry?.averageDurationMs != null
-                  ? formatDuration(runtimeTelemetry.averageDurationMs)
-                  : "No data",
-                subtitle: runtimeTelemetry?.lastCompletedAt
-                  ? `Last finished ${formatDateTime(runtimeTelemetry.lastCompletedAt)}`
-                  : "Awaiting completed runs"
-              }
-            ].map((card) => (
-              <div
-                key={card.title}
-                className="rounded-2xl border border-border/70 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_62%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] p-4 shadow-sm dark:bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.18),transparent_55%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(15,23,42,0.72))]"
+        </TabsContent>
+
+        <TabsContent value="workflows" className="mt-0 space-y-6">
+          <div className="space-y-4">
+            {workflows.map((workflow) => (
+              <Card
+                key={workflow._id}
+                className={cn(
+                  "transition-all duration-200",
+                  workflow.enabled && "border-cyan-300/35 shadow-[0_0_0_1px_rgba(103,232,249,0.18),0_20px_48px_rgba(34,211,238,0.08)]"
+                )}
               >
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{card.title}</div>
-                <div className="mt-2 text-2xl font-semibold tracking-tight text-foreground">{card.value}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{card.subtitle}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold text-foreground">Running Now</div>
-                <Badge variant="outline">{runningExecutions.length}</Badge>
-              </div>
-              {runningExecutions.length > 0 ? (
-                <div className="grid gap-3">
-                  {runningExecutions.map((execution) => (
-                    <div
-                      key={execution._id}
-                      className="rounded-2xl border border-cyan-200/60 bg-cyan-50/50 p-4 dark:border-cyan-500/20 dark:bg-cyan-500/10"
-                    >
-                      {(() => {
-                        const countdownMs = getCurrentActionCountdownMs(execution.currentAction, nowMs);
-                        const nextActionMessage = resolveNextActionMessage(execution.currentAction);
-                        return (
-                          <>
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="font-semibold">{resolveExecutionName(execution)}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            Trigger: {execution.triggerType.replace(/_/g, " ")} via {execution.triggerSource.replace(/_/g, " ")}
-                          </div>
-                        </div>
-                        <span className="rounded-full border border-cyan-200 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200">
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-lg">{workflow.name}</CardTitle>
+                      <CardDescription>{workflow.description || "No description provided."}</CardDescription>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {runningWorkflowIds.has(workflow._id) ? (
+                        <div className="flex min-w-[96px] items-center justify-center rounded-full border border-cyan-200/90 bg-cyan-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200">
                           Running
-                        </span>
-                      </div>
-
-                      <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-                        <div>
-                          <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Started</div>
-                          <div className="mt-1 font-medium">{formatDateTime(execution.startedAt)}</div>
-                        </div>
-                        <div>
-                          <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Elapsed</div>
-                          <div className="mt-1 font-medium">{formatRunningSince(execution.startedAt, nowMs)}</div>
-                        </div>
-                        <div>
-                          <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Current Step</div>
-                          <div className="mt-1 font-medium">
-                            {execution.currentAction?.message || execution.lastEvent?.message || "Waiting for next action"}
-                          </div>
-                        </div>
-                      </div>
-
-                      {countdownMs !== null ? (
-                        <div className="mt-3 grid gap-3 rounded-xl border border-cyan-200/70 bg-white/70 px-3 py-3 text-sm dark:border-cyan-500/20 dark:bg-slate-950/20 sm:grid-cols-2">
-                          <div>
-                            <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Timer Countdown</div>
-                            <div className="mt-1 font-semibold text-cyan-700 dark:text-cyan-200">{formatCountdown(countdownMs)}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">When Timer Ends</div>
-                            <div className="mt-1 font-medium">{nextActionMessage}</div>
-                          </div>
                         </div>
                       ) : null}
-
-                      {execution.lastEvent?.message ? (
-                        <div className="mt-3 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
-                          Latest update: {execution.lastEvent.message}
-                        </div>
-                      ) : null}
-
-                      <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                        <span>
-                          Progress: {execution.successfulActions || 0}/{execution.totalActions || 0} steps finished
-                        </span>
-                        <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(execution)}>
-                          View Logs
-                        </Button>
+                      <div
+                        className={cn(
+                          "flex min-w-[112px] items-center justify-center rounded-full border px-4 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] transition-all",
+                          workflow.enabled
+                            ? "border-cyan-200/90 bg-[linear-gradient(135deg,rgba(86,234,255,0.98),rgba(40,208,255,0.94))] text-white shadow-[0_12px_30px_rgba(34,211,238,0.3)]"
+                            : "border-white/15 bg-transparent text-muted-foreground"
+                        )}
+                      >
+                        {workflow.enabled ? "Enabled" : "Disabled"}
                       </div>
-                          </>
-                        );
-                      })()}
+                      <Switch
+                        className={cn(
+                          workflow.enabled
+                            ? "border-cyan-200/90 data-[state=checked]:!bg-cyan-400 data-[state=checked]:shadow-[0_0_0_1px_rgba(165,243,252,0.5),0_12px_28px_rgba(34,211,238,0.3)]"
+                            : "border-white/20 data-[state=unchecked]:!bg-white/10"
+                        )}
+                        checked={workflow.enabled}
+                        disabled={!isAdmin}
+                        onCheckedChange={(value) => void handleToggleWorkflow(workflow, value)}
+                      />
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
-                  No workflow-backed automations are running right now.
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold text-foreground">Live Activity</div>
-                <Badge variant="outline">{activityEvents.length}</Badge>
-              </div>
-              <ScrollArea className="h-[360px] rounded-2xl border border-border/70 bg-background/70">
-                <div className="space-y-3 p-3">
-                  {activityEvents.length > 0 ? activityEvents.map((event) => (
-                    <div
-                      key={event.id}
-                      className={cn("rounded-xl border px-3 py-3 text-sm", activitySeverityClassName(event.severity))}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-medium">{activitySummary(event)}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(event.createdAt)}</div>
-                        </div>
-                        <Badge variant="outline" className="text-[10px] uppercase tracking-[0.16em]">
-                          {event.severity}
-                        </Badge>
-                      </div>
-                      {typeof event.payload?.message === "string" && event.payload.message.trim() ? (
-                        <div className="mt-2 text-xs text-muted-foreground">{event.payload.message}</div>
-                      ) : null}
-                    </div>
-                  )) : (
-                    <div className="rounded-xl border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
-                      Automation activity will appear here as workflows trigger and run.
-                    </div>
-                  )}
-                </div>
-              </ScrollArea>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-              <div>
-                <div className="text-sm font-semibold text-foreground">Recent Executions</div>
-                <div className="text-xs text-muted-foreground">
-                  Filter persisted runtime records by time period and how many logs appear per page.
-                </div>
-              </div>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <div className="space-y-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">How Many Logs</div>
-                  <Select
-                    value={String(runtimeHistoryLimit)}
-                    onValueChange={(value) => {
-                      setRuntimeHistoryLimit(Number(value) || 50);
-                      setRuntimeHistoryPage(1);
-                    }}
-                  >
-                    <SelectTrigger className="w-[150px] bg-background/80">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {WORKFLOW_LOG_LIMIT_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={String(option)}>
-                          {option} logs
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time Period</div>
-                  <Select
-                    value={String(runtimeHistoryHours)}
-                    onValueChange={(value) => {
-                      setRuntimeHistoryHours(Number(value) || 24);
-                      setRuntimeHistoryPage(1);
-                    }}
-                  >
-                    <SelectTrigger className="w-[170px] bg-background/80">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {WORKFLOW_LOG_WINDOW_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={String(option.value)}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </div>
-            <div className="rounded-2xl border border-border/70 bg-background/70">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Workflow</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Trigger</TableHead>
-                    <TableHead>Started</TableHead>
-                    <TableHead>Duration</TableHead>
-                    <TableHead>Result</TableHead>
-                    <TableHead className="text-right">Logs</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {runtimeHistory.length > 0 ? runtimeHistory.map((entry) => (
-                    <TableRow key={entry._id}>
-                      <TableCell>
-                        <div className="font-medium">{resolveExecutionName(entry)}</div>
-                        <div className="text-xs text-muted-foreground">{entry.automationName}</div>
-                      </TableCell>
-                      <TableCell>
-                        <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold", runtimeStatusClassName(entry.status))}>
-                          {runtimeStatusLabel(entry.status)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {entry.triggerType.replace(/_/g, " ")}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {formatDateTime(entry.startedAt)}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {entry.status === "running" ? formatRunningSince(entry.startedAt, nowMs) : formatDuration(entry.durationMs)}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {entry.lastEvent?.message || (entry.failedActions > 0
-                          ? `${entry.failedActions} step(s) failed`
-                          : `${entry.successfulActions || 0} step(s) succeeded`)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(entry)}>
-                          View Logs
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  )) : (
-                    <TableRow>
-                      <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
-                        No workflow execution history was recorded in the selected time period.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-              <div className="flex flex-col gap-3 border-t border-border/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-xs text-muted-foreground">{runtimePageSummary}</div>
-                <div className="flex items-center gap-2 self-end sm:self-auto">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setRuntimeHistoryPage((current) => Math.max(1, current - 1))}
-                    disabled={!runtimePagination?.hasPreviousPage || runtimeRefreshing}
-                  >
-                    Previous
-                  </Button>
-                  <div className="min-w-[96px] text-center text-xs text-muted-foreground">
-                    Page {runtimePagination?.page ?? 1} of {runtimePagination?.totalPages ?? 1}
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setRuntimeHistoryPage((current) => current + 1)}
-                    disabled={!runtimePagination?.hasNextPage || runtimeRefreshing}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid gap-3 text-sm md:grid-cols-4">
+                    <div>
+                      <div className="text-muted-foreground">Trigger</div>
+                      <div className="font-medium">{workflow.trigger?.type || "manual"}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Steps</div>
+                      <div className="font-medium">{workflow.actions?.length || 0}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Last Run</div>
+                      <div className="font-medium">{formatLastRun(workflow.lastRun)}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Runs</div>
+                      <div className="font-medium">{workflow.executionCount || 0}</div>
+                    </div>
+                  </div>
 
-      <div className="space-y-4">
-        {workflows.map((workflow) => (
-          <Card
-            key={workflow._id}
-            className={cn(
-              "transition-all duration-200",
-              workflow.enabled && "border-cyan-300/35 shadow-[0_0_0_1px_rgba(103,232,249,0.18),0_20px_48px_rgba(34,211,238,0.08)]"
-            )}
-          >
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="text-lg">{workflow.name}</CardTitle>
-                  <CardDescription>{workflow.description || "No description provided."}</CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  {runningWorkflowIds.has(workflow._id) ? (
-                    <div className="flex min-w-[96px] items-center justify-center rounded-full border border-cyan-200/90 bg-cyan-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200">
-                      Running
+                  {(workflow.voiceAliases || []).length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {(workflow.voiceAliases || []).map((alias) => (
+                        <Badge key={alias} variant="outline">
+                          {alias}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">
+                      No voice alias set yet.
+                    </div>
+                  )}
+
+                  {workflow.lastError?.message ? (
+                    <div className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300">
+                      Last error: {workflow.lastError.message}
                     </div>
                   ) : null}
-                  <div
-                    className={cn(
-                      "flex min-w-[112px] items-center justify-center rounded-full border px-4 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] transition-all",
-                      workflow.enabled
-                        ? "border-cyan-200/90 bg-[linear-gradient(135deg,rgba(86,234,255,0.98),rgba(40,208,255,0.94))] text-white shadow-[0_12px_30px_rgba(34,211,238,0.3)]"
-                        : "border-white/15 bg-transparent text-muted-foreground"
-                    )}
-                  >
-                    {workflow.enabled ? "Enabled" : "Disabled"}
+
+                  {isAdmin ? (
+                    <div className="flex items-center justify-between gap-2 rounded-xl border border-border/70 bg-muted/15 px-3 py-2">
+                      <div className="text-xs text-muted-foreground">
+                        Expose this workflow to Alexa when it can behave like a safe scene trigger.
+                      </div>
+                      <AlexaExposureControl
+                        entityType="workflow"
+                        entityId={workflow._id}
+                        entityName={workflow.name}
+                        exposure={getExposure("workflow", workflow._id)}
+                        loading={loadingAlexaExposure}
+                        defaultAliases={workflow.voiceAliases || []}
+                        onSave={(payload) => handleSaveAlexaExposure(workflow, payload)}
+                        compact
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => void handleRunWorkflow(workflow)}>
+                      <Play className="mr-2 h-4 w-4" />
+                      Run Now
+                    </Button>
+                    {isAdmin ? (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => openEditDialog(workflow)}>
+                          <History className="mr-2 h-4 w-4" />
+                          Edit Flow
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => openReviseDialog(workflow)}>
+                          <Wand2 className="mr-2 h-4 w-4" />
+                          AI Revise
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => void handleCloneWorkflow(workflow)}>
+                          <Copy className="mr-2 h-4 w-4" />
+                          Clone
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => handleExportWorkflow(workflow)}>
+                          <Download className="mr-2 h-4 w-4" />
+                          Export
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => void handleDeleteWorkflow(workflow)}>
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Delete
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
-                  <Switch
-                    className={cn(
-                      workflow.enabled
-                        ? "border-cyan-200/90 data-[state=checked]:!bg-cyan-400 data-[state=checked]:shadow-[0_0_0_1px_rgba(165,243,252,0.5),0_12px_28px_rgba(34,211,238,0.3)]"
-                        : "border-white/20 data-[state=unchecked]:!bg-white/10"
-                    )}
-                    checked={workflow.enabled}
-                    disabled={!isAdmin}
-                    onCheckedChange={(value) => void handleToggleWorkflow(workflow, value)}
-                  />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {workflows.length === 0 ? (
+            <Card>
+              <CardContent className="py-12 text-center">
+                <div className="mb-3 text-lg font-semibold">No workflows yet</div>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  {isAdmin
+                    ? "Start by generating one with AI text or creating one manually in the visual builder."
+                    : "No workflows are available to run yet."}
+                </p>
+                {isAdmin ? (
+                  <Button onClick={openCreateDialog}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create First Workflow
+                  </Button>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="logs" className="mt-0">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="h-4 w-4" />
+                    Automation Runtime
+                  </CardTitle>
+                  <CardDescription>
+                    Live execution state, recent trigger evaluations, and runtime logs for workflow-backed automations.
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className={cn(activityConnected && "border-cyan-300 text-cyan-700 dark:text-cyan-200")}>
+                    {activityConnected ? "Live connected" : "Live reconnecting"}
+                  </Badge>
+                  <Button variant="outline" size="sm" onClick={() => void loadRuntimeData()} disabled={runtimeRefreshing}>
+                    {runtimeRefreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                    Refresh Runtime
+                  </Button>
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="grid gap-3 text-sm md:grid-cols-4">
-                <div>
-                  <div className="text-muted-foreground">Trigger</div>
-                  <div className="font-medium">{workflow.trigger?.type || "manual"}</div>
+            <CardContent className="space-y-6">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                {[
+                  {
+                    title: "Running Now",
+                    value: (runtimeTelemetry?.runningNow ?? runningExecutions.length).toLocaleString(),
+                    subtitle: "Live workflow executions"
+                  },
+                  {
+                    title: "Logs in Range",
+                    value: (runtimeTelemetry?.executionCount ?? runtimePagination?.total ?? runtimeHistory.length).toLocaleString(),
+                    subtitle: `${runtimeWindowLabel}${runtimeTelemetry?.cancelledCount ? ` · ${runtimeTelemetry.cancelledCount} stopped` : ""}`
+                  },
+                  {
+                    title: "Succeeded",
+                    value: (runtimeTelemetry?.successCount ?? 0).toLocaleString(),
+                    subtitle: "Completed successfully"
+                  },
+                  {
+                    title: "Failed",
+                    value: (runtimeTelemetry?.failedCount ?? 0).toLocaleString(),
+                    subtitle: runtimeTelemetry ? `${runtimeTelemetry.failureRatePct}% failure rate` : "Execution failures"
+                  },
+                  {
+                    title: "Partial",
+                    value: (runtimeTelemetry?.partialSuccessCount ?? 0).toLocaleString(),
+                    subtitle: "Completed with issues"
+                  },
+                  {
+                    title: "Avg Duration",
+                    value: runtimeTelemetry?.averageDurationMs != null
+                      ? formatDuration(runtimeTelemetry.averageDurationMs)
+                      : "No data",
+                    subtitle: runtimeTelemetry?.lastCompletedAt
+                      ? `Last finished ${formatDateTime(runtimeTelemetry.lastCompletedAt)}`
+                      : "Awaiting completed runs"
+                  }
+                ].map((card) => (
+                  <div
+                    key={card.title}
+                    className="rounded-2xl border border-border/70 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_62%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] p-4 shadow-sm dark:bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.18),transparent_55%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(15,23,42,0.72))]"
+                  >
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{card.title}</div>
+                    <div className="mt-2 text-2xl font-semibold tracking-tight text-foreground">{card.value}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{card.subtitle}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold text-foreground">Running Now</div>
+                    <Badge variant="outline">{runningExecutions.length}</Badge>
+                  </div>
+                  {runningExecutions.length > 0 ? (
+                    <div className="grid gap-3">
+                      {runningExecutions.map((execution) => (
+                        <div
+                          key={execution._id}
+                          className="rounded-2xl border border-cyan-200/60 bg-cyan-50/50 p-4 dark:border-cyan-500/20 dark:bg-cyan-500/10"
+                        >
+                          {(() => {
+                            const countdownMs = getCurrentActionCountdownMs(execution.currentAction, nowMs);
+                            const nextActionMessage = resolveNextActionMessage(execution.currentAction);
+                            return (
+                              <>
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <div className="font-semibold">{resolveExecutionName(execution)}</div>
+                                    <div className="mt-1 text-xs text-muted-foreground">
+                                      Trigger: {execution.triggerType.replace(/_/g, " ")} via {execution.triggerSource.replace(/_/g, " ")}
+                                    </div>
+                                  </div>
+                                  <span className="rounded-full border border-cyan-200 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-700 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200">
+                                    Running
+                                  </span>
+                                </div>
+
+                                <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+                                  <div>
+                                    <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Started</div>
+                                    <div className="mt-1 font-medium">{formatDateTime(execution.startedAt)}</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Elapsed</div>
+                                    <div className="mt-1 font-medium">{formatRunningSince(execution.startedAt, nowMs)}</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Current Step</div>
+                                    <div className="mt-1 font-medium">
+                                      {execution.currentAction?.message || execution.lastEvent?.message || "Waiting for next action"}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {countdownMs !== null ? (
+                                  <div className="mt-3 grid gap-3 rounded-xl border border-cyan-200/70 bg-white/70 px-3 py-3 text-sm dark:border-cyan-500/20 dark:bg-slate-950/20 sm:grid-cols-2">
+                                    <div>
+                                      <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Timer Countdown</div>
+                                      <div className="mt-1 font-semibold text-cyan-700 dark:text-cyan-200">{formatCountdown(countdownMs)}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">When Timer Ends</div>
+                                      <div className="mt-1 font-medium">{nextActionMessage}</div>
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {execution.lastEvent?.message ? (
+                                  <div className="mt-3 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
+                                    Latest update: {execution.lastEvent.message}
+                                  </div>
+                                ) : null}
+
+                                <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                                  <span>
+                                    Progress: {execution.successfulActions || 0}/{execution.totalActions || 0} steps finished
+                                  </span>
+                                  <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(execution)}>
+                                    View Logs
+                                  </Button>
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
+                      No workflow-backed automations are running right now.
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <div className="text-muted-foreground">Steps</div>
-                  <div className="font-medium">{workflow.actions?.length || 0}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">Last Run</div>
-                  <div className="font-medium">{formatLastRun(workflow.lastRun)}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">Runs</div>
-                  <div className="font-medium">{workflow.executionCount || 0}</div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold text-foreground">Live Activity</div>
+                    <Badge variant="outline">{activityEvents.length}</Badge>
+                  </div>
+                  <ScrollArea className="h-[360px] rounded-2xl border border-border/70 bg-background/70">
+                    <div className="space-y-3 p-3">
+                      {activityEvents.length > 0 ? activityEvents.map((event) => (
+                        <div
+                          key={event.id}
+                          className={cn("rounded-xl border px-3 py-3 text-sm", activitySeverityClassName(event.severity))}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="font-medium">{activitySummary(event)}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(event.createdAt)}</div>
+                            </div>
+                            <Badge variant="outline" className="text-[10px] uppercase tracking-[0.16em]">
+                              {event.severity}
+                            </Badge>
+                          </div>
+                          {typeof event.payload?.message === "string" && event.payload.message.trim() ? (
+                            <div className="mt-2 text-xs text-muted-foreground">{event.payload.message}</div>
+                          ) : null}
+                        </div>
+                      )) : (
+                        <div className="rounded-xl border border-dashed border-border/70 px-4 py-8 text-center text-sm text-muted-foreground">
+                          Automation activity will appear here as workflows trigger and run.
+                        </div>
+                      )}
+                    </div>
+                  </ScrollArea>
                 </div>
               </div>
 
-              {(workflow.voiceAliases || []).length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {(workflow.voiceAliases || []).map((alias) => (
-                    <Badge key={alias} variant="outline">
-                      {alias}
-                    </Badge>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-muted-foreground">
-                  No voice alias set yet.
-                </div>
-              )}
-
-              {workflow.lastError?.message ? (
-                <div className="rounded-md border border-red-300 bg-red-50 dark:bg-red-900/20 p-2 text-xs text-red-700 dark:text-red-300">
-                  Last error: {workflow.lastError.message}
-                </div>
-              ) : null}
-
-              {isAdmin ? (
-                <div className="flex items-center justify-between gap-2 rounded-xl border border-border/70 bg-muted/15 px-3 py-2">
-                  <div className="text-xs text-muted-foreground">
-                    Expose this workflow to Alexa when it can behave like a safe scene trigger.
+              <div className="space-y-3">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">Recent Executions</div>
+                    <div className="text-xs text-muted-foreground">
+                      Filter persisted runtime records by time period and how many logs appear per page.
+                    </div>
                   </div>
-                  <AlexaExposureControl
-                    entityType="workflow"
-                    entityId={workflow._id}
-                    entityName={workflow.name}
-                    exposure={getExposure("workflow", workflow._id)}
-                    loading={loadingAlexaExposure}
-                    defaultAliases={workflow.voiceAliases || []}
-                    onSave={(payload) => handleSaveAlexaExposure(workflow, payload)}
-                    compact
-                  />
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">How Many Logs</div>
+                      <Select
+                        value={String(runtimeHistoryLimit)}
+                        onValueChange={(value) => {
+                          setRuntimeHistoryLimit(Number(value) || 50);
+                          setRuntimeHistoryPage(1);
+                        }}
+                      >
+                        <SelectTrigger className="w-[150px] bg-background/80">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WORKFLOW_LOG_LIMIT_OPTIONS.map((option) => (
+                            <SelectItem key={option} value={String(option)}>
+                              {option} logs
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time Period</div>
+                      <Select
+                        value={String(runtimeHistoryHours)}
+                        onValueChange={(value) => {
+                          setRuntimeHistoryHours(Number(value) || 24);
+                          setRuntimeHistoryPage(1);
+                        }}
+                      >
+                        <SelectTrigger className="w-[170px] bg-background/80">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WORKFLOW_LOG_WINDOW_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={String(option.value)}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
                 </div>
-              ) : null}
-
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => void handleRunWorkflow(workflow)}>
-                  <Play className="mr-2 h-4 w-4" />
-                  Run Now
-                </Button>
-                {isAdmin ? (
-                  <>
-                    <Button size="sm" variant="outline" onClick={() => openEditDialog(workflow)}>
-                      <History className="mr-2 h-4 w-4" />
-                      Edit Flow
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => openReviseDialog(workflow)}>
-                      <Wand2 className="mr-2 h-4 w-4" />
-                      AI Revise
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => void handleCloneWorkflow(workflow)}>
-                      <Copy className="mr-2 h-4 w-4" />
-                      Clone
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => handleExportWorkflow(workflow)}>
-                      <Download className="mr-2 h-4 w-4" />
-                      Export
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => void handleDeleteWorkflow(workflow)}>
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete
-                    </Button>
-                  </>
-                ) : null}
+                <div className="rounded-2xl border border-border/70 bg-background/70">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Workflow</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Trigger</TableHead>
+                        <TableHead>Started</TableHead>
+                        <TableHead>Duration</TableHead>
+                        <TableHead>Result</TableHead>
+                        <TableHead className="text-right">Logs</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {runtimeHistory.length > 0 ? runtimeHistory.map((entry) => (
+                        <TableRow key={entry._id}>
+                          <TableCell>
+                            <div className="font-medium">{resolveExecutionName(entry)}</div>
+                            <div className="text-xs text-muted-foreground">{entry.automationName}</div>
+                          </TableCell>
+                          <TableCell>
+                            <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold", runtimeStatusClassName(entry.status))}>
+                              {runtimeStatusLabel(entry.status)}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {entry.triggerType.replace(/_/g, " ")}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {formatDateTime(entry.startedAt)}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {entry.status === "running" ? formatRunningSince(entry.startedAt, nowMs) : formatDuration(entry.durationMs)}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {entry.lastEvent?.message || (entry.failedActions > 0
+                              ? `${entry.failedActions} step(s) failed`
+                              : `${entry.successfulActions || 0} step(s) succeeded`)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(entry)}>
+                              View Logs
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      )) : (
+                        <TableRow>
+                          <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
+                            No workflow execution history was recorded in the selected time period.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                  <div className="flex flex-col gap-3 border-t border-border/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-xs text-muted-foreground">{runtimePageSummary}</div>
+                    <div className="flex items-center gap-2 self-end sm:self-auto">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setRuntimeHistoryPage((current) => Math.max(1, current - 1))}
+                        disabled={!runtimePagination?.hasPreviousPage || runtimeRefreshing}
+                      >
+                        Previous
+                      </Button>
+                      <div className="min-w-[96px] text-center text-xs text-muted-foreground">
+                        Page {runtimePagination?.page ?? 1} of {runtimePagination?.totalPages ?? 1}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setRuntimeHistoryPage((current) => current + 1)}
+                        disabled={!runtimePagination?.hasNextPage || runtimeRefreshing}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
-        ))}
-      </div>
-
-      {workflows.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <div className="mb-3 text-lg font-semibold">No workflows yet</div>
-            <p className="mb-4 text-sm text-muted-foreground">
-              {isAdmin
-                ? "Start by generating one with AI text or creating one manually in the visual builder."
-                : "No workflows are available to run yet."}
-            </p>
-            {isAdmin ? (
-              <Button onClick={openCreateDialog}>
-                <Plus className="mr-2 h-4 w-4" />
-                Create First Workflow
-              </Button>
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={reviseDialogOpen} onOpenChange={(open) => {
         setReviseDialogOpen(open);

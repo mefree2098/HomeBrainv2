@@ -100,6 +100,18 @@ private let workflowTemplateDefinitions: [WorkflowTemplateDefinition] = [
     }
 ]
 
+private enum WorkflowStudioTab: String, CaseIterable, Identifiable {
+    case overview
+    case workflows
+    case logs
+
+    var id: String { rawValue }
+
+    var title: String {
+        rawValue.capitalized
+    }
+}
+
 struct WorkflowsView: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -135,6 +147,7 @@ struct WorkflowsView: View {
     @State private var runtimeLogLimit = 50
     @State private var runtimeWindowHours = 24
     @State private var runtimeHistoryPage = 1
+    @State private var selectedTab: WorkflowStudioTab = .overview
 
     @State private var createName = ""
     @State private var createDescription = ""
@@ -212,18 +225,16 @@ struct WorkflowsView: View {
                         }
                     }
 
-                    metricsSection
-
-                    if isAdmin {
-                        templatesSection
-                        createFromTextSection
-                    } else {
-                        adminCapabilitiesNote
+                    Picker("Workflow Section", selection: $selectedTab) {
+                        ForEach(WorkflowStudioTab.allCases) { tab in
+                            Text(tab.title).tag(tab)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("Workflow studio sections")
 
-                    commandSection
-                    runtimeSection
-                    workflowsSection
+                    selectedTabContent
                 }
             }
             .padding()
@@ -293,6 +304,29 @@ struct WorkflowsView: View {
         }
         .onChange(of: runtimeHistoryPage) { _, _ in
             Task { await refreshWorkflowScreen(silent: false) }
+        }
+    }
+
+    @ViewBuilder
+    private var selectedTabContent: some View {
+        switch selectedTab {
+        case .overview:
+            metricsSection
+
+            if isAdmin {
+                templatesSection
+                createFromTextSection
+            } else {
+                adminCapabilitiesNote
+            }
+
+            commandSection
+
+        case .workflows:
+            workflowsSection
+
+        case .logs:
+            runtimeSection
         }
     }
 
@@ -1346,6 +1380,7 @@ struct WorkflowsView: View {
             let created = WorkflowItem.from(JSON.object(object["workflow"]))
             workflows.insert(created, at: 0)
             workflows.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            selectedTab = .workflows
             await refreshWorkflowScreen(silent: true)
         } catch {
             errorMessage = error.localizedDescription
@@ -1370,8 +1405,10 @@ struct WorkflowsView: View {
                 let createdWorkflows = JSON.array(object["workflows"]).map(WorkflowItem.from)
                 if !createdWorkflows.isEmpty {
                     workflows.insert(contentsOf: createdWorkflows, at: 0)
+                    selectedTab = .workflows
                 } else if object["workflow"] != nil {
                     workflows.insert(WorkflowItem.from(JSON.object(object["workflow"])), at: 0)
+                    selectedTab = .workflows
                 }
             }
 
@@ -1399,6 +1436,7 @@ struct WorkflowsView: View {
                 workflows[index] = updated
             }
 
+            selectedTab = .workflows
             showReviseSheet = false
             self.workflowToRevise = nil
             revisePrompt = ""
@@ -1473,6 +1511,7 @@ struct WorkflowsView: View {
             ]
 
             _ = try await session.apiClient.post("/api/workflows", body: payload)
+            selectedTab = .workflows
             showCreateSheet = false
             resetWorkflowEditor()
             await refreshWorkflowScreen(silent: false)
@@ -1491,6 +1530,7 @@ struct WorkflowsView: View {
             ]
 
             _ = try await session.apiClient.put("/api/workflows/\(workflow.id)", body: payload)
+            selectedTab = .workflows
             showCreateSheet = false
             resetWorkflowEditor()
             await refreshWorkflowScreen(silent: false)
