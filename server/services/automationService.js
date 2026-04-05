@@ -9,7 +9,11 @@ const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
 const deviceService = require('./deviceService');
 const mongoose = require('mongoose');
 const Settings = require('../models/Settings');
-const { executeActionSequence, getActionTargetCandidate } = require('./workflowExecutionService');
+const {
+  executeActionSequence,
+  getActionTargetCandidate,
+  hydrateWorkflowRuntimeState
+} = require('./workflowExecutionService');
 const automationRuntimeService = require('./automationRuntimeService');
 
 const MAX_LLM_RETRIES = 3;
@@ -22,6 +26,7 @@ const VALID_SECURITY_ALARM_STATES = new Set(['disarmed', 'armedStay', 'armedAway
 const VALID_SOLAR_SCHEDULE_EVENTS = new Set(['sunrise', 'sunset']);
 const DYNAMIC_TARGET_CONTEXT_KEYS = new Set(['triggeringDeviceId']);
 const DEVICE_GROUP_TARGET_KINDS = new Set(['device_group', 'group']);
+const activeResumeExecutionIds = new Set();
 
 const DEVICE_TYPE_HINTS = {
   light: ['light', 'lights', 'lamp', 'bulb'],
@@ -377,6 +382,24 @@ function buildEmptyExecutionSummary() {
     totalActions: 0,
     successfulActions: 0,
     failedActions: 0
+  };
+}
+
+function deriveExecutionStatusFromActionResults(actionResults = []) {
+  const successfulActions = actionResults.filter((entry) => entry?.success === true).length;
+  const failedActions = actionResults.filter((entry) => entry?.success === false).length;
+
+  let status = 'success';
+  if (failedActions > 0 && successfulActions > 0) {
+    status = 'partial_success';
+  } else if (failedActions > 0 && successfulActions === 0) {
+    status = 'failed';
+  }
+
+  return {
+    status,
+    successfulActions,
+    failedActions
   };
 }
 
@@ -2377,52 +2400,71 @@ async function executeAutomation(id, options = {}) {
 
   let history = null;
   let runtimeContext = null;
+  let automation = null;
+  const resumingExistingExecution = Boolean(options.resumeHistory || options.resumeHistoryId);
 
   try {
+    if (resumingExistingExecution) {
+      history = options.resumeHistory || await AutomationHistory.findById(options.resumeHistoryId);
+      if (!history) {
+        throw new Error(`Running automation history for ${id} was not found`);
+      }
+      if (history.status !== 'running') {
+        throw new Error(`Automation history ${history._id} is no longer running`);
+      }
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new Error('Invalid automation ID format');
     }
 
-    const automation = await Automation.findById(id);
+    automation = await Automation.findById(id);
 
     if (!automation) {
       throw new Error(`Automation with ID ${id} not found`);
     }
 
-    if (!automation.enabled) {
+    if (!resumingExistingExecution && !automation.enabled) {
       throw new Error(`Automation "${automation.name}" is currently disabled`);
     }
 
-    const triggerType = options.triggerType || automation.trigger?.type || 'manual';
-    const triggerSource = options.triggerSource || 'manual';
+    const triggerType = options.triggerType || history?.triggerType || automation.trigger?.type || 'manual';
+    const triggerSource = options.triggerSource || history?.triggerSource || 'manual';
     const triggerContext = options.context && typeof options.context === 'object'
       ? { ...options.context }
-      : {};
+      : (history?.resumeState?.context && typeof history.resumeState.context === 'object'
+        ? { ...history.resumeState.context }
+        : (history?.triggerContext && typeof history.triggerContext === 'object'
+          ? { ...history.triggerContext }
+          : {}));
     const workflowId = automation.workflowId?._id?.toString?.()
       || automation.workflowId?.toString?.()
+      || history?.workflowId?._id?.toString?.()
+      || history?.workflowId?.toString?.()
       || null;
-    const correlationId = options.correlationId || crypto.randomUUID();
+    const correlationId = options.correlationId || history?.correlationId || crypto.randomUUID();
 
-    // Create history entry
-    history = new AutomationHistory({
-      automationId: automation._id,
-      automationName: automation.name,
-      workflowId: automation.workflowId || null,
-      workflowName: workflowId ? automation.name : null,
-      triggerType,
-      triggerSource,
-      correlationId,
-      triggerContext,
-      ...(options.voiceCommandId ? { voiceCommandId: options.voiceCommandId } : {}),
-      totalActions: automation.actions.length,
-      environment: {
+    if (!resumingExistingExecution) {
+      history = new AutomationHistory({
+        automationId: automation._id,
+        automationName: automation.name,
+        workflowId: automation.workflowId || null,
+        workflowName: workflowId ? automation.name : null,
         triggerType,
         triggerSource,
-        context: triggerContext
-      },
-      status: 'running'
-    });
-    await history.save();
+        correlationId,
+        triggerContext,
+        ...(options.voiceCommandId ? { voiceCommandId: options.voiceCommandId } : {}),
+        totalActions: automation.actions.length,
+        environment: {
+          triggerType,
+          triggerSource,
+          context: triggerContext
+        },
+        status: 'running'
+      });
+      await history.save();
+    }
 
     runtimeContext = automationRuntimeService.buildExecutionContext({
       automation,
@@ -2433,19 +2475,29 @@ async function executeAutomation(id, options = {}) {
       triggerType,
       triggerSource,
       triggerContext,
-      totalActions: automation.actions.length
+      totalActions: history?.totalActions || automation.actions.length
     });
 
-    await automationRuntimeService.recordTriggerMatched(runtimeContext, {
-      message: `Trigger matched for "${automation.name}"`,
-      triggerContext
-    });
-    await automationRuntimeService.recordExecutionStarted(runtimeContext);
+    if (!resumingExistingExecution) {
+      await automationRuntimeService.recordTriggerMatched(runtimeContext, {
+        message: `Trigger matched for "${automation.name}"`,
+        triggerContext
+      });
+      await automationRuntimeService.recordExecutionStarted(runtimeContext);
+    } else {
+      hydrateWorkflowRuntimeState(history?.resumeState?.workflowRuntimeState || {});
+    }
 
-    const execution = await executeActionSequence(automation.actions, {
+    const pendingActions = resumingExistingExecution
+      && Array.isArray(history?.resumeState?.pendingActions)
+      && history.resumeState.pendingActions.length > 0
+      ? history.resumeState.pendingActions
+      : automation.actions;
+
+    await executeActionSequence(pendingActions, {
       context: triggerContext,
       runtime: {
-        onActionStart: async ({ actionIndex, parentActionIndex, action, nextAction, timer, startedAt }) => {
+        onActionStart: async ({ actionIndex, parentActionIndex, action, nextAction, timer, startedAt, resumeState }) => {
           await automationRuntimeService.recordActionStarted(runtimeContext, {
             actionIndex,
             parentActionIndex,
@@ -2453,10 +2505,11 @@ async function executeAutomation(id, options = {}) {
             target: getActionTargetCandidate(action, ['deviceId', 'sceneId']),
             nextAction,
             timer,
-            startedAt
+            startedAt,
+            resumeState
           });
         },
-        onActionComplete: async ({ actionIndex, parentActionIndex, action, result, startedAt }) => {
+        onActionComplete: async ({ actionIndex, parentActionIndex, action, result, startedAt, resumeState }) => {
           await automationRuntimeService.recordActionCompleted(runtimeContext, {
             actionIndex,
             parentActionIndex,
@@ -2465,10 +2518,12 @@ async function executeAutomation(id, options = {}) {
             durationMs: result?.durationMs ?? null,
             message: result?.message || `Completed ${action?.type || 'action'} action`,
             startedAt,
-            success: true
+            success: true,
+            resumeState,
+            actionResult: result
           });
         },
-        onActionError: async ({ actionIndex, parentActionIndex, action, error, result, startedAt }) => {
+        onActionError: async ({ actionIndex, parentActionIndex, action, error, result, startedAt, resumeState }) => {
           await automationRuntimeService.recordActionCompleted(runtimeContext, {
             actionIndex,
             parentActionIndex,
@@ -2478,22 +2533,30 @@ async function executeAutomation(id, options = {}) {
             message: error?.message || `Failed ${action?.type || 'action'} action`,
             error: error?.message || 'Action failed',
             startedAt,
-            success: false
+            success: false,
+            resumeState,
+            actionResult: result
           });
         }
       }
     });
-    const actionResults = execution.actionResults || [];
-    const finalStatus = execution.status || 'failed';
+
+    const completedHistory = await AutomationHistory.findById(history._id);
+    if (!completedHistory) {
+      throw new Error(`Automation history ${history._id} disappeared before completion`);
+    }
+    const executionSummary = deriveExecutionStatusFromActionResults(
+      Array.isArray(completedHistory.actionResults) ? completedHistory.actionResults : []
+    );
+    const finalStatus = executionSummary.status || 'failed';
     const allSuccess = finalStatus === 'success';
 
-    history.actionResults = actionResults;
-    await history.markCompleted(finalStatus);
+    await completedHistory.markCompleted(finalStatus);
     await automationRuntimeService.recordExecutionCompleted(runtimeContext, {
       status: finalStatus,
-      successfulActions: execution.successfulActions,
-      failedActions: execution.failedActions,
-      durationMs: history.durationMs
+      successfulActions: executionSummary.successfulActions,
+      failedActions: executionSummary.failedActions,
+      durationMs: completedHistory.durationMs
     });
 
     // Update execution tracking
@@ -2502,7 +2565,7 @@ async function executeAutomation(id, options = {}) {
 
     if (!allSuccess) {
       automation.lastError = {
-        message: `${execution.failedActions || actionResults.filter((r) => !r.success).length} actions failed`,
+        message: `${executionSummary.failedActions} actions failed`,
         timestamp: new Date()
       };
     } else {
@@ -2518,7 +2581,7 @@ async function executeAutomation(id, options = {}) {
         workflow.executionCount = (workflow.executionCount || 0) + 1;
         if (!allSuccess) {
           workflow.lastError = {
-            message: automation.lastError?.message || execution.message || 'Workflow execution had errors',
+            message: automation.lastError?.message || completedHistory.error?.message || 'Workflow execution had errors',
             timestamp: new Date()
           };
         } else {
@@ -2534,21 +2597,29 @@ async function executeAutomation(id, options = {}) {
       message: `Automation "${automation.name}" executed ${finalStatus === 'success' ? 'successfully' : 'with issues'}`,
       automation: automation.toObject(),
       executedActions: automation.actions.length,
-      successfulActions: execution.successfulActions,
-      failedActions: execution.failedActions,
-      history: history.toObject()
+      successfulActions: executionSummary.successfulActions,
+      failedActions: executionSummary.failedActions,
+      history: completedHistory.toObject()
     };
   } catch (error) {
-    if (history && runtimeContext && history.status === 'running') {
+    if (history) {
       try {
-        await history.markCompleted('failed', error);
-        await automationRuntimeService.recordExecutionCompleted(runtimeContext, {
-          status: 'failed',
-          successfulActions: 0,
-          failedActions: 1,
-          durationMs: history.durationMs,
-          message: error.message || 'Automation execution failed'
-        });
+        const persistedHistory = await AutomationHistory.findById(history._id);
+        if (persistedHistory && persistedHistory.status === 'running') {
+          await persistedHistory.markCompleted('failed', error);
+          if (runtimeContext) {
+            const failedSummary = deriveExecutionStatusFromActionResults(
+              Array.isArray(persistedHistory.actionResults) ? persistedHistory.actionResults : []
+            );
+            await automationRuntimeService.recordExecutionCompleted(runtimeContext, {
+              status: 'failed',
+              successfulActions: failedSummary.successfulActions,
+              failedActions: Math.max(1, failedSummary.failedActions),
+              durationMs: persistedHistory.durationMs,
+              message: error.message || 'Automation execution failed'
+            });
+          }
+        }
       } catch (loggingError) {
         console.warn(`AutomationService: failed to persist runtime failure for ${id}: ${loggingError.message}`);
       }
@@ -2563,6 +2634,57 @@ async function executeAutomation(id, options = {}) {
     }
     throw new Error(`Failed to execute automation: ${error.message}`);
   }
+}
+
+async function resumeRunningExecutions(options = {}) {
+  const reason = typeof options.reason === 'string' && options.reason.trim()
+    ? options.reason.trim()
+    : 'server_restart';
+  const runningHistories = await AutomationHistory.find({ status: 'running' })
+    .sort({ startedAt: 1 })
+    .select('_id automationId automationName workflowId workflowName correlationId status')
+    .lean();
+
+  const launches = [];
+  let skippedCount = 0;
+
+  runningHistories.forEach((history) => {
+    const historyId = history?._id?.toString?.() || null;
+    const automationId = history?.automationId?.toString?.() || null;
+    if (!historyId || !automationId || activeResumeExecutionIds.has(historyId)) {
+      skippedCount += 1;
+      return;
+    }
+
+    activeResumeExecutionIds.add(historyId);
+    launches.push({
+      historyId,
+      automationId,
+      automationName: history?.automationName || null,
+      workflowId: history?.workflowId?.toString?.() || null,
+      workflowName: history?.workflowName || null,
+      correlationId: history?.correlationId || null
+    });
+
+    void module.exports.executeAutomation(automationId, {
+      resumeHistoryId: historyId,
+      resumeReason: reason
+    })
+      .catch((error) => {
+        console.error(`AutomationService: Failed to resume automation history ${historyId}: ${error.message}`);
+      })
+      .finally(() => {
+        activeResumeExecutionIds.delete(historyId);
+      });
+  });
+
+  return {
+    totalRunning: runningHistories.length,
+    launchedCount: launches.length,
+    skippedCount,
+    reason,
+    executions: launches
+  };
 }
 
 /**
@@ -2695,6 +2817,7 @@ Object.assign(module.exports, {
   reviseAutomationFromText,
   getAutomationStats,
   executeAutomation,
+  resumeRunningExecutions,
   getAutomationHistory,
   getExecutionStats
 });

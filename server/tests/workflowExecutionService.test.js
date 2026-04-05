@@ -828,3 +828,48 @@ test('delay action runtime hook exposes timer countdown and next action metadata
   assert.equal(actionStarts[0].nextAction.actionType, 'notification');
   assert.match(actionStarts[0].nextAction.message, /notification/i);
 });
+
+test('delay action resume state uses the remaining countdown after a restart', async (t) => {
+  const originalSetTimeout = global.setTimeout;
+  const realDateNow = Date.now;
+  const actionStarts = [];
+  const now = new Date('2026-04-05T16:00:00.000Z');
+
+  t.after(() => {
+    global.setTimeout = originalSetTimeout;
+    Date.now = realDateNow;
+  });
+
+  Date.now = () => now.getTime();
+  global.setTimeout = (handler, delay, ...args) => {
+    if (typeof handler === 'function') {
+      handler(...args);
+    }
+    return 0;
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'delay',
+      parameters: {
+        seconds: 120,
+        __resumeDelayState: {
+          durationMs: 120_000,
+          endsAt: new Date(now.getTime() + 30_000).toISOString()
+        }
+      }
+    }
+  ], {
+    context: {},
+    runtime: {
+      onActionStart: async (payload) => {
+        actionStarts.push(payload);
+      }
+    }
+  });
+
+  assert.equal(actionStarts.length, 1);
+  assert.equal(actionStarts[0].timer.durationMs, 30_000);
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].message, 'Delay complete (30s)');
+});

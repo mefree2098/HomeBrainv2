@@ -1444,7 +1444,7 @@ function createApp(options = {}) {
       }
       await requireAlexaAuth(store, req, { expectedHubId: hubId });
 
-      const response = await proxyToHub(store, hubId, 'execute', 'post', req.body?.directive || req.body);
+      const response = await proxyToHub(store, hubId, 'execute', 'post', req.body || {});
       return res.status(200).json(response);
     } catch (error) {
       return res.status(error.status || 500).json({

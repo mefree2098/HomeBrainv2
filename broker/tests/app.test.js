@@ -36,6 +36,7 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   const relayToken = 'relay-secret';
   const linkedAccountsPayloads = [];
   const eventGatewayPayloads = [];
+  const executePayloads = [];
 
   const hubServer = http.createServer(async (req, res) => {
     const chunks = [];
@@ -99,6 +100,20 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
         success: true,
         spokenText: 'Custom skill completed.',
         resultText: 'Custom skill completed.'
+      }));
+      return;
+    }
+
+    if (req.url === '/api/alexa/broker/execute' && req.method === 'POST') {
+      executePayloads.push(body);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        properties: [{
+          namespace: 'Alexa.PowerController',
+          name: 'powerState',
+          value: 'ON'
+        }]
       }));
       return;
     }
@@ -350,6 +365,55 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   });
 
   assert.equal(stateSyncResponse.status, 200);
+
+  const executeResponse = await fetch(`${broker.baseUrl}/api/alexa/directives/execute`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${tokens.access_token}`
+    },
+    body: JSON.stringify({
+      hubId: 'hub-test',
+      directive: {
+        header: {
+          namespace: 'Alexa.PowerController',
+          name: 'TurnOn',
+          payloadVersion: '3',
+          messageId: 'msg-broker-exec'
+        },
+        endpoint: {
+          endpointId: 'hb:hub-test:device:lamp-1',
+          scope: {
+            type: 'BearerToken',
+            token: tokens.access_token
+          }
+        },
+        payload: {}
+      }
+    })
+  });
+
+  assert.equal(executeResponse.status, 200);
+  assert.equal(executePayloads.length, 1);
+  assert.deepEqual(executePayloads[0], {
+    hubId: 'hub-test',
+    directive: {
+      header: {
+        namespace: 'Alexa.PowerController',
+        name: 'TurnOn',
+        payloadVersion: '3',
+        messageId: 'msg-broker-exec'
+      },
+      endpoint: {
+        endpointId: 'hb:hub-test:device:lamp-1',
+        scope: {
+          type: 'BearerToken',
+          token: tokens.access_token
+        }
+      },
+      payload: {}
+    }
+  });
 
   const flushResponse = await fetch(`${broker.baseUrl}/api/alexa/events/flush`, {
     method: 'POST',

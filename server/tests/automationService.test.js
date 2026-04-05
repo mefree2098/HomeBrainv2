@@ -212,3 +212,57 @@ test('getExecutionStats returns empty stats when only workflow-managed runtime a
     failures: []
   });
 });
+
+test('resumeRunningExecutions queues persisted running histories for background resume', async (t) => {
+  const originalFindHistory = AutomationHistory.find;
+  const originalExecuteAutomation = automationService.executeAutomation;
+
+  const launched = [];
+
+  AutomationHistory.find = () => ({
+    sort() {
+      return {
+        select() {
+          return {
+            lean: async () => ([
+              {
+                _id: 'history-1',
+                automationId: STANDALONE_AUTOMATION_ID,
+                automationName: 'Bathroom Fan Auto Off',
+                workflowId: WORKFLOW_ID,
+                workflowName: 'Bathroom Fan Auto Off',
+                correlationId: 'corr-1',
+                status: 'running'
+              }
+            ])
+          };
+        }
+      };
+    }
+  });
+
+  automationService.executeAutomation = async (automationId, options = {}) => {
+    launched.push({ automationId, options });
+    return { success: true };
+  };
+
+  t.after(() => {
+    AutomationHistory.find = originalFindHistory;
+    automationService.executeAutomation = originalExecuteAutomation;
+  });
+
+  const result = await automationService.resumeRunningExecutions({ reason: 'server_startup' });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.totalRunning, 1);
+  assert.equal(result.launchedCount, 1);
+  assert.equal(result.skippedCount, 0);
+  assert.equal(launched.length, 1);
+  assert.deepEqual(launched[0], {
+    automationId: STANDALONE_AUTOMATION_ID,
+    options: {
+      resumeHistoryId: 'history-1',
+      resumeReason: 'server_startup'
+    }
+  });
+});

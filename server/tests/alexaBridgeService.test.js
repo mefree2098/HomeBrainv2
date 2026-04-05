@@ -185,6 +185,25 @@ test('normalizeDirectivePayload extracts Alexa Smart Home directive details', ()
   assert.equal(normalized.correlationToken, 'abc-123');
 });
 
+test('normalizeDirectivePayload accepts a raw Alexa directive object', () => {
+  const normalized = normalizeDirectivePayload({
+    header: {
+      namespace: 'Alexa.PowerController',
+      name: 'TurnOn',
+      correlationToken: 'raw-123'
+    },
+    endpoint: {
+      endpointId: 'hb:hub-1:device:device-9'
+    },
+    payload: {}
+  });
+
+  assert.equal(normalized.namespace, 'Alexa.PowerController');
+  assert.equal(normalized.name, 'TurnOn');
+  assert.equal(normalized.endpointId, 'hb:hub-1:device:device-9');
+  assert.equal(normalized.correlationToken, 'raw-123');
+});
+
 test('alexaColorToHex converts Alexa HSB colors into HomeBrain hex strings', () => {
   assert.equal(alexaColorToHex({
     hue: 0,

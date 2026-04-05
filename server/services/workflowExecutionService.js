@@ -39,6 +39,9 @@ const DEFAULT_WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS = Math.max(
   500,
   Number(process.env.WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS || 1500)
 );
+const RESUME_META_KEY = '__resumeMeta';
+const RESUME_DELAY_KEY = '__resumeDelayState';
+const RESUME_REPEAT_KEY = '__resumeRepeatState';
 
 const conditionStateCache = new Map();
 const isyVariableStore = new Map();
@@ -47,6 +50,13 @@ const workflowStopRequests = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cloneSerializable(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  return JSON.parse(JSON.stringify(value));
 }
 
 function isObjectIdLike(value) {
@@ -459,24 +469,80 @@ function buildActionPreview(action, actionIndex, parentActionIndex = null, optio
   };
 }
 
-function buildNextActionPreview(actions = [], currentIndex = 0, parentActionIndex = null) {
-  if (Array.isArray(actions) && currentIndex + 1 < actions.length) {
-    const nextAction = actions[currentIndex + 1];
-    return buildActionPreview(nextAction, currentIndex + 1, parentActionIndex);
+function getActionExecutionMeta(action, fallbackActionIndex = null, fallbackParentActionIndex = null) {
+  const rawMeta = action && typeof action === 'object' && action[RESUME_META_KEY] && typeof action[RESUME_META_KEY] === 'object'
+    ? action[RESUME_META_KEY]
+    : null;
+
+  return {
+    actionIndex: Number.isInteger(rawMeta?.actionIndex) ? rawMeta.actionIndex : fallbackActionIndex,
+    parentActionIndex: Number.isInteger(rawMeta?.parentActionIndex)
+      ? rawMeta.parentActionIndex
+      : (Number.isInteger(fallbackParentActionIndex) ? fallbackParentActionIndex : null)
+  };
+}
+
+function cloneActionForResume(action, defaults = {}) {
+  const cloned = cloneSerializable(action);
+  if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) {
+    return cloned;
   }
 
-  if (Number.isInteger(parentActionIndex)) {
-    return {
-      actionIndex: parentActionIndex,
-      parentActionIndex: null,
-      actionType: 'parent_sequence',
-      target: null,
-      message: 'Return to parent workflow steps'
-    };
+  const existingMeta = cloned[RESUME_META_KEY] && typeof cloned[RESUME_META_KEY] === 'object'
+    ? cloned[RESUME_META_KEY]
+    : {};
+
+  cloned[RESUME_META_KEY] = {
+    actionIndex: Number.isInteger(existingMeta.actionIndex) ? existingMeta.actionIndex : defaults.actionIndex,
+    parentActionIndex: Number.isInteger(existingMeta.parentActionIndex)
+      ? existingMeta.parentActionIndex
+      : (Number.isInteger(defaults.parentActionIndex) ? defaults.parentActionIndex : null)
+  };
+
+  return cloned;
+}
+
+function buildResumeActionList(actions = [], startIndex = 0, afterActions = [], parentActionIndex = null, options = {}) {
+  const pendingActions = [];
+  const safeStartIndex = Math.max(0, Number(startIndex) || 0);
+
+  for (let index = safeStartIndex; index < actions.length; index += 1) {
+    const clonedAction = cloneActionForResume(actions[index], {
+      actionIndex: index,
+      parentActionIndex
+    });
+
+    if (index === safeStartIndex && typeof options.decorateCurrentAction === 'function') {
+      options.decorateCurrentAction(clonedAction);
+    }
+
+    pendingActions.push(clonedAction);
+  }
+
+  if (Array.isArray(afterActions) && afterActions.length > 0) {
+    afterActions.forEach((action) => {
+      const clonedAction = cloneActionForResume(action);
+      if (clonedAction) {
+        pendingActions.push(clonedAction);
+      }
+    });
+  }
+
+  return pendingActions;
+}
+
+function buildActionPreviewFromPendingAction(action) {
+  const meta = getActionExecutionMeta(action, null, null);
+  return buildActionPreview(action, meta.actionIndex, meta.parentActionIndex);
+}
+
+function buildNextActionPreviewFromPendingActions(pendingActions = []) {
+  if (Array.isArray(pendingActions) && pendingActions.length > 1) {
+    return buildActionPreviewFromPendingAction(pendingActions[1]);
   }
 
   return {
-    actionIndex: currentIndex + 1,
+    actionIndex: null,
     parentActionIndex: null,
     actionType: 'execution_complete',
     target: null,
@@ -484,16 +550,107 @@ function buildNextActionPreview(actions = [], currentIndex = 0, parentActionInde
   };
 }
 
-function buildDelayTimer(resolvedDelaySeconds, startedAt) {
-  const durationMs = Math.round(Math.max(0, Number(resolvedDelaySeconds) || 0) * 1000);
+function resolveResumeDelayWaitMs(action) {
+  const resumeState = action?.parameters && typeof action.parameters === 'object'
+    ? action.parameters[RESUME_DELAY_KEY]
+    : null;
+
+  if (!resumeState || typeof resumeState !== 'object') {
+    return null;
+  }
+
+  if (resumeState.endsAt) {
+    const endsAt = new Date(resumeState.endsAt);
+    if (Number.isFinite(endsAt.getTime())) {
+      return Math.max(0, endsAt.getTime() - Date.now());
+    }
+  }
+
+  const remainingMs = Number(
+    Object.prototype.hasOwnProperty.call(resumeState, 'remainingMs')
+      ? resumeState.remainingMs
+      : resumeState.durationMs
+  );
+  if (Number.isFinite(remainingMs)) {
+    return Math.max(0, Math.round(remainingMs));
+  }
+
+  return null;
+}
+
+function resolveDelayWaitMs(action, resolvedDelaySeconds = null) {
+  const resumedWaitMs = resolveResumeDelayWaitMs(action);
+  if (resumedWaitMs !== null) {
+    return resumedWaitMs;
+  }
+
+  const seconds = Number.isFinite(resolvedDelaySeconds)
+    ? resolvedDelaySeconds
+    : resolveDelaySeconds(action);
+  return Math.round(Math.max(0, Number(seconds) || 0) * 1000);
+}
+
+function decorateDelayActionForResume(action, timer = null) {
+  if (!action || typeof action !== 'object' || Array.isArray(action) || action.type !== 'delay' || !timer?.endsAt) {
+    return;
+  }
+
+  action.parameters = action.parameters && typeof action.parameters === 'object'
+    ? { ...action.parameters }
+    : {};
+  action.parameters[RESUME_DELAY_KEY] = {
+    durationMs: Number(timer.durationMs) || 0,
+    endsAt: timer.endsAt instanceof Date ? timer.endsAt.toISOString() : timer.endsAt
+  };
+}
+
+function buildResumeStateSnapshot(pendingActions = [], context = {}) {
+  return {
+    pendingActions: cloneSerializable(Array.isArray(pendingActions) ? pendingActions : []),
+    context: cloneSerializable(context && typeof context === 'object' ? context : {}),
+    workflowRuntimeState: exportWorkflowRuntimeState(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function buildRepeatContinuationAction(action, state = {}, meta = {}) {
+  const continuation = cloneActionForResume(action, meta);
+  if (!continuation || typeof continuation !== 'object' || Array.isArray(continuation)) {
+    return continuation;
+  }
+
+  continuation.parameters = continuation.parameters && typeof continuation.parameters === 'object'
+    ? { ...continuation.parameters }
+    : {};
+  continuation.parameters[RESUME_REPEAT_KEY] = cloneSerializable(state || {});
+
+  return continuation;
+}
+
+function buildDelayTimer(waitMs, startedAt, explicitEndsAt = null) {
+  const durationMs = Math.round(Math.max(0, Number(waitMs) || 0));
   if (!Number.isFinite(durationMs) || durationMs <= 0 || !(startedAt instanceof Date) || !Number.isFinite(startedAt.getTime())) {
     return null;
   }
 
+  const resolvedEndsAt = explicitEndsAt ? new Date(explicitEndsAt) : null;
   return {
     durationMs,
-    endsAt: new Date(startedAt.getTime() + durationMs)
+    endsAt: resolvedEndsAt instanceof Date && Number.isFinite(resolvedEndsAt.getTime())
+      ? resolvedEndsAt
+      : new Date(startedAt.getTime() + durationMs)
   };
+}
+
+function sanitizeActionParameters(parameters = {}) {
+  if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
+    return {};
+  }
+
+  const sanitized = { ...parameters };
+  delete sanitized[RESUME_DELAY_KEY];
+  delete sanitized[RESUME_REPEAT_KEY];
+  return sanitized;
 }
 
 function normalizeIsyVariableKey(value = '') {
@@ -554,6 +711,69 @@ function writeIsyVariable(variableName, value, options = {}) {
   state.updatedAt = new Date();
 
   return state;
+}
+
+function exportWorkflowRuntimeState() {
+  return {
+    conditionStates: [...conditionStateCache.entries()].map(([key, value]) => ({
+      key,
+      value: Boolean(value)
+    })),
+    isyVariables: [...isyVariableStore.values()].map((entry) => ({
+      key: entry.key,
+      type: entry.type || 'integer',
+      value: Number.isFinite(Number(entry.value)) ? Number(entry.value) : 0,
+      initValue: Number.isFinite(Number(entry.initValue)) ? Number(entry.initValue) : 0
+    })),
+    isyPrograms: [...isyProgramStateCache.entries()].map(([key, value]) => ({
+      key,
+      state: Boolean(value?.state),
+      enabled: value?.enabled === undefined ? null : Boolean(value.enabled),
+      runAtStartup: value?.runAtStartup === undefined ? null : Boolean(value.runAtStartup)
+    }))
+  };
+}
+
+function hydrateWorkflowRuntimeState(snapshot = {}) {
+  const conditionStates = Array.isArray(snapshot?.conditionStates) ? snapshot.conditionStates : [];
+  conditionStates.forEach((entry) => {
+    const key = sanitizeString(entry?.key);
+    if (!key) {
+      return;
+    }
+    conditionStateCache.set(key, Boolean(entry?.value));
+  });
+
+  const isyVariables = Array.isArray(snapshot?.isyVariables) ? snapshot.isyVariables : [];
+  isyVariables.forEach((entry) => {
+    const key = sanitizeString(entry?.key);
+    if (!key) {
+      return;
+    }
+
+    isyVariableStore.set(key, {
+      key,
+      type: sanitizeString(entry?.type) || 'integer',
+      value: Number.isFinite(Number(entry?.value)) ? Math.trunc(Number(entry.value)) : 0,
+      initValue: Number.isFinite(Number(entry?.initValue)) ? Math.trunc(Number(entry.initValue)) : 0,
+      updatedAt: new Date()
+    });
+  });
+
+  const isyPrograms = Array.isArray(snapshot?.isyPrograms) ? snapshot.isyPrograms : [];
+  isyPrograms.forEach((entry) => {
+    const key = sanitizeString(entry?.key);
+    if (!key) {
+      return;
+    }
+
+    isyProgramStateCache.set(key, {
+      state: Boolean(entry?.state),
+      enabled: entry?.enabled === null || entry?.enabled === undefined ? undefined : Boolean(entry.enabled),
+      runAtStartup: entry?.runAtStartup === null || entry?.runAtStartup === undefined ? undefined : Boolean(entry.runAtStartup),
+      updatedAt: new Date()
+    });
+  });
 }
 
 function resolveWorkflowStopRequest(workflowId) {
@@ -1272,16 +1492,17 @@ async function executeIsyNetworkResource(action) {
 }
 
 async function executeDelay(action, context = {}, options = {}) {
-  const seconds = Number.isFinite(options.resolvedDelaySeconds)
-    ? options.resolvedDelaySeconds
-    : resolveDelaySeconds(action);
-  if (seconds > 0) {
-    await sleepWithStopCheck(seconds * 1000, context);
+  const waitMs = resolveDelayWaitMs(action, options.resolvedDelaySeconds);
+  if (waitMs > 0) {
+    await sleepWithStopCheck(waitMs, context);
   }
+  const secondsLabel = waitMs % 1000 === 0
+    ? waitMs / 1000
+    : Number((waitMs / 1000).toFixed(3));
 
   return {
     target: action?.target || null,
-    message: `Delay complete (${seconds}s)`
+    message: `Delay complete (${secondsLabel}s)`
   };
 }
 
@@ -1547,6 +1768,12 @@ async function executeRepeat(action, context = {}, options = {}) {
   const parameters = action?.parameters || {};
   const mode = String(parameters.mode || 'for').toLowerCase();
   const rawActions = Array.isArray(parameters.actions) ? parameters.actions : [];
+  const resumeState = parameters[RESUME_REPEAT_KEY] && typeof parameters[RESUME_REPEAT_KEY] === 'object'
+    ? parameters[RESUME_REPEAT_KEY]
+    : null;
+  const repeatActionIndex = Number.isInteger(options.actionIndex) ? options.actionIndex : null;
+  const repeatParentActionIndex = Number.isInteger(options.parentActionIndex) ? options.parentActionIndex : null;
+  const parentAfterActions = Array.isArray(options.afterActions) ? options.afterActions : [];
   if (rawActions.length === 0) {
     return {
       target: null,
@@ -1565,20 +1792,32 @@ async function executeRepeat(action, context = {}, options = {}) {
   const random = parameters.random === true;
 
   if (mode === 'for') {
-    let iterations = Math.max(0, Math.trunc(Number(parameters.count ?? parameters.times ?? 0)));
-    if (random) {
+    let iterations = resumeState?.mode === 'for'
+      ? Math.max(0, Math.trunc(Number(resumeState.remainingIterations || 0)))
+      : Math.max(0, Math.trunc(Number(parameters.count ?? parameters.times ?? 0)));
+    if (!resumeState && random) {
       iterations = resolveRandomInteger(0, iterations);
     }
 
     for (let iteration = 0; iteration < iterations; iteration += 1) {
       ensureWorkflowNotStopped(nestedContext);
+      const continuationActions = iteration + 1 < iterations
+        ? [buildRepeatContinuationAction(action, {
+            mode: 'for',
+            remainingIterations: iterations - (iteration + 1)
+          }, {
+            actionIndex: repeatActionIndex,
+            parentActionIndex: repeatParentActionIndex
+          })]
+        : [];
       // eslint-disable-next-line no-await-in-loop
       const nested = await executeActionSequence(rawActions, {
         context: nestedContext,
         depth: Number(options.depth || 0) + 1,
         workflowControlDepth: Number(options.workflowControlDepth || 0),
         runtime: options.runtime,
-        parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex
+        parentActionIndex: repeatActionIndex,
+        afterActions: [...continuationActions, ...parentAfterActions]
       });
       nested.actionResults.forEach((result) => {
         nestedResults.push({
@@ -1596,24 +1835,40 @@ async function executeRepeat(action, context = {}, options = {}) {
   }
 
   if (mode === 'every') {
-    const requested = Number(parameters.intervalSeconds ?? parameters.seconds ?? 0);
+    const requested = resumeState?.mode === 'every'
+      ? Number(resumeState.intervalSeconds ?? 0)
+      : Number(parameters.intervalSeconds ?? parameters.seconds ?? 0);
     let intervalSeconds = Number.isFinite(requested)
       ? Math.max(0, Math.min(MAX_DELAY_SECONDS, Math.round(requested)))
       : 0;
-    if (random && intervalSeconds > 0) {
+    if (!resumeState && random && intervalSeconds > 0) {
       intervalSeconds = resolveRandomInteger(0, intervalSeconds);
     }
+    const totalIterations = resumeState?.mode === 'every'
+      ? Math.max(1, Math.trunc(Number(resumeState.remainingIterations || 1)))
+      : maxIterations;
 
     let iteration = 0;
-    while (iteration < maxIterations) {
+    while (iteration < totalIterations) {
       ensureWorkflowNotStopped(nestedContext);
+      const continuationActions = iteration + 1 < totalIterations
+        ? [buildRepeatContinuationAction(action, {
+            mode: 'every',
+            remainingIterations: totalIterations - (iteration + 1),
+            intervalSeconds
+          }, {
+            actionIndex: repeatActionIndex,
+            parentActionIndex: repeatParentActionIndex
+          })]
+        : [];
       // eslint-disable-next-line no-await-in-loop
       const nested = await executeActionSequence(rawActions, {
         context: nestedContext,
         depth: Number(options.depth || 0) + 1,
         workflowControlDepth: Number(options.workflowControlDepth || 0),
         runtime: options.runtime,
-        parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex
+        parentActionIndex: repeatActionIndex,
+        afterActions: [...continuationActions, ...parentAfterActions]
       });
       nested.actionResults.forEach((result) => {
         nestedResults.push({
@@ -1623,7 +1878,7 @@ async function executeRepeat(action, context = {}, options = {}) {
       });
 
       iteration += 1;
-      if (iteration >= maxIterations) {
+      if (iteration >= totalIterations) {
         break;
       }
 
@@ -1745,7 +2000,8 @@ async function executeWorkflowControl(action, context = {}, options = {}) {
       depth: Number(options.depth || 0) + 1,
       workflowControlDepth: nextControlDepth,
       runtime: options.runtime,
-      parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex
+      parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex,
+      afterActions: Array.isArray(options.afterActions) ? options.afterActions : []
     });
 
     const branchState = !(operation === 'run_else' || operation === 'else');
@@ -1769,7 +2025,8 @@ async function executeWorkflowControl(action, context = {}, options = {}) {
       depth: Number(options.depth || 0) + 1,
       workflowControlDepth: nextControlDepth,
       runtime: options.runtime,
-      parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex
+      parentActionIndex: Number.isInteger(options.actionIndex) ? options.actionIndex : options.parentActionIndex,
+      afterActions: Array.isArray(options.afterActions) ? options.afterActions : []
     });
 
     return {
@@ -1873,6 +2130,7 @@ async function executeActionSequence(actions = [], options = {}) {
   const parentActionIndex = Number.isInteger(options.parentActionIndex)
     ? options.parentActionIndex
     : null;
+  const afterActions = Array.isArray(options.afterActions) ? options.afterActions : [];
   const results = [];
   let halt = false;
 
@@ -1882,21 +2140,37 @@ async function executeActionSequence(actions = [], options = {}) {
     }
 
     const action = actions[index];
+    const actionMeta = getActionExecutionMeta(action, index, parentActionIndex);
+    const effectiveActionIndex = Number.isInteger(actionMeta.actionIndex) ? actionMeta.actionIndex : index;
+    const effectiveParentActionIndex = Number.isInteger(actionMeta.parentActionIndex) ? actionMeta.parentActionIndex : null;
     const startedAt = Date.now();
     const startedAtDate = new Date(startedAt);
     const resolvedDelaySeconds = action?.type === 'delay'
       ? resolveDelaySeconds(action)
       : null;
-    const nextAction = buildNextActionPreview(actions, index, parentActionIndex);
-    const timer = action?.type === 'delay'
-      ? buildDelayTimer(resolvedDelaySeconds, startedAtDate)
+    const resolvedDelayWaitMs = action?.type === 'delay'
+      ? resolveDelayWaitMs(action, resolvedDelaySeconds)
       : null;
+    const timer = action?.type === 'delay'
+      ? buildDelayTimer(
+          resolvedDelayWaitMs,
+          startedAtDate,
+          action?.parameters?.[RESUME_DELAY_KEY]?.endsAt || null
+        )
+      : null;
+    const afterCurrentActions = buildResumeActionList(actions, index + 1, afterActions, parentActionIndex);
+    const pendingActionsBefore = buildResumeActionList(actions, index, afterActions, parentActionIndex, {
+      decorateCurrentAction: (currentAction) => {
+        decorateDelayActionForResume(currentAction, timer);
+      }
+    });
+    const nextAction = buildNextActionPreviewFromPendingActions(pendingActionsBefore);
 
     try {
       ensureWorkflowNotStopped(context);
       await invokeRuntimeHook(runtime, 'onActionStart', {
-        actionIndex: index,
-        parentActionIndex,
+        actionIndex: effectiveActionIndex,
+        parentActionIndex: effectiveParentActionIndex,
         actionType: action?.type || 'unknown',
         action,
         target: getActionTargetCandidate(action, ['deviceId', 'sceneId']),
@@ -1905,52 +2179,76 @@ async function executeActionSequence(actions = [], options = {}) {
         workflowControlDepth,
         startedAt: startedAtDate,
         nextAction,
-        timer
+        timer,
+        resumeState: buildResumeStateSnapshot(pendingActionsBefore, context)
       });
 
       const details = await executeAction(action, context, {
         depth,
         workflowControlDepth,
         runtime,
-        actionIndex: index,
-        parentActionIndex,
-        resolvedDelaySeconds
+        actionIndex: effectiveActionIndex,
+        parentActionIndex: effectiveParentActionIndex,
+        resolvedDelaySeconds,
+        afterActions: afterCurrentActions
       });
       const conditionMet = details?.conditionMet;
 
       const resultEntry = {
-        actionIndex: index,
-        parentActionIndex,
+        actionIndex: effectiveActionIndex,
+        parentActionIndex: effectiveParentActionIndex,
         actionType: action?.type || 'unknown',
         target: details?.target ?? action?.target ?? null,
-        parameters: action?.parameters || {},
+        parameters: sanitizeActionParameters(action?.parameters || {}),
         success: true,
         executedAt: new Date(),
         durationMs: Date.now() - startedAt,
         message: details?.message || 'Action executed',
+        ...(typeof details?.conditionMet === 'boolean'
+          ? { conditionMet: details.conditionMet }
+          : {}),
+        ...(typeof details?.conditionOutcome === 'string'
+          ? { conditionOutcome: details.conditionOutcome }
+          : {}),
         ...(details?.details && typeof details.details === 'object'
           ? { details: details.details }
           : {})
       };
 
+      let nextPendingActions = afterCurrentActions;
+      if (action?.type === 'condition') {
+        const conditionOutcome = details?.conditionOutcome;
+        if (conditionOutcome === 'unchanged') {
+          nextPendingActions = [];
+        } else if (conditionMet === false) {
+          const onFalseActions = Array.isArray(action?.parameters?.onFalseActions)
+            ? action.parameters.onFalseActions
+            : [];
+          nextPendingActions = onFalseActions.length > 0
+            ? buildResumeActionList(onFalseActions, 0, [], effectiveActionIndex)
+            : [];
+        }
+      }
+
       results.push(resultEntry);
       await invokeRuntimeHook(runtime, 'onActionComplete', {
-        actionIndex: index,
-        parentActionIndex,
+        actionIndex: effectiveActionIndex,
+        parentActionIndex: effectiveParentActionIndex,
         action,
         result: resultEntry,
         details,
         context,
         depth,
         workflowControlDepth,
-        startedAt: startedAtDate
+        startedAt: startedAtDate,
+        resumeState: buildResumeStateSnapshot(nextPendingActions, context)
       });
 
       if (Array.isArray(details?.nestedActionResults) && details.nestedActionResults.length > 0) {
         details.nestedActionResults.forEach((nestedResult) => {
           results.push({
             ...nestedResult,
-            parentActionIndex: index
+            parentActionIndex: effectiveActionIndex
           });
         });
       }
@@ -1973,12 +2271,13 @@ async function executeActionSequence(actions = [], options = {}) {
               depth: depth + 1,
               workflowControlDepth,
               runtime,
-              parentActionIndex: index
+              parentActionIndex: effectiveActionIndex,
+              afterActions: []
             });
             nested.actionResults.forEach((nestedResult) => {
               results.push({
                 ...nestedResult,
-                parentActionIndex: index
+                parentActionIndex: effectiveActionIndex
               });
             });
           }
@@ -1986,12 +2285,13 @@ async function executeActionSequence(actions = [], options = {}) {
         }
       }
     } catch (error) {
+      const stopped = /was stopped$/i.test(String(error?.message || ''));
       const resultEntry = {
-        actionIndex: index,
-        parentActionIndex,
+        actionIndex: effectiveActionIndex,
+        parentActionIndex: effectiveParentActionIndex,
         actionType: action?.type || 'unknown',
         target: action?.target ?? null,
-        parameters: action?.parameters || {},
+        parameters: sanitizeActionParameters(action?.parameters || {}),
         success: false,
         error: error.message || 'Action failed',
         executedAt: new Date(),
@@ -2003,18 +2303,19 @@ async function executeActionSequence(actions = [], options = {}) {
 
       results.push(resultEntry);
       await invokeRuntimeHook(runtime, 'onActionError', {
-        actionIndex: index,
-        parentActionIndex,
+        actionIndex: effectiveActionIndex,
+        parentActionIndex: effectiveParentActionIndex,
         action,
         result: resultEntry,
         error,
         context,
         depth,
         workflowControlDepth,
-        startedAt: startedAtDate
+        startedAt: startedAtDate,
+        resumeState: buildResumeStateSnapshot(stopped ? [] : afterCurrentActions, context)
       });
 
-      if (/was stopped$/i.test(String(error?.message || ''))) {
+      if (stopped) {
         halt = true;
       }
     }
@@ -2040,5 +2341,7 @@ async function executeActionSequence(actions = [], options = {}) {
 
 module.exports = {
   executeActionSequence,
-  getActionTargetCandidate
+  getActionTargetCandidate,
+  exportWorkflowRuntimeState,
+  hydrateWorkflowRuntimeState
 };

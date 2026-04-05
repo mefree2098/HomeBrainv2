@@ -172,6 +172,10 @@ const automationHistorySchema = new mongoose.Schema({
   environment: {
     type: mongoose.Schema.Types.Mixed, // Capture relevant state at execution time
     default: {}
+  },
+  resumeState: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
   }
 }, {
   timestamps: true,
@@ -192,6 +196,7 @@ automationHistorySchema.methods.markCompleted = function(status, error = null) {
   this.completedAt = new Date();
   this.durationMs = this.completedAt - this.startedAt;
   this.currentAction = null;
+  this.resumeState = null;
 
   if (error) {
     this.error = {

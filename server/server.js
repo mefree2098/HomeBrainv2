@@ -58,8 +58,8 @@ const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
 const axiomIngressSyncService = require("./services/axiomIngressSyncService");
 const { shutdownCodexCliService } = require("./services/codexCliService");
+const automationService = require("./services/automationService");
 const automationSchedulerService = require("./services/automationSchedulerService");
-const automationRuntimeService = require("./services/automationRuntimeService");
 const alexaBridgeService = require("./services/alexaBridgeService");
 const alexaBrokerService = require("./services/alexaBrokerService");
 const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
@@ -403,14 +403,14 @@ async function initializeDiscoveryService() {
 
 void initializeDiscoveryService();
 alexaBridgeService.start();
-automationRuntimeService.reconcileRunningExecutions({ reason: 'server_startup' })
+automationService.resumeRunningExecutions({ reason: 'server_startup' })
   .then((result) => {
-    if (result?.cancelledCount > 0) {
-      console.warn(`Automation runtime reconciliation cancelled ${result.cancelledCount} stale execution(s) on startup`);
+    if (result?.launchedCount > 0) {
+      console.log(`Automation runtime resume launched ${result.launchedCount} persisted execution(s) on startup`);
     }
   })
   .catch((error) => {
-    console.warn(`Automation runtime startup reconciliation failed: ${error.message}`);
+    console.warn(`Automation runtime startup resume failed: ${error.message}`);
   });
 automationSchedulerService.start();
 platformUpdateMonitorService.start();
@@ -507,14 +507,7 @@ async function gracefulShutdown(signal) {
     console.error('Error stopping platform update monitor service:', error.message);
   }
 
-  try {
-    const reconciliation = await automationRuntimeService.reconcileRunningExecutions({ reason: 'server_shutdown' });
-    if (reconciliation?.cancelledCount > 0) {
-      console.warn(`Automation runtime reconciliation cancelled ${reconciliation.cancelledCount} execution(s) during shutdown`);
-    }
-  } catch (error) {
-    console.error('Error reconciling automation runtime executions during shutdown:', error.message);
-  }
+  console.log('Preserving running automation executions for resume after restart');
 
   try {
     await whisperService.stopService();

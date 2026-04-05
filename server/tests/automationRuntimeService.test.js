@@ -154,6 +154,79 @@ test('recordActionStarted persists delay timer metadata for running executions',
   assert.equal(published[0].payload.startedAt.toISOString(), startedAt.toISOString());
 });
 
+test('recordActionCompleted persists the resumable checkpoint and action result', async (t) => {
+  const originalUpdateOne = AutomationHistory.updateOne;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const updates = [];
+  const published = [];
+
+  AutomationHistory.updateOne = async (query, update) => {
+    updates.push({ query, update });
+    return { acknowledged: true };
+  };
+  eventStreamService.publishSafe = async (payload) => {
+    published.push(payload);
+    return payload;
+  };
+
+  t.after(() => {
+    AutomationHistory.updateOne = originalUpdateOne;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  await automationRuntimeService.recordActionCompleted({
+    automationId: 'automation-1',
+    automationName: 'Theater Bathroom Fan Auto Off',
+    workflowId: 'workflow-1',
+    workflowName: 'Theater Bathroom Fan Auto Off',
+    historyId: 'history-1',
+    correlationId: 'corr-1',
+    triggerType: 'manual',
+    triggerSource: 'manual'
+  }, {
+    actionIndex: 0,
+    parentActionIndex: null,
+    actionType: 'delay',
+    target: null,
+    durationMs: 30_000,
+    success: true,
+    message: 'Delay complete (30s)',
+    resumeState: {
+      pendingActions: [
+        {
+          type: 'notification',
+          parameters: { message: 'fan is off' }
+        }
+      ],
+      context: { triggeringDeviceId: 'device-1' },
+      workflowRuntimeState: {
+        conditionStates: [{ key: 'flag', value: true }]
+      },
+      updatedAt: '2026-04-05T16:00:30.000Z'
+    },
+    actionResult: {
+      actionIndex: 0,
+      parentActionIndex: null,
+      actionType: 'delay',
+      target: null,
+      parameters: { seconds: 30 },
+      success: true,
+      message: 'Delay complete (30s)',
+      executedAt: '2026-04-05T16:00:30.000Z',
+      durationMs: 30_000
+    }
+  });
+
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].query._id, 'history-1');
+  assert.equal(updates[0].update.$set.resumeState.pendingActions.length, 1);
+  assert.equal(updates[0].update.$set.resumeState.context.triggeringDeviceId, 'device-1');
+  assert.equal(updates[0].update.$push.actionResults.actionType, 'delay');
+  assert.equal(updates[0].update.$push.actionResults.message, 'Delay complete (30s)');
+  assert.equal(published.length, 1);
+  assert.equal(published[0].type, 'automation.action.completed');
+});
+
 test('getWorkflowExecutionHistory returns paginated workflow runtime history for a time window', async (t) => {
   const originalCountDocuments = AutomationHistory.countDocuments;
   const originalFind = AutomationHistory.find;

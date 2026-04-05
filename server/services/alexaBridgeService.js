@@ -85,20 +85,27 @@ function extractBearerToken(headerValue) {
 }
 
 function normalizeDirectivePayload(requestBody = {}) {
+  const topLevelDirective = requestBody && typeof requestBody === 'object'
+    ? requestBody
+    : {};
   const directive = requestBody.directive && typeof requestBody.directive === 'object'
     ? requestBody.directive
-    : {};
+    : topLevelDirective;
   const header = directive.header && typeof directive.header === 'object'
     ? directive.header
-    : {};
+    : topLevelDirective.header && typeof topLevelDirective.header === 'object'
+      ? topLevelDirective.header
+      : {};
   const endpoint = directive.endpoint && typeof directive.endpoint === 'object'
     ? directive.endpoint
-    : {};
+    : topLevelDirective.endpoint && typeof topLevelDirective.endpoint === 'object'
+      ? topLevelDirective.endpoint
+      : {};
 
   return {
     namespace: requestBody.namespace || directive.namespace || header.namespace || '',
     name: requestBody.name || directive.name || header.name || '',
-    payload: requestBody.payload || directive.payload || {},
+    payload: requestBody.payload || directive.payload || topLevelDirective.payload || {},
     endpointId: requestBody.endpointId || endpoint.endpointId || '',
     correlationToken: requestBody.correlationToken || header.correlationToken || directive.correlationToken || '',
     rawDirective: directive

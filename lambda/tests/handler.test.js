@@ -246,6 +246,29 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
     calls.filter((entry) => entry.url === '/api/alexa/directives/execute')[0]?.authorization,
     'Bearer access-123'
   );
+  assert.deepEqual(
+    calls.filter((entry) => entry.url === '/api/alexa/directives/execute')[0]?.body,
+    {
+      hubId: 'hub-test',
+      directive: {
+        header: {
+          namespace: 'Alexa.PowerController',
+          name: 'TurnOn',
+          payloadVersion: '3',
+          messageId: 'msg-4',
+          correlationToken: 'corr-2'
+        },
+        endpoint: {
+          endpointId: 'hb:hub-test:device:lamp-1',
+          scope: {
+            type: 'BearerToken',
+            token: 'access-123'
+          }
+        },
+        payload: {}
+      }
+    }
+  );
 });
 
 test('lambda maps broker authorization and endpoint failures into Alexa error responses', async (t) => {

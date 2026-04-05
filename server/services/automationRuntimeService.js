@@ -193,10 +193,53 @@ function formatActionStartMessage(actionType, timer = null) {
     : 'Running action';
 }
 
-async function appendRuntimeEvent(historyId, event, currentAction = undefined) {
+function sanitizeResumeState(resumeState) {
+  if (!resumeState || typeof resumeState !== 'object') {
+    return null;
+  }
+
+  return {
+    pendingActions: Array.isArray(resumeState.pendingActions) ? resumeState.pendingActions : [],
+    context: resumeState.context && typeof resumeState.context === 'object' ? resumeState.context : {},
+    workflowRuntimeState: resumeState.workflowRuntimeState && typeof resumeState.workflowRuntimeState === 'object'
+      ? resumeState.workflowRuntimeState
+      : {},
+    updatedAt: resumeState.updatedAt ? new Date(resumeState.updatedAt).toISOString() : new Date().toISOString()
+  };
+}
+
+function sanitizeActionResult(actionResult) {
+  if (!actionResult || typeof actionResult !== 'object') {
+    return null;
+  }
+
+  return {
+    actionIndex: Number.isInteger(actionResult.actionIndex) ? actionResult.actionIndex : 0,
+    parentActionIndex: Number.isInteger(actionResult.parentActionIndex) ? actionResult.parentActionIndex : null,
+    repeatIteration: Number.isInteger(actionResult.repeatIteration) ? actionResult.repeatIteration : undefined,
+    actionType: String(actionResult.actionType || 'notification'),
+    target: Object.prototype.hasOwnProperty.call(actionResult, 'target') ? actionResult.target : null,
+    parameters: actionResult.parameters && typeof actionResult.parameters === 'object' ? actionResult.parameters : {},
+    success: actionResult.success !== false,
+    message: typeof actionResult.message === 'string' ? actionResult.message : undefined,
+    error: typeof actionResult.error === 'string' ? actionResult.error : undefined,
+    details: actionResult.details && typeof actionResult.details === 'object' ? actionResult.details : undefined,
+    conditionMet: typeof actionResult.conditionMet === 'boolean' ? actionResult.conditionMet : undefined,
+    conditionOutcome: typeof actionResult.conditionOutcome === 'string' ? actionResult.conditionOutcome : undefined,
+    executedAt: actionResult.executedAt ? new Date(actionResult.executedAt) : new Date(),
+    durationMs: Number.isFinite(Number(actionResult.durationMs)) ? Number(actionResult.durationMs) : undefined
+  };
+}
+
+async function appendRuntimeEvent(historyId, event, currentAction = undefined, options = {}) {
   if (!historyId || !event) {
     return;
   }
+
+  const actionResult = sanitizeActionResult(options.actionResult);
+  const resumeState = Object.prototype.hasOwnProperty.call(options, 'resumeState')
+    ? sanitizeResumeState(options.resumeState)
+    : undefined;
 
   const update = {
     $set: {
@@ -212,6 +255,14 @@ async function appendRuntimeEvent(historyId, event, currentAction = undefined) {
 
   if (currentAction !== undefined) {
     update.$set.currentAction = currentAction;
+  }
+
+  if (resumeState !== undefined) {
+    update.$set.resumeState = resumeState;
+  }
+
+  if (actionResult) {
+    update.$push.actionResults = actionResult;
   }
 
   await AutomationHistory.updateOne({ _id: historyId }, update);
@@ -352,7 +403,9 @@ async function recordActionStarted(context, details = {}) {
     'info'
   );
 
-  await appendRuntimeEvent(context.historyId, event, currentAction);
+  await appendRuntimeEvent(context.historyId, event, currentAction, {
+    resumeState: details.resumeState
+  });
   await publishAutomationEvent('automation.action.started', context, {
     payload: {
       actionIndex: currentAction.actionIndex,
@@ -402,7 +455,10 @@ async function recordActionCompleted(context, details = {}) {
       }
     : null;
 
-  await appendRuntimeEvent(context.historyId, event, currentAction);
+  await appendRuntimeEvent(context.historyId, event, currentAction, {
+    resumeState: details.resumeState,
+    actionResult: details.actionResult
+  });
   await publishAutomationEvent(eventType, context, {
     severity: level,
     payload: {
@@ -444,7 +500,9 @@ async function recordExecutionCompleted(context, details = {}) {
     severity
   );
 
-  await appendRuntimeEvent(context.historyId, event, null);
+  await appendRuntimeEvent(context.historyId, event, null, {
+    resumeState: null
+  });
   await publishAutomationEvent('automation.execution.completed', context, {
     severity,
     payload: {
