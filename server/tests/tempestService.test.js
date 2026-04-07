@@ -199,7 +199,9 @@ test('getSelectedStationDevice prefers the freshest Tempest duplicate and remove
   Device.find = async (query) => {
     assert.deepEqual(query, {
       'properties.source': 'tempest',
-      'properties.tempest.stationId': 42
+      'properties.tempest.stationId': {
+        $in: [42, '42']
+      }
     });
     return [staleDuplicate, freshCanonical];
   };
@@ -216,6 +218,44 @@ test('getSelectedStationDevice prefers the freshest Tempest duplicate and remove
   assert.equal(device?._id, 'tempest-fresh');
   assert.deepEqual(device.groups, ['Favorites', 'Weather']);
   assert.equal(device.saved, true);
+});
+
+test('getSelectedStationDevice matches mixed string and numeric Tempest station ids', async (t) => {
+  const originalFind = Device.find;
+
+  t.after(() => {
+    Device.find = originalFind;
+  });
+
+  const freshCanonical = {
+    _id: 'tempest-string-station',
+    name: 'Lehi',
+    room: 'Outside',
+    groups: [],
+    lastSeen: new Date('2026-04-07T22:35:31Z'),
+    createdAt: new Date('2026-04-03T00:00:00Z'),
+    properties: {
+      source: 'tempest',
+      tempest: {
+        stationId: '42',
+        lastObservationAt: new Date('2026-04-07T22:35:31Z')
+      }
+    }
+  };
+
+  Device.find = async (query) => {
+    assert.deepEqual(query, {
+      'properties.source': 'tempest',
+      'properties.tempest.stationId': {
+        $in: [42, '42']
+      }
+    });
+    return [freshCanonical];
+  };
+
+  const device = await tempestService.getSelectedStationDevice(42);
+
+  assert.equal(device?._id, 'tempest-string-station');
 });
 
 test('getStatus reports an environment-backed token as configured without exposing the raw secret', async (t) => {

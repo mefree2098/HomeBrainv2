@@ -101,11 +101,19 @@ const buildTempestDeviceQuery = ({ stationId, deviceId, serialNumber, hubSerialN
   const orConditions = [];
 
   if (toNumber(stationId) !== null) {
-    orConditions.push({ 'properties.tempest.stationId': toNumber(stationId) });
+    orConditions.push({
+      'properties.tempest.stationId': {
+        $in: [toNumber(stationId), String(toNumber(stationId))]
+      }
+    });
   }
 
   if (toNumber(deviceId) !== null) {
-    orConditions.push({ 'properties.tempest.deviceIds': toNumber(deviceId) });
+    orConditions.push({
+      'properties.tempest.deviceIds': {
+        $in: [toNumber(deviceId), String(toNumber(deviceId))]
+      }
+    });
   }
 
   if (trimString(serialNumber)) {
@@ -284,7 +292,9 @@ class TempestService {
     };
 
     if (targetStationId !== null) {
-      query['properties.tempest.stationId'] = targetStationId;
+      query['properties.tempest.stationId'] = {
+        $in: [targetStationId, String(targetStationId)]
+      };
     }
 
     return this.findCanonicalStationDevice(query);
