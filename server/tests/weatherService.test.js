@@ -297,6 +297,86 @@ test('fetchDashboardWeather falls back to stale cached forecast data when Open-M
   assert.equal(fallback.tempest.station?.name, 'Backyard Tempest');
 });
 
+test('fetchDashboardWeather reuses the same forecast cache entry across minor auto-location jitter', async (t) => {
+  const originalAxiosGet = axios.get;
+  const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
+
+  t.after(() => {
+    axios.get = originalAxiosGet;
+    tempestService.getSelectedStationSnapshot = originalGetSelectedStationSnapshot;
+  });
+
+  const forecastPayload = {
+    timezone: 'America/Denver',
+    current: {
+      temperature_2m: 72.6,
+      apparent_temperature: 71.1,
+      relative_humidity_2m: 38,
+      wind_speed_10m: 6.2,
+      precipitation: 0,
+      weather_code: 1,
+      is_day: 1
+    },
+    daily: {
+      weather_code: [1],
+      temperature_2m_max: [76.4],
+      temperature_2m_min: [51.2],
+      precipitation_probability_max: [12],
+      sunrise: ['2026-04-07T06:54'],
+      sunset: ['2026-04-07T19:46']
+    },
+    hourly: {
+      time: ['2026-04-07T16:00'],
+      temperature_2m: [72.6],
+      precipitation_probability: [12],
+      weather_code: [1],
+      wind_speed_10m: [6.2]
+    }
+  };
+
+  let forecastRequests = 0;
+  let airQualityRequests = 0;
+
+  axios.get = async (url) => {
+    if (url.includes('api.open-meteo.com/v1/forecast')) {
+      forecastRequests += 1;
+      return { data: forecastPayload };
+    }
+
+    if (url.includes('air-quality-api.open-meteo.com')) {
+      airQualityRequests += 1;
+      return {
+        data: {
+          current: {
+            us_aqi: 29
+          }
+        }
+      };
+    }
+
+    throw new Error(`Unexpected axios request: ${url}`);
+  };
+
+  tempestService.getSelectedStationSnapshot = async () => null;
+
+  await fetchDashboardWeather({
+    latitude: '40.3322',
+    longitude: '-111.7743',
+    label: 'Current location'
+  });
+
+  const payload = await fetchDashboardWeather({
+    latitude: '40.3349',
+    longitude: '-111.7712',
+    label: 'Current location'
+  });
+
+  assert.equal(forecastRequests, 1);
+  assert.equal(airQualityRequests, 1);
+  assert.equal(payload.current.temperatureF, 72.6);
+  assert.equal(payload.today.highF, 76.4);
+});
+
 test('fetchDashboardWeather falls back to Tempest-only weather when Open-Meteo is rate limited without cache', async (t) => {
   const originalAxiosGet = axios.get;
   const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
@@ -349,8 +429,8 @@ test('fetchDashboardWeather falls back to Tempest-only weather when Open-Meteo i
   });
 
   const payload = await fetchDashboardWeather({
-    latitude: '40.1122',
-    longitude: '-111.6543',
+    latitude: '41.2211',
+    longitude: '-111.9322',
     label: 'Current location'
   });
 

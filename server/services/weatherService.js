@@ -9,6 +9,7 @@ const DEFAULT_GEOCODE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_FORECAST_STALE_IF_ERROR_MS = 30 * 60 * 1000;
 const DEFAULT_AIR_QUALITY_STALE_IF_ERROR_MS = 30 * 60 * 1000;
 const DEFAULT_GEOCODE_STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1000;
+const WEATHER_CACHE_COORDINATE_PRECISION = 2;
 const forecastCache = new Map();
 const airQualityCache = new Map();
 const geocodeCache = new Map();
@@ -162,7 +163,9 @@ function normalizeCoordinates(latitude, longitude) {
 function buildForecastCacheKey(location) {
   const latitude = Number(location?.latitude);
   const longitude = Number(location?.longitude);
-  return `${latitude.toFixed(4)},${longitude.toFixed(4)}`;
+  // Auto-detect coordinates drift slightly between refreshes; bucket them so one driveway
+  // does not fan out into new forecast/AQI cache misses every minute.
+  return `${latitude.toFixed(WEATHER_CACHE_COORDINATE_PRECISION)},${longitude.toFixed(WEATHER_CACHE_COORDINATE_PRECISION)}`;
 }
 
 function buildAirQualityCacheKey(location) {
