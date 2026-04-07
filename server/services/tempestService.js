@@ -247,7 +247,8 @@ class TempestService {
   }
 
   async testConnection({ token } = {}) {
-    const resolvedToken = this.resolveToken(token);
+    const integration = await TempestIntegration.getIntegration();
+    const resolvedToken = this.resolveToken(token, integration);
     if (!resolvedToken) {
       throw new Error('A Tempest Personal Access Token is required.');
     }

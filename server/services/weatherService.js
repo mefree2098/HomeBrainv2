@@ -3,9 +3,12 @@ const settingsService = require('./settingsService');
 const tempestService = require('./tempestService');
 const telemetryService = require('./telemetryService');
 
-const DEFAULT_FORECAST_CACHE_TTL_MS = 60 * 1000;
-const DEFAULT_AIR_QUALITY_CACHE_TTL_MS = 60 * 1000;
+const DEFAULT_FORECAST_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_AIR_QUALITY_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_GEOCODE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_FORECAST_STALE_IF_ERROR_MS = 30 * 60 * 1000;
+const DEFAULT_AIR_QUALITY_STALE_IF_ERROR_MS = 30 * 60 * 1000;
+const DEFAULT_GEOCODE_STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1000;
 const forecastCache = new Map();
 const airQualityCache = new Map();
 const geocodeCache = new Map();
@@ -128,6 +131,18 @@ const GEOCODE_CACHE_TTL_MS = parsePositiveInteger(
   process.env.WEATHER_GEOCODE_CACHE_TTL_MS,
   DEFAULT_GEOCODE_CACHE_TTL_MS
 );
+const FORECAST_STALE_IF_ERROR_MS = parsePositiveInteger(
+  process.env.WEATHER_FORECAST_STALE_IF_ERROR_MS,
+  DEFAULT_FORECAST_STALE_IF_ERROR_MS
+);
+const AIR_QUALITY_STALE_IF_ERROR_MS = parsePositiveInteger(
+  process.env.WEATHER_AIR_QUALITY_STALE_IF_ERROR_MS,
+  DEFAULT_AIR_QUALITY_STALE_IF_ERROR_MS
+);
+const GEOCODE_STALE_IF_ERROR_MS = parsePositiveInteger(
+  process.env.WEATHER_GEOCODE_STALE_IF_ERROR_MS,
+  DEFAULT_GEOCODE_STALE_IF_ERROR_MS
+);
 
 function normalizeCoordinates(latitude, longitude) {
   const lat = toNumber(latitude);
@@ -154,8 +169,9 @@ function buildAirQualityCacheKey(location) {
   return buildForecastCacheKey(location);
 }
 
-async function readThroughCache(cache, key, ttlMs, loader) {
+async function readThroughCache(cache, key, ttlMs, loader, options = {}) {
   const now = Date.now();
+  const staleIfErrorMs = parsePositiveInteger(options.staleIfErrorMs, ttlMs);
   const cached = cache.get(key);
 
   if (cached?.value !== undefined && cached.expiresAt > now) {
@@ -171,11 +187,24 @@ async function readThroughCache(cache, key, ttlMs, loader) {
     .then((value) => {
       cache.set(key, {
         value,
-        expiresAt: Date.now() + ttlMs
+        expiresAt: Date.now() + ttlMs,
+        updatedAt: Date.now()
       });
       return value;
     })
     .catch((error) => {
+      if (cached?.value !== undefined) {
+        const updatedAt = Number(cached.updatedAt || 0);
+        if (updatedAt > 0 && (now - updatedAt) <= staleIfErrorMs) {
+          cache.set(key, {
+            value: cached.value,
+            expiresAt: now + ttlMs,
+            updatedAt
+          });
+          return cached.value;
+        }
+      }
+
       cache.delete(key);
       throw error;
     });
@@ -183,7 +212,8 @@ async function readThroughCache(cache, key, ttlMs, loader) {
   cache.set(key, {
     expiresAt: cached?.expiresAt || 0,
     promise,
-    value: cached?.value
+    value: cached?.value,
+    updatedAt: cached?.updatedAt || 0
   });
 
   return promise;
@@ -374,6 +404,8 @@ async function geocodeLocation(query, source) {
       timezone: result.timezone || null,
       name: buildLocationName(result, normalizedQuery || query)
     };
+  }, {
+    staleIfErrorMs: GEOCODE_STALE_IF_ERROR_MS
   });
 
   return {
@@ -449,6 +481,8 @@ async function fetchDashboardWeather(options = {}) {
       });
 
       return response.data;
+    }, {
+      staleIfErrorMs: FORECAST_STALE_IF_ERROR_MS
     }),
     readThroughCache(airQualityCache, airQualityCacheKey, AIR_QUALITY_CACHE_TTL_MS, async () => {
       const response = await axios.get('https://air-quality-api.open-meteo.com/v1/air-quality', {
@@ -462,6 +496,8 @@ async function fetchDashboardWeather(options = {}) {
       });
 
       return response.data;
+    }, {
+      staleIfErrorMs: AIR_QUALITY_STALE_IF_ERROR_MS
     }).catch(() => null),
     tempestService.getSelectedStationSnapshot().catch(() => null)
   ]);

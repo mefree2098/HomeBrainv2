@@ -9,6 +9,7 @@ const {
   createWeatherPayload,
   describeWeatherCode,
   fetchDashboardWeather,
+  fetchWeatherDashboard,
   normalizeCoordinates,
   normalizeLocationQuery,
   parseUsCityStateQuery,
@@ -190,4 +191,108 @@ test('fetchDashboardWeather attaches Tempest module telemetry to the current wea
   assert.deepEqual(telemetryArgs, { sourceId: 'tempest-device-1' });
   assert.deepEqual(payload.tempest.moduleTelemetry, moduleTelemetry);
   assert.equal(payload.tempest.station?.name, 'Backyard Tempest');
+});
+
+test('fetchDashboardWeather falls back to stale cached forecast data when Open-Meteo is rate limited', async (t) => {
+  const originalAxiosGet = axios.get;
+  const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
+  const originalDateNow = Date.now;
+
+  const baseNow = Date.parse('2026-04-07T22:20:00.000Z');
+  let nowOffsetMs = 0;
+
+  t.after(() => {
+    axios.get = originalAxiosGet;
+    tempestService.getSelectedStationSnapshot = originalGetSelectedStationSnapshot;
+    Date.now = originalDateNow;
+  });
+
+  Date.now = () => baseNow + nowOffsetMs;
+
+  const forecastPayload = {
+    timezone: 'America/Denver',
+    current: {
+      temperature_2m: 67.4,
+      apparent_temperature: 65.2,
+      relative_humidity_2m: 42,
+      wind_speed_10m: 7.8,
+      precipitation: 0,
+      weather_code: 2,
+      is_day: 1
+    },
+    daily: {
+      weather_code: [61],
+      temperature_2m_max: [74.3],
+      temperature_2m_min: [49.8],
+      precipitation_probability_max: [55],
+      sunrise: ['2026-03-23T07:01'],
+      sunset: ['2026-03-23T19:14']
+    },
+    hourly: {
+      time: ['2026-04-07T16:00'],
+      temperature_2m: [67.4],
+      precipitation_probability: [10],
+      weather_code: [2],
+      wind_speed_10m: [7.8]
+    }
+  };
+
+  let forecastRequests = 0;
+
+  axios.get = async (url) => {
+    if (url.includes('api.open-meteo.com/v1/forecast')) {
+      forecastRequests += 1;
+      if (forecastRequests === 1) {
+        return { data: forecastPayload };
+      }
+
+      const error = new Error('Request failed with status code 429');
+      error.response = { status: 429 };
+      throw error;
+    }
+
+    if (url.includes('air-quality-api.open-meteo.com')) {
+      return {
+        data: {
+          current: {
+            us_aqi: 38
+          }
+        }
+      };
+    }
+
+    throw new Error(`Unexpected axios request: ${url}`);
+  };
+
+  tempestService.getSelectedStationSnapshot = async () => ({
+    id: 'tempest-device-1',
+    name: 'Backyard Tempest',
+    room: 'Outside',
+    observedAt: '2026-04-02T17:00:00.000Z',
+    metrics: {
+      temperatureF: 66.9
+    },
+    status: {
+      websocketConnected: true
+    }
+  });
+
+  const initial = await fetchDashboardWeather({
+    latitude: '40.1122',
+    longitude: '-111.6543',
+    label: 'Current location'
+  });
+
+  nowOffsetMs = (5 * 60 * 1000) + 1_000;
+
+  const fallback = await fetchDashboardWeather({
+    latitude: '40.1122',
+    longitude: '-111.6543',
+    label: 'Current location'
+  });
+
+  assert.equal(forecastRequests, 2);
+  assert.equal(initial.current.temperatureF, 67.4);
+  assert.equal(fallback.current.temperatureF, 67.4);
+  assert.equal(fallback.tempest.station?.name, 'Backyard Tempest');
 });

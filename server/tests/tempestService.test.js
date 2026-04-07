@@ -212,3 +212,29 @@ test('getStatus reports an environment-backed token as configured without exposi
   assert.match(status.integration.token, /^\*+1234$/);
   assert.equal(status.integration.token.includes('tempest_env_secret_1234'), false);
 });
+
+test('testConnection uses the persisted Tempest token when no explicit token is provided', async (t) => {
+  const originalGetIntegration = TempestIntegration.getIntegration;
+  const originalRequestJson = tempestService.requestJson;
+
+  t.after(() => {
+    TempestIntegration.getIntegration = originalGetIntegration;
+    tempestService.requestJson = originalRequestJson;
+  });
+
+  TempestIntegration.getIntegration = async () => ({
+    token: 'persisted-tempest-token',
+    enabled: true
+  });
+
+  tempestService.requestJson = async (path, params) => {
+    assert.equal(path, '/stations');
+    assert.equal(params.token, 'persisted-tempest-token');
+    return { stations: [] };
+  };
+
+  const result = await tempestService.testConnection();
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.stations, []);
+});
