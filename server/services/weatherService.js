@@ -376,6 +376,51 @@ function createWeatherPayload(forecastResponse, airQualityResponse, location) {
   };
 }
 
+function createTempestFallbackWeatherPayload(location, tempestStation) {
+  const stationName = tempestStation?.name || 'Tempest Station';
+  const stationMetrics = tempestStation?.metrics || {};
+  const fallbackCondition = tempestStation?.status?.websocketConnected
+    ? 'Live Tempest Station'
+    : 'Tempest Snapshot';
+  const fallbackIcon = stationMetrics.rainRateInPerHr && stationMetrics.rainRateInPerHr > 0
+    ? 'rain'
+    : 'partly-cloudy';
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    location: {
+      name: location?.name || stationName,
+      latitude: location?.latitude ?? tempestStation?.location?.latitude ?? null,
+      longitude: location?.longitude ?? tempestStation?.location?.longitude ?? null,
+      timezone: location?.timezone || tempestStation?.location?.timezone || 'auto',
+      source: location?.source || 'saved'
+    },
+    current: {
+      temperatureF: toNumber(stationMetrics.temperatureF),
+      apparentTemperatureF: toNumber(stationMetrics.feelsLikeF),
+      humidity: toNumber(stationMetrics.humidityPct),
+      windSpeedMph: toNumber(stationMetrics.windAvgMph),
+      precipitationIn: toNumber(stationMetrics.rainLastMinuteIn),
+      airQualityIndex: null,
+      isDay: true,
+      weatherCode: null,
+      condition: fallbackCondition,
+      icon: fallbackIcon
+    },
+    today: {
+      highF: null,
+      lowF: null,
+      precipitationChance: null,
+      sunrise: null,
+      sunset: null,
+      weatherCode: null,
+      condition: fallbackCondition,
+      icon: fallbackIcon
+    },
+    hourlyForecast: []
+  };
+}
+
 async function geocodeLocation(query, source) {
   const normalizedQuery = normalizeLocationQuery(query);
   const cacheKey = normalizedQuery.toLowerCase();
@@ -442,8 +487,11 @@ async function fetchDashboardWeather(options = {}) {
   const location = await resolveWeatherLocation(options);
   const forecastCacheKey = buildForecastCacheKey(location);
   const airQualityCacheKey = buildAirQualityCacheKey(location);
-  const [forecastResponse, airQualityResponse, tempestStation] = await Promise.all([
-    readThroughCache(forecastCache, forecastCacheKey, FORECAST_CACHE_TTL_MS, async () => {
+  const tempestStation = await tempestService.getSelectedStationSnapshot().catch(() => null);
+
+  let forecastResponse;
+  try {
+    forecastResponse = await readThroughCache(forecastCache, forecastCacheKey, FORECAST_CACHE_TTL_MS, async () => {
       const response = await axios.get('https://api.open-meteo.com/v1/forecast', {
         params: {
           latitude: location.latitude,
@@ -483,8 +531,16 @@ async function fetchDashboardWeather(options = {}) {
       return response.data;
     }, {
       staleIfErrorMs: FORECAST_STALE_IF_ERROR_MS
-    }),
-    readThroughCache(airQualityCache, airQualityCacheKey, AIR_QUALITY_CACHE_TTL_MS, async () => {
+    });
+  } catch (error) {
+    if (!tempestStation) {
+      throw error;
+    }
+
+    forecastResponse = null;
+  }
+
+  const airQualityResponse = await readThroughCache(airQualityCache, airQualityCacheKey, AIR_QUALITY_CACHE_TTL_MS, async () => {
       const response = await axios.get('https://air-quality-api.open-meteo.com/v1/air-quality', {
         params: {
           latitude: location.latitude,
@@ -498,9 +554,7 @@ async function fetchDashboardWeather(options = {}) {
       return response.data;
     }, {
       staleIfErrorMs: AIR_QUALITY_STALE_IF_ERROR_MS
-    }).catch(() => null),
-    tempestService.getSelectedStationSnapshot().catch(() => null)
-  ]);
+    }).catch(() => null);
 
   let moduleTelemetry = null;
   if (tempestStation?.id) {
@@ -510,7 +564,9 @@ async function fetchDashboardWeather(options = {}) {
   }
 
   return {
-    ...createWeatherPayload(forecastResponse, airQualityResponse, location),
+    ...(forecastResponse
+      ? createWeatherPayload(forecastResponse, airQualityResponse, location)
+      : createTempestFallbackWeatherPayload(location, tempestStation)),
     tempest: tempestStation
       ? {
           available: true,

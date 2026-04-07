@@ -296,3 +296,68 @@ test('fetchDashboardWeather falls back to stale cached forecast data when Open-M
   assert.equal(fallback.current.temperatureF, 67.4);
   assert.equal(fallback.tempest.station?.name, 'Backyard Tempest');
 });
+
+test('fetchDashboardWeather falls back to Tempest-only weather when Open-Meteo is rate limited without cache', async (t) => {
+  const originalAxiosGet = axios.get;
+  const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
+
+  t.after(() => {
+    axios.get = originalAxiosGet;
+    tempestService.getSelectedStationSnapshot = originalGetSelectedStationSnapshot;
+  });
+
+  axios.get = async (url) => {
+    if (url.includes('api.open-meteo.com/v1/forecast')) {
+      const error = new Error('Request failed with status code 429');
+      error.response = { status: 429 };
+      throw error;
+    }
+
+    if (url.includes('air-quality-api.open-meteo.com')) {
+      return {
+        data: {
+          current: {
+            us_aqi: 38
+          }
+        }
+      };
+    }
+
+    throw new Error(`Unexpected axios request: ${url}`);
+  };
+
+  tempestService.getSelectedStationSnapshot = async () => ({
+    id: 'tempest-device-2',
+    name: 'Lehi',
+    room: 'Outside',
+    location: {
+      latitude: 40.41,
+      longitude: -111.85,
+      timezone: 'America/Denver'
+    },
+    metrics: {
+      temperatureF: 71.2,
+      feelsLikeF: 70.1,
+      humidityPct: 28,
+      windAvgMph: 4.8,
+      rainLastMinuteIn: 0,
+      rainRateInPerHr: 0
+    },
+    status: {
+      websocketConnected: true
+    }
+  });
+
+  const payload = await fetchDashboardWeather({
+    latitude: '40.1122',
+    longitude: '-111.6543',
+    label: 'Current location'
+  });
+
+  assert.equal(payload.current.temperatureF, 71.2);
+  assert.equal(payload.current.apparentTemperatureF, 70.1);
+  assert.equal(payload.current.condition, 'Live Tempest Station');
+  assert.equal(Array.isArray(payload.hourlyForecast), true);
+  assert.equal(payload.hourlyForecast.length, 0);
+  assert.equal(payload.tempest.station?.name, 'Lehi');
+});
