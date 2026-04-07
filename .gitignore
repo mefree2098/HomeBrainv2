@@ -11,6 +11,7 @@ server/.wakeword-venv/
 server/data/voice-acknowledgments/
 server/data/whisper/
 server/data/platform-deploy/
+server/data/weather-provider-cache.json
 server/public/downloads/
 
 client/node_modules/

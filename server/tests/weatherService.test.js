@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const axios = require('axios');
 const tempestService = require('../services/tempestService');
 const telemetryService = require('../services/telemetryService');
@@ -13,8 +16,30 @@ const {
   normalizeCoordinates,
   normalizeLocationQuery,
   parseUsCityStateQuery,
-  pickUsCityStateResult
+  pickUsCityStateResult,
+  __resetWeatherCachesForTests
 } = require('../services/weatherService');
+
+async function setupIsolatedWeatherCache(t) {
+  const originalPersistPath = process.env.WEATHER_PERSIST_PATH;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-weather-cache-'));
+  const persistPath = path.join(tempDir, 'weather-provider-cache.json');
+
+  process.env.WEATHER_PERSIST_PATH = persistPath;
+  __resetWeatherCachesForTests();
+
+  t.after(async () => {
+    if (originalPersistPath === undefined) {
+      delete process.env.WEATHER_PERSIST_PATH;
+    } else {
+      process.env.WEATHER_PERSIST_PATH = originalPersistPath;
+    }
+    __resetWeatherCachesForTests();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  return persistPath;
+}
 
 test('normalizeCoordinates validates latitude and longitude ranges', () => {
   assert.deepEqual(normalizeCoordinates('39.7392', '-104.9903'), {
@@ -104,6 +129,7 @@ test('createWeatherPayload normalizes current and daily forecast data', () => {
 });
 
 test('fetchDashboardWeather attaches Tempest module telemetry to the current weather payload', async (t) => {
+  await setupIsolatedWeatherCache(t);
   const originalAxiosGet = axios.get;
   const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
   const originalGetTempestModuleTelemetry = telemetryService.getTempestModuleTelemetry;
@@ -194,6 +220,7 @@ test('fetchDashboardWeather attaches Tempest module telemetry to the current wea
 });
 
 test('fetchDashboardWeather falls back to stale cached forecast data when Open-Meteo is rate limited', async (t) => {
+  await setupIsolatedWeatherCache(t);
   const originalAxiosGet = axios.get;
   const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
   const originalDateNow = Date.now;
@@ -298,6 +325,7 @@ test('fetchDashboardWeather falls back to stale cached forecast data when Open-M
 });
 
 test('fetchDashboardWeather reuses the same forecast cache entry across minor auto-location jitter', async (t) => {
+  await setupIsolatedWeatherCache(t);
   const originalAxiosGet = axios.get;
   const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
 
@@ -378,6 +406,7 @@ test('fetchDashboardWeather reuses the same forecast cache entry across minor au
 });
 
 test('fetchDashboardWeather falls back to Tempest-only weather when Open-Meteo is rate limited without cache', async (t) => {
+  await setupIsolatedWeatherCache(t);
   const originalAxiosGet = axios.get;
   const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
 
@@ -440,4 +469,120 @@ test('fetchDashboardWeather falls back to Tempest-only weather when Open-Meteo i
   assert.equal(Array.isArray(payload.hourlyForecast), true);
   assert.equal(payload.hourlyForecast.length, 0);
   assert.equal(payload.tempest.station?.name, 'Lehi');
+});
+
+test('fetchDashboardWeather restores persisted forecast and AQI cache after a restart during provider throttling', async (t) => {
+  const originalAxiosGet = axios.get;
+  const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
+  const persistPath = await setupIsolatedWeatherCache(t);
+
+  t.after(async () => {
+    axios.get = originalAxiosGet;
+    tempestService.getSelectedStationSnapshot = originalGetSelectedStationSnapshot;
+  });
+
+  const forecastPayload = {
+    timezone: 'America/Denver',
+    current: {
+      temperature_2m: 72.6,
+      apparent_temperature: 71.1,
+      relative_humidity_2m: 38,
+      wind_speed_10m: 6.2,
+      precipitation: 0,
+      weather_code: 1,
+      is_day: 1
+    },
+    daily: {
+      weather_code: [1],
+      temperature_2m_max: [76.4],
+      temperature_2m_min: [51.2],
+      precipitation_probability_max: [12],
+      sunrise: ['2026-04-07T06:54'],
+      sunset: ['2026-04-07T19:46']
+    },
+    hourly: {
+      time: ['2026-04-07T16:00'],
+      temperature_2m: [72.6],
+      precipitation_probability: [12],
+      weather_code: [1],
+      wind_speed_10m: [6.2]
+    }
+  };
+
+  const liveTempestStation = {
+    id: 'tempest-device-1',
+    name: 'Lehi',
+    room: 'Outside',
+    observedAt: '2026-04-07T22:35:31.000Z',
+    lastEventAt: '2026-04-02T17:00:00.000Z',
+    metrics: {
+      temperatureF: 75.1,
+      feelsLikeF: 75.1,
+      humidityPct: 18,
+      windAvgMph: 3,
+      rainLastMinuteIn: 0,
+      rainTodayIn: 0,
+      pressureInHg: 25.07,
+      uvIndex: 3.5
+    },
+    status: {
+      websocketConnected: true
+    }
+  };
+
+  let shouldThrottle = false;
+
+  axios.get = async (url) => {
+    if (url.includes('api.open-meteo.com/v1/forecast')) {
+      if (shouldThrottle) {
+        const error = new Error('Request failed with status code 429');
+        error.response = { status: 429 };
+        throw error;
+      }
+      return { data: forecastPayload };
+    }
+
+    if (url.includes('air-quality-api.open-meteo.com')) {
+      if (shouldThrottle) {
+        const error = new Error('Request failed with status code 429');
+        error.response = { status: 429 };
+        throw error;
+      }
+      return {
+        data: {
+          current: {
+            us_aqi: 29
+          }
+        }
+      };
+    }
+
+    throw new Error(`Unexpected axios request: ${url}`);
+  };
+
+  tempestService.getSelectedStationSnapshot = async () => liveTempestStation;
+
+  const initial = await fetchDashboardWeather({
+    latitude: '40.3322',
+    longitude: '-111.7743',
+    label: 'Current location'
+  });
+
+  assert.equal(initial.today.highF, 76.4);
+  assert.equal(initial.current.airQualityIndex, 29);
+  assert.equal(initial.current.condition, 'Mostly Clear');
+
+  __resetWeatherCachesForTests();
+  shouldThrottle = true;
+
+  const restored = await fetchDashboardWeather({
+    latitude: '40.3349',
+    longitude: '-111.7712',
+    label: 'Current location'
+  });
+
+  assert.equal(restored.today.highF, 76.4);
+  assert.equal(restored.current.airQualityIndex, 29);
+  assert.equal(restored.current.condition, 'Mostly Clear');
+  assert.equal(restored.tempest.station?.name, 'Lehi');
 });

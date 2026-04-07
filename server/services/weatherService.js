@@ -2,6 +2,7 @@ const axios = require('axios');
 const settingsService = require('./settingsService');
 const tempestService = require('./tempestService');
 const telemetryService = require('./telemetryService');
+const weatherCacheStore = require('./weatherCacheStore');
 
 const DEFAULT_FORECAST_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_AIR_QUALITY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -10,9 +11,12 @@ const DEFAULT_FORECAST_STALE_IF_ERROR_MS = 30 * 60 * 1000;
 const DEFAULT_AIR_QUALITY_STALE_IF_ERROR_MS = 30 * 60 * 1000;
 const DEFAULT_GEOCODE_STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1000;
 const WEATHER_CACHE_COORDINATE_PRECISION = 2;
+const WEATHER_RECOVERY_COORDINATE_PRECISION = 1;
 const forecastCache = new Map();
 const airQualityCache = new Map();
 const geocodeCache = new Map();
+const PERSISTED_WEATHER_CACHE_KIND_FORECAST = 'forecast';
+const PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY = 'air_quality';
 
 const US_STATE_ABBREVIATIONS = Object.freeze({
   AL: 'Alabama',
@@ -160,16 +164,115 @@ function normalizeCoordinates(latitude, longitude) {
   return { latitude: lat, longitude: lon };
 }
 
-function buildForecastCacheKey(location) {
+function buildCoordinateCacheKey(location, precision = WEATHER_CACHE_COORDINATE_PRECISION) {
   const latitude = Number(location?.latitude);
   const longitude = Number(location?.longitude);
-  // Auto-detect coordinates drift slightly between refreshes; bucket them so one driveway
-  // does not fan out into new forecast/AQI cache misses every minute.
-  return `${latitude.toFixed(WEATHER_CACHE_COORDINATE_PRECISION)},${longitude.toFixed(WEATHER_CACHE_COORDINATE_PRECISION)}`;
+  return `${latitude.toFixed(precision)},${longitude.toFixed(precision)}`;
 }
 
-function buildAirQualityCacheKey(location) {
-  return buildForecastCacheKey(location);
+function buildForecastCacheKey(location, precision = WEATHER_CACHE_COORDINATE_PRECISION) {
+  // Auto-detect coordinates drift slightly between refreshes; bucket them so one driveway
+  // does not fan out into new forecast/AQI cache misses every minute.
+  return buildCoordinateCacheKey(location, precision);
+}
+
+function buildAirQualityCacheKey(location, precision = WEATHER_CACHE_COORDINATE_PRECISION) {
+  return buildForecastCacheKey(location, precision);
+}
+
+function buildRecoveryCacheKeys(location, kind) {
+  const exactKey = kind === PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY
+    ? buildAirQualityCacheKey(location)
+    : buildForecastCacheKey(location);
+  const coarseKey = kind === PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY
+    ? buildAirQualityCacheKey(location, WEATHER_RECOVERY_COORDINATE_PRECISION)
+    : buildForecastCacheKey(location, WEATHER_RECOVERY_COORDINATE_PRECISION);
+
+  return Array.from(new Set([exactKey, coarseKey].filter(Boolean)));
+}
+
+function parseUpdatedAtTimestamp(value) {
+  if (!value) {
+    return 0;
+  }
+
+  const candidate = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(candidate.getTime()) ? 0 : candidate.getTime();
+}
+
+async function hydratePersistentWeatherCacheEntry(cache, kind, key, ttlMs) {
+  const persisted = await weatherCacheStore.getEntry(kind, [key]).catch(() => null);
+  if (!persisted || persisted.value === undefined) {
+    return null;
+  }
+
+  const updatedAt = parseUpdatedAtTimestamp(persisted.updatedAt);
+  const hydratedEntry = {
+    value: persisted.value,
+    expiresAt: updatedAt > 0 ? updatedAt + ttlMs : 0,
+    updatedAt
+  };
+  cache.set(key, hydratedEntry);
+  return hydratedEntry;
+}
+
+async function loadPersistentWeatherFallback(kind, keys, staleIfErrorMs) {
+  const persisted = await weatherCacheStore.getEntry(kind, keys).catch(() => null);
+  if (!persisted || persisted.value === undefined) {
+    return null;
+  }
+
+  const updatedAt = parseUpdatedAtTimestamp(persisted.updatedAt);
+  if (updatedAt <= 0) {
+    return null;
+  }
+
+  if ((Date.now() - updatedAt) > staleIfErrorMs) {
+    return null;
+  }
+
+  return {
+    key: persisted.key,
+    value: persisted.value,
+    updatedAt
+  };
+}
+
+async function readThroughWeatherCache(cache, { kind, key, recoveryKeys = [], ttlMs, staleIfErrorMs, loader }) {
+  const now = Date.now();
+  let cached = cache.get(key);
+
+  if (!cached) {
+    cached = await hydratePersistentWeatherCacheEntry(cache, kind, key, ttlMs);
+  }
+
+  if (cached?.value !== undefined && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const wrappedLoader = async () => {
+    const value = await loader();
+    await weatherCacheStore.setEntry(kind, [key, ...recoveryKeys], value);
+    return value;
+  };
+
+  try {
+    return await readThroughCache(cache, key, ttlMs, wrappedLoader, {
+      staleIfErrorMs
+    });
+  } catch (error) {
+    const persistedFallback = await loadPersistentWeatherFallback(kind, [key, ...recoveryKeys], staleIfErrorMs);
+    if (persistedFallback) {
+      cache.set(key, {
+        value: persistedFallback.value,
+        expiresAt: Date.now() + ttlMs,
+        updatedAt: persistedFallback.updatedAt
+      });
+      return persistedFallback.value;
+    }
+
+    throw error;
+  }
 }
 
 async function readThroughCache(cache, key, ttlMs, loader, options = {}) {
@@ -490,11 +593,19 @@ async function fetchDashboardWeather(options = {}) {
   const location = await resolveWeatherLocation(options);
   const forecastCacheKey = buildForecastCacheKey(location);
   const airQualityCacheKey = buildAirQualityCacheKey(location);
+  const forecastRecoveryKeys = buildRecoveryCacheKeys(location, PERSISTED_WEATHER_CACHE_KIND_FORECAST);
+  const airQualityRecoveryKeys = buildRecoveryCacheKeys(location, PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY);
   const tempestStation = await tempestService.getSelectedStationSnapshot().catch(() => null);
 
   let forecastResponse;
   try {
-    forecastResponse = await readThroughCache(forecastCache, forecastCacheKey, FORECAST_CACHE_TTL_MS, async () => {
+    forecastResponse = await readThroughWeatherCache(forecastCache, {
+      kind: PERSISTED_WEATHER_CACHE_KIND_FORECAST,
+      key: forecastCacheKey,
+      recoveryKeys: forecastRecoveryKeys,
+      ttlMs: FORECAST_CACHE_TTL_MS,
+      staleIfErrorMs: FORECAST_STALE_IF_ERROR_MS,
+      loader: async () => {
       const response = await axios.get('https://api.open-meteo.com/v1/forecast', {
         params: {
           latitude: location.latitude,
@@ -532,8 +643,7 @@ async function fetchDashboardWeather(options = {}) {
       });
 
       return response.data;
-    }, {
-      staleIfErrorMs: FORECAST_STALE_IF_ERROR_MS
+      }
     });
   } catch (error) {
     if (!tempestStation) {
@@ -543,7 +653,13 @@ async function fetchDashboardWeather(options = {}) {
     forecastResponse = null;
   }
 
-  const airQualityResponse = await readThroughCache(airQualityCache, airQualityCacheKey, AIR_QUALITY_CACHE_TTL_MS, async () => {
+  const airQualityResponse = await readThroughWeatherCache(airQualityCache, {
+      kind: PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY,
+      key: airQualityCacheKey,
+      recoveryKeys: airQualityRecoveryKeys,
+      ttlMs: AIR_QUALITY_CACHE_TTL_MS,
+      staleIfErrorMs: AIR_QUALITY_STALE_IF_ERROR_MS,
+      loader: async () => {
       const response = await axios.get('https://air-quality-api.open-meteo.com/v1/air-quality', {
         params: {
           latitude: location.latitude,
@@ -555,8 +671,7 @@ async function fetchDashboardWeather(options = {}) {
       });
 
       return response.data;
-    }, {
-      staleIfErrorMs: AIR_QUALITY_STALE_IF_ERROR_MS
+      }
     }).catch(() => null);
 
   let moduleTelemetry = null;
@@ -625,5 +740,11 @@ module.exports = {
   normalizeCoordinates,
   normalizeLocationQuery,
   parseUsCityStateQuery,
-  pickUsCityStateResult
+  pickUsCityStateResult,
+  __resetWeatherCachesForTests: () => {
+    forecastCache.clear();
+    airQualityCache.clear();
+    geocodeCache.clear();
+    weatherCacheStore.resetForTests();
+  }
 };

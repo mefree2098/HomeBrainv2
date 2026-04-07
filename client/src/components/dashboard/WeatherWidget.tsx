@@ -54,6 +54,27 @@ const formatUv = (value: number | null | undefined) => value == null ? "--" : va
 const formatAqi = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)}`
 const formatBatteryVoltage = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(2)} V`
 
+const selectMostRecentTimestamp = (...values: Array<string | null | undefined>) => {
+  let latest: Date | null = null
+
+  values.forEach((value) => {
+    if (!value) {
+      return
+    }
+
+    const candidate = new Date(value)
+    if (Number.isNaN(candidate.getTime())) {
+      return
+    }
+
+    if (!latest || candidate > latest) {
+      latest = candidate
+    }
+  })
+
+  return latest ? latest.toISOString() : null
+}
+
 const toCompass = (degrees: number | null | undefined) => {
   if (degrees == null) {
     return "--"
@@ -930,7 +951,11 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const headlineTemperature = tempestStation?.metrics.temperatureF ?? weather?.current.temperatureF ?? null
   const headlineFeelsLike = tempestStation?.metrics.feelsLikeF ?? weather?.current.apparentTemperatureF ?? null
   const moduleTelemetry = weather?.tempest?.moduleTelemetry ?? null
-  const lastSyncedAt = tempestStation?.lastEventAt ?? tempestStation?.observedAt ?? weather?.fetchedAt ?? null
+  const lastSyncedAt = selectMostRecentTimestamp(
+    tempestStation?.observedAt,
+    tempestStation?.lastEventAt,
+    weather?.fetchedAt
+  )
   const lastSyncedTime = formatLastSyncedTime(lastSyncedAt)
   const lastSyncedAgo = formatLastSyncedAgo(lastSyncedAt)
 
