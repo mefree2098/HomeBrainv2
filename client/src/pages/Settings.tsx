@@ -140,6 +140,7 @@ import {
 import { useNavigate } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
+import { OpenClawIntegration } from "./OpenClawIntegration"
 
 type InsteonSerialPortCandidate = {
   path?: string;
@@ -4034,6 +4035,7 @@ export function Settings() {
 
               <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 p-1">
                 <TabsTrigger value="alexa">Alexa</TabsTrigger>
+                <TabsTrigger value="openclaw">OpenClaw</TabsTrigger>
                 <TabsTrigger value="tempest">Tempest</TabsTrigger>
                 <TabsTrigger value="devices">Device Integrations</TabsTrigger>
                 <TabsTrigger value="ecobee">Ecobee</TabsTrigger>
@@ -4745,6 +4747,16 @@ export function Settings() {
                 </p>
               </CardContent>
             </Card>
+              </TabsContent>
+
+              <TabsContent value="openclaw" className="space-y-6">
+                <div className="space-y-2">
+                  <h3 className="text-xl font-semibold tracking-tight">OpenClaw</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Configure the external OpenClaw admin integration, rotate its HomeBrain token, and generate a Jetson-ready deployment bundle without leaving Settings.
+                  </p>
+                </div>
+                <OpenClawIntegration embedded />
               </TabsContent>
 
               <TabsContent value="tempest" className="space-y-6">

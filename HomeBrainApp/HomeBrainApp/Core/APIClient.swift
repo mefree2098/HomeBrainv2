@@ -61,6 +61,17 @@ final class APIClient {
         try await request(path: path, method: .delete, body: nil, query: [])
     }
 
+    func download(
+        _ path: String,
+        method: HTTPMethod = .get,
+        body: Any? = nil,
+        query: [URLQueryItem] = [],
+        authorized: Bool = true
+    ) async throws -> (data: Data, suggestedFilename: String?) {
+        let (data, response) = try await dataRequest(path: path, method: method, body: body, query: query, authorized: authorized)
+        return (data, suggestedFilename(from: response))
+    }
+
     func streamURL(_ path: String, query: [URLQueryItem] = [], includeAccessTokenQuery: Bool = false) -> URL? {
         var resolvedQuery = query
 
@@ -81,6 +92,25 @@ final class APIClient {
         authorized: Bool = true,
         hasRetried: Bool = false
     ) async throws -> Any {
+        let (data, _) = try await dataRequest(
+            path: path,
+            method: method,
+            body: body,
+            query: query,
+            authorized: authorized,
+            hasRetried: hasRetried
+        )
+        return try parseJSONPayload(data: data)
+    }
+
+    private func dataRequest(
+        path: String,
+        method: HTTPMethod,
+        body: Any?,
+        query: [URLQueryItem],
+        authorized: Bool = true,
+        hasRetried: Bool = false
+    ) async throws -> (Data, HTTPURLResponse) {
         guard let url = buildURL(path: path, query: query) else {
             throw APIError.invalidURL
         }
@@ -120,7 +150,7 @@ final class APIClient {
            path != "/api/auth/login",
            path != "/api/auth/register" {
             try await sessionStore.refreshTokens()
-            return try await request(
+            return try await dataRequest(
                 path: path,
                 method: method,
                 body: body,
@@ -130,10 +160,8 @@ final class APIClient {
             )
         }
 
-        let payload = try parseJSONPayload(data: data)
-
         guard (200..<300).contains(statusCode) else {
-            let message = parseErrorMessage(from: payload)
+            let message = parseErrorMessage(from: payloadForError(from: data))
             if statusCode == 401 || statusCode == 403 {
                 if authorized {
                     sessionStore.expireAuthentication(message: message)
@@ -143,7 +171,7 @@ final class APIClient {
             throw APIError.server(statusCode: statusCode, message: message)
         }
 
-        return payload
+        return (data, httpResponse)
     }
 
     private func buildURL(path: String, query: [URLQueryItem]) -> URL? {
@@ -197,5 +225,25 @@ final class APIClient {
         }
 
         return "The server returned an error."
+    }
+
+    private func payloadForError(from data: Data) -> Any {
+        (try? parseJSONPayload(data: data)) ?? [:]
+    }
+
+    private func suggestedFilename(from response: HTTPURLResponse) -> String? {
+        guard let contentDisposition = response.value(forHTTPHeaderField: "Content-Disposition") else {
+            return nil
+        }
+
+        let parts = contentDisposition.split(separator: ";")
+        for rawPart in parts {
+            let part = rawPart.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard part.lowercased().hasPrefix("filename=") else { continue }
+            let value = part.dropFirst("filename=".count)
+            return String(value).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        }
+
+        return nil
     }
 }

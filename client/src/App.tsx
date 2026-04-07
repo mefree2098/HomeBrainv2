@@ -70,6 +70,7 @@ function App() {
             <Route path="/settings" element={withLayout(<Settings />, { adminOnly: true })} />
             <Route path="/alexa-broker" element={withLayout(<AlexaBrokerManagement />, { adminOnly: true })} />
             <Route path="/platform-deploy" element={withLayout(<PlatformDeploy />, { adminOnly: true })} />
+            <Route path="/openclaw" element={<Navigate to="/settings" replace />} />
             <Route path="/reverse-proxy" element={withLayout(<ReverseProxyManagement />, { adminOnly: true })} />
             <Route path="/operations" element={withLayout(<Operations />, { adminOnly: true })} />
             <Route path="/ssl" element={withLayout(<SSLManagement />, { adminOnly: true })} />

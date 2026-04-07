@@ -41,6 +41,8 @@ const whisperRoutes = require("./routes/whisperRoutes");
 const alexaRoutes = require("./routes/alexaRoutes");
 const alexaCustomSkillRoutes = require("./routes/alexaCustomSkillRoutes");
 const telemetryRoutes = require("./routes/telemetryRoutes");
+const openclawRoutes = require("./routes/openclawRoutes");
+const openclawMcpRoutes = require("./routes/openclawMcpRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
@@ -64,6 +66,7 @@ const alexaBridgeService = require("./services/alexaBridgeService");
 const alexaBrokerService = require("./services/alexaBrokerService");
 const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
 const telemetryService = require("./services/telemetryService");
+const openclawMcpService = require("./services/openclawMcpService");
 const { connectDB } = require("./config/database");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
 const cors = require("cors");
@@ -136,6 +139,7 @@ const normalizeWebhookPath = (value, fallback) => {
 const app = express();
 const port = process.env.PORT || 3000;
 const bindHost = process.env.HOMEBRAIN_BIND_HOST || '0.0.0.0';
+openclawMcpService.setApp(app);
 // Pretty-print JSON responses
 app.enable('json spaces');
 // We want to be consistent with URL paths, so we enable strict routing
@@ -310,9 +314,12 @@ app.use('/api/insteon', insteonRoutes);
   // Ollama Routes
   app.use('/api/ollama', ollamaRoutes);
   // Whisper Routes
-  app.use('/api/whisper', whisperRoutes);
+app.use('/api/whisper', whisperRoutes);
 // Resource Monitor Routes
   app.use('/api/resources', resourceRoutes);
+// OpenClaw Integration Routes
+app.use('/api/openclaw/mcp', openclawMcpRoutes);
+app.use('/api/openclaw', openclawRoutes);
 // Internal Caddy Policy Routes
 app.use('/internal/caddy', internalCaddyRoutes);
 // Internal Axiom Sync Routes

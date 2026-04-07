@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var infoMessage = ""
+    @State private var showingOpenClawSettings = false
 
     @State private var serverURL = ""
 
@@ -152,6 +153,17 @@ struct SettingsView: View {
                         TextField("Harmony Hub Addresses", text: $harmonyHubAddresses)
                     }
 
+                    Section("OpenClaw") {
+                        Text("Configure the external OpenClaw admin integration, rotate its HomeBrain token, and download the Jetson deployment bundle from here.")
+                            .font(.footnote)
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                        Button("Open OpenClaw Settings") {
+                            showingOpenClawSettings = true
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
                     Section("API Keys & Tests") {
                         SecureField("OpenAI API Key", text: $openaiApiKey)
                         HStack {
@@ -212,6 +224,10 @@ struct SettingsView: View {
         .padding()
         .task {
             await loadSettings()
+        }
+        .sheet(isPresented: $showingOpenClawSettings) {
+            OpenClawIntegrationView()
+                .environmentObject(session)
         }
     }
 

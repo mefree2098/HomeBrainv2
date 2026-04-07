@@ -514,11 +514,18 @@ show_logs() {
 update_homebrain() {
   require_repo
 
+  local node_bin
   local repo_status
   repo_status="$(git -C "${HOMEBRAIN_DIR}" status --porcelain)"
   if [[ -n "${repo_status}" ]]; then
     print_error "Repository has local changes. Commit or stash them before running update."
     echo "${repo_status}"
+    exit 1
+  fi
+
+  node_bin="$(resolve_node_bin)"
+  if [[ -z "$node_bin" ]]; then
+    print_error "Node.js is not installed."
     exit 1
   fi
 
@@ -537,6 +544,31 @@ update_homebrain() {
 
   print_status "Building client..."
   run_modern_npm run build --prefix client
+
+  print_status "Validating OpenClaw integration assets..."
+  sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && $(printf '%q' "$node_bin") - <<'NODE'
+const fs = require('fs');
+const requiredFiles = [
+  './server/services/openclawIntegrationService.js',
+  './server/services/openclawMcpService.js',
+  './server/services/openclawToolCatalog.js',
+  './server/routes/openclawRoutes.js',
+  './server/routes/openclawMcpRoutes.js',
+  './openclaw/skills/homebrain-admin/SKILL.md',
+  './openclaw/jetson/install-jetson.sh',
+  './docs/openclaw/jetson-setup.md'
+];
+
+for (const filePath of requiredFiles) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error('Missing OpenClaw asset: ' + filePath);
+  }
+}
+
+require('./server/services/openclawIntegrationService');
+require('./server/services/openclawMcpService');
+console.log('OpenClaw integration assets verified.');
+NODE"
 
   if [[ ! -x "${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/python" && -x "${HOMEBRAIN_DIR}/server/scripts/install-openwakeword-deps.sh" ]]; then
     print_warning "Wake-word virtualenv is missing. Bootstrapping it now."
