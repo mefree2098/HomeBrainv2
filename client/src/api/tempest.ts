@@ -3,6 +3,8 @@ import type { TempestEventRecord, TempestObservationPoint, TempestStationSummary
 
 export interface TempestIntegrationStatus {
   token: string
+  tokenConfigured?: boolean
+  tokenSource?: "stored" | "environment" | "none"
   enabled: boolean
   websocketEnabled: boolean
   udpEnabled: boolean

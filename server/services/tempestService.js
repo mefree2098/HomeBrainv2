@@ -48,6 +48,19 @@ const trimString = (value, fallback = '') => {
   return trimmed || fallback;
 };
 
+const maskSecret = (value) => {
+  const trimmed = trimString(value, '');
+  if (!trimmed) {
+    return '';
+  }
+
+  if (trimmed.length <= 4) {
+    return '*'.repeat(trimmed.length);
+  }
+
+  return `${'*'.repeat(Math.max(8, trimmed.length - 4))}${trimmed.slice(-4)}`;
+};
+
 const mostRecentTimestamp = (...values) => {
   let latest = null;
 
@@ -602,9 +615,24 @@ class TempestService {
     const integration = await TempestIntegration.getIntegration();
     const stations = await this.listProvisionedStations();
     const selectedStation = stations.find((station) => station.stationId === toNumber(integration.selectedStationId)) || null;
+    const persistedToken = trimString(integration?.token, '');
+    const resolvedToken = this.resolveToken(null, integration);
+    const tokenSource = persistedToken
+      ? 'stored'
+      : (trimString(process.env.TEMPEST_TOKEN, '') ? 'environment' : 'none');
+    const sanitizedIntegration = integration.toSanitized
+      ? integration.toSanitized()
+      : { ...integration };
+
+    if (!trimString(sanitizedIntegration.token, '') && resolvedToken) {
+      sanitizedIntegration.token = maskSecret(resolvedToken);
+    }
+
+    sanitizedIntegration.tokenConfigured = Boolean(resolvedToken);
+    sanitizedIntegration.tokenSource = tokenSource;
 
     return {
-      integration: integration.toSanitized ? integration.toSanitized() : integration,
+      integration: sanitizedIntegration,
       health: {
         isConnected: integration.isConnected === true,
         websocketConnected: integration.websocket?.connected === true,

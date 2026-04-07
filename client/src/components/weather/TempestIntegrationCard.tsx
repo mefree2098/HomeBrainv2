@@ -90,7 +90,9 @@ export function TempestIntegrationCard() {
       setStatus(nextStatus)
       setStationOptions(createStationOptions(nextStatus))
       setForm({
-        token: isMaskedSecretValue(nextStatus.integration.token) ? CONFIGURED_SECRET_PLACEHOLDER : (nextStatus.integration.token || ""),
+        token: nextStatus.integration.tokenConfigured || isMaskedSecretValue(nextStatus.integration.token)
+          ? CONFIGURED_SECRET_PLACEHOLDER
+          : (nextStatus.integration.token || ""),
         enabled: nextStatus.integration.enabled === true,
         websocketEnabled: nextStatus.integration.websocketEnabled !== false,
         udpEnabled: nextStatus.integration.udpEnabled === true,
@@ -272,6 +274,13 @@ export function TempestIntegrationCard() {
                 placeholder="Paste Tempest token"
                 onChange={(event) => updateField("token", event.target.value)}
               />
+              {status?.integration?.tokenConfigured ? (
+                <p className="text-xs text-muted-foreground">
+                  {status.integration.tokenSource === "environment"
+                    ? "A Tempest token is active from runtime environment settings. Enter a new value and save if you want HomeBrain to persist it in the database."
+                    : "A Tempest token is already configured. Enter a new value only if you want to replace it."}
+                </p>
+              ) : null}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">

@@ -572,6 +572,8 @@ private struct WeatherDashboardSnapshot {
 
 private struct TempestIntegrationSnapshot {
     let token: String
+    let tokenConfigured: Bool
+    let tokenSource: String
     let enabled: Bool
     let websocketEnabled: Bool
     let udpEnabled: Bool
@@ -595,6 +597,8 @@ private struct TempestIntegrationSnapshot {
         let calibration = JSON.object(object["calibration"])
         return TempestIntegrationSnapshot(
             token: JSON.string(object, "token"),
+            tokenConfigured: JSON.bool(object, "tokenConfigured") || !JSON.string(object, "token").isEmpty,
+            tokenSource: JSON.string(object, "tokenSource", fallback: "none"),
             enabled: JSON.bool(object, "enabled"),
             websocketEnabled: JSON.bool(object, "websocketEnabled", fallback: true),
             udpEnabled: JSON.bool(object, "udpEnabled"),
@@ -713,7 +717,7 @@ private struct TempestConfigForm {
     var rainMultiplier = "1"
 
     mutating func hydrate(from status: TempestStatusSnapshot) {
-        token = weatherIsMaskedSecret(status.integration.token)
+        token = status.integration.tokenConfigured || weatherIsMaskedSecret(status.integration.token)
             ? tempestConfiguredSecretPlaceholder
             : status.integration.token
         enabled = status.integration.enabled
@@ -1891,6 +1895,14 @@ struct WeatherView: View {
                                 .textInputAutocapitalization(.never)
                                 .disableAutocorrection(true)
                                 .hbPanelTextField()
+
+                            if tempestStatus?.integration.tokenConfigured == true {
+                                Text(tempestStatus?.integration.tokenSource == "environment"
+                                    ? "A Tempest token is active from runtime environment settings. Enter a new value and save if you want HomeBrain to persist it in the database."
+                                    : "A Tempest token is already configured. Enter a new value only if you want to replace it.")
+                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
 
                             Group {
                                 if usesCompactWeatherLayout {

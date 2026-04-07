@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const Device = require('../models/Device');
 const TempestEvent = require('../models/TempestEvent');
+const TempestIntegration = require('../models/TempestIntegration');
 const tempestService = require('../services/tempestService');
 
 test('getSelectedStationSnapshot merges recent lightning events into station metrics', async () => {
@@ -149,4 +150,65 @@ test('upsertStationDevice dedupes duplicate HomeBrain rows for one Tempest stati
   assert.equal(result.deduped, 1);
   assert.deepEqual(result.device.groups, ['Weather', 'Favorites']);
   assert.equal(result.device.saved, true);
+});
+
+test('getStatus reports an environment-backed token as configured without exposing the raw secret', async (t) => {
+  const originalGetIntegration = TempestIntegration.getIntegration;
+  const originalListProvisionedStations = tempestService.listProvisionedStations;
+  const originalToken = process.env.TEMPEST_TOKEN;
+
+  t.after(() => {
+    TempestIntegration.getIntegration = originalGetIntegration;
+    tempestService.listProvisionedStations = originalListProvisionedStations;
+    if (originalToken === undefined) {
+      delete process.env.TEMPEST_TOKEN;
+    } else {
+      process.env.TEMPEST_TOKEN = originalToken;
+    }
+  });
+
+  process.env.TEMPEST_TOKEN = 'tempest_env_secret_1234';
+
+  TempestIntegration.getIntegration = async () => ({
+    token: '',
+    enabled: true,
+    websocket: {
+      connected: false,
+      lastConnectedAt: null,
+      lastMessageAt: null,
+      reconnectCount: 0
+    },
+    udp: {
+      listening: false,
+      lastMessageAt: null
+    },
+    isConnected: false,
+    lastDiscoveryAt: null,
+    lastObservationAt: null,
+    lastError: '',
+    selectedStationId: null,
+    toSanitized() {
+      return {
+        token: '',
+        enabled: true,
+        websocketEnabled: true,
+        udpEnabled: false,
+        udpBindAddress: '0.0.0.0',
+        udpPort: 50222,
+        room: 'Outside',
+        selectedStationId: null,
+        selectedDeviceIds: [],
+        calibration: {}
+      };
+    }
+  });
+
+  tempestService.listProvisionedStations = async () => [];
+
+  const status = await tempestService.getStatus();
+
+  assert.equal(status.integration.tokenConfigured, true);
+  assert.equal(status.integration.tokenSource, 'environment');
+  assert.match(status.integration.token, /^\*+1234$/);
+  assert.equal(status.integration.token.includes('tempest_env_secret_1234'), false);
 });
