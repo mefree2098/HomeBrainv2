@@ -82,6 +82,21 @@ const mostRecentTimestamp = (...values) => {
   return latest;
 };
 
+const getTempestFreshnessTimestamp = (device) => {
+  const tempest = device?.properties?.tempest || {};
+  const freshest = mostRecentTimestamp(
+    tempest.lastObservationAt,
+    tempest.lastEventAt,
+    device?.lastSeen,
+    device?.updatedAt,
+    device?.createdAt
+  );
+
+  return freshest instanceof Date && !Number.isNaN(freshest.getTime())
+    ? freshest.getTime()
+    : 0;
+};
+
 const buildTempestDeviceQuery = ({ stationId, deviceId, serialNumber, hubSerialNumber } = {}) => {
   const orConditions = [];
 
@@ -272,7 +287,7 @@ class TempestService {
       query['properties.tempest.stationId'] = targetStationId;
     }
 
-    return Device.findOne(query).sort({ 'properties.tempest.stationName': 1, name: 1 });
+    return this.findCanonicalStationDevice(query);
   }
 
   async listProvisionedStations() {
@@ -928,7 +943,61 @@ class TempestService {
       return null;
     }
 
-    return Device.findOne(query);
+    return this.findCanonicalStationDevice(query);
+  }
+
+  selectCanonicalStationDevice(devices = []) {
+    if (!Array.isArray(devices) || devices.length === 0) {
+      return null;
+    }
+
+    const freshestTimestamp = Math.max(...devices.map((device) => getTempestFreshnessTimestamp(device)));
+    const freshestDevices = devices.filter((device) => getTempestFreshnessTimestamp(device) === freshestTimestamp);
+
+    return selectCanonicalDevice(freshestDevices) || freshestDevices[0] || null;
+  }
+
+  async reconcileDuplicateStationDevices(canonicalDevice, duplicateDevices = []) {
+    if (!canonicalDevice || !Array.isArray(duplicateDevices) || duplicateDevices.length === 0) {
+      return canonicalDevice;
+    }
+
+    const groupsChanged = mergeDuplicateDeviceGroups(canonicalDevice, duplicateDevices);
+    if (groupsChanged && typeof canonicalDevice.save === 'function') {
+      await canonicalDevice.save();
+    }
+
+    const duplicateIds = duplicateDevices
+      .map((candidate) => String(candidate?._id || ''))
+      .filter(Boolean);
+
+    if (duplicateIds.length > 0) {
+      await Device.deleteMany({ _id: { $in: duplicateIds } });
+      console.warn(
+        `TempestService: Removed ${duplicateIds.length} duplicate HomeBrain row(s) during station lookup: ${describeDevices(duplicateDevices)}`
+      );
+    }
+
+    return canonicalDevice;
+  }
+
+  async findCanonicalStationDevice(query) {
+    const devices = await Device.find(query);
+    const canonicalDevice = this.selectCanonicalStationDevice(devices);
+
+    if (!canonicalDevice) {
+      return null;
+    }
+
+    const duplicateDevices = devices.filter((candidate) => (
+      String(candidate?._id || '') !== String(canonicalDevice?._id || '')
+    ));
+
+    if (duplicateDevices.length > 0) {
+      await this.reconcileDuplicateStationDevices(canonicalDevice, duplicateDevices);
+    }
+
+    return canonicalDevice;
   }
 
   async updateDeviceFromObservation(device, observation, extras = {}) {

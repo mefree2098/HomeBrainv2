@@ -152,6 +152,72 @@ test('upsertStationDevice dedupes duplicate HomeBrain rows for one Tempest stati
   assert.equal(result.device.saved, true);
 });
 
+test('getSelectedStationDevice prefers the freshest Tempest duplicate and removes stale rows', async (t) => {
+  const originalFind = Device.find;
+  const originalDeleteMany = Device.deleteMany;
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.deleteMany = originalDeleteMany;
+  });
+
+  const staleDuplicate = {
+    _id: 'tempest-stale',
+    name: 'Backyard Tempest',
+    room: 'Outside',
+    groups: ['Weather'],
+    lastSeen: new Date('2026-04-02T12:17:00Z'),
+    createdAt: new Date('2026-04-01T00:00:00Z'),
+    properties: {
+      source: 'tempest',
+      tempest: {
+        stationId: 42,
+        lastObservationAt: new Date('2026-04-02T12:17:00Z')
+      }
+    }
+  };
+
+  const freshCanonical = {
+    _id: 'tempest-fresh',
+    name: 'Lehi',
+    room: 'Outside',
+    groups: ['Favorites'],
+    lastSeen: new Date('2026-04-07T22:35:31Z'),
+    createdAt: new Date('2026-04-03T00:00:00Z'),
+    properties: {
+      source: 'tempest',
+      tempest: {
+        stationId: 42,
+        lastObservationAt: new Date('2026-04-07T22:35:31Z')
+      }
+    },
+    async save() {
+      this.saved = true;
+    }
+  };
+
+  Device.find = async (query) => {
+    assert.deepEqual(query, {
+      'properties.source': 'tempest',
+      'properties.tempest.stationId': 42
+    });
+    return [staleDuplicate, freshCanonical];
+  };
+
+  Device.deleteMany = async (query) => {
+    assert.deepEqual(query, {
+      _id: { $in: ['tempest-stale'] }
+    });
+    return { deletedCount: 1 };
+  };
+
+  const device = await tempestService.getSelectedStationDevice(42);
+
+  assert.equal(device?._id, 'tempest-fresh');
+  assert.deepEqual(device.groups, ['Favorites', 'Weather']);
+  assert.equal(device.saved, true);
+});
+
 test('getStatus reports an environment-backed token as configured without exposing the raw secret', async (t) => {
   const originalGetIntegration = TempestIntegration.getIntegration;
   const originalListProvisionedStations = tempestService.listProvisionedStations;
