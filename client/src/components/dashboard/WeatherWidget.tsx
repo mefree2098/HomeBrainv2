@@ -32,8 +32,6 @@ interface WeatherWidgetProps {
 }
 
 const WEATHER_REFRESH_INTERVAL_MS = 60_000
-const AUTO_LOCATION_CACHE_MS = 10 * 60 * 1000
-
 const resolveCurrentPosition = () => new Promise<GeolocationPosition>((resolve, reject) => {
   if (!("geolocation" in navigator)) {
     reject(new Error("This browser does not support location access for weather widgets."))
@@ -847,7 +845,6 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const [weather, setWeather] = useState<DashboardWeatherPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const autoLocationRef = useRef<{ latitude: number; longitude: number; expiresAt: number } | null>(null)
   const compact = size === "small"
   const medium = size === "medium"
   const wide = size === "large" || size === "full"
@@ -867,26 +864,10 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
       if (locationMode === "custom" && locationQuery?.trim()) {
         response = await getDashboardWeather({ address: locationQuery.trim() })
       } else if (locationMode === "auto") {
-        const cachedAutoLocation = autoLocationRef.current
-        const now = Date.now()
-        let latitude = cachedAutoLocation?.latitude ?? null
-        let longitude = cachedAutoLocation?.longitude ?? null
-
-        if (!cachedAutoLocation || cachedAutoLocation.expiresAt <= now) {
-          const position = await resolveCurrentPosition()
-          latitude = position.coords.latitude
-          longitude = position.coords.longitude
-
-          autoLocationRef.current = {
-            latitude,
-            longitude,
-            expiresAt: now + AUTO_LOCATION_CACHE_MS
-          }
-        }
-
+        const position = await resolveCurrentPosition()
         response = await getDashboardWeather({
-          latitude,
-          longitude,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
           label: "Current location"
         })
       } else {
