@@ -26,6 +26,7 @@ const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const platformDeployRoutes = require("./routes/platformDeployRoutes");
 const reverseProxyRoutes = require("./routes/reverseProxyRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
+const panelRoutes = require("./routes/panelRoutes");
 const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
 const eventStreamRoutes = require("./routes/eventStreamRoutes");
@@ -294,6 +295,8 @@ app.use('/api/platform-deploy', platformDeployRoutes);
 app.use('/api/admin/reverse-proxy', reverseProxyRoutes);
 // Remote Device Routes
 app.use('/api/remote-devices', remoteDeviceRoutes);
+// Wall Panel Routes
+app.use('/api/panels', panelRoutes);
 // Piper Voice Routes
 app.use('/api/wake-words/voices', piperVoiceRoutes);
 // Wake Word Routes
