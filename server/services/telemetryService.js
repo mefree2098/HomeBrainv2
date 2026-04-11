@@ -3,6 +3,8 @@ const DeviceEnergySample = require('../models/DeviceEnergySample');
 const TelemetrySample = require('../models/TelemetrySample');
 const TempestEvent = require('../models/TempestEvent');
 const TempestObservation = require('../models/TempestObservation');
+const RainMachineDailyStat = require('../models/RainMachineDailyStat');
+const RainMachineWateringDay = require('../models/RainMachineWateringDay');
 const { sendLLMRequestWithFallback } = require('./llmService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const resourceMonitorService = require('./resourceMonitorService');
@@ -83,7 +85,25 @@ const METRIC_LABELS = {
   solar_radiation_wm2: 'Solar Radiation',
   lightning_avg_distance_miles: 'Lightning Distance',
   lightning_count: 'Lightning Count',
-  battery_volts: 'Battery Voltage'
+  battery_volts: 'Battery Voltage',
+  queue_length: 'Queue Length',
+  running_program_count: 'Running Programs',
+  active_zone_count: 'Active Zones',
+  active_restrictions_count: 'Active Restrictions',
+  rain_delay_hours: 'Rain Delay',
+  remaining_sec: 'Remaining Duration',
+  user_duration_sec: 'Scheduled Duration',
+  machine_duration_sec: 'Machine Duration',
+  scheduled_duration_sec: 'Scheduled Duration',
+  watered_duration_sec: 'Watered Duration',
+  program_count: 'Programs',
+  zone_count: 'Zones',
+  cycle_count: 'Cycles',
+  adjustment_pct: 'Adjustment',
+  simulated_adjustment_pct: 'Simulated Adjustment',
+  water_saved_pct: 'Water Saved',
+  min_temp_c: 'Min Temperature',
+  max_temp_c: 'Max Temperature'
 };
 
 const FEATURED_METRIC_PRIORITY = [
@@ -103,6 +123,11 @@ const FEATURED_METRIC_PRIORITY = [
   'rain_today_in',
   'lightning_count',
   'signal_rssi_dbm',
+  'active_zone_count',
+  'queue_length',
+  'rain_delay_hours',
+  'water_saved_pct',
+  'adjustment_pct',
   'power_w',
   'energy_kwh',
   'battery_pct',
@@ -217,6 +242,16 @@ const TELEMETRY_STORAGE_COLLECTIONS = [
     key: 'tempest_events',
     label: 'Tempest Events',
     model: TempestEvent
+  },
+  {
+    key: 'rainmachine_daily_stats',
+    label: 'RainMachine Daily Stats',
+    model: RainMachineDailyStat
+  },
+  {
+    key: 'rainmachine_watering_days',
+    label: 'RainMachine Watering History',
+    model: RainMachineWateringDay
   }
 ];
 
@@ -400,6 +435,14 @@ function asPlainMetrics(value) {
   return typeof value === 'object' ? value : {};
 }
 
+function buildNumericMetricMap(input = {}) {
+  const metrics = {};
+  Object.entries(asPlainMetrics(input)).forEach(([key, value]) => {
+    addMetric(metrics, key, value);
+  });
+  return metrics;
+}
+
 function addMetric(metrics, key, value) {
   const normalizedValue = normalizeMetricValue(value);
   if (normalizedValue === null) {
@@ -507,6 +550,15 @@ function inferMetricLabel(key) {
 function inferMetricUnit(key) {
   if (/_ms$/.test(key)) {
     return 'ms';
+  }
+  if (/_sec$/.test(key)) {
+    return 'sec';
+  }
+  if (/_minutes$/.test(key)) {
+    return 'min';
+  }
+  if (/_hours$/.test(key)) {
+    return 'hr';
   }
   if (/_pct$/.test(key)) {
     return '%';
@@ -813,6 +865,27 @@ function extractDeviceMetrics(device = {}) {
   addMetric(metrics, 'online', device.isOnline);
   addMetric(metrics, 'status', device.status);
 
+  if (sourceOrigin === 'rainmachine') {
+    const rainMachine = properties.rainmachine && typeof properties.rainmachine === 'object'
+      ? properties.rainmachine
+      : {};
+
+    addMetric(metrics, 'queue_length', rainMachine.queueLength);
+    addMetric(metrics, 'running_program_count', rainMachine.runningProgramCount);
+    addMetric(metrics, 'active_zone_count', rainMachine.activeZoneCount);
+    addMetric(metrics, 'active_restrictions_count', rainMachine.activeRestrictionsCount);
+    addMetric(metrics, 'rain_delay_hours', rainMachine.rainDelayHours);
+    addMetric(metrics, 'remaining_sec', rainMachine.remainingSeconds);
+    addMetric(metrics, 'user_duration_sec', rainMachine.userDurationSeconds);
+    addMetric(metrics, 'machine_duration_sec', rainMachine.machineDurationSeconds);
+    addMetric(metrics, 'program_count', rainMachine.programCount);
+    addMetric(metrics, 'zone_count', rainMachine.zoneCount);
+    addMetric(metrics, 'cycle_count', rainMachine.cycleCount);
+    addMetric(metrics, 'status', device.status ?? (rainMachine.stateLabel === 'running' || rainMachine.stateLabel === 'pending'));
+
+    return metrics;
+  }
+
   if (sourceOrigin === 'tempest') {
     const tempest = properties.tempest && typeof properties.tempest === 'object'
       ? properties.tempest
@@ -1087,6 +1160,10 @@ function scoreSourceForPrompt(source, prompt, keywords = [], preferredSourceKey 
 
   if (/device|switch|light|fan|thermostat|lock|sensor/.test(normalizedPrompt) && source?.sourceType === 'device') {
     score += 12;
+  }
+
+  if (/rainmachine|irrigation|sprinkler|watering|zones/.test(normalizedPrompt) && (source?.sourceType === 'rainmachine_report' || source?.origin === 'rainmachine')) {
+    score += 14;
   }
 
   return score;
@@ -1365,6 +1442,108 @@ class TelemetryService {
             observationType: String(observation?.observationType || ''),
             source: String(observation?.source || ''),
             stationName: String(observation?.stationName || '')
+          },
+          createdAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    return { inserted: true };
+  }
+
+  async recordRainMachineDailyStat(controller = {}, stat = {}) {
+    const controllerId = String(controller?.id || stat?.controllerId || '').trim();
+    const controllerName = String(controller?.name || stat?.controllerName || 'RainMachine').trim();
+    if (!controllerId) {
+      return { inserted: false, skipped: true };
+    }
+
+    const recordedAt = parseOptionalDate(stat?.dayDate || stat?.day);
+    if (!recordedAt) {
+      return { inserted: false, skipped: true };
+    }
+
+    const metrics = buildNumericMetricMap(stat?.metrics);
+    if (Object.keys(metrics).length === 0) {
+      return { inserted: false, skipped: true };
+    }
+
+    await TelemetrySample.updateOne(
+      {
+        sourceKey: `rainmachine_report:${controllerId}:daily_stats`,
+        streamType: 'rainmachine_daily_stat',
+        recordedAt,
+        'metadata.day': String(stat?.day || '')
+      },
+      {
+        $setOnInsert: {
+          sourceType: 'rainmachine_report',
+          sourceId: controllerId,
+          sourceKey: `rainmachine_report:${controllerId}:daily_stats`,
+          sourceName: `${controllerName} Daily Stats`,
+          sourceCategory: 'irrigation_report',
+          sourceRoom: String(controller?.room || '').trim(),
+          sourceOrigin: 'rainmachine',
+          streamType: 'rainmachine_daily_stat',
+          metricKeys: Object.keys(metrics).sort(),
+          metrics,
+          metadata: {
+            day: String(stat?.day || ''),
+            controllerName,
+            details: stat?.details || {}
+          },
+          createdAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    return { inserted: true };
+  }
+
+  async recordRainMachineWateringDay(controller = {}, wateringDay = {}) {
+    const controllerId = String(controller?.id || wateringDay?.controllerId || '').trim();
+    const controllerName = String(controller?.name || wateringDay?.controllerName || 'RainMachine').trim();
+    if (!controllerId) {
+      return { inserted: false, skipped: true };
+    }
+
+    const recordedAt = parseOptionalDate(wateringDay?.dayDate || wateringDay?.day);
+    if (!recordedAt) {
+      return { inserted: false, skipped: true };
+    }
+
+    const metrics = buildNumericMetricMap(wateringDay?.summary);
+    if (Object.keys(metrics).length === 0) {
+      return { inserted: false, skipped: true };
+    }
+
+    await TelemetrySample.updateOne(
+      {
+        sourceKey: `rainmachine_report:${controllerId}:watering_log`,
+        streamType: 'rainmachine_watering_log',
+        recordedAt,
+        'metadata.day': String(wateringDay?.day || ''),
+        'metadata.simulated': wateringDay?.simulated === true
+      },
+      {
+        $setOnInsert: {
+          sourceType: 'rainmachine_report',
+          sourceId: controllerId,
+          sourceKey: `rainmachine_report:${controllerId}:watering_log`,
+          sourceName: `${controllerName} Watering Log`,
+          sourceCategory: 'irrigation_report',
+          sourceRoom: String(controller?.room || '').trim(),
+          sourceOrigin: 'rainmachine',
+          streamType: 'rainmachine_watering_log',
+          metricKeys: Object.keys(metrics).sort(),
+          metrics,
+          metadata: {
+            day: String(wateringDay?.day || ''),
+            simulated: wateringDay?.simulated === true,
+            controllerName,
+            programCount: Array.isArray(wateringDay?.programs) ? wateringDay.programs.length : 0
           },
           createdAt: new Date()
         }
@@ -2051,11 +2230,20 @@ class TelemetryService {
       || (sourceType && sourceId ? `${sourceType}:${sourceId}` : '');
 
     if (!resolvedSourceKey) {
-      const [telemetryResult, energyResult, tempestObservationResult, tempestEventResult] = await Promise.all([
+      const [
+        telemetryResult,
+        energyResult,
+        tempestObservationResult,
+        tempestEventResult,
+        rainMachineDailyStatResult,
+        rainMachineWateringDayResult
+      ] = await Promise.all([
         TelemetrySample.deleteMany({}),
         DeviceEnergySample.deleteMany({}),
         TempestObservation.deleteMany({}),
-        TempestEvent.deleteMany({})
+        TempestEvent.deleteMany({}),
+        RainMachineDailyStat.deleteMany({}),
+        RainMachineWateringDay.deleteMany({})
       ]);
 
       return {
@@ -2063,7 +2251,9 @@ class TelemetryService {
         telemetryDeleted: telemetryResult.deletedCount || 0,
         energyDeleted: energyResult.deletedCount || 0,
         tempestObservationsDeleted: tempestObservationResult.deletedCount || 0,
-        tempestEventsDeleted: tempestEventResult.deletedCount || 0
+        tempestEventsDeleted: tempestEventResult.deletedCount || 0,
+        rainMachineDailyStatsDeleted: rainMachineDailyStatResult.deletedCount || 0,
+        rainMachineWateringDaysDeleted: rainMachineWateringDayResult.deletedCount || 0
       };
     }
 
@@ -2073,6 +2263,8 @@ class TelemetryService {
     let energyDeleted = 0;
     let tempestObservationsDeleted = 0;
     let tempestEventsDeleted = 0;
+    let rainMachineDailyStatsDeleted = 0;
+    let rainMachineWateringDaysDeleted = 0;
 
     if (summary.sourceType === 'device') {
       const energyResult = await DeviceEnergySample.deleteMany({ deviceId: summary.sourceId });
@@ -2093,12 +2285,26 @@ class TelemetryService {
       }
     }
 
+    if (summary.sourceType === 'rainmachine_report') {
+      if (summary.sourceKey.endsWith(':daily_stats')) {
+        const dailyResult = await RainMachineDailyStat.deleteMany({ controllerId: summary.sourceId });
+        rainMachineDailyStatsDeleted = dailyResult.deletedCount || 0;
+      }
+
+      if (summary.sourceKey.endsWith(':watering_log')) {
+        const wateringResult = await RainMachineWateringDay.deleteMany({ controllerId: summary.sourceId });
+        rainMachineWateringDaysDeleted = wateringResult.deletedCount || 0;
+      }
+    }
+
     return {
       scope: summary.sourceKey,
       telemetryDeleted: telemetryResult.deletedCount || 0,
       energyDeleted,
       tempestObservationsDeleted,
-      tempestEventsDeleted
+      tempestEventsDeleted,
+      rainMachineDailyStatsDeleted,
+      rainMachineWateringDaysDeleted
     };
   }
 }

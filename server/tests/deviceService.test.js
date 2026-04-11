@@ -8,6 +8,7 @@ const deviceEnergySampleService = require('../services/deviceEnergySampleService
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
 const insteonService = require('../services/insteonService');
 const harmonyService = require('../services/harmonyService');
+const rainMachineService = require('../services/rainMachineService');
 
 test('controlDevice routes Insteon turn_on through insteon service and skips generic DB write path', async (t) => {
   const originalFindById = Device.findById;
@@ -190,6 +191,76 @@ test('controlDevice skips Harmony refresh and verification when fast control opt
   assert.equal(persistedUpdate.status, true);
   assert.equal(persistedUpdate.isOnline, true);
   assert.equal(emitted.length >= 1, true);
+});
+
+test('controlDevice routes RainMachine zone start actions through the RainMachine service', async (t) => {
+  const originalFindById = Device.findById;
+  const originalEnsureRainMachineState = deviceService.ensureRainMachineState;
+  const originalStartZone = rainMachineService.startZone;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.ensureRainMachineState = originalEnsureRainMachineState;
+    rainMachineService.startZone = originalStartZone;
+  });
+
+  let findByIdCalls = 0;
+  Device.findById = async () => {
+    findByIdCalls += 1;
+
+    if (findByIdCalls === 1) {
+      return {
+        _id: 'rain-zone-1',
+        name: 'Front Lawn',
+        type: 'switch',
+        status: false,
+        isOnline: true,
+        properties: {
+          source: 'rainmachine',
+          rainmachine: {
+            entityType: 'zone',
+            controllerId: 'AA:BB:CC',
+            zoneId: 4
+          }
+        }
+      };
+    }
+
+    return {
+      _id: 'rain-zone-1',
+      name: 'Front Lawn',
+      type: 'switch',
+      status: true,
+      isOnline: true,
+      properties: {
+        source: 'rainmachine',
+        rainmachine: {
+          entityType: 'zone',
+          controllerId: 'AA:BB:CC',
+          zoneId: 4
+        }
+      }
+    };
+  };
+
+  let startZoneArgs = null;
+  deviceService.ensureRainMachineState = async () => {};
+  rainMachineService.startZone = async (zoneId, durationSeconds) => {
+    startZoneArgs = { zoneId, durationSeconds };
+    return {
+      dashboard: {}
+    };
+  };
+
+  const updated = await deviceService.controlDevice('rain-zone-1', 'rainmachine_start_zone', {
+    durationSeconds: 900
+  });
+
+  assert.deepEqual(startZoneArgs, {
+    zoneId: 4,
+    durationSeconds: 900
+  });
+  assert.equal(updated.status, true);
 });
 
 test('controlDevice routes Harmony raw devices through direct power commands and honors repeat-power settings', async (t) => {

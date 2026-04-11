@@ -16,6 +16,7 @@ const voiceDeviceRoutes = require("./routes/voiceDeviceRoutes");
 const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const tempestRoutes = require("./routes/tempestRoutes");
+const rainMachineRoutes = require("./routes/rainMachineRoutes");
 const weatherRoutes = require("./routes/weatherRoutes");
 const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
@@ -56,6 +57,7 @@ const wakeWordTrainingService = require("./services/wakeWordTrainingService");
 const voiceAcknowledgmentService = require("./services/voiceAcknowledgmentService");
 const whisperService = require("./services/whisperService");
 const tempestService = require("./services/tempestService");
+const rainMachineService = require("./services/rainMachineService");
 const platformDeployService = require("./services/platformDeployService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
@@ -277,6 +279,7 @@ app.use('/api/settings', settingsRoutes);
 // Weather Routes
 app.use('/api/weather', weatherRoutes);
 app.use('/api/tempest', tempestRoutes);
+app.use('/api/rainmachine', rainMachineRoutes);
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
@@ -485,6 +488,16 @@ platformUpdateMonitorService.start();
   }
 })();
 
+// Initialize RainMachine irrigation integration
+(async () => {
+  try {
+    await rainMachineService.initialize();
+    console.log('RainMachine Service initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize RainMachine Service:', error.message);
+  }
+})();
+
 async function gracefulShutdown(signal) {
   if (isShuttingDown) {
     return;
@@ -551,6 +564,12 @@ async function gracefulShutdown(signal) {
       await tempestService.shutdown();
     } catch (error) {
       console.error('Error stopping Tempest service:', error.message);
+    }
+
+    try {
+      await rainMachineService.shutdown();
+    } catch (error) {
+      console.error('Error stopping RainMachine service:', error.message);
     }
 
     try {

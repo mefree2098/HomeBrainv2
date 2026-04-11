@@ -9,6 +9,7 @@ HomeBrain is a local-first home automation and voice-assistant platform. It comb
 - A web dashboard for devices, scenes, workflows, voice devices, profiles, settings, reverse proxy/domains, operations, SSL inventory, Whisper, Ollama, and platform deploy
 - Smart home integrations for SmartThings, Ecobee, INSTEON/ISY, and Logitech Harmony Hub
 - Remote listener onboarding and fleet updates for room devices
+- Dedicated ESP32 wall panel APIs and firmware for rotary touchscreen room controllers
 - Wake-word training and distribution using OpenWakeWord plus Piper-generated training data
 - Optional local speech-to-text with Whisper
 - Optional local LLM support with Ollama
@@ -22,12 +23,16 @@ HomeBrain is no longer Jetson-only.
 - Also supported as a hub: other always-on Ubuntu/Debian `amd64` or `arm64` machines
 - Best-tested listener: Raspberry Pi 4/5
 - Also supported as a listener: other Debian/Ubuntu-based Linux mini PCs or SBCs with a microphone and speaker
+- Best-tested wall panel: ELECROW CrowPanel `2.1"` ESP32-S3 rotary display
+- Same panel family, smaller sibling: ELECROW `1.28"` round rotary display using the same HomeBrain backend flow but requiring its own board profile
 
 What changes by hardware:
 
 - Core web app, workflow runtime, integrations, and remote listeners work on generic Linux hardware.
 - Jetson is still the best target for local GPU workloads such as Whisper and Ollama.
 - Non-Jetson hosts can still run HomeBrain; local AI workloads may simply run slower or fall back to CPU.
+- Remote voice listeners are still Linux-based room devices.
+- ESP32 wall panels connect over `Wi-Fi` to the HomeBrain `/api/panels` endpoints and use the firmware in [`embedded/elecrow-wall-panel`](embedded/elecrow-wall-panel).
 
 ## Fastest Install
 
@@ -68,6 +73,7 @@ Important:
 - Beginner Jetson guide: [`docs/jetson-setup.md`](docs/jetson-setup.md)
 - Full deployment guide: [`DEPLOYMENT.md`](DEPLOYMENT.md)
 - Post-install configuration: [`docs/configuration.md`](docs/configuration.md)
+- ELECROW wall panel guide: [`docs/elecrow-wall-panel.md`](docs/elecrow-wall-panel.md)
 - Ollama management: [`docs/ollama-management.md`](docs/ollama-management.md)
 - Alexa setup guide: [`docs/alexa-admin-setup.md`](docs/alexa-admin-setup.md)
 - Alexa integration overview: [`docs/alexa-integration.md`](docs/alexa-integration.md)
@@ -89,6 +95,19 @@ From the HomeBrain UI:
 5. Run that command on the listener device
 
 Raspberry Pi cloud-init onboarding is also available from the same dialog.
+
+## Wall Panel Flow
+
+The new wall panel path is separate from Linux listeners:
+
+1. Install the hub and create the first admin account
+2. Register a panel through `/api/panels/register`
+3. Flash [`embedded/elecrow-wall-panel`](embedded/elecrow-wall-panel)
+4. Bind thermostat, room, home, media, and quiet actions
+
+Full guide:
+
+- [`docs/elecrow-wall-panel.md`](docs/elecrow-wall-panel.md)
 
 ## Production Service Management
 

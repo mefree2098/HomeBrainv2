@@ -67,6 +67,15 @@ http://<hub-ip>:3000
 3. Create the first account.
 4. Continue with [`docs/configuration.md`](docs/configuration.md).
 
+## Optional Room Hardware After Hub Install
+
+Once the hub is live, the two main room-hardware paths are:
+
+- Linux voice listeners: [`remote-device/README.md`](remote-device/README.md)
+- ELECROW ESP32 wall panels: [`docs/elecrow-wall-panel.md`](docs/elecrow-wall-panel.md)
+
+Use the Linux listener path for microphones, speakers, and wake-word audio. Use the ELECROW wall panel path for always-on touch and rotary room control over `Wi-Fi`.
+
 ## Ports
 
 Production:

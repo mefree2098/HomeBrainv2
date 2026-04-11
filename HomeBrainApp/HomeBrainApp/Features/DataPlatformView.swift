@@ -369,6 +369,17 @@ private nonisolated func telemetryFormatBytes(_ value: Int) -> String {
     return "\(size.formatted(.number.precision(.fractionLength(0...digits)))) \(units[unitIndex])"
 }
 
+private nonisolated func telemetrySourceKindLabel(_ source: TelemetrySourceSummary) -> String {
+    switch source.sourceType {
+    case "tempest_station":
+        return "Weather Station"
+    case "rainmachine_report":
+        return "Irrigation Report"
+    default:
+        return "Device Stream"
+    }
+}
+
 private nonisolated func telemetryDiskLocation(_ disk: TelemetryDiskSummary?) -> String {
     guard let disk else {
         return "the platform drive"
@@ -692,7 +703,7 @@ struct DataPlatformView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This clears the selected source history and any linked device or Tempest history that powers the charts.")
+            Text("This clears the selected source history and any linked device, Tempest, or RainMachine history that powers the charts.")
         }
         .confirmationDialog(
             "Clear all telemetry data?",
@@ -723,7 +734,7 @@ struct DataPlatformView: View {
                             .font(.system(size: 30, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
 
-                        Text("HomeBrain now tracks one year of chart-ready device and Tempest history so trends, comparisons, and future automations can all draw from the same telemetry surface.")
+                        Text("HomeBrain now tracks one year of chart-ready device, Tempest, and RainMachine history so trends, comparisons, and future automations can all draw from the same telemetry surface.")
                             .font(.system(size: 14, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -844,7 +855,7 @@ struct DataPlatformView: View {
                             .font(.system(size: 20, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
 
-                        Text("Choose a tracked source to inspect long-range device or weather history.")
+                        Text("Choose a tracked source to inspect long-range device, weather, or irrigation history.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textMuted)
                     }
@@ -877,7 +888,7 @@ struct DataPlatformView: View {
                 } else {
                     EmptyStateView(
                         title: "No telemetry yet",
-                        subtitle: "As Tempest observations and smart-device state changes arrive, they will appear here automatically."
+                        subtitle: "As Tempest observations, smart-device state changes, and RainMachine report syncs arrive, they will appear here automatically."
                     )
                 }
 
@@ -945,6 +956,11 @@ struct DataPlatformView: View {
                 color: HBPalette.accentBlue
             )
             footerPanel(
+                title: "RainMachine Reporting",
+                subtitle: "Daily irrigation stats and watering logs now land in the same telemetry fabric, so controller-side water savings and runtime history are chartable too.",
+                color: HBPalette.accentOrange
+            )
+            footerPanel(
                 title: "Device State History",
                 subtitle: "Device metrics and state transitions are chartable without digging through the raw device model or provider-specific payloads.",
                 color: HBPalette.accentGreen
@@ -964,7 +980,7 @@ struct DataPlatformView: View {
             selectedSourceKey = source.sourceKey
         } label: {
             VStack(alignment: .leading, spacing: 10) {
-                Text(source.sourceType == "tempest_station" ? "Weather Station" : "Device Stream")
+                Text(telemetrySourceKindLabel(source))
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .textCase(.uppercase)
                     .tracking(1.8)

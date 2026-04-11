@@ -9,13 +9,13 @@ export interface TelemetryMetricDescriptor {
 
 export interface TelemetrySourceSummary {
   sourceKey: string
-  sourceType: "device" | "tempest_station"
+  sourceType: "device" | "tempest_station" | "rainmachine_report"
   sourceId: string
   name: string
   category: string
   room: string
   origin: string
-  streamType: "device_state" | "tempest_observation" | "tempest_device_state"
+  streamType: "device_state" | "tempest_observation" | "tempest_device_state" | "rainmachine_daily_stat" | "rainmachine_watering_log"
   sampleCount: number
   metricCount: number
   lastSampleAt: string | null
@@ -193,6 +193,8 @@ export const clearTelemetryData = async (options: {
         energyDeleted: number
         tempestObservationsDeleted: number
         tempestEventsDeleted: number
+        rainMachineDailyStatsDeleted: number
+        rainMachineWateringDaysDeleted: number
       }
     }
   } catch (error) {

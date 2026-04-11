@@ -80,6 +80,40 @@ test('extractDeviceMetrics captures Tempest connectivity telemetry without dupli
   assert.equal(metrics.temperature_f, undefined);
 });
 
+test('extractDeviceMetrics captures RainMachine controller and zone runtime telemetry', () => {
+  const metrics = extractDeviceMetrics({
+    _id: 'rainmachine-zone-1',
+    isOnline: true,
+    status: true,
+    properties: {
+      source: 'rainmachine',
+      rainmachine: {
+        entityType: 'zone',
+        controllerId: 'AA:BB:CC',
+        queueLength: 2,
+        runningProgramCount: 1,
+        activeZoneCount: 1,
+        activeRestrictionsCount: 0,
+        rainDelayHours: 0,
+        remainingSeconds: 420,
+        userDurationSeconds: 600,
+        machineDurationSeconds: 480,
+        cycleCount: 2
+      }
+    }
+  });
+
+  assert.equal(metrics.online, 1);
+  assert.equal(metrics.status, 1);
+  assert.equal(metrics.queue_length, 2);
+  assert.equal(metrics.running_program_count, 1);
+  assert.equal(metrics.active_zone_count, 1);
+  assert.equal(metrics.remaining_sec, 420);
+  assert.equal(metrics.user_duration_sec, 600);
+  assert.equal(metrics.machine_duration_sec, 480);
+  assert.equal(metrics.cycle_count, 2);
+});
+
 test('extractTempestMetrics keeps display-oriented weather metrics and skips rapid wind snapshots', () => {
   const regularMetrics = extractTempestMetrics({
     observationType: 'obs_st',

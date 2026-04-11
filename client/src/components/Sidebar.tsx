@@ -18,6 +18,7 @@ import {
   Waypoints,
   Volume2,
   CloudSun,
+  CloudRain,
   Database,
   Link2
 } from "lucide-react"
@@ -29,6 +30,7 @@ import { useAuth } from "@/contexts/AuthContext"
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'Weather', href: '/weather', icon: CloudSun },
+  { name: 'RainMachine', href: '/rainmachine', icon: CloudRain },
   { name: 'Data Platform', href: '/data-platform', icon: Database },
   { name: 'Devices', href: '/devices', icon: Lightbulb },
   { name: 'Device Groups', href: '/device-groups', icon: Layers3, adminOnly: true },

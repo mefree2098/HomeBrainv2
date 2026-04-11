@@ -1,10 +1,13 @@
+const mongoose = require('mongoose');
 const Device = require('../models/Device');
 const DeviceGroup = require('../models/DeviceGroup');
 const AlexaExposure = require('../models/AlexaExposure');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
+const RainMachineIntegration = require('../models/RainMachineIntegration');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
 const ecobeeService = require('./ecobeeService');
+const rainMachineService = require('./rainMachineService');
 const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const {
@@ -26,6 +29,10 @@ const getInsteonService = () => {
   }
   return cachedInsteonService;
 };
+
+function isDatabaseReadyForPresenceChecks() {
+  return mongoose.connection?.readyState === 1;
+}
 
 function normalizeDeviceGroups(groups) {
   const values = Array.isArray(groups)
@@ -128,6 +135,11 @@ class DeviceService {
     this.ecobeeSyncPromise = null;
     this.lastEcobeeSyncAt = 0;
     this.ecobeeSyncCooldownMs = Number(process.env.ECOBEE_DEVICE_REFRESH_MS || 2 * 60 * 1000);
+    this.rainMachinePresence = null;
+    this.rainMachinePresenceCheckedAt = 0;
+    this.rainMachineSyncPromise = null;
+    this.lastRainMachineSyncAt = 0;
+    this.rainMachineSyncCooldownMs = Number(process.env.RAINMACHINE_DEVICE_REFRESH_MS || 60 * 1000);
   }
 
   /**
@@ -440,6 +452,7 @@ class DeviceService {
       const isSmartThings = this.isSmartThingsDevice(device);
       const isHarmony = this.isHarmonyDevice(device);
       const isEcobee = this.isEcobeeDevice(device);
+      const isRainMachine = this.isRainMachineDevice(device);
       const isInsteon = this.isInsteonDevice(device);
       const skipIntegrationRefresh = options?.skipIntegrationRefresh === true;
       const skipPostActionVerification = options?.skipPostActionVerification === true;
@@ -452,6 +465,9 @@ class DeviceService {
       }
       if (isEcobee && !skipIntegrationRefresh) {
         await this.ensureEcobeeState({ immediate: true });
+      }
+      if (isRainMachine && !skipIntegrationRefresh) {
+        await this.ensureRainMachineState({ immediate: true });
       }
 
       if (isHarmony && normalizedAction === 'toggle' && !skipIntegrationRefresh) {
@@ -480,6 +496,9 @@ class DeviceService {
             const harmonyHubIp = device?.properties?.harmonyHubIp || 'unknown-hub';
             console.warn(`DeviceService: Harmony device on hub ${harmonyHubIp} still reports offline; attempting command anyway`);
           }
+        } else if (isRainMachine) {
+          const controllerId = device?.properties?.rainmachine?.controllerId || 'unknown-controller';
+          console.warn(`DeviceService: RainMachine device ${controllerId} reports offline; attempting command anyway`);
         } else if (isInsteon) {
           const insteonAddress = device?.properties?.insteonAddress || 'unknown-device';
           console.warn(`DeviceService: Insteon device ${insteonAddress} reports offline; attempting command anyway`);
@@ -491,6 +510,12 @@ class DeviceService {
       if (isInsteon) {
         const updatedDevice = await this.controlInsteonDevice(device, normalizedAction, value);
         console.log('DeviceService: Successfully controlled device:', updatedDevice?.name || device.name, 'action:', action);
+        return updatedDevice;
+      }
+
+      if (isRainMachine) {
+        const updatedDevice = await this.controlRainMachineDevice(device, normalizedAction, value);
+        console.log('DeviceService: Successfully controlled RainMachine device:', updatedDevice?.name || device.name, 'action:', action);
         return updatedDevice;
       }
 
@@ -1029,6 +1054,27 @@ class DeviceService {
   isEcobeeDevice(device) {
     const source = (device?.properties?.source || '').toString().toLowerCase();
     return source === 'ecobee' && !!device?.properties?.ecobeeThermostatIdentifier;
+  }
+
+  isRainMachineDevice(device) {
+    const source = (device?.properties?.source || '').toString().trim().toLowerCase();
+    return source === 'rainmachine' && !!device?.properties?.rainmachine?.controllerId;
+  }
+
+  isRainMachineControllerDevice(device) {
+    if (!this.isRainMachineDevice(device)) {
+      return false;
+    }
+
+    return (device?.properties?.rainmachine?.entityType || '').toString().trim().toLowerCase() === 'controller';
+  }
+
+  isRainMachineZoneDevice(device) {
+    if (!this.isRainMachineDevice(device)) {
+      return false;
+    }
+
+    return (device?.properties?.rainmachine?.entityType || '').toString().trim().toLowerCase() === 'zone';
   }
 
   normalizeHexColor(color) {
@@ -1837,6 +1883,73 @@ class DeviceService {
     }
   }
 
+  async controlRainMachineDevice(device, normalizedAction, commandValue) {
+    const rainMachine = device?.properties?.rainmachine || {};
+
+    if (this.isRainMachineControllerDevice(device)) {
+      switch (normalizedAction) {
+        case 'turnoff':
+        case 'stopall':
+          await rainMachineService.stopAll();
+          break;
+        default:
+          throw new Error('RainMachine controller supports stop_all and turn_off actions');
+      }
+
+      const refreshedController = await Device.findById(device._id);
+      if (!refreshedController) {
+        throw new Error('Device not found');
+      }
+
+      return refreshedController;
+    }
+
+    if (!this.isRainMachineZoneDevice(device)) {
+      throw new Error('Unsupported RainMachine entity type');
+    }
+
+    const zoneId = rainMachine.zoneId;
+    if (zoneId === undefined || zoneId === null) {
+      throw new Error('RainMachine zone ID is not configured for this device');
+    }
+
+    const defaultDuration = Number(rainMachine.nextRunDurationSeconds || rainMachine.userDurationSeconds || 0);
+    const parsedDuration = Number(
+      typeof commandValue === 'object' && commandValue
+        ? (commandValue.durationSeconds ?? commandValue.seconds ?? commandValue.duration)
+        : commandValue
+    );
+    const durationSeconds = Number.isFinite(parsedDuration) && parsedDuration > 0
+      ? Math.max(60, Math.min(6 * 60 * 60, Math.round(parsedDuration)))
+      : (Number.isFinite(defaultDuration) && defaultDuration > 0 ? defaultDuration : undefined);
+
+    switch (normalizedAction) {
+      case 'toggle':
+        if (device.status) {
+          await rainMachineService.stopZone(zoneId);
+        } else {
+          await rainMachineService.startZone(zoneId, durationSeconds);
+        }
+        break;
+      case 'turnon':
+      case 'rainmachinestartzone':
+        await rainMachineService.startZone(zoneId, durationSeconds);
+        break;
+      case 'turnoff':
+        await rainMachineService.stopZone(zoneId);
+        break;
+      default:
+        throw new Error('RainMachine zones support turn_on, turn_off, toggle, and rainmachine_start_zone actions');
+    }
+
+    const refreshedZone = await Device.findById(device._id);
+    if (!refreshedZone) {
+      throw new Error('Device not found');
+    }
+
+    return refreshedZone;
+  }
+
   /**
    * Get devices grouped by room
    * @returns {Promise<Array>} Array of rooms with their devices
@@ -1923,7 +2036,8 @@ class DeviceService {
     await Promise.all([
       this.ensureSmartThingsState({ immediate }),
       this.ensureHarmonyState({ immediate }),
-      this.ensureEcobeeState({ immediate })
+      this.ensureEcobeeState({ immediate }),
+      this.ensureRainMachineState({ immediate })
     ]);
   }
 
@@ -2085,10 +2199,62 @@ class DeviceService {
     }
   }
 
+  async ensureRainMachineState({ immediate = false } = {}) {
+    const hasRainMachine = await this.detectRainMachinePresence();
+    if (!hasRainMachine) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (this.rainMachineSyncPromise) {
+      try {
+        await this.rainMachineSyncPromise;
+      } catch (error) {
+        console.warn('DeviceService: RainMachine state refresh in progress failed:', error.message);
+      }
+      if (!immediate && now - this.lastRainMachineSyncAt < this.rainMachineSyncCooldownMs) {
+        return;
+      }
+    } else if (!immediate && now - this.lastRainMachineSyncAt < this.rainMachineSyncCooldownMs) {
+      return;
+    }
+
+    this.rainMachineSyncPromise = (async () => {
+      let succeeded = false;
+      try {
+        await rainMachineService.refreshRuntime({
+          reason: immediate ? 'api-fetch-force' : 'api-fetch'
+        });
+        succeeded = true;
+      } catch (error) {
+        console.warn('DeviceService: RainMachine state refresh failed:', error.message);
+        throw error;
+      } finally {
+        if (succeeded) {
+          this.lastRainMachineSyncAt = Date.now();
+        }
+        this.rainMachineSyncPromise = null;
+      }
+    })();
+
+    try {
+      await this.rainMachineSyncPromise;
+    } catch (error) {
+      // already logged above
+    }
+  }
+
   async detectSmartThingsPresence() {
     const now = Date.now();
     if (this.smartThingsPresence !== null && (now - this.smartThingsPresenceCheckedAt) < 60000) {
       return this.smartThingsPresence;
+    }
+
+    if (!isDatabaseReadyForPresenceChecks()) {
+      this.smartThingsPresence = null;
+      this.smartThingsPresenceCheckedAt = 0;
+      return false;
     }
 
     try {
@@ -2112,6 +2278,12 @@ class DeviceService {
       return this.harmonyPresence;
     }
 
+    if (!isDatabaseReadyForPresenceChecks()) {
+      this.harmonyPresence = null;
+      this.harmonyPresenceCheckedAt = 0;
+      return false;
+    }
+
     try {
       this.harmonyPresence = await Device.exists({
         'properties.source': 'harmony',
@@ -2133,6 +2305,12 @@ class DeviceService {
       return this.ecobeePresence;
     }
 
+    if (!isDatabaseReadyForPresenceChecks()) {
+      this.ecobeePresence = null;
+      this.ecobeePresenceCheckedAt = 0;
+      return false;
+    }
+
     try {
       this.ecobeePresence = await Device.exists({
         'properties.source': 'ecobee',
@@ -2146,6 +2324,39 @@ class DeviceService {
     }
 
     return this.ecobeePresence;
+  }
+
+  async detectRainMachinePresence() {
+    const now = Date.now();
+    if (this.rainMachinePresence !== null && (now - this.rainMachinePresenceCheckedAt) < 60000) {
+      return this.rainMachinePresence;
+    }
+
+    if (!isDatabaseReadyForPresenceChecks()) {
+      this.rainMachinePresence = null;
+      this.rainMachinePresenceCheckedAt = 0;
+      return false;
+    }
+
+    try {
+      const [devicePresence, integration] = await Promise.all([
+        Device.exists({
+          'properties.source': 'rainmachine',
+          'properties.rainmachine.controllerId': { $exists: true }
+        }),
+        RainMachineIntegration.getIntegration()
+      ]);
+
+      this.rainMachinePresence = Boolean(devicePresence)
+        || (integration?.enabled === true && typeof integration?.host === 'string' && integration.host.trim().length > 0);
+    } catch (error) {
+      console.warn('DeviceService: Failed to detect RainMachine devices:', error.message);
+      this.rainMachinePresence = false;
+    } finally {
+      this.rainMachinePresenceCheckedAt = now;
+    }
+
+    return this.rainMachinePresence;
   }
 }
 

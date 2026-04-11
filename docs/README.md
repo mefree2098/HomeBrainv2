@@ -5,6 +5,7 @@
 - Jetson hub install: [`jetson-setup.md`](jetson-setup.md)
 - General deployment: [`../DEPLOYMENT.md`](../DEPLOYMENT.md)
 - Post-install configuration: [`configuration.md`](configuration.md)
+- ELECROW wall panel deployment: [`elecrow-wall-panel.md`](elecrow-wall-panel.md)
 
 ## Day-To-Day Guides
 

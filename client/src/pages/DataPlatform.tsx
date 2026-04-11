@@ -184,9 +184,39 @@ function formatMetricValue(metric: TelemetryMetricDescriptor, value: number | nu
 }
 
 function sourceTone(source: TelemetrySourceSummary) {
-  return source.sourceType === "tempest_station"
-    ? "from-cyan-400/25 via-sky-500/15 to-blue-600/20"
-    : "from-emerald-400/20 via-teal-500/12 to-cyan-500/18"
+  if (source.sourceType === "tempest_station") {
+    return "from-cyan-400/25 via-sky-500/15 to-blue-600/20"
+  }
+
+  if (source.sourceType === "rainmachine_report") {
+    return "from-sky-400/22 via-emerald-500/16 to-lime-500/16"
+  }
+
+  return "from-emerald-400/20 via-teal-500/12 to-cyan-500/18"
+}
+
+function sourceKindLabel(source: TelemetrySourceSummary) {
+  if (source.sourceType === "tempest_station") {
+    return "Weather Station"
+  }
+
+  if (source.sourceType === "rainmachine_report") {
+    return "Irrigation Report"
+  }
+
+  return "Device Stream"
+}
+
+function sourceHistoryLabel(source: TelemetrySourceSummary) {
+  if (source.sourceType === "tempest_station") {
+    return "weather station"
+  }
+
+  if (source.sourceType === "rainmachine_report") {
+    return "irrigation report"
+  }
+
+  return "device"
 }
 
 type MetricChartCardProps = {
@@ -716,8 +746,8 @@ export default function DataPlatform() {
                 </Badge>
               </div>
               <p className="max-w-3xl text-sm leading-relaxed text-slate-200/80">
-                HomeBrain is now treating Tempest observations and device state changes as a first-class telemetry layer,
-                so one year of history can power charts, trend analysis, and future automations from a single surface.
+                HomeBrain now treats device history, Tempest observations, and RainMachine irrigation reports as one shared telemetry fabric,
+                so long-range charts, trend analysis, and future automations can run from a single surface.
               </p>
             </div>
 
@@ -856,7 +886,7 @@ export default function DataPlatform() {
           <Textarea
             value={chartPrompt}
             onChange={(event) => setChartPrompt(event.target.value)}
-            placeholder='Example: Create a chart showing the master toilet fan on/off history for the last week, or compare rain rate and rain today for the Tempest station over the last month.'
+            placeholder='Example: Create a chart showing the master toilet fan on/off history for the last week, compare rain rate and rain today for the Tempest station over the last month, or graph RainMachine water saved percentage for the last two weeks.'
             className="min-h-[120px]"
           />
         </CardHeader>
@@ -876,7 +906,7 @@ export default function DataPlatform() {
           <CardContent>
             {sources.length === 0 ? (
               <div className="rounded-[1.5rem] border border-dashed border-border/80 bg-muted/30 p-5 text-sm text-muted-foreground">
-                No telemetry has been captured yet. As devices report state changes and Tempest observations arrive,
+                No telemetry has been captured yet. As devices report state changes, Tempest observations arrive, and RainMachine reports sync,
                 they will appear here automatically.
               </div>
             ) : (
@@ -898,7 +928,7 @@ export default function DataPlatform() {
                       >
                         <div className={cn("mb-3 rounded-[1.15rem] bg-gradient-to-r p-[1px]", sourceTone(source))}>
                           <div className="rounded-[1.05rem] bg-slate-950/90 px-3 py-2">
-                            <p className="section-kicker text-cyan-100/70">{source.sourceType === "tempest_station" ? "Weather Station" : "Device Stream"}</p>
+                            <p className="section-kicker text-cyan-100/70">{sourceKindLabel(source)}</p>
                             <p className="mt-1 text-sm font-semibold text-white">{source.name}</p>
                           </div>
                         </div>
@@ -946,7 +976,7 @@ export default function DataPlatform() {
                   </CardTitle>
                   <CardDescription>
                     {selectedSource
-                      ? `Browsing ${selectedSource.sourceType === "tempest_station" ? "weather station" : "device"} history across ${selectedSource.sampleCount.toLocaleString()} stored samples.`
+                      ? `Browsing ${sourceHistoryLabel(selectedSource)} history across ${selectedSource.sampleCount.toLocaleString()} stored samples.`
                       : "Pick a source to unlock charts and trends."}
                   </CardDescription>
                 </div>
@@ -1064,10 +1094,10 @@ export default function DataPlatform() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
                   <Activity className="h-4 w-4 text-cyan-500" />
-                  Tempest Ready
+                  Weather + Irrigation Ready
                 </CardTitle>
                 <CardDescription>
-                  Tempest observations now land in the shared telemetry fabric with a one-year retention target.
+                  Tempest observations and RainMachine controller reports now land in the shared telemetry fabric with the same retention target.
                 </CardDescription>
               </CardHeader>
             </Card>

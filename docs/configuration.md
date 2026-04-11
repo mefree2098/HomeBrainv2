@@ -85,7 +85,27 @@ To add a listener:
 
 The current system supports Raspberry Pi best, but other Debian/Ubuntu-based Linux listeners can also be used.
 
-## 7. Scenes And Workflows
+## 7. Remote Wall Panels
+
+Wall panels are now a separate hardware path from Linux voice listeners.
+
+Current support targets the ELECROW `2.1"` round ESP32-S3 rotary display first. The panel talks to HomeBrain over `Wi-Fi` using the dedicated `/api/panels` API.
+
+Current setup flow:
+
+1. Register the panel with the admin API
+2. Flash the firmware in [`../embedded/elecrow-wall-panel`](../embedded/elecrow-wall-panel)
+3. Bind thermostat, scene, device, security, and Harmony targets
+
+Use the full runbook here:
+
+- [`elecrow-wall-panel.md`](elecrow-wall-panel.md)
+
+Current note:
+
+- panel provisioning is API-driven right now rather than managed from a dedicated wall-panel page in the web UI
+
+## 8. Scenes And Workflows
 
 Current structure:
 
@@ -100,7 +120,7 @@ Recommended order:
 3. Build routines in `Workflows`
 4. Treat `Automations` as runtime internals rather than a separate user-facing editor
 
-## 8. Operations And Deploy
+## 9. Operations And Deploy
 
 Open:
 
@@ -109,7 +129,7 @@ Open:
 
 Use `Platform Deploy` only after the host itself is already stable and working.
 
-## 9. SSL
+## 10. SSL
 
 Open `SSL` if you want HomeBrain reachable at a public HTTPS domain.
 

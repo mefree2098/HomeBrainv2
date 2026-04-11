@@ -24,6 +24,19 @@ Examples:
 
 Exact capabilities depend on what the admin has configured.
 
+## If Your Room Has A Wall Panel
+
+Some rooms can now have a dedicated HomeBrain wall panel instead of only voice control.
+
+Typical gestures:
+
+- swipe left and right to move between `Thermostat`, `Room`, `Home`, `Media`, and `Quiet`
+- rotate the knob to adjust thermostat setpoint or media volume, depending on the page
+- tap the on-screen tiles for scenes, lights, fan, quiet-house actions, or media shortcuts
+- long-press on the thermostat page to trigger `Bedtime` if the admin configured it
+
+Exact actions still depend on how the admin mapped that panel.
+
 ## If It Does Not Respond
 
 Try these basic checks first:

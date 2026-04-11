@@ -140,6 +140,7 @@ import {
 import { useNavigate } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
+import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
 import { OpenClawIntegration } from "./OpenClawIntegration"
 
 type InsteonSerialPortCandidate = {
@@ -4037,6 +4038,7 @@ export function Settings() {
                 <TabsTrigger value="alexa">Alexa</TabsTrigger>
                 <TabsTrigger value="openclaw">OpenClaw</TabsTrigger>
                 <TabsTrigger value="tempest">Tempest</TabsTrigger>
+                <TabsTrigger value="rainmachine">RainMachine</TabsTrigger>
                 <TabsTrigger value="devices">Device Integrations</TabsTrigger>
                 <TabsTrigger value="ecobee">Ecobee</TabsTrigger>
                 <TabsTrigger value="keys">API Keys</TabsTrigger>
@@ -4761,6 +4763,10 @@ export function Settings() {
 
               <TabsContent value="tempest" className="space-y-6">
                 <TempestIntegrationCard />
+              </TabsContent>
+
+              <TabsContent value="rainmachine" className="space-y-6">
+                <RainMachineIntegrationCard />
               </TabsContent>
 
               <TabsContent value="devices" className="space-y-6">

@@ -116,6 +116,7 @@ struct AppShellView: View {
     enum AppSection: String, CaseIterable, Identifiable {
         case dashboard
         case weather
+        case rainMachine
         case dataPlatform
         case views
         case devices
@@ -136,6 +137,7 @@ struct AppShellView: View {
             switch self {
             case .dashboard: return "Dashboard"
             case .weather: return "Weather"
+            case .rainMachine: return "RainMachine"
             case .dataPlatform: return "Data Platform"
             case .views: return "Views"
             case .devices: return "Devices"
@@ -156,6 +158,7 @@ struct AppShellView: View {
             switch self {
             case .dashboard: return "Residence Overview"
             case .weather: return "Weather Command Deck"
+            case .rainMachine: return "Irrigation Command Deck"
             case .dataPlatform: return "Telemetry Atlas"
             case .views: return "Device Dashboards"
             case .devices: return "Device Matrix"
@@ -176,6 +179,7 @@ struct AppShellView: View {
             switch self {
             case .dashboard: return "Live Command Deck"
             case .weather: return "Atmospheric Systems"
+            case .rainMachine: return "Irrigation Systems"
             case .dataPlatform: return "Historical Intelligence"
             case .views: return "Room Presets"
             case .devices: return "Hardware Orchestration"
@@ -196,6 +200,7 @@ struct AppShellView: View {
             switch self {
             case .dashboard: return "house"
             case .weather: return "cloud.sun"
+            case .rainMachine: return "cloud.rain"
             case .dataPlatform: return "chart.xyaxis.line"
             case .views: return "rectangle.3.group"
             case .devices: return "lightbulb"
@@ -1410,6 +1415,12 @@ struct AppShellView: View {
                 UIPreviewModuleView(section: section)
             } else {
                 WeatherView()
+            }
+        case .rainMachine:
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                RainMachineView()
             }
         case .dataPlatform:
             if previewMode {

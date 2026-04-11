@@ -13,6 +13,7 @@ Check these pages first:
 Watch for:
 
 - offline listener devices
+- offline wall panels
 - failed updates
 - degraded health checks
 - repeated errors in the live event feed
@@ -27,6 +28,25 @@ Open `Voice Devices`.
 4. Run it on the target listener
 
 Use Raspberry Pi if you want the most tested path. Other Debian/Ubuntu-based listeners are also possible now.
+
+## Adding A Wall Panel
+
+HomeBrain now has a separate wall-panel path for ELECROW round ESP32-S3 rotary displays.
+
+Current deployment model:
+
+1. Register the panel through the admin API
+2. Flash the firmware in [`../embedded/elecrow-wall-panel`](../embedded/elecrow-wall-panel)
+3. Bind the panel to the thermostat, scenes, room devices, security actions, and Harmony activities you want in that room
+
+Use the full runbook here:
+
+- [`elecrow-wall-panel.md`](elecrow-wall-panel.md)
+
+Important:
+
+- wall panels are `Wi-Fi` room controllers, not Linux voice listeners
+- the current repo firmware targets the ELECROW `2.1"` rotary CrowPanel first
 
 ## Managing Profiles
 
@@ -90,6 +110,7 @@ bash scripts/setup-services.sh health
 
 - verify HomeBrain still opens on `http://<hub-ip>:3000`
 - check that listener devices are online
+- verify any wall panels still return healthy state from `/api/panels`
 - confirm at least one successful recent backup of MongoDB and `server/.env`
 - verify integrations still connect
 - review recent errors in `Operations`

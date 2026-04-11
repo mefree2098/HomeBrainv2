@@ -51,6 +51,7 @@ Next steps:
 1. Create the first account
 2. Follow [`configuration.md`](configuration.md)
 3. Add remote listener devices from `Voice Devices`
+4. If you want a bedside touch/rotary controller, follow [`elecrow-wall-panel.md`](elecrow-wall-panel.md)
 
 ## Useful Commands
 

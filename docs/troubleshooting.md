@@ -66,6 +66,36 @@ Typical fixes:
 - confirm the listener can reach `http://<hub-ip>:3000`
 - confirm the registration code or claim token is current
 
+## ELECROW Wall Panel Will Not Come Online
+
+On the machine you use to flash the device:
+
+```bash
+cd embedded/elecrow-wall-panel
+pio device monitor -b 115200
+```
+
+Typical fixes:
+
+- confirm the values in [`../embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h`](../embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h) are correct, especially `Wi-Fi`, hub URL, panel ID, and registration code
+- confirm the panel can reach the hub URL you compiled into the firmware
+- confirm the panel record still exists by calling `GET /api/panels` as an admin
+- confirm the registration code still works with `GET /api/panels/:id/state`
+- if the device is wall-mounted, verify the USB-C power source is stable and not browning out the board during `Wi-Fi` activity
+- if you bought the smaller `1.28"` board, do not flash the `2.1"` board profile unchanged
+
+Useful check:
+
+```bash
+curl -sS "$HUB_URL/api/panels/$PANEL_ID/state" \
+  -H "X-HomeBrain-Panel-Code: $PANEL_CODE" \
+  | python3 -m json.tool
+```
+
+More detail:
+
+- [`elecrow-wall-panel.md`](elecrow-wall-panel.md)
+
 ## Wake Word Is Not Triggering
 
 Check in the UI:

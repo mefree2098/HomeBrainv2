@@ -72,6 +72,15 @@ const normalizeHarmonyEntityType = (value) => {
   return '';
 };
 
+const normalizeRainMachineEntityType = (value) => {
+  const normalized = trimString(value).toLowerCase();
+  if (normalized === 'controller' || normalized === 'zone' || normalized === 'program') {
+    return normalized;
+  }
+
+  return '';
+};
+
 function normalizePlatformIdentityProperties(properties = {}) {
   const normalizedProperties = properties && typeof properties === 'object'
     ? { ...properties }
@@ -147,6 +156,39 @@ function normalizePlatformIdentityProperties(properties = {}) {
       normalizedTempest.stationId = stationId;
     }
     normalizedProperties.tempest = normalizedTempest;
+  }
+
+  const rawRainMachine = normalizedProperties.rainmachine && typeof normalizedProperties.rainmachine === 'object'
+    ? normalizedProperties.rainmachine
+    : null;
+  if (rawRainMachine) {
+    const normalizedRainMachine = { ...rawRainMachine };
+    const controllerId = trimString(normalizedRainMachine.controllerId);
+    if (controllerId) {
+      normalizedRainMachine.controllerId = controllerId;
+    }
+
+    const zoneId = normalizeInteger(normalizedRainMachine.zoneId);
+    if (zoneId !== null) {
+      normalizedRainMachine.zoneId = zoneId;
+    }
+
+    const programId = normalizeInteger(normalizedRainMachine.programId);
+    if (programId !== null) {
+      normalizedRainMachine.programId = programId;
+    }
+
+    const host = normalizeHost(normalizedRainMachine.host);
+    if (host) {
+      normalizedRainMachine.host = host;
+    }
+
+    const entityType = normalizeRainMachineEntityType(normalizedRainMachine.entityType);
+    if (entityType) {
+      normalizedRainMachine.entityType = entityType;
+    }
+
+    normalizedProperties.rainmachine = normalizedRainMachine;
   }
 
   return normalizedProperties;
@@ -257,6 +299,70 @@ function buildTempestStationIdentityQuery(stationId) {
   };
 }
 
+function buildRainMachineControllerIdentityQuery({ controllerId, host } = {}) {
+  const normalizedControllerId = trimString(controllerId);
+  const normalizedHost = normalizeHost(host);
+  const identityClauses = [];
+
+  if (normalizedControllerId) {
+    identityClauses.push({
+      'properties.rainmachine.controllerId': normalizedControllerId
+    });
+  }
+
+  if (normalizedHost) {
+    identityClauses.push({
+      'properties.rainmachine.host': normalizedHost
+    });
+  }
+
+  if (identityClauses.length === 0) {
+    return null;
+  }
+
+  const entityClause = {
+    $or: [
+      { 'properties.rainmachine.entityType': 'controller' },
+      {
+        'properties.rainmachine.entityType': { $exists: false },
+        'properties.rainmachine.zoneId': { $exists: false },
+        'properties.rainmachine.programId': { $exists: false }
+      }
+    ]
+  };
+
+  if (identityClauses.length === 1) {
+    return {
+      $and: [
+        identityClauses[0],
+        entityClause
+      ]
+    };
+  }
+
+  return {
+    $and: [
+      { $or: identityClauses },
+      entityClause
+    ]
+  };
+}
+
+function buildRainMachineZoneIdentityQuery({ controllerId, zoneId } = {}) {
+  const normalizedControllerId = trimString(controllerId);
+  const normalizedZoneId = normalizeInteger(zoneId);
+  if (!normalizedControllerId || normalizedZoneId === null) {
+    return null;
+  }
+
+  return {
+    'properties.rainmachine.controllerId': normalizedControllerId,
+    'properties.rainmachine.zoneId': {
+      $in: [normalizedZoneId, String(normalizedZoneId)]
+    }
+  };
+}
+
 function buildIdentityDescriptors(properties = {}) {
   const normalizedProperties = normalizePlatformIdentityProperties(properties);
   const descriptors = [];
@@ -331,6 +437,35 @@ function buildIdentityDescriptors(properties = {}) {
       query: tempestQuery,
       errorMessage: 'A HomeBrain device with this Tempest station ID already exists'
     });
+  }
+
+  const rainMachine = normalizedProperties.rainmachine && typeof normalizedProperties.rainmachine === 'object'
+    ? normalizedProperties.rainmachine
+    : null;
+  if (rainMachine) {
+    const zoneQuery = buildRainMachineZoneIdentityQuery({
+      controllerId: rainMachine.controllerId,
+      zoneId: rainMachine.zoneId
+    });
+    if (zoneQuery) {
+      descriptors.push({
+        label: 'RainMachine controller/zone',
+        query: zoneQuery,
+        errorMessage: 'A HomeBrain device with this RainMachine controller/zone already exists'
+      });
+    } else {
+      const controllerQuery = buildRainMachineControllerIdentityQuery({
+        controllerId: rainMachine.controllerId,
+        host: rainMachine.host
+      });
+      if (controllerQuery) {
+        descriptors.push({
+          label: 'RainMachine controller',
+          query: controllerQuery,
+          errorMessage: 'A HomeBrain device for this RainMachine controller already exists'
+        });
+      }
+    }
   }
 
   return {
@@ -481,6 +616,8 @@ module.exports = {
   buildEcobeeThermostatIdentityQuery,
   buildEcobeeSensorIdentityQuery,
   buildTempestStationIdentityQuery,
+  buildRainMachineControllerIdentityQuery,
+  buildRainMachineZoneIdentityQuery,
   selectCanonicalDevice,
   mergeDuplicateDeviceGroups,
   describeDevices
