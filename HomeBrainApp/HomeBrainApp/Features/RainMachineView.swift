@@ -662,6 +662,7 @@ struct RainMachineView: View {
     @State private var isSaving = false
     @State private var submittingKey: String?
     @State private var manualDurationSeconds = 600
+    @State private var hideInactiveZones = true
     @State private var hasInitializedManualDuration = false
     @State private var errorMessage: String?
     @State private var infoMessage = ""
@@ -697,6 +698,18 @@ struct RainMachineView: View {
 
     private var recentWatering: [RainMachineWateringDayRecord] {
         Array((dashboard?.wateringHistory ?? []).prefix(7))
+    }
+
+    private var visibleZones: [RainMachineZoneSummary] {
+        let zones = dashboard?.zones ?? []
+        if hideInactiveZones {
+            return zones.filter(\.active)
+        }
+        return zones
+    }
+
+    private var hiddenZoneCount: Int {
+        max(0, (dashboard?.zones.count ?? 0) - visibleZones.count)
     }
 
     private var summaryCards: [RainMachineSummaryCard] {
@@ -1448,16 +1461,35 @@ struct RainMachineView: View {
                     }
                 }
 
+                Picker("Zone Visibility", selection: $hideInactiveZones) {
+                    Text("Hide Inactive").tag(true)
+                    Text("Show All").tag(false)
+                }
+                .pickerStyle(.segmented)
+
                 if (dashboard?.zones ?? []).isEmpty {
                     Text("No zones were returned by the controller.")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
+                } else if visibleZones.isEmpty {
+                    HBCardRow {
+                        Text("All \(hiddenZoneCount) inactive zone\(hiddenZoneCount == 1 ? "" : "s") are currently hidden. Switch to Show All to review them.")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     VStack(spacing: 10) {
-                        ForEach(dashboard?.zones ?? []) { zone in
+                        ForEach(visibleZones) { zone in
                             rainMachineZoneCard(zone)
                         }
                     }
+                }
+
+                if hideInactiveZones && hiddenZoneCount > 0 {
+                    Text("\(hiddenZoneCount) inactive zone\(hiddenZoneCount == 1 ? "" : "s") hidden by default.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textMuted)
                 }
             }
         }

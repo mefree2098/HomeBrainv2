@@ -30,6 +30,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
@@ -125,6 +126,7 @@ export default function RainMachine() {
   const [syncing, setSyncing] = useState(false)
   const [submittingKey, setSubmittingKey] = useState<string | null>(null)
   const [manualDurationSeconds, setManualDurationSeconds] = useState(600)
+  const [hideInactiveZones, setHideInactiveZones] = useState(true)
 
   const loadDashboard = useCallback(async () => {
     setLoading(true)
@@ -248,6 +250,16 @@ export default function RainMachine() {
   const latestDailyStat = dashboard?.dailyStats?.[0] as RainMachineDailyStatRecord | undefined
   const recentWatering = dashboard?.wateringHistory?.slice(0, 7) || []
   const controllerReady = dashboard?.integration?.enabled && dashboard?.controller
+  const visibleZones = useMemo(() => {
+    if (!dashboard) {
+      return []
+    }
+
+    return hideInactiveZones
+      ? dashboard.zones.filter((zone) => zone.active)
+      : dashboard.zones
+  }, [dashboard, hideInactiveZones])
+  const hiddenZoneCount = Math.max(0, (dashboard?.zones.length || 0) - visibleZones.length)
 
   if (loading) {
     return (
@@ -552,19 +564,42 @@ export default function RainMachine() {
                 Live zone state with manual start and stop controls.
               </CardDescription>
             </div>
-            <div className="w-40">
-              <Input
-                value={manualDurationSeconds}
-                onChange={(event) => setManualDurationSeconds(Math.max(60, Number(event.target.value) || 60))}
-                placeholder="Manual seconds"
-              />
+            <div className="flex flex-col items-end gap-3">
+              <div className="w-40">
+                <Input
+                  value={manualDurationSeconds}
+                  onChange={(event) => setManualDurationSeconds(Math.max(60, Number(event.target.value) || 60))}
+                  placeholder="Manual seconds"
+                />
+              </div>
+              <RadioGroup
+                value={hideInactiveZones ? "hide" : "show"}
+                onValueChange={(value) => setHideInactiveZones(value === "hide")}
+                className="flex flex-wrap justify-end gap-3"
+              >
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <RadioGroupItem value="hide" id="rainmachine-hide-inactive" />
+                  Hide inactive
+                </label>
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <RadioGroupItem value="show" id="rainmachine-show-all" />
+                  Show all
+                </label>
+              </RadioGroup>
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
             {dashboard.zones.length === 0 ? (
               <p className="text-sm text-muted-foreground">No zones were returned by the controller.</p>
+            ) : visibleZones.length === 0 ? (
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <p className="text-sm text-muted-foreground">
+                  All {hiddenZoneCount} inactive zone{hiddenZoneCount === 1 ? "" : "s"} are currently hidden.
+                  Switch to <span className="font-medium text-foreground">Show all</span> to review them.
+                </p>
+              </div>
             ) : (
-              dashboard.zones.map((zone: RainMachineZoneSummary) => (
+              visibleZones.map((zone: RainMachineZoneSummary) => (
                 <div key={zone.uid || zone.name} className={`rounded-2xl border p-4 ${getZoneTone(zone)}`}>
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
@@ -604,6 +639,11 @@ export default function RainMachine() {
                 </div>
               ))
             )}
+            {hideInactiveZones && hiddenZoneCount > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {hiddenZoneCount} inactive zone{hiddenZoneCount === 1 ? "" : "s"} hidden by default.
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       </section>
