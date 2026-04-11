@@ -181,3 +181,88 @@ test('getDeviceEnergyHistory returns samples in ascending order with normalized 
   assert.equal(history[1].recordedAt.toISOString(), '2026-03-31T17:10:00.000Z');
   assert.equal(history[1].energy.value, 0.93);
 });
+
+test('recordSamplesForDevices captures Sense monitor and device energy telemetry', async (t) => {
+  const originalAggregate = DeviceEnergySample.aggregate;
+  const originalInsertMany = DeviceEnergySample.insertMany;
+
+  t.after(() => {
+    DeviceEnergySample.aggregate = originalAggregate;
+    DeviceEnergySample.insertMany = originalInsertMany;
+  });
+
+  let insertedDocs = null;
+
+  DeviceEnergySample.aggregate = async () => [];
+  DeviceEnergySample.insertMany = async (docs) => {
+    insertedDocs = docs;
+    return docs;
+  };
+
+  const result = await deviceEnergySampleService.recordSamplesForDevices([
+    {
+      _id: 'sense-monitor-1',
+      lastSeen: new Date('2026-04-01T12:00:00.000Z'),
+      properties: {
+        source: 'sense',
+        sense: {
+          entityType: 'monitor',
+          currentPowerW: 5200.4,
+          lastSnapshotAt: '2026-04-01T12:00:05.000Z',
+          trends: {
+            day: {
+              consumptionTotalKwh: 31.8754
+            }
+          }
+        }
+      }
+    },
+    {
+      _id: 'sense-device-1',
+      lastSeen: new Date('2026-04-01T12:00:00.000Z'),
+      properties: {
+        source: 'sense',
+        sense: {
+          entityType: 'device',
+          currentPowerW: 1500.3,
+          lastSnapshotAt: '2026-04-01T12:00:05.000Z',
+          trends: {
+            day: {
+              energyKwh: 6.125
+            }
+          }
+        }
+      }
+    }
+  ]);
+
+  assert.equal(result.insertedCount, 2);
+  assert.equal(result.skippedCount, 0);
+  assert.equal(Array.isArray(insertedDocs), true);
+  assert.equal(insertedDocs.length, 2);
+  assert.deepEqual(
+    insertedDocs.map((entry) => ({
+      deviceId: entry.deviceId,
+      source: entry.source,
+      powerValue: entry.powerValue,
+      energyValue: entry.energyValue,
+      recordedAt: entry.recordedAt.toISOString()
+    })),
+    [
+      {
+        deviceId: 'sense-monitor-1',
+        source: 'sense',
+        powerValue: 5200.4,
+        energyValue: 31.8754,
+        recordedAt: '2026-04-01T12:00:05.000Z'
+      },
+      {
+        deviceId: 'sense-device-1',
+        source: 'sense',
+        powerValue: 1500.3,
+        energyValue: 6.125,
+        recordedAt: '2026-04-01T12:00:05.000Z'
+      }
+    ]
+  );
+});

@@ -5,6 +5,8 @@ const TempestEvent = require('../models/TempestEvent');
 const TempestObservation = require('../models/TempestObservation');
 const RainMachineDailyStat = require('../models/RainMachineDailyStat');
 const RainMachineWateringDay = require('../models/RainMachineWateringDay');
+const SenseMonitorSnapshot = require('../models/SenseMonitorSnapshot');
+const SenseTrendSnapshot = require('../models/SenseTrendSnapshot');
 const { sendLLMRequestWithFallback } = require('./llmService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const resourceMonitorService = require('./resourceMonitorService');
@@ -43,7 +45,57 @@ const METRIC_LABELS = {
   target_temperature: 'Target Temperature',
   color_temperature_k: 'Color Temperature',
   power_w: 'Power',
+  solar_power_w: 'Solar Power',
+  net_power_w: 'Net Power',
+  always_on_w: 'Always On',
+  other_w: 'Other',
+  untracked_w: 'Untracked',
   energy_kwh: 'Energy',
+  daily_energy_kwh: 'Daily Energy',
+  weekly_energy_kwh: 'Weekly Energy',
+  monthly_energy_kwh: 'Monthly Energy',
+  yearly_energy_kwh: 'Yearly Energy',
+  cycle_energy_kwh: 'Billing Cycle Energy',
+  daily_consumption_kwh: 'Daily Consumption',
+  weekly_consumption_kwh: 'Weekly Consumption',
+  monthly_consumption_kwh: 'Monthly Consumption',
+  yearly_consumption_kwh: 'Yearly Consumption',
+  cycle_consumption_kwh: 'Billing Cycle Consumption',
+  daily_production_kwh: 'Daily Production',
+  weekly_production_kwh: 'Weekly Production',
+  monthly_production_kwh: 'Monthly Production',
+  yearly_production_kwh: 'Yearly Production',
+  cycle_production_kwh: 'Billing Cycle Production',
+  daily_net_production_kwh: 'Daily Net Production',
+  weekly_net_production_kwh: 'Weekly Net Production',
+  monthly_net_production_kwh: 'Monthly Net Production',
+  yearly_net_production_kwh: 'Yearly Net Production',
+  cycle_net_production_kwh: 'Billing Cycle Net Production',
+  daily_from_grid_kwh: 'Daily From Grid',
+  weekly_from_grid_kwh: 'Weekly From Grid',
+  monthly_from_grid_kwh: 'Monthly From Grid',
+  yearly_from_grid_kwh: 'Yearly From Grid',
+  cycle_from_grid_kwh: 'Billing Cycle From Grid',
+  daily_to_grid_kwh: 'Daily To Grid',
+  weekly_to_grid_kwh: 'Weekly To Grid',
+  monthly_to_grid_kwh: 'Monthly To Grid',
+  yearly_to_grid_kwh: 'Yearly To Grid',
+  cycle_to_grid_kwh: 'Billing Cycle To Grid',
+  daily_solar_powered_pct: 'Daily Solar Powered',
+  weekly_solar_powered_pct: 'Weekly Solar Powered',
+  monthly_solar_powered_pct: 'Monthly Solar Powered',
+  yearly_solar_powered_pct: 'Yearly Solar Powered',
+  cycle_solar_powered_pct: 'Billing Cycle Solar Powered',
+  daily_production_pct: 'Daily Production Percentage',
+  weekly_production_pct: 'Weekly Production Percentage',
+  monthly_production_pct: 'Monthly Production Percentage',
+  yearly_production_pct: 'Yearly Production Percentage',
+  cycle_production_pct: 'Billing Cycle Production Percentage',
+  active_device_count: 'Active Devices',
+  current_share_pct: 'Current Share',
+  voltage_l1_v: 'L1 Voltage',
+  voltage_l2_v: 'L2 Voltage',
+  frequency_hz: 'Frequency',
   battery_pct: 'Battery',
   humidity_pct: 'Humidity',
   level_pct: 'Level',
@@ -129,6 +181,13 @@ const FEATURED_METRIC_PRIORITY = [
   'water_saved_pct',
   'adjustment_pct',
   'power_w',
+  'solar_power_w',
+  'net_power_w',
+  'always_on_w',
+  'other_w',
+  'daily_consumption_kwh',
+  'daily_production_kwh',
+  'daily_energy_kwh',
   'energy_kwh',
   'battery_pct',
   'battery_volts',
@@ -252,6 +311,16 @@ const TELEMETRY_STORAGE_COLLECTIONS = [
     key: 'rainmachine_watering_days',
     label: 'RainMachine Watering History',
     model: RainMachineWateringDay
+  },
+  {
+    key: 'sense_monitor_snapshots',
+    label: 'Sense Monitor Snapshots',
+    model: SenseMonitorSnapshot
+  },
+  {
+    key: 'sense_trend_snapshots',
+    label: 'Sense Trend Snapshots',
+    model: SenseTrendSnapshot
   }
 ];
 
@@ -590,6 +659,12 @@ function inferMetricUnit(key) {
   if (/_w$/.test(key)) {
     return 'W';
   }
+  if (/_v$/.test(key)) {
+    return 'V';
+  }
+  if (/_hz$/.test(key)) {
+    return 'Hz';
+  }
   if (/_kwh$/.test(key)) {
     return 'kWh';
   }
@@ -907,6 +982,59 @@ function extractDeviceMetrics(device = {}) {
     return metrics;
   }
 
+  if (sourceOrigin === 'sense') {
+    const sense = properties.sense && typeof properties.sense === 'object'
+      ? properties.sense
+      : {};
+    const trends = sense.trends && typeof sense.trends === 'object'
+      ? sense.trends
+      : {};
+    const entityType = String(sense.entityType || '').trim().toLowerCase();
+
+    addMetric(metrics, 'power_w', sense.currentPowerW);
+    addMetric(metrics, 'current_share_pct', sense.currentSharePct);
+
+    if (entityType === 'monitor') {
+      addMetric(metrics, 'solar_power_w', sense.solarPowerW);
+      addMetric(metrics, 'net_power_w', sense.netPowerW);
+      addMetric(metrics, 'always_on_w', sense.alwaysOnW);
+      addMetric(metrics, 'other_w', sense.otherW);
+      addMetric(metrics, 'untracked_w', sense.untrackedW);
+      addMetric(metrics, 'active_device_count', sense.activeDeviceCount);
+      addMetric(metrics, 'voltage_l1_v', Array.isArray(sense.voltage) ? sense.voltage[0] : null);
+      addMetric(metrics, 'voltage_l2_v', Array.isArray(sense.voltage) ? sense.voltage[1] : null);
+      addMetric(metrics, 'frequency_hz', sense.frequencyHz);
+    }
+
+    const trendMappings = [
+      ['day', 'daily'],
+      ['week', 'weekly'],
+      ['month', 'monthly'],
+      ['year', 'yearly'],
+      ['cycle', 'cycle']
+    ];
+
+    trendMappings.forEach(([trendKey, prefix]) => {
+      const trend = trends[trendKey] && typeof trends[trendKey] === 'object'
+        ? trends[trendKey]
+        : {};
+
+      if (entityType === 'monitor') {
+        addMetric(metrics, `${prefix}_consumption_kwh`, trend.consumptionTotalKwh);
+        addMetric(metrics, `${prefix}_production_kwh`, trend.productionTotalKwh);
+        addMetric(metrics, `${prefix}_production_pct`, trend.productionPct);
+        addMetric(metrics, `${prefix}_net_production_kwh`, trend.netProductionKwh);
+        addMetric(metrics, `${prefix}_from_grid_kwh`, trend.fromGridKwh);
+        addMetric(metrics, `${prefix}_to_grid_kwh`, trend.toGridKwh);
+        addMetric(metrics, `${prefix}_solar_powered_pct`, trend.solarPoweredPct);
+      } else {
+        addMetric(metrics, `${prefix}_energy_kwh`, trend.energyKwh);
+      }
+    });
+
+    return metrics;
+  }
+
   addMetric(metrics, 'brightness_pct', device.brightness);
   addMetric(metrics, 'temperature', device.temperature);
   addMetric(metrics, 'target_temperature', device.targetTemperature);
@@ -1166,6 +1294,10 @@ function scoreSourceForPrompt(source, prompt, keywords = [], preferredSourceKey 
     score += 14;
   }
 
+  if (/sense|energy|power|usage|solar|always on|grid/.test(normalizedPrompt) && (source?.sourceType === 'sense_monitor' || source?.sourceType === 'sense_device' || source?.origin === 'sense')) {
+    score += 14;
+  }
+
   return score;
 }
 
@@ -1322,6 +1454,7 @@ class TelemetryService {
   async recordDeviceSnapshot(device = {}) {
     const sourceId = String(device?._id || device?.id || '').trim();
     const sourceOrigin = String(device?.properties?.source || '').trim().toLowerCase();
+    const senseEntityType = String(device?.properties?.sense?.entityType || '').trim().toLowerCase();
 
     if (!sourceId) {
       return { inserted: false, skipped: true };
@@ -1332,17 +1465,37 @@ class TelemetryService {
       return { inserted: false, skipped: true };
     }
 
-    const sourceType = sourceOrigin === 'tempest' ? 'tempest_station' : 'device';
+    const sourceType = sourceOrigin === 'tempest'
+      ? 'tempest_station'
+      : sourceOrigin === 'sense' && senseEntityType === 'monitor'
+        ? 'sense_monitor'
+        : sourceOrigin === 'sense'
+          ? 'sense_device'
+          : 'device';
     const sourceKey = sourceOrigin === 'tempest'
       ? `tempest_station:${sourceId}`
-      : `device:${sourceId}`;
+      : sourceOrigin === 'sense' && senseEntityType === 'monitor'
+        ? `sense_monitor:${sourceId}`
+        : sourceOrigin === 'sense'
+          ? `sense_device:${sourceId}`
+          : `device:${sourceId}`;
     const sourceName = sourceOrigin === 'tempest'
       ? String(device?.properties?.tempest?.stationName || device?.name || '').trim()
       : String(device?.name || '').trim();
     const sourceCategory = sourceOrigin === 'tempest'
       ? 'weather_station'
-      : String(device?.type || '').trim();
-    const streamType = sourceOrigin === 'tempest' ? 'tempest_device_state' : 'device_state';
+      : sourceOrigin === 'sense' && senseEntityType === 'monitor'
+        ? 'energy_monitor'
+        : sourceOrigin === 'sense'
+          ? 'energy_device'
+          : String(device?.type || '').trim();
+    const streamType = sourceOrigin === 'tempest'
+      ? 'tempest_device_state'
+      : sourceOrigin === 'sense' && senseEntityType === 'monitor'
+        ? 'sense_monitor_state'
+        : sourceOrigin === 'sense'
+          ? 'sense_device_state'
+          : 'device_state';
 
     const recordedAt = parseOptionalDate(device?.lastSeen) || new Date();
     const payload = {
@@ -2236,14 +2389,18 @@ class TelemetryService {
         tempestObservationResult,
         tempestEventResult,
         rainMachineDailyStatResult,
-        rainMachineWateringDayResult
+        rainMachineWateringDayResult,
+        senseMonitorSnapshotResult,
+        senseTrendSnapshotResult
       ] = await Promise.all([
         TelemetrySample.deleteMany({}),
         DeviceEnergySample.deleteMany({}),
         TempestObservation.deleteMany({}),
         TempestEvent.deleteMany({}),
         RainMachineDailyStat.deleteMany({}),
-        RainMachineWateringDay.deleteMany({})
+        RainMachineWateringDay.deleteMany({}),
+        SenseMonitorSnapshot.deleteMany({}),
+        SenseTrendSnapshot.deleteMany({})
       ]);
 
       return {
@@ -2253,7 +2410,9 @@ class TelemetryService {
         tempestObservationsDeleted: tempestObservationResult.deletedCount || 0,
         tempestEventsDeleted: tempestEventResult.deletedCount || 0,
         rainMachineDailyStatsDeleted: rainMachineDailyStatResult.deletedCount || 0,
-        rainMachineWateringDaysDeleted: rainMachineWateringDayResult.deletedCount || 0
+        rainMachineWateringDaysDeleted: rainMachineWateringDayResult.deletedCount || 0,
+        senseMonitorSnapshotsDeleted: senseMonitorSnapshotResult.deletedCount || 0,
+        senseTrendSnapshotsDeleted: senseTrendSnapshotResult.deletedCount || 0
       };
     }
 
@@ -2265,6 +2424,8 @@ class TelemetryService {
     let tempestEventsDeleted = 0;
     let rainMachineDailyStatsDeleted = 0;
     let rainMachineWateringDaysDeleted = 0;
+    let senseMonitorSnapshotsDeleted = 0;
+    let senseTrendSnapshotsDeleted = 0;
 
     if (summary.sourceType === 'device') {
       const energyResult = await DeviceEnergySample.deleteMany({ deviceId: summary.sourceId });
@@ -2297,6 +2458,34 @@ class TelemetryService {
       }
     }
 
+    if (summary.sourceType === 'sense_monitor' || summary.sourceType === 'sense_device') {
+      const sourceDevice = await Device.findById(summary.sourceId).lean();
+      const monitorId = sourceDevice?.properties?.sense?.monitorId;
+
+      if (summary.sourceType === 'sense_monitor' && monitorId) {
+        const [monitorSnapshotResult, trendSnapshotResult] = await Promise.all([
+          SenseMonitorSnapshot.deleteMany({ monitorId }),
+          SenseTrendSnapshot.deleteMany({ monitorId })
+        ]);
+        senseMonitorSnapshotsDeleted = monitorSnapshotResult.deletedCount || 0;
+        senseTrendSnapshotsDeleted = trendSnapshotResult.deletedCount || 0;
+      }
+
+      if (summary.sourceType === 'sense_device' && monitorId) {
+        const trendSnapshotResult = await SenseTrendSnapshot.updateMany(
+          { monitorId },
+          {
+            $pull: {
+              deviceBreakdown: {
+                senseDeviceId: sourceDevice?.properties?.sense?.senseDeviceId
+              }
+            }
+          }
+        );
+        senseTrendSnapshotsDeleted = trendSnapshotResult.modifiedCount || trendSnapshotResult.nModified || 0;
+      }
+    }
+
     return {
       scope: summary.sourceKey,
       telemetryDeleted: telemetryResult.deletedCount || 0,
@@ -2304,7 +2493,9 @@ class TelemetryService {
       tempestObservationsDeleted,
       tempestEventsDeleted,
       rainMachineDailyStatsDeleted,
-      rainMachineWateringDaysDeleted
+      rainMachineWateringDaysDeleted,
+      senseMonitorSnapshotsDeleted,
+      senseTrendSnapshotsDeleted
     };
   }
 }

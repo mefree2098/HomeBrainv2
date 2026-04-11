@@ -64,6 +64,40 @@ class DeviceEnergySampleService {
   }
 
   extractEnergySnapshot(device) {
+    const source = (device?.properties?.source || 'smartthings').toString().toLowerCase() || 'smartthings';
+
+    if (source === 'sense') {
+      const sense = device?.properties?.sense || {};
+      const dayTrend = sense?.trends?.day || {};
+      const recordedAt = parseOptionalDate(sense?.lastSnapshotAt) || parseOptionalDate(device?.lastSeen) || new Date();
+      const powerValue = toFiniteNumber(sense?.currentPowerW);
+      const energyValue = toFiniteNumber(
+        sense?.entityType === 'monitor'
+          ? dayTrend?.consumptionTotalKwh
+          : dayTrend?.energyKwh
+      );
+
+      return {
+        supportsEnergyMonitoring: powerValue !== null || energyValue !== null,
+        recordedAt,
+        source,
+        power: powerValue === null
+          ? null
+          : {
+              value: powerValue,
+              unit: 'W',
+              timestamp: recordedAt
+            },
+        energy: energyValue === null
+          ? null
+          : {
+              value: energyValue,
+              unit: 'kWh',
+              timestamp: recordedAt
+            }
+      };
+    }
+
     const attributeValues = device?.properties?.smartThingsAttributeValues || {};
     const attributeMetadata = device?.properties?.smartThingsAttributeMetadata || {};
     const capabilitySet = this.getCapabilitySet(device);
@@ -91,7 +125,7 @@ class DeviceEnergySampleService {
     return {
       supportsEnergyMonitoring,
       recordedAt,
-      source: (device?.properties?.source || 'smartthings').toString().toLowerCase() || 'smartthings',
+      source,
       power: powerValue === null
         ? null
         : {

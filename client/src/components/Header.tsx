@@ -34,6 +34,7 @@ interface HeaderProps {
 
 const ROUTE_META: Record<string, { label: string; detail: string }> = {
   "/": { label: "Residence Overview", detail: "Live command deck" },
+  "/sense-energy": { label: "Sense Energy", detail: "Realtime power deck" },
   "/devices": { label: "Device Matrix", detail: "Hardware orchestration" },
   "/scenes": { label: "Scene Sequencer", detail: "Atmosphere presets" },
   "/workflows": { label: "Workflow Studio", detail: "Behavioral automation" },

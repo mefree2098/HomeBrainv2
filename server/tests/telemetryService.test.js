@@ -114,6 +114,74 @@ test('extractDeviceMetrics captures RainMachine controller and zone runtime tele
   assert.equal(metrics.cycle_count, 2);
 });
 
+test('extractDeviceMetrics captures Sense monitor and device telemetry for reporting charts', () => {
+  const monitorMetrics = extractDeviceMetrics({
+    _id: 'sense-monitor-1',
+    isOnline: true,
+    status: true,
+    properties: {
+      source: 'sense',
+      sense: {
+        entityType: 'monitor',
+        currentPowerW: 5200.4,
+        solarPowerW: 1250.3,
+        netPowerW: 3950.1,
+        alwaysOnW: 410.4,
+        otherW: 979.4,
+        untrackedW: 979.4,
+        activeDeviceCount: 3,
+        voltage: [121.2, 118.8],
+        frequencyHz: 59.94,
+        trends: {
+          day: {
+            consumptionTotalKwh: 31.8754,
+            productionTotalKwh: 10.25,
+            productionPct: 32.16,
+            fromGridKwh: 22.5,
+            toGridKwh: 1.2,
+            solarPoweredPct: 43.2
+          }
+        }
+      }
+    }
+  });
+
+  assert.equal(monitorMetrics.power_w, 5200.4);
+  assert.equal(monitorMetrics.solar_power_w, 1250.3);
+  assert.equal(monitorMetrics.net_power_w, 3950.1);
+  assert.equal(monitorMetrics.always_on_w, 410.4);
+  assert.equal(monitorMetrics.active_device_count, 3);
+  assert.equal(monitorMetrics.voltage_l1_v, 121.2);
+  assert.equal(monitorMetrics.voltage_l2_v, 118.8);
+  assert.equal(monitorMetrics.frequency_hz, 59.94);
+  assert.equal(monitorMetrics.daily_consumption_kwh, 31.8754);
+  assert.equal(monitorMetrics.daily_production_kwh, 10.25);
+  assert.equal(monitorMetrics.daily_solar_powered_pct, 43.2);
+
+  const deviceMetrics = extractDeviceMetrics({
+    _id: 'sense-device-1',
+    isOnline: true,
+    status: true,
+    properties: {
+      source: 'sense',
+      sense: {
+        entityType: 'device',
+        currentPowerW: 1500.3,
+        currentSharePct: 28.9,
+        trends: {
+          day: { energyKwh: 6.125 },
+          month: { energyKwh: 120.5 }
+        }
+      }
+    }
+  });
+
+  assert.equal(deviceMetrics.power_w, 1500.3);
+  assert.equal(deviceMetrics.current_share_pct, 28.9);
+  assert.equal(deviceMetrics.daily_energy_kwh, 6.125);
+  assert.equal(deviceMetrics.monthly_energy_kwh, 120.5);
+});
+
 test('extractTempestMetrics keeps display-oriented weather metrics and skips rapid wind snapshots', () => {
   const regularMetrics = extractTempestMetrics({
     observationType: 'obs_st',

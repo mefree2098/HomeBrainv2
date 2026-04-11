@@ -1,6 +1,8 @@
 import SwiftUI
 
 private let rainMachineConfiguredSecretPlaceholder = "••••••••••••••••"
+private let rainMachineManualRunPresetMinutes = [1, 5, 10, 15, 30, 45]
+private let rainMachineMaxManualRunMinutes = 360
 
 private func rainMachineOptionalDouble(_ value: Any?) -> Double? {
     if let value = value as? Double {
@@ -661,9 +663,8 @@ struct RainMachineView: View {
     @State private var isTesting = false
     @State private var isSaving = false
     @State private var submittingKey: String?
-    @State private var manualDurationSeconds = 600
+    @State private var manualDurationMinutes: Int?
     @State private var hideInactiveZones = true
-    @State private var hasInitializedManualDuration = false
     @State private var errorMessage: String?
     @State private var infoMessage = ""
 
@@ -710,6 +711,18 @@ struct RainMachineView: View {
 
     private var hiddenZoneCount: Int {
         max(0, (dashboard?.zones.count ?? 0) - visibleZones.count)
+    }
+
+    private var defaultManualDurationMinutes: Int {
+        max(1, Int(round(Double(dashboard?.integration.defaultZoneDurationSeconds ?? 600) / 60)))
+    }
+
+    private var selectedManualDurationMinutes: Int {
+        manualDurationMinutes ?? defaultManualDurationMinutes
+    }
+
+    private var manualRunPresetMinutes: [Int] {
+        rainMachineManualRunPresetMinutes.filter { $0 != defaultManualDurationMinutes }
     }
 
     private var summaryCards: [RainMachineSummaryCard] {
@@ -1446,26 +1459,85 @@ struct RainMachineView: View {
                     }
 
                     Spacer(minLength: 0)
+                }
 
-                    VStack(alignment: .trailing, spacing: 6) {
-                        Text("Manual Seconds")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .textCase(.uppercase)
-                            .tracking(2)
-                            .foregroundStyle(HBPalette.textMuted)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Manual Run Time")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2)
+                        .foregroundStyle(HBPalette.textMuted)
 
-                        TextField("600", value: $manualDurationSeconds, format: .number)
-                            .keyboardType(.numberPad)
-                            .frame(width: 104)
-                            .hbPanelTextField()
+                    HStack(spacing: 10) {
+                        Button {
+                            updateManualDurationMinutes(by: -5)
+                        } label: {
+                            Label("5m", systemImage: "minus")
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+
+                        VStack(alignment: .center, spacing: 4) {
+                            Text("Manual Run")
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .textCase(.uppercase)
+                                .tracking(1.8)
+                                .foregroundStyle(HBPalette.textMuted)
+
+                            Text("\(selectedManualDurationMinutes) min")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+
+                        Button {
+                            updateManualDurationMinutes(by: 5)
+                        } label: {
+                            Label("5m", systemImage: "plus")
+                        }
+                        .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            rainMachineMinuteChip(
+                                title: "Saved default \(defaultManualDurationMinutes)m",
+                                isSelected: selectedManualDurationMinutes == defaultManualDurationMinutes
+                            ) {
+                                updateManualDurationMinutes(to: defaultManualDurationMinutes)
+                            }
+
+                            ForEach(manualRunPresetMinutes, id: \.self) { minutes in
+                                rainMachineMinuteChip(
+                                    title: "\(minutes)m",
+                                    isSelected: selectedManualDurationMinutes == minutes
+                                ) {
+                                    updateManualDurationMinutes(to: minutes)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+
+                    Text("Saved default uses the RainMachine manual run time saved in Integration Settings. Zone start buttons currently use \(selectedManualDurationMinutes) minute manual runs.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                Toggle(isOn: $hideInactiveZones) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Hide Inactive")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+
+                        Text("Keep inactive zones out of the list until you explicitly turn them back on.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
                     }
                 }
-
-                Picker("Zone Visibility", selection: $hideInactiveZones) {
-                    Text("Hide Inactive").tag(true)
-                    Text("Show All").tag(false)
-                }
-                .pickerStyle(.segmented)
+                .tint(HBPalette.accentBlue)
 
                 if (dashboard?.zones ?? []).isEmpty {
                     Text("No zones were returned by the controller.")
@@ -1473,7 +1545,7 @@ struct RainMachineView: View {
                         .foregroundStyle(HBPalette.textSecondary)
                 } else if visibleZones.isEmpty {
                     HBCardRow {
-                        Text("All \(hiddenZoneCount) inactive zone\(hiddenZoneCount == 1 ? "" : "s") are currently hidden. Switch to Show All to review them.")
+                        Text("All \(hiddenZoneCount) inactive zone\(hiddenZoneCount == 1 ? "" : "s") are currently hidden. Turn off Hide Inactive to review them.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1686,7 +1758,7 @@ struct RainMachineView: View {
                                 await performDashboardMutation(
                                     actionKey: "zone-start-\(zone.id)",
                                     path: "/api/rainmachine/zones/\(zone.uid ?? 0)/start",
-                                    body: ["durationSeconds": max(60, manualDurationSeconds)]
+                                    body: ["durationSeconds": selectedManualDurationMinutes * 60]
                                 )
                             }
                         } label: {
@@ -1822,10 +1894,8 @@ struct RainMachineView: View {
             let dashboardObject = JSON.object(dashboardResponse)
             let nextDashboard = RainMachineDashboardSnapshot.from(JSON.object(dashboardObject["dashboard"]))
             dashboard = nextDashboard
-
-            if !hasInitializedManualDuration {
-                manualDurationSeconds = max(60, nextDashboard.integration.defaultZoneDurationSeconds)
-                hasInitializedManualDuration = true
+            if manualDurationMinutes == nil {
+                manualDurationMinutes = max(1, Int(round(Double(nextDashboard.integration.defaultZoneDurationSeconds) / 60)))
             }
 
             if isAdmin {
@@ -1942,6 +2012,14 @@ struct RainMachineView: View {
         }
     }
 
+    private func updateManualDurationMinutes(by delta: Int) {
+        updateManualDurationMinutes(to: selectedManualDurationMinutes + delta)
+    }
+
+    private func updateManualDurationMinutes(to value: Int) {
+        manualDurationMinutes = max(1, min(rainMachineMaxManualRunMinutes, value))
+    }
+
     private func performDashboardMutation(actionKey: String, path: String, body: [String: Any]? = nil) async {
         submittingKey = actionKey
         defer { submittingKey = nil }
@@ -1955,5 +2033,22 @@ struct RainMachineView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func rainMachineMinuteChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(isSelected ? HBPalette.textPrimary : HBPalette.textSecondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    HBGlassBackground(
+                        cornerRadius: 16,
+                        variant: isSelected ? .panelStrong : .panelSoft
+                    )
+                )
+        }
+        .buttonStyle(.plain)
     }
 }

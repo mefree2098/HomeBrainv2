@@ -243,6 +243,30 @@ function getFormattedInsteonAddress(device: DeviceLike | null): string | null {
 
 function getLiveEnergySnapshot(device: DeviceLike | null): LiveEnergySnapshot {
   const properties = device?.properties as Record<string, any> | undefined
+  const source = (properties?.source || "").toString().trim().toLowerCase()
+
+  if (source === "sense") {
+    const sense = properties?.sense || {}
+    const dayTrend = sense?.trends?.day || {}
+    const powerValue = toFiniteNumber(sense?.currentPowerW)
+    const energyValue = toFiniteNumber(
+      sense?.entityType === "monitor"
+        ? dayTrend?.consumptionTotalKwh
+        : dayTrend?.energyKwh
+    )
+    const timestamp = parseOptionalDate(sense?.lastSnapshotAt) || parseOptionalDate(device?.lastSeen)
+
+    return {
+      supportsEnergyMonitoring: powerValue !== null || energyValue !== null,
+      powerValue,
+      powerUnit: "W",
+      powerTimestamp: timestamp,
+      energyValue,
+      energyUnit: "kWh",
+      energyTimestamp: timestamp
+    }
+  }
+
   const attributeValues = properties?.smartThingsAttributeValues || {}
   const attributeMetadata = properties?.smartThingsAttributeMetadata || {}
   const capabilitySet = new Set(getSmartThingsCapabilities(device))

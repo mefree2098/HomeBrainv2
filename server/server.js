@@ -17,6 +17,7 @@ const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const tempestRoutes = require("./routes/tempestRoutes");
 const rainMachineRoutes = require("./routes/rainMachineRoutes");
+const senseRoutes = require("./routes/senseRoutes");
 const weatherRoutes = require("./routes/weatherRoutes");
 const securityAlarmRoutes = require("./routes/securityAlarmRoutes");
 const smartThingsRoutes = require("./routes/smartThingsRoutes");
@@ -58,6 +59,7 @@ const voiceAcknowledgmentService = require("./services/voiceAcknowledgmentServic
 const whisperService = require("./services/whisperService");
 const tempestService = require("./services/tempestService");
 const rainMachineService = require("./services/rainMachineService");
+const senseService = require("./services/senseService");
 const platformDeployService = require("./services/platformDeployService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
@@ -280,6 +282,7 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/weather', weatherRoutes);
 app.use('/api/tempest', tempestRoutes);
 app.use('/api/rainmachine', rainMachineRoutes);
+app.use('/api/sense', senseRoutes);
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
@@ -498,6 +501,16 @@ platformUpdateMonitorService.start();
   }
 })();
 
+// Initialize Sense energy integration
+(async () => {
+  try {
+    await senseService.initialize();
+    console.log('Sense Service initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Sense Service:', error.message);
+  }
+})();
+
 async function gracefulShutdown(signal) {
   if (isShuttingDown) {
     return;
@@ -570,6 +583,12 @@ async function gracefulShutdown(signal) {
       await rainMachineService.shutdown();
     } catch (error) {
       console.error('Error stopping RainMachine service:', error.message);
+    }
+
+    try {
+      await senseService.shutdown();
+    } catch (error) {
+      console.error('Error stopping Sense service:', error.message);
     }
 
     try {

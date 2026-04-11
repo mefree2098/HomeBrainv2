@@ -137,8 +137,9 @@ import {
   type InsteonIsySyncRunLogEntry,
   type InsteonStatusResponse
 } from "@/api/insteon"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
+import { SenseIntegrationCard } from "@/components/sense/SenseIntegrationCard"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
 import { OpenClawIntegration } from "./OpenClawIntegration"
@@ -178,6 +179,28 @@ type InsteonPlmConnectionTestResult = {
     subcategory?: string | number;
   };
 }
+
+const SETTINGS_MAIN_TABS = new Set([
+  "general",
+  "voice",
+  "integrations",
+  "security",
+  "resources",
+  "maintenance"
+])
+
+const SETTINGS_INTEGRATION_TABS = new Set([
+  "alexa",
+  "openclaw",
+  "sense",
+  "tempest",
+  "rainmachine",
+  "devices",
+  "ecobee",
+  "keys",
+  "ai",
+  "priority"
+])
 
 const formatInsteonConnectionTarget = (target: {
   label?: string;
@@ -307,6 +330,9 @@ Input.displayName = "SettingsInput"
 export function Settings() {
   const { toast } = useToast()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const [activeSettingsTab, setActiveSettingsTab] = useState("general")
+  const [activeIntegrationTab, setActiveIntegrationTab] = useState("alexa")
   const [loading, setLoading] = useState(false)
   const [testingApiKey, setTestingApiKey] = useState(false)
   const [testingOpenAI, setTestingOpenAI] = useState(false)
@@ -480,6 +506,23 @@ export function Settings() {
       enableSecurityMode: false
     }
   })
+
+  useEffect(() => {
+    const requestedTab = searchParams.get("tab")?.trim().toLowerCase() || ""
+    if (!requestedTab) {
+      return
+    }
+
+    if (SETTINGS_MAIN_TABS.has(requestedTab)) {
+      setActiveSettingsTab(requestedTab)
+      return
+    }
+
+    if (SETTINGS_INTEGRATION_TABS.has(requestedTab)) {
+      setActiveSettingsTab("integrations")
+      setActiveIntegrationTab(requestedTab)
+    }
+  }, [searchParams])
 
   const getDeviceDisplayName = (device: any) => {
     if (!device) return "Unknown device"
@@ -3744,7 +3787,7 @@ export function Settings() {
       </div>
 
       <form onSubmit={handleSubmit(handleSaveSettings)} autoComplete="off">
-        <Tabs defaultValue="general" className="space-y-6">
+        <Tabs value={activeSettingsTab} onValueChange={setActiveSettingsTab} className="space-y-6">
           <TabsList className="h-auto flex-wrap gap-1 bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 p-1">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="voice">Voice & Audio</TabsTrigger>
@@ -4026,7 +4069,7 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="integrations" className="space-y-6">
-            <Tabs defaultValue="alexa" className="space-y-6">
+            <Tabs value={activeIntegrationTab} onValueChange={setActiveIntegrationTab} className="space-y-6">
               <div className="space-y-2">
                 <h2 className="text-lg font-semibold">Integration Settings</h2>
                 <p className="text-sm text-muted-foreground">
@@ -4037,6 +4080,7 @@ export function Settings() {
               <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 p-1">
                 <TabsTrigger value="alexa">Alexa</TabsTrigger>
                 <TabsTrigger value="openclaw">OpenClaw</TabsTrigger>
+                <TabsTrigger value="sense">Sense Energy</TabsTrigger>
                 <TabsTrigger value="tempest">Tempest</TabsTrigger>
                 <TabsTrigger value="rainmachine">RainMachine</TabsTrigger>
                 <TabsTrigger value="devices">Device Integrations</TabsTrigger>
@@ -4759,6 +4803,10 @@ export function Settings() {
                   </p>
                 </div>
                 <OpenClawIntegration embedded />
+              </TabsContent>
+
+              <TabsContent value="sense" className="space-y-6">
+                <SenseIntegrationCard />
               </TabsContent>
 
               <TabsContent value="tempest" className="space-y-6">

@@ -1,0 +1,107 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const senseService = require('../services/senseService');
+
+const {
+  buildTrendSummaryMap,
+  normalizeRealtimePayload,
+  normalizeTrendSnapshot
+} = senseService.__private__;
+
+test('normalizeRealtimePayload builds load shares and synthetic residual usage for the Sense dashboard', () => {
+  const catalog = new Map([
+    ['hvac-1', { senseDeviceId: 'hvac-1', name: 'HVAC', icon: 'fan' }],
+    ['dryer-1', { senseDeviceId: 'dryer-1', name: 'Dryer', icon: 'dryer' }],
+    ['always-1', { senseDeviceId: 'always-1', name: 'Always On', icon: 'plug', alwaysOn: true }]
+  ]);
+
+  const summary = normalizeRealtimePayload({
+    time: '2026-04-10T12:00:00.000Z',
+    w: 5200.4,
+    solar_w: 1250.3,
+    voltage: [121.24, 118.77],
+    hz: 59.944,
+    devices: [
+      { id: 'hvac-1', w: 2400.2 },
+      { id: 'dryer-1', w: 1500.3 },
+      { id: 'always-1', w: 320.5 }
+    ]
+  }, {
+    monitorId: 'monitor-1',
+    monitorName: 'Main Panel',
+    deviceCatalog: catalog,
+    alwaysOnInfo: {
+      total: {
+        avg_w: 410.4
+      }
+    },
+    source: 'ws'
+  });
+
+  assert.equal(summary.monitorId, 'monitor-1');
+  assert.equal(summary.monitorName, 'Main Panel');
+  assert.equal(summary.powerW, 5200.4);
+  assert.equal(summary.solarW, 1250.3);
+  assert.equal(summary.netW, 3950.1);
+  assert.equal(summary.alwaysOnW, 410.4);
+  assert.equal(summary.otherW, 979.4);
+  assert.equal(summary.activeDeviceCount, 3);
+  assert.deepEqual(summary.voltage, [121.2, 118.8]);
+  assert.equal(summary.frequencyHz, 59.94);
+  assert.equal(summary.activeDevices[0].senseDeviceId, 'hvac-1');
+  assert.equal(summary.activeDevices[0].sharePct, 46.2);
+
+  const residual = summary.activeDevices.find((entry) => entry.senseDeviceId === 'sense-other');
+  assert.equal(residual?.synthetic, true);
+  assert.equal(residual?.powerW, 979.4);
+  assert.equal(residual?.sharePct, 18.8);
+});
+
+test('normalizeTrendSnapshot and buildTrendSummaryMap preserve report-ready monitor and device energy windows', () => {
+  const trend = normalizeTrendSnapshot('day', {
+    start: '2026-04-01T00:00:00.000Z',
+    consumption: {
+      usage_total_kwh: 31.8754,
+      devices: [
+        {
+          id: 'hvac-1',
+          name: 'HVAC',
+          consumption: {
+            usage_total_kwh: 12.4
+          }
+        },
+        {
+          device_id: 'dryer-1',
+          alias: 'Dryer',
+          usage_total_kwh: 6.125
+        }
+      ]
+    }
+  }, {
+    total: {
+      production_kwh: 10.25,
+      from_grid_kwh: 22.5,
+      to_grid_kwh: 1.2,
+      solar_percentage: 43.2
+    }
+  });
+
+  assert.equal(trend.scale, 'day');
+  assert.equal(trend.startAt.toISOString(), '2026-04-01T00:00:00.000Z');
+  assert.equal(trend.consumptionTotalKwh, 31.8754);
+  assert.equal(trend.productionTotalKwh, 10.25);
+  assert.equal(trend.productionPct, 32.16);
+  assert.equal(trend.fromGridKwh, 22.5);
+  assert.equal(trend.toGridKwh, 1.2);
+  assert.equal(trend.solarPoweredPct, 43.2);
+  assert.equal(trend.deviceBreakdown.length, 2);
+  assert.equal(trend.deviceBreakdown[0].senseDeviceId, 'hvac-1');
+  assert.equal(trend.deviceBreakdown[0].sharePct, 38.9);
+
+  const summary = buildTrendSummaryMap([trend]);
+  assert.equal(summary.monitor.day.consumptionTotalKwh, 31.8754);
+  assert.equal(summary.monitor.day.productionTotalKwh, 10.25);
+  assert.equal(summary.devices.get('hvac-1').day.energyKwh, 12.4);
+  assert.equal(summary.devices.get('dryer-1').day.sharePct, 19.22);
+});

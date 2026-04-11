@@ -4,7 +4,9 @@ import {
   Clock3,
   Database,
   Loader2,
+  Minus,
   Play,
+  Plus,
   RefreshCw,
   ShieldAlert,
   Square,
@@ -29,11 +31,13 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Switch } from "@/components/ui/switch"
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
+
+const MANUAL_RUN_PRESET_MINUTES = [1, 5, 10, 15, 30, 45]
+const MAX_MANUAL_RUN_MINUTES = 360
 
 const formatDateTime = (value: string | null | undefined) => {
   if (!value) {
@@ -125,7 +129,7 @@ export default function RainMachine() {
   const [refreshing, setRefreshing] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [submittingKey, setSubmittingKey] = useState<string | null>(null)
-  const [manualDurationSeconds, setManualDurationSeconds] = useState(600)
+  const [manualDurationMinutes, setManualDurationMinutes] = useState<number | null>(null)
   const [hideInactiveZones, setHideInactiveZones] = useState(true)
 
   const loadDashboard = useCallback(async () => {
@@ -136,7 +140,7 @@ export default function RainMachine() {
         wateringDays: 14
       })
       setDashboard(response.dashboard)
-      setManualDurationSeconds(response.dashboard.integration.defaultZoneDurationSeconds || 600)
+      setManualDurationMinutes((current) => current ?? Math.max(1, Math.round((response.dashboard.integration.defaultZoneDurationSeconds || 600) / 60)))
     } catch (error) {
       toast({
         title: "RainMachine dashboard failed",
@@ -250,6 +254,15 @@ export default function RainMachine() {
   const latestDailyStat = dashboard?.dailyStats?.[0] as RainMachineDailyStatRecord | undefined
   const recentWatering = dashboard?.wateringHistory?.slice(0, 7) || []
   const controllerReady = dashboard?.integration?.enabled && dashboard?.controller
+  const defaultManualDurationMinutes = useMemo(
+    () => Math.max(1, Math.round((dashboard?.integration?.defaultZoneDurationSeconds || 600) / 60)),
+    [dashboard]
+  )
+  const selectedManualDurationMinutes = manualDurationMinutes ?? defaultManualDurationMinutes
+  const manualRunPresetMinutes = useMemo(
+    () => MANUAL_RUN_PRESET_MINUTES.filter((minutes) => minutes !== defaultManualDurationMinutes),
+    [defaultManualDurationMinutes]
+  )
   const visibleZones = useMemo(() => {
     if (!dashboard) {
       return []
@@ -260,6 +273,10 @@ export default function RainMachine() {
       : dashboard.zones
   }, [dashboard, hideInactiveZones])
   const hiddenZoneCount = Math.max(0, (dashboard?.zones.length || 0) - visibleZones.length)
+
+  const updateManualDurationMinutes = (minutes: number) => {
+    setManualDurationMinutes(Math.max(1, Math.min(MAX_MANUAL_RUN_MINUTES, minutes)))
+  }
 
   if (loading) {
     return (
@@ -557,35 +574,79 @@ export default function RainMachine() {
         </Card>
 
         <Card className="border-white/10 bg-white/70 backdrop-blur dark:bg-slate-950/55">
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <CardTitle>Zones</CardTitle>
               <CardDescription>
                 Live zone state with manual start and stop controls.
               </CardDescription>
             </div>
-            <div className="flex flex-col items-end gap-3">
-              <div className="w-40">
-                <Input
-                  value={manualDurationSeconds}
-                  onChange={(event) => setManualDurationSeconds(Math.max(60, Number(event.target.value) || 60))}
-                  placeholder="Manual seconds"
-                />
+            <div className="flex w-full max-w-md flex-col gap-3 lg:items-end">
+              <div className="flex flex-col gap-3 lg:items-end">
+                <div className="flex items-center gap-2 self-stretch lg:self-auto">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-12 rounded-2xl px-4"
+                    onClick={() => updateManualDurationMinutes(selectedManualDurationMinutes - 5)}
+                  >
+                    <Minus className="mr-2 h-4 w-4" />
+                    5m
+                  </Button>
+
+                  <div className="min-w-[8.5rem] flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center lg:flex-none">
+                    <p className="section-kicker">Manual Run</p>
+                    <p className="mt-1 text-lg font-semibold">{selectedManualDurationMinutes} min</p>
+                  </div>
+
+                  <Button
+                    type="button"
+                    className="h-12 rounded-2xl px-4"
+                    onClick={() => updateManualDurationMinutes(selectedManualDurationMinutes + 5)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    5m
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap gap-2 lg:justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={selectedManualDurationMinutes === defaultManualDurationMinutes ? "secondary" : "outline"}
+                    className="rounded-full"
+                    onClick={() => updateManualDurationMinutes(defaultManualDurationMinutes)}
+                  >
+                    Saved default {defaultManualDurationMinutes}m
+                  </Button>
+                  {manualRunPresetMinutes.map((minutes) => (
+                    <Button
+                      key={minutes}
+                      type="button"
+                      size="sm"
+                      variant={selectedManualDurationMinutes === minutes ? "secondary" : "outline"}
+                      className="rounded-full"
+                      onClick={() => updateManualDurationMinutes(minutes)}
+                    >
+                      {minutes}m
+                    </Button>
+                  ))}
+                </div>
               </div>
-              <RadioGroup
-                value={hideInactiveZones ? "hide" : "show"}
-                onValueChange={(value) => setHideInactiveZones(value === "hide")}
-                className="flex flex-wrap justify-end gap-3"
-              >
-                <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <RadioGroupItem value="hide" id="rainmachine-hide-inactive" />
+
+              <div className="flex items-center gap-3">
+                <label htmlFor="rainmachine-hide-inactive" className="text-sm text-muted-foreground">
                   Hide inactive
                 </label>
-                <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <RadioGroupItem value="show" id="rainmachine-show-all" />
-                  Show all
-                </label>
-              </RadioGroup>
+                <Switch
+                  id="rainmachine-hide-inactive"
+                  checked={hideInactiveZones}
+                  onCheckedChange={setHideInactiveZones}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground lg:text-right">
+                Saved default uses the RainMachine manual run time saved in Integration Settings. Zone start buttons currently use {selectedManualDurationMinutes} minute manual runs.
+              </p>
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -595,7 +656,7 @@ export default function RainMachine() {
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p className="text-sm text-muted-foreground">
                   All {hiddenZoneCount} inactive zone{hiddenZoneCount === 1 ? "" : "s"} are currently hidden.
-                  Switch to <span className="font-medium text-foreground">Show all</span> to review them.
+                  Turn off <span className="font-medium text-foreground">Hide inactive</span> to review them.
                 </p>
               </div>
             ) : (
@@ -628,7 +689,7 @@ export default function RainMachine() {
                         <Button
                           size="sm"
                           disabled={submittingKey === `zone-start-${zone.uid}` || zone.uid == null || zone.master || !zone.active}
-                          onClick={() => void applyDashboardMutation(`zone-start-${zone.uid}`, () => startRainMachineZone(zone.uid || "", manualDurationSeconds))}
+                          onClick={() => void applyDashboardMutation(`zone-start-${zone.uid}`, () => startRainMachineZone(zone.uid || "", selectedManualDurationMinutes * 60))}
                         >
                           {submittingKey === `zone-start-${zone.uid}` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
                           Start

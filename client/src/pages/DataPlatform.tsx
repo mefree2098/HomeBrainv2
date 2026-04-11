@@ -192,6 +192,10 @@ function sourceTone(source: TelemetrySourceSummary) {
     return "from-sky-400/22 via-emerald-500/16 to-lime-500/16"
   }
 
+  if (source.sourceType === "sense_monitor" || source.sourceType === "sense_device") {
+    return "from-amber-400/24 via-orange-500/18 to-emerald-500/16"
+  }
+
   return "from-emerald-400/20 via-teal-500/12 to-cyan-500/18"
 }
 
@@ -204,6 +208,14 @@ function sourceKindLabel(source: TelemetrySourceSummary) {
     return "Irrigation Report"
   }
 
+  if (source.sourceType === "sense_monitor") {
+    return "Energy Monitor"
+  }
+
+  if (source.sourceType === "sense_device") {
+    return "Energy Device"
+  }
+
   return "Device Stream"
 }
 
@@ -214,6 +226,14 @@ function sourceHistoryLabel(source: TelemetrySourceSummary) {
 
   if (source.sourceType === "rainmachine_report") {
     return "irrigation report"
+  }
+
+  if (source.sourceType === "sense_monitor") {
+    return "energy monitor"
+  }
+
+  if (source.sourceType === "sense_device") {
+    return "energy device"
   }
 
   return "device"
@@ -746,7 +766,7 @@ export default function DataPlatform() {
                 </Badge>
               </div>
               <p className="max-w-3xl text-sm leading-relaxed text-slate-200/80">
-                HomeBrain now treats device history, Tempest observations, and RainMachine irrigation reports as one shared telemetry fabric,
+                HomeBrain now treats device history, Sense energy telemetry, Tempest observations, and RainMachine irrigation reports as one shared telemetry fabric,
                 so long-range charts, trend analysis, and future automations can run from a single surface.
               </p>
             </div>
@@ -886,7 +906,7 @@ export default function DataPlatform() {
           <Textarea
             value={chartPrompt}
             onChange={(event) => setChartPrompt(event.target.value)}
-            placeholder='Example: Create a chart showing the master toilet fan on/off history for the last week, compare rain rate and rain today for the Tempest station over the last month, or graph RainMachine water saved percentage for the last two weeks.'
+            placeholder='Example: Chart whole-home Sense power draw for the last 6 hours, compare Always On versus total load for the last 24 hours, show the master toilet fan on/off history for the last week, or graph RainMachine water saved percentage for the last two weeks.'
             className="min-h-[120px]"
           />
         </CardHeader>
@@ -906,7 +926,7 @@ export default function DataPlatform() {
           <CardContent>
             {sources.length === 0 ? (
               <div className="rounded-[1.5rem] border border-dashed border-border/80 bg-muted/30 p-5 text-sm text-muted-foreground">
-                No telemetry has been captured yet. As devices report state changes, Tempest observations arrive, and RainMachine reports sync,
+                No telemetry has been captured yet. As devices report state changes, Sense snapshots land, Tempest observations arrive, and RainMachine reports sync,
                 they will appear here automatically.
               </div>
             ) : (
@@ -1094,10 +1114,10 @@ export default function DataPlatform() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
                   <Activity className="h-4 w-4 text-cyan-500" />
-                  Weather + Irrigation Ready
+                  Weather + Energy + Irrigation
                 </CardTitle>
                 <CardDescription>
-                  Tempest observations and RainMachine controller reports now land in the shared telemetry fabric with the same retention target.
+                  Sense energy snapshots, Tempest observations, and RainMachine controller reports now land in the shared telemetry fabric with the same retention target.
                 </CardDescription>
               </CardHeader>
             </Card>

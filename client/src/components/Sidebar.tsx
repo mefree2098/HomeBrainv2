@@ -20,7 +20,8 @@ import {
   CloudSun,
   CloudRain,
   Database,
-  Link2
+  Link2,
+  Zap
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -30,6 +31,7 @@ import { useAuth } from "@/contexts/AuthContext"
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'Weather', href: '/weather', icon: CloudSun },
+  { name: 'Sense Energy', href: '/sense-energy', icon: Zap },
   { name: 'RainMachine', href: '/rainmachine', icon: CloudRain },
   { name: 'Data Platform', href: '/data-platform', icon: Database },
   { name: 'Devices', href: '/devices', icon: Lightbulb },
