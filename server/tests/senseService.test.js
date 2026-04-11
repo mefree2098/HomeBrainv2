@@ -105,3 +105,67 @@ test('normalizeTrendSnapshot and buildTrendSummaryMap preserve report-ready moni
   assert.equal(summary.devices.get('hvac-1').day.energyKwh, 12.4);
   assert.equal(summary.devices.get('dryer-1').day.sharePct, 19.22);
 });
+
+test('testConnection reuses persisted credentials when the client keeps a masked password', async () => {
+  const service = new senseService.SenseService();
+  let authenticateInput = null;
+
+  service.resolvePersistedIntegration = async () => ({
+    email: 'saved@example.com',
+    password: 'saved-password',
+    deviceId: 'device-123',
+    accessToken: '',
+    refreshToken: '',
+    userId: '',
+    monitorId: 'monitor-1',
+    monitorName: 'Main Panel',
+    availableMonitors: []
+  });
+
+  service.authenticate = async (integration, options = {}) => {
+    authenticateInput = {
+      email: integration.email,
+      password: integration.password,
+      monitorId: integration.monitorId,
+      mfaCode: options.mfaCode,
+      persist: options.persist
+    };
+
+    integration.availableMonitors = [{
+      id: 'monitor-1',
+      name: 'Main Panel',
+      solarConfigured: true
+    }];
+    integration.monitorId = integration.monitorId || 'monitor-1';
+  };
+
+  service.requestApi = async (path, { integration }) => {
+    assert.equal(path, 'app/monitors/monitor-1/overview');
+    assert.equal(integration.email, 'saved@example.com');
+    assert.equal(integration.password, 'saved-password');
+
+    return {
+      monitor: {
+        id: 'monitor-1',
+        name: 'Main Panel',
+        solar_configured: true
+      }
+    };
+  };
+
+  const result = await service.testConnection({
+    email: 'saved@example.com'
+  });
+
+  assert.deepEqual(authenticateInput, {
+    email: 'saved@example.com',
+    password: 'saved-password',
+    monitorId: 'monitor-1',
+    mfaCode: '',
+    persist: false
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.monitors.length, 1);
+  assert.equal(result.monitor.monitorId, 'monitor-1');
+  assert.equal(result.monitor.name, 'Main Panel');
+});

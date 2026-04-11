@@ -997,6 +997,12 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const liveRainRate = resolveLiveRainRate(tempestStation)
   const liveRainDetected = hasLiveRain(weather, tempestStation)
   const moduleTelemetry = weather?.tempest?.moduleTelemetry ?? null
+  const displayedRainTotal = findTelemetryWindow(moduleTelemetry, "day")?.rain.totalIn
+    ?? tempestStation?.metrics.rainTodayIn
+    ?? null
+  const rainTileDetail = moduleTelemetry
+    ? `24h total • ${formatRain(liveRainRate)}/hr`
+    : `${formatRain(liveRainRate)}/hr`
   const lastSyncedAt = selectMostRecentTimestamp(
     tempestStation?.observedAt,
     tempestStation?.lastEventAt,
@@ -1251,8 +1257,8 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             >
               <WeatherCompactMetricTile
                 title="Rain"
-                value={formatRain(tempestStation.metrics.rainTodayIn)}
-                detail={`${formatRain(liveRainRate)}/hr`}
+                value={formatRain(displayedRainTotal)}
+                detail={rainTileDetail}
                 icon={<Droplets className="h-4 w-4 text-blue-500" />}
                 accentClassName="bg-sky-400"
               />

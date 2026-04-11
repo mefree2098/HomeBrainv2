@@ -1,7 +1,6 @@
 import SwiftUI
 
 private let rainMachineConfiguredSecretPlaceholder = "••••••••••••••••"
-private let rainMachineManualRunPresetMinutes = [1, 5, 10, 15, 30, 45]
 private let rainMachineMaxManualRunMinutes = 360
 
 private func rainMachineOptionalDouble(_ value: Any?) -> Double? {
@@ -719,10 +718,6 @@ struct RainMachineView: View {
 
     private var selectedManualDurationMinutes: Int {
         manualDurationMinutes ?? defaultManualDurationMinutes
-    }
-
-    private var manualRunPresetMinutes: [Int] {
-        rainMachineManualRunPresetMinutes.filter { $0 != defaultManualDurationMinutes }
     }
 
     private var summaryCards: [RainMachineSummaryCard] {
@@ -1473,27 +1468,6 @@ struct RainMachineView: View {
                     }
                 }
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        rainMachineMinuteChip(
-                            title: "RainMachine default \(defaultManualDurationMinutes)m",
-                            isSelected: selectedManualDurationMinutes == defaultManualDurationMinutes
-                        ) {
-                            updateManualDurationMinutes(to: defaultManualDurationMinutes)
-                        }
-
-                        ForEach(manualRunPresetMinutes, id: \.self) { minutes in
-                            rainMachineMinuteChip(
-                                title: "\(minutes)m",
-                                isSelected: selectedManualDurationMinutes == minutes
-                            ) {
-                                updateManualDurationMinutes(to: minutes)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-
                 if (dashboard?.zones ?? []).isEmpty {
                     Text("No zones were returned by the controller.")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -1988,23 +1962,6 @@ struct RainMachineView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
-    }
-
-    private func rainMachineMinuteChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(isSelected ? HBPalette.textPrimary : HBPalette.textSecondary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    HBGlassBackground(
-                        cornerRadius: 16,
-                        variant: isSelected ? .panelStrong : .panelSoft
-                    )
-                )
-        }
-        .buttonStyle(.plain)
     }
 
     private var rainMachineManualRunControl: some View {

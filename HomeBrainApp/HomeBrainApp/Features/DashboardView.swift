@@ -316,6 +316,10 @@ private struct DashboardWeatherSnapshot {
         return false
     }
 
+    var displayedRainTotalIn: Double? {
+        moduleTelemetry?.windows.first(where: { $0.key == "day" })?.rainTotalIn ?? tempest?.rainTodayIn
+    }
+
     var lastSyncedAt: String? {
         tempest?.observedAt ?? (fetchedAt.isEmpty ? nil : fetchedAt)
     }
@@ -3319,14 +3323,16 @@ struct DashboardView: View {
                             weatherInfoPopoverTrigger(
                                 topic: .rainfall(
                                     widgetID: widget.id,
-                                    total: tempest.rainTodayIn,
+                                    total: snapshot.displayedRainTotalIn,
                                     rate: snapshot.liveRainRateInPerHr
                                 )
                             ) {
                                 weatherCompactMetricTile(
                                     title: "Rain",
-                                    value: formattedRain(tempest.rainTodayIn),
-                                    detail: "\(formattedRain(snapshot.liveRainRateInPerHr))/hr",
+                                    value: formattedRain(snapshot.displayedRainTotalIn),
+                                    detail: snapshot.moduleTelemetry == nil
+                                        ? "\(formattedRain(snapshot.liveRainRateInPerHr))/hr"
+                                        : "24h total • \(formattedRain(snapshot.liveRainRateInPerHr))/hr",
                                     accent: HBPalette.panelStrokeStrong,
                                     iconSystemName: "drop",
                                     iconColor: HBPalette.accentBlue
@@ -3470,14 +3476,16 @@ struct DashboardView: View {
                             weatherInfoPopoverTrigger(
                                 topic: .rainfall(
                                     widgetID: widget.id,
-                                    total: tempest.rainTodayIn,
+                                    total: snapshot.displayedRainTotalIn,
                                     rate: snapshot.liveRainRateInPerHr
                                 )
                             ) {
                                 weatherLiveMetricTile(
                                     title: "Rainfall",
-                                    value: formattedRain(tempest.rainTodayIn),
-                                    detail: "Rate \(formattedRain(snapshot.liveRainRateInPerHr))/hr",
+                                    value: formattedRain(snapshot.displayedRainTotalIn),
+                                    detail: snapshot.moduleTelemetry == nil
+                                        ? "Rate \(formattedRain(snapshot.liveRainRateInPerHr))/hr"
+                                        : "24h total • \(formattedRain(snapshot.liveRainRateInPerHr))/hr",
                                     accent: HBPalette.panelStrokeStrong,
                                     iconSystemName: "drop",
                                     iconColor: HBPalette.accentBlue

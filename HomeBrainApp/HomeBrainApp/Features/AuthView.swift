@@ -19,6 +19,7 @@ struct AuthView: View {
 
     private let previewSections: [AppShellView.AppSection] = [
         .dashboard,
+        .senseEnergy,
         .devices,
         .scenes,
         .workflows,

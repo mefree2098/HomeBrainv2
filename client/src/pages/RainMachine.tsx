@@ -36,7 +36,6 @@ import { Switch } from "@/components/ui/switch"
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
 
-const MANUAL_RUN_PRESET_MINUTES = [1, 5, 10, 15, 30, 45]
 const MAX_MANUAL_RUN_MINUTES = 360
 
 const formatDateTime = (value: string | null | undefined) => {
@@ -259,10 +258,6 @@ export default function RainMachine() {
     [dashboard]
   )
   const selectedManualDurationMinutes = manualDurationMinutes ?? defaultManualDurationMinutes
-  const manualRunPresetMinutes = useMemo(
-    () => MANUAL_RUN_PRESET_MINUTES.filter((minutes) => minutes !== defaultManualDurationMinutes),
-    [defaultManualDurationMinutes]
-  )
   const visibleZones = useMemo(() => {
     if (!dashboard) {
       return []
@@ -581,7 +576,7 @@ export default function RainMachine() {
                 Live zone state with manual start and stop controls.
               </CardDescription>
             </div>
-            <div className="grid gap-3 lg:grid-cols-[auto,1fr,auto] lg:items-center">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-2">
                 <div className="flex items-center gap-3 px-2">
                   <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-400/10 text-sky-300">
@@ -616,31 +611,7 @@ export default function RainMachine() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 lg:justify-center">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={selectedManualDurationMinutes === defaultManualDurationMinutes ? "secondary" : "outline"}
-                  className="rounded-full"
-                  onClick={() => updateManualDurationMinutes(defaultManualDurationMinutes)}
-                >
-                  RainMachine default {defaultManualDurationMinutes}m
-                </Button>
-                {manualRunPresetMinutes.map((minutes) => (
-                  <Button
-                    key={minutes}
-                    type="button"
-                    size="sm"
-                    variant={selectedManualDurationMinutes === minutes ? "secondary" : "outline"}
-                    className="rounded-full"
-                    onClick={() => updateManualDurationMinutes(minutes)}
-                  >
-                    {minutes}m
-                  </Button>
-                ))}
-              </div>
-
-              <div className="flex items-center justify-between gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 lg:justify-self-end">
+              <div className="flex items-center justify-between gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 lg:self-start">
                 <label htmlFor="rainmachine-hide-inactive" className="text-sm font-medium text-foreground">
                   Hide inactive
                 </label>

@@ -375,6 +375,10 @@ private nonisolated func telemetrySourceKindLabel(_ source: TelemetrySourceSumma
         return "Weather Station"
     case "rainmachine_report":
         return "Irrigation Report"
+    case "sense_monitor":
+        return "Energy Monitor"
+    case "sense_device":
+        return "Energy Device"
     default:
         return "Device Stream"
     }
@@ -703,7 +707,7 @@ struct DataPlatformView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This clears the selected source history and any linked device, Tempest, or RainMachine history that powers the charts.")
+            Text("This clears the selected source history and any linked device, Tempest, RainMachine, or Sense history that powers the charts.")
         }
         .confirmationDialog(
             "Clear all telemetry data?",
@@ -734,7 +738,7 @@ struct DataPlatformView: View {
                             .font(.system(size: 30, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
 
-                        Text("HomeBrain now tracks one year of chart-ready device, Tempest, and RainMachine history so trends, comparisons, and future automations can all draw from the same telemetry surface.")
+                        Text("HomeBrain now tracks one year of chart-ready device, Sense, Tempest, and RainMachine history so trends, comparisons, reports, and future automations can all draw from the same telemetry surface.")
                             .font(.system(size: 14, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -855,7 +859,7 @@ struct DataPlatformView: View {
                             .font(.system(size: 20, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
 
-                        Text("Choose a tracked source to inspect long-range device, weather, or irrigation history.")
+                        Text("Choose a tracked source to inspect long-range device, energy, weather, or irrigation history.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textMuted)
                     }
@@ -888,7 +892,7 @@ struct DataPlatformView: View {
                 } else {
                     EmptyStateView(
                         title: "No telemetry yet",
-                        subtitle: "As Tempest observations, smart-device state changes, and RainMachine report syncs arrive, they will appear here automatically."
+                        subtitle: "As Sense energy snapshots, Tempest observations, smart-device state changes, and RainMachine report syncs arrive, they will appear here automatically."
                     )
                 }
 
@@ -950,6 +954,11 @@ struct DataPlatformView: View {
 
     private var footerPanels: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+            footerPanel(
+                title: "Sense Energy",
+                subtitle: "Whole-home and per-device power telemetry now land in the shared data layer so energy reports and long-range utilization charts stay queryable on iOS too.",
+                color: HBPalette.accentYellow
+            )
             footerPanel(
                 title: "Tempest Ready",
                 subtitle: "Weather-station observations now flow into the shared telemetry layer so historical atmospheric charts live alongside device data.",

@@ -1574,16 +1574,17 @@ class SenseService {
   }
 
   async testConnection(input = {}) {
+    const persisted = await this.resolvePersistedIntegration();
     const integration = {
-      email: trimString(input.email),
-      password: trimString(input.password),
-      deviceId: buildSenseDeviceId(),
-      accessToken: '',
-      refreshToken: '',
-      userId: '',
-      monitorId: trimString(input.monitorId),
-      monitorName: '',
-      availableMonitors: []
+      email: trimString(input.email, trimString(persisted.email)),
+      password: trimString(input.password, trimString(persisted.password)),
+      deviceId: trimString(persisted.deviceId) || buildSenseDeviceId(),
+      accessToken: trimString(persisted.accessToken),
+      refreshToken: trimString(persisted.refreshToken),
+      userId: trimString(persisted.userId),
+      monitorId: trimString(input.monitorId, trimString(persisted.monitorId)),
+      monitorName: trimString(persisted.monitorName),
+      availableMonitors: safeArray(persisted.availableMonitors)
     };
 
     await this.authenticate(integration, {
