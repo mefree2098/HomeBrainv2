@@ -56,6 +56,10 @@ const formatPressure = (value: number | null | undefined) => value == null ? "--
 const formatSolar = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)} W/m²`
 const formatUv = (value: number | null | undefined) => value == null ? "--" : value.toFixed(1)
 
+const deriveRainRateFromLastMinute = (value: number | null | undefined) => (
+  value == null ? null : Number((value * 60).toFixed(2))
+)
+
 type WeatherModuleKey = "wind" | "pressure" | "rain" | "humidity" | "solar" | "signal" | "lightning"
 
 const formatChartTime = (value: string) => {
@@ -343,6 +347,9 @@ export function Weather() {
   const station = dashboard?.tempest?.station ?? null
   const tempestsAvailable = dashboard?.tempest?.available === true && station !== null
   const moduleTelemetry = dashboard?.tempest?.moduleTelemetry ?? null
+  const liveRainRate = station?.metrics.rainRateInPerHr ?? deriveRainRateFromLastMinute(station?.metrics.rainLastMinuteIn)
+  const livePrecipitationNow = station?.metrics.rainLastMinuteIn ?? forecast?.current.precipitationIn ?? null
+  const liveRainDetected = (liveRainRate != null && liveRainRate > 0) || (livePrecipitationNow != null && livePrecipitationNow > 0)
 
   const tempTrendData = useMemo(() => {
     const observations = Array.isArray(dashboard?.tempest?.observations) ? dashboard.tempest.observations : []
@@ -493,7 +500,10 @@ export function Weather() {
               </CardHeader>
               <CardContent>
                 <p className="text-3xl font-semibold">{formatTemperature(forecast.today.highF)} / {formatTemperature(forecast.today.lowF)}</p>
-                <p className="mt-2 text-sm text-cyan-100/70">Chance of rain {formatPercent(forecast.today.precipitationChance)}</p>
+                <p className="mt-2 text-sm text-cyan-100/70">
+                  Forecast rain chance {formatPercent(forecast.today.precipitationChance)}
+                  {liveRainDetected ? " • Tempest says raining now" : ""}
+                </p>
               </CardContent>
             </Card>
 
@@ -548,7 +558,7 @@ export function Weather() {
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-cyan-50/80">
-                  {tempestsAvailable ? `Rate ${formatRain(station?.metrics.rainRateInPerHr)}/hr` : "Live rainfall unavailable"}
+                  {tempestsAvailable ? `Rate ${formatRain(liveRainRate)}/hr` : "Live rainfall unavailable"}
                 </p>
               </CardContent>
             </WeatherTelemetryModuleCard>

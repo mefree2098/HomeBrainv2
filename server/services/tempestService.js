@@ -61,6 +61,18 @@ const maskSecret = (value) => {
   return `${'*'.repeat(Math.max(8, trimmed.length - 4))}${trimmed.slice(-4)}`;
 };
 
+const resolveDisplayValue = (persistedValue, computedValue) => {
+  if (persistedValue === null || persistedValue === undefined) {
+    return computedValue;
+  }
+
+  if (typeof persistedValue === 'string' && !persistedValue.trim()) {
+    return computedValue;
+  }
+
+  return persistedValue;
+};
+
 const mostRecentTimestamp = (...values) => {
   let latest = null;
 
@@ -310,8 +322,10 @@ class TempestService {
       ? device.toObject({ depopulate: true })
       : device;
     const tempest = plain?.properties?.tempest || {};
+    const computedDisplay = buildDisplayMetrics(tempest.metrics || {}, tempest.derived || {});
     const display = tempest.display || {};
     const health = tempest.health || {};
+    const displayValue = (key) => resolveDisplayValue(display[key], computedDisplay[key]);
 
     return {
       id: plain?._id?.toString?.() || plain?._id || null,
@@ -329,28 +343,28 @@ class TempestService {
         timezone: trimString(tempest.timezone, '')
       },
       metrics: {
-        temperatureF: toNumber(display.temperatureF),
-        feelsLikeF: toNumber(display.feelsLikeF),
-        dewPointF: toNumber(display.dewPointF),
-        humidityPct: toNumber(display.humidityPct),
-        windLullMph: toNumber(display.windLullMph),
-        windAvgMph: toNumber(display.windAvgMph),
-        windGustMph: toNumber(display.windGustMph),
-        windRapidMph: toNumber(display.windRapidMph),
-        windDirectionDeg: toNumber(display.windDirectionDeg),
-        pressureMb: toNumber(display.pressureMb),
-        pressureInHg: toNumber(display.pressureInHg),
-        pressureTrend: trimString(display.pressureTrend, ''),
-        rainLastMinuteIn: toNumber(display.rainLastMinuteIn),
-        rainTodayIn: toNumber(display.rainTodayIn),
-        rainRateInPerHr: toNumber(display.rainRateInPerHr),
-        illuminanceLux: toNumber(display.illuminanceLux),
-        uvIndex: toNumber(display.uvIndex),
-        solarRadiationWm2: toNumber(display.solarRadiationWm2),
-        lightningAvgDistanceKm: toNumber(display.lightningAvgDistanceKm),
-        lightningAvgDistanceMiles: toNumber(display.lightningAvgDistanceMiles),
-        lightningCount: toNumber(display.lightningCount),
-        batteryVolts: toNumber(display.batteryVolts)
+        temperatureF: toNumber(displayValue('temperatureF')),
+        feelsLikeF: toNumber(displayValue('feelsLikeF')),
+        dewPointF: toNumber(displayValue('dewPointF')),
+        humidityPct: toNumber(displayValue('humidityPct')),
+        windLullMph: toNumber(displayValue('windLullMph')),
+        windAvgMph: toNumber(displayValue('windAvgMph')),
+        windGustMph: toNumber(displayValue('windGustMph')),
+        windRapidMph: toNumber(displayValue('windRapidMph')),
+        windDirectionDeg: toNumber(displayValue('windDirectionDeg')),
+        pressureMb: toNumber(displayValue('pressureMb')),
+        pressureInHg: toNumber(displayValue('pressureInHg')),
+        pressureTrend: trimString(displayValue('pressureTrend'), ''),
+        rainLastMinuteIn: toNumber(displayValue('rainLastMinuteIn')),
+        rainTodayIn: toNumber(displayValue('rainTodayIn')),
+        rainRateInPerHr: toNumber(displayValue('rainRateInPerHr')),
+        illuminanceLux: toNumber(displayValue('illuminanceLux')),
+        uvIndex: toNumber(displayValue('uvIndex')),
+        solarRadiationWm2: toNumber(displayValue('solarRadiationWm2')),
+        lightningAvgDistanceKm: toNumber(displayValue('lightningAvgDistanceKm')),
+        lightningAvgDistanceMiles: toNumber(displayValue('lightningAvgDistanceMiles')),
+        lightningCount: toNumber(displayValue('lightningCount')),
+        batteryVolts: toNumber(displayValue('batteryVolts'))
       },
       status: {
         sensorStatusFlags: Array.isArray(health.sensorStatusFlags) ? health.sensorStatusFlags : [],

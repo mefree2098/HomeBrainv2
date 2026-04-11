@@ -18,6 +18,7 @@ private struct DashboardTempestStationSnapshot {
     let windDirectionDeg: Double?
     let pressureInHg: Double?
     let pressureTrend: String
+    let rainLastMinuteIn: Double?
     let rainTodayIn: Double?
     let rainRateInPerHr: Double?
     let lightningAvgDistanceMiles: Double?
@@ -48,6 +49,7 @@ private struct DashboardTempestStationSnapshot {
             windDirectionDeg: optionalNumber(metrics["windDirectionDeg"]),
             pressureInHg: optionalNumber(metrics["pressureInHg"]),
             pressureTrend: JSON.string(metrics, "pressureTrend", fallback: "steady"),
+            rainLastMinuteIn: optionalNumber(metrics["rainLastMinuteIn"]),
             rainTodayIn: optionalNumber(metrics["rainTodayIn"]),
             rainRateInPerHr: optionalNumber(metrics["rainRateInPerHr"]),
             lightningAvgDistanceMiles: optionalNumber(metrics["lightningAvgDistanceMiles"]),
@@ -284,6 +286,34 @@ private struct DashboardWeatherSnapshot {
 
     var displayWindMph: Double? {
         tempest?.windAvgMph ?? windSpeedMph
+    }
+
+    var livePrecipitationNowIn: Double? {
+        tempest?.rainLastMinuteIn ?? precipitationIn
+    }
+
+    var liveRainRateInPerHr: Double? {
+        if let liveRate = tempest?.rainRateInPerHr {
+            return liveRate
+        }
+
+        guard let lastMinuteRain = tempest?.rainLastMinuteIn else {
+            return nil
+        }
+
+        return (lastMinuteRain * 60 * 100).rounded() / 100
+    }
+
+    var isTempestRainingNow: Bool {
+        if let liveRainRateInPerHr, liveRainRateInPerHr > 0 {
+            return true
+        }
+
+        if let livePrecipitationNowIn, livePrecipitationNowIn > 0 {
+            return true
+        }
+
+        return false
     }
 
     var lastSyncedAt: String? {
@@ -3290,13 +3320,13 @@ struct DashboardView: View {
                                 topic: .rainfall(
                                     widgetID: widget.id,
                                     total: tempest.rainTodayIn,
-                                    rate: tempest.rainRateInPerHr
+                                    rate: snapshot.liveRainRateInPerHr
                                 )
                             ) {
                                 weatherCompactMetricTile(
                                     title: "Rain",
                                     value: formattedRain(tempest.rainTodayIn),
-                                    detail: "\(formattedRain(tempest.rainRateInPerHr))/hr",
+                                    detail: "\(formattedRain(snapshot.liveRainRateInPerHr))/hr",
                                     accent: HBPalette.panelStrokeStrong,
                                     iconSystemName: "drop",
                                     iconColor: HBPalette.accentBlue
@@ -3378,13 +3408,13 @@ struct DashboardView: View {
                             topic: .rainChance(
                                 widgetID: widget.id,
                                 chance: snapshot.precipitationChance,
-                                precipitationNow: snapshot.precipitationIn
+                                precipitationNow: snapshot.livePrecipitationNowIn
                             )
                         ) {
                             weatherCompactMetricTile(
                                 title: "Rain %",
                                 value: formattedPercent(snapshot.precipitationChance),
-                                detail: formattedRainChanceMeaning(snapshot.precipitationChance),
+                                detail: rainChanceTileDetail(snapshot: snapshot),
                                 accent: HBPalette.accentOrange
                             )
                         }
@@ -3441,13 +3471,13 @@ struct DashboardView: View {
                                 topic: .rainfall(
                                     widgetID: widget.id,
                                     total: tempest.rainTodayIn,
-                                    rate: tempest.rainRateInPerHr
+                                    rate: snapshot.liveRainRateInPerHr
                                 )
                             ) {
                                 weatherLiveMetricTile(
                                     title: "Rainfall",
                                     value: formattedRain(tempest.rainTodayIn),
-                                    detail: "Rate \(formattedRain(tempest.rainRateInPerHr))/hr",
+                                    detail: "Rate \(formattedRain(snapshot.liveRainRateInPerHr))/hr",
                                     accent: HBPalette.panelStrokeStrong,
                                     iconSystemName: "drop",
                                     iconColor: HBPalette.accentBlue
@@ -3528,13 +3558,13 @@ struct DashboardView: View {
                             topic: .rainChance(
                                 widgetID: widget.id,
                                 chance: snapshot.precipitationChance,
-                                precipitationNow: snapshot.precipitationIn
+                                precipitationNow: snapshot.livePrecipitationNowIn
                             )
                         ) {
                             weatherMetricTile(
                                 title: "Rain Chance",
                                 value: formattedPercent(snapshot.precipitationChance),
-                                detail: snapshot.precipitationIn.map { String(format: "%.2f in now", $0) } ?? "No live precipitation feed",
+                                detail: rainChanceLiveDetail(snapshot: snapshot),
                                 accent: HBPalette.accentOrange
                             )
                         }
@@ -3947,7 +3977,7 @@ struct DashboardView: View {
         }
 
         if snapshot.precipitationChance != nil {
-            segments.append(formattedRainChanceMeaning(snapshot.precipitationChance))
+            segments.append(snapshot.isTempestRainingNow ? "Tempest raining now" : formattedRainChanceMeaning(snapshot.precipitationChance))
         }
 
         if segments.isEmpty {
@@ -4526,12 +4556,12 @@ struct DashboardView: View {
             case let .rainChance(_, chance, precipitationNow):
                 weatherInfoSectionTitle(
                     title: "Rain Chance",
-                    summary: "Current \(formattedPercent(chance)) • \(formattedRainChanceMeaning(chance))"
+                    summary: "Forecast \(formattedPercent(chance)) • \(formattedRainChanceSummary(chance: chance, precipitationNow: precipitationNow))"
                 )
                 weatherInfoRangeRow(range: "0-20%", label: "Low risk", color: HBPalette.accentGreen)
                 weatherInfoRangeRow(range: "21-50%", label: "Watch clouds", color: HBPalette.accentYellow)
                 weatherInfoRangeRow(range: "51%+", label: "More likely rain", color: HBPalette.accentRed)
-                Text("Rain chance shows the likelihood of measurable precipitation today. Live precipitation now: \(formattedRain(precipitationNow)).")
+                Text("Rain chance is forecast probability. Live precipitation now: \(formattedLivePrecipitation(precipitationNow)).")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
             }
@@ -4813,6 +4843,27 @@ struct DashboardView: View {
         default:
             return "Rain more likely"
         }
+    }
+
+    private func formattedLivePrecipitation(_ value: Double?) -> String {
+        guard let value else { return "No live precipitation feed" }
+        return "\(formattedRain(value)) now from Tempest"
+    }
+
+    private func formattedRainChanceSummary(chance: Double?, precipitationNow: Double?) -> String {
+        guard let precipitationNow, precipitationNow > 0 else {
+            return formattedRainChanceMeaning(chance)
+        }
+
+        return "Tempest says raining now"
+    }
+
+    private func rainChanceTileDetail(snapshot: DashboardWeatherSnapshot) -> String {
+        snapshot.isTempestRainingNow ? "Tempest says raining now" : formattedRainChanceMeaning(snapshot.precipitationChance)
+    }
+
+    private func rainChanceLiveDetail(snapshot: DashboardWeatherSnapshot) -> String {
+        formattedLivePrecipitation(snapshot.livePrecipitationNowIn)
     }
 
     private func formattedLiveWindDetail(gust: Double?, direction: Double?) -> String {

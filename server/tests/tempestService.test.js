@@ -62,6 +62,41 @@ test('getSelectedStationSnapshot merges recent lightning events into station met
   }
 });
 
+test('buildStationSummary backfills rain metrics from raw Tempest observations when persisted display fields are stale', () => {
+  const summary = tempestService.buildStationSummary({
+    _id: 'tempest-device-1',
+    name: 'Backyard Tempest',
+    room: 'Outside',
+    isOnline: true,
+    lastSeen: new Date('2026-04-01T05:10:00Z'),
+    properties: {
+      source: 'tempest',
+      tempest: {
+        stationId: 42,
+        stationName: 'Backyard Tempest',
+        metrics: {
+          rain_mm_last_minute: 0.254,
+          rain_mm_today: 0.762
+        },
+        derived: {
+          rain_rate_mm_per_hr: 15.24
+        },
+        display: {
+          rainTodayIn: 0.03,
+          rainRateInPerHr: null
+        },
+        health: {
+          websocketConnected: true
+        }
+      }
+    }
+  });
+
+  assert.equal(summary.metrics.rainTodayIn, 0.03);
+  assert.equal(summary.metrics.rainLastMinuteIn, 0.01);
+  assert.equal(summary.metrics.rainRateInPerHr, 0.6);
+});
+
 test('upsertStationDevice dedupes duplicate HomeBrain rows for one Tempest station', async (t) => {
   const originalFind = Device.find;
   const originalCreate = Device.create;

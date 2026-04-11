@@ -196,7 +196,8 @@ test('fetchDashboardWeather attaches Tempest module telemetry to the current wea
     room: 'Outside',
     observedAt: '2026-04-02T17:00:00.000Z',
     metrics: {
-      temperatureF: 66.9
+      temperatureF: 66.9,
+      rainLastMinuteIn: 0.03
     },
     status: {
       websocketConnected: true
@@ -217,6 +218,7 @@ test('fetchDashboardWeather attaches Tempest module telemetry to the current wea
   assert.deepEqual(telemetryArgs, { sourceId: 'tempest-device-1' });
   assert.deepEqual(payload.tempest.moduleTelemetry, moduleTelemetry);
   assert.equal(payload.tempest.station?.name, 'Backyard Tempest');
+  assert.equal(payload.current.precipitationIn, 0.03);
 });
 
 test('fetchDashboardWeather falls back to stale cached forecast data when Open-Meteo is rate limited', async (t) => {

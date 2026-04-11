@@ -143,6 +143,11 @@ private func formatUV(_ value: Double?) -> String {
     return String(format: "%.1f", value)
 }
 
+private func deriveRainRateFromLastMinute(_ value: Double?) -> Double? {
+    guard let value else { return nil }
+    return (value * 60 * 100).rounded() / 100
+}
+
 private func formatTimestamp(_ value: String?) -> String {
     guard let value, let date = JSON.date(from: value) else {
         return "Unknown"
@@ -1447,12 +1452,15 @@ struct WeatherView: View {
     private func weatherTelemetryGrid(for dashboard: WeatherDashboardSnapshot) -> some View {
         let forecast = dashboard.forecast
         let station = dashboard.station ?? forecast.tempestStation
+        let liveRainRate = station?.metrics.rainRateInPerHr ?? deriveRainRateFromLastMinute(station?.metrics.rainLastMinuteIn)
+        let livePrecipitationNow = station?.metrics.rainLastMinuteIn ?? forecast.precipitationIn
+        let liveRainDetected = (liveRainRate ?? 0) > 0 || (livePrecipitationNow ?? 0) > 0
 
         let items: [WeatherTelemetryCardItem] = [
             WeatherTelemetryCardItem(
                 title: "Local Forecast",
                 value: "\(formatTemperature(forecast.highF)) / \(formatTemperature(forecast.lowF))",
-                detail: "\(forecast.todayCondition) • Rain chance \(formatPercent(forecast.precipitationChance))",
+                detail: "\(forecast.todayCondition) • Forecast rain chance \(formatPercent(forecast.precipitationChance))\(liveRainDetected ? " • Tempest says raining now" : "")",
                 accent: HBPalette.accentBlue,
                 gradient: [HBPalette.heroCore.opacity(0.8), HBPalette.panelSoft.opacity(0.16)]
             ),
@@ -1473,7 +1481,7 @@ struct WeatherView: View {
             WeatherTelemetryCardItem(
                 title: "Hydrology",
                 value: formatRain(station?.metrics.rainTodayIn),
-                detail: station != nil ? "Rate \(formatRain(station?.metrics.rainRateInPerHr))/hr" : "Forecast-only users still get rain probability",
+                detail: station != nil ? "Rate \(formatRain(liveRainRate))/hr" : "Forecast-only users still get rain probability",
                 accent: HBPalette.accentOrange,
                 gradient: [HBPalette.accentOrange.opacity(0.24), HBPalette.panelSoft.opacity(0.14)]
             )

@@ -162,7 +162,7 @@ final class APIClient {
 
         guard (200..<300).contains(statusCode) else {
             let message = parseErrorMessage(from: payloadForError(from: data))
-            if statusCode == 401 || statusCode == 403 {
+            if statusCode == 401 {
                 if authorized {
                     sessionStore.expireAuthentication(message: message)
                 }

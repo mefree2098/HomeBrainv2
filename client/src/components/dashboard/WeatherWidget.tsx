@@ -194,6 +194,49 @@ const describeRainChance = (value: number | null | undefined) => {
   return "Rain more likely"
 }
 
+const deriveRainRateFromLastMinute = (value: number | null | undefined) => (
+  value == null ? null : Number((value * 60).toFixed(2))
+)
+
+const resolveLiveRainRate = (tempestStation: DashboardWeatherPayload["tempest"]["station"] | null | undefined) => (
+  tempestStation?.metrics.rainRateInPerHr ?? deriveRainRateFromLastMinute(tempestStation?.metrics.rainLastMinuteIn)
+)
+
+const resolveLivePrecipitationNow = (
+  weather: DashboardWeatherPayload | null | undefined,
+  tempestStation: DashboardWeatherPayload["tempest"]["station"] | null | undefined
+) => tempestStation?.metrics.rainLastMinuteIn ?? weather?.current.precipitationIn ?? null
+
+const hasLiveRain = (
+  weather: DashboardWeatherPayload | null | undefined,
+  tempestStation: DashboardWeatherPayload["tempest"]["station"] | null | undefined
+) => {
+  const liveRainRate = resolveLiveRainRate(tempestStation)
+  if (liveRainRate != null && liveRainRate > 0) {
+    return true
+  }
+
+  const livePrecipitationNow = resolveLivePrecipitationNow(weather, tempestStation)
+  return livePrecipitationNow != null && livePrecipitationNow > 0
+}
+
+const describeRainChanceDetail = (
+  chance: number | null | undefined,
+  liveRainDetected: boolean
+) => liveRainDetected ? "Tempest says raining now" : describeRainChance(chance)
+
+const formatLivePrecipitationCopy = (
+  weather: DashboardWeatherPayload | null | undefined,
+  tempestStation: DashboardWeatherPayload["tempest"]["station"] | null | undefined
+) => {
+  const livePrecipitationNow = resolveLivePrecipitationNow(weather, tempestStation)
+  if (livePrecipitationNow == null) {
+    return "No live precipitation feed"
+  }
+
+  return `${formatRain(livePrecipitationNow)} now${tempestStation ? " from Tempest" : ""}`
+}
+
 const formatStationFeed = (websocketConnected: boolean) => websocketConnected ? "WebSocket live" : "Snapshot only"
 
 const formatLastSyncedTime = (value: string | null | undefined) => {
@@ -757,6 +800,7 @@ const buildCompactWeatherSummary = (
   tempestStation: DashboardWeatherPayload["tempest"]["station"] | null
 ) => {
   const segments: string[] = []
+  const liveRainDetected = hasLiveRain(weather, tempestStation)
 
   if (tempestStation?.metrics.dewPointF != null) {
     segments.push(describeDewPointLevel(tempestStation.metrics.dewPointF))
@@ -769,7 +813,7 @@ const buildCompactWeatherSummary = (
   }
 
   if (weather.today.precipitationChance != null) {
-    segments.push(describeRainChance(weather.today.precipitationChance))
+    segments.push(liveRainDetected ? "Tempest raining now" : describeRainChance(weather.today.precipitationChance))
   }
 
   return segments.length > 0 ? segments.join(" • ") : "Forecast synced and ready."
@@ -950,6 +994,8 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
 
   const headlineTemperature = tempestStation?.metrics.temperatureF ?? weather?.current.temperatureF ?? null
   const headlineFeelsLike = tempestStation?.metrics.feelsLikeF ?? weather?.current.apparentTemperatureF ?? null
+  const liveRainRate = resolveLiveRainRate(tempestStation)
+  const liveRainDetected = hasLiveRain(weather, tempestStation)
   const moduleTelemetry = weather?.tempest?.moduleTelemetry ?? null
   const lastSyncedAt = selectMostRecentTimestamp(
     tempestStation?.observedAt,
@@ -1192,11 +1238,11 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 ) : (
                   <WeatherInfoValueCard
                     title="Rainfall"
-                    summary={`Today ${formatRain(tempestStation.metrics.rainTodayIn)} · Rate ${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`}
+                    summary={`Today ${formatRain(tempestStation.metrics.rainTodayIn)} · Rate ${formatRain(liveRainRate)}/hr`}
                     rows={[
                       { label: "Today", value: formatRain(tempestStation.metrics.rainTodayIn), toneClassName: "text-blue-600 dark:text-blue-300" },
-                      { label: "Current Rate", value: `${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`, toneClassName: "text-blue-600 dark:text-blue-300" },
-                      { label: "Meaning", value: describeRainIntensity(tempestStation.metrics.rainRateInPerHr), toneClassName: "text-foreground" }
+                      { label: "Current Rate", value: `${formatRain(liveRainRate)}/hr`, toneClassName: "text-blue-600 dark:text-blue-300" },
+                      { label: "Meaning", value: describeRainIntensity(liveRainRate), toneClassName: "text-foreground" }
                     ]}
                     footer="Today's rainfall is total accumulation. Rate shows how quickly rain is falling right now."
                   />
@@ -1206,7 +1252,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               <WeatherCompactMetricTile
                 title="Rain"
                 value={formatRain(tempestStation.metrics.rainTodayIn)}
-                detail={`${formatRain(tempestStation.metrics.rainRateInPerHr)}/hr`}
+                detail={`${formatRain(liveRainRate)}/hr`}
                 icon={<Droplets className="h-4 w-4 text-blue-500" />}
                 accentClassName="bg-sky-400"
               />
@@ -1385,20 +1431,20 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             content={(
               <WeatherInfoCard
                 title="Rain Chance"
-                summary={`Current ${formatPercent(weather.today.precipitationChance)} · ${describeRainChance(weather.today.precipitationChance)}`}
+                summary={`Forecast ${formatPercent(weather.today.precipitationChance)} · ${describeRainChanceDetail(weather.today.precipitationChance, liveRainDetected)}`}
                 rows={[
                   { range: "0-20%", detail: "Low risk", toneClassName: "text-emerald-600 dark:text-emerald-300" },
                   { range: "21-50%", detail: "Watch clouds", toneClassName: "text-amber-600 dark:text-amber-300" },
                   { range: "51%+", detail: "More likely rain", toneClassName: "text-rose-600 dark:text-rose-300" }
                 ]}
-                footer={`Rain chance shows the likelihood of measurable precipitation today. Live precipitation now: ${weather.current.precipitationIn === null ? "No live precipitation feed" : formatRain(weather.current.precipitationIn)}.`}
+                footer={`Rain chance is forecast probability. Live precipitation now: ${formatLivePrecipitationCopy(weather, tempestStation)}.`}
               />
             )}
           >
             <WeatherCompactMetricTile
               title="Rain %"
               value={formatPercent(weather.today.precipitationChance)}
-              detail={describeRainChance(weather.today.precipitationChance)}
+              detail={describeRainChanceDetail(weather.today.precipitationChance, liveRainDetected)}
               accentClassName="bg-amber-400"
             />
           </WeatherInfoPopover>

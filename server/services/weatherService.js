@@ -527,6 +527,25 @@ function createTempestFallbackWeatherPayload(location, tempestStation) {
   };
 }
 
+function mergeTempestCurrentConditions(weatherPayload, tempestStation) {
+  if (!weatherPayload || !tempestStation) {
+    return weatherPayload;
+  }
+
+  const livePrecipitationNow = toNumber(tempestStation?.metrics?.rainLastMinuteIn);
+  if (livePrecipitationNow === null) {
+    return weatherPayload;
+  }
+
+  return {
+    ...weatherPayload,
+    current: {
+      ...weatherPayload.current,
+      precipitationIn: livePrecipitationNow
+    }
+  };
+}
+
 async function geocodeLocation(query, source) {
   const normalizedQuery = normalizeLocationQuery(query);
   const cacheKey = normalizedQuery.toLowerCase();
@@ -681,10 +700,15 @@ async function fetchDashboardWeather(options = {}) {
     }).catch(() => null);
   }
 
-  return {
-    ...(forecastResponse
+  const weatherPayload = mergeTempestCurrentConditions(
+    forecastResponse
       ? createWeatherPayload(forecastResponse, airQualityResponse, location)
-      : createTempestFallbackWeatherPayload(location, tempestStation)),
+      : createTempestFallbackWeatherPayload(location, tempestStation),
+    tempestStation
+  );
+
+  return {
+    ...weatherPayload,
     tempest: tempestStation
       ? {
           available: true,
