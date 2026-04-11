@@ -4,6 +4,8 @@ const {
   buildControlResponse,
   buildDiscoveryResponse,
   buildErrorResponse,
+  buildSceneActivationResponse,
+  buildSceneDeactivationResponse,
   inferAlexaErrorType,
   buildStateReportResponse
 } = require('../../shared/alexa/messages');
@@ -190,6 +192,22 @@ async function handler(event) {
       }, {
         bearerToken: directive.bearerToken
       });
+
+      if (directive.namespace === 'Alexa.SceneController') {
+        if (directive.name === 'Activate') {
+          return buildSceneActivationResponse({
+            directive: event,
+            endpoint: directive.endpoint
+          });
+        }
+
+        if (directive.name === 'Deactivate') {
+          return buildSceneDeactivationResponse({
+            directive: event,
+            endpoint: directive.endpoint
+          });
+        }
+      }
 
       return buildControlResponse({
         directive: event,

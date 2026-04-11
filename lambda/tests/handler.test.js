@@ -231,6 +231,33 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
   assert.equal(controlResponse.event.header.name, 'Response');
   assert.equal(controlResponse.context.properties[0].value, 'ON');
 
+  const sceneResponse = await handler({
+    directive: {
+      header: {
+        namespace: 'Alexa.SceneController',
+        name: 'Activate',
+        payloadVersion: '3',
+        messageId: 'msg-5',
+        correlationToken: 'corr-3'
+      },
+      endpoint: {
+        endpointId: 'hb:hub-test:workflow:night-tv',
+        scope: {
+          type: 'BearerToken',
+          token: 'access-123'
+        }
+      },
+      payload: {}
+    }
+  });
+
+  assert.equal(sceneResponse.event.header.namespace, 'Alexa.SceneController');
+  assert.equal(sceneResponse.event.header.name, 'ActivationStarted');
+  assert.equal(sceneResponse.event.header.correlationToken, 'corr-3');
+  assert.equal(sceneResponse.event.payload.cause.type, 'VOICE_INTERACTION');
+  assert.equal(sceneResponse.event.endpoint.endpointId, 'hb:hub-test:workflow:night-tv');
+  assert.deepEqual(sceneResponse.context.properties, []);
+
   assert.ok(calls.some((entry) => entry.url === '/api/alexa/grants/accept'));
   assert.ok(calls.some((entry) => entry.url === '/api/oauth/alexa/resolve'));
   assert.ok(calls.some((entry) => entry.url === '/api/alexa/directives/execute'));

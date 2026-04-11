@@ -781,17 +781,31 @@ class AlexaBridgeService {
       if (record.exposure.entityType === 'scene') {
         await sceneService.activateScene(record.exposure.entityId);
       } else if (record.exposure.entityType === 'workflow') {
-        await workflowService.executeWorkflow(record.exposure.entityId, {
+        void workflowService.executeWorkflow(record.exposure.entityId, {
           triggerType: 'manual',
           triggerSource: 'alexa',
           context: {
             source: 'alexa',
             endpointId: normalized.endpointId
           }
+        }).catch((error) => {
+          console.warn(`AlexaBridgeService: Workflow Alexa activation failed for ${record.exposure.entityId}: ${error.message}`);
         });
       } else {
         throw new Error('Scene activation directive is only valid for Alexa scene endpoints');
       }
+
+      return {
+        success: true,
+        endpointId: normalized.endpointId,
+        entityType: record.exposure.entityType,
+        entityId: record.exposure.entityId,
+        namespace,
+        name,
+        correlationToken: normalized.correlationToken,
+        properties: [],
+        connectivity: 'OK'
+      };
     } else if (record.exposure.entityType === 'device') {
       await this.executeDeviceDirective(record, namespace, name, payload);
     } else if (record.exposure.entityType === 'device_group') {

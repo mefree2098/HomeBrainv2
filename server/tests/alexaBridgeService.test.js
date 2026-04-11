@@ -294,6 +294,85 @@ test('executeDirective uses fast Harmony power control for Alexa responses', asy
   ]);
 });
 
+test('executeDirective acknowledges Alexa workflow scenes without waiting for the workflow timer to finish', async (t) => {
+  const bridge = new AlexaBridgeService();
+  const workflowService = require('../services/workflowService');
+
+  const originalGetCatalogEntryByEndpointId = alexaProjectionService.getCatalogEntryByEndpointId;
+  const originalGetStateForEndpoint = alexaProjectionService.getStateForEndpoint;
+  const originalExecuteWorkflow = workflowService.executeWorkflow;
+
+  t.after(() => {
+    alexaProjectionService.getCatalogEntryByEndpointId = originalGetCatalogEntryByEndpointId;
+    alexaProjectionService.getStateForEndpoint = originalGetStateForEndpoint;
+    workflowService.executeWorkflow = originalExecuteWorkflow;
+  });
+
+  alexaProjectionService.getCatalogEntryByEndpointId = async () => ({
+    exposure: {
+      entityType: 'workflow',
+      entityId: 'workflow-night-tv-1'
+    },
+    entity: {
+      _id: 'workflow-night-tv-1',
+      name: 'Night TV',
+      trigger: {
+        type: 'manual'
+      },
+      actions: [
+        { type: 'device_control', target: 'device-harmony-1', parameters: { action: 'turn_on' } },
+        { type: 'delay', parameters: { seconds: 5400 } }
+      ]
+    },
+    validationErrors: [],
+    endpoint: {
+      displayCategories: ['ACTIVITY_TRIGGER'],
+      state: {
+        properties: []
+      }
+    }
+  });
+  alexaProjectionService.getStateForEndpoint = async () => {
+    throw new Error('Alexa workflow scenes should not fetch endpoint state for ActivationStarted responses');
+  };
+
+  let receivedCall = null;
+  workflowService.executeWorkflow = (...args) => {
+    receivedCall = args;
+    return new Promise(() => {});
+  };
+
+  const result = await bridge.executeDirective({
+    directive: {
+      header: {
+        namespace: 'Alexa.SceneController',
+        name: 'Activate',
+        correlationToken: 'scene-corr-1'
+      },
+      endpoint: {
+        endpointId: 'hb:hub-1:workflow:workflow-night-tv-1'
+      },
+      payload: {}
+    }
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.namespace, 'Alexa.SceneController');
+  assert.equal(result.name, 'Activate');
+  assert.deepEqual(result.properties, []);
+  assert.deepEqual(receivedCall, [
+    'workflow-night-tv-1',
+    {
+      triggerType: 'manual',
+      triggerSource: 'alexa',
+      context: {
+        source: 'alexa',
+        endpointId: 'hb:hub-1:workflow:workflow-night-tv-1'
+      }
+    }
+  ]);
+});
+
 test('getBrokerDeliveryStatus and flushBrokerEvents proxy broker delivery state through relay auth', async (t) => {
   const bridge = new AlexaBridgeService();
   const brokerCalls = [];

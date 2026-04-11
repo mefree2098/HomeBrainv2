@@ -100,6 +100,47 @@ function buildControlResponse({ directive = {}, endpoint = null, properties = []
   };
 }
 
+function buildSceneLifecycleResponse({
+  directive = {},
+  endpoint = null,
+  lifecycleName = 'ActivationStarted',
+  causeType = 'VOICE_INTERACTION',
+  timestamp = new Date().toISOString()
+} = {}) {
+  return {
+    context: buildContext([]),
+    event: {
+      header: responseHeader({
+        namespace: 'Alexa.SceneController',
+        name: lifecycleName,
+        messageId: directive?.directive?.header?.messageId,
+        correlationToken: directive?.directive?.header?.correlationToken
+      }),
+      endpoint,
+      payload: {
+        cause: {
+          type: causeType
+        },
+        timestamp
+      }
+    }
+  };
+}
+
+function buildSceneActivationResponse(options = {}) {
+  return buildSceneLifecycleResponse({
+    ...options,
+    lifecycleName: 'ActivationStarted'
+  });
+}
+
+function buildSceneDeactivationResponse(options = {}) {
+  return buildSceneLifecycleResponse({
+    ...options,
+    lifecycleName: 'DeactivationStarted'
+  });
+}
+
 function buildErrorResponse({ directive = {}, type = 'INTERNAL_ERROR', message = 'Alexa request failed' } = {}) {
   return buildEventEnvelope({
     header: responseHeader({
@@ -254,6 +295,8 @@ module.exports = {
   buildDeleteReport,
   buildDiscoveryResponse,
   buildErrorResponse,
+  buildSceneActivationResponse,
+  buildSceneDeactivationResponse,
   buildStateReportResponse,
   buildContext,
   buildEventEnvelope,
