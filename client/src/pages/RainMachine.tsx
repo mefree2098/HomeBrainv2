@@ -574,68 +574,74 @@ export default function RainMachine() {
         </Card>
 
         <Card className="border-white/10 bg-white/70 backdrop-blur dark:bg-slate-950/55">
-          <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <CardHeader className="space-y-4">
             <div>
               <CardTitle>Zones</CardTitle>
               <CardDescription>
                 Live zone state with manual start and stop controls.
               </CardDescription>
             </div>
-            <div className="flex w-full max-w-md flex-col gap-3 lg:items-end">
-              <div className="flex flex-col gap-3 lg:items-end">
-                <div className="flex items-center gap-2 self-stretch lg:self-auto">
+            <div className="grid gap-3 lg:grid-cols-[auto,1fr,auto] lg:items-center">
+              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-2">
+                <div className="flex items-center gap-3 px-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-400/10 text-sky-300">
+                    <Clock3 className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <p className="section-kicker">Manual Run</p>
+                    <p className="text-lg font-semibold leading-none">{selectedManualDurationMinutes} min</p>
+                  </div>
+                </div>
+
+                <div className="ml-auto flex items-center gap-2">
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-12 rounded-2xl px-4"
+                    size="icon"
+                    className="h-10 w-10 rounded-xl border-white/10 bg-white/5 hover:bg-white/10"
                     onClick={() => updateManualDurationMinutes(selectedManualDurationMinutes - 5)}
                   >
-                    <Minus className="mr-2 h-4 w-4" />
-                    5m
+                    <Minus className="h-4 w-4" />
                   </Button>
-
-                  <div className="min-w-[8.5rem] flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center lg:flex-none">
-                    <p className="section-kicker">Manual Run</p>
-                    <p className="mt-1 text-lg font-semibold">{selectedManualDurationMinutes} min</p>
-                  </div>
 
                   <Button
                     type="button"
-                    className="h-12 rounded-2xl px-4"
+                    variant="outline"
+                    size="icon"
+                    className="h-10 w-10 rounded-xl border-white/10 bg-white/5 hover:bg-white/10"
                     onClick={() => updateManualDurationMinutes(selectedManualDurationMinutes + 5)}
                   >
-                    <Plus className="mr-2 h-4 w-4" />
-                    5m
+                    <Plus className="h-4 w-4" />
                   </Button>
-                </div>
-
-                <div className="flex flex-wrap gap-2 lg:justify-end">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={selectedManualDurationMinutes === defaultManualDurationMinutes ? "secondary" : "outline"}
-                    className="rounded-full"
-                    onClick={() => updateManualDurationMinutes(defaultManualDurationMinutes)}
-                  >
-                    Saved default {defaultManualDurationMinutes}m
-                  </Button>
-                  {manualRunPresetMinutes.map((minutes) => (
-                    <Button
-                      key={minutes}
-                      type="button"
-                      size="sm"
-                      variant={selectedManualDurationMinutes === minutes ? "secondary" : "outline"}
-                      className="rounded-full"
-                      onClick={() => updateManualDurationMinutes(minutes)}
-                    >
-                      {minutes}m
-                    </Button>
-                  ))}
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
-                <label htmlFor="rainmachine-hide-inactive" className="text-sm text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-2 lg:justify-center">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={selectedManualDurationMinutes === defaultManualDurationMinutes ? "secondary" : "outline"}
+                  className="rounded-full"
+                  onClick={() => updateManualDurationMinutes(defaultManualDurationMinutes)}
+                >
+                  RainMachine default {defaultManualDurationMinutes}m
+                </Button>
+                {manualRunPresetMinutes.map((minutes) => (
+                  <Button
+                    key={minutes}
+                    type="button"
+                    size="sm"
+                    variant={selectedManualDurationMinutes === minutes ? "secondary" : "outline"}
+                    className="rounded-full"
+                    onClick={() => updateManualDurationMinutes(minutes)}
+                  >
+                    {minutes}m
+                  </Button>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 lg:justify-self-end">
+                <label htmlFor="rainmachine-hide-inactive" className="text-sm font-medium text-foreground">
                   Hide inactive
                 </label>
                 <Switch
@@ -644,9 +650,6 @@ export default function RainMachine() {
                   onCheckedChange={setHideInactiveZones}
                 />
               </div>
-              <p className="text-xs text-muted-foreground lg:text-right">
-                Saved default uses the RainMachine manual run time saved in Integration Settings. Zone start buttons currently use {selectedManualDurationMinutes} minute manual runs.
-              </p>
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
