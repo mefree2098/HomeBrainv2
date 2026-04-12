@@ -30,8 +30,7 @@ final class SessionStore: ObservableObject {
     private static let accessTokenRefreshLeadTime: TimeInterval = 5 * 60
 
     init() {
-        let storedServerURL = defaults.string(forKey: serverURLKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedServerURL = Self.normalizedServerURLString(from: defaults.string(forKey: serverURLKey))
         let legacyLocalURLs: Set<String> = [
             "http://127.0.0.1:3000",
             "http://localhost:3000",
@@ -98,11 +97,19 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    func updateServerURL(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        serverURLString = trimmed
-        defaults.set(trimmed, forKey: serverURLKey)
+    var normalizedServerURL: URL? {
+        Self.normalizedServerURL(from: serverURLString)
+    }
+
+    @discardableResult
+    func updateServerURL(_ value: String) -> Bool {
+        guard let normalized = Self.normalizedServerURLString(from: value) else {
+            return false
+        }
+
+        serverURLString = normalized
+        defaults.set(normalized, forKey: serverURLKey)
+        return true
     }
 
     func login(email: String, password: String) async {
@@ -315,5 +322,77 @@ final class SessionStore: ObservableObject {
         }
 
         return Date(timeIntervalSince1970: expValue.doubleValue)
+    }
+
+    private static func normalizedServerURL(from rawValue: String?) -> URL? {
+        guard let normalized = normalizedServerURLString(from: rawValue) else {
+            return nil
+        }
+
+        return URL(string: normalized)
+    }
+
+    private static func normalizedServerURLString(from rawValue: String?) -> String? {
+        guard let rawValue else {
+            return nil
+        }
+
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        let candidate: String
+        if trimmed.contains("://") {
+            candidate = trimmed
+        } else {
+            candidate = "\(defaultScheme(for: trimmed))://\(trimmed)"
+        }
+
+        guard var components = URLComponents(string: candidate),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty else {
+            return nil
+        }
+
+        components.scheme = scheme
+        components.host = host.lowercased()
+        components.query = nil
+        components.fragment = nil
+
+        let trimmedPath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.percentEncodedPath = trimmedPath.isEmpty ? "" : "/\(trimmedPath)"
+
+        return components.url?.absoluteString
+    }
+
+    private static func defaultScheme(for rawValue: String) -> String {
+        prefersHTTP(for: rawValue) ? "http" : "https"
+    }
+
+    private static func prefersHTTP(for rawValue: String) -> Bool {
+        guard let host = URLComponents(string: "http://\(rawValue)")?.host?.lowercased(),
+              !host.isEmpty else {
+            return false
+        }
+
+        if host == "localhost" || host == "::1" || host.hasSuffix(".local") || !host.contains(".") {
+            return true
+        }
+
+        if host.hasPrefix("127.") || host.hasPrefix("10.") || host.hasPrefix("192.168.") {
+            return true
+        }
+
+        let octets = host.split(separator: ".")
+        if octets.count >= 2,
+           octets[0] == "172",
+           let second = Int(octets[1]),
+           (16...31).contains(second) {
+            return true
+        }
+
+        return false
     }
 }

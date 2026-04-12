@@ -612,10 +612,7 @@ final class VoiceAssistantManager: ObservableObject {
 
     private func makeWakeAcknowledgmentRequest(wakeWord: String) async -> URLRequest? {
         guard let sessionStore else { return nil }
-        let trimmedBase = sessionStore.serverURLString
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(trimmedBase)/api/voice/browser/acknowledgment") else {
+        guard let url = sessionStore.apiClient.streamURL("/api/voice/browser/acknowledgment") else {
             return nil
         }
 

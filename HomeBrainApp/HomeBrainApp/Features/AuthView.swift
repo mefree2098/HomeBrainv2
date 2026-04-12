@@ -135,7 +135,12 @@ struct AuthView: View {
                             .hbPanelTextField()
 
                         Button("Save") {
-                            session.updateServerURL(serverURL)
+                            if session.updateServerURL(serverURL) {
+                                serverURL = session.serverURLString
+                                session.authError = nil
+                            } else {
+                                session.authError = "Enter a valid server URL."
+                            }
                         }
                         .buttonStyle(HBSecondaryButtonStyle())
                     }
@@ -246,7 +251,13 @@ struct AuthView: View {
     }
 
     private func submit() {
-        session.updateServerURL(serverURL)
+        guard session.updateServerURL(serverURL) else {
+            session.authError = "Enter a valid server URL."
+            return
+        }
+
+        serverURL = session.serverURLString
+        session.authError = nil
 
         if mode == .register {
             guard password == confirmPassword else {

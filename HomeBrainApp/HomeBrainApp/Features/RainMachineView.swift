@@ -473,7 +473,7 @@ private struct RainMachineWateringDayRecord: Identifiable {
             dayDate: JSON.string(object, "dayDate", fallback: JSON.string(object, "day")),
             simulated: JSON.bool(object, "simulated"),
             summary: rainMachineNumericMap(object["summary"]),
-            programCount: JSON.array(object["programs"]).count
+            programCount: JSON.int(JSON.object(object["summary"]), "program_count", fallback: JSON.array(object["programs"]).count)
         )
     }
 }

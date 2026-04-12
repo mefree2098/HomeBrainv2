@@ -78,8 +78,13 @@ struct SettingsView: View {
                             .disableAutocorrection(true)
 
                         Button("Apply Server URL") {
-                            session.updateServerURL(serverURL)
-                            infoMessage = "Server URL updated."
+                            if session.updateServerURL(serverURL) {
+                                serverURL = session.serverURLString
+                                infoMessage = "Server URL updated."
+                                errorMessage = nil
+                            } else {
+                                errorMessage = "Enter a valid server URL."
+                            }
                         }
                     }
 
@@ -281,7 +286,11 @@ struct SettingsView: View {
 
     private func saveSettings() async {
         do {
-            session.updateServerURL(serverURL)
+            guard session.updateServerURL(serverURL) else {
+                errorMessage = "Enter a valid server URL."
+                return
+            }
+            serverURL = session.serverURLString
 
             let payload: [String: Any] = [
                 "location": location,

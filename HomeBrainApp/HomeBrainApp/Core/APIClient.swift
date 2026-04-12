@@ -175,22 +175,19 @@ final class APIClient {
     }
 
     private func buildURL(path: String, query: [URLQueryItem]) -> URL? {
-        let trimmedBase = sessionStore.serverURLString
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let normalizedPath = path.hasPrefix("/") ? path : "/\(path)"
-
-        guard let rawURL = URL(string: "\(trimmedBase)\(normalizedPath)") else {
+        guard var components = sessionStore.normalizedServerURL.flatMap({
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)
+        }) else {
             return nil
         }
 
-        guard !query.isEmpty else {
-            return rawURL
-        }
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let normalizedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pathComponents = [basePath, normalizedPath].filter { !$0.isEmpty }
+        components.percentEncodedPath = pathComponents.isEmpty ? "" : "/\(pathComponents.joined(separator: "/"))"
+        components.queryItems = query.isEmpty ? nil : query
 
-        var components = URLComponents(url: rawURL, resolvingAgainstBaseURL: false)
-        components?.queryItems = query
-        return components?.url
+        return components.url
     }
 
     private func parseJSONPayload(data: Data) throws -> Any {
