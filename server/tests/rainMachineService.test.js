@@ -6,10 +6,13 @@ const RainMachineIntegration = require('../models/RainMachineIntegration');
 
 const {
   buildRequestPayload,
+  compactRainMachineSnapshot,
   normalizeDailyStats,
   normalizeWateringLogDays,
   parseDiscoveryResponse,
-  snapshotShowsActiveZone
+  snapshotShowsActiveZone,
+  summarizeRainMachineDailyStat,
+  summarizeRainMachineWateringDay
 } = rainMachineService.__private__;
 
 test('parseDiscoveryResponse extracts controller discovery details from broadcast payloads', () => {
@@ -142,6 +145,147 @@ test('normalizeWateringLogDays summarizes durations and saved percentage from wa
   assert.equal(days[0].summary.water_saved_pct, 20);
 });
 
+test('compactRainMachineSnapshot removes verbose zone payload fragments before dashboard serialization', () => {
+  const compact = compactRainMachineSnapshot({
+    controller: {
+      id: 'AA:BB:CC',
+      name: 'Back Yard'
+    },
+    runtime: {
+      queueLength: 1
+    },
+    zones: [
+      {
+        uid: 7,
+        valveId: 7,
+        name: 'Front Lawn',
+        active: true,
+        state: 1,
+        stateLabel: 'running',
+        remainingSeconds: 420,
+        raw: {
+          zone: { some: 'large-value' },
+          properties: { another: 'large-value' }
+        },
+        waterSense: {
+          enabled: true
+        },
+        type: 3
+      }
+    ],
+    programs: [
+      {
+        uid: 1,
+        name: 'Morning',
+        statusLabel: 'idle',
+        totalConfiguredDurationSeconds: 600,
+        zoneIds: [7],
+        wateringTimes: [
+          { id: 7, active: true, order: 1, durationSeconds: 600, debug: 'ignore-me' }
+        ]
+      }
+    ],
+    restrictions: {
+      currently: {
+        activeCount: 0
+      }
+    }
+  });
+
+  assert.deepEqual(compact.zones, [
+    {
+      uid: 7,
+      valveId: 7,
+      name: 'Front Lawn',
+      active: true,
+      master: false,
+      state: 1,
+      stateLabel: 'running',
+      restriction: false,
+      userDurationSeconds: 0,
+      machineDurationSeconds: 0,
+      remainingSeconds: 420,
+      cycle: 0,
+      cycleCount: 0,
+      internet: false,
+      history: false,
+      soil: null,
+      slope: null,
+      sun: null,
+      sprinkler: null,
+      savings: null,
+      nextRun: null,
+      nextRunProgramId: null,
+      nextRunProgramName: '',
+      nextRunDurationSeconds: null
+    }
+  ]);
+  assert.deepEqual(compact.programs[0].wateringTimes, [
+    {
+      id: 7,
+      active: true,
+      order: 1,
+      durationSeconds: 600
+    }
+  ]);
+});
+
+test('dashboard summary helpers keep RainMachine report history lightweight', () => {
+  const dailySummary = summarizeRainMachineDailyStat({
+    controllerId: 'AA:BB:CC',
+    controllerName: 'Back Yard',
+    day: '2026-04-10',
+    dayDate: '2026-04-10T00:00:00.000Z',
+    metrics: {
+      water_saved_pct: 26.7
+    },
+    details: {
+      programs: [{ id: 1 }]
+    }
+  });
+  const wateringSummary = summarizeRainMachineWateringDay({
+    controllerId: 'AA:BB:CC',
+    controllerName: 'Back Yard',
+    day: '2026-04-09',
+    dayDate: '2026-04-09T00:00:00.000Z',
+    simulated: false,
+    summary: {
+      program_count: 1,
+      cycle_count: 2
+    },
+    programs: [
+      {
+        id: 5,
+        zones: [{ uid: 1 }]
+      }
+    ],
+    raw: {
+      giant: true
+    }
+  });
+
+  assert.deepEqual(dailySummary, {
+    controllerId: 'AA:BB:CC',
+    controllerName: 'Back Yard',
+    day: '2026-04-10',
+    dayDate: '2026-04-10T00:00:00.000Z',
+    metrics: {
+      water_saved_pct: 26.7
+    }
+  });
+  assert.deepEqual(wateringSummary, {
+    controllerId: 'AA:BB:CC',
+    controllerName: 'Back Yard',
+    day: '2026-04-09',
+    dayDate: '2026-04-09T00:00:00.000Z',
+    simulated: false,
+    summary: {
+      program_count: 1,
+      cycle_count: 2
+    }
+  });
+});
+
 test('buildRequestPayload uses JSON bodies for RainMachine POST objects', () => {
   const payload = buildRequestPayload({ time: 600 });
 
@@ -268,8 +412,8 @@ test('getDashboardSafe returns cached dashboard payload when dashboard assembly 
   service.getDashboard = async () => {
     throw new Error('dashboard assembly failed');
   };
-  service.getDailyStatsForIntegration = async () => [];
-  service.getWateringHistoryForIntegration = async () => [];
+  service.getDailyStatsSummaryForIntegration = async () => [];
+  service.getWateringHistorySummaryForIntegration = async () => [];
 
   const dashboard = await service.getDashboardSafe({
     integration: {

@@ -25,6 +25,11 @@ const DEFAULT_ALWAYS_ON_CACHE_MS = 10 * 60 * 1000;
 const DEFAULT_DEVICE_CATALOG_CACHE_MS = 60 * 60 * 1000;
 const MAX_DASHBOARD_HOURS = 24 * 14;
 const MAX_DASHBOARD_POINTS = 360;
+const WEBSOCKET_STATE_PERSIST_INTERVAL_MS = Math.max(5000, Number(process.env.SENSE_WS_STATE_PERSIST_INTERVAL_MS || 30000));
+const SENSE_STATUS_SNAPSHOT_SELECT = 'observedAt powerW solarW netW alwaysOnW activeDeviceCount';
+const SENSE_STATUS_TREND_SELECT = 'scale startAt syncedAt consumptionTotalKwh productionTotalKwh productionPct netProductionKwh fromGridKwh toGridKwh solarPoweredPct';
+const SENSE_DASHBOARD_SNAPSHOT_SELECT = 'observedAt powerW solarW netW alwaysOnW otherW untrackedW activeDeviceCount frequencyHz voltage activeDevices';
+const SENSE_DASHBOARD_TREND_SELECT = 'scale startAt syncedAt consumptionTotalKwh productionTotalKwh productionPct netProductionKwh fromGridKwh toGridKwh solarPoweredPct deviceBreakdown';
 const SCALE_ORDER = ['day', 'week', 'month', 'year', 'cycle'];
 const SCALE_TO_API = {
   day: 'DAY',
@@ -492,8 +497,8 @@ function normalizeTrendSnapshot(scale, usagePayload = {}, solarPayload = {}) {
     solarPoweredPct,
     deviceBreakdown: deviceBreakdownWithShare,
     metadata: {
-      rawUsage: usage,
-      rawSolar: solar
+      usageDeviceCount: deviceBreakdownWithShare.length,
+      solarPresent: Object.keys(solar).length > 0
     }
   };
 }
@@ -601,6 +606,7 @@ class SenseService {
       devices: new Map()
     };
     this.lastPersistedRealtimeAt = 0;
+    this.lastRealtimeStatePersistAt = 0;
     this.lastCatalogSyncAt = 0;
     this.lastAlwaysOnFetchAt = 0;
     this.cachedAlwaysOnInfo = null;
@@ -1139,6 +1145,14 @@ class SenseService {
     return this.requestApi(`app/${integration.monitorId}/realtime_update`, { integration });
   }
 
+  runBackgroundTask(label, task) {
+    Promise.resolve()
+      .then(() => task())
+      .catch((error) => {
+        console.warn(`SenseService: ${label} failed: ${error.message}`);
+      });
+  }
+
   startWebSocket(integration) {
     const monitorId = trimString(integration.monitorId);
     if (!monitorId || !trimString(integration.accessToken)) {
@@ -1157,13 +1171,17 @@ class SenseService {
 
     socket.on('open', () => {
       this.websocketReconnectAttempt = 0;
-      void this.updateRealtimeState(integration, {
-        websocket: {
-          connected: true,
-          lastConnectedAt: new Date(),
-          reconnectCount: 0
-        },
-        lastError: ''
+      this.runBackgroundTask('websocket open state update', async () => {
+        await this.updateRealtimeState(integration, {
+          websocket: {
+            connected: true,
+            lastConnectedAt: new Date(),
+            reconnectCount: 0
+          },
+          lastError: ''
+        }, {
+          forcePersist: true
+        });
       });
     });
 
@@ -1177,7 +1195,9 @@ class SenseService {
       }
 
       if (payload?.type === 'error') {
-        void this.handleWebSocketError(integration, payload);
+        this.runBackgroundTask('websocket error payload handling', async () => {
+          await this.handleWebSocketError(integration, payload);
+        });
         return;
       }
 
@@ -1185,12 +1205,16 @@ class SenseService {
         return;
       }
 
-      void this.updateRealtimeState(integration, {
-        websocket: {
-          connected: true,
-          lastMessageAt: new Date()
-        },
-        lastError: ''
+      this.runBackgroundTask('websocket heartbeat update', async () => {
+        await this.updateRealtimeState(integration, {
+          websocket: {
+            connected: true,
+            lastMessageAt: new Date()
+          },
+          lastError: ''
+        }, {
+          throttlePersist: true
+        });
       });
 
       void this.ingestRealtimePayload(integration, payload.payload || payload, {
@@ -1201,21 +1225,29 @@ class SenseService {
     });
 
     socket.on('close', () => {
-      void this.updateRealtimeState(integration, {
-        websocket: {
-          connected: false
-        }
+      this.runBackgroundTask('websocket close state update', async () => {
+        await this.updateRealtimeState(integration, {
+          websocket: {
+            connected: false
+          }
+        }, {
+          forcePersist: true
+        });
       });
       this.scheduleWebSocketReconnect();
     });
 
     socket.on('error', (error) => {
       console.warn(`SenseService: websocket error: ${error.message}`);
-      void this.updateRealtimeState(integration, {
-        websocket: {
-          connected: false
-        },
-        lastError: error.message || 'Sense websocket error'
+      this.runBackgroundTask('websocket error state update', async () => {
+        await this.updateRealtimeState(integration, {
+          websocket: {
+            connected: false
+          },
+          lastError: error.message || 'Sense websocket error'
+        }, {
+          forcePersist: true
+        });
       });
     });
   }
@@ -1305,11 +1337,18 @@ class SenseService {
     }
   }
 
-  async updateRealtimeState(integration, updates = {}) {
-    const nextWebsocket = {
+  async updateRealtimeState(integration, updates = {}, { forcePersist = false, throttlePersist = false } = {}) {
+    const previousWebsocket = {
       ...(integration.websocket?.toObject ? integration.websocket.toObject() : integration.websocket || {})
     };
+    const previousLastError = trimString(integration.lastError);
+    const previousLastRealtimeAt = parseOptionalDate(integration.lastRealtimeAt)?.getTime() || 0;
+    const previousLastSyncAt = parseOptionalDate(integration.lastSyncAt)?.getTime() || 0;
+    const nextWebsocket = {
+      ...previousWebsocket
+    };
     const websocketUpdates = asPlainObject(updates.websocket);
+    const updateDoc = {};
 
     Object.entries(websocketUpdates).forEach(([key, value]) => {
       if (value !== undefined) {
@@ -1319,21 +1358,63 @@ class SenseService {
 
     if (Object.keys(nextWebsocket).length > 0) {
       integration.websocket = nextWebsocket;
+      updateDoc.websocket = nextWebsocket;
     }
 
     if (updates.lastError !== undefined) {
       integration.lastError = trimString(updates.lastError);
+      updateDoc.lastError = integration.lastError;
     }
 
     if (updates.lastRealtimeAt) {
       integration.lastRealtimeAt = updates.lastRealtimeAt;
+      updateDoc.lastRealtimeAt = updates.lastRealtimeAt;
     }
 
     if (updates.lastSyncAt) {
       integration.lastSyncAt = updates.lastSyncAt;
+      updateDoc.lastSyncAt = updates.lastSyncAt;
     }
 
-    await integration.save();
+    if (Object.keys(updateDoc).length === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    const connectedChanged = Boolean(previousWebsocket.connected) !== Boolean(nextWebsocket.connected);
+    const reconnectCountChanged = Number(previousWebsocket.reconnectCount || 0) !== Number(nextWebsocket.reconnectCount || 0);
+    const lastConnectedAtChanged = (parseOptionalDate(previousWebsocket.lastConnectedAt)?.getTime() || 0)
+      !== (parseOptionalDate(nextWebsocket.lastConnectedAt)?.getTime() || 0);
+    const lastErrorChanged = previousLastError !== trimString(integration.lastError);
+    const lastRealtimeAtChanged = previousLastRealtimeAt !== (parseOptionalDate(integration.lastRealtimeAt)?.getTime() || 0);
+    const lastSyncAtChanged = previousLastSyncAt !== (parseOptionalDate(integration.lastSyncAt)?.getTime() || 0);
+    const shouldPersist = forcePersist
+      || connectedChanged
+      || reconnectCountChanged
+      || lastConnectedAtChanged
+      || lastErrorChanged
+      || lastRealtimeAtChanged
+      || lastSyncAtChanged
+      || !throttlePersist
+      || (now - this.lastRealtimeStatePersistAt) >= WEBSOCKET_STATE_PERSIST_INTERVAL_MS;
+
+    if (!shouldPersist) {
+      return;
+    }
+
+    if (integration._id) {
+      await SenseIntegration.updateOne(
+        { _id: integration._id },
+        { $set: updateDoc }
+      );
+      this.lastRealtimeStatePersistAt = now;
+      return;
+    }
+
+    if (typeof integration.save === 'function') {
+      await integration.save();
+      this.lastRealtimeStatePersistAt = now;
+    }
   }
 
   async ingestRealtimePayload(integration, payload, { source = 'http', forcePersist = false } = {}) {
@@ -1835,10 +1916,16 @@ class SenseService {
     );
     const rateCentsPerKwh = integration.electricityRateCentsPerKwh;
     const latestSnapshot = trimString(integration.monitorId)
-      ? await SenseMonitorSnapshot.findOne({ monitorId: integration.monitorId }).sort({ observedAt: -1 }).lean()
+      ? await SenseMonitorSnapshot.findOne({ monitorId: integration.monitorId })
+        .select(SENSE_STATUS_SNAPSHOT_SELECT)
+        .sort({ observedAt: -1 })
+        .lean()
       : null;
     const latestTrends = trimString(integration.monitorId)
-      ? await SenseTrendSnapshot.find({ monitorId: integration.monitorId }).sort({ syncedAt: -1 }).lean()
+      ? await SenseTrendSnapshot.find({ monitorId: integration.monitorId })
+        .select(SENSE_STATUS_TREND_SELECT)
+        .sort({ syncedAt: -1 })
+        .lean()
       : [];
     const trendSummary = buildTrendSummaryMap(
       latestTrends.reduce((acc, entry) => {
@@ -1929,7 +2016,10 @@ class SenseService {
       ? await SenseMonitorSnapshot.find({
           monitorId: latestIntegration.monitorId,
           observedAt: { $gte: startAt }
-        }).sort({ observedAt: 1 }).lean()
+        })
+          .select(SENSE_DASHBOARD_SNAPSHOT_SELECT)
+          .sort({ observedAt: 1 })
+          .lean()
       : [];
     const downsampledSnapshots = downsampleSnapshots(snapshots, MAX_DASHBOARD_POINTS).map((snapshot) => ({
       observedAt: snapshot.observedAt,
@@ -1942,7 +2032,10 @@ class SenseService {
     }));
 
     const trendDocs = trimString(latestIntegration.monitorId)
-      ? await SenseTrendSnapshot.find({ monitorId: latestIntegration.monitorId }).sort({ syncedAt: -1 }).lean()
+      ? await SenseTrendSnapshot.find({ monitorId: latestIntegration.monitorId })
+        .select(SENSE_DASHBOARD_TREND_SELECT)
+        .sort({ syncedAt: -1 })
+        .lean()
       : [];
     const latestTrendDocs = trendDocs.reduce((acc, entry) => {
       if (!acc.some((candidate) => candidate.scale === entry.scale)) {
@@ -2113,23 +2206,6 @@ class SenseService {
 const senseService = new SenseService();
 
 module.exports = senseService;
-module.exports.SenseService = SenseService;
-module.exports.__private__ = {
-  buildTrendSummaryMap,
-  calculateCostUsd,
-  calculateCurrentCostRateUsdPerHour,
-  decorateDeviceUsageWindowWithCost,
-  decorateTrendWindowWithCost,
-  downsampleSnapshots,
-  extractAlwaysOnWatts,
-  normalizeCatalogDevice,
-  normalizeMonitorOptions,
-  normalizeMonitorOverview,
-  normalizeRealtimePayload,
-  normalizeTrendSnapshot,
-  projectMonthlyEnergyWindow,
-  resolveMonthProjectionContext
-};
 module.exports.SenseService = SenseService;
 module.exports.__private__ = {
   buildTrendSummaryMap,

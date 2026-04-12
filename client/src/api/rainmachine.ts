@@ -198,7 +198,7 @@ export interface RainMachineDailyStatRecord {
   day: string
   dayDate: string
   metrics: Record<string, number | null>
-  details: {
+  details?: {
     day: string
     programs: Array<{
       id: number | null
@@ -219,7 +219,7 @@ export interface RainMachineWateringDayRecord {
   dayDate: string
   simulated: boolean
   summary: Record<string, number | null>
-  programs: Array<{
+  programs?: Array<{
     id: number | null
     scheduledDurationSeconds: number
     wateredDurationSeconds: number

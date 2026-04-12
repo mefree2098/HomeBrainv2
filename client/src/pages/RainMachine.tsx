@@ -837,13 +837,14 @@ export default function RainMachine() {
               ) : (
                 recentWatering.map((day: RainMachineWateringDayRecord) => {
                   const summary = buildWateringSummary(day)
+                  const programCount = Number(day.summary.program_count ?? day.programs?.length ?? 0)
                   return (
                     <div key={`${day.day}-${day.simulated ? "sim" : "actual"}`} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <p className="font-medium">{formatDay(day.dayDate)}</p>
                           <p className="text-sm text-muted-foreground">
-                            {day.programs.length} program{day.programs.length === 1 ? "" : "s"} • {Number(day.summary.zone_count || 0)} zones • {Number(day.summary.cycle_count || 0)} cycles
+                            {programCount} program{programCount === 1 ? "" : "s"} • {Number(day.summary.zone_count || 0)} zones • {Number(day.summary.cycle_count || 0)} cycles
                           </p>
                         </div>
                         {day.simulated ? <Badge variant="outline">Simulated</Badge> : <Badge variant="secondary">Actual</Badge>}

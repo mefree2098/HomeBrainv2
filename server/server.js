@@ -145,8 +145,9 @@ const app = express();
 const port = process.env.PORT || 3000;
 const bindHost = process.env.HOMEBRAIN_BIND_HOST || '0.0.0.0';
 openclawMcpService.setApp(app);
-// Pretty-print JSON responses
-app.enable('json spaces');
+if (process.env.NODE_ENV !== 'production') {
+  app.set('json spaces', 2);
+}
 // We want to be consistent with URL paths, so we enable strict routing
 app.enable('strict routing');
 app.disable('x-powered-by');

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const senseService = require('../services/senseService');
+const SenseIntegration = require('../models/SenseIntegration');
 
 const {
   buildTrendSummaryMap,
@@ -98,6 +99,10 @@ test('normalizeTrendSnapshot and buildTrendSummaryMap preserve report-ready moni
   assert.equal(trend.toGridKwh, 1.2);
   assert.equal(trend.solarPoweredPct, 43.2);
   assert.equal(trend.deviceBreakdown.length, 2);
+  assert.deepEqual(trend.metadata, {
+    usageDeviceCount: 2,
+    solarPresent: true
+  });
   assert.equal(trend.deviceBreakdown[0].senseDeviceId, 'hvac-1');
   assert.equal(trend.deviceBreakdown[0].sharePct, 38.9);
 
@@ -184,4 +189,87 @@ test('testConnection reuses persisted credentials when the client keeps a masked
   assert.equal(result.monitors.length, 1);
   assert.equal(result.monitor.monitorId, 'monitor-1');
   assert.equal(result.monitor.name, 'Main Panel');
+});
+
+test('updateRealtimeState throttles websocket heartbeat persistence to avoid save storms', async () => {
+  const service = new senseService.SenseService();
+  const originalUpdateOne = SenseIntegration.updateOne;
+  const updates = [];
+  let saveCalled = false;
+
+  SenseIntegration.updateOne = async (query, update) => {
+    updates.push({ query, update });
+  };
+
+  try {
+    service.lastRealtimeStatePersistAt = Date.now();
+
+    await service.updateRealtimeState({
+      _id: 'integration-1',
+      websocket: {
+        connected: true,
+        reconnectCount: 0,
+        lastConnectedAt: new Date('2026-04-11T12:00:00.000Z')
+      },
+      lastError: '',
+      lastRealtimeAt: null,
+      lastSyncAt: null,
+      save: async () => {
+        saveCalled = true;
+      }
+    }, {
+      websocket: {
+        connected: true,
+        lastMessageAt: new Date('2026-04-11T12:01:00.000Z')
+      },
+      lastError: ''
+    }, {
+      throttlePersist: true
+    });
+
+    assert.equal(updates.length, 0);
+    assert.equal(saveCalled, false);
+  } finally {
+    SenseIntegration.updateOne = originalUpdateOne;
+  }
+});
+
+test('updateRealtimeState persists important websocket state transitions with updateOne', async () => {
+  const service = new senseService.SenseService();
+  const originalUpdateOne = SenseIntegration.updateOne;
+  const updates = [];
+
+  SenseIntegration.updateOne = async (query, update) => {
+    updates.push({ query, update });
+  };
+
+  try {
+    service.lastRealtimeStatePersistAt = Date.now();
+
+    await service.updateRealtimeState({
+      _id: 'integration-1',
+      websocket: {
+        connected: true,
+        reconnectCount: 0,
+        lastConnectedAt: new Date('2026-04-11T12:00:00.000Z')
+      },
+      lastError: '',
+      lastRealtimeAt: null,
+      lastSyncAt: null
+    }, {
+      websocket: {
+        connected: false
+      },
+      lastError: 'socket down'
+    }, {
+      throttlePersist: true
+    });
+
+    assert.equal(updates.length, 1);
+    assert.deepEqual(updates[0].query, { _id: 'integration-1' });
+    assert.equal(updates[0].update.$set.websocket.connected, false);
+    assert.equal(updates[0].update.$set.lastError, 'socket down');
+  } finally {
+    SenseIntegration.updateOne = originalUpdateOne;
+  }
 });

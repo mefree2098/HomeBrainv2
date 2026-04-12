@@ -659,6 +659,105 @@ function normalizeWateringPrograms(rawPrograms = [], programNameMap = {}) {
   });
 }
 
+function compactRainMachineZone(zone = {}) {
+  const item = asPlainObject(zone);
+  return {
+    uid: pickFirstNumber(item.uid),
+    valveId: pickFirstNumber(item.valveId),
+    name: pickFirstString(item.name),
+    active: booleanFromValue(item.active),
+    master: booleanFromValue(item.master),
+    state: pickFirstNumber(item.state) ?? 0,
+    stateLabel: pickFirstString(item.stateLabel, 'idle'),
+    restriction: booleanFromValue(item.restriction),
+    userDurationSeconds: pickFirstNumber(item.userDurationSeconds) ?? 0,
+    machineDurationSeconds: pickFirstNumber(item.machineDurationSeconds) ?? 0,
+    remainingSeconds: pickFirstNumber(item.remainingSeconds) ?? 0,
+    cycle: pickFirstNumber(item.cycle) ?? 0,
+    cycleCount: pickFirstNumber(item.cycleCount) ?? 0,
+    internet: booleanFromValue(item.internet),
+    history: booleanFromValue(item.history),
+    soil: pickFirstNumber(item.soil),
+    slope: pickFirstNumber(item.slope),
+    sun: pickFirstNumber(item.sun),
+    sprinkler: pickFirstNumber(item.sprinkler),
+    savings: pickFirstNumber(item.savings),
+    nextRun: pickFirstString(item.nextRun) || null,
+    nextRunProgramId: pickFirstNumber(item.nextRunProgramId),
+    nextRunProgramName: pickFirstString(item.nextRunProgramName),
+    nextRunDurationSeconds: pickFirstNumber(item.nextRunDurationSeconds)
+  };
+}
+
+function compactRainMachineProgram(program = {}) {
+  const item = asPlainObject(program);
+
+  return {
+    uid: pickFirstNumber(item.uid),
+    name: pickFirstString(item.name),
+    active: booleanFromValue(item.active),
+    status: pickFirstNumber(item.status) ?? 0,
+    statusLabel: pickFirstString(item.statusLabel, 'idle'),
+    nextRun: pickFirstString(item.nextRun) || null,
+    startTime: pickFirstString(item.startTime),
+    frequencyType: pickFirstNumber(item.frequencyType),
+    frequencyParam: pickFirstString(item.frequencyParam),
+    cycles: pickFirstNumber(item.cycles) ?? 0,
+    soak: pickFirstNumber(item.soak) ?? 0,
+    delay: pickFirstNumber(item.delay) ?? 0,
+    ignoreInternetWeather: booleanFromValue(item.ignoreInternetWeather),
+    useWaterSense: booleanFromValue(item.useWaterSense),
+    totalConfiguredDurationSeconds: pickFirstNumber(item.totalConfiguredDurationSeconds) ?? 0,
+    zoneIds: safeArray(item.zoneIds)
+      .map((value) => pickFirstNumber(value))
+      .filter((value) => value !== null),
+    wateringTimes: safeArray(item.wateringTimes).map((entry) => {
+      const wateringTime = asPlainObject(entry);
+      return {
+        id: pickFirstNumber(wateringTime.id),
+        active: booleanFromValue(wateringTime.active),
+        order: pickFirstNumber(wateringTime.order),
+        durationSeconds: pickFirstNumber(wateringTime.durationSeconds)
+      };
+    })
+  };
+}
+
+function compactRainMachineSnapshot(snapshot = {}) {
+  const body = asPlainObject(snapshot);
+
+  return {
+    controller: asPlainObject(body.controller),
+    runtime: asPlainObject(body.runtime),
+    zones: safeArray(body.zones).map((entry) => compactRainMachineZone(entry)),
+    programs: safeArray(body.programs).map((entry) => compactRainMachineProgram(entry)),
+    restrictions: body.restrictions ? asPlainObject(body.restrictions) : null
+  };
+}
+
+function summarizeRainMachineDailyStat(stat = {}) {
+  const item = asPlainObject(stat);
+  return {
+    controllerId: pickFirstString(item.controllerId),
+    controllerName: pickFirstString(item.controllerName),
+    day: pickFirstString(item.day),
+    dayDate: item.dayDate || null,
+    metrics: asPlainObject(item.metrics)
+  };
+}
+
+function summarizeRainMachineWateringDay(wateringDay = {}) {
+  const item = asPlainObject(wateringDay);
+  return {
+    controllerId: pickFirstString(item.controllerId),
+    controllerName: pickFirstString(item.controllerName),
+    day: pickFirstString(item.day),
+    dayDate: item.dayDate || null,
+    simulated: item.simulated === true,
+    summary: asPlainObject(item.summary)
+  };
+}
+
 function normalizeControllerSnapshot({
   integration,
   endpoint,
@@ -1240,23 +1339,24 @@ class RainMachineService {
         activeZone,
         activePrograms
       });
+      const compactSnapshot = compactRainMachineSnapshot(snapshot);
 
-      const deviceSync = await this.syncDevices(snapshot, persistedIntegration);
+      const deviceSync = await this.syncDevices(compactSnapshot, persistedIntegration);
       const reportSync = await this.syncReports({
         endpoint,
         integration: persistedIntegration,
-        snapshot,
+        snapshot: compactSnapshot,
         force: forceReports || reason === 'manual-sync' || reason === 'configure'
       });
 
       persistedIntegration.host = endpoint.host;
       persistedIntegration.protocol = endpoint.protocol;
       persistedIntegration.port = endpoint.port;
-      persistedIntegration.controllerId = snapshot.controller.id;
-      persistedIntegration.controllerName = snapshot.controller.name;
-      persistedIntegration.apiVersion = snapshot.controller.apiVersion || '';
-      persistedIntegration.hardwareVersion = snapshot.controller.hardwareVersion;
-      persistedIntegration.softwareVersion = snapshot.controller.softwareVersion || '';
+      persistedIntegration.controllerId = compactSnapshot.controller.id;
+      persistedIntegration.controllerName = compactSnapshot.controller.name;
+      persistedIntegration.apiVersion = compactSnapshot.controller.apiVersion || '';
+      persistedIntegration.hardwareVersion = compactSnapshot.controller.hardwareVersion;
+      persistedIntegration.softwareVersion = compactSnapshot.controller.softwareVersion || '';
       persistedIntegration.isConnected = true;
       persistedIntegration.lastConnectedAt = new Date();
       persistedIntegration.lastSyncAt = new Date();
@@ -1265,7 +1365,7 @@ class RainMachineService {
       }
       persistedIntegration.lastError = '';
       persistedIntegration.snapshot = {
-        ...snapshot,
+        ...compactSnapshot,
         syncedAt: new Date().toISOString(),
         reportSync: {
           synced: reportSync.synced,
@@ -2035,7 +2135,7 @@ class RainMachineService {
     const sanitizedIntegration = integration.toSanitized
       ? integration.toSanitized()
       : { ...integration };
-    const snapshot = asPlainObject(integration.snapshot);
+    const snapshot = compactRainMachineSnapshot(asPlainObject(integration.snapshot));
     const controller = asPlainObject(snapshot.controller);
 
     return {
@@ -2071,6 +2171,22 @@ class RainMachineService {
       .lean();
   }
 
+  async getDailyStatsSummaryForIntegration(integration, { days = 30 } = {}) {
+    const controllerId = trimString(integration?.controllerId, trimString(integration?.snapshot?.controller?.id));
+    if (!controllerId) {
+      return [];
+    }
+
+    const limit = clampInteger(days, 30, 1, 365);
+    const docs = await RainMachineDailyStat.find({ controllerId })
+      .select('controllerId controllerName day dayDate metrics')
+      .sort({ dayDate: -1 })
+      .limit(limit)
+      .lean();
+
+    return docs.map((entry) => summarizeRainMachineDailyStat(entry));
+  }
+
   async getWateringHistory({ days = 30, simulated = false } = {}) {
     const integration = await RainMachineIntegration.getIntegration();
     return this.getWateringHistoryForIntegration(integration, { days, simulated });
@@ -2090,6 +2206,25 @@ class RainMachineService {
       .sort({ dayDate: -1 })
       .limit(limit)
       .lean();
+  }
+
+  async getWateringHistorySummaryForIntegration(integration, { days = 30, simulated = false } = {}) {
+    const controllerId = trimString(integration?.controllerId, trimString(integration?.snapshot?.controller?.id));
+    if (!controllerId) {
+      return [];
+    }
+
+    const limit = clampInteger(days, 30, 1, 365);
+    const docs = await RainMachineWateringDay.find({
+      controllerId,
+      simulated: simulated === true
+    })
+      .select('controllerId controllerName day dayDate simulated summary')
+      .sort({ dayDate: -1 })
+      .limit(limit)
+      .lean();
+
+    return docs.map((entry) => summarizeRainMachineWateringDay(entry));
   }
 
   buildDashboardPayload(integration, snapshot, {
@@ -2130,11 +2265,11 @@ class RainMachineService {
 
   async getDashboard({ dailyDays = 14, wateringDays = 14, integration = null } = {}) {
     const resolvedIntegration = integration || await RainMachineIntegration.getIntegration();
-    const snapshot = asPlainObject(resolvedIntegration.snapshot);
-    const dailyStats = await this.getDailyStatsForIntegration(resolvedIntegration, { days: dailyDays });
+    const snapshot = compactRainMachineSnapshot(asPlainObject(resolvedIntegration.snapshot));
+    const dailyStats = await this.getDailyStatsSummaryForIntegration(resolvedIntegration, { days: dailyDays });
     const [wateringHistory, simulatedWateringHistory] = await Promise.all([
-      this.getWateringHistoryForIntegration(resolvedIntegration, { days: wateringDays, simulated: false }),
-      this.getWateringHistoryForIntegration(resolvedIntegration, { days: wateringDays, simulated: true })
+      this.getWateringHistorySummaryForIntegration(resolvedIntegration, { days: wateringDays, simulated: false }),
+      this.getWateringHistorySummaryForIntegration(resolvedIntegration, { days: wateringDays, simulated: true })
     ]);
     return this.buildDashboardPayload(resolvedIntegration, snapshot, {
       dailyStats,
@@ -2161,25 +2296,25 @@ class RainMachineService {
         fallbackIntegration = await RainMachineIntegration.getIntegration();
       }
 
-      const snapshot = asPlainObject(fallbackIntegration?.snapshot);
+      const snapshot = compactRainMachineSnapshot(asPlainObject(fallbackIntegration?.snapshot));
       let dailyStats = [];
       let wateringHistory = [];
       let simulatedWateringHistory = [];
 
       try {
-        dailyStats = await this.getDailyStatsForIntegration(fallbackIntegration, { days: dailyDays });
+        dailyStats = await this.getDailyStatsSummaryForIntegration(fallbackIntegration, { days: dailyDays });
       } catch (dailyStatsError) {
         console.warn(`RainMachineService: cached dashboard daily stats fallback failed: ${dailyStatsError.message}`);
       }
 
       try {
-        wateringHistory = await this.getWateringHistoryForIntegration(fallbackIntegration, { days: wateringDays, simulated: false });
+        wateringHistory = await this.getWateringHistorySummaryForIntegration(fallbackIntegration, { days: wateringDays, simulated: false });
       } catch (wateringHistoryError) {
         console.warn(`RainMachineService: cached dashboard watering history fallback failed: ${wateringHistoryError.message}`);
       }
 
       try {
-        simulatedWateringHistory = await this.getWateringHistoryForIntegration(fallbackIntegration, { days: wateringDays, simulated: true });
+        simulatedWateringHistory = await this.getWateringHistorySummaryForIntegration(fallbackIntegration, { days: wateringDays, simulated: true });
       } catch (simulatedHistoryError) {
         console.warn(`RainMachineService: cached dashboard simulated watering history fallback failed: ${simulatedHistoryError.message}`);
       }
@@ -2360,9 +2495,11 @@ module.exports = rainMachineService;
 module.exports.RainMachineService = RainMachineService;
 module.exports.__private__ = {
   buildRequestPayload,
+  compactRainMachineProgram,
+  compactRainMachineSnapshot,
+  compactRainMachineZone,
   buildProgramNextRunMap,
   buildZoneNextRunMap,
-  snapshotShowsActiveZone,
   normalizeDailyStats,
   normalizePrograms,
   normalizeQueueEntries,
@@ -2370,5 +2507,8 @@ module.exports.__private__ = {
   normalizeWateringLogDays,
   normalizeZones,
   parseDiscoveryResponse,
-  parseHostInput
+  parseHostInput,
+  snapshotShowsActiveZone,
+  summarizeRainMachineDailyStat,
+  summarizeRainMachineWateringDay
 };
