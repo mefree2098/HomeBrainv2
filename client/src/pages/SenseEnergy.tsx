@@ -602,7 +602,7 @@ export default function SenseEnergy() {
         ))}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[0.95fr,1.05fr]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(280px,0.72fr)_minmax(0,1.28fr)] 2xl:grid-cols-[minmax(300px,0.68fr)_minmax(0,1.32fr)]">
         <Card className="border-white/10 bg-white/5 backdrop-blur-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -613,7 +613,7 @@ export default function SenseEnergy() {
               Consumption and solar totals persisted by HomeBrain for reporting, charting, and historical analysis.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+          <CardContent className="grid gap-4">
             {SCALE_ORDER.map((scale) => {
               const trend = dashboard?.trends?.[scale]
               const label = scale === "cycle" ? "Billing Cycle" : `${scale.charAt(0).toUpperCase()}${scale.slice(1)} Window`
@@ -647,39 +647,39 @@ export default function SenseEnergy() {
           </CardHeader>
           <CardContent>
             {dashboard?.deviceUsage?.length ? (
-              <Table>
+              <Table className="text-[13px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Device</TableHead>
-                    <TableHead>Now</TableHead>
-                    <TableHead>Cost Now</TableHead>
-                    <TableHead>Day</TableHead>
-                    <TableHead>Week</TableHead>
-                    <TableHead>Month</TableHead>
-                    <TableHead>Month Cost</TableHead>
-                    <TableHead>Projected</TableHead>
-                    <TableHead>Year</TableHead>
-                    <TableHead>Cycle</TableHead>
+                    <TableHead className="w-[22%] min-w-[210px]">Device</TableHead>
+                    <TableHead className="w-[8%] whitespace-nowrap">Now</TableHead>
+                    <TableHead className="w-[11%] whitespace-nowrap">Cost Now</TableHead>
+                    <TableHead className="w-[8%] whitespace-nowrap">Day</TableHead>
+                    <TableHead className="w-[8%] whitespace-nowrap">Week</TableHead>
+                    <TableHead className="w-[8%] whitespace-nowrap">Month</TableHead>
+                    <TableHead className="w-[11%] whitespace-nowrap">Month Cost</TableHead>
+                    <TableHead className="w-[11%] whitespace-nowrap">Projected</TableHead>
+                    <TableHead className="w-[7%] whitespace-nowrap">Year</TableHead>
+                    <TableHead className="w-[6%] whitespace-nowrap">Cycle</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {dashboard.deviceUsage.slice(0, 18).map((device) => (
                     <TableRow key={device.senseDeviceId}>
-                      <TableCell>
-                        <div>
+                      <TableCell className="py-3">
+                        <div className="max-w-[220px]">
                           <p className="font-medium">{device.name}</p>
                           <p className="text-xs text-muted-foreground">{device.room || "Whole home energy deck"}</p>
                         </div>
                       </TableCell>
-                      <TableCell>{formatPower(device.currentPowerW)}</TableCell>
-                      <TableCell>{formatCostRate(device.currentCostUsdPerHour)}</TableCell>
-                      <TableCell>{formatEnergy(device.day?.energyKwh)}</TableCell>
-                      <TableCell>{formatEnergy(device.week?.energyKwh)}</TableCell>
-                      <TableCell>{formatEnergy(device.month?.energyKwh)}</TableCell>
-                      <TableCell>{formatCurrency(device.monthToDateCostUsd ?? device.month?.costUsd)}</TableCell>
-                      <TableCell>{formatCurrency(device.projectedMonthCostUsd)}</TableCell>
-                      <TableCell>{formatEnergy(device.year?.energyKwh)}</TableCell>
-                      <TableCell>{formatEnergy(device.cycle?.energyKwh)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatPower(device.currentPowerW)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatCostRate(device.currentCostUsdPerHour)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatEnergy(device.day?.energyKwh)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatEnergy(device.week?.energyKwh)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatEnergy(device.month?.energyKwh)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatCurrency(device.monthToDateCostUsd ?? device.month?.costUsd)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatCurrency(device.projectedMonthCostUsd)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatEnergy(device.year?.energyKwh)}</TableCell>
+                      <TableCell className="py-3 whitespace-nowrap">{formatEnergy(device.cycle?.energyKwh)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

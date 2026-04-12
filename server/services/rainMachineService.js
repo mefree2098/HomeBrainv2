@@ -2055,7 +2055,11 @@ class RainMachineService {
 
   async getDailyStats({ days = 30 } = {}) {
     const integration = await RainMachineIntegration.getIntegration();
-    const controllerId = trimString(integration.controllerId, trimString(integration.snapshot?.controller?.id));
+    return this.getDailyStatsForIntegration(integration, { days });
+  }
+
+  async getDailyStatsForIntegration(integration, { days = 30 } = {}) {
+    const controllerId = trimString(integration?.controllerId, trimString(integration?.snapshot?.controller?.id));
     if (!controllerId) {
       return [];
     }
@@ -2069,7 +2073,11 @@ class RainMachineService {
 
   async getWateringHistory({ days = 30, simulated = false } = {}) {
     const integration = await RainMachineIntegration.getIntegration();
-    const controllerId = trimString(integration.controllerId, trimString(integration.snapshot?.controller?.id));
+    return this.getWateringHistoryForIntegration(integration, { days, simulated });
+  }
+
+  async getWateringHistoryForIntegration(integration, { days = 30, simulated = false } = {}) {
+    const controllerId = trimString(integration?.controllerId, trimString(integration?.snapshot?.controller?.id));
     if (!controllerId) {
       return [];
     }
@@ -2084,33 +2092,30 @@ class RainMachineService {
       .lean();
   }
 
-  async getDashboard({ dailyDays = 14, wateringDays = 14 } = {}) {
-    const integration = await RainMachineIntegration.getIntegration();
-    const sanitizedIntegration = integration.toSanitized
+  buildDashboardPayload(integration, snapshot, {
+    dailyStats = [],
+    wateringHistory = [],
+    simulatedWateringHistory = []
+  } = {}) {
+    const sanitizedIntegration = integration?.toSanitized
       ? integration.toSanitized()
       : { ...integration };
-    const snapshot = asPlainObject(integration.snapshot);
-    const dailyStats = await this.getDailyStats({ days: dailyDays });
-    const [wateringHistory, simulatedWateringHistory] = await Promise.all([
-      this.getWateringHistory({ days: wateringDays, simulated: false }),
-      this.getWateringHistory({ days: wateringDays, simulated: true })
-    ]);
-    const controllerId = trimString(integration.controllerId, trimString(snapshot?.controller?.id));
+    const controllerId = trimString(integration?.controllerId, trimString(snapshot?.controller?.id));
 
     return {
       generatedAt: new Date().toISOString(),
       integration: sanitizedIntegration,
       health: {
-        isConnected: integration.isConnected === true,
-        lastSyncAt: integration.lastSyncAt || null,
-        lastReportSyncAt: integration.lastReportSyncAt || null,
-        lastError: integration.lastError || ''
+        isConnected: integration?.isConnected === true,
+        lastSyncAt: integration?.lastSyncAt || null,
+        lastReportSyncAt: integration?.lastReportSyncAt || null,
+        lastError: integration?.lastError || ''
       },
-      controller: snapshot.controller || null,
-      runtime: snapshot.runtime || null,
-      zones: safeArray(snapshot.zones),
-      programs: safeArray(snapshot.programs),
-      restrictions: snapshot.restrictions || null,
+      controller: snapshot?.controller || null,
+      runtime: snapshot?.runtime || null,
+      zones: safeArray(snapshot?.zones),
+      programs: safeArray(snapshot?.programs),
+      restrictions: snapshot?.restrictions || null,
       dailyStats,
       wateringHistory,
       simulatedWateringHistory,
@@ -2121,6 +2126,70 @@ class RainMachineService {
           }
         : null
     };
+  }
+
+  async getDashboard({ dailyDays = 14, wateringDays = 14, integration = null } = {}) {
+    const resolvedIntegration = integration || await RainMachineIntegration.getIntegration();
+    const snapshot = asPlainObject(resolvedIntegration.snapshot);
+    const dailyStats = await this.getDailyStatsForIntegration(resolvedIntegration, { days: dailyDays });
+    const [wateringHistory, simulatedWateringHistory] = await Promise.all([
+      this.getWateringHistoryForIntegration(resolvedIntegration, { days: wateringDays, simulated: false }),
+      this.getWateringHistoryForIntegration(resolvedIntegration, { days: wateringDays, simulated: true })
+    ]);
+    return this.buildDashboardPayload(resolvedIntegration, snapshot, {
+      dailyStats,
+      wateringHistory,
+      simulatedWateringHistory
+    });
+  }
+
+  async getDashboardSafe({ dailyDays = 14, wateringDays = 14, integration = null } = {}) {
+    try {
+      return await this.getDashboard({ dailyDays, wateringDays, integration: integration || null });
+    } catch (error) {
+      console.warn(`RainMachineService: falling back to cached dashboard payload: ${error.message}`);
+
+      let fallbackIntegration = integration;
+      if ((!fallbackIntegration || !fallbackIntegration.snapshot) && integration?._id) {
+        try {
+          fallbackIntegration = await RainMachineIntegration.findById(integration._id) || integration;
+        } catch (_reloadError) {
+          fallbackIntegration = integration;
+        }
+      }
+      if (!fallbackIntegration) {
+        fallbackIntegration = await RainMachineIntegration.getIntegration();
+      }
+
+      const snapshot = asPlainObject(fallbackIntegration?.snapshot);
+      let dailyStats = [];
+      let wateringHistory = [];
+      let simulatedWateringHistory = [];
+
+      try {
+        dailyStats = await this.getDailyStatsForIntegration(fallbackIntegration, { days: dailyDays });
+      } catch (dailyStatsError) {
+        console.warn(`RainMachineService: cached dashboard daily stats fallback failed: ${dailyStatsError.message}`);
+      }
+
+      try {
+        wateringHistory = await this.getWateringHistoryForIntegration(fallbackIntegration, { days: wateringDays, simulated: false });
+      } catch (wateringHistoryError) {
+        console.warn(`RainMachineService: cached dashboard watering history fallback failed: ${wateringHistoryError.message}`);
+      }
+
+      try {
+        simulatedWateringHistory = await this.getWateringHistoryForIntegration(fallbackIntegration, { days: wateringDays, simulated: true });
+      } catch (simulatedHistoryError) {
+        console.warn(`RainMachineService: cached dashboard simulated watering history fallback failed: ${simulatedHistoryError.message}`);
+      }
+
+      return this.buildDashboardPayload(fallbackIntegration, snapshot, {
+        dailyStats,
+        wateringHistory,
+        simulatedWateringHistory
+      });
+    }
   }
 
   async startZone(zoneId, durationSeconds = null) {
@@ -2145,7 +2214,7 @@ class RainMachineService {
     } catch (error) {
       console.warn(`RainMachineService: post-zone-start refresh failed after successful command: ${error.message}`);
     }
-    return this.getDashboard();
+    return this.getDashboardSafe({ integration });
   }
 
   async stopZone(zoneId) {
@@ -2177,7 +2246,7 @@ class RainMachineService {
     } catch (error) {
       console.warn(`RainMachineService: post-zone-stop refresh failed after successful command: ${error.message}`);
     }
-    return this.getDashboard();
+    return this.getDashboardSafe({ integration });
   }
 
   async startProgram(programId) {
@@ -2196,7 +2265,7 @@ class RainMachineService {
     } catch (error) {
       console.warn(`RainMachineService: post-program-start refresh failed after successful command: ${error.message}`);
     }
-    return this.getDashboard();
+    return this.getDashboardSafe({ integration });
   }
 
   async stopProgram(programId) {
@@ -2214,7 +2283,7 @@ class RainMachineService {
     } catch (error) {
       console.warn(`RainMachineService: post-program-stop refresh failed after successful command: ${error.message}`);
     }
-    return this.getDashboard();
+    return this.getDashboardSafe({ integration });
   }
 
   async stopAll() {
@@ -2232,7 +2301,7 @@ class RainMachineService {
     } catch (error) {
       console.warn(`RainMachineService: post-stop-all refresh failed after successful command: ${error.message}`);
     }
-    return this.getDashboard();
+    return this.getDashboardSafe({ integration });
   }
 
   async setRainDelay(days = 0) {
@@ -2252,7 +2321,7 @@ class RainMachineService {
     } catch (error) {
       console.warn(`RainMachineService: post-rain-delay refresh failed after successful command: ${error.message}`);
     }
-    return this.getDashboard();
+    return this.getDashboardSafe({ integration });
   }
 }
 

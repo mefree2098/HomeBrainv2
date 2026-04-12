@@ -261,3 +261,41 @@ test('stopZone falls back to stop-all when direct stop fails for the active zone
     RainMachineIntegration.getIntegration = originalGetIntegration;
   }
 });
+
+test('getDashboardSafe returns cached dashboard payload when dashboard assembly fails', async () => {
+  const service = new rainMachineService.RainMachineService();
+
+  service.getDashboard = async () => {
+    throw new Error('dashboard assembly failed');
+  };
+  service.getDailyStatsForIntegration = async () => [];
+  service.getWateringHistoryForIntegration = async () => [];
+
+  const dashboard = await service.getDashboardSafe({
+    integration: {
+      enabled: true,
+      isConnected: true,
+      lastError: '',
+      lastSyncAt: '2026-04-11T18:00:00.000Z',
+      lastReportSyncAt: null,
+      controllerId: 'AA:BB:CC',
+      snapshot: {
+        controller: {
+          id: 'AA:BB:CC',
+          name: 'Back Yard'
+        },
+        runtime: {
+          queueLength: 0
+        },
+        zones: [],
+        programs: [],
+        restrictions: null
+      }
+    }
+  });
+
+  assert.equal(dashboard.integration.enabled, true);
+  assert.equal(dashboard.controller?.id, 'AA:BB:CC');
+  assert.equal(dashboard.runtime?.queueLength, 0);
+  assert.deepEqual(dashboard.dailyStats, []);
+});
