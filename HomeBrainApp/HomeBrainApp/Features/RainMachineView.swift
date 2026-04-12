@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 private let rainMachineConfiguredSecretPlaceholder = "••••••••••••••••"
 private let rainMachineMaxManualRunMinutes = 360
@@ -338,9 +339,9 @@ private struct RainMachineRuntimeSnapshot {
 
     static func from(_ object: [String: Any]) -> RainMachineRuntimeSnapshot {
         RainMachineRuntimeSnapshot(
-            queue: JSON.array(object["queue"]).map(RainMachineQueueEntry.from),
+            queue: JSON.array(object["queue"]).map { RainMachineQueueEntry.from($0) },
             activeZone: JSON.object(object["activeZone"]).isEmpty ? nil : RainMachineQueueEntry.from(JSON.object(object["activeZone"])),
-            activePrograms: JSON.array(object["activePrograms"]).map(RainMachineRuntimeProgram.from),
+            activePrograms: JSON.array(object["activePrograms"]).map { RainMachineRuntimeProgram.from($0) },
             queueLength: JSON.int(object, "queueLength"),
             activeZoneCount: JSON.int(object, "activeZoneCount"),
             runningProgramCount: JSON.int(object, "runningProgramCount"),
@@ -520,12 +521,12 @@ private struct RainMachineDashboardSnapshot {
             health: RainMachineHealthSnapshot.from(JSON.object(object["health"])),
             controller: controllerObject.isEmpty ? nil : RainMachineControllerSnapshot.from(controllerObject),
             runtime: runtimeObject.isEmpty ? nil : RainMachineRuntimeSnapshot.from(runtimeObject),
-            zones: JSON.array(object["zones"]).map(RainMachineZoneSummary.from),
-            programs: JSON.array(object["programs"]).map(RainMachineProgramSummary.from),
+            zones: JSON.array(object["zones"]).map { RainMachineZoneSummary.from($0) },
+            programs: JSON.array(object["programs"]).map { RainMachineProgramSummary.from($0) },
             restrictions: restrictionsObject.isEmpty ? nil : RainMachineRestrictionsSummary.from(restrictionsObject),
-            dailyStats: JSON.array(object["dailyStats"]).map(RainMachineDailyStatRecord.from),
-            wateringHistory: JSON.array(object["wateringHistory"]).map(RainMachineWateringDayRecord.from),
-            simulatedWateringHistory: JSON.array(object["simulatedWateringHistory"]).map(RainMachineWateringDayRecord.from),
+            dailyStats: JSON.array(object["dailyStats"]).map { RainMachineDailyStatRecord.from($0) },
+            wateringHistory: JSON.array(object["wateringHistory"]).map { RainMachineWateringDayRecord.from($0) },
+            simulatedWateringHistory: JSON.array(object["simulatedWateringHistory"]).map { RainMachineWateringDayRecord.from($0) },
             telemetrySources: RainMachineTelemetrySources.from(JSON.object(object["telemetrySources"]))
         )
     }
@@ -1349,19 +1350,7 @@ struct RainMachineView: View {
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
                     ForEach([0, 1, 2, 3], id: \.self) { days in
-                        Button {
-                            Task {
-                                await performDashboardMutation(
-                                    actionKey: "rain-delay-\(days)",
-                                    path: "/api/rainmachine/restrictions/rain-delay",
-                                    body: ["days": days]
-                                )
-                            }
-                        } label: {
-                            Text(days == 0 ? "Clear Delay" : "\(days) Day\(days == 1 ? "" : "s")")
-                        }
-                        .buttonStyle(days == 0 ? HBSecondaryButtonStyle(compact: true) : HBPrimaryButtonStyle(compact: true))
-                        .disabled(submittingKey == "rain-delay-\(days)")
+                        rainMachineRainDelayButton(days: days)
                     }
                 }
 
@@ -1764,6 +1753,43 @@ struct RainMachineView: View {
         .disabled(submittingKey == "stop-all" || (dashboard?.runtime?.queueLength ?? 0) == 0)
     }
 
+    private func rainMachineRainDelayButton(days: Int) -> some View {
+        let actionKey = "rain-delay-\(days)"
+        let label = days == 0 ? "Clear Delay" : "\(days) Day\(days == 1 ? "" : "s")"
+
+        return Group {
+            if days == 0 {
+                Button {
+                    Task {
+                        await performDashboardMutation(
+                            actionKey: actionKey,
+                            path: "/api/rainmachine/restrictions/rain-delay",
+                            body: ["days": days]
+                        )
+                    }
+                } label: {
+                    Text(label)
+                }
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                .disabled(submittingKey == actionKey)
+            } else {
+                Button {
+                    Task {
+                        await performDashboardMutation(
+                            actionKey: actionKey,
+                            path: "/api/rainmachine/restrictions/rain-delay",
+                            body: ["days": days]
+                        )
+                    }
+                } label: {
+                    Text(label)
+                }
+                .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                .disabled(submittingKey == actionKey)
+            }
+        }
+    }
+
     private func rainMachineProgramDetails(_ program: RainMachineProgramSummary) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ViewThatFits(in: .horizontal) {
@@ -2110,7 +2136,7 @@ struct RainMachineView: View {
         do {
             let response = try await session.apiClient.post("/api/rainmachine/discover")
             let object = JSON.object(response)
-            let controllers = JSON.array(object["controllers"]).map(RainMachineDiscoveryController.from)
+            let controllers = JSON.array(object["controllers"]).map { RainMachineDiscoveryController.from($0) }
             discoveredControllers = controllers
 
             if let first = controllers.first, form.host.isEmpty {
