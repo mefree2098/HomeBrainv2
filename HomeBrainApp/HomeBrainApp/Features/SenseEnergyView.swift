@@ -663,6 +663,7 @@ private nonisolated struct SenseChartDeviceLine: Identifiable {
 struct SenseEnergyView: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var dashboard: SenseDashboardSnapshot?
     @State private var status: SenseStatusSnapshot?
@@ -682,6 +683,10 @@ struct SenseEnergyView: View {
         session.currentUser?.role == "admin"
     }
 
+    private var isCompactWidth: Bool {
+        horizontalSizeClass == .compact
+    }
+
     private var activeIntegration: SenseIntegrationStatus? {
         status?.integration ?? dashboard?.integration
     }
@@ -696,6 +701,10 @@ struct SenseEnergyView: View {
 
     private var activeDevices: [SenseDashboardDevice] {
         dashboard?.activeDevices ?? []
+    }
+
+    private var ledgerDevices: [SenseDashboardDeviceUsage] {
+        Array((dashboard?.deviceUsage ?? []).prefix(18))
     }
 
     private var chartPoints: [SenseDashboardSnapshotPoint] {
@@ -900,81 +909,21 @@ struct SenseEnergyView: View {
     private var heroPanel: some View {
         HBDeckSurface {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Power Intelligence")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .textCase(.uppercase)
-                            .tracking(2.4)
-                            .foregroundStyle(HBPalette.textMuted)
-
-                        Text("Sense Energy")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
-
-                        Text("Whole-home draw, per-device load bars, live utilization overlays, and report-grade energy windows now live together in the native iOS app.")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        HStack(spacing: 8) {
-                            HBBadge(
-                                text: dashboard?.health.websocketConnected == true ? "Live Feed" : (dashboard?.health.isConnected == true ? "Polling" : "Standby"),
-                                foreground: dashboard?.health.isConnected == true ? HBPalette.accentGreen : HBPalette.textPrimary,
-                                background: dashboard?.health.isConnected == true ? HBPalette.accentGreen.opacity(0.16) : HBPalette.panelSoft,
-                                stroke: dashboard?.health.isConnected == true ? HBPalette.accentGreen.opacity(0.7) : HBPalette.panelStrokeStrong
-                            )
-                            HBBadge(text: "\((liveSnapshot?.activeDeviceCount ?? 0).formatted()) active loads")
-                            if dashboard?.monitor.solarConfigured == true {
-                                HBBadge(text: "Solar aware")
-                            }
-                        }
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 14) {
+                        heroIntroContent
+                        Spacer(minLength: 0)
+                        heroControls
                     }
 
-                    Spacer(minLength: 0)
-
-                    VStack(alignment: .trailing, spacing: 10) {
-                        HStack(spacing: 8) {
-                            ForEach(SenseDashboardRange.allCases) { option in
-                                Button {
-                                    selectedRange = option
-                                    Task {
-                                        do {
-                                            try await loadDashboard(showLoading: false)
-                                        } catch {
-                                            errorMessage = error.localizedDescription
-                                        }
-                                    }
-                                } label: {
-                                    Text(option.title)
-                                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                                        .frame(minWidth: 44)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(selectedRange == option ? HBPalette.accentBlue : HBPalette.accentSlate)
-                            }
-                        }
-
-                        Button {
-                            Task { await loadContent(showLoading: false) }
-                        } label: {
-                            Label(isRefreshing ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
-                        }
-                        .buttonStyle(HBSecondaryButtonStyle())
-
-                        if isAdmin {
-                            Button {
-                                Task { await syncSense() }
-                            } label: {
-                                Label(isSyncing ? "Syncing..." : "Sync Sense", systemImage: "bolt.horizontal")
-                            }
-                            .buttonStyle(HBPrimaryButtonStyle())
-                            .disabled(isSyncing)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        heroIntroContent
+                        heroControls
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
 
-                HStack(spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
                     senseHeroFact(title: "Realtime", value: senseFormatDateTime(dashboard?.health.lastRealtimeAt ?? liveSnapshot?.observedAt))
                     senseHeroFact(title: "Trend Sync", value: senseFormatDateTime(dashboard?.health.lastTrendSyncAt))
                     senseHeroFact(title: "Monitor", value: dashboard?.monitor.name.isEmpty == false ? dashboard?.monitor.name ?? "Sense Monitor" : "Sense Monitor")
@@ -983,6 +932,125 @@ struct SenseEnergyView: View {
             }
             .padding(18)
         }
+    }
+
+    private var heroIntroContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Power Intelligence")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(2.4)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text("Sense Energy")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+
+            Text("Whole-home draw, per-device load bars, live utilization overlays, and report-grade energy windows now live together in the native iOS app.")
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    HBBadge(
+                        text: dashboard?.health.websocketConnected == true ? "Live Feed" : (dashboard?.health.isConnected == true ? "Polling" : "Standby"),
+                        foreground: dashboard?.health.isConnected == true ? HBPalette.accentGreen : HBPalette.textPrimary,
+                        background: dashboard?.health.isConnected == true ? HBPalette.accentGreen.opacity(0.16) : HBPalette.panelSoft,
+                        stroke: dashboard?.health.isConnected == true ? HBPalette.accentGreen.opacity(0.7) : HBPalette.panelStrokeStrong
+                    )
+                    HBBadge(text: "\((liveSnapshot?.activeDeviceCount ?? 0).formatted()) active loads")
+                    if dashboard?.monitor.solarConfigured == true {
+                        HBBadge(text: "Solar aware")
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private var heroControls: some View {
+        VStack(alignment: isCompactWidth ? .leading : .trailing, spacing: 10) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(SenseDashboardRange.allCases) { option in
+                        senseRangeButton(option)
+                    }
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    ForEach(SenseDashboardRange.allCases) { option in
+                        senseRangeButton(option)
+                    }
+                }
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    refreshSenseButton
+
+                    if isAdmin {
+                        syncSenseButton
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    refreshSenseButton
+
+                    if isAdmin {
+                        syncSenseButton
+                    }
+                }
+            }
+        }
+    }
+
+    private func senseRangeButton(_ option: SenseDashboardRange) -> some View {
+        Button {
+            selectedRange = option
+            Task {
+                do {
+                    try await loadDashboard(showLoading: false)
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        } label: {
+            Text(option.title)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(minWidth: 44)
+                .frame(maxWidth: isCompactWidth ? .infinity : nil)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(isCompactWidth ? .small : .regular)
+        .tint(selectedRange == option ? HBPalette.accentBlue : HBPalette.accentSlate)
+    }
+
+    private var refreshSenseButton: some View {
+        Button {
+            Task { await loadContent(showLoading: false) }
+        } label: {
+            Label(isRefreshing ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: isCompactWidth))
+    }
+
+    private var syncSenseButton: some View {
+        Button {
+            Task { await syncSense() }
+        } label: {
+            Label(isSyncing ? "Syncing..." : "Sync Sense", systemImage: "bolt.horizontal")
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .buttonStyle(HBPrimaryButtonStyle(compact: isCompactWidth))
+        .disabled(isSyncing)
     }
 
     private var adminSetupPanel: some View {
@@ -1124,7 +1192,7 @@ struct SenseEnergyView: View {
                     }
                 }
 
-                HStack(spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) {
                     HBCardRow {
                         Toggle(isOn: $form.enabled) {
                             VStack(alignment: .leading, spacing: 4) {
@@ -1154,29 +1222,38 @@ struct SenseEnergyView: View {
                     }
                 }
 
-                HStack(spacing: 10) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: isCompactWidth ? 150 : 180), spacing: 10)], spacing: 10) {
                     Button {
                         Task { await testConnection() }
                     } label: {
                         Label(isTesting ? "Testing..." : "Test Sense Account", systemImage: "checkmark.seal")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
-                    .buttonStyle(HBSecondaryButtonStyle())
+                    .buttonStyle(HBSecondaryButtonStyle(compact: isCompactWidth))
                     .disabled(isTesting)
 
                     Button {
                         Task { await saveConfiguration() }
                     } label: {
                         Label(isSaving ? "Saving..." : "Save Sense Config", systemImage: "square.and.arrow.down")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
-                    .buttonStyle(HBPrimaryButtonStyle())
+                    .buttonStyle(HBPrimaryButtonStyle(compact: isCompactWidth))
                     .disabled(isSaving)
 
                     Button {
                         Task { await syncSense() }
                     } label: {
                         Label(isSyncing ? "Syncing..." : "Sync Sense Now", systemImage: "arrow.triangle.2.circlepath")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
-                    .buttonStyle(HBSecondaryButtonStyle())
+                    .buttonStyle(HBSecondaryButtonStyle(compact: isCompactWidth))
                     .disabled(isSyncing)
                 }
 
@@ -1524,7 +1601,9 @@ struct SenseEnergyView: View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: 12) {
                 energyWindowsPanel
+                    .frame(width: 292)
                 deviceLedgerPanel
+                    .frame(maxWidth: .infinity)
             }
             VStack(spacing: 12) {
                 energyWindowsPanel
@@ -1545,7 +1624,7 @@ struct SenseEnergyView: View {
                     .foregroundStyle(HBPalette.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 12)], spacing: 12) {
                     ForEach(SenseTrendScale.allCases) { scale in
                         let trend = dashboard?.trends[scale.rawValue]
                         senseRuntimeTile(
@@ -1572,61 +1651,73 @@ struct SenseEnergyView: View {
                     .foregroundStyle(HBPalette.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
 
-                if (dashboard?.deviceUsage ?? []).isEmpty {
+                if ledgerDevices.isEmpty {
                     EmptyStateView(
                         title: "No device ledger yet",
                         subtitle: "Per-device energy windows will appear here as Sense trend data arrives."
                     )
                 } else {
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    if isCompactWidth {
+                        VStack(spacing: 10) {
+                            ForEach(ledgerDevices) { device in
+                                senseLedgerCompactCard(device)
+                            }
+                        }
+                    } else {
                         VStack(spacing: 0) {
-                            HStack(spacing: 10) {
-                                senseLedgerHeader("Device", width: 180, alignment: .leading)
-                                senseLedgerHeader("Now", width: 86)
-                                senseLedgerHeader("Cost Now", width: 92)
-                                senseLedgerHeader("Day", width: 78)
-                                senseLedgerHeader("Week", width: 78)
-                                senseLedgerHeader("Month", width: 78)
-                                senseLedgerHeader("Month $", width: 92)
-                                senseLedgerHeader("Proj $", width: 92)
-                                senseLedgerHeader("Year", width: 78)
-                                senseLedgerHeader("Cycle", width: 78)
+                            HStack(spacing: 4) {
+                                senseLedgerHeader("Device", width: 108, alignment: .leading)
+                                senseLedgerHeader("Now", width: 50)
+                                senseLedgerHeader("Cost\nNow", width: 64)
+                                senseLedgerHeader("Day", width: 48)
+                                senseLedgerHeader("Week", width: 48)
+                                senseLedgerHeader("Month", width: 48)
+                                senseLedgerHeader("Month\n$", width: 64)
+                                senseLedgerHeader("Proj\n$", width: 64)
+                                senseLedgerHeader("Year", width: 48)
+                                senseLedgerHeader("Cycle", width: 48)
                             }
                             .padding(.horizontal, 12)
                             .padding(.bottom, 8)
 
-                            ForEach(Array((dashboard?.deviceUsage ?? []).prefix(18))) { device in
+                            ForEach(ledgerDevices) { device in
                                 Divider()
                                     .overlay(HBPalette.divider.opacity(0.32))
 
-                                HStack(spacing: 10) {
+                                HStack(spacing: 4) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(device.name)
-                                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                                            .font(.system(size: 13, weight: .bold, design: .rounded))
                                             .foregroundStyle(HBPalette.textPrimary)
-                                            .lineLimit(1)
+                                            .lineLimit(2)
 
                                         Text(device.room.isEmpty ? "Whole home energy deck" : device.room)
-                                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
                                             .foregroundStyle(HBPalette.textSecondary)
-                                            .lineLimit(1)
+                                            .lineLimit(2)
                                     }
-                                    .frame(width: 180, alignment: .leading)
+                                    .frame(width: 108, alignment: .leading)
 
-                                    senseLedgerValue(senseFormatPower(device.currentPowerW), width: 86)
-                                    senseLedgerValue(senseFormatCurrencyRate(device.currentCostUsdPerHour), width: 92)
-                                    senseLedgerValue(senseFormatEnergy(device.day?.energyKwh), width: 78)
-                                    senseLedgerValue(senseFormatEnergy(device.week?.energyKwh), width: 78)
-                                    senseLedgerValue(senseFormatEnergy(device.month?.energyKwh), width: 78)
-                                    senseLedgerValue(senseFormatCurrency(device.monthToDateCostUsd ?? device.month?.costUsd), width: 92)
-                                    senseLedgerValue(senseFormatCurrency(device.projectedMonthCostUsd), width: 92)
-                                    senseLedgerValue(senseFormatEnergy(device.year?.energyKwh), width: 78)
-                                    senseLedgerValue(senseFormatEnergy(device.cycle?.energyKwh), width: 78)
+                                    senseLedgerValue(senseFormatPower(device.currentPowerW), width: 50)
+                                    senseLedgerValue(senseFormatCurrencyRate(device.currentCostUsdPerHour), width: 64)
+                                    senseLedgerValue(senseFormatEnergy(device.day?.energyKwh), width: 48)
+                                    senseLedgerValue(senseFormatEnergy(device.week?.energyKwh), width: 48)
+                                    senseLedgerValue(senseFormatEnergy(device.month?.energyKwh), width: 48)
+                                    senseLedgerValue(senseFormatCurrency(device.monthToDateCostUsd ?? device.month?.costUsd), width: 64)
+                                    senseLedgerValue(senseFormatCurrency(device.projectedMonthCostUsd), width: 64)
+                                    senseLedgerValue(senseFormatEnergy(device.year?.energyKwh), width: 48)
+                                    senseLedgerValue(senseFormatEnergy(device.cycle?.energyKwh), width: 48)
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 12)
                             }
                         }
+                    }
+
+                    if (dashboard?.deviceUsage.count ?? 0) > ledgerDevices.count {
+                        Text("Showing the top \(ledgerDevices.count.formatted()) devices out of \((dashboard?.deviceUsage.count ?? 0).formatted()) tracked Sense loads.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textMuted)
                     }
                 }
             }
@@ -1746,6 +1837,8 @@ struct SenseEnergyView: View {
             .tracking(1.8)
             .foregroundStyle(HBPalette.textMuted)
             .frame(width: width, alignment: alignment)
+            .lineLimit(2)
+            .multilineTextAlignment(alignment == .leading ? .leading : .center)
     }
 
     private func senseLedgerValue(_ value: String, width: CGFloat) -> some View {
@@ -1753,8 +1846,73 @@ struct SenseEnergyView: View {
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(HBPalette.textPrimary)
             .frame(width: width)
-            .lineLimit(1)
+            .lineLimit(2)
             .minimumScaleFactor(0.72)
+            .multilineTextAlignment(.center)
+    }
+
+    private func senseLedgerCompactCard(_ device: SenseDashboardDeviceUsage) -> some View {
+        HBCardRow {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(device.name)
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .lineLimit(2)
+
+                        Text(device.room.isEmpty ? "Whole home energy deck" : device.room)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .lineLimit(2)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text(senseFormatPower(device.currentPowerW))
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .multilineTextAlignment(.trailing)
+
+                        Text(senseFormatCurrencyRate(device.currentCostUsdPerHour))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textMuted)
+                    }
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    senseLedgerMetricCell(title: "Day", value: senseFormatEnergy(device.day?.energyKwh))
+                    senseLedgerMetricCell(title: "Week", value: senseFormatEnergy(device.week?.energyKwh))
+                    senseLedgerMetricCell(title: "Month", value: senseFormatEnergy(device.month?.energyKwh))
+                    senseLedgerMetricCell(title: "Month Cost", value: senseFormatCurrency(device.monthToDateCostUsd ?? device.month?.costUsd))
+                    senseLedgerMetricCell(title: "Projected", value: senseFormatCurrency(device.projectedMonthCostUsd))
+                    senseLedgerMetricCell(title: "Year", value: senseFormatEnergy(device.year?.energyKwh))
+                    senseLedgerMetricCell(title: "Cycle", value: senseFormatEnergy(device.cycle?.energyKwh))
+                    senseLedgerMetricCell(title: "Cost Now", value: senseFormatCurrencyRate(device.currentCostUsdPerHour))
+                }
+            }
+        }
+    }
+
+    private func senseLedgerMetricCell(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(1.6)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.78)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
     }
 
     private func loadContent(showLoading: Bool) async {

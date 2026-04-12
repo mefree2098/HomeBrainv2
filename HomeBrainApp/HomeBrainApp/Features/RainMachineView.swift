@@ -838,59 +838,21 @@ struct RainMachineView: View {
     private var heroPanel: some View {
         HBDeckSurface {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Irrigation Control")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .textCase(.uppercase)
-                            .tracking(2.4)
-                            .foregroundStyle(HBPalette.textMuted)
-
-                        Text("RainMachine")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
-
-                        Text("Live zone status, program controls, recent watering history, and controller-side reporting now travel together in the iOS app.")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        HStack(spacing: 8) {
-                            HBBadge(
-                                text: activeHealth?.isConnected == true ? "Controller Online" : "Controller Offline",
-                                foreground: activeHealth?.isConnected == true ? HBPalette.accentGreen : HBPalette.accentRed,
-                                background: activeHealth?.isConnected == true ? HBPalette.accentGreen.opacity(0.16) : HBPalette.accentRed.opacity(0.16),
-                                stroke: activeHealth?.isConnected == true ? HBPalette.accentGreen.opacity(0.7) : HBPalette.accentRed.opacity(0.7)
-                            )
-                            HBBadge(text: "\((dashboard?.runtime?.zoneCount) ?? (activeRuntime?.zoneCount ?? 0)) zones")
-                            HBBadge(text: "\((dashboard?.runtime?.programCount) ?? (activeRuntime?.programCount ?? 0)) programs")
-                        }
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 14) {
+                        rainMachineHeroSummary
+                        Spacer(minLength: 0)
+                        rainMachineHeroActions(stacked: false)
                     }
 
-                    Spacer(minLength: 0)
-
-                    VStack(alignment: .trailing, spacing: 10) {
-                        Button {
-                            Task { await loadContent(showLoading: false) }
-                        } label: {
-                            Label(isRefreshing ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
-                        }
-                        .buttonStyle(HBSecondaryButtonStyle())
-
-                        if isAdmin {
-                            Button {
-                                Task { await syncRainMachine() }
-                            } label: {
-                                Label(isSyncing ? "Syncing..." : "Sync Controller", systemImage: "timer")
-                            }
-                            .buttonStyle(HBPrimaryButtonStyle())
-                            .disabled(isSyncing)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        rainMachineHeroSummary
+                        rainMachineHeroActions(stacked: true)
                     }
                 }
 
                 if let health = activeHealth {
-                    HStack(spacing: 12) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
                         rainMachineHeroFact(title: "Runtime Sync", value: rainMachineFormatDateTime(health.lastSyncAt))
                         rainMachineHeroFact(title: "Report Sync", value: rainMachineFormatDateTime(health.lastReportSyncAt))
                         rainMachineHeroFact(title: "Data Platform", value: dashboard?.telemetrySources == nil ? "Standby" : "Ready")
@@ -904,26 +866,17 @@ struct RainMachineView: View {
     private var adminSetupPanel: some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Controller Setup")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
-
-                        Text("Discover the controller on your LAN, verify the password-authenticated local API, and save the polling configuration used by HomeBrain.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textMuted)
-                            .fixedSize(horizontal: false, vertical: true)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        rainMachineSetupHeader
+                        Spacer(minLength: 0)
+                        rainMachineSetupStatusBadge
                     }
 
-                    Spacer(minLength: 0)
-
-                    HBBadge(
-                        text: activeHealth?.isConnected == true ? "Connected" : "Standby",
-                        foreground: activeHealth?.isConnected == true ? HBPalette.accentGreen : HBPalette.textPrimary,
-                        background: activeHealth?.isConnected == true ? HBPalette.accentGreen.opacity(0.16) : HBPalette.panelSoft,
-                        stroke: activeHealth?.isConnected == true ? HBPalette.accentGreen.opacity(0.7) : HBPalette.panelStrokeStrong
-                    )
+                    VStack(alignment: .leading, spacing: 10) {
+                        rainMachineSetupHeader
+                        rainMachineSetupStatusBadge
+                    }
                 }
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
@@ -1030,6 +983,7 @@ struct RainMachineView: View {
                         Text("Current target: \(form.protocolValue)://\(form.host.isEmpty ? "controller-host" : form.host):\(form.port)")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
@@ -1049,11 +1003,13 @@ struct RainMachineView: View {
                             Text("\(lastTestResult.endpointProtocol)://\(lastTestResult.endpointHost):\(lastTestResult.endpointPort) • API \(lastTestResult.apiVersion)")
                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                 .foregroundStyle(HBPalette.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
 
                             if !lastTestResult.ipAddress.isEmpty || !lastTestResult.ssid.isEmpty {
                                 Text([lastTestResult.ipAddress, lastTestResult.ssid].filter { !$0.isEmpty }.joined(separator: " • "))
                                     .font(.system(size: 12, weight: .medium, design: .rounded))
                                     .foregroundStyle(HBPalette.textMuted)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
@@ -1093,11 +1049,13 @@ struct RainMachineView: View {
                                             Text("\(controller.host):\(controller.port)")
                                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                                 .foregroundStyle(HBPalette.textSecondary)
+                                                .fixedSize(horizontal: false, vertical: true)
 
                                             if !controller.macAddress.isEmpty || !controller.address.isEmpty {
                                                 Text([controller.macAddress, controller.address].filter { !$0.isEmpty }.joined(separator: " • "))
                                                     .font(.system(size: 11, weight: .medium, design: .rounded))
                                                     .foregroundStyle(HBPalette.textMuted)
+                                                    .fixedSize(horizontal: false, vertical: true)
                                             }
                                         }
                                         .frame(width: 250, alignment: .leading)
@@ -1112,30 +1070,61 @@ struct RainMachineView: View {
                     }
                 }
 
-                HStack(spacing: 10) {
-                    Button {
-                        Task { await discoverControllers() }
-                    } label: {
-                        Label(isDiscovering ? "Discovering..." : "Discover", systemImage: "magnifyingglass")
-                    }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                    .disabled(isDiscovering)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await discoverControllers() }
+                        } label: {
+                            Label(isDiscovering ? "Discovering..." : "Discover", systemImage: "magnifyingglass")
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(isDiscovering)
 
-                    Button {
-                        Task { await testConnection() }
-                    } label: {
-                        Label(isTesting ? "Testing..." : "Test Connection", systemImage: "testtube.2")
-                    }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                    .disabled(isTesting)
+                        Button {
+                            Task { await testConnection() }
+                        } label: {
+                            Label(isTesting ? "Testing..." : "Test Connection", systemImage: "testtube.2")
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(isTesting)
 
-                    Button {
-                        Task { await saveConfiguration() }
-                    } label: {
-                        Label(isSaving ? "Saving..." : "Save Configuration", systemImage: "square.and.arrow.down")
+                        Button {
+                            Task { await saveConfiguration() }
+                        } label: {
+                            Label(isSaving ? "Saving..." : "Save Configuration", systemImage: "square.and.arrow.down")
+                        }
+                        .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                        .disabled(isSaving)
                     }
-                    .buttonStyle(HBPrimaryButtonStyle(compact: true))
-                    .disabled(isSaving)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button {
+                            Task { await discoverControllers() }
+                        } label: {
+                            Label(isDiscovering ? "Discovering..." : "Discover", systemImage: "magnifyingglass")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(isDiscovering)
+
+                        Button {
+                            Task { await testConnection() }
+                        } label: {
+                            Label(isTesting ? "Testing..." : "Test Connection", systemImage: "testtube.2")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(isTesting)
+
+                        Button {
+                            Task { await saveConfiguration() }
+                        } label: {
+                            Label(isSaving ? "Saving..." : "Save Configuration", systemImage: "square.and.arrow.down")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                        .disabled(isSaving)
+                    }
                 }
 
                 if let health = activeHealth, !health.lastError.isEmpty {
@@ -1232,26 +1221,39 @@ struct RainMachineView: View {
     private var runtimePanel: some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Runtime Queue")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Runtime Queue")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
 
-                        Text("Current queue depth, active zones, and controller-side irrigation runtime.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textMuted)
+                            Text("Current queue depth, active zones, and controller-side irrigation runtime.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textMuted)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        rainMachineStopAllButton
                     }
 
-                    Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Runtime Queue")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
 
-                    Button {
-                        Task { await performDashboardMutation(actionKey: "stop-all", path: "/api/rainmachine/controller/stop-all") }
-                    } label: {
-                        Label(submittingKey == "stop-all" ? "Stopping..." : "Stop All", systemImage: "stop.fill")
+                            Text("Current queue depth, active zones, and controller-side irrigation runtime.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textMuted)
+                        }
+
+                        HStack {
+                            Spacer(minLength: 0)
+                            rainMachineStopAllButton
+                        }
                     }
-                    .buttonStyle(HBDestructiveButtonStyle(compact: true))
-                    .disabled(submittingKey == "stop-all" || (dashboard?.runtime?.queueLength ?? 0) == 0)
                 }
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
@@ -1345,7 +1347,7 @@ struct RainMachineView: View {
                     }
                 }
 
-                HStack(spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
                     ForEach([0, 1, 2, 3], id: \.self) { days in
                         Button {
                             Task {
@@ -1391,19 +1393,35 @@ struct RainMachineView: View {
     private var programsPanel: some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Programs")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Programs")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
 
-                        Text("Start or stop RainMachine programs without leaving the iOS app.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textMuted)
+                            Text("Start or stop RainMachine programs without leaving the iOS app.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textMuted)
+                        }
+
+                        Spacer(minLength: 0)
+                        HBBadge(text: "\((dashboard?.programs.count) ?? 0)")
                     }
 
-                    Spacer(minLength: 0)
-                    HBBadge(text: "\((dashboard?.programs.count) ?? 0)")
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Programs")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(HBPalette.textPrimary)
+
+                            Text("Start or stop RainMachine programs without leaving the iOS app.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textMuted)
+                        }
+
+                        HBBadge(text: "\((dashboard?.programs.count) ?? 0)")
+                    }
                 }
 
                 if (dashboard?.programs ?? []).isEmpty {
@@ -1411,57 +1429,28 @@ struct RainMachineView: View {
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
                 } else {
-                    VStack(spacing: 10) {
-                        ForEach(dashboard?.programs ?? []) { program in
-                            HBCardRow {
-                                HStack(alignment: .top, spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        HStack(spacing: 8) {
-                                            Text(program.name)
-                                                .font(.system(size: 15, weight: .bold, design: .rounded))
-                                                .foregroundStyle(HBPalette.textPrimary)
-                                            HBBadge(text: program.statusLabel.capitalized)
+                        VStack(spacing: 10) {
+                            ForEach(dashboard?.programs ?? []) { program in
+                                HBCardRow {
+                                    ViewThatFits(in: .horizontal) {
+                                        HStack(alignment: .top, spacing: 12) {
+                                            rainMachineProgramDetails(program)
+                                            Spacer(minLength: 0)
+                                            rainMachineProgramActionButton(program)
                                         }
 
-                                        Text("Next run \(program.nextRun == nil ? "not scheduled" : rainMachineFormatDay(program.nextRun)) • \(program.zoneIds.count) zones • configured \(rainMachineFormatDuration(program.totalConfiguredDurationSeconds))")
-                                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                                            .foregroundStyle(HBPalette.textSecondary)
-                                    }
-
-                                    Spacer(minLength: 0)
-
-                                    if program.statusLabel == "running" || program.statusLabel == "pending" {
-                                        Button {
-                                            Task {
-                                                await performDashboardMutation(
-                                                    actionKey: "program-stop-\(program.id)",
-                                                    path: "/api/rainmachine/programs/\(program.uid ?? 0)/stop"
-                                                )
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            rainMachineProgramDetails(program)
+                                            HStack {
+                                                Spacer(minLength: 0)
+                                                rainMachineProgramActionButton(program)
                                             }
-                                        } label: {
-                                            Label(submittingKey == "program-stop-\(program.id)" ? "Stopping..." : "Stop", systemImage: "stop.fill")
                                         }
-                                        .buttonStyle(HBDestructiveButtonStyle(compact: true))
-                                        .disabled(submittingKey == "program-stop-\(program.id)" || program.uid == nil)
-                                    } else {
-                                        Button {
-                                            Task {
-                                                await performDashboardMutation(
-                                                    actionKey: "program-start-\(program.id)",
-                                                    path: "/api/rainmachine/programs/\(program.uid ?? 0)/start"
-                                                )
-                                            }
-                                        } label: {
-                                            Label(submittingKey == "program-start-\(program.id)" ? "Starting..." : "Start", systemImage: "play.fill")
-                                        }
-                                        .buttonStyle(HBPrimaryButtonStyle(compact: true))
-                                        .disabled(submittingKey == "program-start-\(program.id)" || program.uid == nil)
                                     }
                                 }
                             }
                         }
                     }
-                }
             }
         }
     }
@@ -1665,67 +1654,309 @@ struct RainMachineView: View {
     }
 
     private func rainMachineZoneCard(_ zone: RainMachineZoneSummary) -> some View {
-        let isRunning = zone.stateLabel == "running" || zone.stateLabel == "pending"
-        let canStart = zone.uid != nil && zone.active && !zone.master
-
         return HBCardRow {
-            VStack(alignment: .leading, spacing: 10) {
+            ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Text(zone.name)
-                                .font(.system(size: 15, weight: .bold, design: .rounded))
-                                .foregroundStyle(HBPalette.textPrimary)
-
-                            if zone.master {
-                                HBBadge(text: "Master Valve")
-                            }
-                            if !zone.active {
-                                HBBadge(text: "Inactive")
-                            }
-                            if zone.restriction {
-                                HBBadge(text: "Restricted")
-                            }
-                        }
-
-                        Text("\(zone.stateLabel.capitalized) • remaining \(rainMachineFormatDuration(liveRemainingSeconds(zone.remainingSeconds))) • next run \(zone.nextRun == nil ? "not scheduled" : "\(rainMachineFormatDay(zone.nextRun)) via \(zone.nextRunProgramName.isEmpty ? "program" : zone.nextRunProgramName)")")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                    }
-
+                    rainMachineZoneDetails(zone)
                     Spacer(minLength: 0)
+                    rainMachineZoneActionButton(zone)
+                }
 
-                    if isRunning {
-                        Button {
-                            Task {
-                                await performDashboardMutation(
-                                    actionKey: "zone-stop-\(zone.id)",
-                                    path: "/api/rainmachine/zones/\(zone.uid ?? 0)/stop"
-                                )
-                            }
-                        } label: {
-                            Label(submittingKey == "zone-stop-\(zone.id)" ? "Stopping..." : "Stop", systemImage: "stop.fill")
-                        }
-                        .buttonStyle(HBDestructiveButtonStyle(compact: true))
-                        .disabled(submittingKey == "zone-stop-\(zone.id)" || zone.uid == nil)
-                    } else {
-                        Button {
-                            Task {
-                                await performDashboardMutation(
-                                    actionKey: "zone-start-\(zone.id)",
-                                    path: "/api/rainmachine/zones/\(zone.uid ?? 0)/start",
-                                    body: ["durationSeconds": selectedManualDurationMinutes * 60]
-                                )
-                            }
-                        } label: {
-                            Label(submittingKey == "zone-start-\(zone.id)" ? "Starting..." : "Start", systemImage: "play.fill")
-                        }
-                        .buttonStyle(HBPrimaryButtonStyle(compact: true))
-                        .disabled(submittingKey == "zone-start-\(zone.id)" || !canStart)
+                VStack(alignment: .leading, spacing: 12) {
+                    rainMachineZoneDetails(zone)
+                    HStack {
+                        Spacer(minLength: 0)
+                        rainMachineZoneActionButton(zone)
                     }
                 }
             }
         }
+    }
+
+    private var rainMachineHeroSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Irrigation Control")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(2.4)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text("RainMachine")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+
+            Text("Live zone status, program controls, recent watering history, and controller-side reporting now travel together in the iOS app.")
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            rainMachineHeroBadgeGroup
+        }
+    }
+
+    private func rainMachineHeroActions(stacked: Bool) -> some View {
+        VStack(alignment: stacked ? .leading : .trailing, spacing: 10) {
+            Button {
+                Task { await loadContent(showLoading: false) }
+            } label: {
+                Label(isRefreshing ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
+                    .frame(maxWidth: stacked ? .infinity : nil, alignment: stacked ? .leading : .trailing)
+            }
+            .buttonStyle(HBSecondaryButtonStyle(compact: stacked))
+
+            if isAdmin {
+                Button {
+                    Task { await syncRainMachine() }
+                } label: {
+                    Label(isSyncing ? "Syncing..." : "Sync Controller", systemImage: "timer")
+                        .frame(maxWidth: stacked ? .infinity : nil, alignment: stacked ? .leading : .trailing)
+                }
+                .buttonStyle(HBPrimaryButtonStyle(compact: stacked))
+                .disabled(isSyncing)
+            }
+        }
+    }
+
+    private var rainMachineHeroBadgeGroup: some View {
+        let connectivityBadge = AnyView(
+            HBBadge(
+                text: activeHealth?.isConnected == true ? "Controller Online" : "Controller Offline",
+                foreground: activeHealth?.isConnected == true ? HBPalette.accentGreen : HBPalette.accentRed,
+                background: activeHealth?.isConnected == true ? HBPalette.accentGreen.opacity(0.16) : HBPalette.accentRed.opacity(0.16),
+                stroke: activeHealth?.isConnected == true ? HBPalette.accentGreen.opacity(0.7) : HBPalette.accentRed.opacity(0.7)
+            )
+        )
+        let zoneBadge = AnyView(HBBadge(text: "\((dashboard?.runtime?.zoneCount) ?? (activeRuntime?.zoneCount ?? 0)) zones"))
+        let programBadge = AnyView(HBBadge(text: "\((dashboard?.runtime?.programCount) ?? (activeRuntime?.programCount ?? 0)) programs"))
+
+        return rainMachineBadgeGroup([connectivityBadge, zoneBadge, programBadge])
+    }
+
+    private var rainMachineSetupHeader: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Controller Setup")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+
+            Text("Discover the controller on your LAN, verify the password-authenticated local API, and save the polling configuration used by HomeBrain.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var rainMachineSetupStatusBadge: some View {
+        HBBadge(
+            text: activeHealth?.isConnected == true ? "Connected" : "Standby",
+            foreground: activeHealth?.isConnected == true ? HBPalette.accentGreen : HBPalette.textPrimary,
+            background: activeHealth?.isConnected == true ? HBPalette.accentGreen.opacity(0.16) : HBPalette.panelSoft,
+            stroke: activeHealth?.isConnected == true ? HBPalette.accentGreen.opacity(0.7) : HBPalette.panelStrokeStrong
+        )
+    }
+
+    private var rainMachineStopAllButton: some View {
+        Button {
+            Task { await performDashboardMutation(actionKey: "stop-all", path: "/api/rainmachine/controller/stop-all") }
+        } label: {
+            Label(submittingKey == "stop-all" ? "Stopping..." : "Stop All", systemImage: "stop.fill")
+        }
+        .buttonStyle(HBDestructiveButtonStyle(compact: true))
+        .disabled(submittingKey == "stop-all" || (dashboard?.runtime?.queueLength ?? 0) == 0)
+    }
+
+    private func rainMachineProgramDetails(_ program: RainMachineProgramSummary) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Text(program.name)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                    HBBadge(text: program.statusLabel.capitalized)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(program.name)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HBBadge(text: program.statusLabel.capitalized)
+                }
+            }
+
+            Text("Next run \(program.nextRun == nil ? "not scheduled" : rainMachineFormatDay(program.nextRun)) • \(program.zoneIds.count) zones • configured \(rainMachineFormatDuration(program.totalConfiguredDurationSeconds))")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func rainMachineProgramActionButton(_ program: RainMachineProgramSummary) -> some View {
+        Group {
+            if program.statusLabel == "running" || program.statusLabel == "pending" {
+                Button {
+                    Task {
+                        await performDashboardMutation(
+                            actionKey: "program-stop-\(program.id)",
+                            path: "/api/rainmachine/programs/\(program.uid ?? 0)/stop"
+                        )
+                    }
+                } label: {
+                    Label(submittingKey == "program-stop-\(program.id)" ? "Stopping..." : "Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(HBDestructiveButtonStyle(compact: true))
+                .disabled(submittingKey == "program-stop-\(program.id)" || program.uid == nil)
+            } else {
+                Button {
+                    Task {
+                        await performDashboardMutation(
+                            actionKey: "program-start-\(program.id)",
+                            path: "/api/rainmachine/programs/\(program.uid ?? 0)/start"
+                        )
+                    }
+                } label: {
+                    Label(submittingKey == "program-start-\(program.id)" ? "Starting..." : "Start", systemImage: "play.fill")
+                }
+                .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                .disabled(submittingKey == "program-start-\(program.id)" || program.uid == nil)
+            }
+        }
+    }
+
+    private func rainMachineZoneDetails(_ zone: RainMachineZoneSummary) -> some View {
+        let badges = rainMachineZoneBadgeViews(zone)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Text(zone.name)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+
+                    ForEach(Array(badges.enumerated()), id: \.offset) { badge in
+                        badge.element
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(zone.name)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !badges.isEmpty {
+                        rainMachineBadgeGroup(badges)
+                    }
+                }
+            }
+
+            Text("\(zone.stateLabel.capitalized) • remaining \(rainMachineFormatDuration(liveRemainingSeconds(zone.remainingSeconds))) • next run \(zone.nextRun == nil ? "not scheduled" : "\(rainMachineFormatDay(zone.nextRun)) via \(zone.nextRunProgramName.isEmpty ? "program" : zone.nextRunProgramName)")")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func rainMachineZoneActionButton(_ zone: RainMachineZoneSummary) -> some View {
+        let isRunning = zone.stateLabel == "running" || zone.stateLabel == "pending"
+        let canStart = zone.uid != nil && zone.active && !zone.master
+
+        return Group {
+            if isRunning {
+                Button {
+                    Task {
+                        await performDashboardMutation(
+                            actionKey: "zone-stop-\(zone.id)",
+                            path: "/api/rainmachine/zones/\(zone.uid ?? 0)/stop"
+                        )
+                    }
+                } label: {
+                    Label(submittingKey == "zone-stop-\(zone.id)" ? "Stopping..." : "Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(HBDestructiveButtonStyle(compact: true))
+                .disabled(submittingKey == "zone-stop-\(zone.id)" || zone.uid == nil)
+            } else {
+                Button {
+                    Task {
+                        await performDashboardMutation(
+                            actionKey: "zone-start-\(zone.id)",
+                            path: "/api/rainmachine/zones/\(zone.uid ?? 0)/start",
+                            body: ["durationSeconds": selectedManualDurationMinutes * 60]
+                        )
+                    }
+                } label: {
+                    Label(submittingKey == "zone-start-\(zone.id)" ? "Starting..." : "Start", systemImage: "play.fill")
+                }
+                .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                .disabled(submittingKey == "zone-start-\(zone.id)" || !canStart)
+            }
+        }
+    }
+
+    private var rainMachineManualRunSummary: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "clock")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(HBPalette.accentBlue)
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(HBPalette.accentBlue.opacity(0.12))
+                )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Manual Run")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .textCase(.uppercase)
+                    .tracking(1.8)
+                    .foregroundStyle(HBPalette.textMuted)
+
+                Text("\(selectedManualDurationMinutes) min")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+            }
+        }
+    }
+
+    private var rainMachineManualRunStepper: some View {
+        HStack(spacing: 8) {
+            rainMachineStepperButton(systemName: "minus") {
+                updateManualDurationMinutes(by: -5)
+            }
+
+            rainMachineStepperButton(systemName: "plus") {
+                updateManualDurationMinutes(by: 5)
+            }
+        }
+    }
+
+    private func rainMachineBadgeGroup(_ badges: [AnyView]) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                ForEach(Array(badges.enumerated()), id: \.offset) { badge in
+                    badge.element
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], alignment: .leading, spacing: 8) {
+                ForEach(Array(badges.enumerated()), id: \.offset) { badge in
+                    badge.element
+                }
+            }
+        }
+    }
+
+    private func rainMachineZoneBadgeViews(_ zone: RainMachineZoneSummary) -> [AnyView] {
+        var badges: [AnyView] = []
+        if zone.master {
+            badges.append(AnyView(HBBadge(text: "Master Valve")))
+        }
+        if !zone.active {
+            badges.append(AnyView(HBBadge(text: "Inactive")))
+        }
+        if zone.restriction {
+            badges.append(AnyView(HBBadge(text: "Restricted")))
+        }
+        return badges
     }
 
     private func rainMachineHeroFact(title: String, value: String) -> some View {
@@ -1739,6 +1970,7 @@ struct RainMachineView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
@@ -2002,39 +2234,18 @@ struct RainMachineView: View {
     }
 
     private var rainMachineManualRunControl: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "clock")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(HBPalette.accentBlue)
-                    .frame(width: 32, height: 32)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(HBPalette.accentBlue.opacity(0.12))
-                    )
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Manual Run")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .textCase(.uppercase)
-                        .tracking(1.8)
-                        .foregroundStyle(HBPalette.textMuted)
-
-                    Text("\(selectedManualDurationMinutes) min")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                rainMachineManualRunSummary
+                Spacer(minLength: 0)
+                rainMachineManualRunStepper
             }
 
-            Spacer(minLength: 0)
-
-            HStack(spacing: 8) {
-                rainMachineStepperButton(systemName: "minus") {
-                    updateManualDurationMinutes(by: -5)
-                }
-
-                rainMachineStepperButton(systemName: "plus") {
-                    updateManualDurationMinutes(by: 5)
+            VStack(alignment: .leading, spacing: 12) {
+                rainMachineManualRunSummary
+                HStack {
+                    Spacer(minLength: 0)
+                    rainMachineManualRunStepper
                 }
             }
         }
