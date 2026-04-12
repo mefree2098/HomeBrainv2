@@ -11,6 +11,7 @@ export interface SenseTrendWindowSummary {
   startAt: string | null
   syncedAt: string | null
   consumptionTotalKwh: number | null
+  costUsd?: number | null
   productionTotalKwh: number | null
   productionPct: number | null
   netProductionKwh: number | null
@@ -34,6 +35,7 @@ export interface SenseIntegrationStatus {
   room: string
   pollIntervalSeconds: number
   trendSyncIntervalMinutes: number
+  electricityRateCentsPerKwh: number
   availableMonitors: SenseMonitorOption[]
   solarConfigured: boolean
   isConnected: boolean
@@ -86,6 +88,7 @@ export interface SenseConfigurePayload {
   room: string
   pollIntervalSeconds: number
   trendSyncIntervalMinutes: number
+  electricityRateCentsPerKwh: number
 }
 
 export interface SenseDashboardDevice {
@@ -94,6 +97,9 @@ export interface SenseDashboardDevice {
   icon: string
   powerW: number
   sharePct: number
+  currentCostUsdPerHour?: number | null
+  monthToDateCostUsd?: number | null
+  projectedMonthCostUsd?: number | null
   alwaysOn?: boolean
   synthetic?: boolean
 }
@@ -115,24 +121,32 @@ export interface SenseDashboardDeviceUsage {
   room: string
   currentPowerW: number
   currentSharePct: number
+  currentCostUsdPerHour?: number | null
+  monthToDateCostUsd?: number | null
+  projectedMonthCostUsd?: number | null
   day?: {
     energyKwh: number
+    costUsd?: number | null
     sharePct: number | null
   }
   week?: {
     energyKwh: number
+    costUsd?: number | null
     sharePct: number | null
   }
   month?: {
     energyKwh: number
+    costUsd?: number | null
     sharePct: number | null
   }
   year?: {
     energyKwh: number
+    costUsd?: number | null
     sharePct: number | null
   }
   cycle?: {
     energyKwh: number
+    costUsd?: number | null
     sharePct: number | null
   }
 }
@@ -153,6 +167,16 @@ export interface SenseDashboardPayload {
     lastRealtimeAt: string | null
     lastTrendSyncAt: string | null
     lastError: string
+  }
+  costs: {
+    electricityRateCentsPerKwh: number
+    electricityRateUsdPerKwh: number
+    currentUsdPerHour: number | null
+    monthToDateUsd: number | null
+    projectedMonthUsd: number | null
+    daysElapsed: number | null
+    daysInMonth: number | null
+    projectionMethod: string
   }
   live: {
     monitorId: string

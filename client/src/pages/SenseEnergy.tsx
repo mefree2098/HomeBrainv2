@@ -58,6 +58,36 @@ const formatEnergy = (value: number | null | undefined) => {
   return `${value.toFixed(digits)} kWh`
 }
 
+const formatCurrency = (value: number | null | undefined) => {
+  if (value == null || !Number.isFinite(value)) {
+    return "--"
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value)
+}
+
+const formatCostRate = (value: number | null | undefined) => {
+  if (value == null || !Number.isFinite(value)) {
+    return "--"
+  }
+
+  const digits = Math.abs(value) >= 1 ? 2 : Math.abs(value) >= 0.1 ? 3 : 4
+  return `$${value.toFixed(digits)}/hr`
+}
+
+const formatRateCents = (value: number | null | undefined) => {
+  if (value == null || !Number.isFinite(value)) {
+    return "--"
+  }
+
+  return `${value.toLocaleString([], { minimumFractionDigits: 0, maximumFractionDigits: 2 })} c/kWh`
+}
+
 const formatPercent = (value: number | null | undefined) => {
   if (value == null || !Number.isFinite(value)) {
     return "--"
@@ -237,6 +267,7 @@ export default function SenseEnergy() {
   const dayTrend = dashboard?.trends?.day
   const weekTrend = dashboard?.trends?.week
   const monthTrend = dashboard?.trends?.month
+  const costs = dashboard?.costs
 
   const peakSnapshot = useMemo(() => {
     return (dashboard?.recentSnapshots?.points || []).reduce<SenseDashboardPayload["recentSnapshots"]["points"][number] | null>((best, point) => {
@@ -356,7 +387,7 @@ export default function SenseEnergy() {
           </div>
         </div>
 
-        <div className="mt-6 grid gap-4 lg:grid-cols-4">
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <Card className="border-white/10 bg-white/5 text-white shadow-none">
             <CardHeader className="pb-3">
               <CardDescription className="text-slate-300/70">Whole Home</CardDescription>
@@ -394,6 +425,26 @@ export default function SenseEnergy() {
             </CardHeader>
             <CardContent className="text-xs text-slate-300/75">
               Voltage {formatVoltage(live?.voltage)} {live?.frequencyHz != null ? `• ${live.frequencyHz.toFixed(2)} Hz` : ""}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-white/5 text-white shadow-none">
+            <CardHeader className="pb-3">
+              <CardDescription className="text-slate-300/70">Month Cost So Far</CardDescription>
+              <CardTitle className="text-3xl">{formatCurrency(costs?.monthToDateUsd)}</CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs text-slate-300/75">
+              Based on {formatRateCents(costs?.electricityRateCentsPerKwh)} and this month’s persisted Sense usage.
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-white/5 text-white shadow-none">
+            <CardHeader className="pb-3">
+              <CardDescription className="text-slate-300/70">Month Estimate</CardDescription>
+              <CardTitle className="text-3xl">{formatCurrency(costs?.projectedMonthUsd)}</CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs text-slate-300/75">
+              Current burn {formatCostRate(costs?.currentUsdPerHour)} • {formatRateCents(costs?.electricityRateCentsPerKwh)}
             </CardContent>
           </Card>
         </div>
@@ -509,6 +560,9 @@ export default function SenseEnergy() {
                             <p className="mt-1 text-xs text-slate-300/70">
                               {device.synthetic ? "Synthetic bucket" : "Sense-detected device"} • {formatPercent(device.sharePct)} of live load
                             </p>
+                            <p className="mt-1 text-xs text-slate-300/60">
+                              Now {formatCostRate(device.currentCostUsdPerHour)} • Month {formatCurrency(device.monthToDateCostUsd)} • Est {formatCurrency(device.projectedMonthCostUsd)}
+                            </p>
                           </div>
                           <div className="text-right">
                             <p className="text-lg font-semibold">{formatPower(device.powerW)}</p>
@@ -566,12 +620,13 @@ export default function SenseEnergy() {
 
               return (
                 <div key={scale} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="section-kicker">{label}</p>
-                  <p className="mt-2 text-xl font-semibold">{formatEnergy(trend?.consumptionTotalKwh)}</p>
-                  <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                    <p>Production: {formatEnergy(trend?.productionTotalKwh)}</p>
-                    <p>From grid: {formatEnergy(trend?.fromGridKwh)}</p>
-                    <p>Solar powered: {formatPercent(trend?.solarPoweredPct)}</p>
+                    <p className="section-kicker">{label}</p>
+                    <p className="mt-2 text-xl font-semibold">{formatEnergy(trend?.consumptionTotalKwh)}</p>
+                    <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                      <p>Cost: {formatCurrency(trend?.costUsd)}</p>
+                      <p>Production: {formatEnergy(trend?.productionTotalKwh)}</p>
+                      <p>From grid: {formatEnergy(trend?.fromGridKwh)}</p>
+                      <p>Solar powered: {formatPercent(trend?.solarPoweredPct)}</p>
                     <p>Synced: {formatDateTime(trend?.syncedAt)}</p>
                   </div>
                 </div>
@@ -587,7 +642,7 @@ export default function SenseEnergy() {
               Device Energy Ledger
             </CardTitle>
             <CardDescription>
-              Live device draw plus daily, weekly, monthly, yearly, and billing-cycle energy totals from the persisted Sense trend fabric.
+              Live device draw, long-range energy windows, and cost projections derived from the configured retail electricity rate.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -597,9 +652,12 @@ export default function SenseEnergy() {
                   <TableRow>
                     <TableHead>Device</TableHead>
                     <TableHead>Now</TableHead>
+                    <TableHead>Cost Now</TableHead>
                     <TableHead>Day</TableHead>
                     <TableHead>Week</TableHead>
                     <TableHead>Month</TableHead>
+                    <TableHead>Month Cost</TableHead>
+                    <TableHead>Projected</TableHead>
                     <TableHead>Year</TableHead>
                     <TableHead>Cycle</TableHead>
                   </TableRow>
@@ -614,9 +672,12 @@ export default function SenseEnergy() {
                         </div>
                       </TableCell>
                       <TableCell>{formatPower(device.currentPowerW)}</TableCell>
+                      <TableCell>{formatCostRate(device.currentCostUsdPerHour)}</TableCell>
                       <TableCell>{formatEnergy(device.day?.energyKwh)}</TableCell>
                       <TableCell>{formatEnergy(device.week?.energyKwh)}</TableCell>
                       <TableCell>{formatEnergy(device.month?.energyKwh)}</TableCell>
+                      <TableCell>{formatCurrency(device.monthToDateCostUsd ?? device.month?.costUsd)}</TableCell>
+                      <TableCell>{formatCurrency(device.projectedMonthCostUsd)}</TableCell>
                       <TableCell>{formatEnergy(device.year?.energyKwh)}</TableCell>
                       <TableCell>{formatEnergy(device.cycle?.energyKwh)}</TableCell>
                     </TableRow>
@@ -654,7 +715,7 @@ export default function SenseEnergy() {
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
             <p className="text-2xl font-semibold text-foreground">{formatEnergy(dayTrend?.consumptionTotalKwh)}</p>
-            <p className="mt-2">HomeBrain keeps the current daily energy window ready for ad hoc charts and reporting prompts.</p>
+            <p className="mt-2">{formatCurrency(dayTrend?.costUsd)} at {formatRateCents(costs?.electricityRateCentsPerKwh)} for the current daily reporting window.</p>
           </CardContent>
         </Card>
 
@@ -679,8 +740,10 @@ export default function SenseEnergy() {
             </CardTitle>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            <p className="text-2xl font-semibold text-foreground">{formatPercent(monthTrend?.solarPoweredPct)}</p>
-            <p className="mt-2">Useful for spotting how much of the month’s load was carried by solar versus the grid.</p>
+            <p className="text-2xl font-semibold text-foreground">{formatCurrency(costs?.projectedMonthUsd)}</p>
+            <p className="mt-2">
+              {formatCurrency(costs?.monthToDateUsd)} so far this month • {formatPercent(monthTrend?.solarPoweredPct)} solar powered.
+            </p>
           </CardContent>
         </Card>
       </div>

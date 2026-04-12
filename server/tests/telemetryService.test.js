@@ -124,6 +124,10 @@ test('extractDeviceMetrics captures Sense monitor and device telemetry for repor
       sense: {
         entityType: 'monitor',
         currentPowerW: 5200.4,
+        currentCostUsdPerHour: 0.572,
+        monthToDateCostUsd: 118.42,
+        projectedMonthCostUsd: 332.8,
+        electricityRateCentsPerKwh: 11,
         solarPowerW: 1250.3,
         netPowerW: 3950.1,
         alwaysOnW: 410.4,
@@ -135,6 +139,7 @@ test('extractDeviceMetrics captures Sense monitor and device telemetry for repor
         trends: {
           day: {
             consumptionTotalKwh: 31.8754,
+            costUsd: 3.51,
             productionTotalKwh: 10.25,
             productionPct: 32.16,
             fromGridKwh: 22.5,
@@ -147,6 +152,10 @@ test('extractDeviceMetrics captures Sense monitor and device telemetry for repor
   });
 
   assert.equal(monitorMetrics.power_w, 5200.4);
+  assert.equal(monitorMetrics.current_cost_usd_per_hr, 0.572);
+  assert.equal(monitorMetrics.month_to_date_cost_usd, 118.42);
+  assert.equal(monitorMetrics.projected_month_cost_usd, 332.8);
+  assert.equal(monitorMetrics.electricity_rate_cents_per_kwh, 11);
   assert.equal(monitorMetrics.solar_power_w, 1250.3);
   assert.equal(monitorMetrics.net_power_w, 3950.1);
   assert.equal(monitorMetrics.always_on_w, 410.4);
@@ -155,6 +164,7 @@ test('extractDeviceMetrics captures Sense monitor and device telemetry for repor
   assert.equal(monitorMetrics.voltage_l2_v, 118.8);
   assert.equal(monitorMetrics.frequency_hz, 59.94);
   assert.equal(monitorMetrics.daily_consumption_kwh, 31.8754);
+  assert.equal(monitorMetrics.daily_cost_usd, 3.51);
   assert.equal(monitorMetrics.daily_production_kwh, 10.25);
   assert.equal(monitorMetrics.daily_solar_powered_pct, 43.2);
 
@@ -168,9 +178,13 @@ test('extractDeviceMetrics captures Sense monitor and device telemetry for repor
         entityType: 'device',
         currentPowerW: 1500.3,
         currentSharePct: 28.9,
+        currentCostUsdPerHour: 0.165,
+        monthToDateCostUsd: 13.26,
+        projectedMonthCostUsd: 38.84,
+        electricityRateCentsPerKwh: 11,
         trends: {
-          day: { energyKwh: 6.125 },
-          month: { energyKwh: 120.5 }
+          day: { energyKwh: 6.125, costUsd: 0.67 },
+          month: { energyKwh: 120.5, costUsd: 13.26 }
         }
       }
     }
@@ -178,8 +192,14 @@ test('extractDeviceMetrics captures Sense monitor and device telemetry for repor
 
   assert.equal(deviceMetrics.power_w, 1500.3);
   assert.equal(deviceMetrics.current_share_pct, 28.9);
+  assert.equal(deviceMetrics.current_cost_usd_per_hr, 0.165);
+  assert.equal(deviceMetrics.month_to_date_cost_usd, 13.26);
+  assert.equal(deviceMetrics.projected_month_cost_usd, 38.84);
+  assert.equal(deviceMetrics.electricity_rate_cents_per_kwh, 11);
   assert.equal(deviceMetrics.daily_energy_kwh, 6.125);
+  assert.equal(deviceMetrics.daily_cost_usd, 0.67);
   assert.equal(deviceMetrics.monthly_energy_kwh, 120.5);
+  assert.equal(deviceMetrics.monthly_cost_usd, 13.26);
 });
 
 test('extractTempestMetrics keeps display-oriented weather metrics and skips rapid wind snapshots', () => {

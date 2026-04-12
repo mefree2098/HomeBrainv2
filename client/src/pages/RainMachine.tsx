@@ -124,6 +124,7 @@ export default function RainMachine() {
   const { toast } = useToast()
   const { currentUser } = useAuth()
   const [dashboard, setDashboard] = useState<RainMachineDashboardPayload | null>(null)
+  const [clockNow, setClockNow] = useState(() => Date.now())
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -155,8 +156,21 @@ export default function RainMachine() {
     void loadDashboard()
   }, [loadDashboard])
 
-  const handleRefresh = async () => {
-    setRefreshing(true)
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setClockNow(Date.now())
+    }, 1000)
+
+    return () => {
+      window.clearInterval(interval)
+    }
+  }, [])
+
+  const refreshDashboard = useCallback(async ({ showSpinner = true, silent = false }: { showSpinner?: boolean; silent?: boolean } = {}) => {
+    if (showSpinner) {
+      setRefreshing(true)
+    }
+
     try {
       const response = await getRainMachineDashboard({
         dailyDays: 14,
@@ -164,14 +178,22 @@ export default function RainMachine() {
       })
       setDashboard(response.dashboard)
     } catch (error) {
-      toast({
-        title: "Refresh failed",
-        description: error instanceof Error ? error.message : "Unable to refresh the RainMachine dashboard.",
-        variant: "destructive"
-      })
+      if (!silent) {
+        toast({
+          title: "Refresh failed",
+          description: error instanceof Error ? error.message : "Unable to refresh the RainMachine dashboard.",
+          variant: "destructive"
+        })
+      }
     } finally {
-      setRefreshing(false)
+      if (showSpinner) {
+        setRefreshing(false)
+      }
     }
+  }, [toast])
+
+  const handleRefresh = async () => {
+    await refreshDashboard()
   }
 
   const handleAdminSync = async () => {
@@ -258,6 +280,18 @@ export default function RainMachine() {
     [dashboard]
   )
   const selectedManualDurationMinutes = manualDurationMinutes ?? defaultManualDurationMinutes
+  const dashboardGeneratedAtMs = useMemo(() => {
+    const parsed = dashboard?.generatedAt ? new Date(dashboard.generatedAt).getTime() : Number.NaN
+    return Number.isFinite(parsed) ? parsed : Date.now()
+  }, [dashboard?.generatedAt])
+  const liveRemainingSeconds = useCallback((remainingSeconds: number | null | undefined) => {
+    if (remainingSeconds == null || !Number.isFinite(remainingSeconds) || remainingSeconds <= 0) {
+      return 0
+    }
+
+    const elapsedSeconds = Math.max(0, Math.floor((clockNow - dashboardGeneratedAtMs) / 1000))
+    return Math.max(0, Math.round(remainingSeconds) - elapsedSeconds)
+  }, [clockNow, dashboardGeneratedAtMs])
   const visibleZones = useMemo(() => {
     if (!dashboard) {
       return []
@@ -268,6 +302,33 @@ export default function RainMachine() {
       : dashboard.zones
   }, [dashboard, hideInactiveZones])
   const hiddenZoneCount = Math.max(0, (dashboard?.zones.length || 0) - visibleZones.length)
+  const hasLiveRuntimeActivity = useMemo(() => {
+    if (!dashboard) {
+      return false
+    }
+
+    return (dashboard.runtime?.queueLength ?? 0) > 0
+      || dashboard.zones.some((zone) => zone.stateLabel === "running" || zone.stateLabel === "pending")
+      || dashboard.programs.some((program) => program.statusLabel === "running" || program.statusLabel === "pending")
+  }, [dashboard])
+
+  useEffect(() => {
+    if (!hasLiveRuntimeActivity) {
+      return
+    }
+
+    const interval = window.setInterval(() => {
+      if (loading || refreshing || syncing || submittingKey) {
+        return
+      }
+
+      void refreshDashboard({ showSpinner: false, silent: true })
+    }, 15000)
+
+    return () => {
+      window.clearInterval(interval)
+    }
+  }, [hasLiveRuntimeActivity, loading, refreshing, syncing, submittingKey, refreshDashboard])
 
   const updateManualDurationMinutes = (minutes: number) => {
     setManualDurationMinutes(Math.max(1, Math.min(MAX_MANUAL_RUN_MINUTES, minutes)))
@@ -404,7 +465,7 @@ export default function RainMachine() {
                 <p className="section-kicker">Active Zone</p>
                 <p className="mt-2 text-lg font-semibold">{dashboard.runtime?.activeZone?.name || "None"}</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {dashboard.runtime?.activeZone ? formatDuration(dashboard.runtime.activeZone.remainingSeconds) : "No active watering"}
+                  {dashboard.runtime?.activeZone ? formatDuration(liveRemainingSeconds(dashboard.runtime.activeZone.remainingSeconds)) : "No active watering"}
                 </p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -442,7 +503,7 @@ export default function RainMachine() {
                       <div>
                         <p className="font-medium">{entry.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {entry.stateLabel} • remaining {formatDuration(entry.remainingSeconds)}
+                          {entry.stateLabel} • remaining {formatDuration(liveRemainingSeconds(entry.remainingSeconds))}
                         </p>
                       </div>
                       <Badge variant={entry.stateLabel === "running" ? "secondary" : "outline"}>
@@ -645,7 +706,7 @@ export default function RainMachine() {
                         {zone.restriction ? <Badge variant="outline">Restricted</Badge> : null}
                       </div>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        {zone.stateLabel} • remaining {formatDuration(zone.remainingSeconds)} • next run {zone.nextRun ? `${formatDay(zone.nextRun)} via ${zone.nextRunProgramName || "program"}` : "not scheduled"}
+                        {zone.stateLabel} • remaining {formatDuration(liveRemainingSeconds(zone.remainingSeconds))} • next run {zone.nextRun ? `${formatDay(zone.nextRun)} via ${zone.nextRunProgramName || "program"}` : "not scheduled"}
                       </p>
                     </div>
                     <div className="flex gap-2">

@@ -649,6 +649,7 @@ private struct RainMachineWateringSummary {
 
 struct RainMachineView: View {
     @EnvironmentObject private var session: SessionStore
+    private let countdownTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     @State private var dashboard: RainMachineDashboardSnapshot?
     @State private var status: RainMachineStatusSnapshot?
@@ -664,6 +665,8 @@ struct RainMachineView: View {
     @State private var submittingKey: String?
     @State private var manualDurationMinutes: Int?
     @State private var hideInactiveZones = true
+    @State private var liveNow = Date()
+    @State private var lastAutomaticRefreshAt = Date.distantPast
     @State private var errorMessage: String?
     @State private var infoMessage = ""
 
@@ -718,6 +721,18 @@ struct RainMachineView: View {
 
     private var selectedManualDurationMinutes: Int {
         manualDurationMinutes ?? defaultManualDurationMinutes
+    }
+
+    private var dashboardGeneratedDate: Date? {
+        rainMachineDate(from: dashboard?.generatedAt)
+    }
+
+    private var hasLiveRuntimeActivity: Bool {
+        guard let dashboard else { return false }
+
+        return (dashboard.runtime?.queueLength ?? 0) > 0
+            || dashboard.zones.contains(where: { $0.stateLabel == "running" || $0.stateLabel == "pending" })
+            || dashboard.programs.contains(where: { $0.statusLabel == "running" || $0.statusLabel == "pending" })
     }
 
     private var summaryCards: [RainMachineSummaryCard] {
@@ -805,6 +820,18 @@ struct RainMachineView: View {
         }
         .task {
             await loadContent(showLoading: true)
+        }
+        .onReceive(countdownTimer) { currentDate in
+            liveNow = currentDate
+
+            guard hasLiveRuntimeActivity else { return }
+            guard currentDate.timeIntervalSince(lastAutomaticRefreshAt) >= 15 else { return }
+            guard !isLoading, !isRefreshing, !isSyncing, !isDiscovering, !isTesting, !isSaving, submittingKey == nil else { return }
+
+            lastAutomaticRefreshAt = currentDate
+            Task {
+                await loadContent(showLoading: false)
+            }
         }
     }
 
@@ -1233,7 +1260,7 @@ struct RainMachineView: View {
                         value: dashboard?.runtime?.activeZone?.name ?? "None",
                         detail: dashboard?.runtime?.activeZone == nil
                             ? "No active watering"
-                            : rainMachineFormatDuration(dashboard?.runtime?.activeZone?.remainingSeconds)
+                            : rainMachineFormatDuration(liveRemainingSeconds(dashboard?.runtime?.activeZone?.remainingSeconds))
                     )
                     rainMachineRuntimeTile(
                         title: "Queue Length",
@@ -1272,7 +1299,7 @@ struct RainMachineView: View {
                                                 .font(.system(size: 15, weight: .bold, design: .rounded))
                                                 .foregroundStyle(HBPalette.textPrimary)
 
-                                            Text("\(entry.stateLabel.capitalized) • remaining \(rainMachineFormatDuration(entry.remainingSeconds))")
+                                            Text("\(entry.stateLabel.capitalized) • remaining \(rainMachineFormatDuration(liveRemainingSeconds(entry.remainingSeconds)))")
                                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                                 .foregroundStyle(HBPalette.textSecondary)
                                         }
@@ -1661,7 +1688,7 @@ struct RainMachineView: View {
                             }
                         }
 
-                        Text("\(zone.stateLabel.capitalized) • remaining \(rainMachineFormatDuration(zone.remainingSeconds)) • next run \(zone.nextRun == nil ? "not scheduled" : "\(rainMachineFormatDay(zone.nextRun)) via \(zone.nextRunProgramName.isEmpty ? "program" : zone.nextRunProgramName)")")
+                        Text("\(zone.stateLabel.capitalized) • remaining \(rainMachineFormatDuration(liveRemainingSeconds(zone.remainingSeconds))) • next run \(zone.nextRun == nil ? "not scheduled" : "\(rainMachineFormatDay(zone.nextRun)) via \(zone.nextRunProgramName.isEmpty ? "program" : zone.nextRunProgramName)")")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
@@ -1823,6 +1850,7 @@ struct RainMachineView: View {
             let dashboardObject = JSON.object(dashboardResponse)
             let nextDashboard = RainMachineDashboardSnapshot.from(JSON.object(dashboardObject["dashboard"]))
             dashboard = nextDashboard
+            lastAutomaticRefreshAt = Date()
             if manualDurationMinutes == nil {
                 manualDurationMinutes = max(1, Int(round(Double(nextDashboard.integration.defaultZoneDurationSeconds) / 60)))
             }
@@ -1941,6 +1969,14 @@ struct RainMachineView: View {
         }
     }
 
+    private func liveRemainingSeconds(_ remainingSeconds: Int?) -> Int {
+        guard let remainingSeconds, remainingSeconds > 0 else { return 0 }
+        guard let referenceDate = dashboardGeneratedDate else { return max(0, remainingSeconds) }
+
+        let elapsedSeconds = max(0, Int(floor(liveNow.timeIntervalSince(referenceDate))))
+        return max(0, remainingSeconds - elapsedSeconds)
+    }
+
     private func updateManualDurationMinutes(by delta: Int) {
         updateManualDurationMinutes(to: selectedManualDurationMinutes + delta)
     }
@@ -1957,6 +1993,7 @@ struct RainMachineView: View {
             let response = try await session.apiClient.post(path, body: body)
             let object = JSON.object(response)
             dashboard = RainMachineDashboardSnapshot.from(JSON.object(object["dashboard"]))
+            lastAutomaticRefreshAt = Date()
             infoMessage = JSON.string(object, "message", fallback: "RainMachine updated.")
             errorMessage = nil
         } catch {

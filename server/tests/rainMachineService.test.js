@@ -8,7 +8,8 @@ const {
   buildRequestPayload,
   normalizeDailyStats,
   normalizeWateringLogDays,
-  parseDiscoveryResponse
+  parseDiscoveryResponse,
+  snapshotShowsActiveZone
 } = rainMachineService.__private__;
 
 test('parseDiscoveryResponse extracts controller discovery details from broadcast payloads', () => {
@@ -184,6 +185,78 @@ test('startZone still returns dashboard when post-start refresh fails after the 
     assert.equal(requestCalls.length, 1);
     assert.equal(requestCalls[0].path, 'zone/7/start');
     assert.deepEqual(requestCalls[0].data, { time: 600 });
+  } finally {
+    RainMachineIntegration.getIntegration = originalGetIntegration;
+  }
+});
+
+test('snapshotShowsActiveZone identifies a running zone from the cached snapshot', () => {
+  assert.equal(
+    snapshotShowsActiveZone(
+      {
+        runtime: {
+          activeZone: {
+            uid: 7,
+            stateLabel: 'running'
+          }
+        },
+        zones: [
+          {
+            uid: 7,
+            stateLabel: 'running'
+          }
+        ]
+      },
+      7
+    ),
+    true
+  );
+});
+
+test('stopZone falls back to stop-all when direct stop fails for the active zone', async () => {
+  const service = new rainMachineService.RainMachineService();
+  const originalGetIntegration = RainMachineIntegration.getIntegration;
+
+  RainMachineIntegration.getIntegration = async () => ({
+    snapshot: {
+      runtime: {
+        activeZone: {
+          uid: 7,
+          stateLabel: 'running'
+        }
+      },
+      zones: [
+        {
+          uid: 7,
+          stateLabel: 'running'
+        }
+      ]
+    }
+  });
+
+  service.resolveEndpoint = async () => ({
+    baseUrl: 'http://rainmachine.local:8081/api/4',
+    host: 'rainmachine.local',
+    port: 8081,
+    protocol: 'http'
+  });
+
+  const requestPaths = [];
+  service.request = async (_endpoint, options) => {
+    requestPaths.push(options.path);
+    if (options.path === 'zone/7/stop') {
+      throw new Error('unsupported stop path');
+    }
+    return {};
+  };
+  service.refreshRuntime = async () => ({});
+  service.getDashboard = async () => ({ ok: true });
+
+  try {
+    const dashboard = await service.stopZone(7);
+
+    assert.deepEqual(dashboard, { ok: true });
+    assert.deepEqual(requestPaths, ['zone/7/stop', 'watering/stopall']);
   } finally {
     RainMachineIntegration.getIntegration = originalGetIntegration;
   }

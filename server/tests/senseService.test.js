@@ -5,8 +5,10 @@ const senseService = require('../services/senseService');
 
 const {
   buildTrendSummaryMap,
+  calculateCostUsd,
   normalizeRealtimePayload,
-  normalizeTrendSnapshot
+  normalizeTrendSnapshot,
+  projectMonthlyEnergyWindow
 } = senseService.__private__;
 
 test('normalizeRealtimePayload builds load shares and synthetic residual usage for the Sense dashboard', () => {
@@ -104,6 +106,20 @@ test('normalizeTrendSnapshot and buildTrendSummaryMap preserve report-ready moni
   assert.equal(summary.monitor.day.productionTotalKwh, 10.25);
   assert.equal(summary.devices.get('hvac-1').day.energyKwh, 12.4);
   assert.equal(summary.devices.get('dryer-1').day.sharePct, 19.22);
+});
+
+test('projectMonthlyEnergyWindow extrapolates month costs from month-to-date usage and retail rate', () => {
+  const projection = projectMonthlyEnergyWindow({
+    monthEnergyKwh: 121.5,
+    monthStartAt: '2026-04-01T00:00:00.000Z',
+    now: '2026-04-11T12:00:00.000Z'
+  });
+
+  assert.equal(projection.method, 'month-to-date');
+  assert.equal(projection.monthToDateKwh, 121.5);
+  assert.equal(projection.daysInMonth, 30);
+  assert.equal(calculateCostUsd(projection.monthToDateKwh, 11), 13.37);
+  assert.equal(calculateCostUsd(projection.projectedMonthKwh, 11), 38.19);
 });
 
 test('testConnection reuses persisted credentials when the client keeps a masked password', async () => {

@@ -18,6 +18,9 @@ const SENSE_WS_BASE = 'wss://clientrt.sense.com/monitors';
 const DEFAULT_HTTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SENSE_HTTP_TIMEOUT_MS || 12000));
 const DEFAULT_POLL_INTERVAL_SECONDS = Math.max(5, Number(process.env.SENSE_POLL_INTERVAL_SECONDS || 10));
 const DEFAULT_TREND_SYNC_INTERVAL_MINUTES = Math.max(5, Number(process.env.SENSE_TREND_SYNC_INTERVAL_MINUTES || 15));
+const DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH = Number.isFinite(Number(process.env.SENSE_ELECTRICITY_RATE_CENTS_PER_KWH))
+  ? Math.max(0, Number(process.env.SENSE_ELECTRICITY_RATE_CENTS_PER_KWH))
+  : 11;
 const DEFAULT_ALWAYS_ON_CACHE_MS = 10 * 60 * 1000;
 const DEFAULT_DEVICE_CATALOG_CACHE_MS = 60 * 60 * 1000;
 const MAX_DASHBOARD_HOURS = 24 * 14;
@@ -54,6 +57,17 @@ const clampInteger = (value, fallback, minimum, maximum) => {
   return Math.max(minimum, Math.min(maximum, Math.trunc(numeric)));
 };
 
+const clampDecimal = (value, fallback, minimum, maximum, digits = 4) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const bounded = Math.max(minimum, Math.min(maximum, numeric));
+  const multiplier = 10 ** digits;
+  return Math.round(bounded * multiplier) / multiplier;
+};
+
 const roundNumber = (value, digits = 2) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -62,6 +76,127 @@ const roundNumber = (value, digits = 2) => {
 
   const multiplier = 10 ** digits;
   return Math.round(numeric * multiplier) / multiplier;
+};
+
+const sanitizeElectricityRateCentsPerKwh = (value, fallback = DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH) => clampDecimal(
+  value,
+  fallback,
+  0,
+  500,
+  4
+);
+
+const calculateCostUsd = (energyKwh, rateCentsPerKwh) => {
+  const energy = Number(energyKwh);
+  const rateCents = Number(rateCentsPerKwh);
+  if (!Number.isFinite(energy) || !Number.isFinite(rateCents)) {
+    return null;
+  }
+
+  return roundNumber((energy * rateCents) / 100, 2);
+};
+
+const calculateCurrentCostRateUsdPerHour = (powerW, rateCentsPerKwh) => {
+  const watts = Number(powerW);
+  const rateCents = Number(rateCentsPerKwh);
+  if (!Number.isFinite(watts) || !Number.isFinite(rateCents)) {
+    return null;
+  }
+
+  return roundNumber(((watts / 1000) * rateCents) / 100, 4);
+};
+
+const getUtcMonthStart = (value) => new Date(Date.UTC(
+  value.getUTCFullYear(),
+  value.getUTCMonth(),
+  1
+));
+
+const getUtcDaysInMonth = (value) => new Date(Date.UTC(
+  value.getUTCFullYear(),
+  value.getUTCMonth() + 1,
+  0
+)).getUTCDate();
+
+const resolveMonthProjectionContext = (startAt, now = new Date()) => {
+  const referenceNow = parseOptionalDate(now) || new Date();
+  let resolvedStartAt = parseOptionalDate(startAt);
+
+  if (!resolvedStartAt || resolvedStartAt > referenceNow) {
+    resolvedStartAt = getUtcMonthStart(referenceNow);
+  }
+
+  const daysInMonth = getUtcDaysInMonth(resolvedStartAt);
+  const elapsedMs = Math.max(60 * 60 * 1000, referenceNow.getTime() - resolvedStartAt.getTime());
+
+  return {
+    startAt: resolvedStartAt,
+    daysInMonth,
+    elapsedDays: elapsedMs / (24 * 60 * 60 * 1000),
+    projectionFactor: daysInMonth / (elapsedMs / (24 * 60 * 60 * 1000))
+  };
+};
+
+const projectMonthlyEnergyWindow = ({
+  monthEnergyKwh = null,
+  dayEnergyKwh = null,
+  monthStartAt = null,
+  now = new Date()
+} = {}) => {
+  const monthEnergy = Number(monthEnergyKwh);
+  if (Number.isFinite(monthEnergy) && monthEnergy >= 0) {
+    const context = resolveMonthProjectionContext(monthStartAt, now);
+    return {
+      monthToDateKwh: roundNumber(monthEnergy, 4),
+      projectedMonthKwh: roundNumber(Math.max(monthEnergy, monthEnergy * context.projectionFactor), 4),
+      daysElapsed: roundNumber(context.elapsedDays, 2),
+      daysInMonth: context.daysInMonth,
+      method: 'month-to-date'
+    };
+  }
+
+  const dayEnergy = Number(dayEnergyKwh);
+  if (Number.isFinite(dayEnergy) && dayEnergy >= 0) {
+    const referenceNow = parseOptionalDate(now) || new Date();
+    const daysInMonth = getUtcDaysInMonth(referenceNow);
+    return {
+      monthToDateKwh: null,
+      projectedMonthKwh: roundNumber(dayEnergy * daysInMonth, 4),
+      daysElapsed: null,
+      daysInMonth,
+      method: 'daily-run-rate'
+    };
+  }
+
+  return {
+    monthToDateKwh: null,
+    projectedMonthKwh: null,
+    daysElapsed: null,
+    daysInMonth: null,
+    method: 'unavailable'
+  };
+};
+
+const decorateTrendWindowWithCost = (trend = null, rateCentsPerKwh = DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH) => {
+  if (!trend || typeof trend !== 'object') {
+    return trend;
+  }
+
+  return {
+    ...trend,
+    costUsd: calculateCostUsd(trend.consumptionTotalKwh, rateCentsPerKwh)
+  };
+};
+
+const decorateDeviceUsageWindowWithCost = (window = null, rateCentsPerKwh = DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH) => {
+  if (!window || typeof window !== 'object') {
+    return window;
+  }
+
+  return {
+    ...window,
+    costUsd: calculateCostUsd(window.energyKwh, rateCentsPerKwh)
+  };
 };
 
 const parseOptionalDate = (value) => {
@@ -1352,6 +1487,17 @@ class SenseService {
 
     const observedAt = parseOptionalDate(summary?.observedAt) || new Date();
     const monitorName = trimString(integration.monitorName, 'Sense Monitor');
+    const rateCentsPerKwh = sanitizeElectricityRateCentsPerKwh(
+      integration.electricityRateCentsPerKwh,
+      DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH
+    );
+    const monitorTrendSummary = this.getMonitorTrendSummary();
+    const monitorMonthProjection = projectMonthlyEnergyWindow({
+      monthEnergyKwh: monitorTrendSummary.month?.consumptionTotalKwh,
+      dayEnergyKwh: monitorTrendSummary.day?.consumptionTotalKwh,
+      monthStartAt: monitorTrendSummary.month?.startAt,
+      now: observedAt
+    });
     const monitorQuery = {
       'properties.source': 'sense',
       'properties.sense.entityType': 'monitor',
@@ -1402,8 +1548,15 @@ class SenseService {
         activeDeviceCount: summary?.activeDeviceCount ?? 0,
         voltage: safeArray(summary?.voltage),
         frequencyHz: summary?.frequencyHz ?? null,
+        electricityRateCentsPerKwh: rateCentsPerKwh,
+        currentCostUsdPerHour: calculateCurrentCostRateUsdPerHour(summary?.powerW ?? 0, rateCentsPerKwh),
+        monthToDateCostUsd: calculateCostUsd(monitorTrendSummary.month?.consumptionTotalKwh, rateCentsPerKwh),
+        projectedMonthCostUsd: calculateCostUsd(monitorMonthProjection.projectedMonthKwh, rateCentsPerKwh),
         lastSnapshotAt: observedAt.toISOString(),
-        trends: this.getMonitorTrendSummary()
+        trends: Object.entries(monitorTrendSummary).reduce((acc, [scale, trend]) => {
+          acc[scale] = decorateTrendWindowWithCost(trend, rateCentsPerKwh);
+          return acc;
+        }, {})
       }
     };
     await monitorDevice.save();
@@ -1439,6 +1592,13 @@ class SenseService {
 
       const current = currentPowerByDeviceId.get(catalogEntry.senseDeviceId) || null;
       const powerW = current?.powerW ?? 0;
+      const deviceTrendSummary = this.getDeviceTrendSummary(catalogEntry.senseDeviceId);
+      const deviceMonthProjection = projectMonthlyEnergyWindow({
+        monthEnergyKwh: deviceTrendSummary.month?.energyKwh,
+        dayEnergyKwh: deviceTrendSummary.day?.energyKwh,
+        monthStartAt: monitorTrendSummary.month?.startAt,
+        now: observedAt
+      });
 
       device.name = trimString(catalogEntry.name, device.name || `Device ${catalogEntry.senseDeviceId}`);
       device.room = trimString(catalogEntry.room, trimString(integration.room, device.room || 'Electrical Panel'));
@@ -1459,8 +1619,15 @@ class SenseService {
           icon: trimString(catalogEntry.icon),
           currentPowerW: roundNumber(powerW, 1) || 0,
           currentSharePct: current?.sharePct ?? 0,
+          electricityRateCentsPerKwh: rateCentsPerKwh,
+          currentCostUsdPerHour: calculateCurrentCostRateUsdPerHour(powerW, rateCentsPerKwh),
+          monthToDateCostUsd: calculateCostUsd(deviceTrendSummary.month?.energyKwh, rateCentsPerKwh),
+          projectedMonthCostUsd: calculateCostUsd(deviceMonthProjection.projectedMonthKwh, rateCentsPerKwh),
           lastSnapshotAt: observedAt.toISOString(),
-          trends: this.getDeviceTrendSummary(catalogEntry.senseDeviceId)
+          trends: Object.entries(deviceTrendSummary).reduce((acc, [scale, trend]) => {
+            acc[scale] = decorateDeviceUsageWindowWithCost(trend, rateCentsPerKwh);
+            return acc;
+          }, {})
         }
       };
       await device.save();
@@ -1632,6 +1799,10 @@ class SenseService {
       5,
       1440
     );
+    integration.electricityRateCentsPerKwh = sanitizeElectricityRateCentsPerKwh(
+      input.electricityRateCentsPerKwh,
+      integration.electricityRateCentsPerKwh ?? DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH
+    );
 
     await integration.save();
 
@@ -1658,6 +1829,11 @@ class SenseService {
 
   async getStatus() {
     const integration = await this.resolvePersistedIntegration();
+    integration.electricityRateCentsPerKwh = sanitizeElectricityRateCentsPerKwh(
+      integration.electricityRateCentsPerKwh,
+      DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH
+    );
+    const rateCentsPerKwh = integration.electricityRateCentsPerKwh;
     const latestSnapshot = trimString(integration.monitorId)
       ? await SenseMonitorSnapshot.findOne({ monitorId: integration.monitorId }).sort({ observedAt: -1 }).lean()
       : null;
@@ -1697,7 +1873,10 @@ class SenseService {
             activeDeviceCount: latestSnapshot.activeDeviceCount
           }
         : null,
-      latestTrends: trendSummary.monitor,
+      latestTrends: Object.entries(trendSummary.monitor).reduce((acc, [scale, trend]) => {
+        acc[scale] = decorateTrendWindowWithCost(trend, rateCentsPerKwh);
+        return acc;
+      }, {}),
       monitors: safeArray(integration.availableMonitors)
     };
   }
@@ -1719,6 +1898,10 @@ class SenseService {
     const requestedHours = clampInteger(options.hours, 6, 1, MAX_DASHBOARD_HOURS);
     const hours = requestedHours;
     const integration = await this.resolvePersistedIntegration();
+    integration.electricityRateCentsPerKwh = sanitizeElectricityRateCentsPerKwh(
+      integration.electricityRateCentsPerKwh,
+      DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH
+    );
 
     if (integration.enabled && (
       !this.latestRealtimeSummary
@@ -1736,6 +1919,11 @@ class SenseService {
     }
 
     const latestIntegration = await this.resolvePersistedIntegration();
+    latestIntegration.electricityRateCentsPerKwh = sanitizeElectricityRateCentsPerKwh(
+      latestIntegration.electricityRateCentsPerKwh,
+      DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH
+    );
+    const rateCentsPerKwh = latestIntegration.electricityRateCentsPerKwh;
     const startAt = new Date(Date.now() - hours * 60 * 60 * 1000);
     const snapshots = trimString(latestIntegration.monitorId)
       ? await SenseMonitorSnapshot.find({
@@ -1763,6 +1951,15 @@ class SenseService {
       return acc;
     }, []);
     const trendSummary = buildTrendSummaryMap(latestTrendDocs);
+    const decoratedTrends = Object.entries(trendSummary.monitor).reduce((acc, [scale, trend]) => {
+      acc[scale] = decorateTrendWindowWithCost(trend, rateCentsPerKwh);
+      return acc;
+    }, {});
+    const monthProjection = projectMonthlyEnergyWindow({
+      monthEnergyKwh: decoratedTrends.month?.consumptionTotalKwh,
+      dayEnergyKwh: decoratedTrends.day?.consumptionTotalKwh,
+      monthStartAt: decoratedTrends.month?.startAt
+    });
 
     const currentCatalog = Array.from(this.deviceCatalog.values());
     const latestLive = this.latestRealtimeSummary && this.latestRealtimeSummary.monitorId === latestIntegration.monitorId
@@ -1831,6 +2028,28 @@ class SenseService {
     });
 
     const deviceUsage = Array.from(deviceUsageMap.values())
+      .map((entry) => {
+        const decoratedEntry = {
+          ...entry,
+          day: decorateDeviceUsageWindowWithCost(entry.day, rateCentsPerKwh),
+          week: decorateDeviceUsageWindowWithCost(entry.week, rateCentsPerKwh),
+          month: decorateDeviceUsageWindowWithCost(entry.month, rateCentsPerKwh),
+          year: decorateDeviceUsageWindowWithCost(entry.year, rateCentsPerKwh),
+          cycle: decorateDeviceUsageWindowWithCost(entry.cycle, rateCentsPerKwh)
+        };
+        const projectedMonth = projectMonthlyEnergyWindow({
+          monthEnergyKwh: entry.month?.energyKwh,
+          dayEnergyKwh: entry.day?.energyKwh,
+          monthStartAt: decoratedTrends.month?.startAt
+        });
+
+        return {
+          ...decoratedEntry,
+          currentCostUsdPerHour: calculateCurrentCostRateUsdPerHour(entry.currentPowerW, rateCentsPerKwh),
+          monthToDateCostUsd: calculateCostUsd(decoratedEntry.month?.energyKwh, rateCentsPerKwh),
+          projectedMonthCostUsd: calculateCostUsd(projectedMonth.projectedMonthKwh, rateCentsPerKwh)
+        };
+      })
       .sort((left, right) => {
         const powerDiff = (right.currentPowerW || 0) - (left.currentPowerW || 0);
         if (powerDiff !== 0) {
@@ -1857,6 +2076,16 @@ class SenseService {
         lastTrendSyncAt: latestIntegration.lastTrendSyncAt || null,
         lastError: latestIntegration.lastError || ''
       },
+      costs: {
+        electricityRateCentsPerKwh: rateCentsPerKwh,
+        electricityRateUsdPerKwh: roundNumber(rateCentsPerKwh / 100, 4),
+        currentUsdPerHour: calculateCurrentCostRateUsdPerHour(latestLive?.powerW, rateCentsPerKwh),
+        monthToDateUsd: calculateCostUsd(decoratedTrends.month?.consumptionTotalKwh, rateCentsPerKwh),
+        projectedMonthUsd: calculateCostUsd(monthProjection.projectedMonthKwh, rateCentsPerKwh),
+        daysElapsed: monthProjection.daysElapsed,
+        daysInMonth: monthProjection.daysInMonth,
+        projectionMethod: monthProjection.method
+      },
       live: latestLive,
       recentSnapshots: {
         hours,
@@ -1864,8 +2093,18 @@ class SenseService {
         rawPointCount: snapshots.length,
         points: downsampledSnapshots
       },
-      trends: trendSummary.monitor,
-      activeDevices: safeArray(latestLive?.activeDevices).sort((left, right) => right.powerW - left.powerW),
+      trends: decoratedTrends,
+      activeDevices: safeArray(latestLive?.activeDevices)
+        .map((entry) => {
+          const usage = deviceUsage.find((candidate) => candidate.senseDeviceId === entry.senseDeviceId);
+          return {
+            ...entry,
+            currentCostUsdPerHour: calculateCurrentCostRateUsdPerHour(entry.powerW, rateCentsPerKwh),
+            monthToDateCostUsd: usage?.monthToDateCostUsd ?? null,
+            projectedMonthCostUsd: usage?.projectedMonthCostUsd ?? null
+          };
+        })
+        .sort((left, right) => right.powerW - left.powerW),
       deviceUsage
     };
   }
@@ -1877,22 +2116,34 @@ module.exports = senseService;
 module.exports.SenseService = SenseService;
 module.exports.__private__ = {
   buildTrendSummaryMap,
+  calculateCostUsd,
+  calculateCurrentCostRateUsdPerHour,
+  decorateDeviceUsageWindowWithCost,
+  decorateTrendWindowWithCost,
   downsampleSnapshots,
   extractAlwaysOnWatts,
   normalizeCatalogDevice,
   normalizeMonitorOptions,
   normalizeMonitorOverview,
   normalizeRealtimePayload,
-  normalizeTrendSnapshot
+  normalizeTrendSnapshot,
+  projectMonthlyEnergyWindow,
+  resolveMonthProjectionContext
 };
 module.exports.SenseService = SenseService;
 module.exports.__private__ = {
   buildTrendSummaryMap,
+  calculateCostUsd,
+  calculateCurrentCostRateUsdPerHour,
+  decorateDeviceUsageWindowWithCost,
+  decorateTrendWindowWithCost,
   downsampleSnapshots,
   extractAlwaysOnWatts,
   normalizeCatalogDevice,
   normalizeMonitorOptions,
   normalizeMonitorOverview,
   normalizeRealtimePayload,
-  normalizeTrendSnapshot
+  normalizeTrendSnapshot,
+  projectMonthlyEnergyWindow,
+  resolveMonthProjectionContext
 };

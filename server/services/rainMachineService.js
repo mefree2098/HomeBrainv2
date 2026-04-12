@@ -314,6 +314,33 @@ const findFirstArray = (payload, candidateKeys = []) => {
   return [];
 };
 
+const isActiveRainMachineState = (value) => {
+  const normalized = trimString(value).toLowerCase();
+  return normalized === 'running' || normalized === 'pending';
+};
+
+const snapshotShowsActiveZone = (snapshot, zoneId) => {
+  const normalizedZoneId = trimString(zoneId);
+  if (!normalizedZoneId) {
+    return false;
+  }
+
+  const body = asPlainObject(snapshot);
+  const activeZone = asPlainObject(body?.runtime?.activeZone);
+  const activeZoneId = pickFirstNumber(activeZone.uid, activeZone.id, activeZone.zoneId, activeZone.valveId);
+  if (activeZoneId !== null && String(activeZoneId) === normalizedZoneId && isActiveRainMachineState(activeZone.stateLabel)) {
+    return true;
+  }
+
+  return safeArray(body?.zones).some((entry) => {
+    const item = asPlainObject(entry);
+    const entryZoneId = pickFirstNumber(item.uid, item.id, item.zoneId, item.valveId);
+    return entryZoneId !== null
+      && String(entryZoneId) === normalizedZoneId
+      && isActiveRainMachineState(item.stateLabel);
+  });
+};
+
 const normalizeZoneStateLabel = (state) => {
   switch (Number(state)) {
     case ZONE_STATE.running:
@@ -2124,13 +2151,26 @@ class RainMachineService {
   async stopZone(zoneId) {
     const integration = await RainMachineIntegration.getIntegration();
     const endpoint = await this.resolveEndpoint(integration);
+    const shouldFallbackToStopAll = snapshotShowsActiveZone(integration?.snapshot, zoneId);
 
-    await this.request(endpoint, {
-      integration,
-      path: `zone/${encodeURIComponent(zoneId)}/stop`,
-      method: 'POST',
-      data: {}
-    });
+    try {
+      await this.request(endpoint, {
+        integration,
+        path: `zone/${encodeURIComponent(zoneId)}/stop`,
+        method: 'POST'
+      });
+    } catch (error) {
+      if (!shouldFallbackToStopAll) {
+        throw error;
+      }
+
+      console.warn(`RainMachineService: direct stop failed for zone ${zoneId}, falling back to stop-all: ${error.message}`);
+      await this.request(endpoint, {
+        integration,
+        path: 'watering/stopall',
+        method: 'POST'
+      });
+    }
 
     try {
       await this.refreshRuntime({ reason: 'post-zone-stop' });
@@ -2166,8 +2206,7 @@ class RainMachineService {
     await this.request(endpoint, {
       integration,
       path: `program/${encodeURIComponent(programId)}/stop`,
-      method: 'POST',
-      data: {}
+      method: 'POST'
     });
 
     try {
@@ -2185,8 +2224,7 @@ class RainMachineService {
     await this.request(endpoint, {
       integration,
       path: 'watering/stopall',
-      method: 'POST',
-      data: {}
+      method: 'POST'
     });
 
     try {
@@ -2255,6 +2293,7 @@ module.exports.__private__ = {
   buildRequestPayload,
   buildProgramNextRunMap,
   buildZoneNextRunMap,
+  snapshotShowsActiveZone,
   normalizeDailyStats,
   normalizePrograms,
   normalizeQueueEntries,

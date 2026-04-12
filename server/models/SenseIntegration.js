@@ -19,6 +19,17 @@ const clampInteger = (value, fallback, minimum, maximum) => {
   return Math.max(minimum, Math.min(maximum, numeric));
 };
 
+const clampDecimal = (value, fallback, minimum, maximum, digits = 4) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const bounded = Math.max(minimum, Math.min(maximum, numeric));
+  const multiplier = 10 ** digits;
+  return Math.round(bounded * multiplier) / multiplier;
+};
+
 const buildDeviceId = () => randomUUID().replace(/-/g, '');
 
 const WebsocketStateSchema = new mongoose.Schema({
@@ -97,6 +108,12 @@ const SenseIntegrationSchema = new mongoose.Schema({
     min: 5,
     max: 1440
   },
+  electricityRateCentsPerKwh: {
+    type: Number,
+    default: 11,
+    min: 0,
+    max: 500
+  },
   availableMonitors: {
     type: [mongoose.Schema.Types.Mixed],
     default: []
@@ -172,6 +189,7 @@ SenseIntegrationSchema.statics.getDefaultIntegration = function() {
     room: trimString(process.env.SENSE_ROOM, 'Electrical Panel'),
     pollIntervalSeconds: clampInteger(process.env.SENSE_POLL_INTERVAL_SECONDS, 10, 5, 300),
     trendSyncIntervalMinutes: clampInteger(process.env.SENSE_TREND_SYNC_INTERVAL_MINUTES, 15, 5, 1440),
+    electricityRateCentsPerKwh: clampDecimal(process.env.SENSE_ELECTRICITY_RATE_CENTS_PER_KWH, 11, 0, 500),
     availableMonitors: [],
     solarConfigured: false,
     isConnected: false,

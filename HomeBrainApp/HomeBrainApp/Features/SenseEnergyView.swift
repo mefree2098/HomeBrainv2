@@ -123,6 +123,31 @@ private nonisolated func senseFormatEnergy(_ value: Double?) -> String {
     return "\(value.formatted(.number.precision(.fractionLength(0...digits)))) kWh"
 }
 
+private nonisolated func senseFormatCurrency(_ value: Double?) -> String {
+    guard let value else { return "--" }
+    return value.formatted(.currency(code: "USD"))
+}
+
+private nonisolated func senseFormatCurrencyRate(_ value: Double?) -> String {
+    guard let value else { return "--" }
+
+    let digits: Int
+    if abs(value) >= 1 {
+        digits = 2
+    } else if abs(value) >= 0.1 {
+        digits = 3
+    } else {
+        digits = 4
+    }
+
+    return "$\(value.formatted(.number.precision(.fractionLength(digits))))/hr"
+}
+
+private nonisolated func senseFormatRateCents(_ value: Double?) -> String {
+    guard let value else { return "--" }
+    return "\(value.formatted(.number.precision(.fractionLength(0...2)))) c/kWh"
+}
+
 private nonisolated func senseFormatPercent(_ value: Double?, digits: Int = 0) -> String {
     guard let value else { return "--" }
     return "\(value.formatted(.number.precision(.fractionLength(0...digits))))%"
@@ -164,6 +189,7 @@ private nonisolated struct SenseTrendWindowSummary: Equatable {
     let startAt: String?
     let syncedAt: String?
     let consumptionTotalKwh: Double?
+    let costUsd: Double?
     let productionTotalKwh: Double?
     let productionPct: Double?
     let netProductionKwh: Double?
@@ -176,6 +202,7 @@ private nonisolated struct SenseTrendWindowSummary: Equatable {
             startAt: JSON.optionalString(object, "startAt"),
             syncedAt: JSON.optionalString(object, "syncedAt"),
             consumptionTotalKwh: senseOptionalDouble(object["consumptionTotalKwh"]),
+            costUsd: senseOptionalDouble(object["costUsd"]),
             productionTotalKwh: senseOptionalDouble(object["productionTotalKwh"]),
             productionPct: senseOptionalDouble(object["productionPct"]),
             netProductionKwh: senseOptionalDouble(object["netProductionKwh"]),
@@ -197,6 +224,7 @@ private nonisolated struct SenseIntegrationStatus: Equatable {
     let room: String
     let pollIntervalSeconds: Int
     let trendSyncIntervalMinutes: Int
+    let electricityRateCentsPerKwh: Double
     let availableMonitors: [SenseMonitorOption]
     let solarConfigured: Bool
     let isConnected: Bool
@@ -218,6 +246,7 @@ private nonisolated struct SenseIntegrationStatus: Equatable {
             room: JSON.string(object, "room", fallback: "Electrical Panel"),
             pollIntervalSeconds: JSON.int(object, "pollIntervalSeconds", fallback: 10),
             trendSyncIntervalMinutes: JSON.int(object, "trendSyncIntervalMinutes", fallback: 15),
+            electricityRateCentsPerKwh: senseOptionalDouble(object["electricityRateCentsPerKwh"]) ?? 11,
             availableMonitors: JSON.array(object["availableMonitors"]).map(SenseMonitorOption.from),
             solarConfigured: JSON.bool(object, "solarConfigured"),
             isConnected: JSON.bool(object, "isConnected"),
@@ -345,6 +374,9 @@ private nonisolated struct SenseDashboardDevice: Identifiable, Equatable {
     let icon: String
     let powerW: Double
     let sharePct: Double
+    let currentCostUsdPerHour: Double?
+    let monthToDateCostUsd: Double?
+    let projectedMonthCostUsd: Double?
     let alwaysOn: Bool
     let synthetic: Bool
 
@@ -357,6 +389,9 @@ private nonisolated struct SenseDashboardDevice: Identifiable, Equatable {
             icon: JSON.string(object, "icon"),
             powerW: senseOptionalDouble(object["powerW"]) ?? 0,
             sharePct: senseOptionalDouble(object["sharePct"]) ?? 0,
+            currentCostUsdPerHour: senseOptionalDouble(object["currentCostUsdPerHour"]),
+            monthToDateCostUsd: senseOptionalDouble(object["monthToDateCostUsd"]),
+            projectedMonthCostUsd: senseOptionalDouble(object["projectedMonthCostUsd"]),
             alwaysOn: JSON.bool(object, "alwaysOn"),
             synthetic: JSON.bool(object, "synthetic")
         )
@@ -444,11 +479,13 @@ private nonisolated struct SenseRecentSnapshots: Equatable {
 
 private nonisolated struct SenseDeviceUsageWindow: Equatable {
     let energyKwh: Double?
+    let costUsd: Double?
     let sharePct: Double?
 
     static func from(_ object: [String: Any]) -> SenseDeviceUsageWindow {
         SenseDeviceUsageWindow(
             energyKwh: senseOptionalDouble(object["energyKwh"]),
+            costUsd: senseOptionalDouble(object["costUsd"]),
             sharePct: senseOptionalDouble(object["sharePct"])
         )
     }
@@ -461,6 +498,9 @@ private nonisolated struct SenseDashboardDeviceUsage: Identifiable, Equatable {
     let room: String
     let currentPowerW: Double
     let currentSharePct: Double
+    let currentCostUsdPerHour: Double?
+    let monthToDateCostUsd: Double?
+    let projectedMonthCostUsd: Double?
     let day: SenseDeviceUsageWindow?
     let week: SenseDeviceUsageWindow?
     let month: SenseDeviceUsageWindow?
@@ -483,6 +523,9 @@ private nonisolated struct SenseDashboardDeviceUsage: Identifiable, Equatable {
             room: JSON.string(object, "room"),
             currentPowerW: senseOptionalDouble(object["currentPowerW"]) ?? 0,
             currentSharePct: senseOptionalDouble(object["currentSharePct"]) ?? 0,
+            currentCostUsdPerHour: senseOptionalDouble(object["currentCostUsdPerHour"]),
+            monthToDateCostUsd: senseOptionalDouble(object["monthToDateCostUsd"]),
+            projectedMonthCostUsd: senseOptionalDouble(object["projectedMonthCostUsd"]),
             day: dayObject.isEmpty ? nil : SenseDeviceUsageWindow.from(dayObject),
             week: weekObject.isEmpty ? nil : SenseDeviceUsageWindow.from(weekObject),
             month: monthObject.isEmpty ? nil : SenseDeviceUsageWindow.from(monthObject),
@@ -492,11 +535,36 @@ private nonisolated struct SenseDashboardDeviceUsage: Identifiable, Equatable {
     }
 }
 
+private nonisolated struct SenseDashboardCostSummary: Equatable {
+    let electricityRateCentsPerKwh: Double
+    let electricityRateUsdPerKwh: Double?
+    let currentUsdPerHour: Double?
+    let monthToDateUsd: Double?
+    let projectedMonthUsd: Double?
+    let daysElapsed: Double?
+    let daysInMonth: Int
+    let projectionMethod: String
+
+    static func from(_ object: [String: Any]) -> SenseDashboardCostSummary {
+        SenseDashboardCostSummary(
+            electricityRateCentsPerKwh: senseOptionalDouble(object["electricityRateCentsPerKwh"]) ?? 11,
+            electricityRateUsdPerKwh: senseOptionalDouble(object["electricityRateUsdPerKwh"]),
+            currentUsdPerHour: senseOptionalDouble(object["currentUsdPerHour"]),
+            monthToDateUsd: senseOptionalDouble(object["monthToDateUsd"]),
+            projectedMonthUsd: senseOptionalDouble(object["projectedMonthUsd"]),
+            daysElapsed: senseOptionalDouble(object["daysElapsed"]),
+            daysInMonth: JSON.int(object, "daysInMonth"),
+            projectionMethod: JSON.string(object, "projectionMethod")
+        )
+    }
+}
+
 private nonisolated struct SenseDashboardSnapshot {
     let integration: SenseIntegrationStatus
     let generatedAt: String?
     let monitor: SenseDashboardMonitor
     let health: SenseDashboardHealthSnapshot
+    let costs: SenseDashboardCostSummary
     let live: SenseDashboardLiveSnapshot?
     let recentSnapshots: SenseRecentSnapshots
     let trends: [String: SenseTrendWindowSummary]
@@ -509,6 +577,7 @@ private nonisolated struct SenseDashboardSnapshot {
             generatedAt: JSON.optionalString(object, "generatedAt"),
             monitor: SenseDashboardMonitor.from(JSON.object(object["monitor"])),
             health: SenseDashboardHealthSnapshot.from(JSON.object(object["health"])),
+            costs: SenseDashboardCostSummary.from(JSON.object(object["costs"])),
             live: JSON.object(object["live"]).isEmpty ? nil : SenseDashboardLiveSnapshot.from(JSON.object(object["live"])),
             recentSnapshots: SenseRecentSnapshots.from(JSON.object(object["recentSnapshots"])),
             trends: SenseDashboardSnapshot.trendMap(from: object["trends"]),
@@ -558,6 +627,7 @@ private nonisolated struct SenseConfigForm {
     var room = "Electrical Panel"
     var pollIntervalSeconds = 10
     var trendSyncIntervalMinutes = 15
+    var electricityRateCentsPerKwh = 11.0
 
     mutating func apply(_ integration: SenseIntegrationStatus) {
         email = integration.email
@@ -571,6 +641,7 @@ private nonisolated struct SenseConfigForm {
         room = integration.room
         pollIntervalSeconds = integration.pollIntervalSeconds
         trendSyncIntervalMinutes = integration.trendSyncIntervalMinutes
+        electricityRateCentsPerKwh = integration.electricityRateCentsPerKwh
     }
 }
 
@@ -617,6 +688,10 @@ struct SenseEnergyView: View {
 
     private var liveSnapshot: SenseDashboardLiveSnapshot? {
         dashboard?.live
+    }
+
+    private var costSummary: SenseDashboardCostSummary? {
+        dashboard?.costs
     }
 
     private var activeDevices: [SenseDashboardDevice] {
@@ -692,6 +767,20 @@ struct SenseEnergyView: View {
                 value: senseFormatPower(live?.alwaysOnW),
                 detail: "Voltage \(senseFormatVoltage(live?.voltage ?? []))\(live?.frequencyHz == nil ? "" : " • \(live?.frequencyHz?.formatted(.number.precision(.fractionLength(0...2))) ?? "--") Hz")",
                 color: HBPalette.accentOrange
+            ),
+            SenseDisplayCard(
+                id: "month-cost",
+                title: "Month Cost So Far",
+                value: senseFormatCurrency(costSummary?.monthToDateUsd),
+                detail: "Based on \(senseFormatRateCents(costSummary?.electricityRateCentsPerKwh)) and this month’s persisted Sense usage.",
+                color: HBPalette.accentPurple
+            ),
+            SenseDisplayCard(
+                id: "month-estimate",
+                title: "Month Estimate",
+                value: senseFormatCurrency(costSummary?.projectedMonthUsd),
+                detail: "Current burn \(senseFormatCurrencyRate(costSummary?.currentUsdPerHour)) • \(senseFormatRateCents(costSummary?.electricityRateCentsPerKwh))",
+                color: HBPalette.accentRed
             )
         ]
     }
@@ -889,7 +978,7 @@ struct SenseEnergyView: View {
                     senseHeroFact(title: "Realtime", value: senseFormatDateTime(dashboard?.health.lastRealtimeAt ?? liveSnapshot?.observedAt))
                     senseHeroFact(title: "Trend Sync", value: senseFormatDateTime(dashboard?.health.lastTrendSyncAt))
                     senseHeroFact(title: "Monitor", value: dashboard?.monitor.name.isEmpty == false ? dashboard?.monitor.name ?? "Sense Monitor" : "Sense Monitor")
-                    senseHeroFact(title: "Data Platform", value: "Report Ready")
+                    senseHeroFact(title: "Rate", value: senseFormatRateCents(costSummary?.electricityRateCentsPerKwh ?? activeIntegration?.electricityRateCentsPerKwh))
                 }
             }
             .padding(18)
@@ -945,6 +1034,12 @@ struct SenseEnergyView: View {
                         value: activeIntegration?.monitorName.isEmpty == false ? activeIntegration?.monitorName ?? "Not selected" : "Not selected",
                         detail: activeIntegration?.solarConfigured == true ? "Solar-enabled monitor detected." : "Consumption-only profile right now.",
                         accent: HBPalette.accentOrange
+                    )
+                    senseRuntimeTile(
+                        title: "Retail Rate",
+                        value: senseFormatRateCents(activeIntegration?.electricityRateCentsPerKwh),
+                        detail: "Used for live burn-rate math plus month-to-date and projected monthly cost estimates.",
+                        accent: HBPalette.accentPurple
                     )
                 }
 
@@ -1017,6 +1112,15 @@ struct SenseEnergyView: View {
                         TextField("15", value: $form.trendSyncIntervalMinutes, format: .number)
                             .keyboardType(.numberPad)
                             .hbPanelTextField()
+                    }
+
+                    senseFieldGroup(title: "Electricity Cost (cents / kWh)") {
+                        TextField("11", value: $form.electricityRateCentsPerKwh, format: .number)
+                            .keyboardType(.decimalPad)
+                            .hbPanelTextField()
+                        Text("Used for live burn-rate math plus month-to-date and projected monthly cost estimates. Defaults to 11 cents per kWh.")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textMuted)
                     }
                 }
 
@@ -1348,6 +1452,10 @@ struct SenseEnergyView: View {
                                             Text("\(device.synthetic ? "Residual bucket" : "Sense-detected device") • \(senseFormatPercent(device.sharePct, digits: 0)) of live load")
                                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                                 .foregroundStyle(HBPalette.textSecondary)
+
+                                            Text("Now \(senseFormatCurrencyRate(device.currentCostUsdPerHour)) • Month \(senseFormatCurrency(device.monthToDateCostUsd)) • Est \(senseFormatCurrency(device.projectedMonthCostUsd))")
+                                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                                .foregroundStyle(HBPalette.textMuted)
                                         }
 
                                         Spacer(minLength: 0)
@@ -1443,7 +1551,7 @@ struct SenseEnergyView: View {
                         senseRuntimeTile(
                             title: scale.title,
                             value: senseFormatEnergy(trend?.consumptionTotalKwh),
-                            detail: "Production \(senseFormatEnergy(trend?.productionTotalKwh)) • Grid \(senseFormatEnergy(trend?.fromGridKwh)) • Solar \(senseFormatPercent(trend?.solarPoweredPct, digits: 0)) • Synced \(senseFormatDateTime(trend?.syncedAt))",
+                            detail: "Cost \(senseFormatCurrency(trend?.costUsd)) • Production \(senseFormatEnergy(trend?.productionTotalKwh)) • Grid \(senseFormatEnergy(trend?.fromGridKwh)) • Solar \(senseFormatPercent(trend?.solarPoweredPct, digits: 0)) • Synced \(senseFormatDateTime(trend?.syncedAt))",
                             accent: scale == .day ? HBPalette.accentYellow : (scale == .week ? HBPalette.accentBlue : (scale == .month ? HBPalette.accentGreen : (scale == .year ? HBPalette.accentPurple : HBPalette.accentOrange)))
                         )
                     }
@@ -1459,7 +1567,7 @@ struct SenseEnergyView: View {
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundStyle(HBPalette.textPrimary)
 
-                Text("Live device draw plus daily, weekly, monthly, yearly, and billing-cycle energy totals from the persisted Sense trend fabric.")
+                Text("Live device draw, long-range energy windows, and cost projections derived from the configured retail electricity rate.")
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1475,9 +1583,12 @@ struct SenseEnergyView: View {
                             HStack(spacing: 10) {
                                 senseLedgerHeader("Device", width: 180, alignment: .leading)
                                 senseLedgerHeader("Now", width: 86)
+                                senseLedgerHeader("Cost Now", width: 92)
                                 senseLedgerHeader("Day", width: 78)
                                 senseLedgerHeader("Week", width: 78)
                                 senseLedgerHeader("Month", width: 78)
+                                senseLedgerHeader("Month $", width: 92)
+                                senseLedgerHeader("Proj $", width: 92)
                                 senseLedgerHeader("Year", width: 78)
                                 senseLedgerHeader("Cycle", width: 78)
                             }
@@ -1503,9 +1614,12 @@ struct SenseEnergyView: View {
                                     .frame(width: 180, alignment: .leading)
 
                                     senseLedgerValue(senseFormatPower(device.currentPowerW), width: 86)
+                                    senseLedgerValue(senseFormatCurrencyRate(device.currentCostUsdPerHour), width: 92)
                                     senseLedgerValue(senseFormatEnergy(device.day?.energyKwh), width: 78)
                                     senseLedgerValue(senseFormatEnergy(device.week?.energyKwh), width: 78)
                                     senseLedgerValue(senseFormatEnergy(device.month?.energyKwh), width: 78)
+                                    senseLedgerValue(senseFormatCurrency(device.monthToDateCostUsd ?? device.month?.costUsd), width: 92)
+                                    senseLedgerValue(senseFormatCurrency(device.projectedMonthCostUsd), width: 92)
                                     senseLedgerValue(senseFormatEnergy(device.year?.energyKwh), width: 78)
                                     senseLedgerValue(senseFormatEnergy(device.cycle?.energyKwh), width: 78)
                                 }
@@ -1774,7 +1888,8 @@ struct SenseEnergyView: View {
                 "realtimeEnabled": form.realtimeEnabled,
                 "room": form.room,
                 "pollIntervalSeconds": max(5, form.pollIntervalSeconds),
-                "trendSyncIntervalMinutes": max(5, form.trendSyncIntervalMinutes)
+                "trendSyncIntervalMinutes": max(5, form.trendSyncIntervalMinutes),
+                "electricityRateCentsPerKwh": max(0, form.electricityRateCentsPerKwh)
             ]
 
             if !senseIsMaskedSecret(form.password),

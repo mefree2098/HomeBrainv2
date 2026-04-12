@@ -46,7 +46,8 @@ const defaultForm: SenseConfigurePayload = {
   realtimeEnabled: true,
   room: "Electrical Panel",
   pollIntervalSeconds: 10,
-  trendSyncIntervalMinutes: 15
+  trendSyncIntervalMinutes: 15,
+  electricityRateCentsPerKwh: 11
 }
 
 const formatDateTime = (value: string | null | undefined) => {
@@ -102,7 +103,8 @@ export function SenseIntegrationCard() {
         realtimeEnabled: nextStatus.integration.realtimeEnabled !== false,
         room: nextStatus.integration.room || "Electrical Panel",
         pollIntervalSeconds: nextStatus.integration.pollIntervalSeconds || 10,
-        trendSyncIntervalMinutes: nextStatus.integration.trendSyncIntervalMinutes || 15
+        trendSyncIntervalMinutes: nextStatus.integration.trendSyncIntervalMinutes || 15,
+        electricityRateCentsPerKwh: nextStatus.integration.electricityRateCentsPerKwh ?? 11
       })
     } catch (error) {
       toast({
@@ -174,6 +176,9 @@ export function SenseIntegrationCard() {
         monitorId: form.monitorId?.trim() || undefined,
         pollIntervalSeconds: Number(form.pollIntervalSeconds) || 10,
         trendSyncIntervalMinutes: Number(form.trendSyncIntervalMinutes) || 15,
+        electricityRateCentsPerKwh: Number.isFinite(Number(form.electricityRateCentsPerKwh))
+          ? Number(form.electricityRateCentsPerKwh)
+          : 11,
         mfaCode: form.mfaCode?.trim() || undefined
       }
 
@@ -347,7 +352,7 @@ export function SenseIntegrationCard() {
                 </Select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-4 md:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="sense-poll">Poll Every (sec)</Label>
                   <Input
@@ -369,6 +374,21 @@ export function SenseIntegrationCard() {
                     value={form.trendSyncIntervalMinutes}
                     onChange={(event) => updateField("trendSyncIntervalMinutes", Number(event.target.value))}
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sense-rate">Electricity Cost (cents / kWh)</Label>
+                  <Input
+                    id="sense-rate"
+                    type="number"
+                    min={0}
+                    max={500}
+                    step={0.1}
+                    value={form.electricityRateCentsPerKwh}
+                    onChange={(event) => updateField("electricityRateCentsPerKwh", Number(event.target.value))}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Used for live burn-rate math plus month-to-date and projected monthly cost estimates. Defaults to 11 cents per kWh.
+                  </p>
                 </div>
               </div>
             </div>

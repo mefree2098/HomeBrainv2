@@ -993,6 +993,10 @@ function extractDeviceMetrics(device = {}) {
 
     addMetric(metrics, 'power_w', sense.currentPowerW);
     addMetric(metrics, 'current_share_pct', sense.currentSharePct);
+    addMetric(metrics, 'current_cost_usd_per_hr', sense.currentCostUsdPerHour);
+    addMetric(metrics, 'month_to_date_cost_usd', sense.monthToDateCostUsd);
+    addMetric(metrics, 'projected_month_cost_usd', sense.projectedMonthCostUsd);
+    addMetric(metrics, 'electricity_rate_cents_per_kwh', sense.electricityRateCentsPerKwh);
 
     if (entityType === 'monitor') {
       addMetric(metrics, 'solar_power_w', sense.solarPowerW);
@@ -1027,8 +1031,10 @@ function extractDeviceMetrics(device = {}) {
         addMetric(metrics, `${prefix}_from_grid_kwh`, trend.fromGridKwh);
         addMetric(metrics, `${prefix}_to_grid_kwh`, trend.toGridKwh);
         addMetric(metrics, `${prefix}_solar_powered_pct`, trend.solarPoweredPct);
+        addMetric(metrics, `${prefix}_cost_usd`, trend.costUsd);
       } else {
         addMetric(metrics, `${prefix}_energy_kwh`, trend.energyKwh);
+        addMetric(metrics, `${prefix}_cost_usd`, trend.costUsd);
       }
     });
 
