@@ -5,6 +5,8 @@ import { Toaster } from "./components/ui/toaster"
 import { AuthProvider } from "./contexts/AuthContext"
 import { ProtectedRoute } from "./components/ProtectedRoute"
 import { Layout } from "./components/Layout"
+import { RouteErrorBoundary } from "./components/RouteErrorBoundary"
+import RainMachine from "./pages/RainMachine"
 
 const Login = lazy(() => import("./pages/Login").then((module) => ({ default: module.Login })))
 const Register = lazy(() => import("./pages/Register").then((module) => ({ default: module.Register })))
@@ -12,7 +14,6 @@ const BlankPage = lazy(() => import("./pages/BlankPage").then((module) => ({ def
 const Dashboard = lazy(() => import("./pages/Dashboard").then((module) => ({ default: module.Dashboard })))
 const Weather = lazy(() => import("./pages/Weather"))
 const SenseEnergy = lazy(() => import("./pages/SenseEnergy"))
-const RainMachine = lazy(() => import("./pages/RainMachine"))
 const DataPlatform = lazy(() => import("./pages/DataPlatform"))
 const Devices = lazy(() => import("./pages/Devices").then((module) => ({ default: module.Devices })))
 const DeviceGroups = lazy(() => import("./pages/DeviceGroups").then((module) => ({ default: module.DeviceGroups })))
@@ -44,7 +45,11 @@ function LoadingScreen() {
 
 const withLayout = (content: ReactNode, options: { adminOnly?: boolean } = {}) => (
   <ProtectedRoute adminOnly={options.adminOnly}>
-    <Layout>{content}</Layout>
+    <Layout>
+      <RouteErrorBoundary routeName="This page">
+        {content}
+      </RouteErrorBoundary>
+    </Layout>
   </ProtectedRoute>
 )
 
