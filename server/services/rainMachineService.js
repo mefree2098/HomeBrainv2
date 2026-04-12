@@ -253,6 +253,31 @@ const coerceJson = (value) => {
   }
 };
 
+const buildRequestPayload = (data) => {
+  if (data === undefined) {
+    return {
+      payload: undefined,
+      headers: {}
+    };
+  }
+
+  if (typeof data === 'string' || Buffer.isBuffer(data)) {
+    return {
+      payload: data,
+      headers: {
+        'Content-Type': 'text/plain'
+      }
+    };
+  }
+
+  return {
+    payload: JSON.stringify(data),
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  };
+};
+
 const ensureApiSuccess = (payload, path) => {
   const body = coerceJson(payload);
 
@@ -1332,14 +1357,13 @@ class RainMachineService {
       return this.authSession.token;
     }
 
+    const loginPayload = buildRequestPayload({ pwd: password, remember: true });
     const response = await axios.post(
       `${endpoint.baseUrl}/auth/login`,
-      JSON.stringify({ pwd: password, remember: true }),
+      loginPayload.payload,
       {
         timeout: this.defaultTimeoutMs,
-        headers: {
-          'Content-Type': 'text/plain'
-        },
+        headers: loginPayload.headers,
         httpsAgent: endpoint.protocol === 'https'
           ? new https.Agent({ rejectUnauthorized: false })
           : undefined,
@@ -1397,14 +1421,13 @@ class RainMachineService {
     const url = authenticated && token
       ? `${endpoint.baseUrl}/${path}?access_token=${encodeURIComponent(token)}`
       : `${endpoint.baseUrl}/${path}`;
+    const requestPayload = buildRequestPayload(data);
     const response = await axios({
       method,
       url,
-      data: data === undefined ? undefined : JSON.stringify(data),
+      data: requestPayload.payload,
       timeout,
-      headers: {
-        'Content-Type': 'text/plain'
-      },
+      headers: requestPayload.headers,
       httpsAgent: endpoint.protocol === 'https'
         ? new https.Agent({ rejectUnauthorized: false })
         : undefined,
@@ -2090,7 +2113,11 @@ class RainMachineService {
       data: { time: effectiveDuration }
     });
 
-    await this.refreshRuntime({ reason: 'post-zone-start' });
+    try {
+      await this.refreshRuntime({ reason: 'post-zone-start' });
+    } catch (error) {
+      console.warn(`RainMachineService: post-zone-start refresh failed after successful command: ${error.message}`);
+    }
     return this.getDashboard();
   }
 
@@ -2105,7 +2132,11 @@ class RainMachineService {
       data: {}
     });
 
-    await this.refreshRuntime({ reason: 'post-zone-stop' });
+    try {
+      await this.refreshRuntime({ reason: 'post-zone-stop' });
+    } catch (error) {
+      console.warn(`RainMachineService: post-zone-stop refresh failed after successful command: ${error.message}`);
+    }
     return this.getDashboard();
   }
 
@@ -2120,7 +2151,11 @@ class RainMachineService {
       data: {}
     });
 
-    await this.refreshRuntime({ reason: 'post-program-start' });
+    try {
+      await this.refreshRuntime({ reason: 'post-program-start' });
+    } catch (error) {
+      console.warn(`RainMachineService: post-program-start refresh failed after successful command: ${error.message}`);
+    }
     return this.getDashboard();
   }
 
@@ -2135,7 +2170,11 @@ class RainMachineService {
       data: {}
     });
 
-    await this.refreshRuntime({ reason: 'post-program-stop' });
+    try {
+      await this.refreshRuntime({ reason: 'post-program-stop' });
+    } catch (error) {
+      console.warn(`RainMachineService: post-program-stop refresh failed after successful command: ${error.message}`);
+    }
     return this.getDashboard();
   }
 
@@ -2150,7 +2189,11 @@ class RainMachineService {
       data: {}
     });
 
-    await this.refreshRuntime({ reason: 'post-stop-all' });
+    try {
+      await this.refreshRuntime({ reason: 'post-stop-all' });
+    } catch (error) {
+      console.warn(`RainMachineService: post-stop-all refresh failed after successful command: ${error.message}`);
+    }
     return this.getDashboard();
   }
 
@@ -2166,7 +2209,11 @@ class RainMachineService {
       data: { rainDelay }
     });
 
-    await this.refreshRuntime({ reason: 'post-rain-delay' });
+    try {
+      await this.refreshRuntime({ reason: 'post-rain-delay' });
+    } catch (error) {
+      console.warn(`RainMachineService: post-rain-delay refresh failed after successful command: ${error.message}`);
+    }
     return this.getDashboard();
   }
 }
@@ -2205,6 +2252,7 @@ const rainMachineService = new RainMachineService();
 module.exports = rainMachineService;
 module.exports.RainMachineService = RainMachineService;
 module.exports.__private__ = {
+  buildRequestPayload,
   buildProgramNextRunMap,
   buildZoneNextRunMap,
   normalizeDailyStats,

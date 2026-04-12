@@ -2,8 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const rainMachineService = require('../services/rainMachineService');
+const RainMachineIntegration = require('../models/RainMachineIntegration');
 
 const {
+  buildRequestPayload,
   normalizeDailyStats,
   normalizeWateringLogDays,
   parseDiscoveryResponse
@@ -137,4 +139,52 @@ test('normalizeWateringLogDays summarizes durations and saved percentage from wa
   assert.equal(days[0].summary.watered_duration_sec, 720);
   assert.equal(days[0].summary.machine_duration_sec, 720);
   assert.equal(days[0].summary.water_saved_pct, 20);
+});
+
+test('buildRequestPayload uses JSON bodies for RainMachine POST objects', () => {
+  const payload = buildRequestPayload({ time: 600 });
+
+  assert.equal(payload.payload, JSON.stringify({ time: 600 }));
+  assert.deepEqual(payload.headers, {
+    'Content-Type': 'application/json'
+  });
+});
+
+test('startZone still returns dashboard when post-start refresh fails after the command succeeds', async () => {
+  const service = new rainMachineService.RainMachineService();
+  const originalGetIntegration = RainMachineIntegration.getIntegration;
+
+  RainMachineIntegration.getIntegration = async () => ({
+    defaultZoneDurationSeconds: 600
+  });
+
+  service.resolveEndpoint = async () => ({
+    baseUrl: 'http://rainmachine.local:8081/api/4',
+    host: 'rainmachine.local',
+    port: 8081,
+    protocol: 'http'
+  });
+
+  const requestCalls = [];
+  service.request = async (_endpoint, options) => {
+    requestCalls.push(options);
+    return {};
+  };
+  service.refreshRuntime = async () => {
+    throw new Error('sync failed');
+  };
+  service.getDashboard = async () => ({
+    ok: true
+  });
+
+  try {
+    const dashboard = await service.startZone(7, 600);
+
+    assert.deepEqual(dashboard, { ok: true });
+    assert.equal(requestCalls.length, 1);
+    assert.equal(requestCalls[0].path, 'zone/7/start');
+    assert.deepEqual(requestCalls[0].data, { time: 600 });
+  } finally {
+    RainMachineIntegration.getIntegration = originalGetIntegration;
+  }
 });
