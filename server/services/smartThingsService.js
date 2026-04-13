@@ -63,6 +63,7 @@ class SmartThingsService {
     this.forceDevicePolling = process.env.SMARTTHINGS_FORCE_DEVICE_POLLING === 'true';
     this.backgroundTasksEnabled = process.env.SMARTTHINGS_BACKGROUND_TASKS !== 'false' && process.env.NODE_ENV !== 'test';
     this.connectionBootstrapInProgress = false;
+    this.refreshAccessTokenPromise = null;
     this.lastRecordedConnectionState = null;
     this.lastSuccessfulDeviceSyncAt = 0;
     if (this.backgroundTasksEnabled && this.deviceStatusSyncIntervalMs > 0) {
@@ -620,6 +621,30 @@ class SmartThingsService {
     return 'Unknown error';
   }
 
+  createSmartThingsServiceError(prefix, error) {
+    const errorDetails = this.extractSmartThingsErrorDetails(error);
+    const wrappedError = new Error(`${prefix}: ${errorDetails || 'Unknown error'}`);
+    const status = Number(error?.status ?? error?.response?.status);
+
+    if (Number.isFinite(status)) {
+      wrappedError.status = status;
+    }
+
+    const code = error?.code || error?.cause?.code;
+    if (typeof code === 'string' && code.trim()) {
+      wrappedError.code = code.trim();
+    }
+
+    if (error?.response?.data !== undefined) {
+      wrappedError.data = error.response.data;
+    } else if (error?.data !== undefined) {
+      wrappedError.data = error.data;
+    }
+
+    wrappedError.cause = error;
+    return wrappedError;
+  }
+
   getSmartThingsOAuthErrorCode(error) {
     const oauthError = error?.response?.data?.error;
     return typeof oauthError === 'string' ? oauthError.trim().toLowerCase() : '';
@@ -652,7 +677,11 @@ class SmartThingsService {
     }
 
     const message = this.extractSmartThingsErrorDetails(error).toLowerCase();
-    return message.includes('no refresh token available');
+    return (
+      message.includes('no refresh token available')
+      || message.includes('invalid_grant')
+      || (message.includes('refresh token') && (message.includes('invalid') || message.includes('expired')))
+    );
   }
 
   canUseAccessTokenDuringRefreshGrace(integration) {
@@ -741,7 +770,9 @@ class SmartThingsService {
       await this.refreshAccessToken();
       return true;
     } catch (refreshError) {
-      if (!this.isTerminalRefreshFailure(refreshError)) {
+      if (this.isTransientSmartThingsError(refreshError)) {
+        console.warn(`SmartThingsService: Preserving stored tokens after transient refresh failure for ${endpoint}: ${refreshError.message}`);
+      } else if (!this.isTerminalRefreshFailure(refreshError)) {
         await this.clearStoredAccessToken('Access token refresh required');
       } else {
         this.lastRecordedConnectionState = false;
@@ -891,67 +922,95 @@ class SmartThingsService {
    * @returns {Promise<Object>} New token data
    */
   async refreshAccessToken() {
-    try {
-      const startTime = Date.now();
-      console.log('SmartThingsService: Refreshing access token');
-
-      const integration = await SmartThingsIntegration.getIntegration();
-
-      const clientId = integration.clientId ? integration.clientId.trim() : '';
-      const clientSecret = integration.clientSecret ? integration.clientSecret.trim() : '';
-
-      if (!integration.refreshToken) {
-        throw new Error('No refresh token available');
-      }
-
-      if (!clientId || !clientSecret) {
-        throw new Error('SmartThings OAuth configuration incomplete');
-      }
-
-      const tokenData = new URLSearchParams();
-      tokenData.append('grant_type', 'refresh_token');
-      tokenData.append('refresh_token', integration.refreshToken);
-      tokenData.append('client_id', clientId);
-      tokenData.append('client_secret', clientSecret);
-
-      const basicAuth = Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64');
-
-      const response = await axios.post(this.tokenUrl, tokenData.toString(), {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json',
-          Authorization: `Basic ${basicAuth}`,
-          'User-Agent': 'HomeBrain/SmartThingsIntegration'
-        },
-        timeout: 10000
-      });
-
-      console.log('SmartThingsService: Refresh response', {
-        status: response.status,
-        tookMs: Date.now() - startTime
-      });
-
-      await integration.updateTokens(response.data);
-
-      console.log('SmartThingsService: Access token refreshed successfully');
-      return response.data;
-    } catch (error) {
-      const errorDetails = this.extractSmartThingsErrorDetails(error);
-      console.error('SmartThingsService: Error refreshing access token:', {
-        status: error.response?.status,
-        data: error.response?.data,
-        headers: error.response?.headers,
-        message: error.message
-      });
-
-      if (this.isTerminalRefreshFailure(error)) {
-        const integration = await SmartThingsIntegration.getIntegration();
-        await integration.clearTokens('Refresh token failed');
-        this.lastRecordedConnectionState = false;
-      }
-
-      throw new Error(`Failed to refresh access token: ${errorDetails || 'Unknown error'}`);
+    if (this.refreshAccessTokenPromise) {
+      console.log('SmartThingsService: Awaiting in-flight access token refresh');
+      return this.refreshAccessTokenPromise;
     }
+
+    this.refreshAccessTokenPromise = (async () => {
+      let attemptedRefreshToken = '';
+      let attemptedAccessToken = '';
+
+      try {
+        const startTime = Date.now();
+        console.log('SmartThingsService: Refreshing access token');
+
+        const integration = await SmartThingsIntegration.getIntegration();
+
+        const clientId = integration.clientId ? integration.clientId.trim() : '';
+        const clientSecret = integration.clientSecret ? integration.clientSecret.trim() : '';
+        attemptedRefreshToken = integration.refreshToken ? integration.refreshToken.trim() : '';
+        attemptedAccessToken = integration.accessToken ? integration.accessToken.trim() : '';
+
+        if (!attemptedRefreshToken) {
+          throw new Error('No refresh token available');
+        }
+
+        if (!clientId || !clientSecret) {
+          throw new Error('SmartThings OAuth configuration incomplete');
+        }
+
+        const tokenData = new URLSearchParams();
+        tokenData.append('grant_type', 'refresh_token');
+        tokenData.append('refresh_token', attemptedRefreshToken);
+        tokenData.append('client_id', clientId);
+        tokenData.append('client_secret', clientSecret);
+
+        const basicAuth = Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64');
+
+        const response = await axios.post(this.tokenUrl, tokenData.toString(), {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+            Authorization: `Basic ${basicAuth}`,
+            'User-Agent': 'HomeBrain/SmartThingsIntegration'
+          },
+          timeout: 10000
+        });
+
+        console.log('SmartThingsService: Refresh response', {
+          status: response.status,
+          tookMs: Date.now() - startTime
+        });
+
+        await integration.updateTokens(response.data);
+
+        console.log('SmartThingsService: Access token refreshed successfully');
+        return response.data;
+      } catch (error) {
+        const wrappedError = this.createSmartThingsServiceError('Failed to refresh access token', error);
+
+        console.error('SmartThingsService: Error refreshing access token:', {
+          status: error.response?.status,
+          data: error.response?.data,
+          headers: error.response?.headers,
+          message: error.message
+        });
+
+        if (this.isTerminalRefreshFailure(error) || this.isTerminalRefreshFailure(wrappedError)) {
+          const latestIntegration = await SmartThingsIntegration.getIntegration();
+          const latestRefreshToken = latestIntegration?.refreshToken ? latestIntegration.refreshToken.trim() : '';
+          const latestAccessToken = latestIntegration?.accessToken ? latestIntegration.accessToken.trim() : '';
+          const credentialsChangedSinceAttempt = (
+            (attemptedRefreshToken && latestRefreshToken && latestRefreshToken !== attemptedRefreshToken)
+            || (latestAccessToken && latestAccessToken !== attemptedAccessToken)
+          );
+
+          if (credentialsChangedSinceAttempt) {
+            console.warn('SmartThingsService: Skipping terminal token clear because newer SmartThings credentials were already stored');
+          } else if (latestIntegration && typeof latestIntegration.clearTokens === 'function') {
+            await latestIntegration.clearTokens('Refresh token failed');
+            this.lastRecordedConnectionState = false;
+          }
+        }
+
+        throw wrappedError;
+      } finally {
+        this.refreshAccessTokenPromise = null;
+      }
+    })();
+
+    return this.refreshAccessTokenPromise;
   }
 
   /**

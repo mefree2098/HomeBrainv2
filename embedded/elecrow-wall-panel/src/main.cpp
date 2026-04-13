@@ -12,6 +12,7 @@
 #include <Preferences.h>
 
 #include "HomeBrainPanelConfig.h"
+#include "HomeBrainPanelAssets.h"
 #include "HomeBrainPalette.h"
 
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
@@ -40,6 +41,7 @@ constexpr unsigned long kWifiRetryMs = 15000;
 constexpr unsigned long kEncoderLongPressMs = 900;
 constexpr unsigned long kStateRefreshFallbackMs = 5000;
 constexpr unsigned long kThermostatCommitDelayMs = 3000;
+constexpr unsigned long kThermostatDispatchDelayMs = 75;
 constexpr unsigned long kOtaStatusReportIntervalMs = 750;
 constexpr int kSwipeThreshold = 120;
 constexpr int kSwipeVerticalLimit = 90;
@@ -49,6 +51,12 @@ constexpr unsigned long kBrightnessPersistDelayMs = 1000;
 constexpr int kBrightnessDefaultPercent = 94;
 constexpr int kBrightnessMinPercent = 15;
 constexpr int kBrightnessMaxPercent = 100;
+constexpr int kTemperatureUnavailable = -1000;
+constexpr lv_coord_t kZoomNormal = 256;
+constexpr lv_coord_t kThermostatCenterZoom = 256;
+constexpr lv_coord_t kThermostatAdjustmentZoom = 256;
+constexpr lv_coord_t kThermostatWeatherZoom = 352;
+constexpr lv_opa_t kThermostatWeatherOpacity = static_cast<lv_opa_t>(72);
 
 PCF8574 gPcf8574(0x21);
 Adafruit_CST8XX gTouchPanel;
@@ -117,6 +125,8 @@ struct ModeSnapshot {
   String metaWeatherIcon;
   String metaWeatherCondition;
   bool metaWeatherIsDay = true;
+  int metaCurrentTemperature = kTemperatureUnavailable;
+  int metaTargetTemperature = kTemperatureUnavailable;
   KnobActionConfig knob;
   QuickAction quickActions[kActionSlots];
   uint8_t quickActionCount = 0;
@@ -158,7 +168,8 @@ int gSwipeStartX = 0;
 int gSwipeStartY = 0;
 unsigned long gSwipeStartedAt = 0;
 
-int gLastEncoderA = LOW;
+uint8_t gLastEncoderState = 0;
+int8_t gEncoderDeltaAccumulator = 0;
 bool gEncoderPressed = false;
 unsigned long gEncoderPressedAt = 0;
 
@@ -167,6 +178,10 @@ bool gPendingThermostatCommit = false;
 bool gThermostatModePickerExpanded = false;
 bool gOtaInProgress = false;
 int gPendingThermostatValue = 0;
+bool gQueuedThermostatDispatch = false;
+String gQueuedThermostatDeviceId;
+int gQueuedThermostatValue = 0;
+unsigned long gQueuedThermostatDispatchAt = 0;
 unsigned long gPendingThermostatCommitAt = 0;
 unsigned long gLastOtaStatusPostAt = 0;
 unsigned long gLastWifiAttemptAt = 0;
@@ -191,6 +206,8 @@ lv_obj_t* gSecondaryLabel = nullptr;
 lv_obj_t* gHintLabel = nullptr;
 lv_obj_t* gFooterLabel = nullptr;
 lv_obj_t* gArc = nullptr;
+lv_obj_t* gWeatherGlyphImage = nullptr;
+lv_obj_t* gWeatherBadgeCard = nullptr;
 lv_obj_t* gWeatherSunCore = nullptr;
 lv_obj_t* gWeatherCloudPuffs[3] = {};
 lv_obj_t* gWeatherCloudBase = nullptr;
@@ -341,6 +358,8 @@ void buildPanelStateFilter(JsonDocument& filterDocument) {
     JsonObject meta = mode["meta"].to<JsonObject>();
     meta["deviceId"] = true;
     meta["mode"] = true;
+    meta["currentTemperature"] = true;
+    meta["targetTemperature"] = true;
     meta["weatherIcon"] = true;
     meta["weatherCondition"] = true;
     meta["weatherIsDay"] = true;
@@ -696,6 +715,8 @@ void parseModeSnapshot(const String& modeId, JsonObjectConst object, ModeSnapsho
   if (!meta.isNull()) {
     mode.metaDeviceId = jsonVariantToString(meta["deviceId"]);
     mode.metaMode = jsonVariantToString(meta["mode"]);
+    mode.metaCurrentTemperature = meta["currentTemperature"] | kTemperatureUnavailable;
+    mode.metaTargetTemperature = meta["targetTemperature"] | kTemperatureUnavailable;
     mode.metaWeatherIcon = jsonVariantToString(meta["weatherIcon"]);
     mode.metaWeatherCondition = jsonVariantToString(meta["weatherCondition"]);
     mode.metaWeatherIsDay = meta["weatherIsDay"] | true;
@@ -812,6 +833,85 @@ String compactTemperatureValue(const String& value) {
   return compact.length() > 0 ? compact : value;
 }
 
+String formatTemperatureDegrees(const String& value, int fallback) {
+  String formatted = compactTemperatureValue(value);
+  if (formatted.isEmpty()) {
+    formatted = String(fallback);
+  }
+  if (!formatted.endsWith("°")) {
+    formatted += String("°");
+  }
+  return formatted;
+}
+
+String formatTemperatureDegreesFromNumber(int value) {
+  return String(value) + String("°");
+}
+
+String jsonMessage(JsonVariantConst value) {
+  if (value.isNull()) {
+    return "";
+  }
+
+  if (value.is<const char*>()) {
+    return String(value.as<const char*>());
+  }
+
+  if (value.is<String>()) {
+    return value.as<String>();
+  }
+
+  return "";
+}
+
+String summarizePanelActionFailure(JsonDocument& response) {
+  const JsonVariantConst root = response.as<JsonVariantConst>();
+  String message = jsonMessage(root["message"]);
+
+  if (message.isEmpty()) {
+    message = jsonMessage(root["error"]);
+  }
+
+  if (message.indexOf("No access token available") >= 0
+      || message.indexOf("Please authorize the application") >= 0) {
+    return "Reconnect SmartThings";
+  }
+
+  if (message.indexOf("timed out") >= 0) {
+    return "Hub request timed out";
+  }
+
+  if (message.length() > 34) {
+    message.remove(34);
+  }
+
+  return message.isEmpty() ? "Setpoint update failed" : message;
+}
+
+const lv_img_dsc_t* thermostatWeatherGlyph(const ModeSnapshot& mode) {
+  const String icon = mode.metaWeatherIcon.isEmpty() ? "cloudy" : mode.metaWeatherIcon;
+
+  if (icon == "sunny") {
+    return mode.metaWeatherIsDay ? &hb_weather_thermometer_sun : &hb_weather_moon_star;
+  }
+  if (icon == "partly-cloudy") {
+    return mode.metaWeatherIsDay ? &hb_weather_cloud_sun : &hb_weather_cloud_moon;
+  }
+  if (icon == "fog") {
+    return &hb_weather_cloud_fog;
+  }
+  if (icon == "drizzle" || icon == "rain") {
+    return &hb_weather_cloud_rain;
+  }
+  if (icon == "sleet" || icon == "snow") {
+    return &hb_weather_cloud_snow;
+  }
+  if (icon == "storm") {
+    return &hb_weather_zap;
+  }
+  return &hb_weather_cloud;
+}
+
 void styleBackdropShape(
   lv_obj_t* object,
   lv_coord_t x,
@@ -828,7 +928,7 @@ void styleBackdropShape(
   lv_obj_clear_flag(object, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_clear_flag(object, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_radius(object, radius, 0);
-  lv_obj_set_style_border_width(object, 4, 0);
+  lv_obj_set_style_border_width(object, 5, 0);
   lv_obj_set_style_border_color(object, border, 0);
   lv_obj_set_style_border_opa(object, borderOpa, 0);
   lv_obj_set_style_bg_color(object, border, 0);
@@ -836,7 +936,6 @@ void styleBackdropShape(
   lv_obj_set_style_shadow_width(object, 0, 0);
   lv_obj_set_style_pad_all(object, 0, 0);
   lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_move_background(object);
 }
 
 void styleBackdropLine(
@@ -844,8 +943,8 @@ void styleBackdropLine(
   const lv_point_t* points,
   uint8_t pointCount,
   lv_color_t color,
-  lv_opa_t opacity = LV_OPA_40,
-  uint8_t width = 4
+  lv_opa_t opacity = static_cast<lv_opa_t>(56),
+  uint8_t width = 5
 ) {
   lv_line_set_points(line, points, pointCount);
   lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
@@ -855,10 +954,15 @@ void styleBackdropLine(
   lv_obj_set_style_line_width(line, width, 0);
   lv_obj_set_style_line_rounded(line, true, 0);
   lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_move_background(line);
 }
 
 void hideWeatherBackdrop() {
+  if (gWeatherGlyphImage) {
+    lv_obj_add_flag(gWeatherGlyphImage, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (gWeatherBadgeCard) {
+    lv_obj_add_flag(gWeatherBadgeCard, LV_OBJ_FLAG_HIDDEN);
+  }
   if (gWeatherSunCore) {
     lv_obj_add_flag(gWeatherSunCore, LV_OBJ_FLAG_HIDDEN);
   }
@@ -900,70 +1004,17 @@ void hideWeatherBackdrop() {
 void renderWeatherBackdrop(const ModeSnapshot& mode) {
   hideWeatherBackdrop();
 
-  if (mode.id != "thermostat" || mode.metaWeatherIcon.isEmpty()) {
+  if (mode.id != "thermostat") {
     return;
   }
 
-  const String icon = mode.metaWeatherIcon;
-  const lv_color_t sunColor = mode.metaWeatherIsDay
-    ? hex(homebrain::palette::kAccentYellow)
-    : hex(homebrain::palette::kAccentPurple);
-  const lv_color_t cloudColor = hex(homebrain::palette::kTextMuted);
-  const lv_color_t rainColor = hex(homebrain::palette::kAccentBlue);
-  const lv_color_t snowColor = hex(homebrain::palette::kTextSecondary);
-  const lv_color_t fogColor = hex(homebrain::palette::kAccentSlate);
-  const lv_color_t stormColor = hex(homebrain::palette::kAccentOrange);
-
-  const bool showSun = icon == "sunny" || icon == "partly-cloudy";
-  const bool showCloud = icon != "sunny";
-  const bool showRain = icon == "drizzle" || icon == "rain" || icon == "sleet";
-  const bool showSnow = icon == "snow";
-  const bool showFog = icon == "fog";
-  const bool showStorm = icon == "storm";
-
-  if (showSun && gWeatherSunCore) {
-    lv_obj_set_style_border_color(gWeatherSunCore, sunColor, 0);
-    lv_obj_set_style_bg_color(gWeatherSunCore, sunColor, 0);
-    lv_obj_clear_flag(gWeatherSunCore, LV_OBJ_FLAG_HIDDEN);
-    for (uint8_t index = 0; index < 8; index += 1) {
-      lv_obj_set_style_line_color(gWeatherSunRays[index], sunColor, 0);
-      lv_obj_clear_flag(gWeatherSunRays[index], LV_OBJ_FLAG_HIDDEN);
-    }
-  }
-
-  if (showCloud && gWeatherCloudBase) {
-    lv_obj_set_style_border_color(gWeatherCloudBase, cloudColor, 0);
-    lv_obj_clear_flag(gWeatherCloudBase, LV_OBJ_FLAG_HIDDEN);
-    for (uint8_t index = 0; index < 3; index += 1) {
-      lv_obj_set_style_border_color(gWeatherCloudPuffs[index], cloudColor, 0);
-      lv_obj_clear_flag(gWeatherCloudPuffs[index], LV_OBJ_FLAG_HIDDEN);
-    }
-  }
-
-  if (showRain) {
-    for (uint8_t index = 0; index < 3; index += 1) {
-      lv_obj_set_style_line_color(gWeatherRainLines[index], rainColor, 0);
-      lv_obj_clear_flag(gWeatherRainLines[index], LV_OBJ_FLAG_HIDDEN);
-    }
-  }
-
-  if (showSnow) {
-    for (uint8_t index = 0; index < 6; index += 1) {
-      lv_obj_set_style_line_color(gWeatherSnowLines[index], snowColor, 0);
-      lv_obj_clear_flag(gWeatherSnowLines[index], LV_OBJ_FLAG_HIDDEN);
-    }
-  }
-
-  if (showFog) {
-    for (uint8_t index = 0; index < 2; index += 1) {
-      lv_obj_set_style_line_color(gWeatherFogLines[index], fogColor, 0);
-      lv_obj_clear_flag(gWeatherFogLines[index], LV_OBJ_FLAG_HIDDEN);
-    }
-  }
-
-  if (showStorm && gWeatherBolt) {
-    lv_obj_set_style_line_color(gWeatherBolt, stormColor, 0);
-    lv_obj_clear_flag(gWeatherBolt, LV_OBJ_FLAG_HIDDEN);
+  if (gWeatherGlyphImage) {
+    lv_img_set_src(gWeatherGlyphImage, thermostatWeatherGlyph(mode));
+    lv_img_set_zoom(gWeatherGlyphImage, kThermostatWeatherZoom);
+    lv_obj_align(gWeatherGlyphImage, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_img_opa(gWeatherGlyphImage, kThermostatWeatherOpacity, 0);
+    lv_obj_clear_flag(gWeatherGlyphImage, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_background(gWeatherGlyphImage);
   }
 }
 
@@ -985,16 +1036,19 @@ void applyDefaultTextLayout() {
   lv_obj_set_width(gTitleLabel, lv_pct(100));
   lv_obj_set_style_text_align(gTitleLabel, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(gTitleLabel, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_transform_zoom(gTitleLabel, kZoomNormal, 0);
 
   lv_obj_set_pos(gCenterValueLabel, 0, 146);
   lv_obj_set_width(gCenterValueLabel, lv_pct(100));
   lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(gCenterValueLabel, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_transform_zoom(gCenterValueLabel, kZoomNormal, 0);
 
   lv_obj_set_pos(gSecondaryLabel, 0, 324);
   lv_obj_set_width(gSecondaryLabel, lv_pct(100));
   lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(gSecondaryLabel, &lv_font_montserrat_32, 0);
+  lv_obj_set_style_transform_zoom(gSecondaryLabel, kZoomNormal, 0);
 }
 
 void renderThermostatOverview(const ModeSnapshot& mode) {
@@ -1002,52 +1056,72 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN);
+  const String currentValue = mode.metaCurrentTemperature != kTemperatureUnavailable
+    ? formatTemperatureDegreesFromNumber(mode.metaCurrentTemperature)
+    : formatTemperatureDegrees(mode.centerValue, mode.knob.value);
 
-  lv_obj_set_pos(gTitleLabel, 0, 62);
   lv_obj_set_width(gTitleLabel, lv_pct(100));
+  lv_obj_align(gTitleLabel, LV_ALIGN_TOP_MID, 0, 58);
   lv_obj_set_style_text_align(gTitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gTitleLabel, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_font(gTitleLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gTitleLabel, kZoomNormal, 0);
+  lv_obj_set_style_text_letter_space(gTitleLabel, 1, 0);
+  lv_obj_set_style_text_color(gTitleLabel, hex(homebrain::palette::kTextPrimary), 0);
   lv_label_set_text(gTitleLabel, "Thermostat");
 
-  lv_obj_set_pos(gCenterValueLabel, 0, 150);
   lv_obj_set_width(gCenterValueLabel, lv_pct(100));
+  lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gCenterValueLabel, &lv_font_montserrat_48, 0);
-  lv_label_set_text(gCenterValueLabel, mode.centerValue.c_str());
+  lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_100, 0);
+  lv_obj_set_style_transform_zoom(gCenterValueLabel, kThermostatCenterZoom, 0);
+  lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
+  lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
+  lv_label_set_text(gCenterValueLabel, currentValue.c_str());
 
-  lv_obj_set_pos(gSecondaryLabel, 0, 334);
   lv_obj_set_width(gSecondaryLabel, lv_pct(100));
+  lv_obj_align(gSecondaryLabel, LV_ALIGN_CENTER, 0, 138);
   lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gSecondaryLabel, &lv_font_montserrat_32, 0);
+  lv_obj_set_style_text_font(gSecondaryLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gSecondaryLabel, kZoomNormal, 0);
+  lv_obj_set_style_text_letter_space(gSecondaryLabel, 0, 0);
+  lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextPrimary), 0);
   const String setPointValue = String(mode.knob.value) + String("°");
   lv_label_set_text(gSecondaryLabel, setPointValue.c_str());
 
-  lv_obj_set_pos(gHintLabel, 0, 376);
+  lv_obj_set_width(gHintLabel, lv_pct(100));
+  lv_obj_align(gHintLabel, LV_ALIGN_CENTER, 0, 174);
   lv_obj_set_width(gHintLabel, lv_pct(100));
   lv_obj_set_style_text_align(gHintLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gHintLabel, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_font(gHintLabel, &hb_font_space_grotesk_20, 0);
+  lv_obj_set_style_transform_zoom(gHintLabel, kZoomNormal, 0);
   lv_obj_set_style_text_color(gHintLabel, hex(homebrain::palette::kTextSecondary), 0);
   lv_label_set_text(gHintLabel, "Set point");
+
+  lv_obj_move_foreground(gTitleLabel);
+  lv_obj_move_foreground(gCenterValueLabel);
+  lv_obj_move_foreground(gSecondaryLabel);
+  lv_obj_move_foreground(gHintLabel);
+  lv_obj_move_foreground(gFooterLabel);
 }
 
 void renderThermostatAdjustment(const ModeSnapshot& mode) {
-  lv_obj_clear_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
 
-  lv_obj_set_pos(gTitleLabel, 0, 62);
-  lv_obj_set_width(gTitleLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gTitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gTitleLabel, &lv_font_montserrat_24, 0);
-  lv_label_set_text(gTitleLabel, "Thermostat");
-
-  lv_obj_set_pos(gCenterValueLabel, 0, 164);
   lv_obj_set_width(gCenterValueLabel, lv_pct(100));
+  lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gCenterValueLabel, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_100, 0);
+  lv_obj_set_style_transform_zoom(gCenterValueLabel, kThermostatAdjustmentZoom, 0);
+  lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
+  lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
   const String adjustmentValue = String(mode.knob.value) + String("°");
   lv_label_set_text(gCenterValueLabel, adjustmentValue.c_str());
+
+  lv_obj_move_foreground(gCenterValueLabel);
+  lv_obj_move_foreground(gFooterLabel);
 }
 
 void renderSettingsMode(const ModeSnapshot& mode) {
@@ -1199,10 +1273,11 @@ void renderMode() {
   }
 
   if (mode->id == "thermostat" && mode->knob.kind == "range" && !mode->metaDeviceId.isEmpty()) {
-    renderWeatherBackdrop(*mode);
     if (gPendingThermostatCommit) {
+      hideWeatherBackdrop();
       renderThermostatAdjustment(*mode);
     } else {
+      renderWeatherBackdrop(*mode);
       renderThermostatOverview(*mode);
     }
     renderThermostatButtons(*mode);
@@ -1764,85 +1839,113 @@ void createUi() {
   lv_obj_set_style_arc_width(gArc, 24, LV_PART_INDICATOR);
   lv_obj_set_style_arc_opa(gArc, LV_OPA_70, LV_PART_MAIN);
 
+  gWeatherGlyphImage = lv_img_create(gMainCard);
+  lv_obj_add_flag(gWeatherGlyphImage, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(gWeatherGlyphImage, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(gWeatherGlyphImage, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_img_opa(gWeatherGlyphImage, kThermostatWeatherOpacity, 0);
+  lv_obj_align(gWeatherGlyphImage, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_move_background(gWeatherGlyphImage);
+
   static const lv_point_t kSunRayPoints[8][2] = {
-    {{240, 68}, {240, 96}},
-    {{286, 84}, {272, 106}},
-    {{314, 128}, {290, 140}},
-    {{318, 188}, {290, 182}},
-    {{286, 232}, {272, 212}},
-    {{194, 232}, {208, 212}},
-    {{164, 188}, {190, 182}},
-    {{166, 128}, {190, 140}}
+    {{166, 36}, {166, 16}},
+    {{197, 47}, {211, 33}},
+    {{208, 77}, {229, 77}},
+    {{197, 108}, {211, 122}},
+    {{166, 119}, {166, 139}},
+    {{135, 108}, {121, 122}},
+    {{124, 77}, {103, 77}},
+    {{135, 47}, {121, 33}}
   };
   static const lv_point_t kRainPoints[3][2] = {
-    {{182, 234}, {168, 260}},
-    {{228, 242}, {214, 268}},
-    {{274, 234}, {260, 260}}
+    {{86, 168}, {74, 198}},
+    {{122, 178}, {110, 208}},
+    {{160, 168}, {148, 198}}
   };
   static const lv_point_t kSnowPoints[6][2] = {
-    {{178, 236}, {198, 258}},
-    {{178, 258}, {198, 236}},
-    {{188, 230}, {188, 264}},
-    {{246, 236}, {266, 258}},
-    {{246, 258}, {266, 236}},
-    {{256, 230}, {256, 264}}
+    {{88, 168}, {108, 188}},
+    {{88, 188}, {108, 168}},
+    {{98, 158}, {98, 198}},
+    {{146, 168}, {166, 188}},
+    {{146, 188}, {166, 168}},
+    {{156, 158}, {156, 198}}
   };
   static const lv_point_t kFogPoints[2][2] = {
-    {{168, 232}, {304, 232}},
-    {{182, 254}, {318, 254}}
+    {{66, 170}, {196, 170}},
+    {{78, 196}, {208, 196}}
   };
   static const lv_point_t kBoltPoints[5] = {
-    {252, 212},
-    {228, 258},
-    {252, 258},
-    {236, 300},
-    {282, 238}
+    {164, 118},
+    {142, 164},
+    {170, 164},
+    {152, 212},
+    {190, 152}
   };
 
-  gWeatherSunCore = lv_obj_create(gMainCard);
+  gWeatherBadgeCard = lv_obj_create(gMainCard);
+  lv_obj_set_pos(gWeatherBadgeCard, 110, 108);
+  lv_obj_set_size(gWeatherBadgeCard, 260, 260);
+  lv_obj_clear_flag(gWeatherBadgeCard, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(gWeatherBadgeCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(gWeatherBadgeCard, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(gWeatherBadgeCard, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(gWeatherBadgeCard, 0, 0);
+  lv_obj_set_style_shadow_width(gWeatherBadgeCard, 0, 0);
+  lv_obj_set_style_pad_all(gWeatherBadgeCard, 0, 0);
+  lv_obj_add_flag(gWeatherBadgeCard, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_background(gWeatherBadgeCard);
+
+  gWeatherSunCore = lv_obj_create(gWeatherBadgeCard);
   styleBackdropShape(
     gWeatherSunCore,
-    182,
-    98,
-    116,
-    116,
+    146,
+    57,
+    40,
+    40,
     hex(homebrain::palette::kAccentYellow),
     LV_RADIUS_CIRCLE,
-    LV_OPA_40,
-    LV_OPA_10
+    static_cast<lv_opa_t>(40),
+    LV_OPA_TRANSP
   );
+  lv_obj_set_style_border_width(gWeatherSunCore, 8, 0);
 
   for (uint8_t index = 0; index < 8; index += 1) {
-    gWeatherSunRays[index] = lv_line_create(gMainCard);
+    gWeatherSunRays[index] = lv_line_create(gWeatherBadgeCard);
     styleBackdropLine(gWeatherSunRays[index], kSunRayPoints[index], 2, hex(homebrain::palette::kAccentYellow));
+    lv_obj_set_style_line_width(gWeatherSunRays[index], 8, 0);
   }
 
-  gWeatherCloudPuffs[0] = lv_obj_create(gMainCard);
-  styleBackdropShape(gWeatherCloudPuffs[0], 150, 150, 64, 64, hex(homebrain::palette::kTextMuted), LV_RADIUS_CIRCLE);
-  gWeatherCloudPuffs[1] = lv_obj_create(gMainCard);
-  styleBackdropShape(gWeatherCloudPuffs[1], 192, 124, 90, 90, hex(homebrain::palette::kTextMuted), LV_RADIUS_CIRCLE);
-  gWeatherCloudPuffs[2] = lv_obj_create(gMainCard);
-  styleBackdropShape(gWeatherCloudPuffs[2], 250, 152, 66, 66, hex(homebrain::palette::kTextMuted), LV_RADIUS_CIRCLE);
-  gWeatherCloudBase = lv_obj_create(gMainCard);
-  styleBackdropShape(gWeatherCloudBase, 144, 176, 178, 50, hex(homebrain::palette::kTextMuted), 26);
+  gWeatherCloudPuffs[0] = lv_obj_create(gWeatherBadgeCard);
+  styleBackdropShape(gWeatherCloudPuffs[0], 54, 104, 46, 46, hex(homebrain::palette::kTextPrimary), LV_RADIUS_CIRCLE, static_cast<lv_opa_t>(56));
+  lv_obj_set_style_border_width(gWeatherCloudPuffs[0], 8, 0);
+  gWeatherCloudPuffs[1] = lv_obj_create(gWeatherBadgeCard);
+  styleBackdropShape(gWeatherCloudPuffs[1], 88, 76, 74, 74, hex(homebrain::palette::kTextPrimary), LV_RADIUS_CIRCLE, static_cast<lv_opa_t>(56));
+  lv_obj_set_style_border_width(gWeatherCloudPuffs[1], 8, 0);
+  gWeatherCloudPuffs[2] = lv_obj_create(gWeatherBadgeCard);
+  styleBackdropShape(gWeatherCloudPuffs[2], 146, 108, 44, 44, hex(homebrain::palette::kTextPrimary), LV_RADIUS_CIRCLE, static_cast<lv_opa_t>(56));
+  lv_obj_set_style_border_width(gWeatherCloudPuffs[2], 8, 0);
+  gWeatherCloudBase = lv_obj_create(gWeatherBadgeCard);
+  styleBackdropShape(gWeatherCloudBase, 56, 124, 134, 30, hex(homebrain::palette::kTextPrimary), 15, static_cast<lv_opa_t>(56));
+  lv_obj_set_style_border_width(gWeatherCloudBase, 8, 0);
 
   for (uint8_t index = 0; index < 3; index += 1) {
-    gWeatherRainLines[index] = lv_line_create(gMainCard);
+    gWeatherRainLines[index] = lv_line_create(gWeatherBadgeCard);
     styleBackdropLine(gWeatherRainLines[index], kRainPoints[index], 2, hex(homebrain::palette::kAccentBlue));
+    lv_obj_set_style_line_width(gWeatherRainLines[index], 8, 0);
   }
 
   for (uint8_t index = 0; index < 6; index += 1) {
-    gWeatherSnowLines[index] = lv_line_create(gMainCard);
-    styleBackdropLine(gWeatherSnowLines[index], kSnowPoints[index], 2, hex(homebrain::palette::kTextSecondary), LV_OPA_40, 3);
+    gWeatherSnowLines[index] = lv_line_create(gWeatherBadgeCard);
+    styleBackdropLine(gWeatherSnowLines[index], kSnowPoints[index], 2, hex(homebrain::palette::kTextSecondary), LV_OPA_40, 6);
   }
 
   for (uint8_t index = 0; index < 2; index += 1) {
-    gWeatherFogLines[index] = lv_line_create(gMainCard);
-    styleBackdropLine(gWeatherFogLines[index], kFogPoints[index], 2, hex(homebrain::palette::kAccentSlate), LV_OPA_30, 4);
+    gWeatherFogLines[index] = lv_line_create(gWeatherBadgeCard);
+    styleBackdropLine(gWeatherFogLines[index], kFogPoints[index], 2, hex(homebrain::palette::kAccentSlate), LV_OPA_30, 8);
   }
 
-  gWeatherBolt = lv_line_create(gMainCard);
-  styleBackdropLine(gWeatherBolt, kBoltPoints, 5, hex(homebrain::palette::kAccentOrange), LV_OPA_50, 5);
+  gWeatherBolt = lv_line_create(gWeatherBadgeCard);
+  styleBackdropLine(gWeatherBolt, kBoltPoints, 5, hex(homebrain::palette::kAccentOrange), LV_OPA_50, 8);
 
   gHintLabel = lv_label_create(gMainCard);
   lv_obj_set_pos(gHintLabel, 70, 268);
@@ -1928,9 +2031,67 @@ void ensureWiFiConnected() {
 }
 
 void queueThermostatCommit(int value) {
+  gQueuedThermostatDispatch = false;
+  gQueuedThermostatDeviceId = "";
   gPendingThermostatCommit = true;
   gPendingThermostatValue = value;
   gPendingThermostatCommitAt = millis();
+}
+
+bool commitPendingThermostatValueNow() {
+  if (!gPendingThermostatCommit) {
+    return false;
+  }
+
+  ModeSnapshot* mode = currentMode();
+  if (!mode || mode->id != "thermostat" || mode->metaDeviceId.isEmpty()) {
+    gPendingThermostatCommit = false;
+    return false;
+  }
+
+  gQueuedThermostatDeviceId = mode->metaDeviceId;
+  gQueuedThermostatValue = gPendingThermostatValue;
+  gQueuedThermostatDispatchAt = millis() + kThermostatDispatchDelayMs;
+  gQueuedThermostatDispatch = true;
+  gPendingThermostatCommit = false;
+  renderMode();
+  return true;
+}
+
+void dispatchQueuedThermostatCommitIfReady() {
+  if (!gQueuedThermostatDispatch) {
+    return;
+  }
+
+  if (millis() < gQueuedThermostatDispatchAt) {
+    return;
+  }
+
+  if (gQueuedThermostatDeviceId.isEmpty()) {
+    gQueuedThermostatDispatch = false;
+    return;
+  }
+
+  StaticJsonDocument<256> request;
+  request["type"] = "thermostat.set_temperature";
+  request["targetId"] = gQueuedThermostatDeviceId;
+  request["value"] = gQueuedThermostatValue;
+
+  const int committedValue = gQueuedThermostatValue;
+  gQueuedThermostatDispatch = false;
+  gQueuedThermostatDeviceId = "";
+
+  DynamicJsonDocument response(1024);
+  if (postPanelJson(panelActionUrl(), request, &response)) {
+    setStatusLine("Setpoint " + String(committedValue) + " sent");
+    fetchPanelState();
+    return;
+  }
+
+  const String failureStatus = summarizePanelActionFailure(response);
+  fetchPanelState();
+  setStatusLine(failureStatus);
+  renderMode();
 }
 
 void commitPendingThermostatValueIfReady() {
@@ -1942,26 +2103,7 @@ void commitPendingThermostatValueIfReady() {
     return;
   }
 
-  ModeSnapshot* mode = currentMode();
-  if (!mode || mode->id != "thermostat" || mode->metaDeviceId.isEmpty()) {
-    gPendingThermostatCommit = false;
-    return;
-  }
-
-  StaticJsonDocument<256> request;
-  request["type"] = "thermostat.set_temperature";
-  request["targetId"] = mode->metaDeviceId;
-  request["value"] = gPendingThermostatValue;
-
-  gPendingThermostatCommit = false;
-
-  if (postPanelJson(panelActionUrl(), request)) {
-    setStatusLine("Setpoint " + String(gPendingThermostatValue) + " sent");
-    fetchPanelState();
-  } else {
-    setStatusLine("Setpoint update failed");
-    renderMode();
-  }
+  commitPendingThermostatValueNow();
 }
 
 void persistBrightnessIfReady() {
@@ -2035,13 +2177,41 @@ void pollEncoder() {
   }
 
   const int currentA = digitalRead(kEncoderAPin);
-  if (currentA != gLastEncoderA && currentA == HIGH) {
-    // Match the physical bezel direction to the UI contract:
-    // clockwise increases, counterclockwise decreases.
-    const int direction = (digitalRead(kEncoderBPin) == LOW) ? -1 : 1;
-    handleEncoderTurn(direction);
+  const int currentB = digitalRead(kEncoderBPin);
+  const uint8_t currentState = static_cast<uint8_t>((currentA << 1) | currentB);
+  if (currentState != gLastEncoderState) {
+    int8_t delta = 0;
+    switch ((gLastEncoderState << 2) | currentState) {
+      case 0b0001:
+      case 0b0111:
+      case 0b1110:
+      case 0b1000:
+        delta = 1;
+        break;
+      case 0b0010:
+      case 0b1011:
+      case 0b1101:
+      case 0b0100:
+        delta = -1;
+        break;
+      default:
+        delta = 0;
+        gEncoderDeltaAccumulator = 0;
+        break;
+    }
+
+    gLastEncoderState = currentState;
+    if (delta != 0) {
+      gEncoderDeltaAccumulator += delta;
+      if (gEncoderDeltaAccumulator >= 4) {
+        handleEncoderTurn(1);
+        gEncoderDeltaAccumulator = 0;
+      } else if (gEncoderDeltaAccumulator <= -4) {
+        handleEncoderTurn(-1);
+        gEncoderDeltaAccumulator = 0;
+      }
+    }
   }
-  gLastEncoderA = currentA;
 
   const bool pressed = gPcf8574.digitalRead(P5, true) == LOW;
   if (pressed && !gEncoderPressed) {
@@ -2064,6 +2234,11 @@ void pollEncoder() {
       return;
     }
 
+    if (mode->id == "thermostat" && gPendingThermostatCommit) {
+      commitPendingThermostatValueNow();
+      return;
+    }
+
     dispatchQuickAction(mode->knob.pressAction);
   }
 }
@@ -2077,7 +2252,7 @@ void maybeRefreshState() {
     return;
   }
 
-  if (gPendingThermostatCommit) {
+  if (gPendingThermostatCommit || gQueuedThermostatDispatch) {
     return;
   }
 
@@ -2110,7 +2285,8 @@ void setup() {
 
   pinMode(kEncoderAPin, INPUT);
   pinMode(kEncoderBPin, INPUT);
-  gLastEncoderA = digitalRead(kEncoderAPin);
+  gLastEncoderState = static_cast<uint8_t>((digitalRead(kEncoderAPin) << 1) | digitalRead(kEncoderBPin));
+  gEncoderDeltaAccumulator = 0;
 
   setupWiFi();
 }
@@ -2122,6 +2298,7 @@ void loop() {
   commitPendingThermostatValueIfReady();
   persistBrightnessIfReady();
   ensureWiFiConnected();
+  dispatchQueuedThermostatCommitIfReady();
   maybeRefreshState();
   maybeApplyOtaUpdate();
   delay(5);

@@ -159,6 +159,152 @@ test('refreshAccessToken preserves stored tokens on transient SmartThings failur
   assert.equal(clearTokensCalled, false);
 });
 
+test('refreshAccessToken deduplicates concurrent refresh attempts', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalAxiosPost = axios.post;
+
+  let updateTokensCalled = 0;
+  let refreshRequests = 0;
+
+  SmartThingsIntegration.getIntegration = async () => ({
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    accessToken: 'expired-access-token',
+    refreshToken: 'refresh-token-1',
+    updateTokens: async () => {
+      updateTokensCalled += 1;
+    }
+  });
+  axios.post = async () => {
+    refreshRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return {
+      status: 200,
+      data: {
+        access_token: 'fresh-access-token',
+        refresh_token: 'refresh-token-2',
+        expires_in: 3600
+      }
+    };
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    axios.post = originalAxiosPost;
+    smartThingsService.refreshAccessTokenPromise = null;
+  });
+
+  const [first, second] = await Promise.all([
+    smartThingsService.refreshAccessToken(),
+    smartThingsService.refreshAccessToken()
+  ]);
+
+  assert.deepEqual(first, second);
+  assert.equal(refreshRequests, 1);
+  assert.equal(updateTokensCalled, 1);
+});
+
+test('refreshAccessToken does not clear newer tokens after a stale invalid_grant failure', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalAxiosPost = axios.post;
+
+  let getIntegrationCalls = 0;
+  let clearTokensCalled = false;
+
+  SmartThingsIntegration.getIntegration = async () => {
+    getIntegrationCalls += 1;
+
+    if (getIntegrationCalls === 1) {
+      return {
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        accessToken: 'expired-access-token',
+        refreshToken: 'stale-refresh-token',
+        updateTokens: async () => {}
+      };
+    }
+
+    return {
+      accessToken: 'fresh-access-token',
+      refreshToken: 'fresh-refresh-token',
+      clearTokens: async () => {
+        clearTokensCalled = true;
+      }
+    };
+  };
+  axios.post = async () => {
+    const error = new Error('Request failed with status code 400');
+    error.response = {
+      status: 400,
+      data: {
+        error: 'invalid_grant',
+        error_description: 'Refresh token expired'
+      }
+    };
+    throw error;
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    axios.post = originalAxiosPost;
+    smartThingsService.refreshAccessTokenPromise = null;
+  });
+
+  await assert.rejects(
+    () => smartThingsService.refreshAccessToken(),
+    /Failed to refresh access token: Refresh token expired/
+  );
+
+  assert.equal(clearTokensCalled, false);
+});
+
+test('getValidAccessToken falls back to the soft-expired access token when refresh fails with a transient 5xx response', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+  const originalGetSettings = Settings.getSettings;
+  const originalAxiosPost = axios.post;
+
+  let clearTokensCalled = false;
+
+  SmartThingsIntegration.getIntegration = async () => ({
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    accessToken: 'soft-expired-access-token',
+    refreshToken: 'refresh-token-1',
+    expiresAt: new Date(Date.now() - 60 * 1000),
+    isTokenValid: () => false,
+    updateTokens: async () => {},
+    clearTokens: async () => {
+      clearTokensCalled = true;
+    }
+  });
+  Settings.getSettings = async () => ({
+    smartthingsUseOAuth: true,
+    smartthingsToken: ''
+  });
+  axios.post = async () => {
+    const error = new Error('Request failed with status code 503');
+    error.response = {
+      status: 503,
+      data: {
+        message: 'Service unavailable'
+      }
+    };
+    throw error;
+  };
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+    Settings.getSettings = originalGetSettings;
+    axios.post = originalAxiosPost;
+    smartThingsService.refreshAccessTokenPromise = null;
+  });
+
+  const token = await smartThingsService.getValidAccessToken();
+
+  assert.equal(token, 'soft-expired-access-token');
+  assert.equal(clearTokensCalled, false);
+});
+
 test('makeAuthenticatedRequest refreshes and retries once after a SmartThings 401', async (t) => {
   const originalAxiosRequest = axios.request;
   const originalGetIntegration = SmartThingsIntegration.getIntegration;
