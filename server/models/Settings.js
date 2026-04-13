@@ -275,6 +275,12 @@ const SettingsSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  authSessionMaxAgeDays: {
+    type: Number,
+    min: 1,
+    max: 3650,
+    default: 365
+  },
   
   // Metadata
   lastModified: {

@@ -6,6 +6,7 @@ const OIDCProviderSettings = require('../models/OIDCProviderSettings');
 const OIDCClient = require('../models/OIDCClient');
 const OIDCAuthorizationCode = require('../models/OIDCAuthorizationCode');
 const UserService = require('./userService');
+const authSessionService = require('./authSessionService');
 const { generateAccessToken } = require('../utils/auth');
 const { getAxiomCallbackUrl } = require('../utils/platformUrls');
 const { getRequestOrigin } = require('../utils/publicOrigin');
@@ -269,21 +270,8 @@ async function getClientById(clientId) {
 }
 
 async function getUserFromSessionToken(sessionToken) {
-  const normalizedToken = trimString(sessionToken);
-  if (!normalizedToken || !process.env.REFRESH_TOKEN_SECRET) {
-    return null;
-  }
-
-  try {
-    const decoded = jwt.verify(normalizedToken, process.env.REFRESH_TOKEN_SECRET);
-    const user = await UserService.get(decoded.sub);
-    if (!user || user.refreshToken !== normalizedToken) {
-      return null;
-    }
-    return user;
-  } catch (_error) {
-    return null;
-  }
+  const { user } = await authSessionService.resolveUserFromSessionToken(sessionToken);
+  return user;
 }
 
 async function getAuthenticatedUserFromSession(req, res) {
@@ -291,6 +279,9 @@ async function getAuthenticatedUserFromSession(req, res) {
   if (accessToken && process.env.JWT_SECRET) {
     try {
       const decoded = jwt.verify(accessToken, process.env.JWT_SECRET);
+      if (decoded?.sid) {
+        await authSessionService.assertSessionActive(decoded.sub, decoded.sid);
+      }
       const user = await UserService.get(decoded.sub);
       if (user) {
         return user;
@@ -301,7 +292,7 @@ async function getAuthenticatedUserFromSession(req, res) {
   }
 
   const sessionToken = getCookieValue(req, SESSION_TOKEN_COOKIE_NAME);
-  const user = await getUserFromSessionToken(sessionToken);
+  const { user, session } = await authSessionService.resolveUserFromSessionToken(sessionToken);
   if (!user) {
     if (sessionToken || accessToken) {
       clearAuthCookies(res);
@@ -309,7 +300,7 @@ async function getAuthenticatedUserFromSession(req, res) {
     return null;
   }
 
-  setAccessTokenCookie(res, generateAccessToken(user));
+  setAccessTokenCookie(res, generateAccessToken(user, { sessionId: session?.sessionId }));
   setSessionTokenCookie(res, sessionToken);
   return user;
 }

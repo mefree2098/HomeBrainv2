@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
 const authMiddleware = require('../routes/middlewares/auth');
+const authSessionService = require('../services/authSessionService');
 const oidcService = require('../services/oidcService');
 const OIDCProviderSettings = require('../models/OIDCProviderSettings');
 const UserService = require('../services/userService');
@@ -163,6 +164,58 @@ test('verifyAccessToken rejects HomeBrain access when the user only has Axiom en
     (error) => {
       assert.equal(error.status, 403);
       assert.equal(error.message, 'HomeBrain access is not enabled for this account');
+      return true;
+    }
+  );
+});
+
+test('verifyAccessToken rejects a valid JWT when its session has been revoked', async (t) => {
+  const originalUserGet = UserService.get;
+  const originalJwtSecret = process.env.JWT_SECRET;
+  const originalAssertSessionActive = authSessionService.assertSessionActive;
+
+  t.after(() => {
+    UserService.get = originalUserGet;
+    process.env.JWT_SECRET = originalJwtSecret;
+    authSessionService.assertSessionActive = originalAssertSessionActive;
+  });
+
+  process.env.JWT_SECRET = 'legacy-jwt-secret';
+
+  const user = {
+    _id: '507f1f77bcf86cd799439011',
+    email: 'admin@example.com',
+    role: 'admin',
+    isActive: true,
+    platforms: {
+      homebrain: true,
+      axiom: true
+    }
+  };
+
+  UserService.get = async () => user;
+  authSessionService.assertSessionActive = async () => {
+    const error = new Error('Session has been revoked');
+    error.status = 401;
+    throw error;
+  };
+
+  const accessToken = jwt.sign(
+    {
+      sub: user._id,
+      sid: 'session-ios-1'
+    },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: '1h'
+    }
+  );
+
+  await assert.rejects(
+    () => authMiddleware.verifyAccessToken(accessToken, ['admin']),
+    (error) => {
+      assert.equal(error.status, 401);
+      assert.equal(error.message, 'Session has been revoked');
       return true;
     }
   );

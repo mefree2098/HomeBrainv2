@@ -181,7 +181,7 @@ Stay in:
 Select the orb and configure:
 
 - `Thermostat Surface`: thermostat device, temperature sensor, and bedtime long-press scene
-- `Room Surface`: favorite room devices and room scenes
+- `Room Surface`: room scenes plus up to four pinned device controls chosen from a searchable, filterable full-home supported-device list
 - `Media Surface`: Harmony hub, activity shortcuts, and command device for the knob
 - `Quiet Surface`: bedtime, morning, white-noise, lock-up, and night-light targets
 

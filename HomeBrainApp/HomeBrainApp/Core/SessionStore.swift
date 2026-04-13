@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 
 @MainActor
 final class SessionStore: ObservableObject {
@@ -25,9 +26,21 @@ final class SessionStore: ObservableObject {
     private let accessTokenKey = "homebrain.accessToken"
     private let refreshTokenKey = "homebrain.refreshToken"
     private let currentUserKey = "homebrain.currentUser"
+    private let clientInstallationIdKey = "homebrain.clientInstallationId"
     private static let defaultServerURL = "https://example.com"
     private static let homeBrainAccessDeniedMessage = "This account does not have HomeBrain access."
     private static let accessTokenRefreshLeadTime: TimeInterval = 5 * 60
+
+    private(set) lazy var clientInstallationId: String = {
+        if let existing = defaults.string(forKey: clientInstallationIdKey),
+           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return existing
+        }
+
+        let created = UUID().uuidString
+        defaults.set(created, forKey: clientInstallationIdKey)
+        return created
+    }()
 
     init() {
         let storedServerURL = Self.normalizedServerURLString(from: defaults.string(forKey: serverURLKey))
@@ -148,7 +161,11 @@ final class SessionStore: ObservableObject {
 
     func logout() {
         Task {
-            _ = try? await apiClient.post("/api/auth/logout", body: ["email": currentUser?.email ?? ""])
+            let payload: [String: Any] = [
+                "email": currentUser?.email ?? "",
+                "refreshToken": refreshToken ?? ""
+            ]
+            _ = try? await apiClient.post("/api/auth/logout", body: payload, authorized: false)
             await MainActor.run {
                 clearAuthData()
             }
@@ -276,6 +293,11 @@ final class SessionStore: ObservableObject {
                 expireAuthentication()
                 throw APIError.unauthorized
             }
+            if case .server(let statusCode, let message) = apiError,
+               statusCode == 401 || statusCode == 403 {
+                expireAuthentication(message: message)
+                throw APIError.unauthorized
+            }
             throw apiError
         }
     }
@@ -394,5 +416,46 @@ final class SessionStore: ObservableObject {
         }
 
         return false
+    }
+
+    var clientHeaders: [String: String] {
+        var headers: [String: String] = [
+            "X-HomeBrain-Client-Type": "ios",
+            "X-HomeBrain-Client-Name": Self.deviceDisplayName(),
+            "X-HomeBrain-Device-Id": clientInstallationId
+        ]
+
+        if let version = Self.appVersionString() {
+            headers["X-HomeBrain-App-Version"] = version
+        }
+
+        return headers
+    }
+
+    private static func deviceDisplayName() -> String {
+        let device = UIDevice.current
+        let pieces = [
+            device.name.trimmingCharacters(in: .whitespacesAndNewlines),
+            device.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        ].filter { !$0.isEmpty }
+
+        return pieces.isEmpty ? "iOS Device" : pieces.joined(separator: " • ")
+    }
+
+    private static func appVersionString() -> String? {
+        let info = Bundle.main.infoDictionary
+        let shortVersion = info?["CFBundleShortVersionString"] as? String
+        let build = info?["CFBundleVersion"] as? String
+
+        switch (shortVersion?.trimmingCharacters(in: .whitespacesAndNewlines), build?.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        case let (version?, build?) where !version.isEmpty && !build.isEmpty:
+            return "\(version) (\(build))"
+        case let (version?, _) where !version.isEmpty:
+            return version
+        case let (_, build?) where !build.isEmpty:
+            return build
+        default:
+            return nil
+        }
     }
 }

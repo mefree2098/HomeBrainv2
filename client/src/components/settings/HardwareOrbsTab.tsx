@@ -4,6 +4,7 @@ import {
   CheckCircle,
   Copy,
   Cpu,
+  Search,
   Home,
   Loader2,
   Moon,
@@ -96,6 +97,8 @@ type ProvisioningDialogState = {
 } | null
 
 const SELECT_NONE = "__none__"
+const ROOM_DEVICE_FILTER_ALL = "__all__"
+const ROOM_DEVICE_FILTER_PANEL_ROOM = "__panel_room__"
 
 const DEFAULT_CREATE_DRAFT: CreatePanelDraft = {
   name: "",
@@ -105,6 +108,14 @@ const DEFAULT_CREATE_DRAFT: CreatePanelDraft = {
 }
 
 const ROOM_CONTROL_DEVICE_TYPES = new Set(["light", "switch", "speaker", "lock", "garage"])
+const ROOM_CONTROL_DEVICE_TYPE_OPTIONS = [
+  { value: ROOM_DEVICE_FILTER_ALL, label: "All device types" },
+  { value: "light", label: "Lights" },
+  { value: "switch", label: "Switches" },
+  { value: "speaker", label: "Speakers" },
+  { value: "lock", label: "Locks" },
+  { value: "garage", label: "Garage doors" }
+]
 
 const sortPanels = (panels: WallPanelRecord[]) =>
   [...panels].sort((left, right) => {
@@ -277,6 +288,9 @@ export function HardwareOrbsTab() {
   const [provisioningDialogOpen, setProvisioningDialogOpen] = useState(false)
   const [loadingProvisioningKey, setLoadingProvisioningKey] = useState("")
   const [rotatingProvisioningKey, setRotatingProvisioningKey] = useState("")
+  const [roomDeviceSearch, setRoomDeviceSearch] = useState("")
+  const [roomDeviceRoomFilter, setRoomDeviceRoomFilter] = useState(ROOM_DEVICE_FILTER_PANEL_ROOM)
+  const [roomDeviceTypeFilter, setRoomDeviceTypeFilter] = useState(ROOM_DEVICE_FILTER_ALL)
 
   const selectedPanel = useMemo(
     () => panels.find((panel) => panel.id === selectedPanelId) || null,
@@ -286,6 +300,12 @@ export function HardwareOrbsTab() {
   useEffect(() => {
     setDraft(selectedPanel ? toPanelDraft(selectedPanel) : null)
   }, [selectedPanelId, selectedPanel?.updatedAt, selectedPanel?.id])
+
+  useEffect(() => {
+    setRoomDeviceSearch("")
+    setRoomDeviceRoomFilter(ROOM_DEVICE_FILTER_PANEL_ROOM)
+    setRoomDeviceTypeFilter(ROOM_DEVICE_FILTER_ALL)
+  }, [selectedPanelId])
 
   const loadOrbData = async (options: { silent?: boolean; focusPanelId?: string } = {}) => {
     const { silent = false, focusPanelId } = options
@@ -375,6 +395,11 @@ export function HardwareOrbsTab() {
     return devices.filter((device) => normalizeString(device.room) === draftRoom)
   }, [devices, draftRoom])
 
+  const roomControlCandidates = useMemo(
+    () => devices.filter((device) => ROOM_CONTROL_DEVICE_TYPES.has(normalizeString(device.type))),
+    [devices]
+  )
+
   const thermostatCandidates = useMemo(
     () => devices.filter((device) => normalizeString(device.type) === "thermostat"),
     [devices]
@@ -385,10 +410,32 @@ export function HardwareOrbsTab() {
     [devices]
   )
 
-  const roomFavoriteCandidates = useMemo(
-    () => roomDevices.filter((device) => ROOM_CONTROL_DEVICE_TYPES.has(normalizeString(device.type))),
-    [roomDevices]
-  )
+  const filteredRoomControlCandidates = useMemo(() => {
+    const normalizedSearch = normalizeString(roomDeviceSearch).toLowerCase()
+
+    return roomControlCandidates.filter((device) => {
+      const deviceRoom = normalizeString(device.room)
+      const deviceType = normalizeString(device.type)
+      const matchesRoom =
+        roomDeviceRoomFilter === ROOM_DEVICE_FILTER_ALL
+        || (roomDeviceRoomFilter === ROOM_DEVICE_FILTER_PANEL_ROOM
+          ? (!draftRoom || deviceRoom === draftRoom)
+          : deviceRoom === roomDeviceRoomFilter)
+      const matchesType = roomDeviceTypeFilter === ROOM_DEVICE_FILTER_ALL || deviceType === roomDeviceTypeFilter
+
+      if (!matchesRoom || !matchesType) {
+        return false
+      }
+
+      if (!normalizedSearch) {
+        return true
+      }
+
+      return [device.name, device.room, device.type]
+        .map((value) => normalizeString(value).toLowerCase())
+        .some((value) => value.includes(normalizedSearch))
+    })
+  }, [draftRoom, roomControlCandidates, roomDeviceRoomFilter, roomDeviceSearch, roomDeviceTypeFilter])
 
   const quietNightLightCandidates = useMemo(
     () => roomDevices.filter((device) => ["light", "switch"].includes(normalizeString(device.type))),
@@ -1013,24 +1060,77 @@ export function HardwareOrbsTab() {
                   <div className="space-y-3">
                     <div>
                       <p className="text-sm font-medium">Room devices</p>
-                      <p className="text-xs text-muted-foreground">Recommended: choose up to four direct room controls.</p>
+                      <p className="text-xs text-muted-foreground">
+                        Choose up to four pinned controls. Start with {draftRoom || "this room"}, then search or filter across the full supported device inventory.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px]">
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={roomDeviceSearch}
+                          onChange={(event) => setRoomDeviceSearch(event.target.value)}
+                          placeholder="Search devices by name, room, or type"
+                          className="pl-10"
+                        />
+                      </div>
+                      <Select value={roomDeviceRoomFilter} onValueChange={setRoomDeviceRoomFilter}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Filter by room" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ROOM_DEVICE_FILTER_PANEL_ROOM}>
+                            {draftRoom ? `${draftRoom} first` : "This orb's room"}
+                          </SelectItem>
+                          <SelectItem value={ROOM_DEVICE_FILTER_ALL}>All rooms</SelectItem>
+                          {roomOptions.map((room) => (
+                            <SelectItem key={room} value={room}>
+                              {room}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={roomDeviceTypeFilter} onValueChange={setRoomDeviceTypeFilter}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Filter by type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ROOM_CONTROL_DEVICE_TYPE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>
+                        Showing {filteredRoomControlCandidates.length} of {roomControlCandidates.length} supported devices
+                      </span>
+                      <span>{draft.roomFavoriteDeviceIds.length}/4 selected</span>
                     </div>
                     <ScrollArea className="h-56 rounded-xl border border-border/60 bg-background/60">
                       <div className="space-y-2 p-3">
-                        {roomFavoriteCandidates.length === 0 ? (
+                        {filteredRoomControlCandidates.length === 0 ? (
                           <p className="text-sm text-muted-foreground">
-                            No room-control devices were found for {draftRoom || "this room"} yet.
+                            No supported devices match the current search and filters.
                           </p>
-                        ) : roomFavoriteCandidates.map((device) => {
+                        ) : filteredRoomControlCandidates.map((device) => {
                           const deviceId = getDeviceId(device)
                           const checked = draft.roomFavoriteDeviceIds.includes(deviceId)
+                          const selectionLimitReached = draft.roomFavoriteDeviceIds.length >= 4 && !checked
                           return (
                             <label
                               key={deviceId}
-                              className="flex cursor-pointer items-start gap-3 rounded-lg border border-transparent px-3 py-2 hover:border-cyan-300/30 hover:bg-cyan-500/[0.03]"
+                              className={`flex items-start gap-3 rounded-lg border border-transparent px-3 py-2 ${
+                                selectionLimitReached
+                                  ? "cursor-not-allowed opacity-60"
+                                  : "cursor-pointer hover:border-cyan-300/30 hover:bg-cyan-500/[0.03]"
+                              }`}
                             >
                               <Checkbox
                                 checked={checked}
+                                disabled={selectionLimitReached}
                                 onCheckedChange={(value) =>
                                   mutateSelectedDraft((current) => ({
                                     ...current,

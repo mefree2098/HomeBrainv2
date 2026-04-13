@@ -506,10 +506,12 @@ function buildThermostatMode(panel, thermostatDevice, sensorDevice) {
   });
 }
 
-function pickRoomDevices(panel, roomDevices = []) {
+function pickRoomDevices(panel, roomDevices = [], allDevices = []) {
   const explicitIds = uniqueIds(panel?.settings?.roomControl?.favoriteDeviceIds);
   if (explicitIds.length > 0) {
-    const byId = new Map(roomDevices.map((device) => [toId(device._id), device]));
+    const byId = new Map(
+      [...allDevices, ...roomDevices].map((device) => [toId(device._id), device])
+    );
     return explicitIds.map((id) => byId.get(id)).filter(Boolean).slice(0, 4);
   }
 
@@ -518,9 +520,11 @@ function pickRoomDevices(panel, roomDevices = []) {
     .slice(0, 4);
 }
 
-async function buildRoomMode(panel, roomDevices = []) {
+async function buildRoomMode(panel, roomDevices = [], allDevices = []) {
   const quickActions = [];
   const configuredScenes = await loadScenesInOrder(panel?.settings?.roomControl?.sceneIds);
+  const explicitDeviceIds = uniqueIds(panel?.settings?.roomControl?.favoriteDeviceIds);
+  const pinnedDevices = pickRoomDevices(panel, roomDevices, allDevices);
 
   configuredScenes.slice(0, 2).forEach((scene) => {
     quickActions.push(makeQuickAction({
@@ -533,7 +537,7 @@ async function buildRoomMode(panel, roomDevices = []) {
     }));
   });
 
-  pickRoomDevices(panel, roomDevices).forEach((device) => {
+  pinnedDevices.forEach((device) => {
     quickActions.push(makeQuickAction({
       id: `room-device-${toId(device._id)}`,
       label: device.name,
@@ -545,21 +549,25 @@ async function buildRoomMode(panel, roomDevices = []) {
     }));
   });
 
-  const controllableCount = roomDevices.filter((device) => ROOM_DEVICE_TYPES.has(trimString(device?.type).toLowerCase())).length;
-  const activeCount = roomDevices.filter((device) => ROOM_DEVICE_TYPES.has(trimString(device?.type).toLowerCase()) && device.status).length;
+  const summaryDevices = explicitDeviceIds.length > 0
+    ? pinnedDevices
+    : roomDevices.filter((device) => ROOM_DEVICE_TYPES.has(trimString(device?.type).toLowerCase()));
+  const controllableCount = summaryDevices.length;
+  const activeCount = summaryDevices.filter((device) => device.status).length;
 
   return makeModeSnapshot({
     id: 'room',
     title: panel.room,
     centerValue: `${activeCount}/${controllableCount || 0}`,
-    secondaryValue: 'Room controls',
+    secondaryValue: explicitDeviceIds.length > 0 ? 'Pinned controls' : 'Room controls',
     hint: 'Tap tiles for scenes and device toggles.',
     accent: 'cyan',
     quickActions,
     meta: {
       ready: quickActions.length > 0,
       controllableCount,
-      activeCount
+      activeCount,
+      isPinnedSelection: explicitDeviceIds.length > 0
     }
   });
 }
@@ -1068,7 +1076,7 @@ class WallPanelService {
     const sensorDevice = await resolveSensorDevice(panel.settings, roomDevices).catch(() => null);
 
     const thermostat = buildThermostatMode(panel, thermostatDevice, sensorDevice);
-    const room = await buildRoomMode(panel, roomDevices);
+    const room = await buildRoomMode(panel, roomDevices, allDevices);
     const home = buildHomeMode(panel, securityStatus, allDevices);
     const media = await buildMediaMode(panel);
     const quiet = await buildQuietMode(panel);

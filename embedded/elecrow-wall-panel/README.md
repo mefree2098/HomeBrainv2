@@ -64,7 +64,7 @@ pio run
 pio run -t upload
 ```
 
-5. After the panel boots, return to `Settings -> Hardware Orbs` and bind the thermostat, room, media, and quiet-house targets in the UI.
+5. After the panel boots, return to `Settings -> Hardware Orbs` and bind the thermostat, searchable room surface scenes/devices, media, and quiet-house targets in the UI.
 
 ## Notes
 

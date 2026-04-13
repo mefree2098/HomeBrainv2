@@ -103,7 +103,7 @@ The new wall panel path is separate from Linux listeners:
 1. Install the hub and create the first admin account
 2. Open `Settings -> Hardware Orbs` and create the orb
 3. Flash [`embedded/elecrow-wall-panel`](embedded/elecrow-wall-panel)
-4. Return to `Settings -> Hardware Orbs` and bind thermostat, room, media, and quiet actions
+4. Return to `Settings -> Hardware Orbs` and bind thermostat, searchable room-surface devices/scenes, media, and quiet actions
 
 Full guide:
 

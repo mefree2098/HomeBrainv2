@@ -1,4 +1,5 @@
 const UserService = require('../../services/userService.js');
+const authSessionService = require('../../services/authSessionService.js');
 const jwt = require('jsonwebtoken');
 const { ALL_ROLES, ROLES } = require("../../../shared/config/roles");
 const oidcService = require('../../services/oidcService');
@@ -84,8 +85,14 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, op
   if (process.env.JWT_SECRET) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (decoded?.sid) {
+        await authSessionService.assertSessionActive(decoded.sub, decoded.sid);
+      }
       return await resolveUserFromSubject(decoded.sub, allowedRoles, options);
     } catch (err) {
+      if (err?.name !== 'JsonWebTokenError' && err?.name !== 'TokenExpiredError') {
+        throw err;
+      }
       jwtError = err;
     }
   }

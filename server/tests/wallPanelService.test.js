@@ -123,6 +123,13 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
     room: 'Garage',
     status: true
   };
+  const frontDoorLock = {
+    _id: 'lock-1',
+    name: 'Front Door',
+    type: 'lock',
+    room: 'Entry',
+    status: true
+  };
   const sceneDocs = [
     { _id: 'scene-bedtime', name: 'Bedtime', category: 'comfort' },
     { _id: 'scene-quiet', name: 'Quiet House', category: 'comfort' }
@@ -146,7 +153,7 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
         bedtimeSceneId: 'scene-bedtime'
       },
       roomControl: {
-        favoriteDeviceIds: ['light-1', 'speaker-1'],
+        favoriteDeviceIds: ['light-1', 'lock-1'],
         sceneIds: []
       },
       harmony: {
@@ -181,7 +188,7 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
       if (query.room === 'Bedroom') {
         return [bedroomLight, bedroomSpeaker];
       }
-      return [thermostat, bedroomLight, bedroomSpeaker, garage];
+      return [thermostat, bedroomLight, bedroomSpeaker, garage, frontDoorLock];
     }
   });
   Scene.find = async () => sceneDocs;
@@ -207,6 +214,9 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   assert.equal(result.modes.thermostat.centerValue, '72°');
   assert.equal(result.modes.thermostat.meta.mode, 'cool');
   assert.equal(result.modes.room.quickActions[0].label, 'Bedroom Lamp');
+  assert.equal(result.modes.room.quickActions[1].label, 'Front Door');
+  assert.equal(result.modes.room.secondaryValue, 'Pinned controls');
+  assert.equal(result.modes.room.meta.isPinnedSelection, true);
   assert.equal(result.modes.home.centerValue, 'DISARMED');
   assert.equal(result.modes.media.centerValue, 'Watch TV');
   assert.equal(result.modes.quiet.quickActions[0].label, 'Bedtime');

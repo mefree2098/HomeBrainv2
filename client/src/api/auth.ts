@@ -40,7 +40,9 @@ export const register = async (email: string, password: string) => {
 // Response: { success: boolean, message: string }
 export const logout = async () => {
   try {
-    return await api.post('/api/auth/logout');
+    return await api.post('/api/auth/logout', {
+      refreshToken: localStorage.getItem('refreshToken') || ''
+    });
   } catch (error) {
     throw new Error(error?.response?.data?.message || error.message);
   }

@@ -39,6 +39,41 @@ const localApi = axios.create({
 
 
 let accessToken: string | null = null;
+const WEB_INSTALLATION_ID_KEY = 'homebrain.webInstallationId';
+
+const generateInstallationId = (): string => {
+  if (typeof window !== 'undefined' && window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const getWebInstallationId = (): string => {
+  const existing = localStorage.getItem(WEB_INSTALLATION_ID_KEY);
+  if (existing) {
+    return existing;
+  }
+
+  const created = generateInstallationId();
+  localStorage.setItem(WEB_INSTALLATION_ID_KEY, created);
+  return created;
+};
+
+const detectBrowser = (): string => {
+  const userAgent = navigator.userAgent;
+  if (userAgent.includes('Edg/')) return 'Edge';
+  if (userAgent.includes('Chrome/') && !userAgent.includes('Edg/')) return 'Chrome';
+  if (userAgent.includes('Firefox/')) return 'Firefox';
+  if (userAgent.includes('Safari/') && !userAgent.includes('Chrome/')) return 'Safari';
+  return 'Browser';
+};
+
+const buildWebClientName = (): string => {
+  const browser = detectBrowser();
+  const platform = navigator.platform?.trim();
+  return platform ? `${browser} on ${platform}` : browser;
+};
 
 const getApiInstance = (url: string) => {
   return localApi;
@@ -62,6 +97,12 @@ const setupInterceptors = (apiInstance: typeof axios) => {
       }
       if (accessToken && config.headers) {
         config.headers.Authorization = `Bearer ${accessToken}`;
+      }
+
+      if (config.headers) {
+        config.headers['X-HomeBrain-Client-Type'] = 'web';
+        config.headers['X-HomeBrain-Client-Name'] = buildWebClientName();
+        config.headers['X-HomeBrain-Device-Id'] = getWebInstallationId();
       }
 
       return config;

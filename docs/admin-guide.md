@@ -38,7 +38,7 @@ Current deployment model:
 1. Open `Settings -> Hardware Orbs`
 2. Create the orb and copy its setup packet
 3. Flash the firmware in [`../embedded/elecrow-wall-panel`](../embedded/elecrow-wall-panel)
-4. Return to the same tab to bind the thermostat, scenes, room devices, security actions, and Harmony activities you want in that room
+4. Return to the same tab to bind the thermostat, room scenes, searchable pinned device controls, security actions, and Harmony activities you want on that orb
 
 Use the full runbook here:
 

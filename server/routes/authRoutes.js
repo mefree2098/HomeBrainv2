@@ -1,9 +1,9 @@
 const express = require('express');
 const UserService = require('../services/userService.js');
+const authSessionService = require('../services/authSessionService.js');
 const { requireUser, extractToken, verifyAccessToken } = require('./middlewares/auth.js');
 const User = require('../models/User.js');
-const { generateAccessToken, generateRefreshToken } = require('../utils/auth.js');
-const jwt = require('jsonwebtoken');
+const { generateAccessToken } = require('../utils/auth.js');
 const { ALL_ROLES, ROLES } = require('../../shared/config/roles.js');
 const oidcService = require('../services/oidcService');
 const { getAxiomPublicOrigin } = require('../utils/platformUrls');
@@ -34,6 +34,13 @@ function buildAuthenticatedUserPayload(user, req, tokens = {}) {
   };
 }
 
+function buildAuthResponse(user, req, sessionIssue) {
+  return buildAuthenticatedUserPayload(user, req, {
+    accessToken: sessionIssue.tokens.accessToken,
+    refreshToken: sessionIssue.tokens.refreshToken
+  });
+}
+
 router.post('/login', async (req, res) => {
   const sendError = msg => res.status(400).json({ message: msg });
   const { email, password } = req.body;
@@ -52,16 +59,22 @@ router.post('/login', async (req, res) => {
   }
 
   if (user) {
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    try {
+      const sessionIssue = await authSessionService.issueSession(user, req);
+      setAuthCookies(
+        res,
+        sessionIssue.tokens.accessToken,
+        sessionIssue.tokens.refreshToken,
+        {
+          sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
+        }
+      );
 
-    user.refreshToken = refreshToken;
-    await user.save();
-    setAuthCookies(res, accessToken, refreshToken);
-    return res.json(buildAuthenticatedUserPayload(user, req, {
-      accessToken,
-      refreshToken
-    }));
+      return res.json(buildAuthResponse(user, req, sessionIssue));
+    } catch (error) {
+      console.error(`Error while issuing login session: ${error.message}`);
+      return res.status(500).json({ message: 'Login failed' });
+    }
   } else {
     return sendError('Email or password is incorrect');
 
@@ -105,17 +118,17 @@ router.post('/register', async (req, res, next) => {
       role: ROLES.ADMIN
     });
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    const sessionIssue = await authSessionService.issueSession(user, req);
+    setAuthCookies(
+      res,
+      sessionIssue.tokens.accessToken,
+      sessionIssue.tokens.refreshToken,
+      {
+        sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
+      }
+    );
 
-    user.refreshToken = refreshToken;
-    await user.save();
-    setAuthCookies(res, accessToken, refreshToken);
-
-    return res.status(200).json(buildAuthenticatedUserPayload(user, req, {
-      accessToken,
-      refreshToken
-    }));
+    return res.status(200).json(buildAuthResponse(user, req, sessionIssue));
   } catch (error) {
     console.error(`Error while registering user: ${error}`);
     return res.status(400).json({ message: error.message || 'Registration failed' });
@@ -124,27 +137,38 @@ router.post('/register', async (req, res, next) => {
 
 router.post('/logout', async (req, res) => {
   const { email } = req.body || {};
+  const explicitRefreshToken = req.body?.refreshToken || getCookieValue(req, SESSION_TOKEN_COOKIE_NAME);
 
   let user = null;
+  let currentSessionId = '';
   const accessToken = extractToken(req);
   if (accessToken) {
     try {
-      user = await verifyAccessToken(accessToken, ALL_ROLES);
+      user = await verifyAccessToken(accessToken, ALL_ROLES, req, { platform: null });
+      currentSessionId = authSessionService.getSessionIdFromAccessToken(accessToken);
     } catch (_error) {
       user = null;
     }
   }
 
-  if (!user) {
-    const sessionToken = getCookieValue(req, SESSION_TOKEN_COOKIE_NAME);
-    user = await oidcService.getUserFromSessionToken(sessionToken);
+  if (!user && explicitRefreshToken) {
+    const resolved = await authSessionService.resolveUserFromSessionToken(explicitRefreshToken);
+    user = resolved.user;
   }
 
   if (!user && email) {
     user = await User.findOne({ email });
   }
 
-  if (user) {
+  if (user && currentSessionId) {
+    await authSessionService.revokeSessionById(user._id, currentSessionId, 'logout');
+  } else if (explicitRefreshToken) {
+    await authSessionService.revokeSessionByRefreshToken(
+      explicitRefreshToken,
+      user?._id || null,
+      'logout'
+    );
+  } else if (user) {
     user.refreshToken = null;
     await user.save();
   }
@@ -169,96 +193,97 @@ router.post('/refresh', async (req, res) => {
   }
 
   try {
-    console.log('Attempting to verify refresh token');
-    
-    if (!process.env.REFRESH_TOKEN_SECRET) {
-      console.error('REFRESH_TOKEN_SECRET environment variable is not set');
-      clearAuthCookies(res);
-      return res.status(500).json({
-        success: false,
-        message: 'Server configuration error'
-      });
-    }
-    
-    // Verify the refresh token
-    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
-
-    // Find the user
-    console.log(`Looking up user with ID: ${decoded.sub}`);
-    const user = await UserService.get(decoded.sub);
-
-    if (!user) {
-      console.log('User not found in database');
-      clearAuthCookies(res);
-      return res.status(403).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    console.log('User found, comparing refresh tokens');
-    if (user.refreshToken !== refreshToken) {
-      console.log('Refresh token mismatch - stored token does not match provided token');
-      clearAuthCookies(res);
-      return res.status(403).json({
-        success: false,
-        message: 'Invalid refresh token'
-      });
-    }
-
-    // Generate new tokens
-    console.log('Generating new tokens');
-    const newAccessToken = generateAccessToken(user);
-    const newRefreshToken = generateRefreshToken(user);
-
-    // Update user's refresh token in database
-    console.log('Updating user refresh token in database');
-    user.refreshToken = newRefreshToken;
-    await user.save();
-    setAuthCookies(res, newAccessToken, newRefreshToken);
+    const sessionIssue = await authSessionService.refreshSession(refreshToken, req);
+    setAuthCookies(
+      res,
+      sessionIssue.tokens.accessToken,
+      sessionIssue.tokens.refreshToken,
+      {
+        sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
+      }
+    );
 
     console.log('Token refresh successful');
-    // Return new tokens
     return res.status(200).json({
       success: true,
       data: {
-        ...buildAuthenticatedUserPayload(user, req),
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken
+        ...buildAuthResponse(sessionIssue.user, req, sessionIssue)
       }
     });
-
   } catch (error) {
     console.error(`Token refresh error: ${error.message}`);
     console.error('Full error details:', error);
 
-    if (error.name === 'TokenExpiredError') {
+    if ((error.status || 500) < 500) {
       clearAuthCookies(res);
-      return res.status(403).json({
-        success: false,
-        message: 'Refresh token has expired'
-      });
     }
 
-    if (error.name === 'JsonWebTokenError') {
-      console.error('JWT verification failed - possible signature mismatch');
-      clearAuthCookies(res);
-      return res.status(403).json({
-        success: false,
-        message: 'Invalid refresh token signature'
-      });
-    }
-
-    clearAuthCookies(res);
-    return res.status(403).json({
+    return res.status(error.status || 403).json({
       success: false,
-      message: 'Invalid refresh token'
+      message: error.message || 'Invalid refresh token'
     });
   }
 });
 
 router.get('/me', requireUser(ALL_ROLES, { platform: null }), async (req, res) => {
   return res.status(200).json(buildAuthenticatedUserPayload(req.user, req));
+});
+
+router.get('/sessions', requireUser(ALL_ROLES, { platform: null }), async (req, res) => {
+  try {
+    const currentSessionId = authSessionService.getSessionIdFromAccessToken(extractToken(req));
+    const sessions = await authSessionService.listSessionsForUser(req.user._id, currentSessionId);
+    const lifetimeDays = await authSessionService.getSessionLifetimeDays();
+
+    return res.status(200).json({
+      success: true,
+      currentSessionId,
+      lifetimeDays,
+      sessions
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to list sessions'
+    });
+  }
+});
+
+router.delete('/sessions/:sessionId', requireUser(ALL_ROLES, { platform: null }), async (req, res) => {
+  try {
+    const session = await authSessionService.revokeSessionById(
+      req.user._id,
+      req.params.sessionId,
+      'revoked-by-user'
+    );
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: 'Session not found'
+      });
+    }
+
+    const currentSessionId = authSessionService.getSessionIdFromAccessToken(extractToken(req));
+    const signedOutCurrentSession = currentSessionId === session.sessionId;
+
+    if (signedOutCurrentSession) {
+      clearAuthCookies(res);
+    }
+
+    return res.status(200).json({
+      success: true,
+      signedOutCurrentSession,
+      message: signedOutCurrentSession
+        ? 'Current session revoked and signed out.'
+        : 'Session revoked successfully.'
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to revoke session'
+    });
+  }
 });
 
 router.get('/registration-status', async (_req, res) => {

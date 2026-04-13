@@ -61,7 +61,9 @@ class SettingsService {
         // SmartThings OAuth Settings
         'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth',
         // Voice/Discovery Preferences
-        'voiceRegion', 'autoDiscoveryEnabled'
+        'voiceRegion', 'autoDiscoveryEnabled',
+        // Auth session lifetime
+        'authSessionMaxAgeDays'
       ];
       const sensitiveFields = new Set([
         'elevenlabsApiKey',

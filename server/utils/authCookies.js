@@ -43,17 +43,17 @@ function buildCookieOptions(maxAge) {
   };
 }
 
-function setAccessTokenCookie(res, accessToken) {
-  res.cookie(ACCESS_TOKEN_COOKIE_NAME, accessToken, buildCookieOptions(ACCESS_TOKEN_COOKIE_MAX_AGE));
+function setAccessTokenCookie(res, accessToken, maxAge = ACCESS_TOKEN_COOKIE_MAX_AGE) {
+  res.cookie(ACCESS_TOKEN_COOKIE_NAME, accessToken, buildCookieOptions(maxAge));
 }
 
-function setSessionTokenCookie(res, sessionToken) {
-  res.cookie(SESSION_TOKEN_COOKIE_NAME, sessionToken, buildCookieOptions(SESSION_TOKEN_COOKIE_MAX_AGE));
+function setSessionTokenCookie(res, sessionToken, maxAge = SESSION_TOKEN_COOKIE_MAX_AGE) {
+  res.cookie(SESSION_TOKEN_COOKIE_NAME, sessionToken, buildCookieOptions(maxAge));
 }
 
-function setAuthCookies(res, accessToken, sessionToken) {
-  setAccessTokenCookie(res, accessToken);
-  setSessionTokenCookie(res, sessionToken);
+function setAuthCookies(res, accessToken, sessionToken, options = {}) {
+  setAccessTokenCookie(res, accessToken, options.accessTokenMaxAge || ACCESS_TOKEN_COOKIE_MAX_AGE);
+  setSessionTokenCookie(res, sessionToken, options.sessionTokenMaxAge || SESSION_TOKEN_COOKIE_MAX_AGE);
 }
 
 function clearAuthCookies(res) {

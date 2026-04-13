@@ -122,6 +122,10 @@ final class APIClient {
         urlRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         urlRequest.setValue("no-cache", forHTTPHeaderField: "Pragma")
 
+        for (header, value) in sessionStore.clientHeaders {
+            urlRequest.setValue(value, forHTTPHeaderField: header)
+        }
+
         if authorized {
             let accessToken = try await sessionStore.validAccessToken()
             urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")

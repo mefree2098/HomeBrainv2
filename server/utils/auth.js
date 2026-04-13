@@ -1,20 +1,36 @@
+const { randomUUID } = require('crypto');
 const jwt = require('jsonwebtoken');
 
 const ACCESS_TOKEN_TTL = process.env.AUTH_ACCESS_TOKEN_TTL || '1d';
 const REFRESH_TOKEN_TTL = process.env.AUTH_REFRESH_TOKEN_TTL || '365d';
 
-const generateAccessToken = (user) => {
+const generateAccessToken = (user, options = {}) => {
   const payload = {
     sub: user._id
   };
-  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL });
+
+  if (options.sessionId) {
+    payload.sid = options.sessionId;
+  }
+
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: options.expiresIn || ACCESS_TOKEN_TTL
+  });
 };
 
-const generateRefreshToken = (user) => {
+const generateRefreshToken = (user, options = {}) => {
   const payload = {
-    sub: user._id
+    sub: user._id,
+    jti: options.tokenId || randomUUID()
   };
-  return jwt.sign(payload, process.env.REFRESH_TOKEN_SECRET, { expiresIn: REFRESH_TOKEN_TTL });
+
+  if (options.sessionId) {
+    payload.sid = options.sessionId;
+  }
+
+  return jwt.sign(payload, process.env.REFRESH_TOKEN_SECRET, {
+    expiresIn: options.expiresIn || REFRESH_TOKEN_TTL
+  });
 };
 
 module.exports = {

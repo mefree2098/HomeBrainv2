@@ -9,6 +9,9 @@ struct SettingsView: View {
     @State private var showingOpenClawSettings = false
 
     @State private var serverURL = ""
+    @State private var authSessionMaxAgeDays = 365
+    @State private var authSessions: [AuthSessionRecord] = []
+    @State private var revokingSessionIDs: Set<String> = []
 
     @State private var location = ""
     @State private var timezone = ""
@@ -86,6 +89,74 @@ struct SettingsView: View {
                                 errorMessage = "Enter a valid server URL."
                             }
                         }
+                    }
+
+                    Section("Sessions") {
+                        Stepper(value: $authSessionMaxAgeDays, in: 30...3650, step: 30) {
+                            HStack {
+                                Text("Session Lifetime")
+                                Spacer()
+                                Text("\(authSessionMaxAgeDays) days")
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
+                        }
+
+                        Text("Refresh sessions stay active for up to \(authSessionMaxAgeDays) days and renew on use. Each device now keeps its own session so signing into one iPad will not knock out the others.")
+                            .font(.footnote)
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                        if authSessions.isEmpty {
+                            Text("No active sessions found for this account.")
+                                .font(.subheadline)
+                                .foregroundStyle(HBPalette.textSecondary)
+                        } else {
+                            ForEach(authSessions) { authSession in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text(authSession.clientName)
+                                            .font(.headline)
+                                        if authSession.isCurrent {
+                                            Text("This device")
+                                                .font(.caption.weight(.semibold))
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 3)
+                                                .background(HBPalette.accentBlue.opacity(0.14))
+                                                .foregroundStyle(HBPalette.accentBlue)
+                                                .clipShape(Capsule())
+                                        }
+                                        Spacer()
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Type: \(authSession.clientType.capitalized)")
+                                        Text("Last used: \(settingsFormatDateTime(authSession.lastUsedAt))")
+                                        Text("Expires: \(settingsFormatDateTime(authSession.expiresAt))")
+                                    }
+                                    .font(.caption)
+                                    .foregroundStyle(HBPalette.textSecondary)
+
+                                    if !authSession.isCurrent {
+                                        Button {
+                                            Task { await revokeAuthSession(authSession) }
+                                        } label: {
+                                            if revokingSessionIDs.contains(authSession.id) {
+                                                ProgressView()
+                                            } else {
+                                                Text("Revoke Session")
+                                            }
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(revokingSessionIDs.contains(authSession.id))
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+
+                        Button("Refresh Session List") {
+                            Task { await loadAuthSessions() }
+                        }
+                        .buttonStyle(.bordered)
                     }
 
                     Section("General") {
@@ -245,6 +316,7 @@ struct SettingsView: View {
             let object = JSON.object(settingsResponse)
             let settings = JSON.object(object["settings"])
 
+            authSessionMaxAgeDays = max(1, JSON.int(settings, "authSessionMaxAgeDays", fallback: authSessionMaxAgeDays))
             location = JSON.string(settings, "location", fallback: location)
             timezone = JSON.string(settings, "timezone", fallback: TimeZone.current.identifier)
             wakeWordSensitivity = JSON.double(settings, "wakeWordSensitivity", fallback: wakeWordSensitivity)
@@ -277,6 +349,7 @@ struct SettingsView: View {
             }
 
             serverURL = session.serverURLString
+            await loadAuthSessions()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -316,7 +389,8 @@ struct SettingsView: View {
                 "openaiApiKey": openaiApiKey,
                 "anthropicApiKey": anthropicApiKey,
                 "elevenlabsApiKey": elevenLabsApiKey,
-                "smartthingsToken": smartThingsToken
+                "smartthingsToken": smartThingsToken,
+                "authSessionMaxAgeDays": authSessionMaxAgeDays
             ]
 
             let response = try await session.apiClient.put("/api/settings", body: payload)
@@ -380,4 +454,71 @@ struct SettingsView: View {
             errorMessage = error.localizedDescription
         }
     }
+
+    private func loadAuthSessions() async {
+        do {
+            let response = try await session.apiClient.get("/api/auth/sessions")
+            let object = JSON.object(response)
+            authSessionMaxAgeDays = max(1, JSON.int(object, "lifetimeDays", fallback: authSessionMaxAgeDays))
+            authSessions = (object["sessions"] as? [Any] ?? [])
+                .compactMap { AuthSessionRecord.from(JSON.object($0)) }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func revokeAuthSession(_ authSession: AuthSessionRecord) async {
+        revokingSessionIDs.insert(authSession.id)
+        defer { revokingSessionIDs.remove(authSession.id) }
+
+        do {
+            let response = try await session.apiClient.delete("/api/auth/sessions/\(authSession.id)")
+            let object = JSON.object(response)
+            let message = JSON.string(object, "message", fallback: "Session revoked.")
+
+            if JSON.bool(object, "signedOutCurrentSession") {
+                session.expireAuthentication(message: message)
+            } else {
+                infoMessage = message
+                authSessions.removeAll { $0.id == authSession.id }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct AuthSessionRecord: Identifiable {
+    let id: String
+    let clientType: String
+    let clientName: String
+    let createdAt: String
+    let lastUsedAt: String
+    let expiresAt: String
+    let isCurrent: Bool
+
+    static func from(_ object: [String: Any]) -> AuthSessionRecord? {
+        let id = JSON.string(object, "id")
+        guard !id.isEmpty else {
+            return nil
+        }
+
+        return AuthSessionRecord(
+            id: id,
+            clientType: JSON.string(object, "clientType", fallback: "unknown"),
+            clientName: JSON.string(object, "clientName", fallback: "Unknown device"),
+            createdAt: JSON.string(object, "createdAt"),
+            lastUsedAt: JSON.string(object, "lastUsedAt"),
+            expiresAt: JSON.string(object, "expiresAt"),
+            isCurrent: JSON.bool(object, "isCurrent")
+        )
+    }
+}
+
+private func settingsFormatDateTime(_ value: String) -> String {
+    guard let date = ISO8601DateFormatter().date(from: value) else {
+        return value.isEmpty ? "Unknown" : value
+    }
+
+    return date.formatted(date: .abbreviated, time: .shortened)
 }
