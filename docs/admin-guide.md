@@ -35,9 +35,10 @@ HomeBrain now has a separate wall-panel path for ELECROW round ESP32-S3 rotary d
 
 Current deployment model:
 
-1. Register the panel through the admin API
-2. Flash the firmware in [`../embedded/elecrow-wall-panel`](../embedded/elecrow-wall-panel)
-3. Bind the panel to the thermostat, scenes, room devices, security actions, and Harmony activities you want in that room
+1. Open `Settings -> Hardware Orbs`
+2. Create the orb and copy its setup packet
+3. Flash the firmware in [`../embedded/elecrow-wall-panel`](../embedded/elecrow-wall-panel)
+4. Return to the same tab to bind the thermostat, scenes, room devices, security actions, and Harmony activities you want in that room
 
 Use the full runbook here:
 

@@ -101,6 +101,44 @@ router.post('/:panelId/claim-token/rotate', admin, async (req, res) => {
   }
 });
 
+router.get('/:panelId/provisioning', admin, async (req, res) => {
+  try {
+    const result = await wallPanelService.getPanelProvisioning(
+      req.params.panelId,
+      getRequestOrigin(req)
+    );
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error(`GET /api/panels/${req.params.panelId}/provisioning - Error:`, error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch wall panel provisioning bundle'
+    });
+  }
+});
+
+router.post('/:panelId/registration-code/rotate', admin, async (req, res) => {
+  try {
+    const result = await wallPanelService.rotateRegistrationCode(
+      req.params.panelId,
+      getRequestOrigin(req)
+    );
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error(`POST /api/panels/${req.params.panelId}/registration-code/rotate - Error:`, error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to rotate wall panel registration code'
+    });
+  }
+});
+
 router.get('/:panelId/bootstrap', async (req, res) => {
   try {
     const credentials = extractPanelCredentials(req);

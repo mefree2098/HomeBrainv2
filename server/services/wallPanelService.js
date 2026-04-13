@@ -857,6 +857,14 @@ class WallPanelService {
     return serializePanel(panel);
   }
 
+  async getPanelProvisioning(panelId, origin = '') {
+    const panel = await getPanelDocument(panelId);
+    return {
+      panel: serializePanel(panel, { includeSecrets: true }),
+      provisioning: buildProvisioningSnapshot(panel, origin)
+    };
+  }
+
   async registerPanel(input = {}) {
     const name = trimString(input.name);
     const room = trimString(input.room);
@@ -972,6 +980,34 @@ class WallPanelService {
     });
     await panel.save();
     return serializePanel(panel, { includeSecrets: true });
+  }
+
+  async rotateRegistrationCode(panelId, origin = '') {
+    const panel = await getPanelDocument(panelId);
+    const registrationCode = buildRegistrationCode();
+    panel.status = 'offline';
+    panel.settings = mergeSettings(panel.settings || {}, {
+      registered: false,
+      registrationCode
+    });
+    await panel.save();
+
+    void eventStreamService.publishSafe({
+      type: 'wall_panel.registration_rotated',
+      source: 'wall_panel',
+      category: 'panel',
+      payload: {
+        panelId: toId(panel._id),
+        name: panel.name,
+        room: panel.room
+      },
+      tags: ['wall-panel', 'registration']
+    });
+
+    return {
+      panel: serializePanel(panel, { includeSecrets: true }),
+      provisioning: buildProvisioningSnapshot(panel, origin)
+    };
   }
 
   async bootstrapPanel(panelId, credentials = {}, origin = '') {

@@ -71,72 +71,42 @@ http://<hub-ip>:3000
 
 The wall panel must use a hub URL that is reachable from the panel itself. Do not use `localhost` in the firmware header.
 
-## 2. Get An Admin API Token
+## 2. Create The Orb In Settings
 
-Set your hub URL and admin credentials:
+Open:
 
-```bash
-export HUB_URL="http://<hub-ip>:3000"
-export ADMIN_EMAIL="you@example.com"
-export ADMIN_PASSWORD="your-password"
-```
+`Settings -> Hardware Orbs`
 
-Log in and extract the `accessToken`:
+From there:
 
-```bash
-export ADMIN_TOKEN="$(
-  curl -sS -X POST "$HUB_URL/api/auth/login" \
-    -H "Content-Type: application/json" \
-    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
-  | python3 -c "import sys, json; print(json.load(sys.stdin)['accessToken'])"
-)"
-```
+1. Click `New Orb`
+2. Enter the orb name and room
+3. Choose the hardware profile
+4. Click `Generate Setup Token`
+5. Open the orb’s `Setup Packet`
 
-If that prints nothing, verify the account by logging into the web UI first.
+The setup packet gives you:
 
-## 3. Register The Panel In HomeBrain
+- the current orb setup token
+- the HomeBrain panel ID
+- a copyable firmware header snippet
+- the hub URL HomeBrain expects the orb to use
 
-Create a panel record:
+## 3. Configure The Firmware Header
 
-```bash
-export PANEL_JSON="$(
-  curl -sS -X POST "$HUB_URL/api/panels/register" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{
-      "name": "Master Bedroom Orb",
-      "room": "Master Bedroom",
-      "hardwareProfile": "elecrow-crowpanel-2.1-rotary"
-    }'
-)"
-```
+Open [HomeBrainPanelConfig.h](~/HomeBrainv2/embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h) and replace the placeholder values.
 
-Extract the values the firmware needs:
-
-```bash
-export PANEL_ID="$(printf '%s' "$PANEL_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin)['panel']['id'])")"
-export PANEL_CODE="$(printf '%s' "$PANEL_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin)['panel']['settings']['registrationCode'])")"
-printf 'Panel ID: %s\nRegistration code: %s\n' "$PANEL_ID" "$PANEL_CODE"
-```
-
-Optional: fetch the compact bootstrap payload that mirrors the firmware header values:
-
-```bash
-curl -sS "$HUB_URL/api/panels/$PANEL_ID/bootstrap" \
-  -H "X-HomeBrain-Panel-Code: $PANEL_CODE" \
-  | python3 -m json.tool
-```
-
-## 4. Configure The Firmware Header
-
-Edit [HomeBrainPanelConfig.h](~/HomeBrainv2/embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h) and replace the placeholder values:
+You provide these local network values yourself:
 
 - `HOMEBRAIN_PANEL_WIFI_SSID`
 - `HOMEBRAIN_PANEL_WIFI_PASSWORD`
+- `HOMEBRAIN_PANEL_HOSTNAME`
+
+The `Hardware Orbs` setup packet in the UI gives you the HomeBrain values for:
+
 - `HOMEBRAIN_PANEL_HUB_URL`
 - `HOMEBRAIN_PANEL_ID`
 - `HOMEBRAIN_PANEL_REGISTRATION_CODE`
-- `HOMEBRAIN_PANEL_HOSTNAME`
 
 Use a hub URL the panel can actually reach, for example:
 
@@ -144,7 +114,12 @@ Use a hub URL the panel can actually reach, for example:
 - `http://homebrain.local:3000` if your LAN resolves mDNS properly
 - your internal DNS name if you already run one
 
-## 5. Install PlatformIO
+Tip:
+
+- if your HomeBrain web app is opened at a public domain, the setup packet will default to that URL
+- for in-home wall panels, you may prefer replacing it with a LAN-local URL before flashing
+
+## 4. Install PlatformIO
 
 On macOS, the fastest path is:
 
@@ -154,7 +129,7 @@ brew install platformio
 
 If you prefer another OS-specific method, use the official PlatformIO docs linked above.
 
-## 6. Build And Flash The Firmware
+## 5. Build And Flash The Firmware
 
 From the repo root:
 
@@ -183,81 +158,34 @@ The firmware will:
 - poll `GET /api/panels/:id/state`
 - send touch/knob actions to `POST /api/panels/:id/actions`
 
-## 7. Verify The Panel Is Reaching HomeBrain
+## 6. Verify The Panel Is Reaching HomeBrain
 
-You can check the current state payload manually:
+Go back to:
 
-```bash
-curl -sS "$HUB_URL/api/panels/$PANEL_ID/state" \
-  -H "X-HomeBrain-Panel-Code: $PANEL_CODE" \
-  | python3 -m json.tool
-```
+`Settings -> Hardware Orbs`
 
-List all registered panels:
+Use the orb card and detail view to verify:
 
-```bash
-curl -sS "$HUB_URL/api/panels" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  | python3 -m json.tool
-```
+- the orb moved from `Waiting for first activation` to a provisioned state
+- the status is `Online`
+- the orb reports an IP address and firmware version
 
 At this point, the display should stop showing the boot placeholder and start rendering HomeBrain state.
 
-## 8. Find Device And Scene IDs
+## 7. Bind Thermostat, Room, Home, Media, And Quiet Actions
 
-Panel bindings are API-driven right now.
+Stay in:
 
-Useful discovery calls:
+`Settings -> Hardware Orbs`
 
-```bash
-curl -sS "$HUB_URL/api/devices?room=Master%20Bedroom" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  | python3 -m json.tool
-```
+Select the orb and configure:
 
-```bash
-curl -sS "$HUB_URL/api/scenes" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  | python3 -m json.tool
-```
+- `Thermostat Surface`: thermostat device, temperature sensor, and bedtime long-press scene
+- `Room Surface`: favorite room devices and room scenes
+- `Media Surface`: Harmony hub, activity shortcuts, and command device for the knob
+- `Quiet Surface`: bedtime, morning, white-noise, lock-up, and night-light targets
 
-Use those responses to collect the device IDs and scene IDs you want on the panel.
-
-## 9. Bind Thermostat, Room, Home, Media, And Quiet Actions
-
-Update the panel settings with the entities you want the room control to drive:
-
-```bash
-curl -sS -X PUT "$HUB_URL/api/panels/$PANEL_ID" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "settings": {
-      "thermostat": {
-        "deviceId": "THERMOSTAT_DEVICE_ID",
-        "sensorDeviceId": "BEDROOM_SENSOR_DEVICE_ID",
-        "bedtimeSceneId": "SCENE_ID_BEDTIME"
-      },
-      "roomControl": {
-        "favoriteDeviceIds": ["BEDROOM_LIGHT_ID", "BEDROOM_FAN_ID"],
-        "sceneIds": ["SCENE_ID_GOOD_MORNING"]
-      },
-      "harmony": {
-        "hubIp": "192.168.1.99",
-        "activityIds": ["WATCH_TV_ACTIVITY_ID", "APPLE_TV_ACTIVITY_ID"],
-        "commandDeviceId": "HARMONY_COMMAND_DEVICE_ID"
-      },
-      "quietHouse": {
-        "bedtimeSceneId": "SCENE_ID_BEDTIME",
-        "morningSceneId": "SCENE_ID_GOOD_MORNING",
-        "whiteNoiseSceneId": "SCENE_ID_WHITE_NOISE",
-        "lockUpSceneId": "SCENE_ID_LOCK_UP",
-        "nightLightDeviceId": "NIGHT_LIGHT_DEVICE_ID"
-      }
-    }
-  }' \
-  | python3 -m json.tool
-```
+Save the orb when you are happy with the mappings.
 
 Practical defaults:
 
@@ -266,7 +194,11 @@ Practical defaults:
 - keep room-control favorites to only the most important two to four devices
 - treat `Quiet` as the "one tap before sleep" surface
 
-## 10. Day-To-Day Use
+## 8. Advanced Manual API Fallback
+
+If you are troubleshooting or automating this flow outside the UI, the backend still exposes `/api/panels` for manual registration, provisioning, and updates. The intended day-to-day operator path is now the `Hardware Orbs` Settings tab.
+
+## 9. Day-To-Day Use
 
 The default interaction model is:
 
@@ -277,7 +209,7 @@ The default interaction model is:
 - long press the knob on `Thermostat` to trigger `Bedtime` if you bound it
 - tap the quick tiles to change HVAC mode, run scenes, control devices, or trigger whole-home actions
 
-## Power And Wall Mounting
+## 10. Power And Wall Mounting
 
 This device should be powered from regulated `5V` USB power, not from raw thermostat wiring.
 
@@ -296,12 +228,12 @@ Practical guidance:
 
 The `2.1"` CrowPanel family is a much better candidate for a bedside thermostat puck or scene controller than a Linux voice listener, because it is small, silent, touch-first, and already has the rotary control we need.
 
-## Current Limitations
+## 11. Current Limitations
 
 - current repo firmware targets the ELECROW `2.1"` rotary board first
 - the `1.28"` board family still needs its own board profile before flashing this exact firmware
 - `Wi-Fi` credentials are compiled into the firmware header today
-- there is not yet a dedicated wall-panel management page in the HomeBrain web UI
+- flashing firmware is still manual even though provisioning and bindings now live in the HomeBrain web UI
 - the panel currently polls for state rather than using a live push channel
 
 ## Related Docs

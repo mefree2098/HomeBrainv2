@@ -93,9 +93,10 @@ Current support targets the ELECROW `2.1"` round ESP32-S3 rotary display first. 
 
 Current setup flow:
 
-1. Register the panel with the admin API
-2. Flash the firmware in [`../embedded/elecrow-wall-panel`](../embedded/elecrow-wall-panel)
-3. Bind thermostat, scene, device, security, and Harmony targets
+1. Open `Settings -> Hardware Orbs`
+2. Create the orb and reveal its setup packet
+3. Flash the firmware in [`../embedded/elecrow-wall-panel`](../embedded/elecrow-wall-panel)
+4. Finish thermostat, scene, device, security, and Harmony mappings back in the same tab
 
 Use the full runbook here:
 
@@ -103,7 +104,7 @@ Use the full runbook here:
 
 Current note:
 
-- panel provisioning is API-driven right now rather than managed from a dedicated wall-panel page in the web UI
+- provisioning and room bindings now live in the dedicated `Hardware Orbs` Settings tab
 
 ## 8. Scenes And Workflows
 

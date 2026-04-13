@@ -269,3 +269,75 @@ test('executeAction delegates thermostat and scene actions to existing services'
   assert.deepEqual(calls[0], ['device', 'thermo-1', 'set_temperature', 71]);
   assert.deepEqual(calls[1], ['scene', 'scene-1']);
 });
+
+test('getPanelProvisioning exposes the setup token for admin UI flows', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-5',
+    name: 'Bedroom Orb',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'offline',
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: 'claim-token-123',
+      claimTokenExpires: new Date(Date.now() + 60_000),
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const result = await wallPanelService.getPanelProvisioning('panel-5', 'https://example.com');
+
+  assert.equal(result.panel.settings.registrationCode, 'HBWP-ABCD-EF12-3456');
+  assert.equal(result.provisioning.hubUrl, 'https://example.com');
+  assert.equal(result.provisioning.firmwareHeader.HOMEBRAIN_PANEL_ID, 'panel-5');
+});
+
+test('rotateRegistrationCode regenerates the setup token and marks the panel unregistered', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-6',
+    name: 'Bedroom Orb',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const result = await wallPanelService.rotateRegistrationCode('panel-6', 'https://example.com');
+
+  assert.equal(result.panel.status, 'offline');
+  assert.equal(result.panel.settings.registered, false);
+  assert.match(result.panel.settings.registrationCode, /^HBWP-/);
+  assert.notEqual(result.panel.settings.registrationCode, 'HBWP-ABCD-EF12-3456');
+  assert.equal(result.provisioning.firmwareHeader.HOMEBRAIN_PANEL_HUB_URL, 'https://example.com');
+});

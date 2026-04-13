@@ -142,6 +142,7 @@ import { SettingsResourceUtilizationTab } from "@/components/system/SystemResour
 import { SenseIntegrationCard } from "@/components/sense/SenseIntegrationCard"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
+import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
 import { OpenClawIntegration } from "./OpenClawIntegration"
 
 type InsteonSerialPortCandidate = {
@@ -184,6 +185,7 @@ const SETTINGS_MAIN_TABS = new Set([
   "general",
   "voice",
   "integrations",
+  "hardware-orbs",
   "security",
   "resources",
   "maintenance"
@@ -3792,6 +3794,7 @@ export function Settings() {
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="voice">Voice & Audio</TabsTrigger>
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
+            <TabsTrigger value="hardware-orbs">Hardware Orbs</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
             <TabsTrigger value="resources">System Resources</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
@@ -7091,6 +7094,10 @@ export function Settings() {
             </Card>
               </TabsContent>
             </Tabs>
+          </TabsContent>
+
+          <TabsContent value="hardware-orbs" className="space-y-6">
+            <HardwareOrbsTab />
           </TabsContent>
 
           <TabsContent value="security" className="space-y-6">

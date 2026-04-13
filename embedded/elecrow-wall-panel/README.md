@@ -50,22 +50,11 @@ The UI intentionally mirrors the HomeBrain iOS app:
 
 ## Setup
 
-1. Follow the full deployment guide in [`../../docs/elecrow-wall-panel.md`](../../docs/elecrow-wall-panel.md) for hub install, admin login, token creation, and panel registration.
+1. Follow the full deployment guide in [`../../docs/elecrow-wall-panel.md`](../../docs/elecrow-wall-panel.md).
 
-2. Register a panel in HomeBrain as an admin:
+2. In HomeBrain, open `Settings -> Hardware Orbs`, create the orb, and open its `Setup Packet`.
 
-```bash
-curl -X POST "$HUB_URL/api/panels/register" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Master Bedroom Orb",
-    "room": "Master Bedroom",
-    "hardwareProfile": "elecrow-crowpanel-2.1-rotary"
-  }'
-```
-
-3. Copy the returned `panel.id` and `panel.settings.registrationCode` into [HomeBrainPanelConfig.h](~/HomeBrainv2/embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h).
+3. Copy the `panel ID`, `setup token`, and `hub URL` values into [HomeBrainPanelConfig.h](~/HomeBrainv2/embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h).
 
 4. Build and flash:
 
@@ -75,38 +64,7 @@ pio run
 pio run -t upload
 ```
 
-5. After the panel boots, bind its HomeBrain targets:
-
-```bash
-curl -X PUT "$HUB_URL/api/panels/$PANEL_ID" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "settings": {
-      "thermostat": {
-        "deviceId": "THERMOSTAT_DEVICE_ID",
-        "sensorDeviceId": "BEDROOM_SENSOR_DEVICE_ID",
-        "bedtimeSceneId": "SCENE_ID_BEDTIME"
-      },
-      "roomControl": {
-        "favoriteDeviceIds": ["BEDROOM_LIGHT_ID", "BEDROOM_FAN_ID"],
-        "sceneIds": ["GOOD_MORNING_SCENE_ID"]
-      },
-      "harmony": {
-        "hubIp": "192.168.1.99",
-        "activityIds": ["ACTIVITY_WATCH_TV_ID", "ACTIVITY_APPLE_TV_ID"],
-        "commandDeviceId": "HARMONY_COMMAND_DEVICE_ID"
-      },
-      "quietHouse": {
-        "bedtimeSceneId": "SCENE_ID_BEDTIME",
-        "morningSceneId": "SCENE_ID_GOOD_MORNING",
-        "whiteNoiseSceneId": "SCENE_ID_WHITE_NOISE",
-        "lockUpSceneId": "SCENE_ID_LOCK_UP",
-        "nightLightDeviceId": "NIGHT_LIGHT_DEVICE_ID"
-      }
-    }
-  }'
-```
+5. After the panel boots, return to `Settings -> Hardware Orbs` and bind the thermostat, room, media, and quiet-house targets in the UI.
 
 ## Notes
 
