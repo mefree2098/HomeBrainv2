@@ -1,0 +1,7 @@
+{
+  "name": "HomeBrainArduinoGFXCompat",
+  "version": "0.0.1",
+  "description": "Minimal ELECROW-compatible Arduino_GFX subset for the HomeBrain wall panel firmware",
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}

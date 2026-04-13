@@ -182,7 +182,11 @@ router.post('/:panelId/activate', async (req, res) => {
 
 router.get('/:panelId/state', async (req, res) => {
   try {
-    const state = await wallPanelService.getPanelState(req.params.panelId, extractPanelCredentials(req));
+    const state = await wallPanelService.getPanelState(
+      req.params.panelId,
+      extractPanelCredentials(req),
+      getRequestOrigin(req)
+    );
     return res.status(200).json({
       success: true,
       state
@@ -192,6 +196,61 @@ router.get('/:panelId/state', async (req, res) => {
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to fetch wall panel state'
+    });
+  }
+});
+
+router.post('/:panelId/ota/push', admin, async (req, res) => {
+  try {
+    const panel = await wallPanelService.pushFirmwareUpdate(req.params.panelId);
+    return res.status(202).json({
+      success: true,
+      panel
+    });
+  } catch (error) {
+    console.error(`POST /api/panels/${req.params.panelId}/ota/push - Error:`, error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to start the wall panel OTA update'
+    });
+  }
+});
+
+router.get('/:panelId/ota/download', async (req, res) => {
+  try {
+    const artifact = await wallPanelService.getPanelOtaArtifact(
+      req.params.panelId,
+      extractPanelCredentials(req)
+    );
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', String(artifact.artifactSizeBytes));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.sendFile(artifact.artifactPath);
+  } catch (error) {
+    console.error(`GET /api/panels/${req.params.panelId}/ota/download - Error:`, error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to stream the wall panel OTA package'
+    });
+  }
+});
+
+router.post('/:panelId/ota/status', async (req, res) => {
+  try {
+    const panel = await wallPanelService.reportPanelOtaStatus(
+      req.params.panelId,
+      extractPanelCredentials(req),
+      req.body || {}
+    );
+    return res.status(200).json({
+      success: true,
+      panel
+    });
+  } catch (error) {
+    console.error(`POST /api/panels/${req.params.panelId}/ota/status - Error:`, error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to record wall panel OTA status'
     });
   }
 });

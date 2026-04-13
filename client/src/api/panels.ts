@@ -51,6 +51,24 @@ export type WallPanelRecord = {
   lastSeen?: string | null
   createdAt?: string | null
   updatedAt?: string | null
+  ota?: {
+    jobId?: string
+    status?: 'idle' | 'queued' | 'building' | 'ready' | 'downloading' | 'installing' | 'rebooting' | 'completed' | 'failed'
+    phase?: string
+    progress?: number
+    targetVersion?: string
+    currentVersion?: string
+    message?: string
+    lastError?: string
+    hardwareProfile?: string
+    artifactSizeBytes?: number
+    bytesTransferred?: number
+    bytesTotal?: number
+    requestedAt?: string | null
+    startedAt?: string | null
+    completedAt?: string | null
+    updatedAt?: string | null
+  }
   settings: WallPanelSettingsRecord
 }
 
@@ -131,6 +149,19 @@ export const rotateWallPanelRegistrationCode = async (panelId: string) => {
       success: boolean
       panel: WallPanelRecord
       provisioning: WallPanelProvisioningBundle
+    }
+  } catch (error) {
+    console.error(error)
+    throw new Error(getApiErrorMessage(error))
+  }
+}
+
+export const pushWallPanelFirmwareUpdate = async (panelId: string) => {
+  try {
+    const response = await api.post(`/api/panels/${encodeURIComponent(panelId)}/ota/push`)
+    return response.data as {
+      success: boolean
+      panel: WallPanelRecord
     }
   } catch (error) {
     console.error(error)

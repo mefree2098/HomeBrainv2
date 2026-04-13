@@ -8,6 +8,7 @@ const deviceService = require('../services/deviceService');
 const sceneService = require('../services/sceneService');
 const securityAlarmService = require('../services/securityAlarmService');
 const harmonyService = require('../services/harmonyService');
+const weatherService = require('../services/weatherService');
 const wallPanelService = require('../services/wallPanelService');
 
 test('registerPanel issues panel credentials and default mode order', async (t) => {
@@ -89,6 +90,7 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   const originalGetAlarmStatus = securityAlarmService.getAlarmStatus;
   const originalGetDeviceById = deviceService.getDeviceById;
   const originalGetHubSnapshot = harmonyService.getHubSnapshot;
+  const originalFetchDashboardWeather = weatherService.fetchDashboardWeather;
 
   const thermostat = {
     _id: 'thermo-1',
@@ -179,6 +181,7 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
     securityAlarmService.getAlarmStatus = originalGetAlarmStatus;
     deviceService.getDeviceById = originalGetDeviceById;
     harmonyService.getHubSnapshot = originalGetHubSnapshot;
+    weatherService.fetchDashboardWeather = originalFetchDashboardWeather;
   });
 
   WallPanel.findById = async () => panelDoc;
@@ -195,7 +198,16 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   securityAlarmService.getAlarmStatus = async () => ({
     alarmState: 'disarmed',
     isArmed: false,
-    isTriggered: false
+    isTriggered: false,
+    sensorCount: 3,
+    activeSensorCount: 1,
+    sensors: [
+      { id: 'sensor-1', name: 'Front Door', isActive: false },
+      { id: 'sensor-2', name: 'Master Window', isActive: true }
+    ],
+    doorLocks: [
+      { id: 'lock-1', name: 'Front Door', isLocked: true }
+    ]
   });
   deviceService.getDeviceById = async (id) => (id === 'thermo-1' ? thermostat : null);
   harmonyService.getHubSnapshot = async () => ({
@@ -205,21 +217,38 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
       { id: 'activity-tv', label: 'Watch TV', activityTypeDisplayName: 'TV' }
     ]
   });
+  weatherService.fetchDashboardWeather = async () => ({
+    current: {
+      icon: 'sunny',
+      condition: 'Clear',
+      isDay: true,
+      temperatureF: 58
+    }
+  });
 
   const result = await wallPanelService.getPanelState('panel-3', {
     registrationCode: 'HBWP-ABCD-EF12-3456'
-  });
+  }, 'https://example.com');
 
   assert.deepEqual(result.modeOrder, ['thermostat', 'room', 'home', 'media', 'quiet']);
-  assert.equal(result.modes.thermostat.centerValue, '72°');
+  assert.equal(result.modes.thermostat.centerValue, '69°');
   assert.equal(result.modes.thermostat.meta.mode, 'cool');
+  assert.equal(result.modes.thermostat.meta.weatherIcon, 'sunny');
+  assert.equal(result.modes.thermostat.meta.weatherCondition, 'Clear');
+  assert.equal(result.modes.thermostat.secondaryValue, 'Set point 72°');
   assert.equal(result.modes.room.quickActions[0].label, 'Bedroom Lamp');
   assert.equal(result.modes.room.quickActions[1].label, 'Front Door');
   assert.equal(result.modes.room.secondaryValue, 'Pinned controls');
   assert.equal(result.modes.room.meta.isPinnedSelection, true);
   assert.equal(result.modes.home.centerValue, 'DISARMED');
+  assert.equal(result.modes.home.meta.security.sensorCount, 3);
+  assert.equal(result.modes.home.meta.security.activeSensorCount, 1);
+  assert.equal(result.modes.home.meta.security.sensors, undefined);
+  assert.equal(result.modes.home.meta.security.doorLocks, undefined);
   assert.equal(result.modes.media.centerValue, 'Watch TV');
   assert.equal(result.modes.quiet.quickActions[0].label, 'Bedtime');
+  assert.equal(result.ota.available, false);
+  assert.equal(result.ota.downloadUrl, '');
 });
 
 test('executeAction delegates thermostat and scene actions to existing services', async (t) => {

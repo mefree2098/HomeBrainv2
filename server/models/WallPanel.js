@@ -43,6 +43,10 @@ const schema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  ota: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
   settings: {
     type: mongoose.Schema.Types.Mixed,
     default: {}

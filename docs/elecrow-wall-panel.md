@@ -32,6 +32,16 @@ The current firmware and backend support five swipeable modes:
 - `Media`: Harmony activities plus knob-based volume and button transport commands
 - `Quiet`: bedtime, morning, white-noise, lock-up, and night-light shortcuts
 
+The orb also appends one local on-device surface:
+
+- `Settings`: persistent brightness control plus local orb utilities such as restart
+
+The orb now also supports:
+
+- full `Settings -> Hardware Orbs` provisioning and room binding in the UI
+- searchable, filterable supported-device selection for the room surface
+- HomeBrain-managed `OTA` firmware updates after the first USB flash of the OTA-capable firmware
+
 Visual direction:
 
 - dark glass cockpit background
@@ -139,6 +149,12 @@ pio run
 pio run -t upload
 ```
 
+Build note:
+
+- this firmware now ships with a bundled ELECROW-compatible Arduino-GFX subset in `embedded/elecrow-wall-panel/lib/HomeBrainArduinoGFXCompat`
+- if you previously tried building an older checkout and `pio run` failed with graphics-library errors, delete `embedded/elecrow-wall-panel/.pio` after pulling the latest repo changes and then run `pio run` again
+- the checked-in `platformio.ini` now uses a conservative `115200` upload speed plus `--no-stub`, because that is the most reliable flash path on the CrowPanel USB serial interface
+
 If you have more than one serial device attached, specify the upload port explicitly:
 
 ```bash
@@ -157,6 +173,11 @@ The firmware will:
 - call `POST /api/panels/:id/activate`
 - poll `GET /api/panels/:id/state`
 - send touch/knob actions to `POST /api/panels/:id/actions`
+
+Important OTA note:
+
+- this build now uses an OTA-capable partition layout
+- you must flash this newer firmware over USB at least once before future `Push Code Update` actions in the UI can work over `Wi-Fi`
 
 ## 6. Verify The Panel Is Reaching HomeBrain
 
@@ -194,22 +215,46 @@ Practical defaults:
 - keep room-control favorites to only the most important two to four devices
 - treat `Quiet` as the "one tap before sleep" surface
 
-## 8. Advanced Manual API Fallback
+## 8. OTA Firmware Updates From The UI
+
+After the orb has been flashed once with the current OTA-capable firmware and has come online:
+
+1. Open `Settings -> Hardware Orbs`
+2. Select the orb
+3. Open the `Firmware Updates` card
+4. Click `Push Code Update`
+
+HomeBrain will:
+
+- build the latest checked-in firmware on the HomeBrain host
+- stage an authenticated OTA package for that orb
+- let the orb download the update over `Wi-Fi`
+- show build/download/install/reboot progress back in the `Hardware Orbs` UI
+- mark the orb online again after it reboots and reports the new firmware version
+
+Operational notes:
+
+- the orb must already be provisioned and able to reach the hub over `Wi-Fi`
+- OTA updates depend on the new OTA partition table, so older pre-OTA USB flashes need one manual refresh first
+- if the orb is offline when you queue an update, HomeBrain can build the package, but the install will wait until the orb reconnects
+## 9. Advanced Manual API Fallback
 
 If you are troubleshooting or automating this flow outside the UI, the backend still exposes `/api/panels` for manual registration, provisioning, and updates. The intended day-to-day operator path is now the `Hardware Orbs` Settings tab.
 
-## 9. Day-To-Day Use
+## 10. Day-To-Day Use
 
 The default interaction model is:
 
 - swipe left or right to move between `Thermostat`, `Room`, `Home`, `Media`, and `Quiet`
+- keep swiping to reach the local `Settings` page for on-device options such as brightness
 - rotate the knob on `Thermostat` to change setpoint
 - rotate the knob on `Media` to send volume up and down
+- rotate the knob on `Settings` to dim or brighten the orb and save that preference on the device
 - short press the knob on `Media` for `PlayPause`
 - long press the knob on `Thermostat` to trigger `Bedtime` if you bound it
 - tap the quick tiles to change HVAC mode, run scenes, control devices, or trigger whole-home actions
 
-## 10. Power And Wall Mounting
+## 11. Power And Wall Mounting
 
 This device should be powered from regulated `5V` USB power, not from raw thermostat wiring.
 
@@ -228,12 +273,11 @@ Practical guidance:
 
 The `2.1"` CrowPanel family is a much better candidate for a bedside thermostat puck or scene controller than a Linux voice listener, because it is small, silent, touch-first, and already has the rotary control we need.
 
-## 11. Current Limitations
+## 12. Current Limitations
 
 - current repo firmware targets the ELECROW `2.1"` rotary board first
 - the `1.28"` board family still needs its own board profile before flashing this exact firmware
 - `Wi-Fi` credentials are compiled into the firmware header today
-- flashing firmware is still manual even though provisioning and bindings now live in the HomeBrain web UI
 - the panel currently polls for state rather than using a live push channel
 
 ## Related Docs

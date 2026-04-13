@@ -27,6 +27,7 @@ The firmware talks to HomeBrain over `Wi-Fi` and uses the new `/api/panels` back
 - whole-home security and garage status
 - Harmony activity and transport controls
 - quiet-house / bedtime shortcuts
+- authenticated OTA firmware updates staged by `Settings -> Hardware Orbs`
 
 ## Visual Direction
 
@@ -40,9 +41,11 @@ The UI intentionally mirrors the HomeBrain iOS app:
 ## Current Interaction Model
 
 - Swipe left/right: move between `Thermostat`, `Room`, `Home`, `Media`, and `Quiet`
+- Keep swiping to reach the local `Settings` page
 - Rotate knob:
   - `Thermostat`: change setpoint
   - `Media`: send `VolumeUp` / `VolumeDown`
+  - `Settings`: adjust persistent screen brightness
 - Short press:
   - `Media`: `PlayPause`
 - Long press:
@@ -63,6 +66,18 @@ cd embedded/elecrow-wall-panel
 pio run
 pio run -t upload
 ```
+
+The firmware directory includes a small bundled ELECROW-compatible Arduino-GFX
+subset under `lib/HomeBrainArduinoGFXCompat`, so you should not need to chase
+external display-library versions manually.
+
+The checked-in `platformio.ini` also pins a slower `115200` upload speed and
+`--no-stub`, which has proven to be the most reliable flash path for this
+CrowPanel over USB.
+
+The current build also uses an OTA-capable partition layout. Flash this version
+over USB once, then future code refreshes can be triggered from
+`Settings -> Hardware Orbs -> Firmware Updates -> Push Code Update`.
 
 5. After the panel boots, return to `Settings -> Hardware Orbs` and bind the thermostat, searchable room surface scenes/devices, media, and quiet-house targets in the UI.
 

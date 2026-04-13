@@ -21,6 +21,7 @@ import { getHarmonyHubs } from "@/api/harmony"
 import {
   getWallPanelProvisioning,
   getWallPanels,
+  pushWallPanelFirmwareUpdate,
   registerWallPanel,
   rotateWallPanelRegistrationCode,
   updateWallPanel,
@@ -41,6 +42,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/useToast"
@@ -116,6 +118,7 @@ const ROOM_CONTROL_DEVICE_TYPE_OPTIONS = [
   { value: "lock", label: "Locks" },
   { value: "garage", label: "Garage doors" }
 ]
+const OTA_ACTIVE_STATUSES = new Set(["queued", "building", "ready", "downloading", "installing", "rebooting"])
 
 const sortPanels = (panels: WallPanelRecord[]) =>
   [...panels].sort((left, right) => {
@@ -166,6 +169,31 @@ const statusLabel = (status: WallPanelRecord["status"]) => {
   if (status === "updating") return "Updating"
   return "Offline"
 }
+
+const otaStatusLabel = (status?: string) => {
+  switch (status) {
+    case "queued":
+      return "Queued"
+    case "building":
+      return "Building"
+    case "ready":
+      return "Ready for Orb"
+    case "downloading":
+      return "Downloading"
+    case "installing":
+      return "Installing"
+    case "rebooting":
+      return "Rebooting"
+    case "completed":
+      return "Completed"
+    case "failed":
+      return "Failed"
+    default:
+      return "Idle"
+  }
+}
+
+const isOtaBusy = (panel: WallPanelRecord | null | undefined) => OTA_ACTIVE_STATUSES.has(normalizeString(panel?.ota?.status))
 
 const toPanelDraft = (panel: WallPanelRecord): PanelDraft => ({
   name: normalizeString(panel.name),
@@ -288,6 +316,7 @@ export function HardwareOrbsTab() {
   const [provisioningDialogOpen, setProvisioningDialogOpen] = useState(false)
   const [loadingProvisioningKey, setLoadingProvisioningKey] = useState("")
   const [rotatingProvisioningKey, setRotatingProvisioningKey] = useState("")
+  const [pushingUpdateKey, setPushingUpdateKey] = useState("")
   const [roomDeviceSearch, setRoomDeviceSearch] = useState("")
   const [roomDeviceRoomFilter, setRoomDeviceRoomFilter] = useState(ROOM_DEVICE_FILTER_PANEL_ROOM)
   const [roomDeviceTypeFilter, setRoomDeviceTypeFilter] = useState(ROOM_DEVICE_FILTER_ALL)
@@ -366,6 +395,18 @@ export function HardwareOrbsTab() {
   useEffect(() => {
     void loadOrbData()
   }, [])
+
+  useEffect(() => {
+    if (!panels.some((panel) => isOtaBusy(panel))) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadOrbData({ silent: true })
+    }, 4000)
+
+    return () => window.clearInterval(intervalId)
+  }, [panels])
 
   const roomOptions = useMemo(() => {
     const values = new Set<string>()
@@ -458,6 +499,9 @@ export function HardwareOrbsTab() {
     }
     return panelDraftKey(draft) !== panelRecordKey(selectedPanel)
   }, [draft, selectedPanel])
+
+  const selectedPanelOta = selectedPanel?.ota
+  const selectedPanelOtaBusy = isOtaBusy(selectedPanel)
 
   const onlineCount = panels.filter((panel) => panel.status === "online").length
   const provisionedCount = panels.filter((panel) => panel.settings?.registered === true).length
@@ -555,6 +599,27 @@ export function HardwareOrbsTab() {
       })
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handlePushFirmwareUpdate = async (panel: WallPanelRecord) => {
+    setPushingUpdateKey(panel.id)
+    try {
+      const response = await pushWallPanelFirmwareUpdate(panel.id)
+      replacePanel(response.panel)
+      toast({
+        title: "Firmware push started",
+        description: `${response.panel.name} is building a fresh OTA package now. HomeBrain will hand it to the orb over Wi-Fi and show progress here.`
+      })
+      void loadOrbData({ silent: true, focusPanelId: panel.id })
+    } catch (error: any) {
+      toast({
+        title: "Firmware push failed",
+        description: error?.message || "Unable to start the hardware orb OTA update.",
+        variant: "destructive"
+      })
+    } finally {
+      setPushingUpdateKey("")
     }
   }
 
@@ -865,6 +930,81 @@ export function HardwareOrbsTab() {
                     <p className="mt-2 font-medium">{normalizeString(selectedPanel.firmwareVersion) || "Not reported yet"}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{hardwareProfileLabel(selectedPanel.hardwareProfile)}</p>
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+                <CardHeader>
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <Cpu className="h-5 w-5 text-cyan-500" />
+                        Firmware Updates
+                      </CardTitle>
+                      <CardDescription>
+                        Build the latest checked-in orb firmware on this HomeBrain host, push it over Wi-Fi, and watch the orb report its progress back here.
+                      </CardDescription>
+                    </div>
+                    <Button
+                      type="button"
+                      className="bg-cyan-600 hover:bg-cyan-700 text-white"
+                      onClick={() => void handlePushFirmwareUpdate(selectedPanel)}
+                      disabled={!selectedPanel.settings?.registered || selectedPanelOtaBusy || pushingUpdateKey === selectedPanel.id}
+                    >
+                      {pushingUpdateKey === selectedPanel.id ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Cpu className="mr-2 h-4 w-4" />
+                      )}
+                      Push Code Update
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded-xl border border-border/60 bg-background/70 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Running</p>
+                      <p className="mt-2 font-medium">{normalizeString(selectedPanel.firmwareVersion) || "Not reported yet"}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">Live firmware version currently reported by the orb.</p>
+                    </div>
+                    <div className="rounded-xl border border-border/60 bg-background/70 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Target</p>
+                      <p className="mt-2 font-medium">{normalizeString(selectedPanelOta?.targetVersion) || "No pending OTA job"}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">The version HomeBrain is building or asking the orb to install next.</p>
+                    </div>
+                    <div className="rounded-xl border border-border/60 bg-background/70 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">OTA State</p>
+                      <p className="mt-2 font-medium">{otaStatusLabel(selectedPanelOta?.status)}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {selectedPanelOta?.message || (selectedPanel.settings?.registered
+                          ? "This orb is ready for one-click OTA updates."
+                          : "Complete the first USB flash and activation before OTA is available.")}
+                      </p>
+                    </div>
+                  </div>
+
+                  {selectedPanelOta?.status && selectedPanelOta.status !== "idle" ? (
+                    <div className="rounded-2xl border border-cyan-300/20 bg-cyan-500/[0.05] p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="text-sm font-medium">{otaStatusLabel(selectedPanelOta.status)}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {selectedPanelOta.message || "HomeBrain is coordinating this firmware push."}
+                          </p>
+                        </div>
+                        <p className="text-sm font-medium">{Math.max(0, Math.min(100, Number(selectedPanelOta.progress || 0)))}%</p>
+                      </div>
+                      <Progress value={Math.max(0, Math.min(100, Number(selectedPanelOta.progress || 0)))} className="mt-3" />
+                      <div className="mt-3 flex flex-wrap gap-4 text-xs text-muted-foreground">
+                        <span>Requested {selectedPanelOta.requestedAt ? new Date(selectedPanelOta.requestedAt).toLocaleString() : "just now"}</span>
+                        {selectedPanelOta.startedAt ? <span>Started {new Date(selectedPanelOta.startedAt).toLocaleString()}</span> : null}
+                        {selectedPanelOta.completedAt ? <span>Finished {new Date(selectedPanelOta.completedAt).toLocaleString()}</span> : null}
+                      </div>
+                      {normalizeString(selectedPanelOta.lastError) ? (
+                        <p className="mt-3 text-sm text-red-500">{selectedPanelOta.lastError}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
 

@@ -30,3 +30,5 @@ uploads
 tmp/
 temp_ctranslate2/
 temp_openwakeword/
+.pio/
+**/.pio/

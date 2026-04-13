@@ -77,10 +77,14 @@ pio device monitor -b 115200
 
 Typical fixes:
 
+- if `pio run` fails after an older attempt, remove `embedded/elecrow-wall-panel/.pio`, pull the latest repo changes, and rebuild so PlatformIO picks up the bundled `HomeBrainArduinoGFXCompat` display library
+- if upload fails right after the ESP32-S3 stub starts, pull the latest repo changes before retrying; the checked-in `platformio.ini` now pins a slower `115200` upload speed and `--no-stub` for this board family
+- if `Push Code Update` is unavailable or OTA updates fail immediately, make sure the panel has been flashed once with the newer OTA-capable partition layout from the latest repo checkout
 - confirm the values in [`../embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h`](../embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h) are correct, especially `Wi-Fi`, hub URL, panel ID, and registration code
 - confirm the panel can reach the hub URL you compiled into the firmware
 - confirm the panel record still exists by calling `GET /api/panels` as an admin
 - confirm the registration code still works with `GET /api/panels/:id/state`
+- if the panel shows `Building` or `Ready for Orb` in `Settings -> Hardware Orbs` but never installs the update, confirm the orb is online and check that the HomeBrain host can still build `embedded/elecrow-wall-panel` locally with `pio run`
 - if the device is wall-mounted, verify the USB-C power source is stable and not browning out the board during `Wi-Fi` activity
 - if you bought the smaller `1.28"` board, do not flash the `2.1"` board profile unchanged
 
