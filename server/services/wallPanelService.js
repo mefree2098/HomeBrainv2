@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const fsp = fs.promises;
+const net = require('net');
+const os = require('os');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 
@@ -1170,9 +1172,66 @@ function resolvePanelBuildTarget(hardwareProfile) {
   return PANEL_BUILD_TARGETS[key] || null;
 }
 
-function buildPanelOtaDownloadUrl(panelId, origin = '') {
-  const resolvedOrigin = trimString(origin) || getConfiguredPublicOrigin();
-  if (!resolvedOrigin) {
+function isPrivateIpAddress(host) {
+  const value = trimString(host);
+  if (!net.isIP(value)) {
+    return false;
+  }
+
+  if (net.isIPv4(value)) {
+    const [a, b] = value.split('.').map(Number);
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+
+  const normalized = value.toLowerCase();
+  return normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80');
+}
+
+function getLocalIpAddress() {
+  const interfaces = os.networkInterfaces();
+  for (const values of Object.values(interfaces)) {
+    for (const iface of values || []) {
+      if (iface?.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+
+  return '';
+}
+
+function sharesPrivateIpv4Subnet(left, right) {
+  if (!net.isIPv4(left) || !net.isIPv4(right)) {
+    return false;
+  }
+
+  const leftOctets = left.split('.');
+  const rightOctets = right.split('.');
+  return leftOctets[0] === rightOctets[0]
+    && leftOctets[1] === rightOctets[1]
+    && leftOctets[2] === rightOctets[2];
+}
+
+function resolvePanelOtaOrigin(panel, origin = '') {
+  const panelIp = trimString(panel?.ipAddress);
+  const localIp = getLocalIpAddress();
+  const localPort = trimString(process.env.PORT) || '3000';
+
+  if (isPrivateIpAddress(panelIp) && isPrivateIpAddress(localIp) && sharesPrivateIpv4Subnet(panelIp, localIp)) {
+    return `http://${localIp}:${localPort}`;
+  }
+
+  return trimString(origin) || getConfiguredPublicOrigin();
+}
+
+function buildPanelOtaDownloadUrl(panel, origin = '') {
+  const panelId = toId(panel?._id || panel?.id);
+  const resolvedOrigin = resolvePanelOtaOrigin(panel, origin);
+  if (!panelId || !resolvedOrigin) {
     return '';
   }
 
@@ -1193,7 +1252,7 @@ function buildPanelOtaPayload(panel, origin = '') {
     targetVersion: ota.targetVersion,
     message: ota.message,
     bytesTotal: ota.bytesTotal || ota.artifactSizeBytes || 0,
-    downloadUrl: downloadReady ? buildPanelOtaDownloadUrl(toId(panel?._id || panel?.id), origin) : ''
+    downloadUrl: downloadReady ? buildPanelOtaDownloadUrl(panel, origin) : ''
   };
 }
 

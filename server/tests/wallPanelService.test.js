@@ -276,6 +276,82 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   assert.equal(result.ota.downloadUrl, '');
 });
 
+test('getPanelState prefers a LAN OTA download URL when the panel and hub share a private subnet', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const originalDeviceFind = Device.find;
+  const originalDeviceFindOne = Device.findOne;
+  const originalSceneFind = Scene.find;
+  const originalGetAlarmStatus = securityAlarmService.getAlarmStatus;
+  const originalGetDeviceById = deviceService.getDeviceById;
+  const originalGetHubSnapshot = harmonyService.getHubSnapshot;
+  const originalFetchDashboardWeather = weatherService.fetchDashboardWeather;
+  const originalNetworkInterfaces = os.networkInterfaces;
+
+  const panelDoc = {
+    _id: 'panel-lan-ota',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    ipAddress: '192.168.2.72',
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    ota: {
+      status: 'ready',
+      artifactPath: '/tmp/panel.bin',
+      artifactSizeBytes: 1234
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+    Device.find = originalDeviceFind;
+    Device.findOne = originalDeviceFindOne;
+    Scene.find = originalSceneFind;
+    securityAlarmService.getAlarmStatus = originalGetAlarmStatus;
+    deviceService.getDeviceById = originalGetDeviceById;
+    harmonyService.getHubSnapshot = originalGetHubSnapshot;
+    weatherService.fetchDashboardWeather = originalFetchDashboardWeather;
+    os.networkInterfaces = originalNetworkInterfaces;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+  Device.findOne = async () => null;
+  Device.find = () => ({
+    sort: async () => []
+  });
+  Scene.find = async () => [];
+  securityAlarmService.getAlarmStatus = async () => null;
+  deviceService.getDeviceById = async () => null;
+  harmonyService.getHubSnapshot = async () => null;
+  weatherService.fetchDashboardWeather = async () => null;
+  os.networkInterfaces = () => ({
+    en0: [
+      {
+        family: 'IPv4',
+        internal: false,
+        address: '192.168.2.61'
+      }
+    ]
+  });
+
+  const result = await wallPanelService.getPanelState('panel-lan-ota', {
+    registrationCode: 'HBWP-ABCD-EF12-3456'
+  }, 'https://example.com');
+
+  assert.equal(
+    result.ota.downloadUrl,
+    'http://192.168.2.61:3000/api/panels/panel-lan-ota/ota/download'
+  );
+});
+
 test('executeAction delegates thermostat and scene actions to existing services', async (t) => {
   const originalFindById = WallPanel.findById;
   const originalControlDevice = deviceService.controlDevice;
