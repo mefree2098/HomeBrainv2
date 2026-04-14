@@ -76,6 +76,7 @@ schema.pre('validate', function normalizePlatforms() {
 
 function sanitizeUserDocument(_doc, ret) {
   delete ret.password;
+  delete ret.refreshToken;
   ret.platforms = normalizeUserPlatforms(ret.platforms);
   return ret;
 }
