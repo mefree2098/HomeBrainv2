@@ -408,6 +408,7 @@ test('getPanelState prefers a LAN OTA download URL when the panel and hub share 
     hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
     status: 'online',
     ipAddress: '192.168.2.72',
+    firmwareVersion: 'panel-20260414T203000Z',
     settings: {
       registrationCode: 'HBWP-ABCD-EF12-3456',
       claimToken: '',
@@ -416,6 +417,7 @@ test('getPanelState prefers a LAN OTA download URL when the panel and hub share 
     },
     ota: {
       status: 'ready',
+      targetVersion: 'panel-20260414T204043Z-70305d3',
       artifactPath: '/tmp/panel.bin',
       artifactSizeBytes: 1234
     },
@@ -464,6 +466,78 @@ test('getPanelState prefers a LAN OTA download URL when the panel and hub share 
     result.ota.downloadUrl,
     'http://192.168.2.61:3000/api/panels/panel-lan-ota/ota/download'
   );
+});
+
+test('getPanelState hides stale OTA payloads when the panel is already on a newer firmware', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const originalDeviceFind = Device.find;
+  const originalDeviceFindOne = Device.findOne;
+  const originalSceneFind = Scene.find;
+  const originalGetAlarmStatus = securityAlarmService.getAlarmStatus;
+  const originalGetDeviceById = deviceService.getDeviceById;
+  const originalGetHubSnapshot = harmonyService.getHubSnapshot;
+  const originalFetchDashboardWeather = weatherService.fetchDashboardWeather;
+
+  const panelDoc = {
+    _id: 'panel-stale-ota',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    firmwareVersion: 'panel-20260414T210957Z',
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    ota: {
+      status: 'ready',
+      phase: 'ready',
+      progress: 60,
+      jobId: 'job-stale',
+      targetVersion: 'panel-20260414T204043Z-70305d3',
+      artifactPath: '/tmp/panel.bin',
+      artifactSizeBytes: 1234,
+      message: 'Waiting for download'
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+    Device.find = originalDeviceFind;
+    Device.findOne = originalDeviceFindOne;
+    Scene.find = originalSceneFind;
+    securityAlarmService.getAlarmStatus = originalGetAlarmStatus;
+    deviceService.getDeviceById = originalGetDeviceById;
+    harmonyService.getHubSnapshot = originalGetHubSnapshot;
+    weatherService.fetchDashboardWeather = originalFetchDashboardWeather;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+  Device.findOne = async () => null;
+  Device.find = () => ({
+    sort: async () => []
+  });
+  Scene.find = async () => [];
+  securityAlarmService.getAlarmStatus = async () => null;
+  deviceService.getDeviceById = async () => null;
+  harmonyService.getHubSnapshot = async () => null;
+  weatherService.fetchDashboardWeather = async () => null;
+
+  const result = await wallPanelService.getPanelState('panel-stale-ota', {
+    registrationCode: 'HBWP-ABCD-EF12-3456'
+  }, 'https://example.com');
+
+  assert.equal(result.ota.active, false);
+  assert.equal(result.ota.available, false);
+  assert.equal(result.ota.status, 'idle');
+  assert.equal(result.ota.jobId, '');
+  assert.equal(result.ota.targetVersion, '');
+  assert.equal(result.ota.downloadUrl, '');
 });
 
 test('executeAction delegates thermostat and scene actions to existing services', async (t) => {

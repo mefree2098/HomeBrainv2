@@ -1254,18 +1254,19 @@ function buildPanelOtaDownloadUrl(panel, origin = '') {
 
 function buildPanelOtaPayload(panel, origin = '') {
   const ota = normalizeOtaState(panel?.ota || {});
-  const downloadReady = DOWNLOADABLE_OTA_STATUSES.has(ota.status) && ota.artifactPath;
+  const updateAvailable = isFirmwareUpdateAvailable(panel?.firmwareVersion, ota.targetVersion);
+  const downloadReady = updateAvailable && DOWNLOADABLE_OTA_STATUSES.has(ota.status) && ota.artifactPath;
 
   return {
-    active: otaStatusIsActive(ota.status),
+    active: updateAvailable && otaStatusIsActive(ota.status),
     available: Boolean(downloadReady),
-    status: ota.status,
-    phase: ota.phase,
-    progress: ota.progress,
-    jobId: ota.jobId,
-    targetVersion: ota.targetVersion,
-    message: ota.message,
-    bytesTotal: ota.bytesTotal || ota.artifactSizeBytes || 0,
+    status: updateAvailable ? ota.status : 'idle',
+    phase: updateAvailable ? ota.phase : 'idle',
+    progress: updateAvailable ? ota.progress : 0,
+    jobId: updateAvailable ? ota.jobId : '',
+    targetVersion: updateAvailable ? ota.targetVersion : '',
+    message: updateAvailable ? ota.message : '',
+    bytesTotal: updateAvailable ? (ota.bytesTotal || ota.artifactSizeBytes || 0) : 0,
     downloadUrl: downloadReady ? buildPanelOtaDownloadUrl(panel, origin) : ''
   };
 }

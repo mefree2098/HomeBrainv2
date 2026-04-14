@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <SPIFFS.h>
 #include <Update.h>
 #include <ArduinoJson.h>
 #include <lvgl.h>
@@ -12,12 +13,21 @@
 #include <Preferences.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#ifdef CONFIG_APP_ROLLBACK_ENABLE
+#include "esp_ota_ops.h"
+#endif
 
 #include "HomeBrainPanelConfig.h"
 #include "HomeBrainPanelAssets.h"
 #include "HomeBrainPalette.h"
 
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
+#ifdef CONFIG_APP_ROLLBACK_ENABLE
+extern "C" bool verifyRollbackLater() {
+  return true;
+}
+#endif
 
 namespace {
 
@@ -53,6 +63,7 @@ constexpr int kSwipeVerticalLimit = 220;
 constexpr unsigned long kSwipeWindowMs = 1000;
 constexpr uint16_t kStateJsonCapacity = 32768;
 constexpr unsigned long kBrightnessPersistDelayMs = 1000;
+constexpr unsigned long kOtaPostActivationValidationMs = 45000;
 constexpr int kBrightnessDefaultPercent = 94;
 constexpr int kBrightnessMinPercent = 15;
 constexpr int kBrightnessMaxPercent = 100;
@@ -71,6 +82,9 @@ constexpr uint8_t kNetworkJobQueueCapacity = 12;
 constexpr uint8_t kNetworkResultQueueCapacity = 12;
 constexpr uint16_t kNetworkTaskIdleDelayMs = 8;
 constexpr uint16_t kLoopIdleDelayMs = 1;
+constexpr char kCachedPanelStatePath[] = "/last-panel-state.json";
+constexpr char kCachedPanelStateTempPath[] = "/last-panel-state.tmp";
+constexpr unsigned long kStateCachePersistIntervalMs = 60000;
 constexpr lv_coord_t kZoomNormal = 256;
 constexpr lv_coord_t kThermostatCenterZoom = 256;
 constexpr lv_coord_t kThermostatAdjustmentZoom = 256;
@@ -178,6 +192,11 @@ struct PanelState {
   bool loaded = false;
 };
 
+enum class StatePayloadSource : uint8_t {
+  Live = 0,
+  Cached = 1
+};
+
 enum class NetworkJobKind : uint8_t {
   None = 0,
   ExecuteAction = 1
@@ -242,9 +261,18 @@ unsigned long gLastActivateAttemptAt = 0;
 unsigned long gBrightnessChangedAt = 0;
 bool gDeferredStateRefresh = false;
 unsigned long gDeferredStateRefreshAt = 0;
+unsigned long gLastLiveStateAppliedAt = 0;
+unsigned long gPendingOtaActivatedAt = 0;
 
 int gBrightnessPercent = kBrightnessDefaultPercent;
 bool gPendingBrightnessPersist = false;
+bool gSpiffsReady = false;
+bool gLoadedCachedState = false;
+bool gPendingOtaValidation = false;
+bool gPendingOtaSawActivation = false;
+bool gHaveCachedStateChecksum = false;
+uint32_t gCachedStateChecksum = 0;
+unsigned long gLastCachedStatePersistAt = 0;
 
 String gStatusLine = "Booting HomeBrain panel...";
 String gActiveOtaJobId;
@@ -286,6 +314,8 @@ lv_obj_t* gActionButtons[kActionSlots] = {};
 lv_obj_t* gActionTitleLabels[kActionSlots] = {};
 lv_obj_t* gActionSubtitleLabels[kActionSlots] = {};
 int8_t gActionMappings[kActionSlots] = {-1, -1, -1, -1};
+
+void renderOtaProgressScreen(const String& title, int progress, const String& message);
 
 String normalizeHubUrl() {
   String base = String(HOMEBRAIN_PANEL_HUB_URL);
@@ -350,6 +380,57 @@ String brightnessLabel(int value) {
   return String(normalizeBrightnessPercent(value)) + String("%");
 }
 
+long long extractPanelFirmwareTimestamp(const String& value) {
+  const int markerIndex = value.indexOf('T');
+  if (markerIndex < 8 || markerIndex + 7 >= static_cast<int>(value.length())) {
+    return -1;
+  }
+
+  const String stamp = value.substring(markerIndex - 8, markerIndex + 7);
+  for (size_t index = 0; index < stamp.length(); index += 1) {
+    const char character = stamp.charAt(index);
+    if (index == 8) {
+      if (character != 'T') {
+        return -1;
+      }
+      continue;
+    }
+    if (character < '0' || character > '9') {
+      return -1;
+    }
+  }
+
+  long long numericStamp = 0;
+  for (size_t index = 0; index < stamp.length(); index += 1) {
+    const char character = stamp.charAt(index);
+    if (character == 'T') {
+      continue;
+    }
+    numericStamp = (numericStamp * 10LL) + static_cast<long long>(character - '0');
+  }
+
+  return numericStamp;
+}
+
+bool otaTargetVersionIsInstallable() {
+  const String targetVersion = gState.ota.targetVersion;
+  if (targetVersion.isEmpty()) {
+    return false;
+  }
+
+  if (targetVersion == HOMEBRAIN_PANEL_FIRMWARE_VERSION) {
+    return false;
+  }
+
+  const long long currentStamp = extractPanelFirmwareTimestamp(String(HOMEBRAIN_PANEL_FIRMWARE_VERSION));
+  const long long targetStamp = extractPanelFirmwareTimestamp(targetVersion);
+  if (currentStamp >= 0 && targetStamp >= 0) {
+    return targetStamp > currentStamp;
+  }
+
+  return true;
+}
+
 enum class HttpRequestChannel : uint8_t {
   Default = 0,
   OtaDownload = 1
@@ -363,19 +444,25 @@ bool beginHttpRequest(
   const size_t channelIndex = static_cast<size_t>(channel);
   const bool otaChannel = channel == HttpRequestChannel::OtaDownload;
 
-  http.setReuse(true);
+  http.setReuse(otaChannel);
   http.setConnectTimeout(otaChannel ? kOtaHttpConnectTimeoutMs : kPanelHttpConnectTimeoutMs);
   http.setTimeout(otaChannel ? kOtaHttpTimeoutMs : kPanelHttpTimeoutMs);
 
   if (url.startsWith("https://")) {
     static WiFiClientSecure secureClients[2];
     WiFiClientSecure& secureClient = secureClients[channelIndex];
+    if (!otaChannel) {
+      secureClient.stop();
+    }
     secureClient.setInsecure();
     return http.begin(secureClient, url);
   }
 
   static WiFiClient plainClients[2];
   WiFiClient& plainClient = plainClients[channelIndex];
+  if (!otaChannel) {
+    plainClient.stop();
+  }
   return http.begin(plainClient, url);
 }
 
@@ -512,6 +599,157 @@ void setStatusLine(const String& status) {
   Serial.println(String("[status] ") + status);
 }
 
+void initStateCache() {
+  gSpiffsReady = SPIFFS.begin(true);
+  if (!gSpiffsReady) {
+    Serial.println("[cache] SPIFFS mount failed");
+    return;
+  }
+
+  Serial.println("[cache] SPIFFS ready");
+}
+
+bool persistCachedPanelState(const String& payload) {
+  if (!gSpiffsReady || payload.isEmpty()) {
+    return false;
+  }
+
+  SPIFFS.remove(kCachedPanelStateTempPath);
+  File file = SPIFFS.open(kCachedPanelStateTempPath, FILE_WRITE);
+  if (!file) {
+    Serial.println("[cache] failed to open temp cache file");
+    return false;
+  }
+
+  const size_t written = file.print(payload);
+  file.close();
+  if (written != payload.length()) {
+    SPIFFS.remove(kCachedPanelStateTempPath);
+    Serial.println("[cache] failed to write full cache payload");
+    return false;
+  }
+
+  SPIFFS.remove(kCachedPanelStatePath);
+  if (!SPIFFS.rename(kCachedPanelStateTempPath, kCachedPanelStatePath)) {
+    SPIFFS.remove(kCachedPanelStateTempPath);
+    Serial.println("[cache] failed to finalize cache payload");
+    return false;
+  }
+
+  return true;
+}
+
+uint32_t computeStatePayloadChecksum(const String& payload) {
+  uint32_t checksum = 2166136261UL;
+  for (size_t index = 0; index < payload.length(); index += 1) {
+    checksum ^= static_cast<uint8_t>(payload.charAt(index));
+    checksum *= 16777619UL;
+  }
+  return checksum;
+}
+
+void maybePersistCachedPanelState(const String& payload) {
+  if (!gSpiffsReady || payload.isEmpty()) {
+    return;
+  }
+
+  const uint32_t checksum = computeStatePayloadChecksum(payload);
+  if (gHaveCachedStateChecksum && checksum == gCachedStateChecksum) {
+    return;
+  }
+
+  if (gLastCachedStatePersistAt != 0 && millis() - gLastCachedStatePersistAt < kStateCachePersistIntervalMs) {
+    return;
+  }
+
+  if (!persistCachedPanelState(payload)) {
+    return;
+  }
+
+  gCachedStateChecksum = checksum;
+  gHaveCachedStateChecksum = true;
+  gLastCachedStatePersistAt = millis();
+}
+
+bool readCachedPanelStatePayload(String& payload) {
+  payload = "";
+  if (!gSpiffsReady || !SPIFFS.exists(kCachedPanelStatePath)) {
+    return false;
+  }
+
+  File file = SPIFFS.open(kCachedPanelStatePath, FILE_READ);
+  if (!file) {
+    return false;
+  }
+
+  const size_t size = file.size();
+  if (size == 0 || size > static_cast<size_t>(kStateJsonCapacity)) {
+    file.close();
+    return false;
+  }
+
+  payload.reserve(size + 1);
+  payload = file.readString();
+  file.close();
+  if (!payload.isEmpty()) {
+    gCachedStateChecksum = computeStatePayloadChecksum(payload);
+    gHaveCachedStateChecksum = true;
+  }
+  return !payload.isEmpty();
+}
+
+#ifdef CONFIG_APP_ROLLBACK_ENABLE
+void beginPendingOtaValidationIfNeeded() {
+  const esp_partition_t* runningPartition = esp_ota_get_running_partition();
+  if (runningPartition == nullptr) {
+    return;
+  }
+
+  esp_ota_img_states_t otaState = ESP_OTA_IMG_UNDEFINED;
+  if (esp_ota_get_state_partition(runningPartition, &otaState) != ESP_OK) {
+    return;
+  }
+
+  if (otaState != ESP_OTA_IMG_PENDING_VERIFY) {
+    return;
+  }
+
+  gPendingOtaValidation = true;
+  gPendingOtaSawActivation = false;
+  gPendingOtaActivatedAt = 0;
+  Serial.println("[ota] running pending-verify firmware");
+}
+
+void confirmPendingOtaValidation(const String& reason) {
+  if (!gPendingOtaValidation) {
+    return;
+  }
+
+  const esp_err_t result = esp_ota_mark_app_valid_cancel_rollback();
+  if (result == ESP_OK) {
+    Serial.println(String("[ota] firmware validated: ") + reason);
+    gPendingOtaValidation = false;
+    gPendingOtaSawActivation = false;
+    gPendingOtaActivatedAt = 0;
+    return;
+  }
+
+  Serial.println(String("[ota] validation confirm failed: ") + result);
+}
+
+void rollbackPendingOtaFirmware(const String& reason) {
+  if (!gPendingOtaValidation) {
+    return;
+  }
+
+  Serial.println(String("[ota] rolling back firmware: ") + reason);
+  setStatusLine("Rolling back firmware");
+  renderOtaProgressScreen("Recovery", 0, "Update could not load live HomeBrain state. Restoring the previous firmware...");
+  delay(1200);
+  esp_ota_mark_app_invalid_rollback_and_reboot();
+}
+#endif
+
 void configurePcf8574() {
   Wire.begin(kI2cSdaPin, kI2cSclPin);
   gPcf8574.pinMode(P0, OUTPUT);
@@ -600,10 +838,13 @@ int activeEncoderThreshold();
 int encoderStepAmount(const ModeSnapshot& mode, int direction);
 bool postPanelResponse(const String& url, const String& body, String* responseBody = nullptr);
 bool getPanelResponse(const String& url, String& responseBody);
-bool applyPanelStatePayload(const String& payload);
+bool applyPanelStatePayload(const String& payload, StatePayloadSource source);
 void renderMode();
 void processNetworkResults();
 void scheduleDeferredStateRefresh(unsigned long delayMs = kActionStateRefreshDelayMs);
+bool loadCachedPanelState();
+void maybeResolvePendingOtaValidation();
+void renderOtaProgressScreen(const String& title, int progress, const String& message);
 
 void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
   LV_UNUSED(indevDriver);
@@ -2275,7 +2516,7 @@ bool getPanelResponse(const String& url, String& responseBody) {
   return statusCode >= 200 && statusCode < 300;
 }
 
-bool applyPanelStatePayload(const String& payload) {
+bool applyPanelStatePayload(const String& payload, StatePayloadSource source) {
   DynamicJsonDocument response(kStateJsonCapacity);
   const DeserializationError error = deserializeJson(response, payload);
   if (error) {
@@ -2290,9 +2531,23 @@ bool applyPanelStatePayload(const String& payload) {
     return false;
   }
 
-  gLastStateFetchAt = millis();
-  setStatusLine("Live");
-  Serial.println("[panel] state refreshed successfully");
+  if (source == StatePayloadSource::Live) {
+    gLastStateFetchAt = millis();
+    gLastLiveStateAppliedAt = gLastStateFetchAt;
+    gLoadedCachedState = false;
+    setStatusLine("Live");
+    maybePersistCachedPanelState(payload);
+    Serial.println("[panel] live state refreshed successfully");
+#ifdef CONFIG_APP_ROLLBACK_ENABLE
+    confirmPendingOtaValidation("live HomeBrain state loaded");
+#endif
+  } else {
+    gLoadedCachedState = true;
+    gState.ota = OtaSnapshot();
+    setStatusLine("Offline snapshot");
+    Serial.println("[panel] cached state restored");
+  }
+
   renderMode();
   return true;
 }
@@ -2305,6 +2560,13 @@ bool activatePanel() {
   const bool ok = postPanelJson(panelActivateUrl(), request);
   if (ok) {
     gPanelActivated = true;
+#ifdef CONFIG_APP_ROLLBACK_ENABLE
+    if (gPendingOtaValidation && !gPendingOtaSawActivation) {
+      gPendingOtaSawActivation = true;
+      gPendingOtaActivatedAt = millis();
+      Serial.println("[ota] activation succeeded while awaiting validation");
+    }
+#endif
     setStatusLine("Panel activated");
     return true;
   }
@@ -2321,7 +2583,16 @@ bool fetchPanelState() {
     return false;
   }
 
-  return applyPanelStatePayload(payload);
+  return applyPanelStatePayload(payload, StatePayloadSource::Live);
+}
+
+bool loadCachedPanelState() {
+  String payload;
+  if (!readCachedPanelStatePayload(payload)) {
+    return false;
+  }
+
+  return applyPanelStatePayload(payload, StatePayloadSource::Cached);
 }
 
 void renderOtaProgressScreen(const String& title, int progress, const String& message) {
@@ -2560,6 +2831,15 @@ void maybeApplyOtaUpdate() {
   }
 
   if (gBlockedOtaJobId == gState.ota.jobId) {
+    return;
+  }
+
+  if (!otaTargetVersionIsInstallable()) {
+    gBlockedOtaJobId = gState.ota.jobId;
+    setStatusLine("Skipping stale firmware");
+    reportOtaStatus("failed", 0, "Skipping older HomeBrain firmware package.", 0, gState.ota.bytesTotal, "stale-target");
+    fetchPanelState();
+    renderMode();
     return;
   }
 
@@ -3442,15 +3722,45 @@ void dispatchDeferredStateRefreshIfReady() {
   fetchPanelState();
 }
 
+void maybeResolvePendingOtaValidation() {
+#ifndef CONFIG_APP_ROLLBACK_ENABLE
+  return;
+#else
+  if (!gPendingOtaValidation) {
+    return;
+  }
+
+  if (gLastLiveStateAppliedAt != 0) {
+    confirmPendingOtaValidation("live HomeBrain state loaded");
+    return;
+  }
+
+  if (!gPendingOtaSawActivation || gPendingOtaActivatedAt == 0) {
+    return;
+  }
+
+  if (millis() - gPendingOtaActivatedAt < kOtaPostActivationValidationMs) {
+    return;
+  }
+
+  rollbackPendingOtaFirmware("activation succeeded but no live state was applied");
+#endif
+}
+
 }  // namespace
 
 void setup() {
   Serial.begin(115200);
+#ifdef CONFIG_APP_ROLLBACK_ENABLE
+  beginPendingOtaValidationIfNeeded();
+#endif
   loadPersistentDeviceSettings();
   configurePcf8574();
   resetDisplayAndTouch();
   initBacklight();
   setupDisplay();
+  initStateCache();
+  loadCachedPanelState();
 
   pinMode(kEncoderAPin, INPUT);
   pinMode(kEncoderBPin, INPUT);
@@ -3486,6 +3796,7 @@ void loop() {
   dispatchQueuedDeviceLevelIfReady();
   dispatchDeferredStateRefreshIfReady();
   maybeRefreshState();
+  maybeResolvePendingOtaValidation();
   maybeApplyOtaUpdate();
   delay(kLoopIdleDelayMs);
 }
