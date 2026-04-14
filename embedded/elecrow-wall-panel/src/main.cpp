@@ -219,6 +219,8 @@ lv_obj_t* gModeBadgeLabel = nullptr;
 lv_obj_t* gTitleLabel = nullptr;
 lv_obj_t* gCenterValueLabel = nullptr;
 lv_obj_t* gSecondaryLabel = nullptr;
+lv_obj_t* gRoomOverlayCenterLabel = nullptr;
+lv_obj_t* gRoomOverlaySubtitleLabel = nullptr;
 lv_obj_t* gHintLabel = nullptr;
 lv_obj_t* gFooterLabel = nullptr;
 lv_obj_t* gArc = nullptr;
@@ -946,6 +948,11 @@ void hideTextLabel(lv_obj_t* label) {
   lv_label_set_text(label, "");
 }
 
+void hideRoomOverlayLabels() {
+  hideTextLabel(gRoomOverlayCenterLabel);
+  hideTextLabel(gRoomOverlaySubtitleLabel);
+}
+
 void setSurfaceTitleText(const String& text, lv_coord_t y, lv_coord_t zoom = 256) {
   styleSurfaceTitle(gTitleLabel, y, zoom);
   lv_label_set_text(gTitleLabel, text.c_str());
@@ -1381,6 +1388,7 @@ void renderThermostatAdjustment(const ModeSnapshot& mode) {
 }
 
 void renderSettingsMode(const ModeSnapshot& mode) {
+  hideRoomOverlayLabels();
   setSurfaceTitleText(mode.title.isEmpty() ? "Settings" : mode.title, 72);
   setSurfaceSubtitleText(mode.secondaryValue, 112, true, 204);
   styleSurfaceCenterValue(mode.centerValue, -28, 224, 420);
@@ -1398,20 +1406,43 @@ void renderRoomMode(const ModeSnapshot& mode) {
     : mode.hint;
 
   lv_obj_clear_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
   setSurfaceTitleText(roomTitle, 74);
-  styleRoomSubtitleText(roomSubtitle, 114, 204);
-  styleRoomCenterValueText(roomValue, 8);
+  hideTextLabel(gSecondaryLabel);
+  hideTextLabel(gCenterValueLabel);
+
+  lv_obj_clear_flag(gRoomOverlaySubtitleLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(gRoomOverlaySubtitleLabel, lv_pct(100));
+  lv_obj_align(gRoomOverlaySubtitleLabel, LV_ALIGN_TOP_MID, 0, 114);
+  lv_obj_set_style_text_align(gRoomOverlaySubtitleLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(gRoomOverlaySubtitleLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gRoomOverlaySubtitleLabel, 256, 0);
+  lv_obj_set_style_text_letter_space(gRoomOverlaySubtitleLabel, 1, 0);
+  lv_obj_set_style_text_color(gRoomOverlaySubtitleLabel, hex(homebrain::palette::kTextSecondary), 0);
+  lv_label_set_text(gRoomOverlaySubtitleLabel, roomSubtitle.c_str());
+
+  lv_obj_clear_flag(gRoomOverlayCenterLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(gRoomOverlayCenterLabel, lv_pct(100));
+  lv_obj_align(gRoomOverlayCenterLabel, LV_ALIGN_CENTER, 0, 8);
+  lv_obj_set_style_text_align(gRoomOverlayCenterLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(
+    gRoomOverlayCenterLabel,
+    (isNumericDisplayValue(roomValue) || roomValue.length() <= 3) ? &hb_font_orbitron_80 : &hb_font_orbitron_28,
+    0
+  );
+  lv_obj_set_style_transform_zoom(gRoomOverlayCenterLabel, 256, 0);
+  lv_obj_set_style_text_letter_space(gRoomOverlayCenterLabel, 0, 0);
+  lv_obj_set_style_text_color(gRoomOverlayCenterLabel, hex(homebrain::palette::kTextPrimary), 0);
+  lv_label_set_text(gRoomOverlayCenterLabel, roomValue.c_str());
   styleHelperLabel(gHintLabel, 326, roomHint);
   lv_obj_move_foreground(gTitleLabel);
-  lv_obj_move_foreground(gSecondaryLabel);
-  lv_obj_move_foreground(gCenterValueLabel);
+  lv_obj_move_foreground(gRoomOverlaySubtitleLabel);
+  lv_obj_move_foreground(gRoomOverlayCenterLabel);
   lv_obj_move_foreground(gHintLabel);
   lv_obj_move_foreground(gFooterLabel);
 }
 
 void renderSecurityMode(const ModeSnapshot& mode) {
+  hideRoomOverlayLabels();
   setSurfaceTitleText(mode.title, 74);
   hideTextLabel(gSecondaryLabel);
   styleSurfaceCenterValue(mode.centerValue, -26, 208, 292);
@@ -1419,6 +1450,7 @@ void renderSecurityMode(const ModeSnapshot& mode) {
 }
 
 void renderMediaSurface(const ModeSnapshot& mode) {
+  hideRoomOverlayLabels();
   setSurfaceTitleText(mode.title, 74);
   styleSurfaceCenterValue(mode.centerValue, -24, 208, 504);
   setSurfaceSubtitleText(mode.secondaryValue, 246, true, 192);
@@ -1579,6 +1611,7 @@ void renderThermostatButtons(const ModeSnapshot& mode) {
 
 void renderMode() {
   hideRoomSurfaceLabels();
+  hideRoomOverlayLabels();
   ModeSnapshot* mode = currentMode();
   if (!mode) {
     hideWeatherBackdrop();
@@ -2363,6 +2396,22 @@ void createUi() {
   createActionButton(1, 256, 300);
   createActionButton(2, 50, 382);
   createActionButton(3, 256, 382);
+
+  gRoomOverlaySubtitleLabel = lv_label_create(gMainCard);
+  lv_obj_set_width(gRoomOverlaySubtitleLabel, lv_pct(100));
+  lv_obj_set_style_text_align(gRoomOverlaySubtitleLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(gRoomOverlaySubtitleLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_text_color(gRoomOverlaySubtitleLabel, hex(homebrain::palette::kTextSecondary), 0);
+  lv_label_set_text(gRoomOverlaySubtitleLabel, "");
+  lv_obj_add_flag(gRoomOverlaySubtitleLabel, LV_OBJ_FLAG_HIDDEN);
+
+  gRoomOverlayCenterLabel = lv_label_create(gMainCard);
+  lv_obj_set_width(gRoomOverlayCenterLabel, lv_pct(100));
+  lv_obj_set_style_text_align(gRoomOverlayCenterLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(gRoomOverlayCenterLabel, &hb_font_orbitron_80, 0);
+  lv_obj_set_style_text_color(gRoomOverlayCenterLabel, hex(homebrain::palette::kTextPrimary), 0);
+  lv_label_set_text(gRoomOverlayCenterLabel, "");
+  lv_obj_add_flag(gRoomOverlayCenterLabel, LV_OBJ_FLAG_HIDDEN);
 }
 
 void setupDisplay() {
