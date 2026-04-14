@@ -11,6 +11,7 @@
 #include <Adafruit_CST8XX.h>
 #include <PCF8574.h>
 #include <Preferences.h>
+#include <memory>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #ifdef CONFIG_APP_ROLLBACK_ENABLE
@@ -74,8 +75,8 @@ constexpr int kUltraFastEncoderDeltaThreshold = 1;
 constexpr unsigned long kEncoderAccelerationFastMs = 80;
 constexpr unsigned long kEncoderAccelerationFasterMs = 45;
 constexpr unsigned long kEncoderAccelerationFastestMs = 20;
-constexpr int kPanelHttpConnectTimeoutMs = 1200;
-constexpr int kPanelHttpTimeoutMs = 1800;
+constexpr int kPanelHttpConnectTimeoutMs = 3000;
+constexpr int kPanelHttpTimeoutMs = 5000;
 constexpr int kOtaHttpConnectTimeoutMs = 4000;
 constexpr int kOtaHttpTimeoutMs = 15000;
 constexpr uint8_t kNetworkJobQueueCapacity = 12;
@@ -273,6 +274,8 @@ bool gPendingOtaSawActivation = false;
 bool gHaveCachedStateChecksum = false;
 uint32_t gCachedStateChecksum = 0;
 unsigned long gLastCachedStatePersistAt = 0;
+std::unique_ptr<WiFiClientSecure> gSecureHttpClients[2];
+std::unique_ptr<WiFiClient> gPlainHttpClients[2];
 
 String gStatusLine = "Booting HomeBrain panel...";
 String gActiveOtaJobId;
@@ -449,20 +452,16 @@ bool beginHttpRequest(
   http.setTimeout(otaChannel ? kOtaHttpTimeoutMs : kPanelHttpTimeoutMs);
 
   if (url.startsWith("https://")) {
-    static WiFiClientSecure secureClients[2];
-    WiFiClientSecure& secureClient = secureClients[channelIndex];
-    if (!otaChannel) {
-      secureClient.stop();
-    }
+    gPlainHttpClients[channelIndex].reset();
+    gSecureHttpClients[channelIndex].reset(new WiFiClientSecure());
+    WiFiClientSecure& secureClient = *gSecureHttpClients[channelIndex];
     secureClient.setInsecure();
     return http.begin(secureClient, url);
   }
 
-  static WiFiClient plainClients[2];
-  WiFiClient& plainClient = plainClients[channelIndex];
-  if (!otaChannel) {
-    plainClient.stop();
-  }
+  gSecureHttpClients[channelIndex].reset();
+  gPlainHttpClients[channelIndex].reset(new WiFiClient());
+  WiFiClient& plainClient = *gPlainHttpClients[channelIndex];
   return http.begin(plainClient, url);
 }
 
@@ -2402,6 +2401,7 @@ bool postPanelJson(const String& url, JsonDocument& requestDocument, JsonDocumen
   serializeJson(requestDocument, body);
   const int statusCode = http.POST(body);
   if (statusCode <= 0) {
+    Serial.println(String("[http] POST failed: ") + url + " code=" + statusCode);
     http.end();
     return false;
   }
@@ -2470,6 +2470,7 @@ bool getPanelJson(const String& url, JsonDocument& responseDocument) {
   http.addHeader("X-HomeBrain-Panel-Code", HOMEBRAIN_PANEL_REGISTRATION_CODE);
   const int statusCode = http.GET();
   if (statusCode <= 0) {
+    Serial.println(String("[http] GET failed: ") + url + " code=" + statusCode);
     http.end();
     return false;
   }
@@ -2503,6 +2504,7 @@ bool getPanelResponse(const String& url, String& responseBody) {
   http.addHeader("X-HomeBrain-Panel-Code", HOMEBRAIN_PANEL_REGISTRATION_CODE);
   const int statusCode = http.GET();
   if (statusCode <= 0) {
+    Serial.println(String("[http] GET failed: ") + url + " code=" + statusCode);
     http.end();
     return false;
   }
