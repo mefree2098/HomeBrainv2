@@ -228,6 +228,29 @@ function statusLabelForDevice(device = {}) {
   }
 }
 
+function isBrightnessCapableDevice(device = {}) {
+  return deviceService.supportsBrightnessControl(device);
+}
+
+function brightnessForDevice(device = {}) {
+  const directBrightness = normalizeNumber(device?.brightness, NaN);
+  if (Number.isFinite(directBrightness)) {
+    return Math.max(0, Math.min(100, Math.round(directBrightness)));
+  }
+
+  const propertyBrightness = normalizeNumber(
+    device?.properties?.brightness
+      ?? device?.properties?.level
+      ?? device?.properties?.smartThingsAttributeValues?.switchLevel?.level,
+    NaN
+  );
+  if (Number.isFinite(propertyBrightness)) {
+    return Math.max(0, Math.min(100, Math.round(propertyBrightness)));
+  }
+
+  return device.status ? 100 : 0;
+}
+
 function actionForDevice(device = {}) {
   switch (trimString(device?.type).toLowerCase()) {
     case 'lock':
@@ -352,6 +375,7 @@ function buildDefaultSettings(overrides = {}) {
       bedtimeSceneId: toId(input?.thermostat?.bedtimeSceneId)
     },
     roomControl: {
+      lightDeviceId: toId(input?.roomControl?.lightDeviceId),
       favoriteDeviceIds: uniqueIds(input?.roomControl?.favoriteDeviceIds),
       sceneIds: uniqueIds(input?.roomControl?.sceneIds)
     },
@@ -361,6 +385,7 @@ function buildDefaultSettings(overrides = {}) {
     },
     harmony: {
       hubIp: trimString(input?.harmony?.hubIp),
+      defaultActivityId: toId(input?.harmony?.defaultActivityId),
       activityIds: uniqueIds(input?.harmony?.activityIds),
       commandDeviceId: toId(input?.harmony?.commandDeviceId)
     },
@@ -530,6 +555,45 @@ async function resolveSensorDevice(settings, roomDevices = []) {
   return roomDevices.find((device) => trimString(device?.type).toLowerCase() === 'sensor') || null;
 }
 
+function resolveRoomLightDevice(panel, roomDevices = [], allDevices = []) {
+  const explicitLightId = toId(panel?.settings?.roomControl?.lightDeviceId);
+  if (explicitLightId) {
+    const byId = new Map(
+      [...roomDevices, ...allDevices].map((device) => [toId(device?._id), device])
+    );
+    const explicitDevice = byId.get(explicitLightId);
+    if (explicitDevice) {
+      return explicitDevice;
+    }
+  }
+
+  const favoriteIds = uniqueIds(panel?.settings?.roomControl?.favoriteDeviceIds);
+  if (favoriteIds.length > 0) {
+    const byId = new Map(
+      [...roomDevices, ...allDevices].map((device) => [toId(device?._id), device])
+    );
+    const favoriteLight = favoriteIds
+      .map((id) => byId.get(id))
+      .find((device) => ['light', 'switch'].includes(trimString(device?.type).toLowerCase()));
+    if (favoriteLight) {
+      return favoriteLight;
+    }
+  }
+
+  const roomLight = roomDevices.find((device) => {
+    const type = trimString(device?.type).toLowerCase();
+    return (type === 'light' || type === 'switch') && isBrightnessCapableDevice(device);
+  });
+  if (roomLight) {
+    return roomLight;
+  }
+
+  return roomDevices.find((device) => {
+    const type = trimString(device?.type).toLowerCase();
+    return type === 'light' || type === 'switch';
+  }) || null;
+}
+
 function buildThermostatWeatherMeta(weather = null) {
   const icon = trimString(weather?.current?.icon);
   const condition = trimString(weather?.current?.condition);
@@ -639,53 +703,57 @@ function pickRoomDevices(panel, roomDevices = [], allDevices = []) {
 }
 
 async function buildRoomMode(panel, roomDevices = [], allDevices = []) {
-  const quickActions = [];
-  const configuredScenes = await loadScenesInOrder(panel?.settings?.roomControl?.sceneIds);
-  const explicitDeviceIds = uniqueIds(panel?.settings?.roomControl?.favoriteDeviceIds);
-  const pinnedDevices = pickRoomDevices(panel, roomDevices, allDevices);
+  const lightDevice = resolveRoomLightDevice(panel, roomDevices, allDevices);
+  if (!lightDevice) {
+    return makeModeSnapshot({
+      id: 'room',
+      title: trimString(panel?.room) || 'Room',
+      centerValue: 'Not Bound',
+      secondaryValue: 'Lights',
+      hint: 'Assign the room light in hardware orb settings.',
+      accent: 'cyan',
+      meta: {
+        ready: false
+      }
+    });
+  }
 
-  configuredScenes.slice(0, 2).forEach((scene) => {
-    quickActions.push(makeQuickAction({
-      id: `room-scene-${toId(scene._id)}`,
-      label: scene.name,
-      subtitle: trimString(scene.category) || 'Scene',
-      type: 'scene.activate',
-      targetId: toId(scene._id),
-      accent: 'purple'
-    }));
-  });
-
-  pinnedDevices.forEach((device) => {
-    quickActions.push(makeQuickAction({
-      id: `room-device-${toId(device._id)}`,
-      label: device.name,
-      subtitle: statusLabelForDevice(device),
-      type: 'device.control',
-      targetId: toId(device._id),
-      action: actionForDevice(device),
-      accent: accentForDevice(device)
-    }));
-  });
-
-  const summaryDevices = explicitDeviceIds.length > 0
-    ? pinnedDevices
-    : roomDevices.filter((device) => ROOM_DEVICE_TYPES.has(trimString(device?.type).toLowerCase()));
-  const controllableCount = summaryDevices.length;
-  const activeCount = summaryDevices.filter((device) => device.status).length;
+  const brightness = brightnessForDevice(lightDevice);
+  const isOn = brightness > 0;
+  const toggleValue = isOn ? 0 : 100;
 
   return makeModeSnapshot({
     id: 'room',
-    title: panel.room,
-    centerValue: `${activeCount}/${controllableCount || 0}`,
-    secondaryValue: explicitDeviceIds.length > 0 ? 'Pinned controls' : 'Room controls',
-    hint: 'Tap tiles for scenes and device toggles.',
+    title: trimString(panel?.room) || trimString(lightDevice?.room) || 'Room',
+    centerValue: isOn ? `${brightness}%` : 'Off',
+    secondaryValue: 'Lights',
+    hint: 'Tap to toggle. Rotate to dim or brighten.',
     accent: 'cyan',
-    quickActions,
+    knob: {
+      kind: 'range',
+      min: 0,
+      max: 100,
+      step: 1,
+      value: brightness,
+      pressAction: makeQuickAction({
+        id: `room-light-toggle-${toId(lightDevice._id)}`,
+        label: isOn ? 'Off' : 'On',
+        subtitle: trimString(lightDevice.name) || 'Lights',
+        type: 'device.control',
+        targetId: toId(lightDevice._id),
+        action: 'set_brightness',
+        value: toggleValue,
+        accent: isOn ? 'red' : 'cyan'
+      })
+    },
     meta: {
-      ready: quickActions.length > 0,
-      controllableCount,
-      activeCount,
-      isPinnedSelection: explicitDeviceIds.length > 0
+      ready: true,
+      deviceId: toId(lightDevice._id),
+      deviceName: trimString(lightDevice.name),
+      deviceType: trimString(lightDevice.type).toLowerCase(),
+      brightness,
+      isOn,
+      isBrightnessCapable: isBrightnessCapableDevice(lightDevice)
     }
   });
 }
@@ -701,6 +769,20 @@ function alarmStateLabel(status = {}) {
     case 'disarmed':
     default:
       return 'DISARMED';
+  }
+}
+
+function alarmStateDisplayLabel(status = {}) {
+  switch (status.alarmState) {
+    case 'armedStay':
+      return 'Arm Stay';
+    case 'armedAway':
+      return 'Arm Away';
+    case 'triggered':
+      return 'Triggered';
+    case 'disarmed':
+    default:
+      return 'Disarmed';
   }
 }
 
@@ -729,35 +811,18 @@ function summarizeSecurityStatus(securityStatus = null) {
 }
 
 function buildHomeMode(panel, securityStatus = null, allDevices = []) {
-  const garages = allDevices.filter((device) => trimString(device?.type).toLowerCase() === 'garage');
-  const locks = allDevices.filter((device) => trimString(device?.type).toLowerCase() === 'lock');
-  const garageOpenCount = garages.filter((device) => device.status).length;
-  const unlockedCount = locks.filter((device) => !device.status).length;
+  void panel;
+  void allDevices;
   const quickActions = [];
 
-  if (securityStatus?.isTriggered) {
+  if (securityStatus?.isTriggered || securityStatus?.isArmed) {
     quickActions.push(makeQuickAction({
-      id: 'security-dismiss',
-      label: 'Dismiss',
-      subtitle: 'Clear active alarm',
-      type: 'security.dismiss',
+      id: 'security-disarm',
+      label: 'Disarm',
+      subtitle: securityStatus?.isTriggered ? 'Silence and disarm' : 'Return to normal',
+      type: 'security.disarm',
       accent: 'red',
       destructive: true
-    }));
-    quickActions.push(makeQuickAction({
-      id: 'security-disarm',
-      label: 'Disarm',
-      subtitle: 'Return to normal',
-      type: 'security.disarm',
-      accent: 'yellow'
-    }));
-  } else if (securityStatus?.isArmed) {
-    quickActions.push(makeQuickAction({
-      id: 'security-disarm',
-      label: 'Disarm',
-      subtitle: 'Home access',
-      type: 'security.disarm',
-      accent: 'yellow'
     }));
   } else {
     quickActions.push(makeQuickAction({
@@ -778,42 +843,16 @@ function buildHomeMode(panel, securityStatus = null, allDevices = []) {
     }));
   }
 
-  const lockUpSceneId = toId(panel?.settings?.quietHouse?.lockUpSceneId);
-  if (lockUpSceneId) {
-    quickActions.push(makeQuickAction({
-      id: 'home-lock-up',
-      label: 'Lock Up',
-      subtitle: 'Night secure',
-      type: 'scene.activate',
-      targetId: lockUpSceneId,
-      accent: 'purple'
-    }));
-  }
-
-  if (garages[0]) {
-    quickActions.push(makeQuickAction({
-      id: `home-garage-${toId(garages[0]._id)}`,
-      label: garages[0].name,
-      subtitle: statusLabelForDevice(garages[0]),
-      type: 'device.control',
-      targetId: toId(garages[0]._id),
-      action: actionForDevice(garages[0]),
-      accent: 'orange'
-    }));
-  }
-
   return makeModeSnapshot({
     id: 'home',
-    title: 'Whole Home',
-    centerValue: alarmStateLabel(securityStatus || {}),
-    secondaryValue: `${garageOpenCount} garage open · ${unlockedCount} unlocked`,
-    hint: 'Security, garage, and lock shortcuts live here.',
+    title: 'Security',
+    centerValue: alarmStateDisplayLabel(securityStatus || {}),
+    secondaryValue: securityStatus?.isArmed ? 'Tap disarm to turn the alarm off.' : 'Choose Arm Stay or Arm Away.',
+    hint: 'Security control',
     accent: securityStatus?.isTriggered ? 'red' : (securityStatus?.isArmed ? 'green' : 'blue'),
     quickActions,
     meta: {
       ready: true,
-      garageOpenCount,
-      unlockedCount,
       security: summarizeSecurityStatus(securityStatus)
     }
   });
@@ -854,97 +893,131 @@ async function buildMediaMode(panel) {
   }
 
   const configuredActivityIds = uniqueIds(panel?.settings?.harmony?.activityIds);
+  const configuredDefaultActivityId = toId(panel?.settings?.harmony?.defaultActivityId);
   const activities = Array.isArray(hub?.activities) ? hub.activities : [];
-  const chosenActivities = configuredActivityIds.length > 0
-    ? configuredActivityIds
-        .map((id) => activities.find((entry) => trimString(entry?.id) === id))
-        .filter(Boolean)
-    : activities.slice(0, 2);
+  const launchableActivities = activities.filter((entry) => trimString(entry?.id) && trimString(entry?.id) !== '-1');
   const commandDeviceId = toId(panel?.settings?.harmony?.commandDeviceId);
   const currentActivity = activities.find((entry) => trimString(entry?.id) === trimString(hub?.currentActivityId));
-  const quickActions = chosenActivities.map((activity) => makeQuickAction({
-    id: `media-activity-${trimString(activity.id)}`,
-    label: trimString(activity.label) || 'Activity',
-    subtitle: trimString(activity.activityTypeDisplayName) || 'Harmony',
-    type: 'harmony.activity.start',
-    targetId: trimString(activity.id),
-    accent: trimString(activity.id) === trimString(hub?.currentActivityId) ? 'green' : 'purple'
-  }));
+  const defaultActivity = (
+    launchableActivities.find((entry) => trimString(entry?.id) === configuredDefaultActivityId)
+    || launchableActivities.find((entry) => trimString(entry?.id) === trimString(currentActivity?.id))
+    || launchableActivities.find((entry) => configuredActivityIds.includes(trimString(entry?.id)))
+    || launchableActivities[0]
+    || null
+  );
+  const isOn = trimString(hub?.currentActivityId) !== '-1' && !!currentActivity;
+  if (!isOn && !defaultActivity) {
+    return makeModeSnapshot({
+      id: 'media',
+      title: trimString(hub?.friendlyName) || 'Media',
+      centerValue: 'Not Bound',
+      secondaryValue: 'Choose a default activity in orb settings.',
+      hint: 'Pick what this hub should start when the orb powers it on.',
+      accent: 'purple',
+      meta: {
+        ready: false,
+        hubIp
+      }
+    });
+  }
+
+  const toggleAction = isOn
+    ? makeQuickAction({
+        id: 'media-toggle-off',
+        label: 'Off',
+        subtitle: 'Power down',
+        type: 'harmony.power_off',
+        accent: 'red'
+      })
+    : defaultActivity
+      ? makeQuickAction({
+          id: 'media-toggle-on',
+          label: 'On',
+          subtitle: trimString(defaultActivity?.label) || 'Power on',
+          type: 'harmony.activity.start',
+          targetId: trimString(defaultActivity?.id),
+          accent: 'green'
+        })
+      : null;
+  const quickActions = [];
+
+  if (defaultActivity) {
+    quickActions.push(makeQuickAction({
+      id: 'media-on',
+      label: 'On',
+      subtitle: trimString(defaultActivity?.label) || 'Start default',
+      type: 'harmony.activity.start',
+      targetId: trimString(defaultActivity?.id),
+      accent: isOn ? 'slate' : 'green'
+    }));
+  }
 
   quickActions.push(makeQuickAction({
     id: 'media-off',
-    label: 'Power Off',
-    subtitle: 'Shut down hub',
+    label: 'Off',
+    subtitle: 'Power down',
     type: 'harmony.power_off',
-    accent: 'red'
+    accent: isOn ? 'red' : 'slate'
   }));
-
-  if (commandDeviceId) {
-    quickActions.push(makeQuickAction({
-      id: 'media-play-pause',
-      label: 'Play / Pause',
-      subtitle: 'Knob press mirror',
-      type: 'harmony.command',
-      targetId: commandDeviceId,
-      action: 'PlayPause',
-      accent: 'blue'
-    }));
-  }
 
   return makeModeSnapshot({
     id: 'media',
     title: trimString(hub?.friendlyName) || 'Media',
-    centerValue: trimString(currentActivity?.label) || 'All Off',
-    secondaryValue: commandDeviceId ? 'Turn knob for volume' : 'Tap to launch activities',
-    hint: commandDeviceId
-      ? 'Turn the knob for volume. Press for Play/Pause.'
-      : 'Tap an activity to launch media control.',
+    centerValue: isOn ? 'On' : 'Off',
+    secondaryValue: isOn
+      ? (trimString(currentActivity?.label) || 'Now playing')
+      : (trimString(defaultActivity?.label) || 'Choose a default activity'),
+    hint: isOn && commandDeviceId
+      ? 'Rotate for volume.'
+      : 'Tap the center or the buttons to power this hub.',
     accent: 'purple',
-    knob: commandDeviceId
-      ? {
-          kind: 'relative',
-          value: 50,
-          min: 0,
-          max: 100,
-          step: 1,
-          clockwiseAction: makeQuickAction({
+    knob: {
+      kind: isOn && commandDeviceId ? 'relative' : 'none',
+      value: 50,
+      min: 0,
+      max: 100,
+      step: 1,
+      clockwiseAction: isOn && commandDeviceId
+        ? makeQuickAction({
             id: 'media-volume-up',
             label: 'Volume Up',
             type: 'harmony.command',
             targetId: commandDeviceId,
             action: 'VolumeUp',
             accent: 'blue'
-          }),
-          counterclockwiseAction: makeQuickAction({
+          })
+        : null,
+      counterclockwiseAction: isOn && commandDeviceId
+        ? makeQuickAction({
             id: 'media-volume-down',
             label: 'Volume Down',
             type: 'harmony.command',
             targetId: commandDeviceId,
             action: 'VolumeDown',
             accent: 'blue'
-          }),
-          pressAction: makeQuickAction({
-            id: 'media-play-pause',
-            label: 'Play / Pause',
-            type: 'harmony.command',
-            targetId: commandDeviceId,
-            action: 'PlayPause',
-            accent: 'purple'
-          }),
-          longPressAction: makeQuickAction({
+          })
+        : null,
+      pressAction: toggleAction,
+      longPressAction: isOn
+        ? makeQuickAction({
             id: 'media-power-off',
-            label: 'Power Off',
+            label: 'Off',
+            subtitle: 'Power down',
             type: 'harmony.power_off',
             accent: 'red'
           })
-        }
-      : undefined,
+        : null
+    },
     quickActions,
     meta: {
-      ready: true,
+      ready: !!defaultActivity || isOn,
       hubIp,
       commandDeviceId,
-      currentActivityId: trimString(hub?.currentActivityId)
+      currentActivityId: trimString(hub?.currentActivityId),
+      currentActivityLabel: trimString(currentActivity?.label) || '',
+      defaultActivityId: trimString(defaultActivity?.id),
+      defaultActivityLabel: trimString(defaultActivity?.label),
+      isOn
     }
   });
 }

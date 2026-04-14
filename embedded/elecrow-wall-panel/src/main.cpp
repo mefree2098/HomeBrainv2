@@ -42,6 +42,7 @@ constexpr unsigned long kEncoderLongPressMs = 900;
 constexpr unsigned long kStateRefreshFallbackMs = 5000;
 constexpr unsigned long kThermostatCommitDelayMs = 3000;
 constexpr unsigned long kThermostatDispatchDelayMs = 75;
+constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
 constexpr unsigned long kOtaStatusReportIntervalMs = 750;
 constexpr int kSwipeThreshold = 120;
 constexpr int kSwipeVerticalLimit = 90;
@@ -52,6 +53,8 @@ constexpr int kBrightnessDefaultPercent = 94;
 constexpr int kBrightnessMinPercent = 15;
 constexpr int kBrightnessMaxPercent = 100;
 constexpr int kTemperatureUnavailable = -1000;
+constexpr int kDefaultEncoderDeltaThreshold = 4;
+constexpr int kFastEncoderDeltaThreshold = 2;
 constexpr lv_coord_t kZoomNormal = 256;
 constexpr lv_coord_t kThermostatCenterZoom = 256;
 constexpr lv_coord_t kThermostatAdjustmentZoom = 256;
@@ -182,6 +185,10 @@ bool gQueuedThermostatDispatch = false;
 String gQueuedThermostatDeviceId;
 int gQueuedThermostatValue = 0;
 unsigned long gQueuedThermostatDispatchAt = 0;
+bool gQueuedDeviceLevelDispatch = false;
+String gQueuedDeviceLevelTargetId;
+int gQueuedDeviceLevelValue = 0;
+unsigned long gQueuedDeviceLevelDispatchAt = 0;
 unsigned long gPendingThermostatCommitAt = 0;
 unsigned long gLastOtaStatusPostAt = 0;
 unsigned long gLastWifiAttemptAt = 0;
@@ -206,6 +213,7 @@ lv_obj_t* gSecondaryLabel = nullptr;
 lv_obj_t* gHintLabel = nullptr;
 lv_obj_t* gFooterLabel = nullptr;
 lv_obj_t* gArc = nullptr;
+lv_obj_t* gCenterTapButton = nullptr;
 lv_obj_t* gWeatherGlyphImage = nullptr;
 lv_obj_t* gWeatherBadgeCard = nullptr;
 lv_obj_t* gWeatherSunCore = nullptr;
@@ -846,6 +854,101 @@ String formatTemperatureDegrees(const String& value, int fallback) {
 
 String formatTemperatureDegreesFromNumber(int value) {
   return String(value) + String("°");
+}
+
+bool isNumericDisplayValue(const String& value) {
+  bool hasDigit = false;
+  for (size_t index = 0; index < value.length(); index += 1) {
+    const char character = value.charAt(index);
+    if (character >= '0' && character <= '9') {
+      hasDigit = true;
+      continue;
+    }
+    if (character == '%' || character == '.' || character == '-' || character == ' ' || character == 0xB0) {
+      continue;
+    }
+    return false;
+  }
+  return hasDigit;
+}
+
+void styleSurfaceTitle(lv_obj_t* label, lv_coord_t y, lv_coord_t zoom = 256) {
+  lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(label, lv_pct(100));
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, y);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(label, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(label, zoom, 0);
+  lv_obj_set_style_text_letter_space(label, 1, 0);
+  lv_obj_set_style_text_color(label, hex(homebrain::palette::kTextPrimary), 0);
+}
+
+void styleSurfaceSubtitle(lv_obj_t* label, lv_coord_t y, bool muted = false, lv_coord_t zoom = 228) {
+  lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(label, lv_pct(100));
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, y);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(label, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(label, zoom, 0);
+  lv_obj_set_style_text_letter_space(label, 0, 0);
+  lv_obj_set_style_text_color(
+    label,
+    muted ? hex(homebrain::palette::kTextSecondary) : hex(homebrain::palette::kTextPrimary),
+    0
+  );
+}
+
+void styleHelperLabel(lv_obj_t* label, lv_coord_t y, const String& text) {
+  if (text.isEmpty()) {
+    lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(label, "");
+    return;
+  }
+
+  lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(label, 360);
+  lv_obj_align(label, LV_ALIGN_TOP_MID, 0, y);
+  lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(label, &hb_font_space_grotesk_20, 0);
+  lv_obj_set_style_transform_zoom(label, 256, 0);
+  lv_obj_set_style_text_color(label, hex(homebrain::palette::kTextSecondary), 0);
+  lv_label_set_text(label, text.c_str());
+}
+
+void styleSurfaceCenterValue(
+  const String& value,
+  lv_coord_t yOffset = 0,
+  lv_coord_t numericZoom = 256,
+  lv_coord_t textZoom = 420
+) {
+  lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(gCenterValueLabel, lv_pct(100));
+  lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, yOffset);
+  lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
+  if (isNumericDisplayValue(value)) {
+    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_80, 0);
+    lv_obj_set_style_transform_zoom(gCenterValueLabel, numericZoom, 0);
+  } else {
+    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_28, 0);
+    lv_obj_set_style_transform_zoom(gCenterValueLabel, textZoom, 0);
+  }
+  lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
+  lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
+  lv_label_set_text(gCenterValueLabel, value.c_str());
+}
+
+void applyActionButtonFonts(
+  const lv_font_t* titleFont,
+  lv_coord_t titleZoom,
+  const lv_font_t* subtitleFont,
+  lv_coord_t subtitleZoom
+) {
+  for (uint8_t index = 0; index < kActionSlots; index += 1) {
+    lv_obj_set_style_text_font(gActionTitleLabels[index], titleFont, 0);
+    lv_obj_set_style_transform_zoom(gActionTitleLabels[index], titleZoom, 0);
+    lv_obj_set_style_text_font(gActionSubtitleLabels[index], subtitleFont, 0);
+    lv_obj_set_style_transform_zoom(gActionSubtitleLabels[index], subtitleZoom, 0);
+  }
 }
 
 String jsonMessage(JsonVariantConst value) {

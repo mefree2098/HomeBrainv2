@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 
 const authMiddleware = require('../routes/middlewares/auth');
 const authSessionService = require('../services/authSessionService');
+const codexSkillIntegrationService = require('../services/codexSkillIntegrationService');
 const oidcService = require('../services/oidcService');
 const OIDCProviderSettings = require('../models/OIDCProviderSettings');
 const UserService = require('../services/userService');
@@ -219,4 +220,42 @@ test('verifyAccessToken rejects a valid JWT when its session has been revoked', 
       return true;
     }
   );
+});
+
+test('verifyAccessToken accepts a HomeBrain Codex skill token for admin routes', async (t) => {
+  const originalLooksLikeCodexToken = codexSkillIntegrationService.looksLikeCodexSkillToken;
+  const originalResolveAuthenticatedUser = codexSkillIntegrationService.resolveAuthenticatedUser;
+
+  t.after(() => {
+    codexSkillIntegrationService.looksLikeCodexSkillToken = originalLooksLikeCodexToken;
+    codexSkillIntegrationService.resolveAuthenticatedUser = originalResolveAuthenticatedUser;
+  });
+
+  const user = {
+    _id: '507f1f77bcf86cd799439011',
+    email: 'admin@example.com',
+    role: 'admin',
+    isActive: true,
+    platforms: {
+      homebrain: true,
+      axiom: true
+    }
+  };
+
+  codexSkillIntegrationService.looksLikeCodexSkillToken = () => true;
+  codexSkillIntegrationService.resolveAuthenticatedUser = async () => ({
+    integration: {
+      displayName: 'HomeBrain Codex Live Admin'
+    },
+    user
+  });
+
+  const verified = await authMiddleware.verifyAccessToken('hbcdx_live_token', ['admin'], {
+    headers: {
+      authorization: 'Bearer hbcdx_live_token'
+    }
+  });
+
+  assert.equal(String(verified._id), user._id);
+  assert.equal(verified.email, user.email);
 });

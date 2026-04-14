@@ -46,6 +46,7 @@ const alexaCustomSkillRoutes = require("./routes/alexaCustomSkillRoutes");
 const telemetryRoutes = require("./routes/telemetryRoutes");
 const openclawRoutes = require("./routes/openclawRoutes");
 const openclawMcpRoutes = require("./routes/openclawMcpRoutes");
+const codexSkillRoutes = require("./routes/codexSkillRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
@@ -330,6 +331,7 @@ app.use('/api/whisper', whisperRoutes);
 // OpenClaw Integration Routes
 app.use('/api/openclaw/mcp', openclawMcpRoutes);
 app.use('/api/openclaw', openclawRoutes);
+app.use('/api/codex-skill', codexSkillRoutes);
 // Internal Caddy Policy Routes
 app.use('/internal/caddy', internalCaddyRoutes);
 // Internal Axiom Sync Routes

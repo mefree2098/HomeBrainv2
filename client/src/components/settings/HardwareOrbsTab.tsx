@@ -4,7 +4,6 @@ import {
   CheckCircle,
   Copy,
   Cpu,
-  Search,
   Home,
   Loader2,
   Moon,
@@ -32,7 +31,6 @@ import { getScenes, type SceneRecord } from "@/api/scenes"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -43,7 +41,6 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/useToast"
 
@@ -74,9 +71,11 @@ type PanelDraft = {
   thermostatDeviceId: string
   sensorDeviceId: string
   thermostatBedtimeSceneId: string
+  roomLightDeviceId: string
   roomSceneIds: string[]
   roomFavoriteDeviceIds: string[]
   harmonyHubIp: string
+  harmonyDefaultActivityId: string
   harmonyActivityIds: string[]
   harmonyCommandDeviceId: string
   quietBedtimeSceneId: string
@@ -99,9 +98,6 @@ type ProvisioningDialogState = {
 } | null
 
 const SELECT_NONE = "__none__"
-const ROOM_DEVICE_FILTER_ALL = "__all__"
-const ROOM_DEVICE_FILTER_PANEL_ROOM = "__panel_room__"
-
 const DEFAULT_CREATE_DRAFT: CreatePanelDraft = {
   name: "",
   room: "",
@@ -109,15 +105,6 @@ const DEFAULT_CREATE_DRAFT: CreatePanelDraft = {
   powerSource: "wired"
 }
 
-const ROOM_CONTROL_DEVICE_TYPES = new Set(["light", "switch", "speaker", "lock", "garage"])
-const ROOM_CONTROL_DEVICE_TYPE_OPTIONS = [
-  { value: ROOM_DEVICE_FILTER_ALL, label: "All device types" },
-  { value: "light", label: "Lights" },
-  { value: "switch", label: "Switches" },
-  { value: "speaker", label: "Speakers" },
-  { value: "lock", label: "Locks" },
-  { value: "garage", label: "Garage doors" }
-]
 const OTA_ACTIVE_STATUSES = new Set(["queued", "building", "ready", "downloading", "installing", "rebooting"])
 
 const sortPanels = (panels: WallPanelRecord[]) =>
@@ -203,11 +190,13 @@ const toPanelDraft = (panel: WallPanelRecord): PanelDraft => ({
   thermostatDeviceId: normalizeString(panel.settings?.thermostat?.deviceId),
   sensorDeviceId: normalizeString(panel.settings?.thermostat?.sensorDeviceId),
   thermostatBedtimeSceneId: normalizeString(panel.settings?.thermostat?.bedtimeSceneId),
+  roomLightDeviceId: normalizeString(panel.settings?.roomControl?.lightDeviceId),
   roomSceneIds: Array.isArray(panel.settings?.roomControl?.sceneIds) ? [...panel.settings.roomControl.sceneIds] : [],
   roomFavoriteDeviceIds: Array.isArray(panel.settings?.roomControl?.favoriteDeviceIds)
     ? [...panel.settings.roomControl.favoriteDeviceIds]
     : [],
   harmonyHubIp: normalizeString(panel.settings?.harmony?.hubIp),
+  harmonyDefaultActivityId: normalizeString(panel.settings?.harmony?.defaultActivityId),
   harmonyActivityIds: Array.isArray(panel.settings?.harmony?.activityIds) ? [...panel.settings.harmony.activityIds] : [],
   harmonyCommandDeviceId: normalizeString(panel.settings?.harmony?.commandDeviceId),
   quietBedtimeSceneId: normalizeString(panel.settings?.quietHouse?.bedtimeSceneId),
@@ -234,12 +223,17 @@ const buildUpdatePayload = (draft: PanelDraft) => ({
       bedtimeSceneId: normalizeString(draft.thermostatBedtimeSceneId)
     },
     roomControl: {
+      lightDeviceId: normalizeString(draft.roomLightDeviceId),
       favoriteDeviceIds: draft.roomFavoriteDeviceIds.filter(Boolean),
       sceneIds: draft.roomSceneIds.filter(Boolean)
     },
     harmony: {
       hubIp: normalizeString(draft.harmonyHubIp),
-      activityIds: draft.harmonyActivityIds.filter(Boolean),
+      defaultActivityId: normalizeString(draft.harmonyDefaultActivityId),
+      activityIds: Array.from(new Set([
+        normalizeString(draft.harmonyDefaultActivityId),
+        ...draft.harmonyActivityIds.filter(Boolean)
+      ].filter(Boolean))),
       commandDeviceId: normalizeString(draft.harmonyCommandDeviceId)
     },
     quietHouse: {
@@ -284,16 +278,6 @@ const buildFirmwareHeaderSnippet = (bundle: ProvisioningDialogState) => {
   ].join("\n")
 }
 
-const toggleSelection = (values: string[], value: string, checked: boolean) => {
-  if (!value) {
-    return values
-  }
-  if (checked) {
-    return values.includes(value) ? values : [...values, value]
-  }
-  return values.filter((entry) => entry !== value)
-}
-
 async function copyToClipboard(text: string) {
   await navigator.clipboard.writeText(text)
 }
@@ -317,9 +301,6 @@ export function HardwareOrbsTab() {
   const [loadingProvisioningKey, setLoadingProvisioningKey] = useState("")
   const [rotatingProvisioningKey, setRotatingProvisioningKey] = useState("")
   const [pushingUpdateKey, setPushingUpdateKey] = useState("")
-  const [roomDeviceSearch, setRoomDeviceSearch] = useState("")
-  const [roomDeviceRoomFilter, setRoomDeviceRoomFilter] = useState(ROOM_DEVICE_FILTER_PANEL_ROOM)
-  const [roomDeviceTypeFilter, setRoomDeviceTypeFilter] = useState(ROOM_DEVICE_FILTER_ALL)
 
   const selectedPanel = useMemo(
     () => panels.find((panel) => panel.id === selectedPanelId) || null,
@@ -329,12 +310,6 @@ export function HardwareOrbsTab() {
   useEffect(() => {
     setDraft(selectedPanel ? toPanelDraft(selectedPanel) : null)
   }, [selectedPanelId, selectedPanel?.updatedAt, selectedPanel?.id])
-
-  useEffect(() => {
-    setRoomDeviceSearch("")
-    setRoomDeviceRoomFilter(ROOM_DEVICE_FILTER_PANEL_ROOM)
-    setRoomDeviceTypeFilter(ROOM_DEVICE_FILTER_ALL)
-  }, [selectedPanelId])
 
   const loadOrbData = async (options: { silent?: boolean; focusPanelId?: string } = {}) => {
     const { silent = false, focusPanelId } = options
@@ -365,7 +340,9 @@ export function HardwareOrbsTab() {
 
       nextDevices.sort((left, right) => getDeviceLabel(left).localeCompare(getDeviceLabel(right)))
       nextScenes.sort((left, right) => getSceneLabel(left).localeCompare(getSceneLabel(right)))
-      nextHarmonyHubs.sort((left, right) => (left.friendlyName || left.ip).localeCompare(right.friendlyName || right.ip))
+      nextHarmonyHubs.sort((left: HarmonyHubSnapshot, right: HarmonyHubSnapshot) =>
+        (left.friendlyName || left.ip).localeCompare(right.friendlyName || right.ip)
+      )
 
       setPanels(nextPanels)
       setDevices(nextDevices)
@@ -436,10 +413,21 @@ export function HardwareOrbsTab() {
     return devices.filter((device) => normalizeString(device.room) === draftRoom)
   }, [devices, draftRoom])
 
-  const roomControlCandidates = useMemo(
-    () => devices.filter((device) => ROOM_CONTROL_DEVICE_TYPES.has(normalizeString(device.type))),
-    [devices]
-  )
+  const lightSurfaceCandidates = useMemo(() => {
+    const candidates = devices.filter((device) => {
+      const type = normalizeString(device.type)
+      return type === "light" || type === "switch"
+    })
+
+    return [...candidates].sort((left: DeviceRecord, right: DeviceRecord) => {
+      const leftRoomPriority = normalizeString(left.room) === draftRoom ? 0 : 1
+      const rightRoomPriority = normalizeString(right.room) === draftRoom ? 0 : 1
+      if (leftRoomPriority !== rightRoomPriority) {
+        return leftRoomPriority - rightRoomPriority
+      }
+      return getDeviceLabel(left).localeCompare(getDeviceLabel(right))
+    })
+  }, [devices, draftRoom])
 
   const thermostatCandidates = useMemo(
     () => devices.filter((device) => normalizeString(device.type) === "thermostat"),
@@ -451,33 +439,6 @@ export function HardwareOrbsTab() {
     [devices]
   )
 
-  const filteredRoomControlCandidates = useMemo(() => {
-    const normalizedSearch = normalizeString(roomDeviceSearch).toLowerCase()
-
-    return roomControlCandidates.filter((device) => {
-      const deviceRoom = normalizeString(device.room)
-      const deviceType = normalizeString(device.type)
-      const matchesRoom =
-        roomDeviceRoomFilter === ROOM_DEVICE_FILTER_ALL
-        || (roomDeviceRoomFilter === ROOM_DEVICE_FILTER_PANEL_ROOM
-          ? (!draftRoom || deviceRoom === draftRoom)
-          : deviceRoom === roomDeviceRoomFilter)
-      const matchesType = roomDeviceTypeFilter === ROOM_DEVICE_FILTER_ALL || deviceType === roomDeviceTypeFilter
-
-      if (!matchesRoom || !matchesType) {
-        return false
-      }
-
-      if (!normalizedSearch) {
-        return true
-      }
-
-      return [device.name, device.room, device.type]
-        .map((value) => normalizeString(value).toLowerCase())
-        .some((value) => value.includes(normalizedSearch))
-    })
-  }, [draftRoom, roomControlCandidates, roomDeviceRoomFilter, roomDeviceSearch, roomDeviceTypeFilter])
-
   const quietNightLightCandidates = useMemo(
     () => roomDevices.filter((device) => ["light", "switch"].includes(normalizeString(device.type))),
     [roomDevices]
@@ -486,6 +447,11 @@ export function HardwareOrbsTab() {
   const hubActivityOptions = useMemo(
     () => Array.isArray(selectedHub?.activities) ? selectedHub.activities : [],
     [selectedHub]
+  )
+
+  const hubPowerOnActivityOptions = useMemo(
+    () => hubActivityOptions.filter((activity) => normalizeString(activity.id) !== "-1"),
+    [hubActivityOptions]
   )
 
   const hubCommandDeviceOptions = useMemo(
@@ -1160,133 +1126,42 @@ export function HardwareOrbsTab() {
                     Room Surface
                   </CardTitle>
                   <CardDescription>
-                    Pick the most important room devices and scenes. The orb shows up to four devices and up to two room scenes on this page.
+                    Choose the single light this orb should dim and toggle. The orb now shows the room name, a Lights label, and the live brightness percentage on this page.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="grid gap-6 lg:grid-cols-2">
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-sm font-medium">Room scenes</p>
-                      <p className="text-xs text-muted-foreground">Recommended: choose one or two scene shortcuts.</p>
-                    </div>
-                    <ScrollArea className="h-56 rounded-xl border border-border/60 bg-background/60">
-                      <div className="space-y-2 p-3">
-                        {scenes.map((scene) => {
-                          const checked = draft.roomSceneIds.includes(scene._id)
-                          return (
-                            <label
-                              key={scene._id}
-                              className="flex cursor-pointer items-start gap-3 rounded-lg border border-transparent px-3 py-2 hover:border-cyan-300/30 hover:bg-cyan-500/[0.03]"
-                            >
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={(value) =>
-                                  mutateSelectedDraft((current) => ({
-                                    ...current,
-                                    roomSceneIds: toggleSelection(current.roomSceneIds, scene._id, value === true)
-                                  }))
-                                }
-                              />
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium">{scene.name}</p>
-                                <p className="text-xs text-muted-foreground">{scene.category || "Scene"}</p>
-                              </div>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    </ScrollArea>
-                  </div>
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-sm font-medium">Room devices</p>
-                      <p className="text-xs text-muted-foreground">
-                        Choose up to four pinned controls. Start with {draftRoom || "this room"}, then search or filter across the full supported device inventory.
-                      </p>
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px]">
-                      <div className="relative">
-                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          value={roomDeviceSearch}
-                          onChange={(event) => setRoomDeviceSearch(event.target.value)}
-                          placeholder="Search devices by name, room, or type"
-                          className="pl-10"
-                        />
-                      </div>
-                      <Select value={roomDeviceRoomFilter} onValueChange={setRoomDeviceRoomFilter}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Filter by room" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={ROOM_DEVICE_FILTER_PANEL_ROOM}>
-                            {draftRoom ? `${draftRoom} first` : "This orb's room"}
+                <CardContent className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Light or switch</label>
+                    <Select
+                      value={draft.roomLightDeviceId || SELECT_NONE}
+                      onValueChange={(value) =>
+                        mutateSelectedDraft((current) => ({
+                          ...current,
+                          roomLightDeviceId: value === SELECT_NONE ? "" : value
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Choose the room light" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={SELECT_NONE}>Not configured</SelectItem>
+                        {lightSurfaceCandidates.map((device) => (
+                          <SelectItem key={getDeviceId(device)} value={getDeviceId(device)}>
+                            {getDeviceLabel(device)}
                           </SelectItem>
-                          <SelectItem value={ROOM_DEVICE_FILTER_ALL}>All rooms</SelectItem>
-                          {roomOptions.map((room) => (
-                            <SelectItem key={room} value={room}>
-                              {room}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Select value={roomDeviceTypeFilter} onValueChange={setRoomDeviceTypeFilter}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Filter by type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ROOM_CONTROL_DEVICE_TYPE_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>
-                        Showing {filteredRoomControlCandidates.length} of {roomControlCandidates.length} supported devices
-                      </span>
-                      <span>{draft.roomFavoriteDeviceIds.length}/4 selected</span>
-                    </div>
-                    <ScrollArea className="h-56 rounded-xl border border-border/60 bg-background/60">
-                      <div className="space-y-2 p-3">
-                        {filteredRoomControlCandidates.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">
-                            No supported devices match the current search and filters.
-                          </p>
-                        ) : filteredRoomControlCandidates.map((device) => {
-                          const deviceId = getDeviceId(device)
-                          const checked = draft.roomFavoriteDeviceIds.includes(deviceId)
-                          const selectionLimitReached = draft.roomFavoriteDeviceIds.length >= 4 && !checked
-                          return (
-                            <label
-                              key={deviceId}
-                              className={`flex items-start gap-3 rounded-lg border border-transparent px-3 py-2 ${
-                                selectionLimitReached
-                                  ? "cursor-not-allowed opacity-60"
-                                  : "cursor-pointer hover:border-cyan-300/30 hover:bg-cyan-500/[0.03]"
-                              }`}
-                            >
-                              <Checkbox
-                                checked={checked}
-                                disabled={selectionLimitReached}
-                                onCheckedChange={(value) =>
-                                  mutateSelectedDraft((current) => ({
-                                    ...current,
-                                    roomFavoriteDeviceIds: toggleSelection(current.roomFavoriteDeviceIds, deviceId, value === true)
-                                  }))
-                                }
-                              />
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium">{device.name}</p>
-                                <p className="text-xs text-muted-foreground">{device.type} · {device.room}</p>
-                              </div>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    </ScrollArea>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="rounded-xl border border-border/60 bg-background/70 p-4">
+                    <p className="text-sm font-medium">How this surface behaves</p>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Center tap toggles between Off and 100%. Rotation adjusts brightness in 1% steps and the orb shows Off at 0%.
+                    </p>
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      Choose a dimmable light or switch whenever possible for the smoothest experience.
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -1298,11 +1173,10 @@ export function HardwareOrbsTab() {
                     Media Surface
                   </CardTitle>
                   <CardDescription>
-                    Bind the bedroom orb to a Harmony hub so swipes, taps, and the knob can become a bedroom remote.
+                    Bind the orb to a Harmony hub, choose what “On” should launch, and set the device that should receive volume commands while the hub is on.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="grid gap-4 md:grid-cols-2">
+                <CardContent className="grid gap-4 md:grid-cols-3">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Harmony hub</label>
                       <Select
@@ -1311,6 +1185,7 @@ export function HardwareOrbsTab() {
                           mutateSelectedDraft((current) => ({
                             ...current,
                             harmonyHubIp: value === SELECT_NONE ? "" : value,
+                            harmonyDefaultActivityId: value === current.harmonyHubIp ? current.harmonyDefaultActivityId : "",
                             harmonyActivityIds: value === current.harmonyHubIp ? current.harmonyActivityIds : [],
                             harmonyCommandDeviceId: value === current.harmonyHubIp ? current.harmonyCommandDeviceId : ""
                           }))
@@ -1325,14 +1200,42 @@ export function HardwareOrbsTab() {
                             <SelectItem key={hub.ip} value={hub.ip}>
                               {(hub.friendlyName || hub.ip) + ` · ${hub.ip}`}
                             </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Command device for knob volume</label>
-                      <Select
-                        value={draft.harmonyCommandDeviceId || SELECT_NONE}
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Default On activity</label>
+                    <Select
+                      value={draft.harmonyDefaultActivityId || SELECT_NONE}
+                      onValueChange={(value) =>
+                        mutateSelectedDraft((current) => ({
+                          ...current,
+                          harmonyDefaultActivityId: value === SELECT_NONE ? "" : value,
+                          harmonyActivityIds: value === SELECT_NONE
+                            ? current.harmonyActivityIds
+                            : Array.from(new Set([value, ...current.harmonyActivityIds]))
+                        }))
+                      }
+                      disabled={!selectedHub}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={selectedHub ? "Choose the power-on activity" : "Choose a hub first"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={SELECT_NONE}>Not configured</SelectItem>
+                        {hubPowerOnActivityOptions.map((activity) => (
+                          <SelectItem key={activity.id} value={activity.id}>
+                            {activity.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Command device for knob volume</label>
+                    <Select
+                      value={draft.harmonyCommandDeviceId || SELECT_NONE}
                         onValueChange={(value) =>
                           mutateSelectedDraft((current) => ({
                             ...current,
@@ -1350,49 +1253,18 @@ export function HardwareOrbsTab() {
                             <SelectItem key={device.id} value={device.id}>
                               {[device.label, device.manufacturer, device.model].filter(Boolean).join(" · ")}
                             </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-sm font-medium">Activity shortcuts</p>
-                      <p className="text-xs text-muted-foreground">The media page shows up to four activities and uses the selected command device for transport and volume.</p>
-                    </div>
-                    <ScrollArea className="h-52 rounded-xl border border-border/60 bg-background/60">
-                      <div className="space-y-2 p-3">
-                        {!selectedHub ? (
-                          <p className="text-sm text-muted-foreground">Choose a Harmony hub to load its activities.</p>
-                        ) : hubActivityOptions.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">This hub did not return any launchable activities.</p>
-                        ) : hubActivityOptions.map((activity) => {
-                          const checked = draft.harmonyActivityIds.includes(activity.id)
-                          return (
-                            <label
-                              key={activity.id}
-                              className="flex cursor-pointer items-start gap-3 rounded-lg border border-transparent px-3 py-2 hover:border-cyan-300/30 hover:bg-cyan-500/[0.03]"
-                            >
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={(value) =>
-                                  mutateSelectedDraft((current) => ({
-                                    ...current,
-                                    harmonyActivityIds: toggleSelection(current.harmonyActivityIds, activity.id, value === true)
-                                  }))
-                                }
-                              />
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium">{activity.label}</p>
-                                <p className="text-xs text-muted-foreground">
-                                  {activity.activityTypeDisplayName || selectedHub.currentActivityLabel || "Activity"}
-                                </p>
-                              </div>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    </ScrollArea>
+                  <div className="rounded-xl border border-border/60 bg-background/70 p-4 md:col-span-3">
+                    <p className="text-sm font-medium">How this surface behaves</p>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      The orb now shows only On or Off in the middle. Tapping the center or the on/off buttons toggles the hub, and rotation changes volume once the hub is on.
+                    </p>
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      If the hub is off, the orb uses the default On activity selected here when you power it on.
+                    </p>
                   </div>
                 </CardContent>
               </Card>

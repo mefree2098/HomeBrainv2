@@ -1,0 +1,7 @@
+interface:
+  display_name: "HomeBrain Live"
+  short_description: "Inspect and operate a live HomeBrain instance."
+  default_prompt: "Use $homebrain-live to inspect the running HomeBrain platform, trigger a deploy, and verify the live result."
+
+policy:
+  allow_implicit_invocation: true

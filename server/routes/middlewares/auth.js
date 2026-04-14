@@ -1,5 +1,6 @@
 const UserService = require('../../services/userService.js');
 const authSessionService = require('../../services/authSessionService.js');
+const codexSkillIntegrationService = require('../../services/codexSkillIntegrationService.js');
 const jwt = require('jsonwebtoken');
 const { ALL_ROLES, ROLES } = require("../../../shared/config/roles");
 const oidcService = require('../../services/oidcService');
@@ -44,6 +45,10 @@ function formatPlatformName(platform) {
 
 async function resolveUserFromSubject(subject, allowedRoles = ALL_ROLES, options = {}) {
   const user = await UserService.get(subject);
+  return assertResolvedUser(user, allowedRoles, options);
+}
+
+function assertResolvedUser(user, allowedRoles = ALL_ROLES, options = {}) {
   if (!user) {
     const error = new Error('User not found');
     error.status = 401;
@@ -79,6 +84,11 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, op
     const error = new Error('Unauthorized');
     error.status = 401;
     throw error;
+  }
+
+  if (codexSkillIntegrationService.looksLikeCodexSkillToken(token)) {
+    const resolved = await codexSkillIntegrationService.resolveAuthenticatedUser(token, req);
+    return assertResolvedUser(resolved.user, allowedRoles, options);
   }
 
   let jwtError = null;

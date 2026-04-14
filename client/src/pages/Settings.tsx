@@ -143,6 +143,7 @@ import { SenseIntegrationCard } from "@/components/sense/SenseIntegrationCard"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
 import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
+import { CodexSkillIntegration } from "./CodexSkillIntegration"
 import { OpenClawIntegration } from "./OpenClawIntegration"
 
 type InsteonSerialPortCandidate = {
@@ -193,6 +194,7 @@ const SETTINGS_MAIN_TABS = new Set([
 
 const SETTINGS_INTEGRATION_TABS = new Set([
   "alexa",
+  "codex-skill",
   "openclaw",
   "sense",
   "tempest",
@@ -4082,6 +4084,7 @@ export function Settings() {
 
               <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 p-1">
                 <TabsTrigger value="alexa">Alexa</TabsTrigger>
+                <TabsTrigger value="codex-skill">Codex Skill</TabsTrigger>
                 <TabsTrigger value="openclaw">OpenClaw</TabsTrigger>
                 <TabsTrigger value="sense">Sense Energy</TabsTrigger>
                 <TabsTrigger value="tempest">Tempest</TabsTrigger>
@@ -4796,6 +4799,16 @@ export function Settings() {
                 </p>
               </CardContent>
             </Card>
+              </TabsContent>
+
+              <TabsContent value="codex-skill" className="space-y-6">
+                <div className="space-y-2">
+                  <h3 className="text-xl font-semibold tracking-tight">Codex Skill</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Generate a HomeBrain-managed admin token for Codex, copy the live connection exports, and download the shipped <code>homebrain-live</code> skill bundle.
+                  </p>
+                </div>
+                <CodexSkillIntegration embedded />
               </TabsContent>
 
               <TabsContent value="openclaw" className="space-y-6">

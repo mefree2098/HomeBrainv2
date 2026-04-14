@@ -17,6 +17,7 @@ export type WallPanelSettingsRecord = {
     bedtimeSceneId?: string
   }
   roomControl?: {
+    lightDeviceId?: string
     favoriteDeviceIds?: string[]
     sceneIds?: string[]
   }
@@ -26,6 +27,7 @@ export type WallPanelSettingsRecord = {
   }
   harmony?: {
     hubIp?: string
+    defaultActivityId?: string
     activityIds?: string[]
     commandDeviceId?: string
   }
