@@ -1894,10 +1894,15 @@ bool performOtaUpdate() {
   uint8_t buffer[1024];
   size_t totalWritten = 0;
   unsigned long lastChunkAt = millis();
+  const bool hasKnownContentLength = contentLength > 0;
 
-  while (http.connected() && (contentLength < 0 || totalWritten < static_cast<size_t>(contentLength))) {
+  while (!hasKnownContentLength || totalWritten < static_cast<size_t>(contentLength)) {
     const size_t availableBytes = stream->available();
     if (availableBytes == 0) {
+      if (!http.connected()) {
+        break;
+      }
+
       if (millis() - lastChunkAt > 15000UL) {
         Update.abort();
         http.end();
@@ -1940,6 +1945,18 @@ bool performOtaUpdate() {
       : min(99, max(0, gState.ota.progress));
 
     renderOtaProgressScreen("Updating", min(98, max(60, rawProgress)), "Downloading firmware package...");
+  }
+
+  if (hasKnownContentLength && totalWritten < static_cast<size_t>(contentLength)) {
+    Update.abort();
+    http.end();
+    gOtaInProgress = false;
+    gBlockedOtaJobId = gActiveOtaJobId;
+    setStatusLine("OTA download incomplete");
+    reportOtaStatus("failed", 0, "The OTA download ended before the full firmware arrived.", totalWritten, totalBytes, "download-truncated");
+    fetchPanelState();
+    renderMode();
+    return false;
   }
 
   http.end();
