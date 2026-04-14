@@ -44,9 +44,9 @@ constexpr unsigned long kThermostatCommitDelayMs = 3000;
 constexpr unsigned long kThermostatDispatchDelayMs = 75;
 constexpr unsigned long kDeviceLevelCommitDelayMs = 3000;
 constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
-constexpr int kSwipeThreshold = 72;
-constexpr int kSwipeVerticalLimit = 140;
-constexpr unsigned long kSwipeWindowMs = 650;
+constexpr int kSwipeThreshold = 40;
+constexpr int kSwipeVerticalLimit = 190;
+constexpr unsigned long kSwipeWindowMs = 900;
 constexpr uint16_t kStateJsonCapacity = 32768;
 constexpr unsigned long kBrightnessPersistDelayMs = 1000;
 constexpr int kBrightnessDefaultPercent = 94;
@@ -584,10 +584,21 @@ void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
   }
 
   const int deltaX = x - gSwipeStartX;
+  const int absoluteDeltaX = abs(deltaX);
   const int deltaY = abs(y - gSwipeStartY);
   const unsigned long elapsed = millis() - gSwipeStartedAt;
 
   if (elapsed > kSwipeWindowMs || deltaY > kSwipeVerticalLimit) {
+    return;
+  }
+
+  if (absoluteDeltaX < kSwipeThreshold) {
+    return;
+  }
+
+  // Require a mostly horizontal motion so taps and short diagonals do not
+  // unexpectedly flip surfaces now that the swipe threshold is much lower.
+  if (absoluteDeltaX <= deltaY + 8) {
     return;
   }
 
@@ -1061,11 +1072,13 @@ void applyActionButtonFonts(
   const lv_font_t* subtitleFont,
   lv_coord_t subtitleZoom
 ) {
+  (void)titleZoom;
+  (void)subtitleZoom;
   for (uint8_t index = 0; index < kActionSlots; index += 1) {
     lv_obj_set_style_text_font(gActionTitleLabels[index], titleFont, 0);
-    lv_obj_set_style_transform_zoom(gActionTitleLabels[index], titleZoom, 0);
+    lv_obj_set_style_transform_zoom(gActionTitleLabels[index], 256, 0);
     lv_obj_set_style_text_font(gActionSubtitleLabels[index], subtitleFont, 0);
-    lv_obj_set_style_transform_zoom(gActionSubtitleLabels[index], subtitleZoom, 0);
+    lv_obj_set_style_transform_zoom(gActionSubtitleLabels[index], 256, 0);
   }
 }
 
@@ -2168,7 +2181,7 @@ void createActionButton(uint8_t index, lv_coord_t x, lv_coord_t y) {
   lv_obj_set_width(gActionTitleLabels[index], lv_pct(100));
   lv_obj_set_style_text_align(gActionTitleLabels[index], LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(gActionTitleLabels[index], &hb_font_orbitron_28, 0);
-  lv_obj_set_style_transform_zoom(gActionTitleLabels[index], 176, 0);
+  lv_obj_set_style_transform_zoom(gActionTitleLabels[index], 256, 0);
   lv_obj_set_style_text_letter_space(gActionTitleLabels[index], 1, 0);
 
   gActionSubtitleLabels[index] = lv_label_create(column);
@@ -2176,7 +2189,7 @@ void createActionButton(uint8_t index, lv_coord_t x, lv_coord_t y) {
   lv_obj_set_width(gActionSubtitleLabels[index], lv_pct(100));
   lv_obj_set_style_text_align(gActionSubtitleLabels[index], LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(gActionSubtitleLabels[index], &hb_font_space_grotesk_20, 0);
-  lv_obj_set_style_transform_zoom(gActionSubtitleLabels[index], 168, 0);
+  lv_obj_set_style_transform_zoom(gActionSubtitleLabels[index], 256, 0);
 }
 
 void createUi() {
