@@ -916,6 +916,32 @@ bool isNumericDisplayValue(const String& value) {
   return hasDigit;
 }
 
+void setLabelTextIfChanged(lv_obj_t* label, const String& text) {
+  if (!label) {
+    return;
+  }
+
+  const char* current = lv_label_get_text(label);
+  if (current != nullptr && text.equals(current)) {
+    return;
+  }
+
+  lv_label_set_text(label, text.c_str());
+}
+
+void clearLabelTextIfNeeded(lv_obj_t* label) {
+  if (!label) {
+    return;
+  }
+
+  const char* current = lv_label_get_text(label);
+  if (current == nullptr || current[0] == '\0') {
+    return;
+  }
+
+  lv_label_set_text(label, "");
+}
+
 void styleSurfaceTitle(lv_obj_t* label, lv_coord_t y, lv_coord_t zoom = 256) {
   lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
   lv_obj_set_width(label, lv_pct(100));
@@ -944,12 +970,12 @@ void styleSurfaceSubtitle(lv_obj_t* label, lv_coord_t y, bool muted = false, lv_
 
 void hideTextLabel(lv_obj_t* label) {
   lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
-  lv_label_set_text(label, "");
+  clearLabelTextIfNeeded(label);
 }
 
 void setSurfaceTitleText(const String& text, lv_coord_t y, lv_coord_t zoom = 256) {
   styleSurfaceTitle(gTitleLabel, y, zoom);
-  lv_label_set_text(gTitleLabel, text.c_str());
+  setLabelTextIfChanged(gTitleLabel, text);
 }
 
 void setSurfaceSubtitleText(const String& text, lv_coord_t y, bool muted = false, lv_coord_t zoom = 228) {
@@ -959,7 +985,7 @@ void setSurfaceSubtitleText(const String& text, lv_coord_t y, bool muted = false
   }
 
   styleSurfaceSubtitle(gSecondaryLabel, y, muted, zoom);
-  lv_label_set_text(gSecondaryLabel, text.c_str());
+  setLabelTextIfChanged(gSecondaryLabel, text);
 }
 
 void styleHelperLabel(lv_obj_t* label, lv_coord_t y, const String& text) {
@@ -976,7 +1002,7 @@ void styleHelperLabel(lv_obj_t* label, lv_coord_t y, const String& text) {
   lv_obj_set_style_text_font(label, &hb_font_space_grotesk_20, 0);
   lv_obj_set_style_transform_zoom(label, 256, 0);
   lv_obj_set_style_text_color(label, hex(homebrain::palette::kTextSecondary), 0);
-  lv_label_set_text(label, text.c_str());
+  setLabelTextIfChanged(label, text);
 }
 
 void styleSurfaceCenterValue(
@@ -998,7 +1024,7 @@ void styleSurfaceCenterValue(
   }
   lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
-  lv_label_set_text(gCenterValueLabel, value.c_str());
+  setLabelTextIfChanged(gCenterValueLabel, value);
 }
 
 void applyActionButtonFonts(
@@ -1242,12 +1268,12 @@ void setCenterTapEnabled(bool enabled) {
 void hideRoomSurfaceLabels() {
   if (gRoomValueLabel) {
     lv_obj_add_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(gRoomValueLabel, "");
+    clearLabelTextIfNeeded(gRoomValueLabel);
   }
 
   if (gRoomSubtitleLabel) {
     lv_obj_add_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(gRoomSubtitleLabel, "");
+    clearLabelTextIfNeeded(gRoomSubtitleLabel);
   }
 }
 
@@ -1284,7 +1310,7 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_transform_zoom(gTitleLabel, kZoomNormal, 0);
   lv_obj_set_style_text_letter_space(gTitleLabel, 1, 0);
   lv_obj_set_style_text_color(gTitleLabel, hex(homebrain::palette::kTextPrimary), 0);
-  lv_label_set_text(gTitleLabel, "Thermostat");
+  setLabelTextIfChanged(gTitleLabel, "Thermostat");
 
   lv_obj_set_width(gCenterValueLabel, lv_pct(100));
   lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, 0);
@@ -1293,7 +1319,7 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_transform_zoom(gCenterValueLabel, kThermostatCenterZoom, 0);
   lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
-  lv_label_set_text(gCenterValueLabel, currentValue.c_str());
+  setLabelTextIfChanged(gCenterValueLabel, currentValue);
 
   lv_obj_set_width(gSecondaryLabel, lv_pct(100));
   lv_obj_align(gSecondaryLabel, LV_ALIGN_CENTER, 0, 138);
@@ -1303,7 +1329,7 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_text_letter_space(gSecondaryLabel, 0, 0);
   lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextPrimary), 0);
   const String setPointValue = String(mode.knob.value) + String("°");
-  lv_label_set_text(gSecondaryLabel, setPointValue.c_str());
+  setLabelTextIfChanged(gSecondaryLabel, setPointValue);
 
   lv_obj_set_width(gHintLabel, lv_pct(100));
   lv_obj_align(gHintLabel, LV_ALIGN_CENTER, 0, 174);
@@ -1312,7 +1338,7 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_text_font(gHintLabel, &hb_font_space_grotesk_20, 0);
   lv_obj_set_style_transform_zoom(gHintLabel, kZoomNormal, 0);
   lv_obj_set_style_text_color(gHintLabel, hex(homebrain::palette::kTextSecondary), 0);
-  lv_label_set_text(gHintLabel, "Set point");
+  setLabelTextIfChanged(gHintLabel, "Set point");
 
   lv_obj_move_foreground(gTitleLabel);
   lv_obj_move_foreground(gCenterValueLabel);
@@ -1335,7 +1361,7 @@ void renderThermostatAdjustment(const ModeSnapshot& mode) {
   lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
   const String adjustmentValue = String(mode.knob.value) + String("°");
-  lv_label_set_text(gCenterValueLabel, adjustmentValue.c_str());
+  setLabelTextIfChanged(gCenterValueLabel, adjustmentValue);
 
   lv_obj_move_foreground(gCenterValueLabel);
   lv_obj_move_foreground(gFooterLabel);
@@ -1358,46 +1384,14 @@ void renderRoomMode(const ModeSnapshot& mode) {
     ? "Tap to toggle. Rotate to dim or brighten."
     : mode.hint;
 
-  hideTextLabel(gSecondaryLabel);
-  hideTextLabel(gCenterValueLabel);
+  hideRoomSurfaceLabels();
   setSurfaceTitleText(roomTitle, 74);
-  if (gRoomSubtitleLabel) {
-    lv_obj_clear_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_width(gRoomSubtitleLabel, lv_pct(100));
-    lv_obj_align(gRoomSubtitleLabel, LV_ALIGN_TOP_MID, 0, 116);
-    lv_obj_set_style_text_align(gRoomSubtitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(gRoomSubtitleLabel, &hb_font_orbitron_28, 0);
-    lv_obj_set_style_transform_zoom(gRoomSubtitleLabel, 210, 0);
-    lv_obj_set_style_text_letter_space(gRoomSubtitleLabel, 0, 0);
-    lv_obj_set_style_text_color(gRoomSubtitleLabel, hex(homebrain::palette::kTextSecondary), 0);
-    lv_label_set_text(gRoomSubtitleLabel, roomSubtitle.c_str());
-  }
-
-  if (gRoomValueLabel) {
-    lv_obj_clear_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_width(gRoomValueLabel, lv_pct(100));
-    lv_obj_align(gRoomValueLabel, LV_ALIGN_CENTER, 0, 12);
-    lv_obj_set_style_text_align(gRoomValueLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_letter_space(gRoomValueLabel, 0, 0);
-    lv_obj_set_style_text_color(gRoomValueLabel, hex(homebrain::palette::kTextPrimary), 0);
-    if (isNumericDisplayValue(roomValue)) {
-      lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_100, 0);
-      lv_obj_set_style_transform_zoom(gRoomValueLabel, 196, 0);
-    } else {
-      lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_28, 0);
-      lv_obj_set_style_transform_zoom(gRoomValueLabel, 360, 0);
-    }
-    lv_label_set_text(gRoomValueLabel, roomValue.c_str());
-  }
-
-  styleHelperLabel(gHintLabel, 330, roomHint);
+  setSurfaceSubtitleText(roomSubtitle, 114, true, 204);
+  styleSurfaceCenterValue(roomValue, 8, 212, 332);
+  styleHelperLabel(gHintLabel, 326, roomHint);
   lv_obj_move_foreground(gTitleLabel);
-  if (gRoomSubtitleLabel) {
-    lv_obj_move_foreground(gRoomSubtitleLabel);
-  }
-  if (gRoomValueLabel) {
-    lv_obj_move_foreground(gRoomValueLabel);
-  }
+  lv_obj_move_foreground(gSecondaryLabel);
+  lv_obj_move_foreground(gCenterValueLabel);
   lv_obj_move_foreground(gHintLabel);
   lv_obj_move_foreground(gFooterLabel);
 }
@@ -1425,14 +1419,14 @@ void updateFooter() {
     footer += " · " + gStatusLine;
   }
   lv_obj_clear_flag(gFooterLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_label_set_text(gFooterLabel, footer.c_str());
+  setLabelTextIfChanged(gFooterLabel, footer);
 }
 
 void hideActionButton(uint8_t index) {
   gActionMappings[index] = -1;
   lv_obj_add_flag(gActionButtons[index], LV_OBJ_FLAG_HIDDEN);
-  lv_label_set_text(gActionTitleLabels[index], "");
-  lv_label_set_text(gActionSubtitleLabels[index], "");
+  clearLabelTextIfNeeded(gActionTitleLabels[index]);
+  clearLabelTextIfNeeded(gActionSubtitleLabels[index]);
 }
 
 void showActionButton(
@@ -1450,15 +1444,15 @@ void showActionButton(
   lv_obj_set_size(gActionButtons[slot], width, height);
   lv_obj_clear_flag(gActionButtons[slot], LV_OBJ_FLAG_HIDDEN);
   styleButton(gActionButtons[slot], action);
-  lv_label_set_text(gActionTitleLabels[slot], action.label.c_str());
+  setLabelTextIfChanged(gActionTitleLabels[slot], action.label);
   lv_obj_set_style_text_color(gActionTitleLabels[slot], hex(homebrain::palette::kTextPrimary), 0);
 
   if (showSubtitle && !action.subtitle.isEmpty()) {
-    lv_label_set_text(gActionSubtitleLabels[slot], action.subtitle.c_str());
+    setLabelTextIfChanged(gActionSubtitleLabels[slot], action.subtitle);
     lv_obj_set_style_text_color(gActionSubtitleLabels[slot], accentForName(action.accent), 0);
     lv_obj_clear_flag(gActionSubtitleLabels[slot], LV_OBJ_FLAG_HIDDEN);
   } else {
-    lv_label_set_text(gActionSubtitleLabels[slot], "");
+    clearLabelTextIfNeeded(gActionSubtitleLabels[slot]);
     lv_obj_add_flag(gActionSubtitleLabels[slot], LV_OBJ_FLAG_HIDDEN);
   }
 }
@@ -1632,7 +1626,7 @@ void renderMode() {
     hideWeatherBackdrop();
     setCenterTapEnabled(false);
     applyDefaultTextLayout();
-    lv_label_set_text(gTitleLabel, mode->title.c_str());
+    setLabelTextIfChanged(gTitleLabel, mode->title);
     styleSurfaceCenterValue(mode->centerValue, -22, 216, 280);
     setSurfaceSubtitleText(mode->secondaryValue, 254, true, 210);
     styleHelperLabel(gHintLabel, 308, mode->hint);
