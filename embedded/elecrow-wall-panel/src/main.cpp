@@ -916,32 +916,6 @@ bool isNumericDisplayValue(const String& value) {
   return hasDigit;
 }
 
-void setLabelTextIfChanged(lv_obj_t* label, const String& text) {
-  if (!label) {
-    return;
-  }
-
-  const char* current = lv_label_get_text(label);
-  if (current != nullptr && text.equals(current)) {
-    return;
-  }
-
-  lv_label_set_text(label, text.c_str());
-}
-
-void clearLabelTextIfNeeded(lv_obj_t* label) {
-  if (!label) {
-    return;
-  }
-
-  const char* current = lv_label_get_text(label);
-  if (current == nullptr || current[0] == '\0') {
-    return;
-  }
-
-  lv_label_set_text(label, "");
-}
-
 void styleSurfaceTitle(lv_obj_t* label, lv_coord_t y, lv_coord_t zoom = 256) {
   lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
   lv_obj_set_width(label, lv_pct(100));
@@ -970,12 +944,12 @@ void styleSurfaceSubtitle(lv_obj_t* label, lv_coord_t y, bool muted = false, lv_
 
 void hideTextLabel(lv_obj_t* label) {
   lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
-  clearLabelTextIfNeeded(label);
+  lv_label_set_text(label, "");
 }
 
 void setSurfaceTitleText(const String& text, lv_coord_t y, lv_coord_t zoom = 256) {
   styleSurfaceTitle(gTitleLabel, y, zoom);
-  setLabelTextIfChanged(gTitleLabel, text);
+  lv_label_set_text(gTitleLabel, text.c_str());
 }
 
 void setSurfaceSubtitleText(const String& text, lv_coord_t y, bool muted = false, lv_coord_t zoom = 228) {
@@ -985,7 +959,7 @@ void setSurfaceSubtitleText(const String& text, lv_coord_t y, bool muted = false
   }
 
   styleSurfaceSubtitle(gSecondaryLabel, y, muted, zoom);
-  setLabelTextIfChanged(gSecondaryLabel, text);
+  lv_label_set_text(gSecondaryLabel, text.c_str());
 }
 
 void styleHelperLabel(lv_obj_t* label, lv_coord_t y, const String& text) {
@@ -1002,7 +976,7 @@ void styleHelperLabel(lv_obj_t* label, lv_coord_t y, const String& text) {
   lv_obj_set_style_text_font(label, &hb_font_space_grotesk_20, 0);
   lv_obj_set_style_transform_zoom(label, 256, 0);
   lv_obj_set_style_text_color(label, hex(homebrain::palette::kTextSecondary), 0);
-  setLabelTextIfChanged(label, text);
+  lv_label_set_text(label, text.c_str());
 }
 
 void styleSurfaceCenterValue(
@@ -1024,7 +998,7 @@ void styleSurfaceCenterValue(
   }
   lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
-  setLabelTextIfChanged(gCenterValueLabel, value);
+  lv_label_set_text(gCenterValueLabel, value.c_str());
 }
 
 void applyActionButtonFonts(
@@ -1268,12 +1242,12 @@ void setCenterTapEnabled(bool enabled) {
 void hideRoomSurfaceLabels() {
   if (gRoomValueLabel) {
     lv_obj_add_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
-    clearLabelTextIfNeeded(gRoomValueLabel);
+    lv_label_set_text(gRoomValueLabel, "");
   }
 
   if (gRoomSubtitleLabel) {
     lv_obj_add_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
-    clearLabelTextIfNeeded(gRoomSubtitleLabel);
+    lv_label_set_text(gRoomSubtitleLabel, "");
   }
 }
 
@@ -1310,7 +1284,7 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_transform_zoom(gTitleLabel, kZoomNormal, 0);
   lv_obj_set_style_text_letter_space(gTitleLabel, 1, 0);
   lv_obj_set_style_text_color(gTitleLabel, hex(homebrain::palette::kTextPrimary), 0);
-  setLabelTextIfChanged(gTitleLabel, "Thermostat");
+  lv_label_set_text(gTitleLabel, "Thermostat");
 
   lv_obj_set_width(gCenterValueLabel, lv_pct(100));
   lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, 0);
@@ -1319,7 +1293,7 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_transform_zoom(gCenterValueLabel, kThermostatCenterZoom, 0);
   lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
-  setLabelTextIfChanged(gCenterValueLabel, currentValue);
+  lv_label_set_text(gCenterValueLabel, currentValue.c_str());
 
   lv_obj_set_width(gSecondaryLabel, lv_pct(100));
   lv_obj_align(gSecondaryLabel, LV_ALIGN_CENTER, 0, 138);
@@ -1329,7 +1303,7 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_text_letter_space(gSecondaryLabel, 0, 0);
   lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextPrimary), 0);
   const String setPointValue = String(mode.knob.value) + String("°");
-  setLabelTextIfChanged(gSecondaryLabel, setPointValue);
+  lv_label_set_text(gSecondaryLabel, setPointValue.c_str());
 
   lv_obj_set_width(gHintLabel, lv_pct(100));
   lv_obj_align(gHintLabel, LV_ALIGN_CENTER, 0, 174);
@@ -1338,7 +1312,7 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_text_font(gHintLabel, &hb_font_space_grotesk_20, 0);
   lv_obj_set_style_transform_zoom(gHintLabel, kZoomNormal, 0);
   lv_obj_set_style_text_color(gHintLabel, hex(homebrain::palette::kTextSecondary), 0);
-  setLabelTextIfChanged(gHintLabel, "Set point");
+  lv_label_set_text(gHintLabel, "Set point");
 
   lv_obj_move_foreground(gTitleLabel);
   lv_obj_move_foreground(gCenterValueLabel);
@@ -1361,7 +1335,7 @@ void renderThermostatAdjustment(const ModeSnapshot& mode) {
   lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
   const String adjustmentValue = String(mode.knob.value) + String("°");
-  setLabelTextIfChanged(gCenterValueLabel, adjustmentValue);
+  lv_label_set_text(gCenterValueLabel, adjustmentValue.c_str());
 
   lv_obj_move_foreground(gCenterValueLabel);
   lv_obj_move_foreground(gFooterLabel);
@@ -1419,14 +1393,14 @@ void updateFooter() {
     footer += " · " + gStatusLine;
   }
   lv_obj_clear_flag(gFooterLabel, LV_OBJ_FLAG_HIDDEN);
-  setLabelTextIfChanged(gFooterLabel, footer);
+  lv_label_set_text(gFooterLabel, footer.c_str());
 }
 
 void hideActionButton(uint8_t index) {
   gActionMappings[index] = -1;
   lv_obj_add_flag(gActionButtons[index], LV_OBJ_FLAG_HIDDEN);
-  clearLabelTextIfNeeded(gActionTitleLabels[index]);
-  clearLabelTextIfNeeded(gActionSubtitleLabels[index]);
+  lv_label_set_text(gActionTitleLabels[index], "");
+  lv_label_set_text(gActionSubtitleLabels[index], "");
 }
 
 void showActionButton(
@@ -1444,15 +1418,15 @@ void showActionButton(
   lv_obj_set_size(gActionButtons[slot], width, height);
   lv_obj_clear_flag(gActionButtons[slot], LV_OBJ_FLAG_HIDDEN);
   styleButton(gActionButtons[slot], action);
-  setLabelTextIfChanged(gActionTitleLabels[slot], action.label);
+  lv_label_set_text(gActionTitleLabels[slot], action.label.c_str());
   lv_obj_set_style_text_color(gActionTitleLabels[slot], hex(homebrain::palette::kTextPrimary), 0);
 
   if (showSubtitle && !action.subtitle.isEmpty()) {
-    setLabelTextIfChanged(gActionSubtitleLabels[slot], action.subtitle);
+    lv_label_set_text(gActionSubtitleLabels[slot], action.subtitle.c_str());
     lv_obj_set_style_text_color(gActionSubtitleLabels[slot], accentForName(action.accent), 0);
     lv_obj_clear_flag(gActionSubtitleLabels[slot], LV_OBJ_FLAG_HIDDEN);
   } else {
-    clearLabelTextIfNeeded(gActionSubtitleLabels[slot]);
+    lv_label_set_text(gActionSubtitleLabels[slot], "");
     lv_obj_add_flag(gActionSubtitleLabels[slot], LV_OBJ_FLAG_HIDDEN);
   }
 }
@@ -1626,7 +1600,7 @@ void renderMode() {
     hideWeatherBackdrop();
     setCenterTapEnabled(false);
     applyDefaultTextLayout();
-    setLabelTextIfChanged(gTitleLabel, mode->title);
+    lv_label_set_text(gTitleLabel, mode->title.c_str());
     styleSurfaceCenterValue(mode->centerValue, -22, 216, 280);
     setSurfaceSubtitleText(mode->secondaryValue, 254, true, 210);
     styleHelperLabel(gHintLabel, 308, mode->hint);
