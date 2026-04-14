@@ -109,7 +109,8 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
     name: 'Bedroom Lamp',
     type: 'light',
     room: 'Bedroom',
-    status: true
+    status: true,
+    brightness: 35
   };
   const bedroomSpeaker = {
     _id: 'speaker-1',
@@ -155,11 +156,13 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
         bedtimeSceneId: 'scene-bedtime'
       },
       roomControl: {
+        lightDeviceId: 'light-1',
         favoriteDeviceIds: ['light-1', 'lock-1'],
         sceneIds: []
       },
       harmony: {
         hubIp: '192.168.1.99',
+        defaultActivityId: 'activity-tv',
         activityIds: ['activity-tv'],
         commandDeviceId: 'remote-1'
       },
@@ -236,16 +239,29 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   assert.equal(result.modes.thermostat.meta.weatherIcon, 'sunny');
   assert.equal(result.modes.thermostat.meta.weatherCondition, 'Clear');
   assert.equal(result.modes.thermostat.secondaryValue, 'Set point 72°');
-  assert.equal(result.modes.room.quickActions[0].label, 'Bedroom Lamp');
-  assert.equal(result.modes.room.quickActions[1].label, 'Front Door');
-  assert.equal(result.modes.room.secondaryValue, 'Pinned controls');
-  assert.equal(result.modes.room.meta.isPinnedSelection, true);
-  assert.equal(result.modes.home.centerValue, 'DISARMED');
+  assert.equal(result.modes.room.title, 'Bedroom');
+  assert.equal(result.modes.room.centerValue, '35%');
+  assert.equal(result.modes.room.secondaryValue, 'Lights');
+  assert.equal(result.modes.room.knob.pressAction.targetId, 'light-1');
+  assert.equal(result.modes.room.knob.pressAction.action, 'set_brightness');
+  assert.equal(result.modes.room.knob.pressAction.value, 0);
+  assert.equal(result.modes.room.meta.deviceId, 'light-1');
+  assert.deepEqual(result.modes.room.quickActions, []);
+  assert.equal(result.modes.home.title, 'Security');
+  assert.equal(result.modes.home.centerValue, 'Disarmed');
+  assert.equal(result.modes.home.quickActions[0].label, 'Arm Stay');
+  assert.equal(result.modes.home.quickActions[1].label, 'Arm Away');
   assert.equal(result.modes.home.meta.security.sensorCount, 3);
   assert.equal(result.modes.home.meta.security.activeSensorCount, 1);
   assert.equal(result.modes.home.meta.security.sensors, undefined);
   assert.equal(result.modes.home.meta.security.doorLocks, undefined);
-  assert.equal(result.modes.media.centerValue, 'Watch TV');
+  assert.equal(result.modes.media.title, 'Bedroom Hub');
+  assert.equal(result.modes.media.centerValue, 'On');
+  assert.equal(result.modes.media.secondaryValue, 'Watch TV');
+  assert.equal(result.modes.media.knob.kind, 'relative');
+  assert.equal(result.modes.media.knob.pressAction.label, 'Off');
+  assert.equal(result.modes.media.quickActions[0].label, 'On');
+  assert.equal(result.modes.media.quickActions[1].label, 'Off');
   assert.equal(result.modes.quiet.quickActions[0].label, 'Bedtime');
   assert.equal(result.ota.available, false);
   assert.equal(result.ota.downloadUrl, '');
@@ -305,8 +321,18 @@ test('executeAction delegates thermostat and scene actions to existing services'
     targetId: 'scene-1'
   });
 
+  await wallPanelService.executeAction('panel-4', {
+    registrationCode: 'HBWP-ABCD-EF12-3456'
+  }, {
+    type: 'device.control',
+    targetId: 'light-1',
+    action: 'set_brightness',
+    value: 63
+  });
+
   assert.deepEqual(calls[0], ['device', 'thermo-1', 'set_temperature', 71]);
   assert.deepEqual(calls[1], ['scene', 'scene-1']);
+  assert.deepEqual(calls[2], ['device', 'light-1', 'set_brightness', 63]);
 });
 
 test('getPanelProvisioning exposes the setup token for admin UI flows', async (t) => {
