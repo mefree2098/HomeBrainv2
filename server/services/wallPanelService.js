@@ -130,6 +130,20 @@ function otaStatusIsActive(status) {
   return ACTIVE_OTA_STATUSES.has(trimString(status));
 }
 
+function otaActivationCanFinalize(ota = {}) {
+  const normalized = normalizeOtaState(ota);
+  if (!normalized.targetVersion) {
+    return false;
+  }
+
+  if (normalized.bytesTransferred > 0) {
+    return true;
+  }
+
+  return ['downloading', 'installing', 'rebooting'].includes(normalized.status)
+    || ['downloading', 'download', 'installing', 'write', 'verifying', 'rebooting'].includes(normalized.phase);
+}
+
 function buildPanelFirmwareVersion() {
   const stamp = formatPanelFirmwareVersionStamp(new Date());
   return `panel-${stamp}-${crypto.randomBytes(2).toString('hex')}`;
@@ -2307,7 +2321,7 @@ class WallPanelService {
     });
 
     const currentOta = normalizeOtaState(panel.ota || {});
-    if (currentOta.targetVersion && panel.firmwareVersion === currentOta.targetVersion) {
+    if (panel.firmwareVersion === currentOta.targetVersion && otaActivationCanFinalize(currentOta)) {
       panel.status = 'online';
       panel.ota = mergeOtaState(currentOta, {
         status: 'completed',
@@ -2317,6 +2331,11 @@ class WallPanelService {
         message: 'Orb is now running the latest HomeBrain firmware.',
         lastError: '',
         completedAt: new Date()
+      });
+    } else if (panel.firmwareVersion === currentOta.targetVersion) {
+      panel.status = 'online';
+      panel.ota = mergeOtaState(currentOta, {
+        currentVersion: panel.firmwareVersion
       });
     } else if (otaStatusIsActive(currentOta.status)) {
       panel.status = 'updating';

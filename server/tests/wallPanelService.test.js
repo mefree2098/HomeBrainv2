@@ -91,6 +91,120 @@ test('activatePanel accepts the registration code and clears the claim token', a
   assert.equal(panelDoc.settings.claimToken, '');
 });
 
+test('activatePanel does not complete an OTA that is only waiting in ready state', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-2-ready',
+    name: 'Bedroom Panel',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    ipAddress: '',
+    firmwareVersion: 'panel-old',
+    ota: {
+      jobId: 'job-ready',
+      status: 'ready',
+      phase: 'ready',
+      progress: 60,
+      targetVersion: 'panel-target',
+      currentVersion: 'panel-old',
+      message: 'Waiting for the orb to download the package.'
+    },
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return {
+        ...this
+      };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const result = await wallPanelService.activatePanel('panel-2-ready', {
+    registrationCode: 'HBWP-ABCD-EF12-3456'
+  }, {
+    ipAddress: '192.168.1.45',
+    firmwareVersion: 'panel-target'
+  });
+
+  assert.equal(result.status, 'online');
+  assert.equal(result.ota.status, 'ready');
+  assert.equal(result.ota.phase, 'ready');
+  assert.equal(result.ota.progress, 60);
+  assert.equal(result.ota.currentVersion, 'panel-target');
+});
+
+test('activatePanel completes an OTA after download progress has started', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-2-downloading',
+    name: 'Bedroom Panel',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    ipAddress: '',
+    firmwareVersion: 'panel-old',
+    ota: {
+      jobId: 'job-downloading',
+      status: 'downloading',
+      phase: 'downloading',
+      progress: 72,
+      targetVersion: 'panel-target',
+      currentVersion: 'panel-old',
+      bytesTransferred: 1024,
+      bytesTotal: 2048,
+      message: 'Downloading firmware package.'
+    },
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return {
+        ...this
+      };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const result = await wallPanelService.activatePanel('panel-2-downloading', {
+    registrationCode: 'HBWP-ABCD-EF12-3456'
+  }, {
+    ipAddress: '192.168.1.45',
+    firmwareVersion: 'panel-target'
+  });
+
+  assert.equal(result.status, 'online');
+  assert.equal(result.ota.status, 'completed');
+  assert.equal(result.ota.phase, 'completed');
+  assert.equal(result.ota.progress, 100);
+  assert.equal(result.ota.currentVersion, 'panel-target');
+});
+
 test('getPanelState builds swipeable mode payloads for the firmware', async (t) => {
   const originalFindById = WallPanel.findById;
   const originalDeviceFind = Device.find;
