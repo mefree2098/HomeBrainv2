@@ -14,6 +14,7 @@
 #include <memory>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "driver/gpio.h"
 #ifdef CONFIG_APP_ROLLBACK_ENABLE
 #include "esp_ota_ops.h"
 #endif
@@ -233,12 +234,16 @@ int gSwipeStartX = 0;
 int gSwipeStartY = 0;
 unsigned long gSwipeStartedAt = 0;
 
-uint8_t gLastEncoderState = 0;
-int8_t gEncoderDeltaAccumulator = 0;
+volatile uint8_t gLastEncoderState = 0;
+volatile int16_t gPendingEncoderTransitions = 0;
+volatile unsigned long gLatestEncoderIntervalUs = 0;
+volatile unsigned long gLastEncoderTransitionUs = 0;
+int16_t gEncoderDeltaAccumulator = 0;
 bool gEncoderPressed = false;
 unsigned long gEncoderPressedAt = 0;
 unsigned long gLastEncoderTurnAt = 0;
 int gLastEncoderDirection = 0;
+portMUX_TYPE gEncoderMux = portMUX_INITIALIZER_UNLOCKED;
 
 bool gPanelActivated = false;
 bool gPendingThermostatCommit = false;
@@ -348,6 +353,59 @@ String panelActivateUrl() {
 
 String panelOtaStatusUrl() {
   return normalizeHubUrl() + panelBasePath() + "/ota/status";
+}
+
+uint8_t readEncoderStateFast() {
+  const int currentA = gpio_get_level(static_cast<gpio_num_t>(kEncoderAPin));
+  const int currentB = gpio_get_level(static_cast<gpio_num_t>(kEncoderBPin));
+  return static_cast<uint8_t>((currentA << 1) | currentB);
+}
+
+void IRAM_ATTR encoderInterruptHandler() {
+  portENTER_CRITICAL_ISR(&gEncoderMux);
+
+  const uint8_t currentState = readEncoderStateFast();
+  if (currentState != gLastEncoderState) {
+    int8_t delta = 0;
+    switch ((gLastEncoderState << 2) | currentState) {
+      case 0b0001:
+      case 0b0111:
+      case 0b1110:
+      case 0b1000:
+        delta = 1;
+        break;
+      case 0b0010:
+      case 0b1011:
+      case 0b1101:
+      case 0b0100:
+        delta = -1;
+        break;
+      default:
+        delta = 0;
+        break;
+    }
+
+    const unsigned long nowUs = micros();
+    if (delta != 0) {
+      gPendingEncoderTransitions = constrain(gPendingEncoderTransitions + delta, -256, 256);
+      if (gLastEncoderTransitionUs != 0 && nowUs >= gLastEncoderTransitionUs) {
+        gLatestEncoderIntervalUs = nowUs - gLastEncoderTransitionUs;
+      }
+      gLastEncoderTransitionUs = nowUs;
+    }
+
+    gLastEncoderState = currentState;
+  }
+
+  portEXIT_CRITICAL_ISR(&gEncoderMux);
+}
+
+void clearPendingEncoderInput() {
+  portENTER_CRITICAL(&gEncoderMux);
+  gPendingEncoderTransitions = 0;
+  gLatestEncoderIntervalUs = 0;
+  gLastEncoderTransitionUs = 0;
+  portEXIT_CRITICAL(&gEncoderMux);
 }
 
 String jsonVariantToString(JsonVariantConst value) {
@@ -836,7 +894,10 @@ void queueDeviceLevelDispatch(const String& targetId, int value);
 bool toggleRoomLight(ModeSnapshot& mode);
 void hideRoomSurfaceLabels();
 int activeEncoderThreshold();
-int encoderStepAmount(const ModeSnapshot& mode, int direction);
+int encoderStepAmount(const ModeSnapshot& mode, int direction, int turnCount, unsigned long latestIntervalUs);
+uint8_t readEncoderStateFast();
+void IRAM_ATTR encoderInterruptHandler();
+void clearPendingEncoderInput();
 bool postPanelJson(const String& url, JsonDocument& requestDocument, JsonDocument* responseDocument = nullptr);
 bool postPanelResponse(const String& url, const String& body, String* responseBody = nullptr);
 bool getPanelResponse(const String& url, String& responseBody);
@@ -2421,6 +2482,7 @@ void changeMode(int delta) {
   gEncoderDeltaAccumulator = 0;
   gLastEncoderTurnAt = 0;
   gLastEncoderDirection = 0;
+  clearPendingEncoderInput();
 
   const int next = static_cast<int>(gCurrentModeIndex) + delta;
   if (next < 0) {
@@ -3547,33 +3609,39 @@ int activeEncoderThreshold() {
   return kDefaultEncoderDeltaThreshold;
 }
 
-int encoderStepAmount(const ModeSnapshot& mode, int direction) {
+int encoderStepAmount(const ModeSnapshot& mode, int direction, int turnCount, unsigned long latestIntervalUs) {
   const int baseStep = max(1, mode.knob.step);
+  const int effectiveTurns = max(1, turnCount);
   if (mode.knob.kind != "range") {
-    return baseStep;
+    return baseStep * effectiveTurns;
   }
 
   if (mode.id != "room" && mode.id != "settings") {
-    return baseStep;
+    return baseStep * effectiveTurns;
   }
 
-  const unsigned long now = millis();
   const bool sameDirection = gLastEncoderTurnAt != 0 && direction == gLastEncoderDirection;
-  const unsigned long elapsedMs = sameDirection ? now - gLastEncoderTurnAt : ULONG_MAX;
-  gLastEncoderTurnAt = now;
+  const unsigned long elapsedMs = latestIntervalUs > 0
+    ? max(1UL, (latestIntervalUs + 999UL) / 1000UL)
+    : ULONG_MAX;
+  gLastEncoderTurnAt = millis();
   gLastEncoderDirection = direction;
 
-  if (elapsedMs <= kEncoderAccelerationFastestMs) {
-    return baseStep * 10;
-  }
-  if (elapsedMs <= kEncoderAccelerationFasterMs) {
-    return baseStep * 5;
-  }
-  if (elapsedMs <= kEncoderAccelerationFastMs) {
-    return baseStep * 3;
+  if (!sameDirection) {
+    return baseStep * effectiveTurns;
   }
 
-  return baseStep;
+  if (effectiveTurns >= 6 || elapsedMs <= kEncoderAccelerationFastestMs) {
+    return min(baseStep * effectiveTurns * 10, baseStep * 30);
+  }
+  if (effectiveTurns >= 3 || elapsedMs <= kEncoderAccelerationFasterMs) {
+    return min(baseStep * effectiveTurns * 5, baseStep * 24);
+  }
+  if (effectiveTurns >= 2 || elapsedMs <= kEncoderAccelerationFastMs) {
+    return min(baseStep * effectiveTurns * 3, baseStep * 18);
+  }
+
+  return baseStep * effectiveTurns;
 }
 
 void persistBrightnessIfReady() {
@@ -3589,7 +3657,7 @@ void persistBrightnessIfReady() {
   gPendingBrightnessPersist = false;
 }
 
-void handleEncoderTurn(int direction) {
+void handleEncoderTurn(int signedSteps, unsigned long latestIntervalUs = 0) {
   if (gOtaInProgress) {
     return;
   }
@@ -3599,8 +3667,15 @@ void handleEncoderTurn(int direction) {
     return;
   }
 
+  if (signedSteps == 0) {
+    return;
+  }
+
+  const int direction = signedSteps > 0 ? 1 : -1;
+  const int turnCount = abs(signedSteps);
+
   if (mode->knob.kind == "range") {
-    const int stepAmount = encoderStepAmount(*mode, direction);
+    const int stepAmount = encoderStepAmount(*mode, direction, turnCount, latestIntervalUs);
     const int next = constrain(
       mode->knob.value + (direction * stepAmount),
       mode->knob.minValue,
@@ -3640,12 +3715,15 @@ void handleEncoderTurn(int direction) {
   }
 
   if (mode->knob.kind == "relative") {
-    if (direction > 0 && mode->knob.clockwiseAction.valid) {
-      dispatchQuickAction(mode->knob.clockwiseAction);
-      return;
-    }
-    if (direction < 0 && mode->knob.counterclockwiseAction.valid) {
-      dispatchQuickAction(mode->knob.counterclockwiseAction);
+    const int repeatCount = min(turnCount, 6);
+    for (int index = 0; index < repeatCount; index += 1) {
+      if (direction > 0 && mode->knob.clockwiseAction.valid) {
+        dispatchQuickAction(mode->knob.clockwiseAction);
+        continue;
+      }
+      if (direction < 0 && mode->knob.counterclockwiseAction.valid) {
+        dispatchQuickAction(mode->knob.counterclockwiseAction);
+      }
     }
   }
 }
@@ -3655,41 +3733,22 @@ void pollEncoder() {
     return;
   }
 
-  const int currentA = digitalRead(kEncoderAPin);
-  const int currentB = digitalRead(kEncoderBPin);
-  const uint8_t currentState = static_cast<uint8_t>((currentA << 1) | currentB);
-  if (currentState != gLastEncoderState) {
-    int8_t delta = 0;
-    switch ((gLastEncoderState << 2) | currentState) {
-      case 0b0001:
-      case 0b0111:
-      case 0b1110:
-      case 0b1000:
-        delta = 1;
-        break;
-      case 0b0010:
-      case 0b1011:
-      case 0b1101:
-      case 0b0100:
-        delta = -1;
-        break;
-      default:
-        delta = 0;
-        break;
-    }
+  int16_t transitionDelta = 0;
+  unsigned long latestIntervalUs = 0;
+  portENTER_CRITICAL(&gEncoderMux);
+  transitionDelta = gPendingEncoderTransitions;
+  gPendingEncoderTransitions = 0;
+  latestIntervalUs = gLatestEncoderIntervalUs;
+  gLatestEncoderIntervalUs = 0;
+  portEXIT_CRITICAL(&gEncoderMux);
 
-    gLastEncoderState = currentState;
-    if (delta != 0) {
-      gEncoderDeltaAccumulator += delta;
-      const int encoderThreshold = activeEncoderThreshold();
-      while (gEncoderDeltaAccumulator >= encoderThreshold) {
-        handleEncoderTurn(1);
-        gEncoderDeltaAccumulator -= encoderThreshold;
-      }
-      while (gEncoderDeltaAccumulator <= -encoderThreshold) {
-        handleEncoderTurn(-1);
-        gEncoderDeltaAccumulator += encoderThreshold;
-      }
+  if (transitionDelta != 0) {
+    gEncoderDeltaAccumulator += transitionDelta;
+    const int encoderThreshold = max(1, activeEncoderThreshold());
+    const int logicalTurns = gEncoderDeltaAccumulator / encoderThreshold;
+    if (logicalTurns != 0) {
+      gEncoderDeltaAccumulator -= logicalTurns * encoderThreshold;
+      handleEncoderTurn(logicalTurns, latestIntervalUs);
     }
   }
 
@@ -3837,10 +3896,13 @@ void setup() {
 
   pinMode(kEncoderAPin, INPUT);
   pinMode(kEncoderBPin, INPUT);
-  gLastEncoderState = static_cast<uint8_t>((digitalRead(kEncoderAPin) << 1) | digitalRead(kEncoderBPin));
+  gLastEncoderState = readEncoderStateFast();
   gEncoderDeltaAccumulator = 0;
   gLastEncoderTurnAt = 0;
   gLastEncoderDirection = 0;
+  clearPendingEncoderInput();
+  attachInterrupt(digitalPinToInterrupt(kEncoderAPin), encoderInterruptHandler, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(kEncoderBPin), encoderInterruptHandler, CHANGE);
   gLastLvglTickAt = millis();
   gNetworkMutex = xSemaphoreCreateMutex();
   if (gNetworkMutex != nullptr) {
