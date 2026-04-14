@@ -691,3 +691,125 @@ test('buildPanelOtaArtifact keeps trying candidates when python3 lacks the platf
   assert.ok(commands.some((entry) => entry.command === 'python3'));
   assert.ok(commands.some((entry) => entry.command === 'python'));
 });
+
+test('buildPanelOtaArtifact bootstraps a private PlatformIO toolchain when none is installed', async (t) => {
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-managed-'));
+  const firmwareDir = path.join(tempRoot, 'embedded', 'elecrow-wall-panel');
+  const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
+  const builtArtifactPath = path.join(firmwareDir, '.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin');
+  const managedRootDir = path.join(otaArtifactsDir, '.platformio-homebrain');
+  const managedPython = path.join(managedRootDir, 'bin', 'python');
+  const managedPio = path.join(managedRootDir, 'bin', 'pio');
+  const originalPublishSafe = eventStreamService.publishSafe;
+
+  t.after(async () => {
+    eventStreamService.publishSafe = originalPublishSafe;
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.promises.mkdir(path.dirname(builtArtifactPath), { recursive: true });
+  await fs.promises.writeFile(path.join(firmwareDir, 'platformio.ini'), '[env:elecrow-crowpanel-2_1]\n');
+  await fs.promises.writeFile(builtArtifactPath, Buffer.from('firmware-binary'));
+
+  eventStreamService.publishSafe = async () => {};
+
+  const spawnCommands = [];
+  const execCalls = [];
+  const service = new WallPanelService({
+    projectRoot: tempRoot,
+    panelFirmwareProjectDir: firmwareDir,
+    panelOtaArtifactsDir: otaArtifactsDir,
+    platformioBin: 'pio',
+    execFile: (file, args, options, callback) => {
+      execCalls.push({ file, args });
+
+      process.nextTick(async () => {
+        try {
+          if (file === 'python3' && args[0] === '--version') {
+            callback(null, 'Python 3.11.0\n', '');
+            return;
+          }
+
+          if (file === 'python3' && args[0] === '-m' && args[1] === 'venv') {
+            await fs.promises.mkdir(path.dirname(managedPio), { recursive: true });
+            await fs.promises.writeFile(managedPython, '#!/usr/bin/env python3\n');
+            await fs.promises.writeFile(managedPio, '#!/bin/sh\n');
+            callback(null, '', '');
+            return;
+          }
+
+          if (file === managedPython && args[0] === '-m' && args[1] === 'ensurepip') {
+            callback(null, '', '');
+            return;
+          }
+
+          if (file === managedPython && args[0] === '-m' && args[1] === 'pip') {
+            callback(null, 'installed platformio\n', '');
+            return;
+          }
+
+          if (file === managedPio && args[0] === '--version') {
+            callback(null, 'PlatformIO Core, version 6.1.18\n', '');
+            return;
+          }
+
+          const error = new Error(`spawn ${file} ENOENT`);
+          error.code = 'ENOENT';
+          callback(error, '', '');
+        } catch (error) {
+          callback(error, '', '');
+        }
+      });
+    },
+    spawnProcess: (command, args, options) => {
+      spawnCommands.push({
+        command,
+        args,
+        envPath: options?.env?.PATH || ''
+      });
+
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+
+      process.nextTick(() => {
+        if (command !== managedPio || !fs.existsSync(managedPio)) {
+          const error = new Error(`spawn ${command} ENOENT`);
+          error.code = 'ENOENT';
+          child.emit('error', error);
+          return;
+        }
+
+        child.stdout.write('Compiling wall panel firmware...\n');
+        child.stderr.write('Linking and packaging OTA image...\n');
+        child.emit('close', 0);
+      });
+
+      return child;
+    }
+  });
+
+  service.updatePanelOtaState = async () => ({});
+
+  await service.buildPanelOtaArtifact(
+    {
+      id: 'panel-build',
+      hardwareProfile: 'elecrow-crowpanel-2.1-rotary'
+    },
+    {
+      jobId: 'job-4',
+      targetVersion: 'panel-20240410T000000Z-abc1234'
+    }
+  );
+
+  const copiedArtifact = await fs.promises.readFile(
+    path.join(otaArtifactsDir, 'panel-build', 'job-4.bin'),
+    'utf8'
+  );
+
+  assert.ok(execCalls.some((entry) => entry.file === 'python3' && entry.args[0] === '--version'));
+  assert.ok(execCalls.some((entry) => entry.file === 'python3' && entry.args[0] === '-m' && entry.args[1] === 'venv'));
+  assert.ok(execCalls.some((entry) => entry.file === managedPython && entry.args[1] === 'pip'));
+  assert.ok(spawnCommands.some((entry) => entry.command === managedPio));
+  assert.equal(copiedArtifact, 'firmware-binary');
+});

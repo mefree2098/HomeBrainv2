@@ -1396,10 +1396,12 @@ class WallPanelService {
       ? path.dirname(configuredBin)
       : '';
     const homeDir = trimString(process.env.HOME || '');
+    const managedBinDir = this.getManagedPlatformioBinDir();
     const searchPaths = [];
 
     [
       configuredDir,
+      managedBinDir,
       homeDir ? path.join(homeDir, '.platformio', 'penv', 'bin') : '',
       homeDir ? path.join(homeDir, '.local', 'bin') : '',
       '/opt/homebrew/bin',
@@ -1425,13 +1427,40 @@ class WallPanelService {
     };
   }
 
+  getManagedPlatformioRootDir() {
+    return path.join(this.panelOtaArtifactsDir, '.platformio-homebrain');
+  }
+
+  getManagedPlatformioBinDir() {
+    return path.join(this.getManagedPlatformioRootDir(), 'bin');
+  }
+
+  getManagedPlatformioExecutable() {
+    return path.join(this.getManagedPlatformioBinDir(), 'pio');
+  }
+
+  getManagedPlatformioPythonExecutable() {
+    return path.join(this.getManagedPlatformioBinDir(), 'python');
+  }
+
   getPlatformioCandidates() {
     const configuredBin = trimString(this.platformioBin);
     const homeDir = trimString(process.env.HOME || '');
     const homePlatformioBinDir = homeDir ? path.join(homeDir, '.platformio', 'penv', 'bin') : '';
     const homeLocalBinDir = homeDir ? path.join(homeDir, '.local', 'bin') : '';
+    const managedPlatformioBinDir = this.getManagedPlatformioBinDir();
     const candidates = [
       configuredBin ? { command: configuredBin, args: [], label: configuredBin } : null,
+      {
+        command: path.join(managedPlatformioBinDir, 'pio'),
+        args: [],
+        label: path.join(managedPlatformioBinDir, 'pio')
+      },
+      {
+        command: path.join(managedPlatformioBinDir, 'platformio'),
+        args: [],
+        label: path.join(managedPlatformioBinDir, 'platformio')
+      },
       { command: 'pio', args: [], label: 'pio' },
       { command: 'platformio', args: [], label: 'platformio' },
       homePlatformioBinDir ? {
@@ -1475,6 +1504,183 @@ class WallPanelService {
 
       seen.add(key);
       return true;
+    });
+  }
+
+  async ensureManagedPlatformio(panelId, jobId, processEnv) {
+    const managedRootDir = this.getManagedPlatformioRootDir();
+    const managedPython = this.getManagedPlatformioPythonExecutable();
+    const managedPio = this.getManagedPlatformioExecutable();
+    const existingBinary = await fsp.stat(managedPio).catch(() => null);
+
+    if (existingBinary?.isFile()) {
+      try {
+        await this.execFileCapture(managedPio, ['--version'], {
+          env: processEnv,
+          maxBuffer: 8 * 1024 * 1024
+        });
+        return managedPio;
+      } catch (_error) {
+        await fsp.rm(managedRootDir, { recursive: true, force: true }).catch(() => null);
+      }
+    }
+
+    await this.updatePanelOtaState(panelId, jobId, {
+      progress: 10,
+      message: 'Preparing HomeBrain PlatformIO toolchain...'
+    }, { allowMissingJob: true }).catch(() => null);
+
+    await this.ensureOtaArtifactsDir();
+
+    const pythonCandidates = [
+      'python3',
+      'python',
+      '/usr/bin/python3',
+      '/usr/local/bin/python3',
+      '/opt/homebrew/bin/python3'
+    ];
+    const missingPythonCandidates = [];
+    let bootstrapPython = '';
+
+    for (const candidate of pythonCandidates) {
+      try {
+        await this.execFileCapture(candidate, ['--version'], {
+          env: processEnv,
+          maxBuffer: 1024 * 1024
+        });
+        bootstrapPython = candidate;
+        break;
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          missingPythonCandidates.push(candidate);
+          continue;
+        }
+        throw createError(
+          500,
+          trimString(error?.stderr || error?.message)
+          || `HomeBrain could not prepare Python to bootstrap PlatformIO with ${candidate}.`
+        );
+      }
+    }
+
+    if (!bootstrapPython) {
+      throw createError(
+        500,
+        `HomeBrain could not bootstrap PlatformIO because Python was not found. Checked ${missingPythonCandidates.join(', ')}.`
+      );
+    }
+
+    await fsp.rm(managedRootDir, { recursive: true, force: true }).catch(() => null);
+
+    await this.execFileCapture(bootstrapPython, ['-m', 'venv', managedRootDir], {
+      env: processEnv,
+      maxBuffer: 8 * 1024 * 1024
+    }).catch((error) => {
+      throw createError(
+        500,
+        trimString(error?.stderr || error?.message)
+        || 'HomeBrain could not create the private PlatformIO virtual environment.'
+      );
+    });
+
+    await this.updatePanelOtaState(panelId, jobId, {
+      progress: 16,
+      message: 'Installing HomeBrain OTA build toolchain...'
+    }, { allowMissingJob: true }).catch(() => null);
+
+    await this.execFileCapture(managedPython, ['-m', 'ensurepip', '--upgrade'], {
+      env: processEnv,
+      maxBuffer: 8 * 1024 * 1024
+    }).catch(() => null);
+
+    await this.execFileCapture(managedPython, [
+      '-m',
+      'pip',
+      'install',
+      '--disable-pip-version-check',
+      '--no-python-version-warning',
+      'platformio'
+    ], {
+      env: processEnv,
+      maxBuffer: 16 * 1024 * 1024
+    }).catch((error) => {
+      throw createError(
+        500,
+        trimString(error?.stderr || error?.message)
+        || 'HomeBrain could not install PlatformIO into the private OTA toolchain.'
+      );
+    });
+
+    await this.execFileCapture(managedPio, ['--version'], {
+      env: processEnv,
+      maxBuffer: 8 * 1024 * 1024
+    }).catch((error) => {
+      throw createError(
+        500,
+        trimString(error?.stderr || error?.message)
+        || 'HomeBrain installed PlatformIO, but the OTA toolchain still is not runnable.'
+      );
+    });
+
+    return managedPio;
+  }
+
+  async runPlatformioBuildCandidate(panel, jobId, buildTarget, candidate, processEnv) {
+    await new Promise((resolve, reject) => {
+      const child = this.spawnProcess(
+        candidate.command,
+        [...candidate.args, 'run', '-e', buildTarget.env],
+        {
+          cwd: this.panelFirmwareProjectDir,
+          env: processEnv,
+          stdio: ['ignore', 'pipe', 'pipe']
+        }
+      );
+
+      let stderr = '';
+      let sawCompiling = false;
+      let sawLinking = false;
+
+      const handleOutput = async (chunk) => {
+        const text = chunk.toString();
+        stderr = `${stderr}${text}`.slice(-4000);
+
+        if (!sawCompiling && /Compiling|Building/i.test(text)) {
+          sawCompiling = true;
+          await this.updatePanelOtaState(panel.id, jobId, {
+            progress: 24,
+            message: 'Compiling wall panel firmware...'
+          }, { allowMissingJob: true }).catch(() => null);
+        }
+
+        if (!sawLinking && /Linking|Creating esp32s3 image|Retrieving maximum program size/i.test(text)) {
+          sawLinking = true;
+          await this.updatePanelOtaState(panel.id, jobId, {
+            progress: 42,
+            message: 'Linking and packaging OTA image...'
+          }, { allowMissingJob: true }).catch(() => null);
+        }
+      };
+
+      child.stdout.on('data', handleOutput);
+      child.stderr.on('data', handleOutput);
+      child.on('error', (error) => {
+        error.command = candidate.label;
+        error.stderr = trimString(stderr);
+        reject(error);
+      });
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        const failure = new Error(trimString(stderr) || `${candidate.label} exited with code ${code}`);
+        failure.code = code;
+        failure.command = candidate.label;
+        failure.stderr = trimString(stderr);
+        reject(failure);
+      });
     });
   }
 
@@ -1559,62 +1765,7 @@ class WallPanelService {
 
     for (const candidate of this.getPlatformioCandidates()) {
       try {
-        await new Promise((resolve, reject) => {
-          const child = this.spawnProcess(
-            candidate.command,
-            [...candidate.args, 'run', '-e', buildTarget.env],
-            {
-              cwd: this.panelFirmwareProjectDir,
-              env: processEnv,
-              stdio: ['ignore', 'pipe', 'pipe']
-            }
-          );
-
-          let stderr = '';
-          let sawCompiling = false;
-          let sawLinking = false;
-
-          const handleOutput = async (chunk) => {
-            const text = chunk.toString();
-            stderr = `${stderr}${text}`.slice(-4000);
-
-            if (!sawCompiling && /Compiling|Building/i.test(text)) {
-              sawCompiling = true;
-              await this.updatePanelOtaState(panel.id, jobId, {
-                progress: 24,
-                message: 'Compiling wall panel firmware...'
-              }, { allowMissingJob: true }).catch(() => null);
-            }
-
-            if (!sawLinking && /Linking|Creating esp32s3 image|Retrieving maximum program size/i.test(text)) {
-              sawLinking = true;
-              await this.updatePanelOtaState(panel.id, jobId, {
-                progress: 42,
-                message: 'Linking and packaging OTA image...'
-              }, { allowMissingJob: true }).catch(() => null);
-            }
-          };
-
-          child.stdout.on('data', handleOutput);
-          child.stderr.on('data', handleOutput);
-          child.on('error', (error) => {
-            error.command = candidate.label;
-            error.stderr = trimString(stderr);
-            reject(error);
-          });
-          child.on('close', (code) => {
-            if (code === 0) {
-              resolve();
-              return;
-            }
-
-            const failure = new Error(trimString(stderr) || `${candidate.label} exited with code ${code}`);
-            failure.code = code;
-            failure.command = candidate.label;
-            failure.stderr = trimString(stderr);
-            reject(failure);
-          });
-        });
+        await this.runPlatformioBuildCandidate(panel, jobId, buildTarget, candidate, processEnv);
 
         buildCompleted = true;
         break;
@@ -1628,10 +1779,33 @@ class WallPanelService {
     }
 
     if (!buildCompleted) {
-      throw createError(
-        500,
-        `HomeBrain could not find PlatformIO. Checked ${missingCandidates.join(', ') || 'configured PATH'}. Install PlatformIO or set HOMEBRAIN_PANEL_PLATFORMIO_BIN.`
-      );
+      const managedPlatformio = await this.ensureManagedPlatformio(panel.id, jobId, processEnv).catch((error) => {
+        const detail = trimString(error?.message || error?.stderr);
+        if (detail) {
+          throw createError(500, detail);
+        }
+        throw error;
+      });
+
+      await this.runPlatformioBuildCandidate(
+        panel,
+        jobId,
+        buildTarget,
+        {
+          command: managedPlatformio,
+          args: [],
+          label: managedPlatformio
+        },
+        processEnv
+      ).catch((error) => {
+        if (error?.code === 'ENOENT' || isMissingPlatformioModule(error)) {
+          throw createError(
+            500,
+            `HomeBrain could not find PlatformIO. Checked ${missingCandidates.join(', ') || 'configured PATH'}, and the private OTA toolchain at ${managedPlatformio}. Install PlatformIO or set HOMEBRAIN_PANEL_PLATFORMIO_BIN.`
+          );
+        }
+        throw error;
+      });
     }
 
     const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
