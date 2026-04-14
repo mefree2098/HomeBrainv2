@@ -219,8 +219,6 @@ lv_obj_t* gModeBadgeLabel = nullptr;
 lv_obj_t* gTitleLabel = nullptr;
 lv_obj_t* gCenterValueLabel = nullptr;
 lv_obj_t* gSecondaryLabel = nullptr;
-lv_obj_t* gRoomValueLabel = nullptr;
-lv_obj_t* gRoomSubtitleLabel = nullptr;
 lv_obj_t* gHintLabel = nullptr;
 lv_obj_t* gFooterLabel = nullptr;
 lv_obj_t* gArc = nullptr;
@@ -980,52 +978,51 @@ void styleHelperLabel(lv_obj_t* label, lv_coord_t y, const String& text) {
 }
 
 void styleRoomSubtitleText(const String& text, lv_coord_t y = 114, lv_coord_t zoom = 204) {
-  if (!gRoomSubtitleLabel) {
+  if (!gSecondaryLabel) {
     return;
   }
 
   if (text.isEmpty()) {
-    lv_obj_add_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(gRoomSubtitleLabel, "");
+    hideTextLabel(gSecondaryLabel);
     return;
   }
 
-  lv_obj_clear_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_set_width(gRoomSubtitleLabel, lv_pct(100));
-  lv_obj_align(gRoomSubtitleLabel, LV_ALIGN_TOP_MID, 0, y);
-  lv_obj_set_style_text_align(gRoomSubtitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gRoomSubtitleLabel, &hb_font_orbitron_28, 0);
-  lv_obj_set_style_transform_zoom(gRoomSubtitleLabel, zoom, 0);
-  lv_obj_set_style_text_letter_space(gRoomSubtitleLabel, 1, 0);
-  lv_obj_set_style_text_color(gRoomSubtitleLabel, hex(homebrain::palette::kTextSecondary), 0);
-  lv_label_set_text(gRoomSubtitleLabel, text.c_str());
+  lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(gSecondaryLabel, lv_pct(100));
+  lv_obj_align(gSecondaryLabel, LV_ALIGN_TOP_MID, 0, y);
+  lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(gSecondaryLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gSecondaryLabel, zoom, 0);
+  lv_obj_set_style_text_letter_space(gSecondaryLabel, 1, 0);
+  lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextSecondary), 0);
+  lv_label_set_text(gSecondaryLabel, text.c_str());
 }
 
 void styleRoomCenterValueText(const String& value, lv_coord_t yOffset = 8) {
-  if (!gRoomValueLabel) {
+  if (!gCenterValueLabel) {
     return;
   }
 
   const bool numericValue = isNumericDisplayValue(value);
   const bool shortTextValue = value.length() <= 3;
 
-  lv_obj_clear_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_set_width(gRoomValueLabel, lv_pct(100));
-  lv_obj_align(gRoomValueLabel, LV_ALIGN_CENTER, 0, yOffset);
-  lv_obj_set_style_text_align(gRoomValueLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(gCenterValueLabel, lv_pct(100));
+  lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, yOffset);
+  lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
   if (numericValue) {
-    lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_100, 0);
-    lv_obj_set_style_transform_zoom(gRoomValueLabel, 196, 0);
+    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_100, 0);
+    lv_obj_set_style_transform_zoom(gCenterValueLabel, 196, 0);
   } else if (shortTextValue) {
-    lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_100, 0);
-    lv_obj_set_style_transform_zoom(gRoomValueLabel, 156, 0);
+    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_100, 0);
+    lv_obj_set_style_transform_zoom(gCenterValueLabel, 156, 0);
   } else {
-    lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_28, 0);
-    lv_obj_set_style_transform_zoom(gRoomValueLabel, 300, 0);
+    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_28, 0);
+    lv_obj_set_style_transform_zoom(gCenterValueLabel, 300, 0);
   }
-  lv_obj_set_style_text_letter_space(gRoomValueLabel, 0, 0);
-  lv_obj_set_style_text_color(gRoomValueLabel, hex(homebrain::palette::kTextPrimary), 0);
-  lv_label_set_text(gRoomValueLabel, value.c_str());
+  lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
+  lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
+  lv_label_set_text(gCenterValueLabel, value.c_str());
 }
 
 void styleSurfaceCenterValue(
@@ -1289,15 +1286,7 @@ void setCenterTapEnabled(bool enabled) {
 }
 
 void hideRoomSurfaceLabels() {
-  if (gRoomValueLabel) {
-    lv_obj_add_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(gRoomValueLabel, "");
-  }
-
-  if (gRoomSubtitleLabel) {
-    lv_obj_add_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(gRoomSubtitleLabel, "");
-  }
+  return;
 }
 
 void applyDefaultTextLayout() {
@@ -1407,15 +1396,16 @@ void renderRoomMode(const ModeSnapshot& mode) {
     ? "Tap to toggle. Rotate to dim or brighten."
     : mode.hint;
 
+  lv_obj_clear_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
   setSurfaceTitleText(roomTitle, 74);
-  hideTextLabel(gSecondaryLabel);
-  hideTextLabel(gCenterValueLabel);
   styleRoomSubtitleText(roomSubtitle, 114, 204);
   styleRoomCenterValueText(roomValue, 8);
   styleHelperLabel(gHintLabel, 326, roomHint);
   lv_obj_move_foreground(gTitleLabel);
-  lv_obj_move_foreground(gRoomSubtitleLabel);
-  lv_obj_move_foreground(gRoomValueLabel);
+  lv_obj_move_foreground(gSecondaryLabel);
+  lv_obj_move_foreground(gCenterValueLabel);
   lv_obj_move_foreground(gHintLabel);
   lv_obj_move_foreground(gFooterLabel);
 }
@@ -2367,26 +2357,6 @@ void createUi() {
   lv_obj_set_style_outline_width(gCenterTapButton, 0, 0);
   lv_obj_add_flag(gCenterTapButton, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(gCenterTapButton, centerTapEventHandler, LV_EVENT_CLICKED, nullptr);
-
-  gRoomSubtitleLabel = lv_label_create(gMainCard);
-  lv_obj_set_width(gRoomSubtitleLabel, lv_pct(100));
-  lv_obj_align(gRoomSubtitleLabel, LV_ALIGN_TOP_MID, 0, 116);
-  lv_obj_set_style_text_align(gRoomSubtitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gRoomSubtitleLabel, &hb_font_orbitron_28, 0);
-  lv_obj_set_style_transform_zoom(gRoomSubtitleLabel, 210, 0);
-  lv_obj_set_style_text_color(gRoomSubtitleLabel, hex(homebrain::palette::kTextSecondary), 0);
-  lv_label_set_text(gRoomSubtitleLabel, "");
-  lv_obj_add_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
-
-  gRoomValueLabel = lv_label_create(gMainCard);
-  lv_obj_set_width(gRoomValueLabel, lv_pct(100));
-  lv_obj_align(gRoomValueLabel, LV_ALIGN_CENTER, 0, 12);
-  lv_obj_set_style_text_align(gRoomValueLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_100, 0);
-  lv_obj_set_style_transform_zoom(gRoomValueLabel, 196, 0);
-  lv_obj_set_style_text_color(gRoomValueLabel, hex(homebrain::palette::kTextPrimary), 0);
-  lv_label_set_text(gRoomValueLabel, "");
-  lv_obj_add_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
 
   createActionButton(0, 50, 300);
   createActionButton(1, 256, 300);
