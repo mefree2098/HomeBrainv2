@@ -60,7 +60,7 @@ constexpr unsigned long kDeviceLevelCommitDelayMs = 3000;
 constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
 constexpr unsigned long kSecurityStateRefreshDelayMs = 1750;
 constexpr unsigned long kActionStateRefreshDelayMs = 450;
-constexpr int kSwipeThreshold = 26;
+constexpr int kSwipeThreshold = 18;
 constexpr int kSwipeVerticalLimit = 220;
 constexpr unsigned long kSwipeWindowMs = 1000;
 constexpr uint16_t kStateJsonCapacity = 32768;
@@ -73,9 +73,9 @@ constexpr int kTemperatureUnavailable = -1000;
 constexpr int kDefaultEncoderDeltaThreshold = 4;
 constexpr int kFastEncoderDeltaThreshold = 2;
 constexpr int kUltraFastEncoderDeltaThreshold = 1;
-constexpr unsigned long kEncoderAccelerationFastMs = 80;
-constexpr unsigned long kEncoderAccelerationFasterMs = 45;
-constexpr unsigned long kEncoderAccelerationFastestMs = 20;
+constexpr unsigned long kEncoderAccelerationFastMs = 95;
+constexpr unsigned long kEncoderAccelerationFasterMs = 55;
+constexpr unsigned long kEncoderAccelerationFastestMs = 28;
 constexpr int kPanelHttpConnectTimeoutMs = 3000;
 constexpr int kPanelHttpTimeoutMs = 5000;
 constexpr int kOtaHttpConnectTimeoutMs = 4000;
@@ -960,9 +960,9 @@ void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
     return;
   }
 
-  // Require a mostly horizontal motion so taps and short diagonals do not
-  // unexpectedly flip surfaces now that the swipe threshold is much lower.
-  if (absoluteDeltaX <= deltaY + 8) {
+  // Keep swipes easy to trigger while still requiring a clear horizontal lead
+  // so taps and short diagonals do not unexpectedly flip surfaces.
+  if (absoluteDeltaX <= deltaY + 4) {
     return;
   }
 
