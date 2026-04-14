@@ -139,6 +139,11 @@ function formatPanelFirmwareVersionStamp(value) {
   return resolved.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
+function isMissingPlatformioModule(error) {
+  const detail = trimString(error?.stderr || error?.message || '');
+  return /No module named ['"]?platformio['"]?/i.test(detail);
+}
+
 function createError(status, message) {
   const error = new Error(message);
   error.status = status;
@@ -1396,6 +1401,7 @@ class WallPanelService {
     [
       configuredDir,
       homeDir ? path.join(homeDir, '.platformio', 'penv', 'bin') : '',
+      homeDir ? path.join(homeDir, '.local', 'bin') : '',
       '/opt/homebrew/bin',
       '/usr/local/bin',
       trimString(process.env.PATH || '')
@@ -1422,17 +1428,36 @@ class WallPanelService {
   getPlatformioCandidates() {
     const configuredBin = trimString(this.platformioBin);
     const homeDir = trimString(process.env.HOME || '');
+    const homePlatformioBinDir = homeDir ? path.join(homeDir, '.platformio', 'penv', 'bin') : '';
+    const homeLocalBinDir = homeDir ? path.join(homeDir, '.local', 'bin') : '';
     const candidates = [
       configuredBin ? { command: configuredBin, args: [], label: configuredBin } : null,
       { command: 'pio', args: [], label: 'pio' },
       { command: 'platformio', args: [], label: 'platformio' },
-      homeDir ? {
-        command: path.join(homeDir, '.platformio', 'penv', 'bin', 'pio'),
+      homePlatformioBinDir ? {
+        command: path.join(homePlatformioBinDir, 'pio'),
         args: [],
-        label: path.join(homeDir, '.platformio', 'penv', 'bin', 'pio')
+        label: path.join(homePlatformioBinDir, 'pio')
+      } : null,
+      homePlatformioBinDir ? {
+        command: path.join(homePlatformioBinDir, 'platformio'),
+        args: [],
+        label: path.join(homePlatformioBinDir, 'platformio')
+      } : null,
+      homeLocalBinDir ? {
+        command: path.join(homeLocalBinDir, 'pio'),
+        args: [],
+        label: path.join(homeLocalBinDir, 'pio')
+      } : null,
+      homeLocalBinDir ? {
+        command: path.join(homeLocalBinDir, 'platformio'),
+        args: [],
+        label: path.join(homeLocalBinDir, 'platformio')
       } : null,
       { command: '/opt/homebrew/bin/pio', args: [], label: '/opt/homebrew/bin/pio' },
+      { command: '/opt/homebrew/bin/platformio', args: [], label: '/opt/homebrew/bin/platformio' },
       { command: '/usr/local/bin/pio', args: [], label: '/usr/local/bin/pio' },
+      { command: '/usr/local/bin/platformio', args: [], label: '/usr/local/bin/platformio' },
       { command: 'python3', args: ['-m', 'platformio'], label: 'python3 -m platformio' },
       { command: 'python', args: ['-m', 'platformio'], label: 'python -m platformio' }
     ];
@@ -1586,6 +1611,7 @@ class WallPanelService {
             const failure = new Error(trimString(stderr) || `${candidate.label} exited with code ${code}`);
             failure.code = code;
             failure.command = candidate.label;
+            failure.stderr = trimString(stderr);
             reject(failure);
           });
         });
@@ -1593,7 +1619,7 @@ class WallPanelService {
         buildCompleted = true;
         break;
       } catch (error) {
-        if (error?.code === 'ENOENT') {
+        if (error?.code === 'ENOENT' || isMissingPlatformioModule(error)) {
           missingCandidates.push(candidate.label);
           continue;
         }

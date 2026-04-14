@@ -534,3 +534,160 @@ test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missin
   assert.ok(commands.some((entry) => entry.envPath.includes('/opt/homebrew/bin')));
   assert.equal(copiedArtifact, 'firmware-binary');
 });
+
+test('buildPanelOtaArtifact falls back to Linux user-local PlatformIO when PATH is missing it', async (t) => {
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-local-'));
+  const firmwareDir = path.join(tempRoot, 'embedded', 'elecrow-wall-panel');
+  const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
+  const builtArtifactPath = path.join(firmwareDir, '.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin');
+  const homeDir = path.join(tempRoot, 'home');
+  const userLocalPlatformio = path.join(homeDir, '.local', 'bin', 'platformio');
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const originalHome = process.env.HOME;
+
+  t.after(async () => {
+    process.env.HOME = originalHome;
+    eventStreamService.publishSafe = originalPublishSafe;
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  process.env.HOME = homeDir;
+
+  await fs.promises.mkdir(path.dirname(builtArtifactPath), { recursive: true });
+  await fs.promises.mkdir(path.dirname(userLocalPlatformio), { recursive: true });
+  await fs.promises.writeFile(path.join(firmwareDir, 'platformio.ini'), '[env:elecrow-crowpanel-2_1]\n');
+  await fs.promises.writeFile(builtArtifactPath, Buffer.from('firmware-binary'));
+
+  eventStreamService.publishSafe = async () => {};
+
+  const commands = [];
+  const service = new WallPanelService({
+    projectRoot: tempRoot,
+    panelFirmwareProjectDir: firmwareDir,
+    panelOtaArtifactsDir: otaArtifactsDir,
+    platformioBin: 'pio',
+    spawnProcess: (command, args, options) => {
+      commands.push({
+        command,
+        args,
+        envPath: options?.env?.PATH || ''
+      });
+
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+
+      process.nextTick(() => {
+        if (command !== userLocalPlatformio) {
+          const error = new Error(`spawn ${command} ENOENT`);
+          error.code = 'ENOENT';
+          child.emit('error', error);
+          return;
+        }
+
+        child.stdout.write('Compiling wall panel firmware...\n');
+        child.stderr.write('Linking and packaging OTA image...\n');
+        child.emit('close', 0);
+      });
+
+      return child;
+    }
+  });
+
+  service.updatePanelOtaState = async () => ({});
+
+  await service.buildPanelOtaArtifact(
+    {
+      id: 'panel-build',
+      hardwareProfile: 'elecrow-crowpanel-2.1-rotary'
+    },
+    {
+      jobId: 'job-2',
+      targetVersion: 'panel-20240410T000000Z-abc1234'
+    }
+  );
+
+  const copiedArtifact = await fs.promises.readFile(
+    path.join(otaArtifactsDir, 'panel-build', 'job-2.bin'),
+    'utf8'
+  );
+
+  assert.ok(commands.some((entry) => entry.command === userLocalPlatformio));
+  assert.ok(commands.some((entry) => entry.envPath.includes(path.join(homeDir, '.local', 'bin'))));
+  assert.equal(copiedArtifact, 'firmware-binary');
+});
+
+test('buildPanelOtaArtifact keeps trying candidates when python3 lacks the platformio module', async (t) => {
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-python-'));
+  const firmwareDir = path.join(tempRoot, 'embedded', 'elecrow-wall-panel');
+  const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
+  const builtArtifactPath = path.join(firmwareDir, '.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin');
+  const originalPublishSafe = eventStreamService.publishSafe;
+
+  t.after(async () => {
+    eventStreamService.publishSafe = originalPublishSafe;
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.promises.mkdir(path.dirname(builtArtifactPath), { recursive: true });
+  await fs.promises.writeFile(path.join(firmwareDir, 'platformio.ini'), '[env:elecrow-crowpanel-2_1]\n');
+  await fs.promises.writeFile(builtArtifactPath, Buffer.from('firmware-binary'));
+
+  eventStreamService.publishSafe = async () => {};
+
+  const commands = [];
+  const service = new WallPanelService({
+    projectRoot: tempRoot,
+    panelFirmwareProjectDir: firmwareDir,
+    panelOtaArtifactsDir: otaArtifactsDir,
+    platformioBin: 'pio',
+    spawnProcess: (command, args, options) => {
+      commands.push({
+        command,
+        args,
+        envPath: options?.env?.PATH || ''
+      });
+
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+
+      process.nextTick(() => {
+        if (command === 'python3') {
+          child.stderr.write('/usr/bin/python3: No module named platformio\n');
+          child.emit('close', 1);
+          return;
+        }
+
+        if (command !== 'python') {
+          const error = new Error(`spawn ${command} ENOENT`);
+          error.code = 'ENOENT';
+          child.emit('error', error);
+          return;
+        }
+
+        child.stdout.write('Compiling wall panel firmware...\n');
+        child.stderr.write('Linking and packaging OTA image...\n');
+        child.emit('close', 0);
+      });
+
+      return child;
+    }
+  });
+
+  service.updatePanelOtaState = async () => ({});
+
+  await service.buildPanelOtaArtifact(
+    {
+      id: 'panel-build',
+      hardwareProfile: 'elecrow-crowpanel-2.1-rotary'
+    },
+    {
+      jobId: 'job-3',
+      targetVersion: 'panel-20240410T000000Z-abc1234'
+    }
+  );
+
+  assert.ok(commands.some((entry) => entry.command === 'python3'));
+  assert.ok(commands.some((entry) => entry.command === 'python'));
+});
