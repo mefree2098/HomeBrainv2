@@ -44,9 +44,9 @@ constexpr unsigned long kThermostatCommitDelayMs = 3000;
 constexpr unsigned long kThermostatDispatchDelayMs = 75;
 constexpr unsigned long kDeviceLevelCommitDelayMs = 3000;
 constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
-constexpr int kSwipeThreshold = 120;
-constexpr int kSwipeVerticalLimit = 90;
-constexpr unsigned long kSwipeWindowMs = 350;
+constexpr int kSwipeThreshold = 72;
+constexpr int kSwipeVerticalLimit = 140;
+constexpr unsigned long kSwipeWindowMs = 650;
 constexpr uint16_t kStateJsonCapacity = 32768;
 constexpr unsigned long kBrightnessPersistDelayMs = 1000;
 constexpr int kBrightnessDefaultPercent = 94;
@@ -979,6 +979,55 @@ void styleHelperLabel(lv_obj_t* label, lv_coord_t y, const String& text) {
   lv_label_set_text(label, text.c_str());
 }
 
+void styleRoomSubtitleText(const String& text, lv_coord_t y = 114, lv_coord_t zoom = 204) {
+  if (!gRoomSubtitleLabel) {
+    return;
+  }
+
+  if (text.isEmpty()) {
+    lv_obj_add_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(gRoomSubtitleLabel, "");
+    return;
+  }
+
+  lv_obj_clear_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(gRoomSubtitleLabel, lv_pct(100));
+  lv_obj_align(gRoomSubtitleLabel, LV_ALIGN_TOP_MID, 0, y);
+  lv_obj_set_style_text_align(gRoomSubtitleLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(gRoomSubtitleLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gRoomSubtitleLabel, zoom, 0);
+  lv_obj_set_style_text_letter_space(gRoomSubtitleLabel, 1, 0);
+  lv_obj_set_style_text_color(gRoomSubtitleLabel, hex(homebrain::palette::kTextSecondary), 0);
+  lv_label_set_text(gRoomSubtitleLabel, text.c_str());
+}
+
+void styleRoomCenterValueText(const String& value, lv_coord_t yOffset = 8) {
+  if (!gRoomValueLabel) {
+    return;
+  }
+
+  const bool numericValue = isNumericDisplayValue(value);
+  const bool shortTextValue = value.length() <= 3;
+
+  lv_obj_clear_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_width(gRoomValueLabel, lv_pct(100));
+  lv_obj_align(gRoomValueLabel, LV_ALIGN_CENTER, 0, yOffset);
+  lv_obj_set_style_text_align(gRoomValueLabel, LV_TEXT_ALIGN_CENTER, 0);
+  if (numericValue) {
+    lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_100, 0);
+    lv_obj_set_style_transform_zoom(gRoomValueLabel, 196, 0);
+  } else if (shortTextValue) {
+    lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_100, 0);
+    lv_obj_set_style_transform_zoom(gRoomValueLabel, 156, 0);
+  } else {
+    lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_28, 0);
+    lv_obj_set_style_transform_zoom(gRoomValueLabel, 300, 0);
+  }
+  lv_obj_set_style_text_letter_space(gRoomValueLabel, 0, 0);
+  lv_obj_set_style_text_color(gRoomValueLabel, hex(homebrain::palette::kTextPrimary), 0);
+  lv_label_set_text(gRoomValueLabel, value.c_str());
+}
+
 void styleSurfaceCenterValue(
   const String& value,
   lv_coord_t yOffset = 0,
@@ -1358,14 +1407,15 @@ void renderRoomMode(const ModeSnapshot& mode) {
     ? "Tap to toggle. Rotate to dim or brighten."
     : mode.hint;
 
-  hideRoomSurfaceLabels();
   setSurfaceTitleText(roomTitle, 74);
-  setSurfaceSubtitleText(roomSubtitle, 114, true, 204);
-  styleSurfaceCenterValue(roomValue, 8, 212, 332);
+  hideTextLabel(gSecondaryLabel);
+  hideTextLabel(gCenterValueLabel);
+  styleRoomSubtitleText(roomSubtitle, 114, 204);
+  styleRoomCenterValueText(roomValue, 8);
   styleHelperLabel(gHintLabel, 326, roomHint);
   lv_obj_move_foreground(gTitleLabel);
-  lv_obj_move_foreground(gSecondaryLabel);
-  lv_obj_move_foreground(gCenterValueLabel);
+  lv_obj_move_foreground(gRoomSubtitleLabel);
+  lv_obj_move_foreground(gRoomValueLabel);
   lv_obj_move_foreground(gHintLabel);
   lv_obj_move_foreground(gFooterLabel);
 }
