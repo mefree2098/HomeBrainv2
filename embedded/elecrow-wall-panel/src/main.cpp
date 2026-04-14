@@ -502,6 +502,9 @@ void displayFlush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* colorB
 }
 
 void changeMode(int delta);
+void queueDeviceLevelDispatch(const String& targetId, int value);
+bool toggleRoomLight(ModeSnapshot& mode);
+int activeEncoderThreshold();
 
 void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
   LV_UNUSED(indevDriver);
@@ -898,6 +901,26 @@ void styleSurfaceSubtitle(lv_obj_t* label, lv_coord_t y, bool muted = false, lv_
   );
 }
 
+void hideTextLabel(lv_obj_t* label) {
+  lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(label, "");
+}
+
+void setSurfaceTitleText(const String& text, lv_coord_t y, lv_coord_t zoom = 256) {
+  styleSurfaceTitle(gTitleLabel, y, zoom);
+  lv_label_set_text(gTitleLabel, text.c_str());
+}
+
+void setSurfaceSubtitleText(const String& text, lv_coord_t y, bool muted = false, lv_coord_t zoom = 228) {
+  if (text.isEmpty()) {
+    hideTextLabel(gSecondaryLabel);
+    return;
+  }
+
+  styleSurfaceSubtitle(gSecondaryLabel, y, muted, zoom);
+  lv_label_set_text(gSecondaryLabel, text.c_str());
+}
+
 void styleHelperLabel(lv_obj_t* label, lv_coord_t y, const String& text) {
   if (text.isEmpty()) {
     lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
@@ -967,7 +990,7 @@ String jsonMessage(JsonVariantConst value) {
   return "";
 }
 
-String summarizePanelActionFailure(JsonDocument& response) {
+String summarizeActionFailure(JsonDocument& response, const String& fallbackMessage) {
   const JsonVariantConst root = response.as<JsonVariantConst>();
   String message = jsonMessage(root["message"]);
 
@@ -988,7 +1011,11 @@ String summarizePanelActionFailure(JsonDocument& response) {
     message.remove(34);
   }
 
-  return message.isEmpty() ? "Setpoint update failed" : message;
+  return message.isEmpty() ? fallbackMessage : message;
+}
+
+String summarizePanelActionFailure(JsonDocument& response) {
+  return summarizeActionFailure(response, "Setpoint update failed");
 }
 
 const lv_img_dsc_t* thermostatWeatherGlyph(const ModeSnapshot& mode) {
@@ -1129,29 +1156,62 @@ void hideAllActionButtons() {
   }
 }
 
+String roomLevelDisplayValue(int brightness) {
+  const int normalized = constrain(brightness, 0, 100);
+  return normalized <= 0 ? "Off" : String(normalized) + String("%");
+}
+
+void syncRoomModeLocalState(ModeSnapshot& mode, int brightness) {
+  const int normalized = constrain(brightness, mode.knob.minValue, mode.knob.maxValue);
+  mode.knob.value = normalized;
+  mode.centerValue = roomLevelDisplayValue(normalized);
+
+  if (mode.metaDeviceId.isEmpty()) {
+    return;
+  }
+
+  const bool isOn = normalized > 0;
+  mode.knob.pressAction = makeLocalQuickAction(
+    isOn ? "room-light-off" : "room-light-on",
+    isOn ? "Off" : "On",
+    mode.secondaryValue.isEmpty() ? "Lights" : mode.secondaryValue,
+    "device.control",
+    String(isOn ? 0 : 100),
+    isOn ? "red" : "cyan",
+    isOn
+  );
+  mode.knob.pressAction.targetId = mode.metaDeviceId;
+  mode.knob.pressAction.action = "set_brightness";
+}
+
+void setCenterTapEnabled(bool enabled) {
+  if (!gCenterTapButton) {
+    return;
+  }
+
+  if (enabled) {
+    lv_obj_clear_flag(gCenterTapButton, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(gCenterTapButton);
+    return;
+  }
+
+  lv_obj_add_flag(gCenterTapButton, LV_OBJ_FLAG_HIDDEN);
+}
+
 void applyDefaultTextLayout() {
   lv_obj_clear_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN);
+  hideTextLabel(gHintLabel);
 
-  lv_obj_set_pos(gTitleLabel, 0, 62);
-  lv_obj_set_width(gTitleLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gTitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gTitleLabel, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_transform_zoom(gTitleLabel, kZoomNormal, 0);
-
-  lv_obj_set_pos(gCenterValueLabel, 0, 146);
+  styleSurfaceTitle(gTitleLabel, 72);
   lv_obj_set_width(gCenterValueLabel, lv_pct(100));
+  lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, -22);
   lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gCenterValueLabel, &lv_font_montserrat_48, 0);
-  lv_obj_set_style_transform_zoom(gCenterValueLabel, kZoomNormal, 0);
-
-  lv_obj_set_pos(gSecondaryLabel, 0, 324);
-  lv_obj_set_width(gSecondaryLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gSecondaryLabel, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_transform_zoom(gSecondaryLabel, kZoomNormal, 0);
+  lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gCenterValueLabel, 300, 0);
+  lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
+  styleSurfaceSubtitle(gSecondaryLabel, 254, true, 210);
 }
 
 void renderThermostatOverview(const ModeSnapshot& mode) {
@@ -1228,36 +1288,31 @@ void renderThermostatAdjustment(const ModeSnapshot& mode) {
 }
 
 void renderSettingsMode(const ModeSnapshot& mode) {
-  lv_obj_clear_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN);
+  setSurfaceTitleText(mode.title.isEmpty() ? "Settings" : mode.title, 72);
+  setSurfaceSubtitleText(mode.secondaryValue, 112, true, 204);
+  styleSurfaceCenterValue(mode.centerValue, -28, 224, 420);
+  styleHelperLabel(gHintLabel, 246, mode.hint);
+}
 
-  lv_obj_set_pos(gTitleLabel, 0, 62);
-  lv_obj_set_width(gTitleLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gTitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gTitleLabel, &lv_font_montserrat_24, 0);
-  lv_label_set_text(gTitleLabel, "Settings");
+void renderRoomMode(const ModeSnapshot& mode) {
+  setSurfaceTitleText(mode.title, 74);
+  setSurfaceSubtitleText(mode.secondaryValue, 114, true, 210);
+  styleSurfaceCenterValue(mode.centerValue, 8, 232, 438);
+  styleHelperLabel(gHintLabel, 330, mode.hint);
+}
 
-  lv_obj_set_pos(gCenterValueLabel, 0, 138);
-  lv_obj_set_width(gCenterValueLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gCenterValueLabel, &lv_font_montserrat_48, 0);
-  lv_label_set_text(gCenterValueLabel, mode.centerValue.c_str());
+void renderSecurityMode(const ModeSnapshot& mode) {
+  setSurfaceTitleText(mode.title, 74);
+  hideTextLabel(gSecondaryLabel);
+  styleSurfaceCenterValue(mode.centerValue, -26, 208, 292);
+  styleHelperLabel(gHintLabel, 266, mode.secondaryValue);
+}
 
-  lv_obj_set_pos(gSecondaryLabel, 0, 230);
-  lv_obj_set_width(gSecondaryLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gSecondaryLabel, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextSecondary), 0);
-  lv_label_set_text(gSecondaryLabel, mode.secondaryValue.c_str());
-
-  lv_obj_set_pos(gHintLabel, 40, 268);
-  lv_obj_set_width(gHintLabel, 400);
-  lv_obj_set_style_text_align(gHintLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gHintLabel, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(gHintLabel, hex(homebrain::palette::kTextMuted), 0);
-  lv_label_set_text(gHintLabel, mode.hint.c_str());
+void renderMediaSurface(const ModeSnapshot& mode) {
+  setSurfaceTitleText(mode.title, 74);
+  styleSurfaceCenterValue(mode.centerValue, -24, 208, 504);
+  setSurfaceSubtitleText(mode.secondaryValue, 246, true, 192);
+  styleHelperLabel(gHintLabel, 286, mode.hint);
 }
 
 void updateFooter() {
@@ -1268,6 +1323,7 @@ void updateFooter() {
   if (!gStatusLine.isEmpty()) {
     footer += " · " + gStatusLine;
   }
+  lv_obj_clear_flag(gFooterLabel, LV_OBJ_FLAG_HIDDEN);
   lv_label_set_text(gFooterLabel, footer.c_str());
 }
 
@@ -1316,14 +1372,14 @@ int8_t findThermostatActionIndex(const ModeSnapshot& mode, const String& value) 
 }
 
 void renderStandardButtons(const ModeSnapshot& mode) {
-  static const lv_coord_t kButtonX[kActionSlots] = {30, 248, 30, 248};
-  static const lv_coord_t kButtonY[kActionSlots] = {300, 300, 390, 390};
-  static const lv_coord_t kButtonWidth = 202;
-  static const lv_coord_t kButtonHeight = 80;
+  static const lv_coord_t kButtonX[kActionSlots] = {50, 256, 50, 256};
+  static const lv_coord_t kButtonY[kActionSlots] = {300, 300, 382, 382};
+  static const lv_coord_t kButtonWidth = 174;
+  static const lv_coord_t kButtonHeight = 72;
+
+  applyActionButtonFonts(&hb_font_orbitron_28, 176, &hb_font_space_grotesk_20, 168);
 
   for (uint8_t index = 0; index < kActionSlots; index += 1) {
-    lv_obj_set_style_text_font(gActionTitleLabels[index], &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_font(gActionSubtitleLabels[index], &lv_font_montserrat_12, 0);
     if (index < mode.quickActionCount && mode.quickActions[index].valid) {
       showActionButton(
         index,
@@ -1335,7 +1391,71 @@ void renderStandardButtons(const ModeSnapshot& mode) {
         kButtonHeight,
         true
       );
-      lv_obj_clear_flag(gActionSubtitleLabels[index], LV_OBJ_FLAG_HIDDEN);
+    } else {
+      hideActionButton(index);
+    }
+  }
+}
+
+void renderSecurityButtons(const ModeSnapshot& mode) {
+  hideAllActionButtons();
+  applyActionButtonFonts(&hb_font_orbitron_28, 168, &hb_font_space_grotesk_20, 164);
+
+  if (mode.quickActionCount == 0) {
+    return;
+  }
+
+  if (mode.quickActionCount == 1 && mode.quickActions[0].valid) {
+    showActionButton(0, 0, mode.quickActions[0], 74, 314, 332, 84, false);
+    return;
+  }
+
+  if (mode.quickActionCount > 0 && mode.quickActions[0].valid) {
+    showActionButton(0, 0, mode.quickActions[0], 64, 314, 156, 78, false);
+  }
+  if (mode.quickActionCount > 1 && mode.quickActions[1].valid) {
+    showActionButton(1, 1, mode.quickActions[1], 260, 314, 156, 78, false);
+  }
+}
+
+void renderMediaButtons(const ModeSnapshot& mode) {
+  hideAllActionButtons();
+  applyActionButtonFonts(&hb_font_orbitron_28, 182, &hb_font_space_grotesk_20, 164);
+
+  if (mode.quickActionCount == 1 && mode.quickActions[0].valid) {
+    showActionButton(0, 0, mode.quickActions[0], 96, 322, 288, 66, false);
+    return;
+  }
+
+  if (mode.quickActionCount > 0 && mode.quickActions[0].valid) {
+    showActionButton(0, 0, mode.quickActions[0], 88, 322, 144, 66, false);
+  }
+  if (mode.quickActionCount > 1 && mode.quickActions[1].valid) {
+    showActionButton(1, 1, mode.quickActions[1], 248, 322, 144, 66, false);
+  }
+}
+
+void renderSettingsButtons(const ModeSnapshot& mode) {
+  static const lv_coord_t kButtonX[kActionSlots] = {84, 248, 84, 248};
+  static const lv_coord_t kButtonY[kActionSlots] = {286, 286, 360, 360};
+  static const lv_coord_t kButtonWidth = 148;
+  static const lv_coord_t kButtonHeight = 64;
+
+  hideAllActionButtons();
+  applyActionButtonFonts(&hb_font_orbitron_28, 164, &hb_font_space_grotesk_20, 160);
+
+  for (uint8_t index = 0; index < kActionSlots; index += 1) {
+    if (index < mode.quickActionCount && mode.quickActions[index].valid) {
+      showActionButton(
+        index,
+        static_cast<int8_t>(index),
+        mode.quickActions[index],
+        kButtonX[index],
+        kButtonY[index],
+        kButtonWidth,
+        kButtonHeight,
+        false
+      );
     } else {
       hideActionButton(index);
     }
@@ -1351,10 +1471,11 @@ void renderMode() {
   ModeSnapshot* mode = currentMode();
   if (!mode) {
     hideWeatherBackdrop();
+    setCenterTapEnabled(false);
     applyDefaultTextLayout();
-    lv_label_set_text(gTitleLabel, "HomeBrain");
-    lv_label_set_text(gCenterValueLabel, "SYNC");
-    lv_label_set_text(gSecondaryLabel, "Connecting");
+    setSurfaceTitleText("HomeBrain", 84);
+    styleSurfaceCenterValue("SYNC", -24, 220, 332);
+    setSurfaceSubtitleText("Connecting", 258, true, 210);
     lv_obj_set_style_arc_color(gArc, hex(homebrain::palette::kPanelStroke), LV_PART_MAIN);
     lv_obj_set_style_arc_color(gArc, hex(homebrain::palette::kAccentBlue), LV_PART_INDICATOR);
     lv_arc_set_range(gArc, 0, 100);
@@ -1376,6 +1497,7 @@ void renderMode() {
   }
 
   if (mode->id == "thermostat" && mode->knob.kind == "range" && !mode->metaDeviceId.isEmpty()) {
+    setCenterTapEnabled(false);
     if (gPendingThermostatCommit) {
       hideWeatherBackdrop();
       renderThermostatAdjustment(*mode);
@@ -1386,14 +1508,32 @@ void renderMode() {
     renderThermostatButtons(*mode);
   } else if (mode->id == "settings") {
     hideWeatherBackdrop();
+    setCenterTapEnabled(false);
     renderSettingsMode(*mode);
-    renderStandardButtons(*mode);
+    renderSettingsButtons(*mode);
+  } else if (mode->id == "room") {
+    hideWeatherBackdrop();
+    setCenterTapEnabled(true);
+    renderRoomMode(*mode);
+    hideAllActionButtons();
+  } else if (mode->id == "home") {
+    hideWeatherBackdrop();
+    setCenterTapEnabled(false);
+    renderSecurityMode(*mode);
+    renderSecurityButtons(*mode);
+  } else if (mode->id == "media") {
+    hideWeatherBackdrop();
+    setCenterTapEnabled(true);
+    renderMediaSurface(*mode);
+    renderMediaButtons(*mode);
   } else {
     hideWeatherBackdrop();
+    setCenterTapEnabled(false);
     applyDefaultTextLayout();
     lv_label_set_text(gTitleLabel, mode->title.c_str());
-    lv_label_set_text(gCenterValueLabel, mode->centerValue.c_str());
-    lv_label_set_text(gSecondaryLabel, mode->secondaryValue.c_str());
+    styleSurfaceCenterValue(mode->centerValue, -22, 216, 280);
+    setSurfaceSubtitleText(mode->secondaryValue, 254, true, 210);
+    styleHelperLabel(gHintLabel, 308, mode->hint);
     renderStandardButtons(*mode);
   }
 
@@ -1410,6 +1550,7 @@ void changeMode(int delta) {
   }
 
   gThermostatModePickerExpanded = false;
+  gEncoderDeltaAccumulator = 0;
 
   const int next = static_cast<int>(gCurrentModeIndex) + delta;
   if (next < 0) {
@@ -1532,33 +1673,15 @@ bool fetchPanelState() {
 
 void renderOtaProgressScreen(const String& title, int progress, const String& message) {
   hideWeatherBackdrop();
+  setCenterTapEnabled(false);
   hideAllActionButtons();
-  lv_obj_add_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(gFooterLabel, LV_OBJ_FLAG_HIDDEN);
 
-  lv_obj_clear_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
-
-  lv_obj_set_pos(gTitleLabel, 0, 76);
-  lv_obj_set_width(gTitleLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gTitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gTitleLabel, &lv_font_montserrat_24, 0);
-  lv_label_set_text(gTitleLabel, title.c_str());
-
-  lv_obj_set_pos(gCenterValueLabel, 0, 160);
-  lv_obj_set_width(gCenterValueLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gCenterValueLabel, &lv_font_montserrat_48, 0);
   const String percentLabel = String(progress) + String("%");
-  lv_label_set_text(gCenterValueLabel, percentLabel.c_str());
-
-  lv_obj_set_pos(gSecondaryLabel, 40, 328);
-  lv_obj_set_width(gSecondaryLabel, 400);
-  lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gSecondaryLabel, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextSecondary), 0);
-  lv_label_set_text(gSecondaryLabel, message.c_str());
+  setSurfaceTitleText(title, 82);
+  styleSurfaceCenterValue(percentLabel, -6, 224, 380);
+  hideTextLabel(gSecondaryLabel);
+  styleHelperLabel(gHintLabel, 314, message);
 
   lv_obj_set_style_arc_color(gArc, hex(homebrain::palette::kPanelStroke), LV_PART_MAIN);
   lv_obj_set_style_arc_color(gArc, hex(homebrain::palette::kAccentBlue), LV_PART_INDICATOR);
@@ -1800,7 +1923,9 @@ void dispatchQuickAction(const QuickAction& action) {
   if (postPanelJson(panelActionUrl(), request)) {
     setStatusLine(action.label + " sent");
     renderMode();
-    fetchPanelState();
+    if (action.type != "harmony.command") {
+      fetchPanelState();
+    }
     return;
   }
 
@@ -1828,6 +1953,11 @@ void buttonEventHandler(lv_event_t* event) {
     return;
   }
 
+  if (mode->id == "room") {
+    toggleRoomLight(*mode);
+    return;
+  }
+
   if (mode->id == "thermostat") {
     const int8_t currentActionIndex = findThermostatActionIndex(*mode, mode->metaMode);
     if (slotIndex == 0 && actionIndex == currentActionIndex) {
@@ -1839,6 +1969,26 @@ void buttonEventHandler(lv_event_t* event) {
   }
 
   dispatchQuickAction(mode->quickActions[actionIndex]);
+}
+
+void centerTapEventHandler(lv_event_t* event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
+    return;
+  }
+
+  ModeSnapshot* mode = currentMode();
+  if (!mode) {
+    return;
+  }
+
+  if (mode->id == "room") {
+    toggleRoomLight(*mode);
+    return;
+  }
+
+  if (mode->id == "media") {
+    dispatchQuickAction(mode->knob.pressAction);
+  }
 }
 
 void createActionButton(uint8_t index, lv_coord_t x, lv_coord_t y) {
@@ -1863,13 +2013,16 @@ void createActionButton(uint8_t index, lv_coord_t x, lv_coord_t y) {
   lv_label_set_long_mode(gActionTitleLabels[index], LV_LABEL_LONG_CLIP);
   lv_obj_set_width(gActionTitleLabels[index], lv_pct(100));
   lv_obj_set_style_text_align(gActionTitleLabels[index], LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gActionTitleLabels[index], &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_font(gActionTitleLabels[index], &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gActionTitleLabels[index], 176, 0);
+  lv_obj_set_style_text_letter_space(gActionTitleLabels[index], 1, 0);
 
   gActionSubtitleLabels[index] = lv_label_create(column);
   lv_label_set_long_mode(gActionSubtitleLabels[index], LV_LABEL_LONG_CLIP);
   lv_obj_set_width(gActionSubtitleLabels[index], lv_pct(100));
   lv_obj_set_style_text_align(gActionSubtitleLabels[index], LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gActionSubtitleLabels[index], &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_font(gActionSubtitleLabels[index], &hb_font_space_grotesk_20, 0);
+  lv_obj_set_style_transform_zoom(gActionSubtitleLabels[index], 168, 0);
 }
 
 void createUi() {
@@ -1900,7 +2053,8 @@ void createUi() {
 
   gModeBadgeLabel = lv_label_create(gModeBadge);
   lv_obj_center(gModeBadgeLabel);
-  lv_obj_set_style_text_font(gModeBadgeLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(gModeBadgeLabel, &hb_font_space_grotesk_20, 0);
+  lv_obj_set_style_transform_zoom(gModeBadgeLabel, 172, 0);
   lv_obj_set_style_text_color(gModeBadgeLabel, hex(homebrain::palette::kTextPrimary), 0);
   lv_label_set_text(gModeBadgeLabel, "BOOT");
   lv_obj_add_flag(gModeBadge, LV_OBJ_FLAG_HIDDEN);
@@ -1909,7 +2063,8 @@ void createUi() {
   lv_obj_set_pos(gTitleLabel, 0, 54);
   lv_obj_set_width(gTitleLabel, lv_pct(100));
   lv_obj_set_style_text_align(gTitleLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gTitleLabel, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_font(gTitleLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_text_letter_space(gTitleLabel, 1, 0);
   lv_obj_set_style_text_color(gTitleLabel, hex(homebrain::palette::kTextPrimary), 0);
   lv_label_set_text(gTitleLabel, "HomeBrain");
 
@@ -1917,7 +2072,8 @@ void createUi() {
   lv_obj_set_pos(gCenterValueLabel, 0, 124);
   lv_obj_set_width(gCenterValueLabel, lv_pct(100));
   lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gCenterValueLabel, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gCenterValueLabel, 340, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
   lv_label_set_text(gCenterValueLabel, "--");
 
@@ -1925,7 +2081,8 @@ void createUi() {
   lv_obj_set_pos(gSecondaryLabel, 70, 194);
   lv_obj_set_width(gSecondaryLabel, 340);
   lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gSecondaryLabel, &lv_font_montserrat_22, 0);
+  lv_obj_set_style_text_font(gSecondaryLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gSecondaryLabel, 204, 0);
   lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextSecondary), 0);
   lv_label_set_text(gSecondaryLabel, "Waiting for panel state");
 
@@ -2054,24 +2211,37 @@ void createUi() {
   lv_obj_set_pos(gHintLabel, 70, 268);
   lv_obj_set_width(gHintLabel, 340);
   lv_obj_set_style_text_align(gHintLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gHintLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(gHintLabel, &hb_font_space_grotesk_20, 0);
+  lv_obj_set_style_transform_zoom(gHintLabel, 188, 0);
   lv_obj_set_style_text_color(gHintLabel, hex(homebrain::palette::kTextMuted), 0);
   lv_label_set_text(gHintLabel, "Swipe between surfaces. The knob adapts to the current mode.");
   lv_obj_add_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN);
 
   gFooterLabel = lv_label_create(gMainCard);
-  lv_obj_set_width(gFooterLabel, 320);
-  lv_obj_set_pos(gFooterLabel, 80, 292);
+  lv_obj_set_width(gFooterLabel, 380);
+  lv_obj_align(gFooterLabel, LV_ALIGN_BOTTOM_MID, 0, -18);
   lv_obj_set_style_text_align(gFooterLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gFooterLabel, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_font(gFooterLabel, &hb_font_space_grotesk_20, 0);
+  lv_obj_set_style_transform_zoom(gFooterLabel, 160, 0);
   lv_obj_set_style_text_color(gFooterLabel, hex(homebrain::palette::kTextMuted), 0);
   lv_label_set_text(gFooterLabel, "Booting HomeBrain panel...");
   lv_obj_add_flag(gFooterLabel, LV_OBJ_FLAG_HIDDEN);
 
-  createActionButton(0, 30, 300);
-  createActionButton(1, 248, 300);
-  createActionButton(2, 30, 390);
-  createActionButton(3, 248, 390);
+  gCenterTapButton = lv_btn_create(gMainCard);
+  lv_obj_set_size(gCenterTapButton, 176, 176);
+  lv_obj_align(gCenterTapButton, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_radius(gCenterTapButton, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(gCenterTapButton, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(gCenterTapButton, 0, 0);
+  lv_obj_set_style_shadow_width(gCenterTapButton, 0, 0);
+  lv_obj_set_style_outline_width(gCenterTapButton, 0, 0);
+  lv_obj_add_flag(gCenterTapButton, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_event_cb(gCenterTapButton, centerTapEventHandler, LV_EVENT_CLICKED, nullptr);
+
+  createActionButton(0, 50, 300);
+  createActionButton(1, 256, 300);
+  createActionButton(2, 50, 382);
+  createActionButton(3, 256, 382);
 }
 
 void setupDisplay() {
@@ -2209,6 +2379,82 @@ void commitPendingThermostatValueIfReady() {
   commitPendingThermostatValueNow();
 }
 
+void queueDeviceLevelDispatch(const String& targetId, int value) {
+  if (targetId.isEmpty()) {
+    return;
+  }
+
+  gQueuedDeviceLevelTargetId = targetId;
+  gQueuedDeviceLevelValue = constrain(value, 0, 100);
+  gQueuedDeviceLevelDispatchAt = millis() + kDeviceLevelDispatchDelayMs;
+  gQueuedDeviceLevelDispatch = true;
+}
+
+void dispatchQueuedDeviceLevelIfReady() {
+  if (!gQueuedDeviceLevelDispatch) {
+    return;
+  }
+
+  if (millis() < gQueuedDeviceLevelDispatchAt) {
+    return;
+  }
+
+  if (gQueuedDeviceLevelTargetId.isEmpty()) {
+    gQueuedDeviceLevelDispatch = false;
+    return;
+  }
+
+  StaticJsonDocument<256> request;
+  request["type"] = "device.control";
+  request["targetId"] = gQueuedDeviceLevelTargetId;
+  request["action"] = "set_brightness";
+  request["value"] = gQueuedDeviceLevelValue;
+
+  gQueuedDeviceLevelDispatch = false;
+  gQueuedDeviceLevelTargetId = "";
+
+  DynamicJsonDocument response(1024);
+  if (postPanelJson(panelActionUrl(), request, &response)) {
+    fetchPanelState();
+    return;
+  }
+
+  const String failureStatus = summarizeActionFailure(response, "Light update failed");
+  fetchPanelState();
+  setStatusLine(failureStatus);
+  renderMode();
+}
+
+bool toggleRoomLight(ModeSnapshot& mode) {
+  if (mode.id != "room" || mode.metaDeviceId.isEmpty()) {
+    return false;
+  }
+
+  const int nextValue = mode.knob.value > 0 ? 0 : 100;
+  syncRoomModeLocalState(mode, nextValue);
+  queueDeviceLevelDispatch(mode.metaDeviceId, nextValue);
+  setStatusLine(nextValue > 0 ? "Lights 100%" : "Lights off");
+  renderMode();
+  return true;
+}
+
+int activeEncoderThreshold() {
+  ModeSnapshot* mode = currentMode();
+  if (!mode) {
+    return kDefaultEncoderDeltaThreshold;
+  }
+
+  if (mode->id == "room" && mode->knob.kind == "range") {
+    return kFastEncoderDeltaThreshold;
+  }
+
+  if (mode->id == "media" && mode->knob.kind == "relative") {
+    return kFastEncoderDeltaThreshold;
+  }
+
+  return kDefaultEncoderDeltaThreshold;
+}
+
 void persistBrightnessIfReady() {
   if (!gPendingBrightnessPersist) {
     return;
@@ -2258,7 +2504,15 @@ void handleEncoderTurn(int direction) {
       return;
     }
 
-    mode->centerValue = String(next) + String("°");
+    if (mode->id == "room") {
+      syncRoomModeLocalState(*mode, next);
+      queueDeviceLevelDispatch(mode->metaDeviceId, next);
+      setStatusLine(next > 0 ? "Adjusting lights" : "Lights off");
+      renderMode();
+      return;
+    }
+
+    mode->centerValue = String(next);
     renderMode();
     return;
   }
@@ -2306,10 +2560,11 @@ void pollEncoder() {
     gLastEncoderState = currentState;
     if (delta != 0) {
       gEncoderDeltaAccumulator += delta;
-      if (gEncoderDeltaAccumulator >= 4) {
+      const int encoderThreshold = activeEncoderThreshold();
+      if (gEncoderDeltaAccumulator >= encoderThreshold) {
         handleEncoderTurn(1);
         gEncoderDeltaAccumulator = 0;
-      } else if (gEncoderDeltaAccumulator <= -4) {
+      } else if (gEncoderDeltaAccumulator <= -encoderThreshold) {
         handleEncoderTurn(-1);
         gEncoderDeltaAccumulator = 0;
       }
@@ -2337,6 +2592,11 @@ void pollEncoder() {
       return;
     }
 
+    if (mode->id == "room") {
+      toggleRoomLight(*mode);
+      return;
+    }
+
     if (mode->id == "thermostat" && gPendingThermostatCommit) {
       commitPendingThermostatValueNow();
       return;
@@ -2355,7 +2615,7 @@ void maybeRefreshState() {
     return;
   }
 
-  if (gPendingThermostatCommit || gQueuedThermostatDispatch) {
+  if (gPendingThermostatCommit || gQueuedThermostatDispatch || gQueuedDeviceLevelDispatch) {
     return;
   }
 
@@ -2402,6 +2662,7 @@ void loop() {
   persistBrightnessIfReady();
   ensureWiFiConnected();
   dispatchQueuedThermostatCommitIfReady();
+  dispatchQueuedDeviceLevelIfReady();
   maybeRefreshState();
   maybeApplyOtaUpdate();
   delay(5);
