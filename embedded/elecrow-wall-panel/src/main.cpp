@@ -180,9 +180,7 @@ struct PanelState {
 
 enum class NetworkJobKind : uint8_t {
   None = 0,
-  ActivatePanel = 1,
-  FetchState = 2,
-  ExecuteAction = 3
+  ExecuteAction = 1
 };
 
 struct NetworkJob {
@@ -604,8 +602,6 @@ bool postPanelResponse(const String& url, const String& body, String* responseBo
 bool getPanelResponse(const String& url, String& responseBody);
 bool applyPanelStatePayload(const String& payload);
 void renderMode();
-void requestPanelStateRefresh(bool highPriority = false);
-void requestPanelActivation();
 void processNetworkResults();
 void scheduleDeferredStateRefresh(unsigned long delayMs = kActionStateRefreshDelayMs);
 
@@ -1473,7 +1469,7 @@ bool enqueueNetworkJob(const NetworkJob& job, bool highPriority = false, bool de
 
   if (gNetworkJobCount >= kNetworkJobQueueCapacity) {
     xSemaphoreGive(gNetworkMutex);
-    return job.kind == NetworkJobKind::FetchState;
+    return false;
   }
 
   if (highPriority && gNetworkJobCount > 0) {
@@ -1594,18 +1590,6 @@ void scheduleDeferredStateRefresh(unsigned long delayMs) {
   gDeferredStateRefreshAt = millis() + delayMs;
 }
 
-void requestPanelStateRefresh(bool highPriority) {
-  NetworkJob job;
-  job.kind = NetworkJobKind::FetchState;
-  enqueueNetworkJob(job, highPriority, true);
-}
-
-void requestPanelActivation() {
-  NetworkJob job;
-  job.kind = NetworkJobKind::ActivatePanel;
-  enqueueNetworkJob(job, false, true);
-}
-
 bool enqueuePanelActionJob(const NetworkJob& job, bool highPriority = true, bool dedupe = false) {
   return enqueueNetworkJob(job, highPriority, dedupe);
 }
@@ -1613,22 +1597,6 @@ bool enqueuePanelActionJob(const NetworkJob& job, bool highPriority = true, bool
 NetworkResult executeNetworkJob(const NetworkJob& job) {
   NetworkResult result;
   result.job = job;
-
-  if (job.kind == NetworkJobKind::ActivatePanel) {
-    StaticJsonDocument<512> request;
-    request["ipAddress"] = WiFi.localIP().toString();
-    request["firmwareVersion"] = HOMEBRAIN_PANEL_FIRMWARE_VERSION;
-
-    String body;
-    serializeJson(request, body);
-    result.success = postPanelResponse(panelActivateUrl(), body);
-    return result;
-  }
-
-  if (job.kind == NetworkJobKind::FetchState) {
-    result.success = getPanelResponse(panelStateUrl(), result.payload);
-    return result;
-  }
 
   if (job.kind == NetworkJobKind::ExecuteAction) {
     StaticJsonDocument<512> request;
@@ -1732,31 +1700,6 @@ void handleActionNetworkResult(const NetworkResult& result) {
 void processNetworkResults() {
   NetworkResult result;
   while (dequeueNetworkResult(result)) {
-    if (result.job.kind == NetworkJobKind::ActivatePanel) {
-      if (result.success) {
-        gPanelActivated = true;
-        setStatusLine("Panel activated");
-        requestPanelStateRefresh(true);
-      } else {
-        setStatusLine("Activation failed");
-      }
-      renderMode();
-      continue;
-    }
-
-    if (result.job.kind == NetworkJobKind::FetchState) {
-      if (!result.success) {
-        setStatusLine("State refresh failed");
-        renderMode();
-        continue;
-      }
-
-      if (!applyPanelStatePayload(result.payload)) {
-        renderMode();
-      }
-      continue;
-    }
-
     if (result.job.kind == NetworkJobKind::ExecuteAction) {
       handleActionNetworkResult(result);
     }
@@ -3459,7 +3402,7 @@ void maybeRefreshState() {
       return;
     }
     gLastActivateAttemptAt = millis();
-    requestPanelActivation();
+    activatePanel();
     return;
   }
 
@@ -3468,7 +3411,7 @@ void maybeRefreshState() {
     return;
   }
 
-  requestPanelStateRefresh();
+  fetchPanelState();
 }
 
 void dispatchDeferredStateRefreshIfReady() {
@@ -3496,7 +3439,7 @@ void dispatchDeferredStateRefreshIfReady() {
   }
 
   gDeferredStateRefresh = false;
-  requestPanelStateRefresh();
+  fetchPanelState();
 }
 
 }  // namespace
