@@ -10,7 +10,8 @@ Use the bundled `scripts/homebrain-live.js` helper as the default way to inspect
 ## Inputs
 
 - Prefer the environment variables `HOMEBRAIN_CODEX_URL` and `HOMEBRAIN_CODEX_TOKEN`.
-- If either value is missing, ask the user for the HomeBrain URL and the Codex skill token before making live-platform requests.
+- If the environment variables are missing, use the persistent helper config at `$CODEX_HOME/homebrain-live.json` when `CODEX_HOME` is set, or `~/.codex/homebrain-live.json` as the default fallback.
+- Only ask the user for the HomeBrain URL and the Codex skill token if neither the environment nor the helper config provides them.
 - Do not guess the URL or token.
 
 ## Working loop

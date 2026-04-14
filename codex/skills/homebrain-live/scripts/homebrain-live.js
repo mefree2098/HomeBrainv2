@@ -6,9 +6,29 @@ const path = require('path');
 
 const URL_ENV_VAR = 'HOMEBRAIN_CODEX_URL';
 const TOKEN_ENV_VAR = 'HOMEBRAIN_CODEX_TOKEN';
-const CONFIG_PATH = path.join(os.homedir(), '.codex', 'homebrain-live.json');
+
+function getConfigPathCandidates() {
+  const candidates = [];
+  const codexHome = String(process.env.CODEX_HOME || '').trim();
+  if (codexHome) {
+    candidates.push(path.join(codexHome, 'homebrain-live.json'));
+  }
+
+  const globalCodexHome = path.join(os.homedir(), '.codex');
+  const globalConfigPath = path.join(globalCodexHome, 'homebrain-live.json');
+  if (!candidates.includes(globalConfigPath)) {
+    candidates.push(globalConfigPath);
+  }
+
+  return candidates;
+}
+
+function getPreferredConfigPath() {
+  return getConfigPathCandidates()[0];
+}
 
 function printUsage() {
+  const configPaths = getConfigPathCandidates();
   const message = [
     'Usage:',
     '  node scripts/homebrain-live.js overview [--window-minutes 60]',
@@ -20,7 +40,7 @@ function printUsage() {
     '  node scripts/homebrain-live.js request <path> [--method GET] [--body \'{"key":"value"}\']',
     '',
     `Connection values come from ${URL_ENV_VAR} and ${TOKEN_ENV_VAR},`,
-    `or from ${CONFIG_PATH}.`
+    `or from ${configPaths.join(' or ')}.`
   ].join('\n');
 
   process.stdout.write(`${message}\n`);
@@ -52,13 +72,19 @@ function parseArgs(argv) {
 }
 
 function loadConfig() {
-  try {
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    return typeof parsed === 'object' && parsed ? parsed : {};
-  } catch (_error) {
-    return {};
+  for (const configPath of getConfigPathCandidates()) {
+    try {
+      const raw = fs.readFileSync(configPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'object' && parsed) {
+        return parsed;
+      }
+    } catch (_error) {
+      continue;
+    }
   }
+
+  return {};
 }
 
 function sanitizeBaseUrl(value) {
@@ -72,7 +98,7 @@ function resolveConnection(flags) {
 
   if (!baseUrl || !token) {
     throw new Error(
-      `HomeBrain connection info is missing. Set ${URL_ENV_VAR} and ${TOKEN_ENV_VAR}, pass --url/--token, or store them in ${CONFIG_PATH}.`
+      `HomeBrain connection info is missing. Set ${URL_ENV_VAR} and ${TOKEN_ENV_VAR}, pass --url/--token, or store them in ${getPreferredConfigPath()}.`
     );
   }
 
