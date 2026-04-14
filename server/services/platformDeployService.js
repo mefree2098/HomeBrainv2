@@ -659,7 +659,8 @@ class PlatformDeployService {
       return false;
     }
     return filePath.startsWith('client/dist/')
-      || filePath.startsWith('client/dist.quarantine.');
+      || filePath.startsWith('client/dist.quarantine.')
+      || filePath.startsWith('server/data/wall-panel-ota/');
   }
 
   getBlockingDirtyEntries(repoStatus = null) {

@@ -248,3 +248,11 @@ test('buildServiceRestartCommand removes invalid sudo fragments and forces non-i
     true
   );
 });
+
+test('isIgnorableDirtyEntry treats OTA artifacts as generated output', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+
+  assert.equal(service.isIgnorableDirtyEntry('?? server/data/wall-panel-ota/'), true);
+  assert.equal(service.isIgnorableDirtyEntry('?? client/dist/asset.js'), true);
+  assert.equal(service.isIgnorableDirtyEntry('?? server/src/index.js'), false);
+});

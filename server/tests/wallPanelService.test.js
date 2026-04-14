@@ -455,6 +455,9 @@ test('getPanelProvisioning exposes the setup token for admin UI flows', async (t
 
 test('rotateRegistrationCode regenerates the setup token and marks the panel unregistered', async (t) => {
   const originalFindById = WallPanel.findById;
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-rotate-'));
+  const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
+  const staleArtifactPath = path.join(otaArtifactsDir, 'panel-6', 'job-old.bin');
 
   const panelDoc = {
     _id: 'panel-6',
@@ -462,6 +465,12 @@ test('rotateRegistrationCode regenerates the setup token and marks the panel unr
     room: 'Bedroom',
     hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
     status: 'online',
+    ota: {
+      jobId: 'job-old',
+      status: 'completed',
+      phase: 'completed',
+      artifactPath: staleArtifactPath
+    },
     settings: {
       registered: true,
       registrationCode: 'HBWP-ABCD-EF12-3456',
@@ -480,16 +489,28 @@ test('rotateRegistrationCode regenerates the setup token and marks the panel unr
   t.after(() => {
     WallPanel.findById = originalFindById;
   });
+  t.after(async () => {
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.promises.mkdir(path.dirname(staleArtifactPath), { recursive: true });
+  await fs.promises.writeFile(staleArtifactPath, Buffer.from('stale-firmware'));
 
   WallPanel.findById = async () => panelDoc;
 
-  const result = await wallPanelService.rotateRegistrationCode('panel-6', 'https://example.com');
+  const service = new WallPanelService({
+    projectRoot: tempRoot,
+    panelOtaArtifactsDir: otaArtifactsDir
+  });
+
+  const result = await service.rotateRegistrationCode('panel-6', 'https://example.com');
 
   assert.equal(result.panel.status, 'offline');
   assert.equal(result.panel.settings.registered, false);
   assert.match(result.panel.settings.registrationCode, /^HBWP-/);
   assert.notEqual(result.panel.settings.registrationCode, 'HBWP-ABCD-EF12-3456');
   assert.equal(result.provisioning.firmwareHeader.HOMEBRAIN_PANEL_HUB_URL, 'https://example.com');
+  assert.equal(await fs.promises.stat(staleArtifactPath).catch(() => null), null);
 });
 
 test('getPanelById reports when newer HomeBrain firmware is available', async (t) => {

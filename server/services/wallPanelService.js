@@ -1276,6 +1276,67 @@ class WallPanelService {
     await fsp.mkdir(this.panelOtaArtifactsDir, { recursive: true });
   }
 
+  resolveManagedOtaArtifactPath(artifactPath = '') {
+    const candidate = trimString(artifactPath);
+    if (!candidate) {
+      return '';
+    }
+
+    const rootDir = path.resolve(this.panelOtaArtifactsDir);
+    const resolved = path.resolve(candidate);
+    if (!resolved.startsWith(`${rootDir}${path.sep}`)) {
+      return '';
+    }
+
+    return resolved;
+  }
+
+  async pruneEmptyOtaArtifactDirs(startDir = '') {
+    const rootDir = path.resolve(this.panelOtaArtifactsDir);
+    let currentDir = path.resolve(startDir || '');
+
+    while (currentDir && currentDir.startsWith(`${rootDir}${path.sep}`)) {
+      const entries = await fsp.readdir(currentDir).catch(() => null);
+      if (!Array.isArray(entries) || entries.length > 0) {
+        break;
+      }
+
+      await fsp.rmdir(currentDir).catch(() => null);
+      currentDir = path.dirname(currentDir);
+    }
+  }
+
+  async cleanupOtaArtifactFile(artifactPath = '') {
+    const managedArtifactPath = this.resolveManagedOtaArtifactPath(artifactPath);
+    if (!managedArtifactPath) {
+      return false;
+    }
+
+    await fsp.rm(managedArtifactPath, { recursive: true, force: true }).catch(() => null);
+    await this.pruneEmptyOtaArtifactDirs(path.dirname(managedArtifactPath));
+    return true;
+  }
+
+  async cleanupPanelOtaArtifact(panelDoc, artifactPath = '') {
+    const cleaned = await this.cleanupOtaArtifactFile(artifactPath).catch((error) => {
+      console.warn(`WallPanelService: Failed to remove OTA artifact ${artifactPath}: ${error.message}`);
+      return false;
+    });
+
+    if (!cleaned || !panelDoc) {
+      return false;
+    }
+
+    panelDoc.ota = mergeOtaState(panelDoc.ota || {}, {
+      artifactPath: ''
+    });
+    await panelDoc.save().catch((error) => {
+      console.warn(`WallPanelService: Failed to clear OTA artifact state for panel ${panelDoc.id || panelDoc._id}: ${error.message}`);
+    });
+
+    return true;
+  }
+
   execFileCapture(file, args = [], options = {}) {
     return new Promise((resolve, reject) => {
       this.execFile(file, args, options, (error, stdout = '', stderr = '') => {
@@ -1783,6 +1844,8 @@ class WallPanelService {
         allowMissingJob: true
       });
 
+      await this.cleanupPanelOtaArtifact(panel, panel?.ota?.artifactPath || '').catch(() => null);
+
       void eventStreamService.publishSafe({
         type: 'wall_panel.ota_failed',
         source: 'wall_panel',
@@ -2036,6 +2099,10 @@ class WallPanelService {
       await updatedPanel.save();
     }
 
+    if (phase === 'failed' || phase === 'completed') {
+      await this.cleanupPanelOtaArtifact(updatedPanel, ota.artifactPath).catch(() => null);
+    }
+
     return this.serializePanelForResponse(updatedPanel);
   }
 
@@ -2177,6 +2244,7 @@ class WallPanelService {
 
   async rotateRegistrationCode(panelId, origin = '') {
     const panel = await getPanelDocument(panelId);
+    const currentOta = normalizeOtaState(panel.ota || {});
     const registrationCode = buildRegistrationCode();
     panel.status = 'offline';
     panel.ota = mergeOtaState(panel.ota || {}, {
@@ -2198,6 +2266,7 @@ class WallPanelService {
       registrationCode
     });
     await panel.save();
+    await this.cleanupOtaArtifactFile(currentOta.artifactPath).catch(() => null);
 
     void eventStreamService.publishSafe({
       type: 'wall_panel.registration_rotated',
