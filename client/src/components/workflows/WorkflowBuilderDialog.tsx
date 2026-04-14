@@ -138,6 +138,36 @@ function prettifyTriggerSegment(value: string) {
     .trim()
 }
 
+function formatWorkflowTokenLabel(value: string, fallback = "Device") {
+  const normalized = value.trim()
+  if (!normalized) {
+    return fallback
+  }
+
+  return normalized
+    .split(/[\s._-]+/g)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ")
+}
+
+function getWorkflowDeviceType(device: DeviceLite | null | undefined) {
+  const rawType = String(device?.type || "").trim().toLowerCase()
+  if (rawType === "energy_monitor") {
+    return rawType
+  }
+
+  return getDeviceSource(device) === "sense" ? "energy_monitor" : rawType
+}
+
+function getWorkflowDeviceTypeLabel(device: DeviceLite | null | undefined) {
+  return formatWorkflowTokenLabel(getWorkflowDeviceType(device) || String(device?.type || ""), "Device")
+}
+
+function isWorkflowEnergyMonitorDevice(device: DeviceLite | null | undefined) {
+  return getWorkflowDeviceType(device) === "energy_monitor"
+}
+
 function formatSmartThingsAttributeLabel(path: string[], unit?: string) {
   const [capability, attribute] = path.slice(-2);
   const suffix = unit ? ` (${unit})` : "";
@@ -188,6 +218,26 @@ function formatTriggerPropertyLabel(property: string) {
     return "Target temperature";
   }
 
+  if (property === "sense.currentPowerW") {
+    return "Power draw (W)";
+  }
+
+  if (property === "sense.alwaysOnW") {
+    return "Always On load (W)";
+  }
+
+  if (property === "sense.activeDeviceCount") {
+    return "Active detected devices";
+  }
+
+  if (property === "sense.trends.day.energyKwh") {
+    return "Daily energy total (kWh)";
+  }
+
+  if (property === "sense.trends.day.consumptionTotalKwh") {
+    return "Whole-home daily energy total (kWh)";
+  }
+
   if (property.startsWith("smartThingsAttributeValues.")) {
     return formatSmartThingsAttributeLabel(property.replace(/^smartThingsAttributeValues\./, "").split("."));
   }
@@ -196,7 +246,11 @@ function formatTriggerPropertyLabel(property: string) {
 }
 
 function isEnergyTriggerProperty(key: string) {
-  return key === "smartThingsAttributeValues.powerMeter.power"
+  return key === "sense.currentPowerW"
+    || key === "sense.alwaysOnW"
+    || key === "sense.trends.day.energyKwh"
+    || key === "sense.trends.day.consumptionTotalKwh"
+    || key === "smartThingsAttributeValues.powerMeter.power"
     || key === "smartThingsAttributeValues.energyMeter.energy";
 }
 
@@ -276,6 +330,43 @@ function collectSmartThingsAttributeOptions(
   return options;
 }
 
+function collectSenseTriggerOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
+  const source = getDeviceSource(device)
+  if (source !== "sense") {
+    return []
+  }
+
+  const sense = ((device?.properties as Record<string, unknown> | undefined)?.sense as Record<string, unknown> | undefined) || undefined
+  const dayTrend = (sense?.trends as Record<string, unknown> | undefined)?.day as Record<string, unknown> | undefined
+  const options: TriggerPropertyOption[] = []
+
+  const pushNumericOption = (key: string, value: unknown, unit?: string, energyMetric = false) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return
+    }
+
+    options.push({
+      key,
+      label: formatTriggerPropertyLabel(key),
+      kind: "number",
+      unit,
+      energyMetric
+    })
+  }
+
+  pushNumericOption("sense.currentPowerW", sense?.currentPowerW, "W", true)
+  pushNumericOption("sense.alwaysOnW", sense?.alwaysOnW, "W", true)
+  pushNumericOption("sense.activeDeviceCount", sense?.activeDeviceCount)
+
+  if (sense?.entityType === "monitor") {
+    pushNumericOption("sense.trends.day.consumptionTotalKwh", dayTrend?.consumptionTotalKwh, "kWh", true)
+  } else {
+    pushNumericOption("sense.trends.day.energyKwh", dayTrend?.energyKwh, "kWh", true)
+  }
+
+  return options
+}
+
 function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
   const options: TriggerPropertyOption[] = [
     { key: "status", label: "Status", kind: "boolean" },
@@ -294,6 +385,7 @@ function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPrope
 
   const attributeValues = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeValues;
   const attributeMetadata = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeMetadata;
+  options.push(...collectSenseTriggerOptions(device));
   options.push(...collectSmartThingsAttributeOptions(attributeValues, attributeMetadata));
 
   const unique = new Map<string, TriggerPropertyOption>();
@@ -303,6 +395,29 @@ function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPrope
     }
   });
   return [...unique.values()];
+}
+
+function getDefaultTriggerValue(option: TriggerPropertyOption) {
+  if (option.kind === "boolean") {
+    return true
+  }
+
+  if (option.kind === "number") {
+    return option.energyMetric ? 25 : 0
+  }
+
+  return ""
+}
+
+function getPreferredTriggerPropertyOption(device: DeviceLite | undefined) {
+  const options = getTriggerPropertyOptions(device)
+  if (isWorkflowEnergyMonitorDevice(device)) {
+    return options.find((option) => option.key === "sense.currentPowerW")
+      || options.find((option) => option.energyMetric)
+      || options[0]
+  }
+
+  return options.find((option) => option.key === "status") || options[0]
 }
 
 function normalizeTriggerOperator(value: unknown, kind: TriggerPropertyKind) {
@@ -470,6 +585,23 @@ function getDefaultTriggerConditions(type: WorkflowTriggerType) {
   return {};
 }
 
+function buildDeviceStateTriggerConditions(device: DeviceLite | undefined, previousForSeconds: unknown = 0) {
+  const preferredOption = getPreferredTriggerPropertyOption(device) || {
+    key: "status",
+    label: "Status",
+    kind: "boolean" as TriggerPropertyKind
+  }
+
+  return {
+    deviceId: device?._id || "",
+    property: preferredOption.key,
+    operator: getDefaultTriggerOperator(preferredOption, "eq"),
+    value: getDefaultTriggerValue(preferredOption),
+    state: preferredOption.kind === "boolean" && preferredOption.key === "status" ? "on" : undefined,
+    forSeconds: Math.max(0, Number(previousForSeconds) || 0)
+  }
+}
+
 function buildGraph(triggerType: WorkflowTriggerType, actions: WorkflowAction[]) {
   const nodes = [
     {
@@ -523,6 +655,10 @@ function getHarmonyCommandOptions(device: DeviceLite | null | undefined) {
 }
 
 function getDeviceActionChoices(device: DeviceLite | null | undefined) {
+  if (isWorkflowEnergyMonitorDevice(device)) {
+    return []
+  }
+
   const source = getDeviceSource(device);
   if (source === "harmony") {
     if (isHarmonyCommandDevice(device)) {
@@ -630,13 +766,13 @@ function buildDeviceControlParameters(options: {
   const harmonyCommands = targetGroupDevices.length > 0
     ? getCommonHarmonyCommandOptions(targetGroupDevices)
     : getHarmonyCommandOptions(options.targetDevice);
-  const fallbackAction = actionChoices[0] || "turn_on";
+  const fallbackAction = actionChoices[0] || "";
   const requestedAction = typeof options.desiredAction === "string" && actionChoices.includes(options.desiredAction)
     ? options.desiredAction
     : fallbackAction;
-  const nextParameters: Record<string, unknown> = {
-    action: requestedAction
-  };
+  const nextParameters: Record<string, unknown> = requestedAction
+    ? { action: requestedAction }
+    : {};
 
   if (requestedAction === "set_brightness" || (requestedAction === "turn_on" && actionChoices.includes("set_brightness"))) {
     const brightness = clampActionNumber(currentParameters.brightness ?? currentParameters.value, 100, 0, 100);
@@ -867,6 +1003,22 @@ export function WorkflowBuilderDialog({
   const [triggerConditions, setTriggerConditions] = useState<Record<string, unknown>>({});
   const [actions, setActions] = useState<WorkflowAction[]>([DEFAULT_ACTION]);
 
+  const actionableDevices = useMemo(
+    () => devices.filter((device) => !isWorkflowEnergyMonitorDevice(device)),
+    [devices]
+  );
+
+  const actionableDevicesByRoom = useMemo(() => {
+    return actionableDevices.reduce<Record<string, DeviceLite[]>>((acc, device) => {
+      const room = device.room || "Unassigned";
+      if (!acc[room]) {
+        acc[room] = [];
+      }
+      acc[room].push(device);
+      return acc;
+    }, {});
+  }, [actionableDevices]);
+
   useEffect(() => {
     if (!open) {
       return;
@@ -881,7 +1033,7 @@ export function WorkflowBuilderDialog({
       setVoiceAliasesText((initialWorkflow.voiceAliases || []).join(", "));
       setTriggerType((initialWorkflow.trigger?.type as WorkflowTriggerType) || "manual");
       setTriggerConditions(initialWorkflow.trigger?.conditions || {});
-      setActions(initialWorkflow.actions?.length ? initialWorkflow.actions : [buildDefaultAction("manual", devices)]);
+      setActions(initialWorkflow.actions?.length ? initialWorkflow.actions : [buildDefaultAction("manual", actionableDevices)]);
       return;
     }
 
@@ -893,8 +1045,8 @@ export function WorkflowBuilderDialog({
     setVoiceAliasesText("");
     setTriggerType("manual");
     setTriggerConditions({});
-    setActions([buildDefaultAction("manual", devices)]);
-  }, [initialWorkflow, open]);
+    setActions([buildDefaultAction("manual", actionableDevices)]);
+  }, [actionableDevices, initialWorkflow, open]);
 
   const visualGraph = useMemo(() => buildGraph(triggerType, actions), [triggerType, actions]);
 
@@ -949,6 +1101,12 @@ export function WorkflowBuilderDialog({
     return [...groups.values()].sort((left, right) => left.name.localeCompare(right.name));
   }, [availableDeviceGroups, devices]);
 
+  const actionableDeviceGroups = useMemo(() => {
+    return deviceGroups.filter((group) => (
+      group.devices.length > 0 && group.devices.every((device) => !isWorkflowEnergyMonitorDevice(device))
+    ))
+  }, [deviceGroups]);
+
   const deviceGroupsByName = useMemo(() => {
     return deviceGroups.reduce<Map<string, {
       name: string;
@@ -960,11 +1118,23 @@ export function WorkflowBuilderDialog({
     }, new Map());
   }, [deviceGroups]);
 
+  const actionableDeviceGroupsByName = useMemo(() => {
+    return actionableDeviceGroups.reduce<Map<string, {
+      name: string;
+      description?: string;
+      devices: DeviceLite[];
+    }>>((acc, group) => {
+      acc.set(group.name.toLowerCase(), group);
+      return acc;
+    }, new Map());
+  }, [actionableDeviceGroups]);
+
   const triggerDeviceId = typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : null;
   const triggerDevice = useMemo(
     () => devices.find((device) => device._id === triggerDeviceId),
     [devices, triggerDeviceId]
   );
+  const triggerDeviceSupportsControl = !isWorkflowEnergyMonitorDevice(triggerDevice)
   const triggerPropertyOptions = useMemo(
     () => getTriggerPropertyOptions(triggerDevice),
     [triggerDevice]
@@ -994,7 +1164,19 @@ export function WorkflowBuilderDialog({
   );
 
   const addAction = () => {
-    setActions((prev) => [...prev, buildDefaultAction(triggerType, devices)]);
+    if (triggerType === "device_state" && !triggerDeviceSupportsControl) {
+      const fallbackDevice = actionableDevices[0] || null
+      setActions((prev) => [...prev, {
+        type: "device_control",
+        target: fallbackDevice?._id || null,
+        parameters: buildDeviceControlParameters({
+          targetDevice: fallbackDevice
+        }).parameters
+      }])
+      return
+    }
+
+    setActions((prev) => [...prev, buildDefaultAction(triggerType, actionableDevices)]);
   };
 
   const removeAction = (index: number) => {
@@ -1047,7 +1229,7 @@ export function WorkflowBuilderDialog({
 
         return {
           ...action,
-          target: devices[0]?._id || null
+          target: actionableDevices[0]?._id || null
         };
       }));
     }
@@ -1063,13 +1245,16 @@ export function WorkflowBuilderDialog({
   };
 
   const handleActionTypeChange = (index: number, nextType: WorkflowAction["type"]) => {
+    const defaultControlTarget = triggerType === "device_state" && triggerDeviceSupportsControl
+      ? getDefaultDeviceTarget(triggerType, actionableDevices)
+      : actionableDevices[0]?._id || null
     const defaultTarget = nextType === "scene_activate"
       ? scenes[0]?._id || null
       : nextType === "device_control"
-        ? getDefaultDeviceTarget(triggerType, devices)
+        ? defaultControlTarget
         : null;
     const defaultDevice = typeof defaultTarget === "string"
-      ? devices.find((device) => device._id === defaultTarget) || null
+      ? actionableDevices.find((device) => device._id === defaultTarget) || null
       : null;
     const nextAction: WorkflowAction = {
       type: nextType,
@@ -1351,15 +1536,31 @@ export function WorkflowBuilderDialog({
                           <Label>Device</Label>
                           <Select
                             value={String(triggerConditions.deviceId || "")}
-                            onValueChange={(value) => setTriggerConditions((prev) => ({
-                              ...prev,
-                              deviceId: value,
-                              property: "status",
-                              operator: "eq",
-                              value: true,
-                              state: "on",
-                              forSeconds: Number(prev.forSeconds) || 0
-                            }))}
+                            onValueChange={(value) => {
+                              const selectedDevice = devices.find((device) => device._id === value)
+                              setTriggerConditions((prev) => buildDeviceStateTriggerConditions(selectedDevice, prev.forSeconds))
+
+                              if (isWorkflowEnergyMonitorDevice(selectedDevice)) {
+                                setActions((prev) => prev.map((action) => {
+                                  if (action.type !== "device_control" || !isTriggeringDeviceTarget(action.target)) {
+                                    return action
+                                  }
+
+                                  const fallbackTarget = actionableDevices[0]?._id || null
+                                  const fallbackDevice = typeof fallbackTarget === "string"
+                                    ? actionableDevices.find((device) => device._id === fallbackTarget) || null
+                                    : null
+
+                                  return {
+                                    ...action,
+                                    target: fallbackTarget,
+                                    parameters: buildDeviceControlParameters({
+                                      targetDevice: fallbackDevice
+                                    }).parameters
+                                  }
+                                }))
+                              }
+                            }}
                           >
                             <SelectTrigger>
                               <SelectValue placeholder="Select device" />
@@ -1370,7 +1571,7 @@ export function WorkflowBuilderDialog({
                                   <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
                                   {roomDevices.map((device) => (
                                     <SelectItem key={device._id} value={device._id}>
-                                      {device.name} ({device.type})
+                                      {device.name} ({getWorkflowDeviceTypeLabel(device)})
                                     </SelectItem>
                                   ))}
                                 </div>
@@ -1397,7 +1598,9 @@ export function WorkflowBuilderDialog({
                                 value: option.kind === "boolean"
                                   ? true
                                   : option.kind === "number"
-                                    ? Number(prev.value ?? 0) || 0
+                                    ? option.energyMetric
+                                      ? Number(prev.value) || 25
+                                      : Number(prev.value ?? 0) || 0
                                     : String(prev.value ?? ""),
                                 state: option.kind === "boolean" && value === "status" ? "on" : undefined
                               }));
@@ -1509,9 +1712,11 @@ export function WorkflowBuilderDialog({
                         </p>
                       )}
 
-                      {triggerPropertyOptions.some((option) => option.key.startsWith("smartThingsAttributeValues.")) && (
+                      {triggerPropertyOptions.some((option) =>
+                        option.key.startsWith("sense.") || option.key.startsWith("smartThingsAttributeValues.")
+                      ) && (
                         <p className="text-xs text-muted-foreground">
-                          SmartThings readings such as power, energy, humidity, and washer or dryer state appear here after sync as imported trigger properties.
+                          Imported telemetry properties from Sense and SmartThings show up here for threshold-based workflows.
                         </p>
                       )}
                     </div>
@@ -1574,7 +1779,7 @@ export function WorkflowBuilderDialog({
                           ? action.parameters.action
                           : actionConfig.parameters.action)
                         || actionChoices[0]
-                        || "turn_on"
+                        || ""
                       );
                       const selectedHarmonyCommand = typeof action.parameters?.harmonyCommand === "string"
                         && harmonyCommandOptions.some((command) => command.name === action.parameters?.harmonyCommand)
@@ -1661,8 +1866,8 @@ export function WorkflowBuilderDialog({
                                           : selectedGroup
                                             ? ""
                                             : value;
-                                        const updatedDevice = devices.find((device) => device._id === updatedDeviceId);
-                                        const updatedGroup = selectedGroup ? deviceGroupsByName.get(selectedGroup.toLowerCase()) : undefined;
+                                        const updatedDevice = actionableDevices.find((device) => device._id === updatedDeviceId);
+                                        const updatedGroup = selectedGroup ? actionableDeviceGroupsByName.get(selectedGroup.toLowerCase()) : undefined;
                                         const nextParameters = buildDeviceControlParameters({
                                           targetDevice: updatedDevice,
                                           targetGroupDevices: updatedGroup?.devices
@@ -1681,27 +1886,27 @@ export function WorkflowBuilderDialog({
                                         <SelectValue placeholder="Select device" />
                                       </SelectTrigger>
                                       <SelectContent>
-                                        {(triggerType === "device_state" || isTriggeringDeviceTarget(action.target)) && (
+                                        {triggerDeviceSupportsControl && (triggerType === "device_state" || isTriggeringDeviceTarget(action.target)) && (
                                           <SelectItem value={TRIGGERING_DEVICE_TARGET_VALUE}>
                                             Triggering device
                                           </SelectItem>
                                         )}
-                                        {deviceGroups.length > 0 ? (
+                                        {actionableDeviceGroups.length > 0 ? (
                                           <>
                                             <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Groups</div>
-                                            {deviceGroups.map((group) => (
+                                            {actionableDeviceGroups.map((group) => (
                                               <SelectItem key={group.name} value={getDeviceGroupTargetSelectValue(group.name)}>
                                                 {group.name} ({group.devices.length} device{group.devices.length === 1 ? "" : "s"})
                                               </SelectItem>
                                             ))}
                                           </>
                                         ) : null}
-                                        {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
+                                        {Object.entries(actionableDevicesByRoom).map(([room, roomDevices]) => (
                                           <div key={room}>
                                             <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
                                             {roomDevices.map((device) => (
                                               <SelectItem key={device._id} value={device._id}>
-                                                {device.name} ({device.type})
+                                                {device.name} ({getWorkflowDeviceTypeLabel(device)})
                                               </SelectItem>
                                             ))}
                                           </div>
@@ -1723,6 +1928,7 @@ export function WorkflowBuilderDialog({
                                   <div className="space-y-2">
                                     <Label>Device action</Label>
                                     <Select
+                                      disabled={actionChoices.length === 0}
                                       value={actionValue}
                                       onValueChange={(value) => updateAction(index, {
                                         parameters: buildDeviceControlParameters({
@@ -1734,7 +1940,7 @@ export function WorkflowBuilderDialog({
                                       }, { replaceParameters: true })}
                                     >
                                       <SelectTrigger>
-                                        <SelectValue />
+                                        <SelectValue placeholder={actionChoices.length === 0 ? "No valid actions" : undefined} />
                                       </SelectTrigger>
                                       <SelectContent>
                                         {actionChoices.map((choice) => (
@@ -1744,6 +1950,11 @@ export function WorkflowBuilderDialog({
                                         ))}
                                       </SelectContent>
                                     </Select>
+                                    {actionChoices.length === 0 && (
+                                      <p className="text-xs text-muted-foreground">
+                                        Energy monitor devices can trigger workflows, but they are not controllable action targets.
+                                      </p>
+                                    )}
                                   </div>
                                 </div>
 

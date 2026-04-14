@@ -34,7 +34,8 @@ const DEVICE_TYPE_HINTS = {
   thermostat: ['thermostat', 'temperature', 'heat', 'cool'],
   lock: ['lock', 'unlock', 'door'],
   garage: ['garage', 'door'],
-  sensor: ['sensor', 'motion', 'door', 'window', 'temperature', 'humidity']
+  sensor: ['sensor', 'motion', 'door', 'window', 'temperature', 'humidity'],
+  energy_monitor: ['energy', 'power', 'monitor', 'telemetry', 'watt', 'watts', 'wattage', 'kwh']
 };
 
 function sanitizeString(value) {
@@ -43,6 +44,20 @@ function sanitizeString(value) {
   }
 
   return value.trim();
+}
+
+function getWorkflowDeviceType(device = {}) {
+  const rawType = sanitizeString(device?.type).toLowerCase();
+  if (rawType === 'energy_monitor') {
+    return rawType;
+  }
+
+  const source = sanitizeString(device?.properties?.source || device?.source || '').toLowerCase();
+  if (source === 'sense') {
+    return 'energy_monitor';
+  }
+
+  return rawType;
 }
 
 function normalizeDeviceGroupNames(groups) {
@@ -79,7 +94,9 @@ function getWorkflowCapabilitiesForDevice(device = {}) {
     return ['turn_on', 'turn_off', 'toggle'];
   }
 
-  switch (sanitizeString(device.type).toLowerCase()) {
+  switch (getWorkflowDeviceType(device)) {
+    case 'energy_monitor':
+      return [];
     case 'light':
       return device.color
         ? ['turn_on', 'turn_off', 'set_brightness', 'set_color']
@@ -447,6 +464,32 @@ function getSmartThingsWorkflowPropertyHints(device) {
     pushHint('targetTemperature');
   }
 
+  const source = sanitizeString(device?.properties?.source || device?.source || '').toLowerCase();
+  const sense = source === 'sense' && device?.properties?.sense && typeof device.properties.sense === 'object'
+    ? device.properties.sense
+    : null;
+  const senseDayTrend = sense?.trends && typeof sense.trends === 'object' && sense.trends.day && typeof sense.trends.day === 'object'
+    ? sense.trends.day
+    : null;
+
+  if (sense) {
+    if (Number.isFinite(Number(sense.currentPowerW))) {
+      pushHint('sense.currentPowerW');
+    }
+    if (Number.isFinite(Number(sense.alwaysOnW))) {
+      pushHint('sense.alwaysOnW');
+    }
+    if (Number.isFinite(Number(sense.activeDeviceCount))) {
+      pushHint('sense.activeDeviceCount');
+    }
+    if (sense.entityType === 'monitor' && Number.isFinite(Number(senseDayTrend?.consumptionTotalKwh))) {
+      pushHint('sense.trends.day.consumptionTotalKwh');
+    }
+    if (sense.entityType === 'device' && Number.isFinite(Number(senseDayTrend?.energyKwh))) {
+      pushHint('sense.trends.day.energyKwh');
+    }
+  }
+
   const attributeRoot = device?.properties?.smartThingsAttributeValues || {};
 
   const walk = (node, prefix = []) => {
@@ -483,6 +526,13 @@ function getSmartThingsWorkflowPropertyHints(device) {
 function getSmartThingsEnergyMonitoringHints(device) {
   const hints = [];
   const attributeRoot = device?.properties?.smartThingsAttributeValues || {};
+  const source = sanitizeString(device?.properties?.source || device?.source || '').toLowerCase();
+  const sense = source === 'sense' && device?.properties?.sense && typeof device.properties.sense === 'object'
+    ? device.properties.sense
+    : null;
+  const senseDayTrend = sense?.trends && typeof sense.trends === 'object' && sense.trends.day && typeof sense.trends.day === 'object'
+    ? sense.trends.day
+    : null;
 
   if (Object.prototype.hasOwnProperty.call(attributeRoot?.powerMeter || {}, 'power')) {
     hints.push('power level via smartThingsAttributeValues.powerMeter.power');
@@ -490,6 +540,18 @@ function getSmartThingsEnergyMonitoringHints(device) {
 
   if (Object.prototype.hasOwnProperty.call(attributeRoot?.energyMeter || {}, 'energy')) {
     hints.push('energy total via smartThingsAttributeValues.energyMeter.energy');
+  }
+
+  if (Number.isFinite(Number(sense?.currentPowerW))) {
+    hints.push('power level via sense.currentPowerW');
+  }
+
+  if (sense?.entityType === 'monitor' && Number.isFinite(Number(senseDayTrend?.consumptionTotalKwh))) {
+    hints.push('whole-home energy total via sense.trends.day.consumptionTotalKwh');
+  }
+
+  if (sense?.entityType === 'device' && Number.isFinite(Number(senseDayTrend?.energyKwh))) {
+    hints.push('energy total via sense.trends.day.energyKwh');
   }
 
   return hints;
@@ -1261,7 +1323,7 @@ async function buildDeviceContext() {
       const deviceInfo = {
         id: device._id.toString(),
         name: device.name,
-        type: device.type,
+        type: getWorkflowDeviceType(device) || device.type,
         source,
         groups: normalizeDeviceGroupNames(device.groups),
         hubIp: device?.properties?.harmonyHubIp || null,
@@ -1497,24 +1559,12 @@ async function validateAndFixAutomation(automation) {
         ? deviceMap.get(fixedAction.target.toString())
         : null;
       if (device && action.parameters) {
-        const actionType = action.parameters.action;
-
-        // Validate device-specific actions
-        if (device.type === 'light') {
-          if (!['turn_on', 'turn_off', 'set_brightness', 'set_color'].includes(actionType)) {
-            issues.push(`Invalid action "${actionType}" for light device`);
-            return null;
-          }
-        } else if (device.type === 'thermostat') {
-          if (!['turn_on', 'turn_off', 'set_temperature'].includes(actionType)) {
-            issues.push(`Invalid action "${actionType}" for thermostat device`);
-            return null;
-          }
-        } else if (device.type === 'lock') {
-          if (!['lock', 'unlock'].includes(actionType)) {
-            issues.push(`Invalid action "${actionType}" for lock device`);
-            return null;
-          }
+        const actionType = sanitizeString(action.parameters.action).toLowerCase();
+        const supportedActions = getWorkflowCapabilitiesForDevice(device);
+        if (actionType && !supportedActions.includes(actionType)) {
+          const typeLabel = getWorkflowDeviceType(device) || sanitizeString(device.type) || 'device';
+          issues.push(`Invalid action "${actionType}" for ${typeLabel} "${device.name || fixedAction.target}"`);
+          return null;
         }
       } else if (fixedAction.target && typeof fixedAction.target === 'object' && action.parameters) {
         const normalizedGroupTarget = normalizeDeviceGroupTarget(fixedAction.target, groupMap);
@@ -2068,7 +2118,7 @@ IMPORTANT RULES:
 14. For Source:harmony requests in schedules/workflows, prefer explicit turn_on or turn_off instead of toggle unless the user explicitly asks to toggle.
 15. When the request refers to the security system or alarm arming/disarming state, use trigger type "security_alarm_status" with conditions like {"states":["armedStay","armedAway"]}.
 16. When the request refers to sunrise or sunset, use trigger type "schedule" with conditions like {"event":"sunrise","offset":0} or {"event":"sunset","offset":0}. Offsets are in minutes and may be negative or positive.
-17. For numeric SmartThings triggers such as power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path (for example "smartThingsAttributeValues.powerMeter.power") with an explicit operator and numeric value.
+17. For numeric telemetry triggers such as Sense power, SmartThings power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path (for example "sense.currentPowerW" or "smartThingsAttributeValues.powerMeter.power") with an explicit operator and numeric value.
 18. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
 19. When the request says "greater than", "above", "over", or "more than", use operator "gt". When it says "less than", "below", or "under", use operator "lt". For energy-monitoring devices, prefer threshold operators over exact numeric equality unless the user explicitly asks for an exact value.
 
@@ -2094,7 +2144,7 @@ REQUIRED JSON STRUCTURE:
         "conditions": {
           // For time: {"hour": 7, "minute": 0, "days": ["monday", "tuesday", ...]}
           // For schedule: {"cron": "0 7 * * 1-5"} or {"event": "sunrise", "offset": 0}
-          // For device_state: {"deviceId": "ID", "property": "status" or "smartThingsAttributeValues.powerMeter.power", "operator": "eq"/"gt"/"lt"/..., "value": true or 25, "state": "on" or "off" (optional legacy alias), "forSeconds": 600 (optional)}
+          // For device_state: {"deviceId": "ID", "property": "status" or "sense.currentPowerW" or "smartThingsAttributeValues.powerMeter.power", "operator": "eq"/"gt"/"lt"/..., "value": true or 25, "state": "on" or "off" (optional legacy alias), "forSeconds": 600 (optional)}
           // Prefer gt/lt for power or energy level thresholds instead of exact equality.
           // For sensor: {"sensorType": "<sensor_type>", "deviceId": "ID", "condition": "<condition>", "value": 25}
           // For security_alarm_status: {"states": ["armedStay", "armedAway"]}
@@ -2130,6 +2180,7 @@ DEVICE ACTION COMPATIBILITY:
 - speaker: turn_on, turn_off, toggle
 - harmony hub activity device (Source:harmony): turn_on, turn_off, toggle (activity start/stop only)
 - garage: open, close
+- energy_monitor: (read-only, cannot be controlled)
 - sensor: (read-only, cannot be controlled)
 
 TRIGGER TYPE EXAMPLES:
@@ -2137,10 +2188,10 @@ TRIGGER TYPE EXAMPLES:
 - "when motion detected" -> type: "sensor", conditions: {"sensorType": "motion", "condition": "detected"}
 - "when temperature above 75" -> type: "sensor", conditions: {"sensorType": "temperature", "condition": "above", "value": 75}
 - "when front door unlocked" -> type: "device_state", conditions: {"state": "off"}
-- "when dryer power goes above 25 watts" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "gt", "value": 25}
-- "when dryer energy level is greater than 25 watts" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "gt", "value": 25}
-- "when dryer power stays below 5 watts for 10 minutes" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "lt", "value": 5, "forSeconds": 600}
-- "when dryer energy level stays less than 5 watts for 10 minutes" -> type: "device_state", conditions: {"deviceId": "ID", "property": "smartThingsAttributeValues.powerMeter.power", "operator": "lt", "value": 5, "forSeconds": 600}
+- "when dryer power goes above 25 watts" -> type: "device_state", conditions: {"deviceId": "ID", "property": "sense.currentPowerW", "operator": "gt", "value": 25}
+- "when dryer energy level is greater than 25 watts" -> type: "device_state", conditions: {"deviceId": "ID", "property": "sense.currentPowerW", "operator": "gt", "value": 25}
+- "when dryer power stays below 5 watts for 10 minutes" -> type: "device_state", conditions: {"deviceId": "ID", "property": "sense.currentPowerW", "operator": "lt", "value": 5, "forSeconds": 600}
+- "when dryer energy level stays less than 5 watts for 10 minutes" -> type: "device_state", conditions: {"deviceId": "ID", "property": "sense.currentPowerW", "operator": "lt", "value": 5, "forSeconds": 600}
 - "when the security alarm is armed stay or armed away" -> type: "security_alarm_status", conditions: {"states": ["armedStay", "armedAway"]}
 - "at sunset" -> type: "schedule", conditions: {"event": "sunset", "offset": 0}
 - "30 minutes before sunrise" -> type: "schedule", conditions: {"event": "sunrise", "offset": -30}
@@ -2270,7 +2321,7 @@ REVISION RULES:
 5. When fixing an automation that currently lists too few devices, expand the target coverage by using an appropriate group when available.
 6. When an action should target the same device that caused a device_state trigger, prefer {"kind":"context","key":"triggeringDeviceId"}.
 7. Use valid trigger/action structures and only capabilities allowed by the target devices.
-8. For numeric SmartThings triggers such as power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path with an explicit operator and numeric value.
+8. For numeric telemetry triggers such as Sense power, SmartThings power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path with an explicit operator and numeric value.
 9. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
 10. When the request says "greater than", "above", "over", or "more than", use operator "gt". When it says "less than", "below", or "under", use operator "lt".
 

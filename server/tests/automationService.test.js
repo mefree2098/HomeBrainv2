@@ -266,3 +266,148 @@ test('resumeRunningExecutions queues persisted running histories for background 
     }
   });
 });
+
+test('createAutomationFromText exposes Sense devices as energy monitors with Sense trigger properties', async (t) => {
+  const automationServicePath = require.resolve('../services/automationService');
+  delete require.cache[automationServicePath];
+
+  const llmService = require('../services/llmService');
+  const Device = require('../models/Device');
+  const DeviceGroup = require('../models/DeviceGroup');
+  const Scene = require('../models/Scene');
+  const Settings = require('../models/Settings');
+
+  const originalSendLLMRequestWithFallbackDetailed = llmService.sendLLMRequestWithFallbackDetailed;
+  const originalDeviceFind = Device.find;
+  const originalDeviceGroupFind = DeviceGroup.find;
+  const originalSceneFind = Scene.find;
+  const originalSettingsGetSettings = Settings.getSettings;
+  const originalFindOne = Automation.findOne;
+  const originalSave = Automation.prototype.save;
+
+  let capturedPrompt = '';
+
+  llmService.sendLLMRequestWithFallbackDetailed = async (prompt) => {
+    capturedPrompt = prompt;
+    return {
+      response: JSON.stringify({
+        automations: [
+          {
+            name: 'Dryer Power Alert',
+            description: 'Notifies when the Sense dryer power rises above the threshold.',
+            trigger: {
+              type: 'device_state',
+              conditions: {
+                deviceId: 'sense-device-1',
+                property: 'sense.currentPowerW',
+                operator: 'gt',
+                value: 25
+              }
+            },
+            actions: [
+              {
+                type: 'notification',
+                target: null,
+                parameters: {
+                  message: 'Dryer is running'
+                }
+              }
+            ],
+            category: 'energy',
+            priority: 5
+          }
+        ]
+      }),
+      provider: 'openai',
+      model: 'gpt-test'
+    };
+  };
+
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: { toString: () => 'sense-device-1' },
+        name: 'Dryer',
+        type: 'sensor',
+        room: 'Electrical Panel',
+        groups: [],
+        properties: {
+          source: 'sense',
+          sense: {
+            entityType: 'device',
+            currentPowerW: 1420.5,
+            trends: {
+              day: {
+                energyKwh: 2.34
+              }
+            }
+          }
+        }
+      }
+    ])
+  });
+
+  DeviceGroup.find = () => ({
+    lean: async () => [],
+    sort() {
+      return {
+        lean: async () => []
+      };
+    }
+  });
+
+  Scene.find = () => ({
+    lean: async () => []
+  });
+
+  Settings.getSettings = async () => ({
+    llmPriorityList: ['openai']
+  });
+
+  Automation.findOne = () => ({
+    select: async () => null,
+    then(resolve) {
+      return resolve(null);
+    }
+  });
+  Automation.prototype.save = async function saveAutomation() {
+    const saved = {
+      _id: STANDALONE_AUTOMATION_ID,
+      name: this.name,
+      description: this.description,
+      trigger: this.trigger,
+      actions: this.actions,
+      enabled: this.enabled,
+      priority: this.priority,
+      category: this.category,
+      conditions: this.conditions,
+      cooldown: this.cooldown
+    };
+    this.toObject = () => saved;
+    return this;
+  };
+
+  const freshAutomationService = require('../services/automationService');
+
+  t.after(() => {
+    llmService.sendLLMRequestWithFallbackDetailed = originalSendLLMRequestWithFallbackDetailed;
+    Device.find = originalDeviceFind;
+    DeviceGroup.find = originalDeviceGroupFind;
+    Scene.find = originalSceneFind;
+    Settings.getSettings = originalSettingsGetSettings;
+    Automation.findOne = originalFindOne;
+    Automation.prototype.save = originalSave;
+    delete require.cache[automationServicePath];
+  });
+
+  const result = await freshAutomationService.createAutomationFromText(
+    'Create an automation when the dryer power goes above 25 watts.'
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.automation?.trigger?.type, 'device_state');
+  assert.equal(result.automation?.trigger?.conditions?.property, 'sense.currentPowerW');
+  assert.match(capturedPrompt, /Type: energy_monitor/);
+  assert.match(capturedPrompt, /Energy monitoring: power level via sense\.currentPowerW/);
+  assert.match(capturedPrompt, /Trigger properties: status, isOnline, sense\.currentPowerW, sense\.trends\.day\.energyKwh/);
+});
