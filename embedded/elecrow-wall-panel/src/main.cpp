@@ -44,6 +44,7 @@ constexpr unsigned long kThermostatCommitDelayMs = 3000;
 constexpr unsigned long kThermostatDispatchDelayMs = 75;
 constexpr unsigned long kDeviceLevelCommitDelayMs = 3000;
 constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
+constexpr unsigned long kSecurityStateRefreshDelayMs = 1750;
 constexpr int kSwipeThreshold = 40;
 constexpr int kSwipeVerticalLimit = 190;
 constexpr unsigned long kSwipeWindowMs = 900;
@@ -204,6 +205,8 @@ unsigned long gLastWifiAttemptAt = 0;
 unsigned long gLastStateFetchAt = 0;
 unsigned long gLastActivateAttemptAt = 0;
 unsigned long gBrightnessChangedAt = 0;
+bool gDeferredStateRefresh = false;
+unsigned long gDeferredStateRefreshAt = 0;
 
 int gBrightnessPercent = kBrightnessDefaultPercent;
 bool gPendingBrightnessPersist = false;
@@ -619,6 +622,15 @@ ModeSnapshot* currentMode() {
     return nullptr;
   }
   const String& modeId = gState.modeOrder[gCurrentModeIndex];
+  for (uint8_t index = 0; index < kModeSlots; index += 1) {
+    if (gState.modes[index].id == modeId) {
+      return &gState.modes[index];
+    }
+  }
+  return nullptr;
+}
+
+ModeSnapshot* modeById(const String& modeId) {
   for (uint8_t index = 0; index < kModeSlots; index += 1) {
     if (gState.modes[index].id == modeId) {
       return &gState.modes[index];
@@ -1077,8 +1089,11 @@ void applyActionButtonFonts(
   for (uint8_t index = 0; index < kActionSlots; index += 1) {
     lv_obj_set_style_text_font(gActionTitleLabels[index], titleFont, 0);
     lv_obj_set_style_transform_zoom(gActionTitleLabels[index], 256, 0);
+    lv_obj_set_style_text_letter_space(gActionTitleLabels[index], 1, 0);
+    lv_label_set_long_mode(gActionTitleLabels[index], LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_font(gActionSubtitleLabels[index], subtitleFont, 0);
     lv_obj_set_style_transform_zoom(gActionSubtitleLabels[index], 256, 0);
+    lv_label_set_long_mode(gActionSubtitleLabels[index], LV_LABEL_LONG_CLIP);
   }
 }
 
@@ -1267,6 +1282,73 @@ void hideAllActionButtons() {
 String roomLevelDisplayValue(int brightness) {
   const int normalized = constrain(brightness, 0, 100);
   return normalized <= 0 ? "Off" : String(normalized) + String("%");
+}
+
+String securityAlarmStateDisplayValue(const String& alarmState) {
+  if (alarmState == "armedStay") {
+    return "Arm Stay";
+  }
+  if (alarmState == "armedAway") {
+    return "Arm Away";
+  }
+  if (alarmState == "triggered") {
+    return "Triggered";
+  }
+  return "Disarmed";
+}
+
+void syncSecurityModeLocalState(const String& alarmState) {
+  ModeSnapshot* mode = modeById("home");
+  if (!mode) {
+    return;
+  }
+
+  const bool isTriggered = alarmState == "triggered";
+  const bool isArmed = isTriggered || alarmState == "armedStay" || alarmState == "armedAway";
+
+  mode->title = "Security";
+  mode->centerValue = securityAlarmStateDisplayValue(alarmState);
+  mode->secondaryValue = isArmed
+    ? "Tap disarm to turn the alarm off."
+    : "Choose Arm Stay or Arm Away.";
+  mode->hint = "Security control";
+  mode->accent = isTriggered ? "red" : (isArmed ? "green" : "blue");
+
+  for (uint8_t index = 0; index < kActionSlots; index += 1) {
+    mode->quickActions[index] = QuickAction();
+  }
+
+  if (isArmed) {
+    mode->quickActions[0] = makeLocalQuickAction(
+      "security-disarm",
+      "Disarm",
+      isTriggered ? "Silence and disarm" : "Return to normal",
+      "security.disarm",
+      "",
+      "red",
+      true
+    );
+    mode->quickActionCount = 1;
+    return;
+  }
+
+  mode->quickActions[0] = makeLocalQuickAction(
+    "security-arm-stay",
+    "Arm Stay",
+    "Stay home",
+    "security.arm",
+    "stay",
+    "green"
+  );
+  mode->quickActions[1] = makeLocalQuickAction(
+    "security-arm-away",
+    "Arm Away",
+    "Leave home",
+    "security.arm",
+    "away",
+    "orange"
+  );
+  mode->quickActionCount = 2;
 }
 
 void syncRoomModeLocalState(ModeSnapshot& mode, int brightness) {
@@ -1556,20 +1638,25 @@ void renderSecurityButtons(const ModeSnapshot& mode) {
   hideAllActionButtons();
   applyActionButtonFonts(&hb_font_orbitron_28, 168, &hb_font_space_grotesk_20, 164);
 
+  for (uint8_t index = 0; index < kActionSlots; index += 1) {
+    lv_obj_set_style_text_letter_space(gActionTitleLabels[index], 0, 0);
+    lv_label_set_long_mode(gActionTitleLabels[index], LV_LABEL_LONG_WRAP);
+  }
+
   if (mode.quickActionCount == 0) {
     return;
   }
 
   if (mode.quickActionCount == 1 && mode.quickActions[0].valid) {
-    showActionButton(0, 0, mode.quickActions[0], 74, 314, 332, 84, false);
+    showActionButton(0, 0, mode.quickActions[0], 56, 310, 368, 86, false);
     return;
   }
 
   if (mode.quickActionCount > 0 && mode.quickActions[0].valid) {
-    showActionButton(0, 0, mode.quickActions[0], 64, 314, 156, 78, false);
+    showActionButton(0, 0, mode.quickActions[0], 56, 310, 172, 82, false);
   }
   if (mode.quickActionCount > 1 && mode.quickActions[1].valid) {
-    showActionButton(1, 1, mode.quickActions[1], 260, 314, 156, 78, false);
+    showActionButton(1, 1, mode.quickActions[1], 252, 310, 172, 82, false);
   }
 }
 
@@ -2087,8 +2174,34 @@ void dispatchQuickAction(const QuickAction& action) {
     request["value"] = action.value;
   }
 
-  if (postPanelJson(panelActionUrl(), request)) {
+  DynamicJsonDocument response(2048);
+  if (postPanelJson(panelActionUrl(), request, &response)) {
     setStatusLine(action.label + " sent");
+
+    if (action.type == "security.arm") {
+      String alarmState = jsonVariantToString(response["result"]["alarmState"]);
+      if (alarmState.isEmpty()) {
+        alarmState = action.value == "away" ? "armedAway" : "armedStay";
+      }
+      syncSecurityModeLocalState(alarmState);
+      gDeferredStateRefresh = true;
+      gDeferredStateRefreshAt = millis() + kSecurityStateRefreshDelayMs;
+      renderMode();
+      return;
+    }
+
+    if (action.type == "security.disarm" || action.type == "security.dismiss") {
+      String alarmState = jsonVariantToString(response["result"]["alarmState"]);
+      if (alarmState.isEmpty()) {
+        alarmState = "disarmed";
+      }
+      syncSecurityModeLocalState(alarmState);
+      gDeferredStateRefresh = true;
+      gDeferredStateRefreshAt = millis() + kSecurityStateRefreshDelayMs;
+      renderMode();
+      return;
+    }
+
     renderMode();
     if (action.type != "harmony.command") {
       fetchPanelState();
@@ -2898,6 +3011,30 @@ void maybeRefreshState() {
   fetchPanelState();
 }
 
+void dispatchDeferredStateRefreshIfReady() {
+  if (!gDeferredStateRefresh) {
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED || gOtaInProgress) {
+    return;
+  }
+
+  if (millis() < gDeferredStateRefreshAt) {
+    return;
+  }
+
+  if (gPendingThermostatCommit
+      || gQueuedThermostatDispatch
+      || gPendingDeviceLevelCommit
+      || gQueuedDeviceLevelDispatch) {
+    return;
+  }
+
+  gDeferredStateRefresh = false;
+  fetchPanelState();
+}
+
 }  // namespace
 
 void setup() {
@@ -2928,6 +3065,7 @@ void loop() {
   ensureWiFiConnected();
   dispatchQueuedThermostatCommitIfReady();
   dispatchQueuedDeviceLevelIfReady();
+  dispatchDeferredStateRefreshIfReady();
   maybeRefreshState();
   maybeApplyOtaUpdate();
   delay(5);
