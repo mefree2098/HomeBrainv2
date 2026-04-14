@@ -926,12 +926,13 @@ void styleSurfaceTitle(lv_obj_t* label, lv_coord_t y, lv_coord_t zoom = 256) {
 }
 
 void styleSurfaceSubtitle(lv_obj_t* label, lv_coord_t y, bool muted = false, lv_coord_t zoom = 228) {
+  (void)zoom;
   lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
   lv_obj_set_width(label, lv_pct(100));
   lv_obj_align(label, LV_ALIGN_TOP_MID, 0, y);
   lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(label, &hb_font_orbitron_28, 0);
-  lv_obj_set_style_transform_zoom(label, zoom, 0);
+  lv_obj_set_style_transform_zoom(label, 256, 0);
   lv_obj_set_style_text_letter_space(label, 0, 0);
   lv_obj_set_style_text_color(
     label,
@@ -981,6 +982,7 @@ void styleRoomSubtitleText(const String& text, lv_coord_t y = 114, lv_coord_t zo
   if (!gSecondaryLabel) {
     return;
   }
+  (void)zoom;
 
   if (text.isEmpty()) {
     hideTextLabel(gSecondaryLabel);
@@ -992,7 +994,7 @@ void styleRoomSubtitleText(const String& text, lv_coord_t y = 114, lv_coord_t zo
   lv_obj_align(gSecondaryLabel, LV_ALIGN_TOP_MID, 0, y);
   lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(gSecondaryLabel, &hb_font_orbitron_28, 0);
-  lv_obj_set_style_transform_zoom(gSecondaryLabel, zoom, 0);
+  lv_obj_set_style_transform_zoom(gSecondaryLabel, 256, 0);
   lv_obj_set_style_text_letter_space(gSecondaryLabel, 1, 0);
   lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextSecondary), 0);
   lv_label_set_text(gSecondaryLabel, text.c_str());
@@ -1011,15 +1013,13 @@ void styleRoomCenterValueText(const String& value, lv_coord_t yOffset = 8) {
   lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, yOffset);
   lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
   if (numericValue) {
-    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_100, 0);
-    lv_obj_set_style_transform_zoom(gCenterValueLabel, 196, 0);
+    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_80, 0);
   } else if (shortTextValue) {
-    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_100, 0);
-    lv_obj_set_style_transform_zoom(gCenterValueLabel, 156, 0);
+    lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_80, 0);
   } else {
     lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_28, 0);
-    lv_obj_set_style_transform_zoom(gCenterValueLabel, 300, 0);
   }
+  lv_obj_set_style_transform_zoom(gCenterValueLabel, 256, 0);
   lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
   lv_label_set_text(gCenterValueLabel, value.c_str());
@@ -1031,17 +1031,18 @@ void styleSurfaceCenterValue(
   lv_coord_t numericZoom = 256,
   lv_coord_t textZoom = 420
 ) {
+  (void)numericZoom;
+  (void)textZoom;
   lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_set_width(gCenterValueLabel, lv_pct(100));
   lv_obj_align(gCenterValueLabel, LV_ALIGN_CENTER, 0, yOffset);
   lv_obj_set_style_text_align(gCenterValueLabel, LV_TEXT_ALIGN_CENTER, 0);
   if (isNumericDisplayValue(value)) {
     lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_80, 0);
-    lv_obj_set_style_transform_zoom(gCenterValueLabel, numericZoom, 0);
   } else {
     lv_obj_set_style_text_font(gCenterValueLabel, &hb_font_orbitron_28, 0);
-    lv_obj_set_style_transform_zoom(gCenterValueLabel, textZoom, 0);
   }
+  lv_obj_set_style_transform_zoom(gCenterValueLabel, 256, 0);
   lv_obj_set_style_text_letter_space(gCenterValueLabel, 0, 0);
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
   lv_label_set_text(gCenterValueLabel, value.c_str());
