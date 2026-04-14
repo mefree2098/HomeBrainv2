@@ -1875,10 +1875,11 @@ bool performOtaUpdate() {
   }
 
   const int contentLength = http.getSize();
-  const size_t totalBytes = contentLength > 0
+  const size_t expectedBytes = contentLength > 0
     ? static_cast<size_t>(contentLength)
     : (gState.ota.bytesTotal > 0 ? gState.ota.bytesTotal : 0);
-  if (!Update.begin(contentLength > 0 ? static_cast<size_t>(contentLength) : UPDATE_SIZE_UNKNOWN)) {
+  const size_t totalBytes = expectedBytes;
+  if (!Update.begin(expectedBytes > 0 ? expectedBytes : UPDATE_SIZE_UNKNOWN)) {
     const String errorMessage = Update.errorString();
     http.end();
     gOtaInProgress = false;
@@ -1894,9 +1895,9 @@ bool performOtaUpdate() {
   uint8_t buffer[1024];
   size_t totalWritten = 0;
   unsigned long lastChunkAt = millis();
-  const bool hasKnownContentLength = contentLength > 0;
+  const bool hasKnownContentLength = expectedBytes > 0;
 
-  while (!hasKnownContentLength || totalWritten < static_cast<size_t>(contentLength)) {
+  while (!hasKnownContentLength || totalWritten < expectedBytes) {
     const size_t availableBytes = stream->available();
     if (availableBytes == 0) {
       if (!http.connected()) {
@@ -1947,7 +1948,7 @@ bool performOtaUpdate() {
     renderOtaProgressScreen("Updating", min(98, max(60, rawProgress)), "Downloading firmware package...");
   }
 
-  if (hasKnownContentLength && totalWritten < static_cast<size_t>(contentLength)) {
+  if (hasKnownContentLength && totalWritten < expectedBytes) {
     Update.abort();
     http.end();
     gOtaInProgress = false;
