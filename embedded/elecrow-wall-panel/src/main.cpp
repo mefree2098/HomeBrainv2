@@ -44,7 +44,6 @@ constexpr unsigned long kThermostatCommitDelayMs = 3000;
 constexpr unsigned long kThermostatDispatchDelayMs = 75;
 constexpr unsigned long kDeviceLevelCommitDelayMs = 3000;
 constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
-constexpr unsigned long kOtaStatusReportIntervalMs = 750;
 constexpr int kSwipeThreshold = 120;
 constexpr int kSwipeVerticalLimit = 90;
 constexpr unsigned long kSwipeWindowMs = 350;
@@ -201,7 +200,6 @@ String gQueuedDeviceLevelTargetId;
 int gQueuedDeviceLevelValue = 0;
 unsigned long gQueuedDeviceLevelDispatchAt = 0;
 unsigned long gPendingThermostatCommitAt = 0;
-unsigned long gLastOtaStatusPostAt = 0;
 unsigned long gLastWifiAttemptAt = 0;
 unsigned long gLastStateFetchAt = 0;
 unsigned long gLastActivateAttemptAt = 0;
@@ -1847,7 +1845,6 @@ bool performOtaUpdate() {
 
   gOtaInProgress = true;
   gActiveOtaJobId = gState.ota.jobId;
-  gLastOtaStatusPostAt = 0;
   setStatusLine("Installing OTA update");
   renderOtaProgressScreen("Updating", 60, "Preparing secure download...");
   reportOtaStatus("downloading", 0, "Preparing OTA download...");
@@ -1943,10 +1940,6 @@ bool performOtaUpdate() {
       : min(99, max(0, gState.ota.progress));
 
     renderOtaProgressScreen("Updating", min(98, max(60, rawProgress)), "Downloading firmware package...");
-    if (millis() - gLastOtaStatusPostAt >= kOtaStatusReportIntervalMs) {
-      reportOtaStatus("downloading", rawProgress, "Downloading firmware package...", totalWritten, totalBytes);
-      gLastOtaStatusPostAt = millis();
-    }
   }
 
   http.end();
