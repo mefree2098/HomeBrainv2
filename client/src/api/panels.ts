@@ -50,6 +50,8 @@ export type WallPanelRecord = {
   connectionType: 'wifi' | 'bluetooth' | 'ethernet'
   ipAddress?: string
   firmwareVersion?: string
+  latestFirmwareVersion?: string
+  updateAvailable?: boolean
   lastSeen?: string | null
   createdAt?: string | null
   updatedAt?: string | null

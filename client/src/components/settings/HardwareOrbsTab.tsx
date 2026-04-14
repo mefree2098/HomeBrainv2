@@ -468,6 +468,16 @@ export function HardwareOrbsTab() {
 
   const selectedPanelOta = selectedPanel?.ota
   const selectedPanelOtaBusy = isOtaBusy(selectedPanel)
+  const selectedPanelFirmwareVersion = normalizeString(selectedPanel?.firmwareVersion)
+  const selectedPanelLatestFirmwareVersion = normalizeString(selectedPanel?.latestFirmwareVersion)
+  const selectedPanelFirmwareUpdateAvailable = Boolean(
+    selectedPanel?.updateAvailable && selectedPanelFirmwareVersion && selectedPanelLatestFirmwareVersion
+  )
+  const selectedPanelFirmwareUpToDate = Boolean(
+    selectedPanelFirmwareVersion
+    && selectedPanelLatestFirmwareVersion
+    && selectedPanelFirmwareVersion === selectedPanelLatestFirmwareVersion
+  )
 
   const onlineCount = panels.filter((panel) => panel.status === "online").length
   const provisionedCount = panels.filter((panel) => panel.settings?.registered === true).length
@@ -893,8 +903,20 @@ export function HardwareOrbsTab() {
                   </div>
                   <div className="rounded-xl border border-border/60 bg-background/70 p-4">
                     <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Firmware</p>
-                    <p className="mt-2 font-medium">{normalizeString(selectedPanel.firmwareVersion) || "Not reported yet"}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <p className="font-medium">{selectedPanelFirmwareVersion || "Not reported yet"}</p>
+                      {selectedPanelFirmwareUpdateAvailable ? (
+                        <Badge variant="destructive">Update available</Badge>
+                      ) : selectedPanelFirmwareUpToDate ? (
+                        <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">Up to date</Badge>
+                      ) : null}
+                    </div>
                     <p className="mt-1 text-xs text-muted-foreground">{hardwareProfileLabel(selectedPanel.hardwareProfile)}</p>
+                    {selectedPanelLatestFirmwareVersion ? (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        HomeBrain host version: {selectedPanelLatestFirmwareVersion}
+                      </p>
+                    ) : null}
                   </div>
                 </CardContent>
               </Card>
@@ -903,9 +925,12 @@ export function HardwareOrbsTab() {
                 <CardHeader>
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                      <CardTitle className="flex items-center gap-2">
+                      <CardTitle className="flex flex-wrap items-center gap-2">
                         <Cpu className="h-5 w-5 text-cyan-500" />
                         Firmware Updates
+                        {selectedPanelFirmwareUpdateAvailable ? (
+                          <Badge variant="destructive">Newer firmware available</Badge>
+                        ) : null}
                       </CardTitle>
                       <CardDescription>
                         Build the latest checked-in orb firmware on this HomeBrain host, push it over Wi-Fi, and watch the orb report its progress back here.
@@ -913,7 +938,7 @@ export function HardwareOrbsTab() {
                     </div>
                     <Button
                       type="button"
-                      className="bg-cyan-600 hover:bg-cyan-700 text-white"
+                      className="w-full sm:w-auto min-w-[15rem] h-auto min-h-11 whitespace-normal px-5 py-3 text-center leading-tight bg-cyan-600 hover:bg-cyan-700 text-white"
                       onClick={() => void handlePushFirmwareUpdate(selectedPanel)}
                       disabled={!selectedPanel.settings?.registered || selectedPanelOtaBusy || pushingUpdateKey === selectedPanel.id}
                     >
@@ -922,16 +947,40 @@ export function HardwareOrbsTab() {
                       ) : (
                         <Cpu className="mr-2 h-4 w-4" />
                       )}
-                      Push Code Update
+                      {pushingUpdateKey === selectedPanel.id ? "Pushing Firmware Update" : "Push Firmware Update"}
                     </Button>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid gap-3 md:grid-cols-3">
+                  {selectedPanelFirmwareUpdateAvailable ? (
+                    <div className="rounded-2xl border border-amber-400/30 bg-amber-500/[0.08] p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="flex items-start gap-3">
+                          <AlertCircle className="mt-0.5 h-5 w-5 text-amber-500" />
+                          <div>
+                            <p className="text-sm font-medium text-foreground">Newer firmware version available on HomeBrain</p>
+                            <p className="text-xs text-muted-foreground">
+                              This orb is running {selectedPanelFirmwareVersion}. HomeBrain can push {selectedPanelLatestFirmwareVersion} over Wi-Fi.
+                            </p>
+                          </div>
+                        </div>
+                        <Badge variant="destructive" className="w-fit">
+                          Update recommended
+                        </Badge>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <div className="rounded-xl border border-border/60 bg-background/70 p-4">
                       <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Running</p>
-                      <p className="mt-2 font-medium">{normalizeString(selectedPanel.firmwareVersion) || "Not reported yet"}</p>
+                      <p className="mt-2 font-medium">{selectedPanelFirmwareVersion || "Not reported yet"}</p>
                       <p className="mt-1 text-xs text-muted-foreground">Live firmware version currently reported by the orb.</p>
+                    </div>
+                    <div className="rounded-xl border border-border/60 bg-background/70 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Available on HomeBrain</p>
+                      <p className="mt-2 font-medium">{selectedPanelLatestFirmwareVersion || "Not available yet"}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">The latest firmware version this HomeBrain host can build for the orb today.</p>
                     </div>
                     <div className="rounded-xl border border-border/60 bg-background/70 p-4">
                       <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Target</p>

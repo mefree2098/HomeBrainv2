@@ -42,12 +42,13 @@ constexpr unsigned long kEncoderLongPressMs = 900;
 constexpr unsigned long kStateRefreshFallbackMs = 5000;
 constexpr unsigned long kThermostatCommitDelayMs = 3000;
 constexpr unsigned long kThermostatDispatchDelayMs = 75;
+constexpr unsigned long kDeviceLevelCommitDelayMs = 3000;
 constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
 constexpr unsigned long kOtaStatusReportIntervalMs = 750;
 constexpr int kSwipeThreshold = 120;
 constexpr int kSwipeVerticalLimit = 90;
 constexpr unsigned long kSwipeWindowMs = 350;
-constexpr uint16_t kStateJsonCapacity = 24576;
+constexpr uint16_t kStateJsonCapacity = 32768;
 constexpr unsigned long kBrightnessPersistDelayMs = 1000;
 constexpr int kBrightnessDefaultPercent = 94;
 constexpr int kBrightnessMinPercent = 15;
@@ -55,6 +56,10 @@ constexpr int kBrightnessMaxPercent = 100;
 constexpr int kTemperatureUnavailable = -1000;
 constexpr int kDefaultEncoderDeltaThreshold = 4;
 constexpr int kFastEncoderDeltaThreshold = 2;
+constexpr int kUltraFastEncoderDeltaThreshold = 1;
+constexpr unsigned long kEncoderAccelerationFastMs = 80;
+constexpr unsigned long kEncoderAccelerationFasterMs = 45;
+constexpr unsigned long kEncoderAccelerationFastestMs = 20;
 constexpr lv_coord_t kZoomNormal = 256;
 constexpr lv_coord_t kThermostatCenterZoom = 256;
 constexpr lv_coord_t kThermostatAdjustmentZoom = 256;
@@ -175,12 +180,18 @@ uint8_t gLastEncoderState = 0;
 int8_t gEncoderDeltaAccumulator = 0;
 bool gEncoderPressed = false;
 unsigned long gEncoderPressedAt = 0;
+unsigned long gLastEncoderTurnAt = 0;
+int gLastEncoderDirection = 0;
 
 bool gPanelActivated = false;
 bool gPendingThermostatCommit = false;
 bool gThermostatModePickerExpanded = false;
 bool gOtaInProgress = false;
 int gPendingThermostatValue = 0;
+bool gPendingDeviceLevelCommit = false;
+String gPendingDeviceLevelTargetId;
+int gPendingDeviceLevelValue = 0;
+unsigned long gPendingDeviceLevelCommitAt = 0;
 bool gQueuedThermostatDispatch = false;
 String gQueuedThermostatDeviceId;
 int gQueuedThermostatValue = 0;
@@ -210,6 +221,8 @@ lv_obj_t* gModeBadgeLabel = nullptr;
 lv_obj_t* gTitleLabel = nullptr;
 lv_obj_t* gCenterValueLabel = nullptr;
 lv_obj_t* gSecondaryLabel = nullptr;
+lv_obj_t* gRoomValueLabel = nullptr;
+lv_obj_t* gRoomSubtitleLabel = nullptr;
 lv_obj_t* gHintLabel = nullptr;
 lv_obj_t* gFooterLabel = nullptr;
 lv_obj_t* gArc = nullptr;
@@ -502,9 +515,14 @@ void displayFlush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* colorB
 }
 
 void changeMode(int delta);
+void queueDeviceLevelCommit(const String& targetId, int value);
+bool commitPendingDeviceLevelNow();
+void commitPendingDeviceLevelIfReady();
 void queueDeviceLevelDispatch(const String& targetId, int value);
 bool toggleRoomLight(ModeSnapshot& mode);
+void hideRoomSurfaceLabels();
 int activeEncoderThreshold();
+int encoderStepAmount(const ModeSnapshot& mode, int direction);
 
 void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
   LV_UNUSED(indevDriver);
@@ -1198,7 +1216,20 @@ void setCenterTapEnabled(bool enabled) {
   lv_obj_add_flag(gCenterTapButton, LV_OBJ_FLAG_HIDDEN);
 }
 
+void hideRoomSurfaceLabels() {
+  if (gRoomValueLabel) {
+    lv_obj_add_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(gRoomValueLabel, "");
+  }
+
+  if (gRoomSubtitleLabel) {
+    lv_obj_add_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(gRoomSubtitleLabel, "");
+  }
+}
+
 void applyDefaultTextLayout() {
+  hideRoomSurfaceLabels();
   lv_obj_clear_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
@@ -1295,10 +1326,57 @@ void renderSettingsMode(const ModeSnapshot& mode) {
 }
 
 void renderRoomMode(const ModeSnapshot& mode) {
-  setSurfaceTitleText(mode.title, 74);
-  setSurfaceSubtitleText(mode.secondaryValue, 114, true, 210);
-  styleSurfaceCenterValue(mode.centerValue, 8, 232, 438);
-  styleHelperLabel(gHintLabel, 330, mode.hint);
+  const String roomTitle = mode.title.isEmpty() ? "Room" : mode.title;
+  const String roomSubtitle = mode.secondaryValue.isEmpty() ? "Lights" : mode.secondaryValue;
+  const String roomValue = mode.centerValue.isEmpty()
+    ? roomLevelDisplayValue(mode.knob.kind == "range" ? mode.knob.value : 0)
+    : mode.centerValue;
+  const String roomHint = mode.hint.isEmpty()
+    ? "Tap to toggle. Rotate to dim or brighten."
+    : mode.hint;
+
+  hideTextLabel(gSecondaryLabel);
+  hideTextLabel(gCenterValueLabel);
+  setSurfaceTitleText(roomTitle, 74);
+  if (gRoomSubtitleLabel) {
+    lv_obj_clear_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_width(gRoomSubtitleLabel, lv_pct(100));
+    lv_obj_align(gRoomSubtitleLabel, LV_ALIGN_TOP_MID, 0, 116);
+    lv_obj_set_style_text_align(gRoomSubtitleLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(gRoomSubtitleLabel, &hb_font_orbitron_28, 0);
+    lv_obj_set_style_transform_zoom(gRoomSubtitleLabel, 210, 0);
+    lv_obj_set_style_text_letter_space(gRoomSubtitleLabel, 0, 0);
+    lv_obj_set_style_text_color(gRoomSubtitleLabel, hex(homebrain::palette::kTextSecondary), 0);
+    lv_label_set_text(gRoomSubtitleLabel, roomSubtitle.c_str());
+  }
+
+  if (gRoomValueLabel) {
+    lv_obj_clear_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_width(gRoomValueLabel, lv_pct(100));
+    lv_obj_align(gRoomValueLabel, LV_ALIGN_CENTER, 0, 12);
+    lv_obj_set_style_text_align(gRoomValueLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_letter_space(gRoomValueLabel, 0, 0);
+    lv_obj_set_style_text_color(gRoomValueLabel, hex(homebrain::palette::kTextPrimary), 0);
+    if (isNumericDisplayValue(roomValue)) {
+      lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_100, 0);
+      lv_obj_set_style_transform_zoom(gRoomValueLabel, 196, 0);
+    } else {
+      lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_28, 0);
+      lv_obj_set_style_transform_zoom(gRoomValueLabel, 360, 0);
+    }
+    lv_label_set_text(gRoomValueLabel, roomValue.c_str());
+  }
+
+  styleHelperLabel(gHintLabel, 330, roomHint);
+  lv_obj_move_foreground(gTitleLabel);
+  if (gRoomSubtitleLabel) {
+    lv_obj_move_foreground(gRoomSubtitleLabel);
+  }
+  if (gRoomValueLabel) {
+    lv_obj_move_foreground(gRoomValueLabel);
+  }
+  lv_obj_move_foreground(gHintLabel);
+  lv_obj_move_foreground(gFooterLabel);
 }
 
 void renderSecurityMode(const ModeSnapshot& mode) {
@@ -1468,6 +1546,7 @@ void renderThermostatButtons(const ModeSnapshot& mode) {
 }
 
 void renderMode() {
+  hideRoomSurfaceLabels();
   ModeSnapshot* mode = currentMode();
   if (!mode) {
     hideWeatherBackdrop();
@@ -1551,6 +1630,8 @@ void changeMode(int delta) {
 
   gThermostatModePickerExpanded = false;
   gEncoderDeltaAccumulator = 0;
+  gLastEncoderTurnAt = 0;
+  gLastEncoderDirection = 0;
 
   const int next = static_cast<int>(gCurrentModeIndex) + delta;
   if (next < 0) {
@@ -1617,14 +1698,7 @@ bool getPanelJson(const String& url, JsonDocument& responseDocument) {
     return false;
   }
 
-  DynamicJsonDocument filterDocument(4096);
-  buildPanelStateFilter(filterDocument);
-
-  const DeserializationError error = deserializeJson(
-    responseDocument,
-    http.getStream(),
-    DeserializationOption::Filter(filterDocument)
-  );
+  const DeserializationError error = deserializeJson(responseDocument, http.getStream());
   http.end();
   if (error) {
     Serial.println(String("[panel] state parse failed: ") + error.c_str());
@@ -1674,6 +1748,7 @@ bool fetchPanelState() {
 void renderOtaProgressScreen(const String& title, int progress, const String& message) {
   hideWeatherBackdrop();
   setCenterTapEnabled(false);
+  hideRoomSurfaceLabels();
   hideAllActionButtons();
   lv_obj_add_flag(gFooterLabel, LV_OBJ_FLAG_HIDDEN);
 
@@ -2238,6 +2313,26 @@ void createUi() {
   lv_obj_add_flag(gCenterTapButton, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(gCenterTapButton, centerTapEventHandler, LV_EVENT_CLICKED, nullptr);
 
+  gRoomSubtitleLabel = lv_label_create(gMainCard);
+  lv_obj_set_width(gRoomSubtitleLabel, lv_pct(100));
+  lv_obj_align(gRoomSubtitleLabel, LV_ALIGN_TOP_MID, 0, 116);
+  lv_obj_set_style_text_align(gRoomSubtitleLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(gRoomSubtitleLabel, &hb_font_orbitron_28, 0);
+  lv_obj_set_style_transform_zoom(gRoomSubtitleLabel, 210, 0);
+  lv_obj_set_style_text_color(gRoomSubtitleLabel, hex(homebrain::palette::kTextSecondary), 0);
+  lv_label_set_text(gRoomSubtitleLabel, "");
+  lv_obj_add_flag(gRoomSubtitleLabel, LV_OBJ_FLAG_HIDDEN);
+
+  gRoomValueLabel = lv_label_create(gMainCard);
+  lv_obj_set_width(gRoomValueLabel, lv_pct(100));
+  lv_obj_align(gRoomValueLabel, LV_ALIGN_CENTER, 0, 12);
+  lv_obj_set_style_text_align(gRoomValueLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(gRoomValueLabel, &hb_font_orbitron_100, 0);
+  lv_obj_set_style_transform_zoom(gRoomValueLabel, 196, 0);
+  lv_obj_set_style_text_color(gRoomValueLabel, hex(homebrain::palette::kTextPrimary), 0);
+  lv_label_set_text(gRoomValueLabel, "");
+  lv_obj_add_flag(gRoomValueLabel, LV_OBJ_FLAG_HIDDEN);
+
   createActionButton(0, 50, 300);
   createActionButton(1, 256, 300);
   createActionButton(2, 50, 382);
@@ -2379,6 +2474,50 @@ void commitPendingThermostatValueIfReady() {
   commitPendingThermostatValueNow();
 }
 
+void queueDeviceLevelCommit(const String& targetId, int value) {
+  if (targetId.isEmpty()) {
+    return;
+  }
+
+  gQueuedDeviceLevelDispatch = false;
+  gQueuedDeviceLevelTargetId = "";
+  gPendingDeviceLevelCommit = true;
+  gPendingDeviceLevelTargetId = targetId;
+  gPendingDeviceLevelValue = constrain(value, 0, 100);
+  gPendingDeviceLevelCommitAt = millis();
+}
+
+bool commitPendingDeviceLevelNow() {
+  if (!gPendingDeviceLevelCommit) {
+    return false;
+  }
+
+  if (gPendingDeviceLevelTargetId.isEmpty()) {
+    gPendingDeviceLevelCommit = false;
+    return false;
+  }
+
+  gQueuedDeviceLevelTargetId = gPendingDeviceLevelTargetId;
+  gQueuedDeviceLevelValue = gPendingDeviceLevelValue;
+  gQueuedDeviceLevelDispatchAt = millis() + kDeviceLevelDispatchDelayMs;
+  gQueuedDeviceLevelDispatch = true;
+  gPendingDeviceLevelCommit = false;
+  gPendingDeviceLevelTargetId = "";
+  return true;
+}
+
+void commitPendingDeviceLevelIfReady() {
+  if (!gPendingDeviceLevelCommit) {
+    return;
+  }
+
+  if (millis() - gPendingDeviceLevelCommitAt < kDeviceLevelCommitDelayMs) {
+    return;
+  }
+
+  commitPendingDeviceLevelNow();
+}
+
 void queueDeviceLevelDispatch(const String& targetId, int value) {
   if (targetId.isEmpty()) {
     return;
@@ -2431,6 +2570,8 @@ bool toggleRoomLight(ModeSnapshot& mode) {
   }
 
   const int nextValue = mode.knob.value > 0 ? 0 : 100;
+  gPendingDeviceLevelCommit = false;
+  gPendingDeviceLevelTargetId = "";
   syncRoomModeLocalState(mode, nextValue);
   queueDeviceLevelDispatch(mode.metaDeviceId, nextValue);
   setStatusLine(nextValue > 0 ? "Lights 100%" : "Lights off");
@@ -2444,15 +2585,44 @@ int activeEncoderThreshold() {
     return kDefaultEncoderDeltaThreshold;
   }
 
-  if (mode->id == "room" && mode->knob.kind == "range") {
-    return kFastEncoderDeltaThreshold;
+  if ((mode->id == "room" || mode->id == "settings") && mode->knob.kind == "range") {
+    return kUltraFastEncoderDeltaThreshold;
   }
 
   if (mode->id == "media" && mode->knob.kind == "relative") {
-    return kFastEncoderDeltaThreshold;
+    return kUltraFastEncoderDeltaThreshold;
   }
 
   return kDefaultEncoderDeltaThreshold;
+}
+
+int encoderStepAmount(const ModeSnapshot& mode, int direction) {
+  const int baseStep = max(1, mode.knob.step);
+  if (mode.knob.kind != "range") {
+    return baseStep;
+  }
+
+  if (mode.id != "room" && mode.id != "settings") {
+    return baseStep;
+  }
+
+  const unsigned long now = millis();
+  const bool sameDirection = gLastEncoderTurnAt != 0 && direction == gLastEncoderDirection;
+  const unsigned long elapsedMs = sameDirection ? now - gLastEncoderTurnAt : ULONG_MAX;
+  gLastEncoderTurnAt = now;
+  gLastEncoderDirection = direction;
+
+  if (elapsedMs <= kEncoderAccelerationFastestMs) {
+    return baseStep * 10;
+  }
+  if (elapsedMs <= kEncoderAccelerationFasterMs) {
+    return baseStep * 5;
+  }
+  if (elapsedMs <= kEncoderAccelerationFastMs) {
+    return baseStep * 3;
+  }
+
+  return baseStep;
 }
 
 void persistBrightnessIfReady() {
@@ -2479,8 +2649,9 @@ void handleEncoderTurn(int direction) {
   }
 
   if (mode->knob.kind == "range") {
+    const int stepAmount = encoderStepAmount(*mode, direction);
     const int next = constrain(
-      mode->knob.value + (direction * max(1, mode->knob.step)),
+      mode->knob.value + (direction * stepAmount),
       mode->knob.minValue,
       mode->knob.maxValue
     );
@@ -2506,8 +2677,8 @@ void handleEncoderTurn(int direction) {
 
     if (mode->id == "room") {
       syncRoomModeLocalState(*mode, next);
-      queueDeviceLevelDispatch(mode->metaDeviceId, next);
-      setStatusLine(next > 0 ? "Adjusting lights" : "Lights off");
+      queueDeviceLevelCommit(mode->metaDeviceId, next);
+      setStatusLine("Lights " + roomLevelDisplayValue(next));
       renderMode();
       return;
     }
@@ -2553,7 +2724,6 @@ void pollEncoder() {
         break;
       default:
         delta = 0;
-        gEncoderDeltaAccumulator = 0;
         break;
     }
 
@@ -2561,12 +2731,13 @@ void pollEncoder() {
     if (delta != 0) {
       gEncoderDeltaAccumulator += delta;
       const int encoderThreshold = activeEncoderThreshold();
-      if (gEncoderDeltaAccumulator >= encoderThreshold) {
+      while (gEncoderDeltaAccumulator >= encoderThreshold) {
         handleEncoderTurn(1);
-        gEncoderDeltaAccumulator = 0;
-      } else if (gEncoderDeltaAccumulator <= -encoderThreshold) {
+        gEncoderDeltaAccumulator -= encoderThreshold;
+      }
+      while (gEncoderDeltaAccumulator <= -encoderThreshold) {
         handleEncoderTurn(-1);
-        gEncoderDeltaAccumulator = 0;
+        gEncoderDeltaAccumulator += encoderThreshold;
       }
     }
   }
@@ -2615,7 +2786,10 @@ void maybeRefreshState() {
     return;
   }
 
-  if (gPendingThermostatCommit || gQueuedThermostatDispatch || gQueuedDeviceLevelDispatch) {
+  if (gPendingThermostatCommit
+      || gQueuedThermostatDispatch
+      || gPendingDeviceLevelCommit
+      || gQueuedDeviceLevelDispatch) {
     return;
   }
 
@@ -2650,6 +2824,8 @@ void setup() {
   pinMode(kEncoderBPin, INPUT);
   gLastEncoderState = static_cast<uint8_t>((digitalRead(kEncoderAPin) << 1) | digitalRead(kEncoderBPin));
   gEncoderDeltaAccumulator = 0;
+  gLastEncoderTurnAt = 0;
+  gLastEncoderDirection = 0;
 
   setupWiFi();
 }
@@ -2659,6 +2835,7 @@ void loop() {
   lv_timer_handler();
   pollEncoder();
   commitPendingThermostatValueIfReady();
+  commitPendingDeviceLevelIfReady();
   persistBrightnessIfReady();
   ensureWiFiConnected();
   dispatchQueuedThermostatCommitIfReady();

@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
@@ -25,11 +25,24 @@ const DEFAULT_POLL_INTERVAL_MS = Math.max(
   Number(process.env.WALL_PANEL_POLL_INTERVAL_MS || 4_000)
 );
 
+const PANEL_FIRMWARE_VERSION_CACHE_TTL_MS = Math.max(
+  1_000,
+  Number(process.env.HOMEBRAIN_PANEL_VERSION_CACHE_TTL_MS || 15_000)
+);
+
 const PANEL_MODE_ORDER = Object.freeze(['thermostat', 'room', 'home', 'media', 'quiet']);
 const THERMOSTAT_MODES = Object.freeze(['auto', 'cool', 'heat', 'off']);
 const ROOM_DEVICE_TYPES = new Set(['light', 'switch', 'speaker', 'lock', 'garage']);
 const ACTIVE_OTA_STATUSES = new Set(['queued', 'building', 'ready', 'downloading', 'installing', 'rebooting']);
 const DOWNLOADABLE_OTA_STATUSES = new Set(['ready', 'downloading', 'installing', 'rebooting']);
+const PANEL_FIRMWARE_VERSION_INPUTS = Object.freeze([
+  'platformio.ini',
+  'partitions-ota.csv',
+  'src',
+  'include',
+  'lib',
+  'scripts'
+]);
 const PANEL_BUILD_TARGETS = Object.freeze({
   'elecrow-crowpanel-2.1-rotary': Object.freeze({
     env: 'elecrow-crowpanel-2_1',
@@ -116,8 +129,14 @@ function otaStatusIsActive(status) {
 }
 
 function buildPanelFirmwareVersion() {
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const stamp = formatPanelFirmwareVersionStamp(new Date());
   return `panel-${stamp}-${crypto.randomBytes(2).toString('hex')}`;
+}
+
+function formatPanelFirmwareVersionStamp(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  const resolved = Number.isNaN(date.getTime()) ? new Date() : date;
+  return resolved.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
 function createError(status, message) {
@@ -128,6 +147,78 @@ function createError(status, message) {
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function extractPanelFirmwareTimestamp(value) {
+  const match = trimString(value).match(/(\d{8}T\d{6}Z)/);
+  if (!match) {
+    return null;
+  }
+
+  const stamp = match[1];
+  const iso = `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(9, 11)}:${stamp.slice(11, 13)}:${stamp.slice(13, 15)}Z`;
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? null : date.getTime();
+}
+
+function normalizeComparableVersion(value) {
+  return trimString(value)
+    .toLowerCase()
+    .replace(/^v/, '')
+    .split(/[.\-+_]/)
+    .slice(0, 4)
+    .map((segment) => {
+      const numeric = Number.parseInt(segment.replace(/[^0-9]/g, ''), 10);
+      return Number.isFinite(numeric) ? numeric : 0;
+    });
+}
+
+function compareComparableVersions(left, right) {
+  const a = normalizeComparableVersion(left);
+  const b = normalizeComparableVersion(right);
+  const length = Math.max(a.length, b.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = a[index] || 0;
+    const rightValue = b[index] || 0;
+    if (leftValue > rightValue) {
+      return 1;
+    }
+    if (leftValue < rightValue) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+function isFirmwareUpdateAvailable(installedVersion, latestVersion) {
+  const installed = trimString(installedVersion);
+  const latest = trimString(latestVersion);
+
+  if (!installed || !latest || installed === latest) {
+    return false;
+  }
+
+  const installedTimestamp = extractPanelFirmwareTimestamp(installed);
+  const latestTimestamp = extractPanelFirmwareTimestamp(latest);
+
+  if (installedTimestamp !== null && latestTimestamp !== null) {
+    if (latestTimestamp !== installedTimestamp) {
+      return latestTimestamp > installedTimestamp;
+    }
+    return true;
+  }
+
+  if (latestTimestamp !== null) {
+    return true;
+  }
+
+  if (installedTimestamp !== null) {
+    return false;
+  }
+
+  return compareComparableVersions(latest, installed) > 0;
 }
 
 function toId(value) {
@@ -1110,10 +1201,256 @@ class WallPanelService {
       || path.join(this.projectRoot, 'server', 'data', 'wall-panel-ota');
     this.platformioBin = options.platformioBin || process.env.HOMEBRAIN_PANEL_PLATFORMIO_BIN || 'pio';
     this.spawnProcess = options.spawnProcess || spawn;
+    this.execFile = options.execFile || execFile;
+    this.panelFirmwareVersionCache = {
+      expiresAt: 0,
+      value: ''
+    };
   }
 
   async ensureOtaArtifactsDir() {
     await fsp.mkdir(this.panelOtaArtifactsDir, { recursive: true });
+  }
+
+  execFileCapture(file, args = [], options = {}) {
+    return new Promise((resolve, reject) => {
+      this.execFile(file, args, options, (error, stdout = '', stderr = '') => {
+        if (error) {
+          error.stdout = trimString(String(stdout || ''));
+          error.stderr = trimString(String(stderr || ''));
+          reject(error);
+          return;
+        }
+
+        resolve({
+          stdout: trimString(String(stdout || '')),
+          stderr: trimString(String(stderr || ''))
+        });
+      });
+    });
+  }
+
+  async collectFirmwareVersionFiles(entryPath, relativePath) {
+    const stat = await fsp.stat(entryPath).catch(() => null);
+    if (!stat) {
+      return [];
+    }
+
+    if (stat.isFile()) {
+      return [{
+        absolutePath: entryPath,
+        relativePath,
+        mtimeMs: stat.mtimeMs
+      }];
+    }
+
+    if (!stat.isDirectory()) {
+      return [];
+    }
+
+    const entries = await fsp.readdir(entryPath, { withFileTypes: true });
+    const sortedEntries = [...entries].sort((left, right) => left.name.localeCompare(right.name));
+    const files = [];
+
+    for (const entry of sortedEntries) {
+      const childAbsolutePath = path.join(entryPath, entry.name);
+      const childRelativePath = path.join(relativePath, entry.name);
+
+      if (entry.isDirectory()) {
+        files.push(...await this.collectFirmwareVersionFiles(childAbsolutePath, childRelativePath));
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const childStat = await fsp.stat(childAbsolutePath).catch(() => null);
+      if (!childStat) {
+        continue;
+      }
+
+      files.push({
+        absolutePath: childAbsolutePath,
+        relativePath: childRelativePath,
+        mtimeMs: childStat.mtimeMs
+      });
+    }
+
+    return files;
+  }
+
+  async buildLocalPanelFirmwareVersion() {
+    const files = [];
+
+    for (const relativePath of PANEL_FIRMWARE_VERSION_INPUTS) {
+      const absolutePath = path.join(this.panelFirmwareProjectDir, relativePath);
+      files.push(...await this.collectFirmwareVersionFiles(absolutePath, relativePath));
+    }
+
+    if (files.length === 0) {
+      return buildPanelFirmwareVersion();
+    }
+
+    const hash = crypto.createHash('sha1');
+    let newestMtimeMs = 0;
+
+    for (const file of files.sort((left, right) => left.relativePath.localeCompare(right.relativePath))) {
+      const contents = await fsp.readFile(file.absolutePath);
+      hash.update(file.relativePath);
+      hash.update('\n');
+      hash.update(contents);
+      hash.update('\n');
+      newestMtimeMs = Math.max(newestMtimeMs, Number(file.mtimeMs) || 0);
+    }
+
+    const stamp = formatPanelFirmwareVersionStamp(new Date(newestMtimeMs || Date.now()));
+    return `panel-${stamp}-${hash.digest('hex').slice(0, 8)}`;
+  }
+
+  async getLatestPanelFirmwareVersion(options = {}) {
+    const { force = false } = options;
+    const now = Date.now();
+
+    if (!force && this.panelFirmwareVersionCache.expiresAt > now && this.panelFirmwareVersionCache.value) {
+      return this.panelFirmwareVersionCache.value;
+    }
+
+    let version = '';
+    const firmwareProjectPath = path.relative(this.projectRoot, this.panelFirmwareProjectDir) || '.';
+
+    try {
+      const logResult = await this.execFileCapture(
+        'git',
+        ['log', '-1', '--format=%ct:%h', '--', firmwareProjectPath],
+        { cwd: this.projectRoot }
+      );
+
+      const [rawEpoch = '', shortHash = ''] = logResult.stdout.split(':');
+      const epochSeconds = Number(rawEpoch);
+
+      if (Number.isFinite(epochSeconds) && shortHash) {
+        const stamp = formatPanelFirmwareVersionStamp(new Date(epochSeconds * 1000));
+        version = `panel-${stamp}-${trimString(shortHash)}`;
+
+        const statusResult = await this.execFileCapture(
+          'git',
+          ['status', '--porcelain', '--', firmwareProjectPath],
+          { cwd: this.projectRoot }
+        ).catch(() => ({ stdout: '' }));
+
+        if (trimString(statusResult.stdout)) {
+          const localVersion = await this.buildLocalPanelFirmwareVersion();
+          const localFingerprint = trimString(localVersion).split('-').slice(-1)[0] || 'local';
+          version = `${version}-dirty-${localFingerprint}`;
+        }
+      }
+    } catch (_error) {
+      version = '';
+    }
+
+    if (!version) {
+      version = await this.buildLocalPanelFirmwareVersion().catch(() => '');
+    }
+
+    if (!version) {
+      version = buildPanelFirmwareVersion();
+    }
+
+    this.panelFirmwareVersionCache = {
+      value: version,
+      expiresAt: now + PANEL_FIRMWARE_VERSION_CACHE_TTL_MS
+    };
+
+    return version;
+  }
+
+  async serializePanelForResponse(panel, options = {}) {
+    const payload = serializePanel(panel, options);
+    const buildTarget = resolvePanelBuildTarget(payload.hardwareProfile);
+
+    if (!buildTarget) {
+      return {
+        ...payload,
+        latestFirmwareVersion: '',
+        updateAvailable: false
+      };
+    }
+
+    const latestFirmwareVersion = await this.getLatestPanelFirmwareVersion().catch(() => '');
+    return {
+      ...payload,
+      latestFirmwareVersion,
+      updateAvailable: isFirmwareUpdateAvailable(payload.firmwareVersion, latestFirmwareVersion)
+    };
+  }
+
+  createPlatformioEnv(extraEnv = {}) {
+    const configuredBin = trimString(this.platformioBin);
+    const configuredDir = configuredBin && (configuredBin.includes('/') || configuredBin.includes(path.sep))
+      ? path.dirname(configuredBin)
+      : '';
+    const homeDir = trimString(process.env.HOME || '');
+    const searchPaths = [];
+
+    [
+      configuredDir,
+      homeDir ? path.join(homeDir, '.platformio', 'penv', 'bin') : '',
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      trimString(process.env.PATH || '')
+    ].forEach((entry) => {
+      if (!entry) {
+        return;
+      }
+
+      entry.split(path.delimiter).forEach((segment) => {
+        const normalized = trimString(segment);
+        if (normalized && !searchPaths.includes(normalized)) {
+          searchPaths.push(normalized);
+        }
+      });
+    });
+
+    return {
+      ...process.env,
+      ...extraEnv,
+      PATH: searchPaths.join(path.delimiter)
+    };
+  }
+
+  getPlatformioCandidates() {
+    const configuredBin = trimString(this.platformioBin);
+    const homeDir = trimString(process.env.HOME || '');
+    const candidates = [
+      configuredBin ? { command: configuredBin, args: [], label: configuredBin } : null,
+      { command: 'pio', args: [], label: 'pio' },
+      { command: 'platformio', args: [], label: 'platformio' },
+      homeDir ? {
+        command: path.join(homeDir, '.platformio', 'penv', 'bin', 'pio'),
+        args: [],
+        label: path.join(homeDir, '.platformio', 'penv', 'bin', 'pio')
+      } : null,
+      { command: '/opt/homebrew/bin/pio', args: [], label: '/opt/homebrew/bin/pio' },
+      { command: '/usr/local/bin/pio', args: [], label: '/usr/local/bin/pio' },
+      { command: 'python3', args: ['-m', 'platformio'], label: 'python3 -m platformio' },
+      { command: 'python', args: ['-m', 'platformio'], label: 'python -m platformio' }
+    ];
+
+    const seen = new Set();
+    return candidates.filter((candidate) => {
+      if (!candidate || !candidate.command) {
+        return false;
+      }
+
+      const key = `${candidate.command}::${candidate.args.join(' ')}`;
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    });
   }
 
   async updatePanelOtaState(panelId, jobId, updates = {}, options = {}) {
@@ -1189,56 +1526,87 @@ class WallPanelService {
       hardwareProfile: panel.hardwareProfile
     });
 
-    await new Promise((resolve, reject) => {
-      const child = this.spawnProcess(
-        this.platformioBin,
-        ['run', '-e', buildTarget.env],
-        {
-          cwd: this.panelFirmwareProjectDir,
-          env: {
-            ...process.env,
-            HOMEBRAIN_PANEL_BUILD_VERSION: targetVersion
-          },
-          stdio: ['ignore', 'pipe', 'pipe']
-        }
-      );
-
-      let stderr = '';
-      let sawCompiling = false;
-      let sawLinking = false;
-
-      const handleOutput = async (chunk) => {
-        const text = chunk.toString();
-        stderr = `${stderr}${text}`.slice(-4000);
-
-        if (!sawCompiling && /Compiling|Building/i.test(text)) {
-          sawCompiling = true;
-          await this.updatePanelOtaState(panel.id, jobId, {
-            progress: 24,
-            message: 'Compiling wall panel firmware...'
-          }, { allowMissingJob: true }).catch(() => null);
-        }
-
-        if (!sawLinking && /Linking|Creating esp32s3 image|Retrieving maximum program size/i.test(text)) {
-          sawLinking = true;
-          await this.updatePanelOtaState(panel.id, jobId, {
-            progress: 42,
-            message: 'Linking and packaging OTA image...'
-          }, { allowMissingJob: true }).catch(() => null);
-        }
-      };
-
-      child.stdout.on('data', handleOutput);
-      child.stderr.on('data', handleOutput);
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(new Error(trimString(stderr) || `PlatformIO exited with code ${code}`));
-      });
+    const processEnv = this.createPlatformioEnv({
+      HOMEBRAIN_PANEL_BUILD_VERSION: targetVersion
     });
+    const missingCandidates = [];
+    let buildCompleted = false;
+
+    for (const candidate of this.getPlatformioCandidates()) {
+      try {
+        await new Promise((resolve, reject) => {
+          const child = this.spawnProcess(
+            candidate.command,
+            [...candidate.args, 'run', '-e', buildTarget.env],
+            {
+              cwd: this.panelFirmwareProjectDir,
+              env: processEnv,
+              stdio: ['ignore', 'pipe', 'pipe']
+            }
+          );
+
+          let stderr = '';
+          let sawCompiling = false;
+          let sawLinking = false;
+
+          const handleOutput = async (chunk) => {
+            const text = chunk.toString();
+            stderr = `${stderr}${text}`.slice(-4000);
+
+            if (!sawCompiling && /Compiling|Building/i.test(text)) {
+              sawCompiling = true;
+              await this.updatePanelOtaState(panel.id, jobId, {
+                progress: 24,
+                message: 'Compiling wall panel firmware...'
+              }, { allowMissingJob: true }).catch(() => null);
+            }
+
+            if (!sawLinking && /Linking|Creating esp32s3 image|Retrieving maximum program size/i.test(text)) {
+              sawLinking = true;
+              await this.updatePanelOtaState(panel.id, jobId, {
+                progress: 42,
+                message: 'Linking and packaging OTA image...'
+              }, { allowMissingJob: true }).catch(() => null);
+            }
+          };
+
+          child.stdout.on('data', handleOutput);
+          child.stderr.on('data', handleOutput);
+          child.on('error', (error) => {
+            error.command = candidate.label;
+            error.stderr = trimString(stderr);
+            reject(error);
+          });
+          child.on('close', (code) => {
+            if (code === 0) {
+              resolve();
+              return;
+            }
+
+            const failure = new Error(trimString(stderr) || `${candidate.label} exited with code ${code}`);
+            failure.code = code;
+            failure.command = candidate.label;
+            reject(failure);
+          });
+        });
+
+        buildCompleted = true;
+        break;
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          missingCandidates.push(candidate.label);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!buildCompleted) {
+      throw createError(
+        500,
+        `HomeBrain could not find PlatformIO. Checked ${missingCandidates.join(', ') || 'configured PATH'}. Install PlatformIO or set HOMEBRAIN_PANEL_PLATFORMIO_BIN.`
+      );
+    }
 
     const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
     const panelDir = path.join(this.panelOtaArtifactsDir, panel.id);
@@ -1290,7 +1658,7 @@ class WallPanelService {
     }
 
     const jobId = crypto.randomUUID();
-    const targetVersion = buildPanelFirmwareVersion();
+    const targetVersion = await this.getLatestPanelFirmwareVersion().catch(() => buildPanelFirmwareVersion());
     const panelDoc = await getPanelDocument(panelId);
     panelDoc.status = 'updating';
     panelDoc.ota = mergeOtaState(panelDoc.ota || {}, {
@@ -1332,7 +1700,7 @@ class WallPanelService {
       return this.failPanelOtaJob(panel.id, jobId, error);
     });
 
-    return serializePanel(panelDoc);
+    return this.serializePanelForResponse(panelDoc);
   }
 
   async getPanelOtaArtifact(panelId, credentials = {}) {
@@ -1409,23 +1777,23 @@ class WallPanelService {
       await updatedPanel.save();
     }
 
-    return serializePanel(updatedPanel);
+    return this.serializePanelForResponse(updatedPanel);
   }
 
   async listPanels() {
     const panels = await WallPanel.find({}).sort({ room: 1, name: 1 });
-    return panels.map((panel) => serializePanel(panel));
+    return Promise.all(panels.map((panel) => this.serializePanelForResponse(panel)));
   }
 
   async getPanelById(panelId) {
     const panel = await getPanelDocument(panelId);
-    return serializePanel(panel);
+    return this.serializePanelForResponse(panel);
   }
 
   async getPanelProvisioning(panelId, origin = '') {
     const panel = await getPanelDocument(panelId);
     return {
-      panel: serializePanel(panel, { includeSecrets: true }),
+      panel: await this.serializePanelForResponse(panel, { includeSecrets: true }),
       provisioning: buildProvisioningSnapshot(panel, origin)
     };
   }
@@ -1474,7 +1842,7 @@ class WallPanelService {
       tags: ['wall-panel', 'registration']
     });
 
-    return serializePanel(panel, { includeSecrets: true });
+    return this.serializePanelForResponse(panel, { includeSecrets: true });
   }
 
   async updatePanel(panelId, updates = {}) {
@@ -1534,7 +1902,7 @@ class WallPanelService {
       tags: ['wall-panel', 'update']
     });
 
-    return serializePanel(panel);
+    return this.serializePanelForResponse(panel);
   }
 
   async rotateClaimToken(panelId) {
@@ -1545,7 +1913,7 @@ class WallPanelService {
       claimTokenExpires
     });
     await panel.save();
-    return serializePanel(panel, { includeSecrets: true });
+    return this.serializePanelForResponse(panel, { includeSecrets: true });
   }
 
   async rotateRegistrationCode(panelId, origin = '') {
@@ -1585,7 +1953,7 @@ class WallPanelService {
     });
 
     return {
-      panel: serializePanel(panel, { includeSecrets: true }),
+      panel: await this.serializePanelForResponse(panel, { includeSecrets: true }),
       provisioning: buildProvisioningSnapshot(panel, origin)
     };
   }
@@ -1594,7 +1962,7 @@ class WallPanelService {
     const panel = await ensurePanelAccess(panelId, credentials);
     const state = await this.getPanelState(panelId, credentials, origin);
     return {
-      panel: serializePanel(panel),
+      panel: await this.serializePanelForResponse(panel),
       provisioning: buildProvisioningSnapshot(panel, origin),
       state
     };
@@ -1648,7 +2016,7 @@ class WallPanelService {
       tags: ['wall-panel', 'activation']
     });
 
-    return serializePanel(panel);
+    return this.serializePanelForResponse(panel);
   }
 
   async getPanelState(panelId, credentials = {}, origin = '') {
@@ -1832,4 +2200,7 @@ class WallPanelService {
   }
 }
 
-module.exports = new WallPanelService();
+const wallPanelService = new WallPanelService();
+
+module.exports = wallPanelService;
+module.exports.WallPanelService = WallPanelService;

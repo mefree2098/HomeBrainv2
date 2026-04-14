@@ -1,15 +1,24 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { EventEmitter } = require('events');
+const { PassThrough } = require('stream');
 
 const WallPanel = require('../models/WallPanel');
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
 const deviceService = require('../services/deviceService');
+const eventStreamService = require('../services/eventStreamService');
 const sceneService = require('../services/sceneService');
 const securityAlarmService = require('../services/securityAlarmService');
 const harmonyService = require('../services/harmonyService');
 const weatherService = require('../services/weatherService');
-const wallPanelService = require('../services/wallPanelService');
+const wallPanelServiceModule = require('../services/wallPanelService');
+
+const wallPanelService = wallPanelServiceModule;
+const { WallPanelService } = wallPanelServiceModule;
 
 test('registerPanel issues panel credentials and default mode order', async (t) => {
   const originalSave = WallPanel.prototype.save;
@@ -405,4 +414,123 @@ test('rotateRegistrationCode regenerates the setup token and marks the panel unr
   assert.match(result.panel.settings.registrationCode, /^HBWP-/);
   assert.notEqual(result.panel.settings.registrationCode, 'HBWP-ABCD-EF12-3456');
   assert.equal(result.provisioning.firmwareHeader.HOMEBRAIN_PANEL_HUB_URL, 'https://example.com');
+});
+
+test('getPanelById reports when newer HomeBrain firmware is available', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-7',
+    name: 'Hallway Orb',
+    room: 'Hallway',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    firmwareVersion: 'panel-20240409T235959Z-older',
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const service = new WallPanelService({
+    projectRoot: '/tmp/homebrain',
+    panelFirmwareProjectDir: '/tmp/homebrain/embedded/elecrow-wall-panel'
+  });
+  service.panelFirmwareVersionCache = {
+    value: 'panel-20240410T000000Z-abc1234',
+    expiresAt: Date.now() + 60_000
+  };
+
+  const result = await service.getPanelById('panel-7');
+
+  assert.equal(result.latestFirmwareVersion, 'panel-20240410T000000Z-abc1234');
+  assert.equal(result.updateAvailable, true);
+});
+
+test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missing from PATH', async (t) => {
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-'));
+  const firmwareDir = path.join(tempRoot, 'embedded', 'elecrow-wall-panel');
+  const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
+  const builtArtifactPath = path.join(firmwareDir, '.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin');
+  const originalPublishSafe = eventStreamService.publishSafe;
+
+  t.after(async () => {
+    eventStreamService.publishSafe = originalPublishSafe;
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.promises.mkdir(path.dirname(builtArtifactPath), { recursive: true });
+  await fs.promises.writeFile(path.join(firmwareDir, 'platformio.ini'), '[env:elecrow-crowpanel-2_1]\n');
+  await fs.promises.writeFile(builtArtifactPath, Buffer.from('firmware-binary'));
+
+  eventStreamService.publishSafe = async () => {};
+
+  const commands = [];
+  const service = new WallPanelService({
+    projectRoot: tempRoot,
+    panelFirmwareProjectDir: firmwareDir,
+    panelOtaArtifactsDir: otaArtifactsDir,
+    platformioBin: 'pio',
+    spawnProcess: (command, args, options) => {
+      commands.push({
+        command,
+        args,
+        envPath: options?.env?.PATH || ''
+      });
+
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+
+      process.nextTick(() => {
+        if (command !== '/opt/homebrew/bin/pio') {
+          const error = new Error(`spawn ${command} ENOENT`);
+          error.code = 'ENOENT';
+          child.emit('error', error);
+          return;
+        }
+
+        child.stdout.write('Compiling wall panel firmware...\n');
+        child.stderr.write('Linking and packaging OTA image...\n');
+        child.emit('close', 0);
+      });
+
+      return child;
+    }
+  });
+
+  service.updatePanelOtaState = async () => ({});
+
+  await service.buildPanelOtaArtifact(
+    {
+      id: 'panel-build',
+      hardwareProfile: 'elecrow-crowpanel-2.1-rotary'
+    },
+    {
+      jobId: 'job-1',
+      targetVersion: 'panel-20240410T000000Z-abc1234'
+    }
+  );
+
+  const copiedArtifact = await fs.promises.readFile(
+    path.join(otaArtifactsDir, 'panel-build', 'job-1.bin'),
+    'utf8'
+  );
+
+  assert.equal(commands[0].command, 'pio');
+  assert.ok(commands.some((entry) => entry.command === '/opt/homebrew/bin/pio'));
+  assert.ok(commands.some((entry) => entry.envPath.includes('/opt/homebrew/bin')));
+  assert.equal(copiedArtifact, 'firmware-binary');
 });
