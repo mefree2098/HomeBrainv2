@@ -2349,31 +2349,37 @@ class WallPanelService {
 
   async getPanelState(panelId, credentials = {}, origin = '') {
     const panel = normalizePanelDocument(await ensurePanelAccess(panelId, credentials));
-    const roomDevices = await Device.find({ room: panel.room }).sort({ name: 1 });
-    const allDevices = await Device.find({}).sort({ room: 1, name: 1 });
+    const needsAllDevices = uniqueIds([
+      panel?.settings?.roomControl?.lightDeviceId,
+      ...(Array.isArray(panel?.settings?.roomControl?.favoriteDeviceIds)
+        ? panel.settings.roomControl.favoriteDeviceIds
+        : [])
+    ]).length > 0;
 
-    let securityStatus = null;
-    try {
-      securityStatus = await securityAlarmService.getAlarmStatus({ refreshDoorLocks: false });
-    } catch (error) {
-      securityStatus = {
+    const [roomDevices, allDevices, securityStatus, weatherSnapshot] = await Promise.all([
+      Device.find({ room: panel.room }).sort({ name: 1 }),
+      needsAllDevices
+        ? Device.find({}).sort({ room: 1, name: 1 })
+        : Promise.resolve([]),
+      securityAlarmService.getAlarmStatus({ refreshDoorLocks: false }).catch((error) => ({
         alarmState: 'unknown',
         isArmed: false,
         isTriggered: false,
         error: error.message
-      };
-    }
+      })),
+      weatherService.fetchDashboardWeather().catch(() => null)
+    ]);
 
-    const weatherSnapshot = await weatherService.fetchDashboardWeather().catch(() => null);
-
-    const thermostatDevice = await resolveThermostatDevice(panel.settings, roomDevices).catch(() => null);
-    const sensorDevice = await resolveSensorDevice(panel.settings, roomDevices).catch(() => null);
+    const [thermostatDevice, sensorDevice, room, media, quiet] = await Promise.all([
+      resolveThermostatDevice(panel.settings, roomDevices).catch(() => null),
+      resolveSensorDevice(panel.settings, roomDevices).catch(() => null),
+      buildRoomMode(panel, roomDevices, allDevices),
+      buildMediaMode(panel),
+      buildQuietMode(panel)
+    ]);
 
     const thermostat = buildThermostatMode(panel, thermostatDevice, sensorDevice, weatherSnapshot);
-    const room = await buildRoomMode(panel, roomDevices, allDevices);
-    const home = buildHomeMode(panel, securityStatus, allDevices);
-    const media = await buildMediaMode(panel);
-    const quiet = await buildQuietMode(panel);
+    const home = buildHomeMode(panel, securityStatus);
     const modeMap = { thermostat, room, home, media, quiet };
     const modeOrder = panel.settings.modeOrder.filter((mode) => modeMap[mode]);
 

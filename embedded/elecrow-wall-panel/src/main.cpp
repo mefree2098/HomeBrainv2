@@ -10,6 +10,8 @@
 #include <Adafruit_CST8XX.h>
 #include <PCF8574.h>
 #include <Preferences.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include "HomeBrainPanelConfig.h"
 #include "HomeBrainPanelAssets.h"
@@ -45,9 +47,10 @@ constexpr unsigned long kThermostatDispatchDelayMs = 75;
 constexpr unsigned long kDeviceLevelCommitDelayMs = 3000;
 constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
 constexpr unsigned long kSecurityStateRefreshDelayMs = 1750;
-constexpr int kSwipeThreshold = 40;
-constexpr int kSwipeVerticalLimit = 190;
-constexpr unsigned long kSwipeWindowMs = 900;
+constexpr unsigned long kActionStateRefreshDelayMs = 450;
+constexpr int kSwipeThreshold = 26;
+constexpr int kSwipeVerticalLimit = 220;
+constexpr unsigned long kSwipeWindowMs = 1000;
 constexpr uint16_t kStateJsonCapacity = 32768;
 constexpr unsigned long kBrightnessPersistDelayMs = 1000;
 constexpr int kBrightnessDefaultPercent = 94;
@@ -60,6 +63,14 @@ constexpr int kUltraFastEncoderDeltaThreshold = 1;
 constexpr unsigned long kEncoderAccelerationFastMs = 80;
 constexpr unsigned long kEncoderAccelerationFasterMs = 45;
 constexpr unsigned long kEncoderAccelerationFastestMs = 20;
+constexpr int kPanelHttpConnectTimeoutMs = 1200;
+constexpr int kPanelHttpTimeoutMs = 1800;
+constexpr int kOtaHttpConnectTimeoutMs = 4000;
+constexpr int kOtaHttpTimeoutMs = 15000;
+constexpr uint8_t kNetworkJobQueueCapacity = 12;
+constexpr uint8_t kNetworkResultQueueCapacity = 12;
+constexpr uint16_t kNetworkTaskIdleDelayMs = 8;
+constexpr uint16_t kLoopIdleDelayMs = 1;
 constexpr lv_coord_t kZoomNormal = 256;
 constexpr lv_coord_t kThermostatCenterZoom = 256;
 constexpr lv_coord_t kThermostatAdjustmentZoom = 256;
@@ -167,6 +178,32 @@ struct PanelState {
   bool loaded = false;
 };
 
+enum class NetworkJobKind : uint8_t {
+  None = 0,
+  ActivatePanel = 1,
+  FetchState = 2,
+  ExecuteAction = 3
+};
+
+struct NetworkJob {
+  NetworkJobKind kind = NetworkJobKind::None;
+  String actionType;
+  String targetId;
+  String action;
+  String value;
+  String queuedStatus;
+  String successStatus;
+  String failureFallback;
+  bool refreshAfterSuccess = false;
+  bool refreshAfterFailure = false;
+};
+
+struct NetworkResult {
+  NetworkJob job;
+  bool success = false;
+  String payload;
+};
+
 PanelState gState;
 uint8_t gCurrentModeIndex = 0;
 
@@ -214,6 +251,15 @@ bool gPendingBrightnessPersist = false;
 String gStatusLine = "Booting HomeBrain panel...";
 String gActiveOtaJobId;
 String gBlockedOtaJobId;
+SemaphoreHandle_t gNetworkMutex = nullptr;
+TaskHandle_t gNetworkTaskHandle = nullptr;
+NetworkJob gNetworkJobs[kNetworkJobQueueCapacity];
+uint8_t gNetworkJobCount = 0;
+NetworkJob gActiveNetworkJob;
+bool gNetworkJobActive = false;
+NetworkResult gNetworkResults[kNetworkResultQueueCapacity];
+uint8_t gNetworkResultCount = 0;
+unsigned long gLastLvglTickAt = 0;
 
 lv_obj_t* gScreen = nullptr;
 lv_obj_t* gMainCard = nullptr;
@@ -317,6 +363,11 @@ bool beginHttpRequest(
   HttpRequestChannel channel = HttpRequestChannel::Default
 ) {
   const size_t channelIndex = static_cast<size_t>(channel);
+  const bool otaChannel = channel == HttpRequestChannel::OtaDownload;
+
+  http.setReuse(true);
+  http.setConnectTimeout(otaChannel ? kOtaHttpConnectTimeoutMs : kPanelHttpConnectTimeoutMs);
+  http.setTimeout(otaChannel ? kOtaHttpTimeoutMs : kPanelHttpTimeoutMs);
 
   if (url.startsWith("https://")) {
     static WiFiClientSecure secureClients[2];
@@ -549,6 +600,14 @@ bool toggleRoomLight(ModeSnapshot& mode);
 void hideRoomSurfaceLabels();
 int activeEncoderThreshold();
 int encoderStepAmount(const ModeSnapshot& mode, int direction);
+bool postPanelResponse(const String& url, const String& body, String* responseBody = nullptr);
+bool getPanelResponse(const String& url, String& responseBody);
+bool applyPanelStatePayload(const String& payload);
+void renderMode();
+void requestPanelStateRefresh(bool highPriority = false);
+void requestPanelActivation();
+void processNetworkResults();
+void scheduleDeferredStateRefresh(unsigned long delayMs = kActionStateRefreshDelayMs);
 
 void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
   LV_UNUSED(indevDriver);
@@ -1374,6 +1433,336 @@ void syncRoomModeLocalState(ModeSnapshot& mode, int brightness) {
   mode.knob.pressAction.action = "set_brightness";
 }
 
+bool networkJobsMatch(const NetworkJob& left, const NetworkJob& right) {
+  if (left.kind != right.kind) {
+    return false;
+  }
+
+  if (left.kind != NetworkJobKind::ExecuteAction) {
+    return true;
+  }
+
+  return left.actionType == right.actionType
+    && left.targetId == right.targetId
+    && left.action == right.action
+    && left.value == right.value;
+}
+
+bool enqueueNetworkJob(const NetworkJob& job, bool highPriority = false, bool dedupe = false) {
+  if (!gNetworkMutex) {
+    return false;
+  }
+
+  if (xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    return false;
+  }
+
+  if (dedupe) {
+    if (gNetworkJobActive && networkJobsMatch(job, gActiveNetworkJob)) {
+      xSemaphoreGive(gNetworkMutex);
+      return true;
+    }
+
+    for (uint8_t index = 0; index < gNetworkJobCount; index += 1) {
+      if (networkJobsMatch(job, gNetworkJobs[index])) {
+        xSemaphoreGive(gNetworkMutex);
+        return true;
+      }
+    }
+  }
+
+  if (gNetworkJobCount >= kNetworkJobQueueCapacity) {
+    xSemaphoreGive(gNetworkMutex);
+    return job.kind == NetworkJobKind::FetchState;
+  }
+
+  if (highPriority && gNetworkJobCount > 0) {
+    for (int index = static_cast<int>(gNetworkJobCount); index > 0; index -= 1) {
+      gNetworkJobs[index] = gNetworkJobs[index - 1];
+    }
+    gNetworkJobs[0] = job;
+  } else {
+    gNetworkJobs[gNetworkJobCount] = job;
+  }
+  gNetworkJobCount += 1;
+  xSemaphoreGive(gNetworkMutex);
+  return true;
+}
+
+bool dequeueNetworkJob(NetworkJob& job) {
+  if (!gNetworkMutex) {
+    return false;
+  }
+
+  if (xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    return false;
+  }
+
+  if (gNetworkJobCount == 0) {
+    xSemaphoreGive(gNetworkMutex);
+    return false;
+  }
+
+  job = gNetworkJobs[0];
+  for (uint8_t index = 1; index < gNetworkJobCount; index += 1) {
+    gNetworkJobs[index - 1] = gNetworkJobs[index];
+  }
+  gNetworkJobs[gNetworkJobCount - 1] = NetworkJob();
+  gNetworkJobCount -= 1;
+  gActiveNetworkJob = job;
+  gNetworkJobActive = true;
+  xSemaphoreGive(gNetworkMutex);
+  return true;
+}
+
+void finishActiveNetworkJob() {
+  if (!gNetworkMutex) {
+    return;
+  }
+
+  if (xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    return;
+  }
+
+  gActiveNetworkJob = NetworkJob();
+  gNetworkJobActive = false;
+  xSemaphoreGive(gNetworkMutex);
+}
+
+bool enqueueNetworkResult(const NetworkResult& result) {
+  if (!gNetworkMutex) {
+    return false;
+  }
+
+  if (xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    return false;
+  }
+
+  if (gNetworkResultCount >= kNetworkResultQueueCapacity) {
+    for (uint8_t index = 1; index < gNetworkResultCount; index += 1) {
+      gNetworkResults[index - 1] = gNetworkResults[index];
+    }
+    gNetworkResultCount -= 1;
+  }
+
+  gNetworkResults[gNetworkResultCount] = result;
+  gNetworkResultCount += 1;
+  xSemaphoreGive(gNetworkMutex);
+  return true;
+}
+
+bool dequeueNetworkResult(NetworkResult& result) {
+  if (!gNetworkMutex) {
+    return false;
+  }
+
+  if (xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    return false;
+  }
+
+  if (gNetworkResultCount == 0) {
+    xSemaphoreGive(gNetworkMutex);
+    return false;
+  }
+
+  result = gNetworkResults[0];
+  for (uint8_t index = 1; index < gNetworkResultCount; index += 1) {
+    gNetworkResults[index - 1] = gNetworkResults[index];
+  }
+  gNetworkResults[gNetworkResultCount - 1] = NetworkResult();
+  gNetworkResultCount -= 1;
+  xSemaphoreGive(gNetworkMutex);
+  return true;
+}
+
+bool hasPendingNetworkWork() {
+  if (!gNetworkMutex) {
+    return false;
+  }
+
+  if (xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    return true;
+  }
+
+  const bool pending = gNetworkJobActive || gNetworkJobCount > 0 || gNetworkResultCount > 0;
+  xSemaphoreGive(gNetworkMutex);
+  return pending;
+}
+
+void scheduleDeferredStateRefresh(unsigned long delayMs) {
+  gDeferredStateRefresh = true;
+  gDeferredStateRefreshAt = millis() + delayMs;
+}
+
+void requestPanelStateRefresh(bool highPriority) {
+  NetworkJob job;
+  job.kind = NetworkJobKind::FetchState;
+  enqueueNetworkJob(job, highPriority, true);
+}
+
+void requestPanelActivation() {
+  NetworkJob job;
+  job.kind = NetworkJobKind::ActivatePanel;
+  enqueueNetworkJob(job, false, true);
+}
+
+bool enqueuePanelActionJob(const NetworkJob& job, bool highPriority = true, bool dedupe = false) {
+  return enqueueNetworkJob(job, highPriority, dedupe);
+}
+
+NetworkResult executeNetworkJob(const NetworkJob& job) {
+  NetworkResult result;
+  result.job = job;
+
+  if (job.kind == NetworkJobKind::ActivatePanel) {
+    StaticJsonDocument<512> request;
+    request["ipAddress"] = WiFi.localIP().toString();
+    request["firmwareVersion"] = HOMEBRAIN_PANEL_FIRMWARE_VERSION;
+
+    String body;
+    serializeJson(request, body);
+    result.success = postPanelResponse(panelActivateUrl(), body);
+    return result;
+  }
+
+  if (job.kind == NetworkJobKind::FetchState) {
+    result.success = getPanelResponse(panelStateUrl(), result.payload);
+    return result;
+  }
+
+  if (job.kind == NetworkJobKind::ExecuteAction) {
+    StaticJsonDocument<512> request;
+    request["type"] = job.actionType;
+    if (!job.targetId.isEmpty()) {
+      request["targetId"] = job.targetId;
+    }
+    if (!job.action.isEmpty()) {
+      request["action"] = job.action;
+    }
+    if (!job.value.isEmpty()) {
+      request["value"] = job.value;
+    }
+
+    String body;
+    serializeJson(request, body);
+    result.success = postPanelResponse(panelActionUrl(), body, &result.payload);
+  }
+
+  return result;
+}
+
+void panelNetworkTask(void* parameter) {
+  (void)parameter;
+
+  for (;;) {
+    if (gOtaInProgress || WiFi.status() != WL_CONNECTED) {
+      vTaskDelay(pdMS_TO_TICKS(kNetworkTaskIdleDelayMs));
+      continue;
+    }
+
+    NetworkJob job;
+    if (!dequeueNetworkJob(job)) {
+      vTaskDelay(pdMS_TO_TICKS(kNetworkTaskIdleDelayMs));
+      continue;
+    }
+
+    const NetworkResult result = executeNetworkJob(job);
+    finishActiveNetworkJob();
+    enqueueNetworkResult(result);
+  }
+}
+
+void handleActionNetworkResult(const NetworkResult& result) {
+  DynamicJsonDocument response(2048);
+  const bool hasPayload = !result.payload.isEmpty();
+  const bool parsed = hasPayload && !deserializeJson(response, result.payload);
+
+  if (result.success) {
+    if (!result.job.successStatus.isEmpty()) {
+      setStatusLine(result.job.successStatus);
+    }
+
+    if (result.job.actionType == "security.arm") {
+      String alarmState = parsed ? jsonVariantToString(response["result"]["alarmState"]) : "";
+      if (alarmState.isEmpty()) {
+        alarmState = result.job.value == "away" ? "armedAway" : "armedStay";
+      }
+      syncSecurityModeLocalState(alarmState);
+      scheduleDeferredStateRefresh(kSecurityStateRefreshDelayMs);
+      renderMode();
+      return;
+    }
+
+    if (result.job.actionType == "security.disarm" || result.job.actionType == "security.dismiss") {
+      String alarmState = parsed ? jsonVariantToString(response["result"]["alarmState"]) : "";
+      if (alarmState.isEmpty()) {
+        alarmState = "disarmed";
+      }
+      syncSecurityModeLocalState(alarmState);
+      scheduleDeferredStateRefresh(kSecurityStateRefreshDelayMs);
+      renderMode();
+      return;
+    }
+
+    if (result.job.refreshAfterSuccess) {
+      scheduleDeferredStateRefresh();
+    }
+
+    renderMode();
+    return;
+  }
+
+  String failureStatus = result.job.failureFallback.isEmpty()
+    ? String("Action failed")
+    : result.job.failureFallback;
+  if (parsed) {
+    failureStatus = result.job.actionType == "thermostat.set_temperature"
+      ? summarizePanelActionFailure(response)
+      : summarizeActionFailure(response, failureStatus);
+  }
+
+  if (result.job.refreshAfterFailure) {
+    scheduleDeferredStateRefresh();
+  }
+
+  setStatusLine(failureStatus);
+  renderMode();
+}
+
+void processNetworkResults() {
+  NetworkResult result;
+  while (dequeueNetworkResult(result)) {
+    if (result.job.kind == NetworkJobKind::ActivatePanel) {
+      if (result.success) {
+        gPanelActivated = true;
+        setStatusLine("Panel activated");
+        requestPanelStateRefresh(true);
+      } else {
+        setStatusLine("Activation failed");
+      }
+      renderMode();
+      continue;
+    }
+
+    if (result.job.kind == NetworkJobKind::FetchState) {
+      if (!result.success) {
+        setStatusLine("State refresh failed");
+        renderMode();
+        continue;
+      }
+
+      if (!applyPanelStatePayload(result.payload)) {
+        renderMode();
+      }
+      continue;
+    }
+
+    if (result.job.kind == NetworkJobKind::ExecuteAction) {
+      handleActionNetworkResult(result);
+    }
+  }
+}
+
 void setCenterTapEnabled(bool enabled) {
   if (!gCenterTapButton) {
     return;
@@ -1816,6 +2205,7 @@ bool postPanelJson(const String& url, JsonDocument& requestDocument, JsonDocumen
     return false;
   }
 
+  String responseBody;
   HTTPClient http;
   if (!beginHttpRequest(http, url)) {
     return false;
@@ -1837,8 +2227,13 @@ bool postPanelJson(const String& url, JsonDocument& requestDocument, JsonDocumen
     return statusCode >= 200 && statusCode < 300;
   }
 
-  const DeserializationError error = deserializeJson(*responseDocument, http.getStream());
+  const int contentLength = http.getSize();
+  if (contentLength > 0) {
+    responseBody.reserve(static_cast<size_t>(contentLength) + 1);
+  }
+  responseBody = http.getString();
   http.end();
+  const DeserializationError error = deserializeJson(*responseDocument, responseBody);
   if (error) {
     return false;
   }
@@ -1846,7 +2241,72 @@ bool postPanelJson(const String& url, JsonDocument& requestDocument, JsonDocumen
   return statusCode >= 200 && statusCode < 300;
 }
 
+bool postPanelResponse(const String& url, const String& body, String* responseBody) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
+  HTTPClient http;
+  if (!beginHttpRequest(http, url)) {
+    return false;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-HomeBrain-Panel-Code", HOMEBRAIN_PANEL_REGISTRATION_CODE);
+
+  const int statusCode = http.POST(body);
+  if (statusCode <= 0) {
+    http.end();
+    return false;
+  }
+
+  if (responseBody != nullptr) {
+    const int contentLength = http.getSize();
+    if (contentLength > 0) {
+      responseBody->reserve(static_cast<size_t>(contentLength) + 1);
+    }
+    *responseBody = http.getString();
+  }
+
+  http.end();
+  return statusCode >= 200 && statusCode < 300;
+}
+
 bool getPanelJson(const String& url, JsonDocument& responseDocument) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
+  String responseBody;
+  HTTPClient http;
+  if (!beginHttpRequest(http, url)) {
+    return false;
+  }
+
+  http.addHeader("X-HomeBrain-Panel-Code", HOMEBRAIN_PANEL_REGISTRATION_CODE);
+  const int statusCode = http.GET();
+  if (statusCode <= 0) {
+    http.end();
+    return false;
+  }
+
+  const int contentLength = http.getSize();
+  if (contentLength > 0) {
+    responseBody.reserve(static_cast<size_t>(contentLength) + 1);
+  }
+  responseBody = http.getString();
+  http.end();
+  const DeserializationError error = deserializeJson(responseDocument, responseBody);
+  if (error) {
+    Serial.println(String("[panel] state parse failed: ") + error.c_str());
+    return false;
+  }
+
+  return statusCode >= 200 && statusCode < 300;
+}
+
+bool getPanelResponse(const String& url, String& responseBody) {
+  responseBody = "";
   if (WiFi.status() != WL_CONNECTED) {
     return false;
   }
@@ -1863,14 +2323,35 @@ bool getPanelJson(const String& url, JsonDocument& responseDocument) {
     return false;
   }
 
-  const DeserializationError error = deserializeJson(responseDocument, http.getStream());
+  const int contentLength = http.getSize();
+  if (contentLength > 0) {
+    responseBody.reserve(static_cast<size_t>(contentLength) + 1);
+  }
+  responseBody = http.getString();
   http.end();
+  return statusCode >= 200 && statusCode < 300;
+}
+
+bool applyPanelStatePayload(const String& payload) {
+  DynamicJsonDocument response(kStateJsonCapacity);
+  const DeserializationError error = deserializeJson(response, payload);
   if (error) {
+    setStatusLine("State payload invalid");
     Serial.println(String("[panel] state parse failed: ") + error.c_str());
     return false;
   }
 
-  return statusCode >= 200 && statusCode < 300;
+  if (!parseState(response)) {
+    setStatusLine("State payload invalid");
+    Serial.println("[panel] state payload missing expected fields");
+    return false;
+  }
+
+  gLastStateFetchAt = millis();
+  setStatusLine("Live");
+  Serial.println("[panel] state refreshed successfully");
+  renderMode();
+  return true;
 }
 
 bool activatePanel() {
@@ -1890,24 +2371,14 @@ bool activatePanel() {
 }
 
 bool fetchPanelState() {
-  DynamicJsonDocument response(kStateJsonCapacity);
-  const bool ok = getPanelJson(panelStateUrl(), response);
+  String payload;
+  const bool ok = getPanelResponse(panelStateUrl(), payload);
   if (!ok) {
     setStatusLine("State refresh failed");
     return false;
   }
 
-  if (!parseState(response)) {
-    setStatusLine("State payload invalid");
-    Serial.println("[panel] state payload missing expected fields");
-    return false;
-  }
-
-  gLastStateFetchAt = millis();
-  setStatusLine("Live");
-  Serial.println("[panel] state refreshed successfully");
-  renderMode();
-  return true;
+  return applyPanelStatePayload(payload);
 }
 
 void renderOtaProgressScreen(const String& title, int progress, const String& message) {
@@ -2149,6 +2620,10 @@ void maybeApplyOtaUpdate() {
     return;
   }
 
+  if (hasPendingNetworkWork()) {
+    return;
+  }
+
   performOtaUpdate();
 }
 
@@ -2161,55 +2636,25 @@ void dispatchQuickAction(const QuickAction& action) {
     return;
   }
 
-  StaticJsonDocument<512> request;
+  NetworkJob job;
+  job.kind = NetworkJobKind::ExecuteAction;
+  job.actionType = action.type;
+  job.targetId = action.targetId;
+  job.action = action.action;
+  job.value = action.value;
+  job.queuedStatus = action.label + " sending";
+  job.successStatus = action.label + " sent";
+  job.failureFallback = action.label + " failed";
+  job.refreshAfterSuccess = action.type != "harmony.command";
+  job.refreshAfterFailure = action.type != "harmony.command";
 
-  request["type"] = action.type;
-  if (!action.targetId.isEmpty()) {
-    request["targetId"] = action.targetId;
-  }
-  if (!action.action.isEmpty()) {
-    request["action"] = action.action;
-  }
-  if (!action.value.isEmpty()) {
-    request["value"] = action.value;
-  }
-
-  DynamicJsonDocument response(2048);
-  if (postPanelJson(panelActionUrl(), request, &response)) {
-    setStatusLine(action.label + " sent");
-
-    if (action.type == "security.arm") {
-      String alarmState = jsonVariantToString(response["result"]["alarmState"]);
-      if (alarmState.isEmpty()) {
-        alarmState = action.value == "away" ? "armedAway" : "armedStay";
-      }
-      syncSecurityModeLocalState(alarmState);
-      gDeferredStateRefresh = true;
-      gDeferredStateRefreshAt = millis() + kSecurityStateRefreshDelayMs;
-      renderMode();
-      return;
-    }
-
-    if (action.type == "security.disarm" || action.type == "security.dismiss") {
-      String alarmState = jsonVariantToString(response["result"]["alarmState"]);
-      if (alarmState.isEmpty()) {
-        alarmState = "disarmed";
-      }
-      syncSecurityModeLocalState(alarmState);
-      gDeferredStateRefresh = true;
-      gDeferredStateRefreshAt = millis() + kSecurityStateRefreshDelayMs;
-      renderMode();
-      return;
-    }
-
+  if (!enqueuePanelActionJob(job)) {
+    setStatusLine("Action queue full");
     renderMode();
-    if (action.type != "harmony.command") {
-      fetchPanelState();
-    }
     return;
   }
 
-  setStatusLine(action.label + " failed");
+  setStatusLine(job.queuedStatus);
   renderMode();
 }
 
@@ -2575,6 +3020,7 @@ void setupDisplay() {
 
 void setupWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.setHostname(HOMEBRAIN_PANEL_HOSTNAME);
   WiFi.begin(HOMEBRAIN_PANEL_WIFI_SSID, HOMEBRAIN_PANEL_WIFI_PASSWORD);
   gLastWifiAttemptAt = millis();
@@ -2641,25 +3087,29 @@ void dispatchQueuedThermostatCommitIfReady() {
     return;
   }
 
-  StaticJsonDocument<256> request;
-  request["type"] = "thermostat.set_temperature";
-  request["targetId"] = gQueuedThermostatDeviceId;
-  request["value"] = gQueuedThermostatValue;
-
   const int committedValue = gQueuedThermostatValue;
+  const String targetId = gQueuedThermostatDeviceId;
   gQueuedThermostatDispatch = false;
   gQueuedThermostatDeviceId = "";
 
-  DynamicJsonDocument response(1024);
-  if (postPanelJson(panelActionUrl(), request, &response)) {
-    setStatusLine("Setpoint " + String(committedValue) + " sent");
-    fetchPanelState();
+  NetworkJob job;
+  job.kind = NetworkJobKind::ExecuteAction;
+  job.actionType = "thermostat.set_temperature";
+  job.targetId = targetId;
+  job.value = String(committedValue);
+  job.queuedStatus = "Sending setpoint";
+  job.successStatus = "Setpoint " + String(committedValue) + " sent";
+  job.failureFallback = "Setpoint update failed";
+  job.refreshAfterSuccess = true;
+  job.refreshAfterFailure = true;
+
+  if (!enqueuePanelActionJob(job, true)) {
+    setStatusLine("Setpoint queue full");
+    renderMode();
     return;
   }
 
-  const String failureStatus = summarizePanelActionFailure(response);
-  fetchPanelState();
-  setStatusLine(failureStatus);
+  setStatusLine(job.queuedStatus);
   renderMode();
 }
 
@@ -2744,24 +3194,30 @@ void dispatchQueuedDeviceLevelIfReady() {
     return;
   }
 
-  StaticJsonDocument<256> request;
-  request["type"] = "device.control";
-  request["targetId"] = gQueuedDeviceLevelTargetId;
-  request["action"] = "set_brightness";
-  request["value"] = gQueuedDeviceLevelValue;
-
+  const int committedValue = gQueuedDeviceLevelValue;
+  const String targetId = gQueuedDeviceLevelTargetId;
   gQueuedDeviceLevelDispatch = false;
   gQueuedDeviceLevelTargetId = "";
 
-  DynamicJsonDocument response(1024);
-  if (postPanelJson(panelActionUrl(), request, &response)) {
-    fetchPanelState();
+  NetworkJob job;
+  job.kind = NetworkJobKind::ExecuteAction;
+  job.actionType = "device.control";
+  job.targetId = targetId;
+  job.action = "set_brightness";
+  job.value = String(committedValue);
+  job.queuedStatus = "Saving lights";
+  job.successStatus = "Lights " + roomLevelDisplayValue(committedValue) + " sent";
+  job.failureFallback = "Light update failed";
+  job.refreshAfterSuccess = true;
+  job.refreshAfterFailure = true;
+
+  if (!enqueuePanelActionJob(job, true)) {
+    setStatusLine("Light queue full");
+    renderMode();
     return;
   }
 
-  const String failureStatus = summarizeActionFailure(response, "Light update failed");
-  fetchPanelState();
-  setStatusLine(failureStatus);
+  setStatusLine(job.queuedStatus);
   renderMode();
 }
 
@@ -2994,12 +3450,16 @@ void maybeRefreshState() {
     return;
   }
 
+  if (hasPendingNetworkWork()) {
+    return;
+  }
+
   if (!gPanelActivated) {
     if (millis() - gLastActivateAttemptAt < 10000UL) {
       return;
     }
     gLastActivateAttemptAt = millis();
-    activatePanel();
+    requestPanelActivation();
     return;
   }
 
@@ -3008,7 +3468,7 @@ void maybeRefreshState() {
     return;
   }
 
-  fetchPanelState();
+  requestPanelStateRefresh();
 }
 
 void dispatchDeferredStateRefreshIfReady() {
@@ -3031,8 +3491,12 @@ void dispatchDeferredStateRefreshIfReady() {
     return;
   }
 
+  if (hasPendingNetworkWork()) {
+    return;
+  }
+
   gDeferredStateRefresh = false;
-  fetchPanelState();
+  requestPanelStateRefresh();
 }
 
 }  // namespace
@@ -3051,12 +3515,24 @@ void setup() {
   gEncoderDeltaAccumulator = 0;
   gLastEncoderTurnAt = 0;
   gLastEncoderDirection = 0;
+  gLastLvglTickAt = millis();
+  gNetworkMutex = xSemaphoreCreateMutex();
+  if (gNetworkMutex != nullptr) {
+    xTaskCreatePinnedToCore(panelNetworkTask, "hb-panel-net", 10 * 1024, nullptr, 1, &gNetworkTaskHandle, 0);
+  }
 
   setupWiFi();
 }
 
 void loop() {
-  lv_tick_inc(5);
+  const unsigned long now = millis();
+  const unsigned long elapsed = now - gLastLvglTickAt;
+  if (elapsed > 0) {
+    lv_tick_inc(static_cast<uint32_t>(elapsed));
+    gLastLvglTickAt = now;
+  }
+
+  processNetworkResults();
   lv_timer_handler();
   pollEncoder();
   commitPendingThermostatValueIfReady();
@@ -3068,5 +3544,5 @@ void loop() {
   dispatchDeferredStateRefreshIfReady();
   maybeRefreshState();
   maybeApplyOtaUpdate();
-  delay(5);
+  delay(kLoopIdleDelayMs);
 }
