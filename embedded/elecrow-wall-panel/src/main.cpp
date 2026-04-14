@@ -305,15 +305,40 @@ String brightnessLabel(int value) {
   return String(normalizeBrightnessPercent(value)) + String("%");
 }
 
-bool beginHttpRequest(HTTPClient& http, const String& url) {
+enum class HttpRequestChannel : uint8_t {
+  Default = 0,
+  OtaDownload = 1
+};
+
+bool beginHttpRequest(
+  HTTPClient& http,
+  const String& url,
+  HttpRequestChannel channel = HttpRequestChannel::Default
+) {
+  const size_t channelIndex = static_cast<size_t>(channel);
+
   if (url.startsWith("https://")) {
-    static WiFiClientSecure secureClient;
+    static WiFiClientSecure secureClients[2];
+    WiFiClientSecure& secureClient = secureClients[channelIndex];
     secureClient.setInsecure();
     return http.begin(secureClient, url);
   }
 
-  static WiFiClient plainClient;
+  static WiFiClient plainClients[2];
+  WiFiClient& plainClient = plainClients[channelIndex];
   return http.begin(plainClient, url);
+}
+
+String otaDownloadUrlWithCredentials() {
+  if (gState.ota.downloadUrl.isEmpty()) {
+    return "";
+  }
+
+  const bool hasQuery = gState.ota.downloadUrl.indexOf('?') >= 0;
+  return gState.ota.downloadUrl
+    + (hasQuery ? "&" : "?")
+    + "code="
+    + HOMEBRAIN_PANEL_REGISTRATION_CODE;
 }
 
 void buildPanelStateFilter(JsonDocument& filterDocument) {
@@ -1828,7 +1853,8 @@ bool performOtaUpdate() {
   reportOtaStatus("downloading", 0, "Preparing OTA download...");
 
   HTTPClient http;
-  if (!beginHttpRequest(http, gState.ota.downloadUrl)) {
+  const String downloadUrl = otaDownloadUrlWithCredentials();
+  if (!beginHttpRequest(http, downloadUrl, HttpRequestChannel::OtaDownload)) {
     gOtaInProgress = false;
     gBlockedOtaJobId = gActiveOtaJobId;
     setStatusLine("OTA download failed");
