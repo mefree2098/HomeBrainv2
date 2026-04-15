@@ -230,6 +230,88 @@ test('finalizePendingRestart waits until a newer runtime boots before resolving 
   assert.equal(persistedRestart?.expectedCommit, repoStatus.commit);
 });
 
+test('getLatestJob reconciles a stale running restart step as completed when runtime already matches the deployed commit', { concurrency: false }, async (t) => {
+  const publishedEvents = [];
+  const originalPublishSafe = eventStreamService.publishSafe;
+  eventStreamService.publishSafe = async (payload) => {
+    publishedEvents.push(payload);
+  };
+
+  t.after(() => {
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  const service = await createTempService(t);
+  const repoStatus = createRepoStatus('fedcba9876543210', 'fedcba9');
+  const jobId = 'job-4';
+
+  await service.writeJob(createRunningJob(jobId, repoStatus));
+  await service.writeLatestJobRef(jobId);
+
+  service.getRepoStatus = async () => repoStatus;
+  service.getRuntimeInfo = async () => ({
+    pid: 5252,
+    bootedAt: '2026-03-23T12:02:00.000Z',
+    uptimeSeconds: 6,
+    loadedBranch: 'main',
+    loadedCommit: repoStatus.commit,
+    loadedShortCommit: repoStatus.shortCommit,
+    repoMatchesRuntime: true
+  });
+
+  const latest = await service.getLatestJob();
+
+  assert.equal(latest.status, 'completed');
+  assert.equal(latest.currentStep, 'completed');
+  assert.equal(latest.steps.find((step) => step.name === 'Restart services')?.status, 'completed');
+  assert.equal(await service.readPendingRestart(), null);
+  assert.equal(
+    publishedEvents.some((event) => event.type === 'deploy.completed'),
+    true
+  );
+});
+
+test('getLatestJob reconciles a stale running restart step as failed when runtime was superseded externally', { concurrency: false }, async (t) => {
+  const publishedEvents = [];
+  const originalPublishSafe = eventStreamService.publishSafe;
+  eventStreamService.publishSafe = async (payload) => {
+    publishedEvents.push(payload);
+  };
+
+  t.after(() => {
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  const service = await createTempService(t);
+  const deployedRepoStatus = createRepoStatus('fedcba9876543210', 'fedcba9');
+  const currentRepoStatus = createRepoStatus('0123456789abcdef', '0123456');
+  const jobId = 'job-5';
+
+  await service.writeJob(createRunningJob(jobId, deployedRepoStatus));
+  await service.writeLatestJobRef(jobId);
+
+  service.getRepoStatus = async () => currentRepoStatus;
+  service.getRuntimeInfo = async () => ({
+    pid: 6262,
+    bootedAt: '2026-03-23T12:05:00.000Z',
+    uptimeSeconds: 6,
+    loadedBranch: 'main',
+    loadedCommit: currentRepoStatus.commit,
+    loadedShortCommit: currentRepoStatus.shortCommit,
+    repoMatchesRuntime: true
+  });
+
+  const latest = await service.getLatestJob();
+
+  assert.equal(latest.status, 'failed');
+  assert.equal(latest.currentStep, 'failed');
+  assert.match(latest.error, /running backend is 0123456 instead of expected fedcba9/i);
+  assert.equal(
+    publishedEvents.some((event) => event.type === 'deploy.failed'),
+    true
+  );
+});
+
 test('buildServiceRestartCommand removes invalid sudo fragments and forces non-interactive sudo', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   service.restartOllamaOnDeploy = true;

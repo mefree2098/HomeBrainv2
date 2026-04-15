@@ -812,13 +812,84 @@ class PlatformDeployService {
     }
   }
 
+  async reconcileLatestRunningJob(job, { pendingRestart = undefined, repoStatus = null, runtime = null } = {}) {
+    if (!job || job.status !== 'running') {
+      return job;
+    }
+
+    const restartStep = Array.isArray(job.steps)
+      ? job.steps.find((step) => step.name === 'Restart services' && step.status === 'running')
+      : null;
+
+    if (!restartStep) {
+      return job;
+    }
+
+    const resolvedPendingRestart = pendingRestart === undefined
+      ? await this.readPendingRestart()
+      : pendingRestart;
+    if (resolvedPendingRestart) {
+      return job;
+    }
+
+    const resolvedRepoStatus = repoStatus || await this.getRepoStatus().catch(() => null);
+    const resolvedRuntime = runtime || await this.getRuntimeInfo(resolvedRepoStatus).catch(() => null);
+    if (!resolvedRuntime) {
+      return job;
+    }
+
+    const jobStartedAtMs = parseTimestampMs(job.startedAt || restartStep.updatedAt || job.updatedAt);
+    const runtimeBootedAtMs = parseTimestampMs(resolvedRuntime.bootedAt);
+    if (
+      jobStartedAtMs !== null
+      && runtimeBootedAtMs !== null
+      && runtimeBootedAtMs < jobStartedAtMs
+    ) {
+      return job;
+    }
+
+    const expectedCommit = job.repoAfter?.commit || null;
+    const expectedShortCommit = job.repoAfter?.shortCommit
+      || (expectedCommit ? expectedCommit.slice(0, 7) : null);
+    const runtimeCommit = resolvedRuntime.loadedCommit || null;
+    const runtimeShortCommit = resolvedRuntime.loadedShortCommit
+      || (runtimeCommit ? runtimeCommit.slice(0, 7) : 'unknown');
+
+    if (expectedCommit && runtimeCommit && runtimeCommit === expectedCommit) {
+      await this.appendJobLog(
+        job.id,
+        `[${new Date().toISOString()}] [Restart services] Reconciled stale running deploy job after pending restart metadata was already cleared.\n`
+      );
+      await this.markStep(job.id, 'Restart services', 'completed');
+      return this.finalizeJobSuccess(job.id, {
+        job,
+        repoAfter: job.repoAfter || resolvedRepoStatus || null
+      });
+    }
+
+    const errorMessage = expectedCommit
+      ? `Deployment metadata reconciled after restart handoff was cleared; running backend is ${runtimeShortCommit} instead of expected ${expectedShortCommit || 'unknown'}.`
+      : 'Deployment metadata reconciled after restart handoff was cleared before completion could be verified.';
+
+    await this.appendJobLog(
+      job.id,
+      `[${new Date().toISOString()}] [Restart services] Reconciled stale running deploy job: ${errorMessage}\n`
+    );
+    await this.markStep(job.id, 'Restart services', 'failed', errorMessage);
+    return this.finalizeJobFailure(job.id, errorMessage, {
+      job,
+      repoAfter: resolvedRepoStatus || job.repoAfter || null
+    });
+  }
+
   async getLatestJob() {
     const latestJobId = await this.readLatestJobRef();
     if (!latestJobId) {
       return null;
     }
     try {
-      return await this.readJob(latestJobId);
+      const latest = await this.readJob(latestJobId);
+      return await this.reconcileLatestRunningJob(latest);
     } catch (error) {
       return null;
     }
