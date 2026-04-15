@@ -12,6 +12,48 @@ if [[ -z "${SYSTEMCTL_BIN}" ]]; then
   exit 1
 fi
 
+canonicalize_path() {
+  local target_path="${1:-}"
+
+  if [[ -z "${target_path}" ]]; then
+    return 1
+  fi
+
+  readlink -f "${target_path}" 2>/dev/null || printf '%s\n' "${target_path}"
+}
+
+process_matches_homebrain() {
+  local pid="$1"
+  local cmd="$2"
+  local homebrain_dir=""
+  local process_cwd=""
+
+  if [[ "${cmd}" != *"node"* ]]; then
+    return 1
+  fi
+
+  if [[ "${cmd}" != *"server.js"* && "${cmd}" != *"run-with-modern-node.js npm start"* ]]; then
+    return 1
+  fi
+
+  if [[ -z "${HOMEBRAIN_DIR}" ]]; then
+    return 0
+  fi
+
+  homebrain_dir="$(canonicalize_path "${HOMEBRAIN_DIR}")"
+
+  if [[ "${cmd}" == *"${HOMEBRAIN_DIR}"* || "${cmd}" == *"${homebrain_dir}"* ]]; then
+    return 0
+  fi
+
+  process_cwd="$(canonicalize_path "/proc/${pid}/cwd" || true)"
+  if [[ -n "${process_cwd}" && "${process_cwd}" == "${homebrain_dir}" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
 cleanup_orphaned_homebrain_processes() {
   local service_pid="0"
   local stale_pids=()
@@ -28,11 +70,7 @@ cleanup_orphaned_homebrain_processes() {
       continue
     fi
 
-    if [[ -n "${HOMEBRAIN_DIR}" && "${cmd}" != *"${HOMEBRAIN_DIR}"* ]]; then
-      continue
-    fi
-
-    if [[ "${cmd}" == *"node"* ]] && [[ "${cmd}" == *"server.js"* || "${cmd}" == *"run-with-modern-node.js npm start"* ]]; then
+    if process_matches_homebrain "${pid}" "${cmd}"; then
       stale_pids+=("${pid}")
     fi
   done < <(ps -eo pid=,args=)

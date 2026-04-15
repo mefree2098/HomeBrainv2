@@ -115,6 +115,48 @@ normalize_client_dist_permissions() {
   sudo -u "$HOMEBRAIN_USER" mkdir -p "${dist_path}"
 }
 
+canonicalize_path() {
+  local target_path="${1:-}"
+
+  if [[ -z "${target_path}" ]]; then
+    return 1
+  fi
+
+  readlink -f "${target_path}" 2>/dev/null || printf '%s\n' "${target_path}"
+}
+
+process_matches_homebrain() {
+  local pid="$1"
+  local cmd="$2"
+  local homebrain_dir=""
+  local process_cwd=""
+
+  if [[ "${cmd}" != *"node"* ]]; then
+    return 1
+  fi
+
+  if [[ "${cmd}" != *"server.js"* && "${cmd}" != *"run-with-modern-node.js npm start"* ]]; then
+    return 1
+  fi
+
+  if [[ -z "${HOMEBRAIN_DIR}" ]]; then
+    return 0
+  fi
+
+  homebrain_dir="$(canonicalize_path "${HOMEBRAIN_DIR}")"
+
+  if [[ "${cmd}" == *"${HOMEBRAIN_DIR}"* || "${cmd}" == *"${homebrain_dir}"* ]]; then
+    return 0
+  fi
+
+  process_cwd="$(canonicalize_path "/proc/${pid}/cwd" || true)"
+  if [[ -n "${process_cwd}" && "${process_cwd}" == "${homebrain_dir}" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
 cleanup_orphaned_homebrain_processes() {
   local service_pid="0"
   local stale_pids=()
@@ -131,7 +173,7 @@ cleanup_orphaned_homebrain_processes() {
       continue
     fi
 
-    if [[ "${cmd}" == *"${HOMEBRAIN_DIR}"* ]] && [[ "${cmd}" == *"node"* ]] && [[ "${cmd}" == *"server.js"* || "${cmd}" == *"run-with-modern-node.js npm start"* ]]; then
+    if process_matches_homebrain "${pid}" "${cmd}"; then
       stale_pids+=("${pid}")
     fi
   done < <(ps -eo pid=,args=)
@@ -144,6 +186,32 @@ cleanup_orphaned_homebrain_processes() {
   sudo kill "${stale_pids[@]}" 2>/dev/null || true
   sleep 2
   sudo kill -9 "${stale_pids[@]}" 2>/dev/null || true
+}
+
+clear_ignored_package_locks() {
+  local relative_lock_paths=(
+    "package-lock.json"
+    "server/package-lock.json"
+    "client/package-lock.json"
+    "broker/package-lock.json"
+    "lambda/package-lock.json"
+  )
+  local existing_lock_paths=()
+  local relative_path
+
+  for relative_path in "${relative_lock_paths[@]}"; do
+    local absolute_path="${HOMEBRAIN_DIR}/${relative_path}"
+    if [[ -e "${absolute_path}" ]]; then
+      existing_lock_paths+=("${absolute_path}")
+    fi
+  done
+
+  if [[ "${#existing_lock_paths[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  print_status "Removing ignored package-lock files so dependencies refresh from the latest package manifests..."
+  sudo -u "$HOMEBRAIN_USER" rm -f "${existing_lock_paths[@]}"
 }
 
 homebrain_service_unit_exists() {
@@ -583,8 +651,10 @@ update_homebrain() {
   print_status "Pulling latest HomeBrain code from Git..."
   sudo -u "$HOMEBRAIN_USER" git -C "${HOMEBRAIN_DIR}" pull --ff-only
 
+  clear_ignored_package_locks
+
   print_status "Installing dependencies..."
-  run_modern_npm install --no-audit --no-fund
+  run_modern_npm install --package-lock=false --no-audit --no-fund
 
   print_status "Ensuring native server modules match the active Node.js runtime..."
   run_modern_npm run ensure:native --prefix server
