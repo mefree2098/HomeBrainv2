@@ -1,4 +1,7 @@
 const mongoose = require('mongoose');
+const { getDataRetentionDays } = require('../config/dataRetention');
+
+const retentionDays = getDataRetentionDays().automationHistory;
 
 const actionResultSchema = new mongoose.Schema({
   actionIndex: {
@@ -187,6 +190,13 @@ automationHistorySchema.index({ automationId: 1, startedAt: -1 });
 automationHistorySchema.index({ workflowId: 1, startedAt: -1 });
 automationHistorySchema.index({ status: 1, startedAt: -1 });
 automationHistorySchema.index({ startedAt: -1 });
+automationHistorySchema.index(
+  { completedAt: 1 },
+  {
+    expireAfterSeconds: retentionDays * 24 * 60 * 60,
+    name: 'automation_history_ttl'
+  }
+);
 automationHistorySchema.index({ voiceCommandId: 1 });
 automationHistorySchema.index({ correlationId: 1, startedAt: -1 });
 

@@ -39,6 +39,29 @@ export interface InsteonMaintenanceSyncRunSnapshot {
   error?: string | null;
 }
 
+export interface DisasterRecoveryRestoreJob {
+  id: string;
+  status: 'queued' | 'validating' | 'restoring' | 'completed' | 'failed';
+  actor?: string | null;
+  archiveName?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  completedAt?: string | null;
+  error?: string | null;
+  phase?: string | null;
+  message?: string | null;
+  manifest?: {
+    version?: number | null;
+    createdAt?: string | null;
+    appVersion?: string | null;
+  } | null;
+}
+
+function parseDownloadFilename(value: string | null | undefined, fallback: string) {
+  const match = String(value || '').match(/filename="?([^"]+)"?/i);
+  return match?.[1] || fallback;
+}
+
 // Description: Clear all fake/demo data from the system
 // Endpoint: DELETE /api/maintenance/fake-data
 // Request: {}
@@ -248,6 +271,66 @@ export const exportConfiguration = async () => {
   try {
     const response = await api.get('/api/maintenance/export');
     return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+export const downloadDisasterRecoveryBackup = async () => {
+  try {
+    const response = await api.get('/api/maintenance/backup/full', {
+      responseType: 'blob',
+      transformResponse: [(data) => data]
+    });
+
+    return {
+      blob: response.data as Blob,
+      filename: parseDownloadFilename(
+        typeof response.headers?.['content-disposition'] === 'string'
+          ? response.headers['content-disposition']
+          : null,
+        'homebrain-backup.tar.gz'
+      )
+    };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+export const uploadDisasterRecoveryBackup = async (file: File) => {
+  try {
+    const response = await api.request({
+      url: '/api/maintenance/restore',
+      method: 'POST',
+      data: file,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-backup-filename': file.name
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity
+    });
+
+    return response.data as {
+      success: boolean;
+      message?: string;
+      job: DisasterRecoveryRestoreJob;
+    };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+export const getLatestDisasterRecoveryRestoreJob = async () => {
+  try {
+    const response = await api.get('/api/maintenance/restore/latest');
+    return response.data as {
+      success: boolean;
+      job: DisasterRecoveryRestoreJob | null;
+    };
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);

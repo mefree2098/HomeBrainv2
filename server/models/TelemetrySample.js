@@ -1,9 +1,7 @@
 const mongoose = require('mongoose');
+const { getDataRetentionDays } = require('../config/dataRetention');
 
-const retentionDays = Math.max(
-  1,
-  Number(process.env.HOMEBRAIN_TELEMETRY_RETENTION_DAYS || 365)
-);
+const retentionDays = getDataRetentionDays().telemetrySamples;
 
 const telemetrySampleSchema = new mongoose.Schema({
   sourceType: {

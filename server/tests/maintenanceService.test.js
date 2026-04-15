@@ -6,6 +6,7 @@ const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const maintenanceService = require('../services/maintenanceService');
 const insteonService = require('../services/insteonService');
 const smartThingsService = require('../services/smartThingsService');
+const systemBackupService = require('../services/systemBackupService');
 
 test('forceInsteonSync delegates to the PLM sync service and starts runtime monitoring', async (t) => {
   const originalSyncDevicesFromPLM = insteonService.syncDevicesFromPLM;
@@ -147,6 +148,71 @@ test('startInsteonSyncRun stores live progress logs and completes with the sync 
   assert.ok(Array.isArray(snapshot.logs));
   assert.ok(snapshot.logs.some((entry) => /reading plm link database/i.test(entry.message)));
   assert.ok(snapshot.logs.some((entry) => /syncing device 1\/1/i.test(entry.message)));
+});
+
+test('startDisasterRecoveryRestore stages the archive and launches the restore helper separately', async (t) => {
+  const originalStageRestoreUpload = systemBackupService.stageRestoreUpload;
+  const originalStartRestoreJobFromArchive = systemBackupService.startRestoreJobFromArchive;
+  const originalLaunchRestoreHelper = systemBackupService.launchRestoreHelper;
+
+  t.after(() => {
+    systemBackupService.stageRestoreUpload = originalStageRestoreUpload;
+    systemBackupService.startRestoreJobFromArchive = originalStartRestoreJobFromArchive;
+    systemBackupService.launchRestoreHelper = originalLaunchRestoreHelper;
+  });
+
+  const calls = [];
+
+  systemBackupService.stageRestoreUpload = async (_readable, options = {}) => {
+    calls.push({ step: 'stage', options });
+    return {
+      archivePath: '/tmp/homebrain-backup.tar.gz',
+      archiveName: 'homebrain-backup.tar.gz'
+    };
+  };
+
+  systemBackupService.startRestoreJobFromArchive = async (archivePath, options = {}) => {
+    calls.push({ step: 'queue', archivePath, options });
+    return {
+      id: 'restore-job-1',
+      status: 'queued',
+      archiveName: options.archiveName
+    };
+  };
+
+  systemBackupService.launchRestoreHelper = async () => {
+    calls.push({ step: 'launch' });
+    return { serviceName: 'homebrain-restore-helper' };
+  };
+
+  const queued = await maintenanceService.startDisasterRecoveryRestore({}, {
+    archiveName: 'backup.tar.gz',
+    actor: 'admin@example.com'
+  });
+  const launched = await maintenanceService.launchQueuedDisasterRecoveryRestore(queued.id);
+
+  assert.equal(queued.id, 'restore-job-1');
+  assert.equal(queued.status, 'queued');
+  assert.deepEqual(calls, [
+    {
+      step: 'stage',
+      options: {
+        archiveName: 'backup.tar.gz'
+      }
+    },
+    {
+      step: 'queue',
+      archivePath: '/tmp/homebrain-backup.tar.gz',
+      options: {
+        actor: 'admin@example.com',
+        archiveName: 'homebrain-backup.tar.gz'
+      }
+    },
+    {
+      step: 'launch'
+    }
+  ]);
+  assert.equal(launched.success, true);
 });
 
 test('forceSmartThingsSync dedupes duplicate HomeBrain rows for one SmartThings device ID', async (t) => {

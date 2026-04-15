@@ -35,6 +35,7 @@ import {
   RefreshCw,
   Database,
   FileDown,
+  FileUp,
   Activity,
   Copy,
   HardDrive,
@@ -103,6 +104,10 @@ import {
   clearVoiceCommandHistory,
   performHealthCheck,
   exportConfiguration,
+  downloadDisasterRecoveryBackup,
+  uploadDisasterRecoveryBackup,
+  getLatestDisasterRecoveryRestoreJob,
+  type DisasterRecoveryRestoreJob,
   type InsteonMaintenanceSyncResponse,
   type InsteonMaintenanceSyncRunSnapshot
 } from "@/api/maintenance"
@@ -456,6 +461,10 @@ export function Settings() {
   const [clearingVoiceHistory, setClearingVoiceHistory] = useState(false)
   const [runningHealthCheck, setRunningHealthCheck] = useState(false)
   const [exportingConfig, setExportingConfig] = useState(false)
+  const [creatingFullBackup, setCreatingFullBackup] = useState(false)
+  const [restoringBackup, setRestoringBackup] = useState(false)
+  const [selectedRestoreBackup, setSelectedRestoreBackup] = useState<File | null>(null)
+  const [latestRestoreJob, setLatestRestoreJob] = useState<DisasterRecoveryRestoreJob | null>(null)
   const [healthData, setHealthData] = useState(null)
   const [llmPriorityList, setLlmPriorityList] = useState<string[]>(['local', 'codex', 'openai', 'anthropic'])
   const [savingPriority, setSavingPriority] = useState(false)
@@ -788,6 +797,7 @@ export function Settings() {
     loadAlexaSummary();
     loadAlexaProfileOptions();
     loadLLMPriorityList();
+    loadLatestRestoreJob();
   }, [setValue, toast]);
 
   useEffect(() => {
@@ -815,6 +825,28 @@ export function Settings() {
     })
   }, [alexaSummary?.voiceUsers])
 
+  useEffect(() => {
+    if (!latestRestoreJob || !["queued", "validating", "restoring"].includes(latestRestoreJob.status)) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      getLatestDisasterRecoveryRestoreJob()
+        .then((response) => {
+          if (response?.success) {
+            setLatestRestoreJob(response.job || null)
+          }
+        })
+        .catch(() => {
+          // HomeBrain will temporarily go offline during restore; ignore transient poll failures.
+        })
+    }, 5000)
+
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [latestRestoreJob?.id, latestRestoreJob?.status])
+
   // Load LLM priority list
   const loadLLMPriorityList = async () => {
     try {
@@ -831,6 +863,18 @@ export function Settings() {
       setLlmPriorityList(['local', 'codex', 'openai', 'anthropic']);
     }
   };
+
+  const loadLatestRestoreJob = async () => {
+    try {
+      const response = await getLatestDisasterRecoveryRestoreJob()
+      if (response?.success) {
+        setLatestRestoreJob(response.job || null)
+      }
+    } catch (error) {
+      console.error("Failed to load latest restore job:", error)
+      setLatestRestoreJob(null)
+    }
+  }
 
   const loadInsteonRuntimeStatus = async ({ quiet = false }: { quiet?: boolean } = {}) => {
     setLoadingInsteonRuntimeStatus(true)
@@ -3704,6 +3748,83 @@ export function Settings() {
       setExportingConfig(false);
     }
   };
+
+  const handleCreateFullBackup = async () => {
+    setCreatingFullBackup(true)
+    try {
+      const response = await downloadDisasterRecoveryBackup()
+      const url = URL.createObjectURL(response.blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = response.filename || `homebrain-backup-${new Date().toISOString().split("T")[0]}.tar.gz`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+
+      toast({
+        title: "Backup Complete",
+        description: "Full disaster recovery backup downloaded successfully."
+      })
+    } catch (error: any) {
+      console.error("Failed to create full backup:", error)
+      toast({
+        title: "Backup Failed",
+        description: error?.message || "Unable to create a full disaster recovery backup.",
+        variant: "destructive"
+      })
+    } finally {
+      setCreatingFullBackup(false)
+    }
+  }
+
+  const handleRestoreBackupSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] || null
+    setSelectedRestoreBackup(file)
+  }
+
+  const handleRestoreFromBackup = async () => {
+    if (!selectedRestoreBackup) {
+      toast({
+        title: "No Backup Selected",
+        description: "Choose a HomeBrain backup archive before starting a restore.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    const confirmed = window.confirm(
+      "This will replace the current HomeBrain database and persisted files, then restart HomeBrain. Continue?"
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setRestoringBackup(true)
+    try {
+      const response = await uploadDisasterRecoveryBackup(selectedRestoreBackup)
+      if (response?.success) {
+        setLatestRestoreJob(response.job ? {
+          ...response.job,
+          message: response.message || response.job.message
+        } : null)
+        setSelectedRestoreBackup(null)
+        toast({
+          title: "Restore Started",
+          description: response.message || "Restore queued. HomeBrain will go temporarily offline while it is applied."
+        })
+      }
+    } catch (error: any) {
+      console.error("Failed to start restore:", error)
+      toast({
+        title: "Restore Failed",
+        description: error?.message || "Unable to start the disaster recovery restore.",
+        variant: "destructive"
+      })
+    } finally {
+      setRestoringBackup(false)
+    }
+  }
 
   // LLM Priority List handlers
   const movePriorityUp = (index: number) => {
@@ -7740,6 +7861,72 @@ export function Settings() {
                       )}
                     </Button>
                   </div>
+
+                  <div className="space-y-2">
+                    <h4 className="font-medium">Full System Backup</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Download a full disaster recovery backup with MongoDB data and persisted HomeBrain files.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCreateFullBackup}
+                      disabled={creatingFullBackup}
+                      className="w-full"
+                    >
+                      {creatingFullBackup ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Backing up...
+                        </>
+                      ) : (
+                        <>
+                          <HardDrive className="h-4 w-4 mr-2" />
+                          Create Full Backup
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h4 className="font-medium">Restore Full Backup</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Restore a full HomeBrain backup after a clean build. This replaces the current database and persisted files.
+                    </p>
+                    <div className="space-y-2">
+                      <Input
+                        type="file"
+                        accept=".tar.gz,.tgz,.gz,application/gzip"
+                        onChange={handleRestoreBackupSelection}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRestoreFromBackup}
+                        disabled={restoringBackup || !selectedRestoreBackup}
+                        className="w-full"
+                      >
+                        {restoringBackup ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Restoring...
+                          </>
+                        ) : (
+                          <>
+                            <FileUp className="h-4 w-4 mr-2" />
+                            Restore Backup
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    {selectedRestoreBackup && (
+                      <p className="text-xs text-muted-foreground">
+                        Selected: {selectedRestoreBackup.name}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 {/* Health Data Display */}
@@ -7752,8 +7939,12 @@ export function Settings() {
                         <ul className="text-sm text-muted-foreground mt-1">
                           <li>Devices: {healthData.database?.collections?.devices || 0}</li>
                           <li>Scenes: {healthData.database?.collections?.scenes || 0}</li>
-                          <li>Automation Runtime Records: {healthData.database?.collections?.automations || 0}</li>
+                          <li>Automations: {healthData.database?.collections?.automations || 0}</li>
+                          <li>Automation History: {healthData.database?.collections?.automationHistory || 0}</li>
                           <li>Voice Devices: {healthData.database?.collections?.voiceDevices || 0}</li>
+                          <li>Voice Commands: {healthData.database?.collections?.voiceCommands || 0}</li>
+                          <li>Event Stream: {healthData.database?.collections?.eventStream || 0}</li>
+                          <li>Telemetry Samples: {healthData.database?.collections?.telemetrySamples || 0}</li>
                           <li>User Profiles: {healthData.database?.collections?.userProfiles || 0}</li>
                         </ul>
                       </div>
@@ -7766,8 +7957,28 @@ export function Settings() {
                           <li>Voice System: {healthData.voiceSystem?.online || 0}/{healthData.voiceSystem?.devices || 0} online</li>
                           <li>SmartThings: {healthData.integrations?.smartthings?.connected ? 'Connected' : 'Disconnected'}</li>
                           <li>Harmony: {healthData.integrations?.harmony?.trackedDevices || 0} tracked activity devices</li>
+                          <li>Voice retention: {healthData.database?.retentionDays?.voiceCommands || 0} days</li>
+                          <li>Automation retention: {healthData.database?.retentionDays?.automationHistory || 0} days</li>
+                          <li>Event retention: {healthData.database?.retentionDays?.eventStream || 0} days</li>
+                          <li>Telemetry retention: {healthData.database?.retentionDays?.telemetrySamples || 0} days</li>
                         </ul>
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {latestRestoreJob && (
+                  <div className="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                    <h5 className="font-medium mb-2">Latest Restore Status</h5>
+                    <div className="text-sm text-muted-foreground space-y-1">
+                      <p>Status: {latestRestoreJob.status}</p>
+                      <p>Phase: {latestRestoreJob.phase || "n/a"}</p>
+                      <p>Archive: {latestRestoreJob.archiveName || "Unknown"}</p>
+                      <p>Updated: {latestRestoreJob.updatedAt ? new Date(latestRestoreJob.updatedAt).toLocaleString() : "Unknown"}</p>
+                      {latestRestoreJob.message && <p>{latestRestoreJob.message}</p>}
+                      {latestRestoreJob.error && (
+                        <p className="text-red-600 dark:text-red-300">{latestRestoreJob.error}</p>
+                      )}
                     </div>
                   </div>
                 )}

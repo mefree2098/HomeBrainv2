@@ -1,4 +1,5 @@
 const express = require('express');
+const fs = require('fs');
 const router = express.Router();
 const maintenanceService = require('../services/maintenanceService');
 const { requireAdmin } = require('./middlewares/auth');
@@ -366,6 +367,117 @@ router.get('/export', async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export configuration'
+    });
+  }
+});
+
+router.get('/backup/full', async (req, res) => {
+  let backup = null;
+
+  try {
+    console.log('MaintenanceRoutes: GET /backup/full - Creating full disaster recovery backup');
+
+    backup = await maintenanceService.createDisasterRecoveryBackup();
+
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="${backup.archiveFilename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    const stream = fs.createReadStream(backup.archivePath);
+    stream.on('error', async (error) => {
+      console.error('MaintenanceRoutes: Error streaming disaster recovery backup:', error.message);
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          error: 'Failed to stream backup archive'
+        });
+      } else {
+        res.destroy(error);
+      }
+      await backup?.cleanup?.().catch(() => {});
+    });
+
+    res.on('finish', () => {
+      void backup?.cleanup?.().catch(() => {});
+    });
+    res.on('close', () => {
+      void backup?.cleanup?.().catch(() => {});
+    });
+
+    stream.pipe(res);
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error creating disaster recovery backup:', error.message);
+    console.error(error.stack);
+    await backup?.cleanup?.().catch(() => {});
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create disaster recovery backup'
+    });
+  }
+});
+
+router.get('/restore/latest', async (_req, res) => {
+  try {
+    const job = await maintenanceService.getLatestRestoreJob();
+    return res.status(200).json({
+      success: true,
+      job
+    });
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error fetching latest restore job:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch latest restore status'
+    });
+  }
+});
+
+router.post('/restore', async (req, res) => {
+  try {
+    const archiveName = String(req.headers['x-backup-filename'] || '').trim();
+    if (!archiveName) {
+      return res.status(400).json({
+        success: false,
+        error: 'x-backup-filename header is required'
+      });
+    }
+
+    const actor = req.user?.email || req.user?._id || 'unknown';
+    const job = await maintenanceService.startDisasterRecoveryRestore(req, {
+      archiveName,
+      actor
+    });
+
+    let launched = false;
+    const triggerLaunch = () => {
+      if (launched) {
+        return;
+      }
+
+      launched = true;
+      void maintenanceService.launchQueuedDisasterRecoveryRestore(job.id).catch((error) => {
+        console.error('MaintenanceRoutes: Error launching disaster recovery restore helper:', error.message);
+        console.error(error.stack);
+      });
+    };
+
+    res.on('finish', triggerLaunch);
+    res.on('close', triggerLaunch);
+
+    return res.status(202).json({
+      success: true,
+      message: 'Disaster recovery restore queued. HomeBrain will go temporarily offline while the restore is applied.',
+      job
+    });
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error starting disaster recovery restore:', error.message);
+    console.error(error.stack);
+
+    const statusCode = error.code === 'RESTORE_RUNNING' ? 409 : 500;
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to start disaster recovery restore'
     });
   }
 });

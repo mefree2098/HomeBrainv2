@@ -1,4 +1,7 @@
 const mongoose = require('mongoose');
+const { getDataRetentionDays } = require('../config/dataRetention');
+
+const retentionDays = getDataRetentionDays().voiceCommands;
 
 const voiceCommandSchema = new mongoose.Schema({
   // Raw voice command text as received from speech-to-text
@@ -179,11 +182,18 @@ const voiceCommandSchema = new mongoose.Schema({
 
 // Indexes for better query performance
 voiceCommandSchema.index({ createdAt: -1 });
+voiceCommandSchema.index(
+  { createdAt: 1 },
+  {
+    expireAfterSeconds: retentionDays * 24 * 60 * 60,
+    name: 'voice_commands_ttl'
+  }
+);
 voiceCommandSchema.index({ deviceId: 1, createdAt: -1 });
 voiceCommandSchema.index({ sourceRoom: 1, createdAt: -1 });
 voiceCommandSchema.index({ userId: 1, createdAt: -1 });
 voiceCommandSchema.index({ 'intent.action': 1 });
-voiceCommandSchema.index({ 'execution.status': 1 });
+voiceCommandSchema.index({ 'execution.status': 1, createdAt: -1 });
 voiceCommandSchema.index({ wakeWord: 1, createdAt: -1 });
 voiceCommandSchema.index({ sessionId: 1 });
 

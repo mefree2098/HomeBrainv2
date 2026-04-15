@@ -1,0 +1,205 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const fsp = fs.promises;
+const os = require('os');
+const path = require('path');
+
+const systemBackupServiceModule = require('../services/systemBackupService');
+
+const { SystemBackupService } = systemBackupServiceModule;
+
+function getArchiveArg(args = []) {
+  const match = args.find((arg) => typeof arg === 'string' && arg.startsWith('--archive='));
+  return match ? match.slice('--archive='.length) : null;
+}
+
+async function createTempProject(t) {
+  const projectRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'homebrain-system-backup-'));
+  const serverRoot = path.join(projectRoot, 'server');
+  const tempRoot = path.join(projectRoot, '.tmp');
+
+  await fsp.mkdir(path.join(serverRoot, 'data'), { recursive: true });
+  await fsp.mkdir(path.join(serverRoot, 'public', 'downloads'), { recursive: true });
+  await fsp.mkdir(path.join(serverRoot, 'certificates'), { recursive: true });
+  await fsp.mkdir(tempRoot, { recursive: true });
+
+  t.after(async () => {
+    await fsp.rm(projectRoot, { recursive: true, force: true });
+  });
+
+  return {
+    projectRoot,
+    serverRoot,
+    tempRoot
+  };
+}
+
+test('createDisasterRecoveryBackup captures Mongo metadata and persisted filesystem state', { concurrency: false }, async (t) => {
+  const { projectRoot, serverRoot, tempRoot } = await createTempProject(t);
+
+  await fsp.writeFile(path.join(projectRoot, '.env'), 'DATABASE_URL=mongodb://localhost/HomeBrain\nTEST_VALUE=restored\n', 'utf8');
+  await fsp.writeFile(path.join(serverRoot, 'data', 'device-cache.json'), '{"ok":true}\n', 'utf8');
+  await fsp.mkdir(path.join(serverRoot, 'data', 'system-backup'), { recursive: true });
+  await fsp.writeFile(path.join(serverRoot, 'data', 'system-backup', 'skip-me.txt'), 'skip\n', 'utf8');
+  await fsp.writeFile(path.join(serverRoot, 'public', 'downloads', 'latest.bin'), 'payload\n', 'utf8');
+  await fsp.writeFile(path.join(serverRoot, 'certificates', 'hub.pem'), 'certificate\n', 'utf8');
+
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot,
+    databaseUrl: 'mongodb://localhost/HomeBrain',
+    now: () => new Date('2026-04-15T12:00:00.000Z')
+  });
+  const originalRunCommand = service.runCommand.bind(service);
+
+  service.runCommand = async (command, args, options) => {
+    if (command === 'mongodump') {
+      const archivePath = getArchiveArg(args);
+      assert.equal(args.includes('--gzip'), true);
+      assert.ok(archivePath);
+      await fsp.mkdir(path.dirname(archivePath), { recursive: true });
+      await fsp.writeFile(archivePath, 'mongodump-archive', 'utf8');
+      return { code: 0, stdout: '', stderr: '' };
+    }
+
+    return originalRunCommand(command, args, options);
+  };
+
+  const backup = await service.createDisasterRecoveryBackup();
+  const extractRoot = await fsp.mkdtemp(path.join(tempRoot, 'extract-'));
+
+  t.after(async () => {
+    await backup.cleanup();
+    await fsp.rm(extractRoot, { recursive: true, force: true });
+  });
+
+  await originalRunCommand('tar', ['-xzf', backup.archivePath, '-C', extractRoot]);
+
+  const manifest = JSON.parse(await fsp.readFile(path.join(extractRoot, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.format, 'homebrain-disaster-recovery');
+  assert.equal(manifest.version, 1);
+  assert.equal(manifest.database.databaseName, 'HomeBrain');
+  assert.equal(manifest.database.archivePath, 'database/homebrain.mongodb.archive.gz');
+  assert.equal(
+    await fsp.readFile(path.join(extractRoot, 'filesystem', '.env'), 'utf8'),
+    'DATABASE_URL=mongodb://localhost/HomeBrain\nTEST_VALUE=restored\n'
+  );
+  assert.equal(
+    await fsp.readFile(path.join(extractRoot, 'filesystem', 'server', 'data', 'device-cache.json'), 'utf8'),
+    '{"ok":true}\n'
+  );
+  assert.equal(
+    fs.existsSync(path.join(extractRoot, 'filesystem', 'server', 'data', 'system-backup')),
+    false
+  );
+  assert.equal(
+    await fsp.readFile(path.join(extractRoot, 'filesystem', 'server', 'public', 'downloads', 'latest.bin'), 'utf8'),
+    'payload\n'
+  );
+  assert.equal(
+    await fsp.readFile(path.join(extractRoot, 'filesystem', 'server', 'certificates', 'hub.pem'), 'utf8'),
+    'certificate\n'
+  );
+});
+
+test('runRestoreJob restores filesystem state, uses the backup DATABASE_URL, and preserves system-backup workspace', { concurrency: false }, async (t) => {
+  const { projectRoot, serverRoot, tempRoot } = await createTempProject(t);
+  const backupRoot = path.join(serverRoot, 'data', 'system-backup');
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot,
+    databaseUrl: 'mongodb://current-host/HomeBrain',
+    now: () => new Date('2026-04-15T13:00:00.000Z')
+  });
+  const originalRunCommand = service.runCommand.bind(service);
+
+  await service.initialize();
+  await fsp.writeFile(path.join(projectRoot, '.env'), 'DATABASE_URL=mongodb://current-host/HomeBrain\nCURRENT_ONLY=1\n', 'utf8');
+  await fsp.writeFile(path.join(serverRoot, 'data', 'stale.json'), 'stale\n', 'utf8');
+  await fsp.writeFile(path.join(serverRoot, 'public', 'downloads', 'old.bin'), 'old\n', 'utf8');
+  await fsp.writeFile(path.join(serverRoot, 'certificates', 'old.pem'), 'old-cert\n', 'utf8');
+  await fsp.writeFile(path.join(backupRoot, 'keep.txt'), 'keep\n', 'utf8');
+
+  const bundleRoot = await fsp.mkdtemp(path.join(tempRoot, 'bundle-'));
+  const archivePath = path.join(tempRoot, 'restore-backup.tar.gz');
+
+  t.after(async () => {
+    await fsp.rm(bundleRoot, { recursive: true, force: true });
+    await fsp.rm(archivePath, { force: true });
+  });
+
+  await fsp.mkdir(path.join(bundleRoot, 'filesystem', 'server', 'data'), { recursive: true });
+  await fsp.mkdir(path.join(bundleRoot, 'filesystem', 'server', 'public', 'downloads'), { recursive: true });
+  await fsp.mkdir(path.join(bundleRoot, 'filesystem', 'server', 'certificates'), { recursive: true });
+  await fsp.mkdir(path.join(bundleRoot, 'database'), { recursive: true });
+
+  await fsp.writeFile(path.join(bundleRoot, 'filesystem', '.env'), 'DATABASE_URL=mongodb://restored-host/HomeBrain\nRESTORED=1\n', 'utf8');
+  await fsp.writeFile(path.join(bundleRoot, 'filesystem', 'server', 'data', 'restored.json'), 'restored\n', 'utf8');
+  await fsp.writeFile(path.join(bundleRoot, 'filesystem', 'server', 'public', 'downloads', 'latest.bin'), 'new\n', 'utf8');
+  await fsp.writeFile(path.join(bundleRoot, 'filesystem', 'server', 'certificates', 'hub.pem'), 'new-cert\n', 'utf8');
+  await fsp.writeFile(path.join(bundleRoot, 'database', 'homebrain.mongodb.archive.gz'), 'mongorestore-archive', 'utf8');
+  await fsp.writeFile(path.join(bundleRoot, 'manifest.json'), `${JSON.stringify({
+    format: 'homebrain-disaster-recovery',
+    version: 1,
+    createdAt: '2026-04-15T12:00:00.000Z',
+    appVersion: '1.0.0',
+    database: {
+      archivePath: 'database/homebrain.mongodb.archive.gz'
+    }
+  }, null, 2)}\n`, 'utf8');
+
+  await originalRunCommand('tar', ['-czf', archivePath, '-C', bundleRoot, '.']);
+
+  const queuedJob = await service.startRestoreJobFromArchive(archivePath, {
+    actor: 'tester@example.com',
+    archiveName: 'restore-backup.tar.gz'
+  });
+
+  let mongorestoreCalls = 0;
+  service.runCommand = async (command, args, options) => {
+    if (command === 'mongorestore') {
+      mongorestoreCalls += 1;
+      assert.equal(args.includes('--drop'), true);
+      assert.equal(args.includes('--uri=mongodb://restored-host/HomeBrain'), true);
+      assert.equal(fs.existsSync(getArchiveArg(args)), true);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+
+    if (command === 'sudo') {
+      throw new Error('sudo should not be called during an offline restore run');
+    }
+
+    return originalRunCommand(command, args, options);
+  };
+
+  const result = await service.runRestoreJob(queuedJob.id, { restartOnComplete: false });
+
+  assert.equal(mongorestoreCalls, 1);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.phase, 'completed');
+  assert.match(String(result.message || ''), /start homebrain/i);
+  assert.equal(
+    await fsp.readFile(path.join(projectRoot, '.env'), 'utf8'),
+    'DATABASE_URL=mongodb://restored-host/HomeBrain\nRESTORED=1\n'
+  );
+  assert.equal(
+    await fsp.readFile(path.join(serverRoot, 'data', 'restored.json'), 'utf8'),
+    'restored\n'
+  );
+  assert.equal(fs.existsSync(path.join(serverRoot, 'data', 'stale.json')), false);
+  assert.equal(
+    await fsp.readFile(path.join(serverRoot, 'data', 'system-backup', 'keep.txt'), 'utf8'),
+    'keep\n'
+  );
+  assert.equal(
+    await fsp.readFile(path.join(serverRoot, 'public', 'downloads', 'latest.bin'), 'utf8'),
+    'new\n'
+  );
+  assert.equal(fs.existsSync(path.join(serverRoot, 'public', 'downloads', 'old.bin')), false);
+  assert.equal(
+    await fsp.readFile(path.join(serverRoot, 'certificates', 'hub.pem'), 'utf8'),
+    'new-cert\n'
+  );
+  assert.equal(fs.existsSync(path.join(serverRoot, 'certificates', 'old.pem')), false);
+});

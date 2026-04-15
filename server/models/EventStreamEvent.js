@@ -1,4 +1,7 @@
 const mongoose = require('mongoose');
+const { getDataRetentionDays } = require('../config/dataRetention');
+
+const retentionDays = getDataRetentionDays().eventStream;
 
 const eventStreamEventSchema = new mongoose.Schema({
   sequence: {
@@ -50,7 +53,15 @@ const eventStreamEventSchema = new mongoose.Schema({
 });
 
 eventStreamEventSchema.index({ createdAt: -1 });
+eventStreamEventSchema.index(
+  { createdAt: 1 },
+  {
+    expireAfterSeconds: retentionDays * 24 * 60 * 60,
+    name: 'event_stream_ttl'
+  }
+);
 eventStreamEventSchema.index({ type: 1, createdAt: -1 });
 eventStreamEventSchema.index({ source: 1, createdAt: -1 });
+eventStreamEventSchema.index({ category: 1, createdAt: -1 });
 
 module.exports = mongoose.model('EventStreamEvent', eventStreamEventSchema);

@@ -2,15 +2,20 @@ const { randomUUID } = require('node:crypto');
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
 const Automation = require('../models/Automation');
+const AutomationHistory = require('../models/AutomationHistory');
 const VoiceDevice = require('../models/VoiceDevice');
 const UserProfile = require('../models/UserProfile');
 const VoiceCommand = require('../models/VoiceCommand');
+const EventStreamEvent = require('../models/EventStreamEvent');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const Settings = require('../models/Settings');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
+const TelemetrySample = require('../models/TelemetrySample');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
 const insteonService = require('./insteonService');
+const systemBackupService = require('./systemBackupService');
+const { getDataRetentionDays } = require('../config/dataRetention');
 const {
   buildSmartThingsDeviceIdentityQuery,
   selectCanonicalDevice,
@@ -1394,7 +1399,11 @@ class MaintenanceService {
 
     try {
       const health = {
-        database: { connected: true, collections: {} },
+        database: {
+          connected: true,
+          collections: {},
+          retentionDays: getDataRetentionDays()
+        },
         devices: { total: 0, online: 0, offline: 0 },
         integrations: {
           smartthings: { configured: false, connected: false },
@@ -1407,7 +1416,11 @@ class MaintenanceService {
       health.database.collections.devices = await Device.countDocuments();
       health.database.collections.scenes = await Scene.countDocuments();
       health.database.collections.automations = await Automation.countDocuments();
+      health.database.collections.automationHistory = await AutomationHistory.countDocuments();
       health.database.collections.voiceDevices = await VoiceDevice.countDocuments();
+      health.database.collections.voiceCommands = await VoiceCommand.countDocuments();
+      health.database.collections.eventStream = await EventStreamEvent.countDocuments();
+      health.database.collections.telemetrySamples = await TelemetrySample.countDocuments();
       health.database.collections.userProfiles = await UserProfile.countDocuments();
 
       // Check device statistics
@@ -1487,6 +1500,69 @@ class MaintenanceService {
       console.error(error.stack);
       throw new Error('Failed to export configuration');
     }
+  }
+
+  async createDisasterRecoveryBackup() {
+    console.log('MaintenanceService: Creating full disaster recovery backup');
+
+    try {
+      const backup = await systemBackupService.createDisasterRecoveryBackup();
+      return {
+        success: true,
+        message: 'Disaster recovery backup created successfully',
+        ...backup
+      };
+    } catch (error) {
+      console.error('MaintenanceService: Error creating disaster recovery backup:', error.message);
+      console.error(error.stack);
+      throw new Error(`Failed to create a disaster recovery backup: ${error.message}`);
+    }
+  }
+
+  async startDisasterRecoveryRestore(readable, options = {}) {
+    console.log('MaintenanceService: Queueing full disaster recovery restore');
+
+    try {
+      const staged = await systemBackupService.stageRestoreUpload(readable, {
+        archiveName: options.archiveName
+      });
+      return await systemBackupService.startRestoreJobFromArchive(staged.archivePath, {
+        actor: options.actor,
+        archiveName: staged.archiveName
+      });
+    } catch (error) {
+      console.error('MaintenanceService: Error starting disaster recovery restore:', error.message);
+      console.error(error.stack);
+      throw error;
+    }
+  }
+
+  async launchQueuedDisasterRecoveryRestore(jobId) {
+    console.log('MaintenanceService: Launching queued disaster recovery restore helper');
+
+    try {
+      await systemBackupService.launchRestoreHelper();
+      return {
+        success: true
+      };
+    } catch (error) {
+      console.error('MaintenanceService: Error launching disaster recovery restore helper:', error.message);
+      console.error(error.stack);
+
+      if (jobId) {
+        await systemBackupService.markRestoreJobFailed(
+          jobId,
+          error.message,
+          'Restore could not be launched. HomeBrain did not go offline.'
+        ).catch(() => {});
+      }
+
+      throw error;
+    }
+  }
+
+  async getLatestRestoreJob() {
+    return systemBackupService.getLatestRestoreJob();
   }
 }
 

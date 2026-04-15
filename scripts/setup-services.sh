@@ -17,9 +17,13 @@ SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 SERVICE_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
 RESTART_HELPER_SERVICE_NAME="${SERVICE_NAME}-restart-helper"
 RESTART_HELPER_SERVICE_PATH="/etc/systemd/system/${RESTART_HELPER_SERVICE_NAME}.service"
+RESTORE_HELPER_SERVICE_NAME="${SERVICE_NAME}-restore-helper"
+RESTORE_HELPER_SERVICE_PATH="/etc/systemd/system/${RESTORE_HELPER_SERVICE_NAME}.service"
 HOMEBRAIN_HELPER_INSTALL_DIR="/usr/local/lib/homebrain"
 RESTART_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/restart-homebrain-service.sh"
 RESTART_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/restart-homebrain-service.sh"
+RESTORE_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/restore-homebrain-backup.sh"
+RESTORE_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/restore-homebrain-backup.sh"
 OLLAMA_PRIVILEGE_OVERRIDE_PATH="${SERVICE_DROPIN_DIR}/99-ollama-helper.conf"
 OLLAMA_SERVICE_DROPIN_DIR="/etc/systemd/system/ollama.service.d"
 OLLAMA_RESOURCE_GUARD_PATH="${OLLAMA_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
@@ -481,10 +485,19 @@ EOF
     exit 1
   fi
 
+  if [[ ! -f "${RESTORE_HELPER_SOURCE_PATH}" ]]; then
+    print_error "HomeBrain restore helper not found at ${RESTORE_HELPER_SOURCE_PATH}"
+    exit 1
+  fi
+
   print_status "Installing the HomeBrain restart helper..."
   sudo install -d -m 0755 "${HOMEBRAIN_HELPER_INSTALL_DIR}"
   sudo install -m 0755 "${RESTART_HELPER_SOURCE_PATH}" "${RESTART_HELPER_INSTALL_PATH}"
   sudo chown root:root "${RESTART_HELPER_INSTALL_PATH}"
+
+  print_status "Installing the HomeBrain restore helper..."
+  sudo install -m 0755 "${RESTORE_HELPER_SOURCE_PATH}" "${RESTORE_HELPER_INSTALL_PATH}"
+  sudo chown root:root "${RESTORE_HELPER_INSTALL_PATH}"
 
   print_status "Writing ${RESTART_HELPER_SERVICE_PATH}"
   sudo tee "${RESTART_HELPER_SERVICE_PATH}" >/dev/null <<EOF
@@ -500,6 +513,28 @@ Environment="HOMEBRAIN_DIR=${HOMEBRAIN_DIR}"
 ExecStart=${RESTART_HELPER_INSTALL_PATH}
 KillMode=process
 TimeoutStartSec=45s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  print_status "Writing ${RESTORE_HELPER_SERVICE_PATH}"
+  sudo tee "${RESTORE_HELPER_SERVICE_PATH}" >/dev/null <<EOF
+[Unit]
+Description=HomeBrain restore helper
+After=network-online.target mongod.service
+Wants=network-online.target
+Requires=mongod.service
+
+[Service]
+Type=oneshot
+User=${HOMEBRAIN_USER}
+Environment="HOMEBRAIN_SERVICE_NAME=${SERVICE_NAME}"
+Environment="HOMEBRAIN_DIR=${HOMEBRAIN_DIR}"
+Environment="HOMEBRAIN_PORT=${HOMEBRAIN_PORT}"
+ExecStart=${RESTORE_HELPER_INSTALL_PATH}
+KillMode=process
+TimeoutStartSec=30min
 
 [Install]
 WantedBy=multi-user.target
@@ -948,7 +983,7 @@ show_usage() {
 Usage: $0 <command>
 
 Commands:
-  install-service   Write /etc/systemd/system/homebrain.service and the restart helper
+  install-service   Write /etc/systemd/system/homebrain.service plus restart/restore helpers
   refresh-privileges Install the Ollama helper and refresh HomeBrain sudoers
   setup-caddy       Install Caddy as the native public edge service
   start             Start MongoDB and HomeBrain
