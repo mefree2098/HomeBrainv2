@@ -235,14 +235,14 @@ test('buildServiceRestartCommand removes invalid sudo fragments and forces non-i
   service.restartOllamaOnDeploy = true;
   service.defaultOllamaRestartCommand = 'sudo systemctl restart ollama';
   service.customRestartCommand = 'sudo; sudo systemctl daemon-reload';
-  service.coreRestartCommand = 'sudo; sudo systemctl restart homebrain';
+  service.coreRestartCommand = 'sudo; sudo systemctl start homebrain-restart-helper';
 
   const result = service.buildServiceRestartCommand();
 
   assert.equal(result.fullCommand.includes('sudo;'), false);
   assert.equal(result.fullCommand.includes('sudo -n systemctl restart --no-block ollama || true'), true);
   assert.equal(result.fullCommand.includes('sudo -n systemctl daemon-reload'), true);
-  assert.equal(result.fullCommand.includes('sudo -n systemctl restart --no-block homebrain'), true);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl start --no-block homebrain-restart-helper'), true);
   assert.equal(
     result.notes.some((note) => /does not include a command/i.test(note)),
     true

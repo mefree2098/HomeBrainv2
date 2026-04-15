@@ -92,7 +92,7 @@ class PlatformDeployService {
       || 'sudo -n systemctl restart --no-block ollama';
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
-      || 'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart --no-block homebrain';
+      || 'sudo -n systemctl daemon-reload || true; sudo -n systemctl start --no-block homebrain-restart-helper';
     this.alexaBrokerService = options.alexaBrokerService || alexaBrokerService;
     this.runtimeSnapshotCaptured = false;
     this.runtimeSnapshot = {

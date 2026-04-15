@@ -15,6 +15,11 @@ HOMEBRAIN_USER="${HOMEBRAIN_USER:-${SUDO_USER:-$USER}}"
 SERVICE_NAME="homebrain"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 SERVICE_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+RESTART_HELPER_SERVICE_NAME="${SERVICE_NAME}-restart-helper"
+RESTART_HELPER_SERVICE_PATH="/etc/systemd/system/${RESTART_HELPER_SERVICE_NAME}.service"
+HOMEBRAIN_HELPER_INSTALL_DIR="/usr/local/lib/homebrain"
+RESTART_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/restart-homebrain-service.sh"
+RESTART_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/restart-homebrain-service.sh"
 OLLAMA_PRIVILEGE_OVERRIDE_PATH="${SERVICE_DROPIN_DIR}/99-ollama-helper.conf"
 OLLAMA_SERVICE_DROPIN_DIR="/etc/systemd/system/ollama.service.d"
 OLLAMA_RESOURCE_GUARD_PATH="${OLLAMA_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
@@ -22,7 +27,7 @@ CADDY_SERVICE_NAME="${CADDY_SERVICE_NAME:-caddy-api}"
 CADDY_SERVICE_PATH="/etc/systemd/system/${CADDY_SERVICE_NAME}.service"
 CADDY_BOOTSTRAP_PATH="${CADDY_BOOTSTRAP_PATH:-/etc/caddy/Caddyfile}"
 OLLAMA_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/ollama-host-control.sh"
-OLLAMA_HELPER_INSTALL_DIR="/usr/local/lib/homebrain"
+OLLAMA_HELPER_INSTALL_DIR="${HOMEBRAIN_HELPER_INSTALL_DIR}"
 OLLAMA_HELPER_INSTALL_PATH="${OLLAMA_HELPER_INSTALL_DIR}/ollama-host-control.sh"
 DEPLOY_SUDOERS_PATH="/etc/sudoers.d/homebrain-deploy"
 
@@ -151,6 +156,16 @@ homebrain_service_unit_exists() {
     | grep -qx "${SERVICE_NAME}.service"
 }
 
+homebrain_restart_helper_unit_exists() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -qx "${RESTART_HELPER_SERVICE_NAME}.service"
+}
+
 get_homebrain_service_state() {
   if ! command -v systemctl >/dev/null 2>&1; then
     return 0
@@ -266,6 +281,35 @@ NoNewPrivileges=false
 WantedBy=multi-user.target
 EOF
 
+  if [[ ! -f "${RESTART_HELPER_SOURCE_PATH}" ]]; then
+    print_error "HomeBrain restart helper not found at ${RESTART_HELPER_SOURCE_PATH}"
+    exit 1
+  fi
+
+  print_status "Installing the HomeBrain restart helper..."
+  sudo install -d -m 0755 "${HOMEBRAIN_HELPER_INSTALL_DIR}"
+  sudo install -m 0755 "${RESTART_HELPER_SOURCE_PATH}" "${RESTART_HELPER_INSTALL_PATH}"
+  sudo chown root:root "${RESTART_HELPER_INSTALL_PATH}"
+
+  print_status "Writing ${RESTART_HELPER_SERVICE_PATH}"
+  sudo tee "${RESTART_HELPER_SERVICE_PATH}" >/dev/null <<EOF
+[Unit]
+Description=HomeBrain restart helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment="HOMEBRAIN_SERVICE_NAME=${SERVICE_NAME}"
+Environment="HOMEBRAIN_DIR=${HOMEBRAIN_DIR}"
+ExecStart=${RESTART_HELPER_INSTALL_PATH}
+KillMode=process
+TimeoutStartSec=45s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"
   print_success "Service installed and enabled."
@@ -346,9 +390,14 @@ stop_services() {
 }
 
 restart_services() {
-  print_status "Restarting HomeBrain..."
-  stop_homebrain_service "Stopping HomeBrain before restart"
-  sudo systemctl start "${SERVICE_NAME}"
+  if homebrain_restart_helper_unit_exists; then
+    print_status "Restarting HomeBrain via ${RESTART_HELPER_SERVICE_NAME}..."
+    sudo systemctl start "${RESTART_HELPER_SERVICE_NAME}"
+  else
+    print_status "Restarting HomeBrain..."
+    stop_homebrain_service "Stopping HomeBrain before restart"
+    sudo systemctl start "${SERVICE_NAME}"
+  fi
   print_success "HomeBrain restarted."
 }
 
@@ -577,7 +626,8 @@ NODE"
 
   install_service
   refresh_privileges
-  sudo systemctl restart "${SERVICE_NAME}"
+  print_status "Restarting HomeBrain via ${RESTART_HELPER_SERVICE_NAME}..."
+  sudo systemctl start "${RESTART_HELPER_SERVICE_NAME}"
 
   wait_for_homebrain_http 20 1
 
@@ -700,7 +750,7 @@ show_usage() {
 Usage: $0 <command>
 
 Commands:
-  install-service   Write /etc/systemd/system/homebrain.service
+  install-service   Write /etc/systemd/system/homebrain.service and the restart helper
   refresh-privileges Install the Ollama helper and refresh HomeBrain sudoers
   setup-caddy       Install Caddy as the native public edge service
   start             Start MongoDB and HomeBrain
