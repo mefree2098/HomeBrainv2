@@ -1,6 +1,8 @@
 // Load environment variables
 require("dotenv").config();
 const mongoose = require("mongoose");
+const { connectDB } = require("./config/database");
+const { databaseAvailabilityGuard } = require("./middleware/databaseAvailability");
 const express = require("express");
 const basicRoutes = require("./routes/index");
 const authRoutes = require("./routes/authRoutes");
@@ -73,7 +75,6 @@ const alexaBrokerService = require("./services/alexaBrokerService");
 const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
 const telemetryService = require("./services/telemetryService");
 const openclawMcpService = require("./services/openclawMcpService");
-const { connectDB } = require("./config/database");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
 const cors = require("cors");
 const http = require("http");
@@ -171,6 +172,7 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true, limit: '8mb' }));
+app.use('/api', databaseAvailabilityGuard);
 
 // Database connection
 const dbReady = connectDB();
