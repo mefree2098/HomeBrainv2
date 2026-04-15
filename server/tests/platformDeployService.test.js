@@ -240,13 +240,28 @@ test('buildServiceRestartCommand removes invalid sudo fragments and forces non-i
   const result = service.buildServiceRestartCommand();
 
   assert.equal(result.fullCommand.includes('sudo;'), false);
-  assert.equal(result.fullCommand.includes('sudo -n systemctl restart ollama || true'), true);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl restart --no-block ollama || true'), true);
   assert.equal(result.fullCommand.includes('sudo -n systemctl daemon-reload'), true);
-  assert.equal(result.fullCommand.includes('sudo -n systemctl restart homebrain'), true);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl restart --no-block homebrain'), true);
   assert.equal(
     result.notes.some((note) => /does not include a command/i.test(note)),
     true
   );
+});
+
+test('normalizeRestartCommandSegments adds --no-block to systemctl start and restart commands', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+
+  const result = service.normalizeRestartCommandSegments(
+    'sudo systemctl restart homebrain; sudo systemctl start ollama; sudo systemctl try-restart homebrain-discovery',
+    'test restart command'
+  );
+
+  assert.deepEqual(result.segments, [
+    'sudo -n systemctl restart --no-block homebrain',
+    'sudo -n systemctl start --no-block ollama',
+    'sudo -n systemctl try-restart --no-block homebrain-discovery'
+  ]);
 });
 
 test('isIgnorableDirtyEntry treats OTA artifacts as generated output', { concurrency: false }, async (t) => {

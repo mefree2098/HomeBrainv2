@@ -89,10 +89,10 @@ class PlatformDeployService {
     this.autoRecoverDirtyRepo = process.env.HOMEBRAIN_DEPLOY_AUTO_STASH_DIRTY !== 'false';
     this.restartOllamaOnDeploy = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA !== 'false';
     this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD
-      || 'sudo -n systemctl restart ollama';
+      || 'sudo -n systemctl restart --no-block ollama';
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
-      || 'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart homebrain';
+      || 'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart --no-block homebrain';
     this.alexaBrokerService = options.alexaBrokerService || alexaBrokerService;
     this.runtimeSnapshotCaptured = false;
     this.runtimeSnapshot = {
@@ -922,6 +922,17 @@ class PlatformDeployService {
       .trim();
   }
 
+  makeSystemctlRestartNonBlocking(command) {
+    if (typeof command !== 'string' || !command) {
+      return '';
+    }
+
+    return command.replace(
+      /\bsystemctl\s+(restart|try-restart|start)\b(?!\s+--no-block)/gi,
+      'systemctl $1 --no-block'
+    );
+  }
+
   normalizeRestartCommandSegments(command, label = 'restart command') {
     const sanitized = this.sanitizeShellCommand(command);
     if (!sanitized) {
@@ -943,7 +954,7 @@ class PlatformDeployService {
       }
 
       const nonInteractive = trimmed.replace(/\bsudo\s+(?!-n\b)/gi, 'sudo -n ');
-      segments.push(nonInteractive);
+      segments.push(this.makeSystemctlRestartNonBlocking(nonInteractive));
     }
 
     return { segments, notes };
@@ -1013,7 +1024,7 @@ class PlatformDeployService {
     notes.push(...normalizedCoreRestart.notes);
     if (normalizedCoreRestart.segments.length === 0) {
       normalizedCoreRestart = this.normalizeRestartCommandSegments(
-        'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart homebrain',
+        'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart --no-block homebrain',
         'default core restart command'
       );
       notes.push(...normalizedCoreRestart.notes);
