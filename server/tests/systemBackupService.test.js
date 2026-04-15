@@ -203,3 +203,42 @@ test('runRestoreJob restores filesystem state, uses the backup DATABASE_URL, and
   );
   assert.equal(fs.existsSync(path.join(serverRoot, 'certificates', 'old.pem')), false);
 });
+
+test('launchRestoreHelper falls back to the repo restore script when the systemd helper is unavailable', { concurrency: false }, async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const restoreScriptPath = path.join(projectRoot, 'scripts', 'restore-homebrain-backup.sh');
+  await fsp.mkdir(path.dirname(restoreScriptPath), { recursive: true });
+  await fsp.writeFile(restoreScriptPath, '#!/usr/bin/env bash\n', 'utf8');
+
+  const spawnCalls = [];
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot,
+    spawnProcess: (command, args, options) => {
+      spawnCalls.push({ command, args, options });
+      const child = new (require('events').EventEmitter)();
+      child.unref = () => {
+        child.wasUnrefed = true;
+      };
+      process.nextTick(() => child.emit('spawn'));
+      return child;
+    }
+  });
+
+  service.runCommand = async () => {
+    throw new Error('Command failed (sudo -n systemctl start homebrain-restore-helper): Unit not found');
+  };
+
+  const launched = await service.launchRestoreHelper();
+
+  assert.equal(launched.launchStrategy, 'detached-script');
+  assert.equal(launched.scriptPath, restoreScriptPath);
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0].command, restoreScriptPath);
+  assert.deepEqual(spawnCalls[0].args, []);
+  assert.equal(spawnCalls[0].options.detached, true);
+  assert.equal(spawnCalls[0].options.stdio, 'ignore');
+  assert.equal(spawnCalls[0].options.cwd, projectRoot);
+  assert.equal(spawnCalls[0].options.env.HOMEBRAIN_DIR, projectRoot);
+  assert.equal(spawnCalls[0].options.env.HOMEBRAIN_SERVICE_NAME, 'homebrain');
+});

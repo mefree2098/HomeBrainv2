@@ -77,6 +77,39 @@ class SystemBackupService {
     this._runningRestorePromise = null;
   }
 
+  async spawnDetached(command, args, options = {}) {
+    const cwd = options.cwd || this.projectRoot;
+    const env = { ...process.env, ...(options.env || {}) };
+
+    return new Promise((resolve, reject) => {
+      const child = this.spawnProcess(command, args, {
+        cwd,
+        env,
+        detached: true,
+        stdio: 'ignore'
+      });
+
+      const cleanup = () => {
+        child.removeListener('error', handleError);
+        child.removeListener('spawn', handleSpawn);
+      };
+
+      const handleError = (error) => {
+        cleanup();
+        reject(error);
+      };
+
+      const handleSpawn = () => {
+        cleanup();
+        child.unref?.();
+        resolve(child);
+      };
+
+      child.once('error', handleError);
+      child.once('spawn', handleSpawn);
+    });
+  }
+
   async initialize() {
     await fsp.mkdir(this.restoreJobsDir, { recursive: true });
     await fsp.mkdir(this.restoreArchivesDir, { recursive: true });
@@ -388,13 +421,37 @@ class SystemBackupService {
   }
 
   async launchRestoreHelper() {
-    await this.runCommand('sudo', ['-n', 'systemctl', 'start', this.restoreHelperServiceName], {
-      captureStdout: false
-    });
+    try {
+      await this.runCommand('sudo', ['-n', 'systemctl', 'start', this.restoreHelperServiceName], {
+        captureStdout: false
+      });
 
-    return {
-      serviceName: this.restoreHelperServiceName
-    };
+      return {
+        serviceName: this.restoreHelperServiceName,
+        launchStrategy: 'systemd-service'
+      };
+    } catch (error) {
+      const restoreHelperScriptPath = path.join(this.projectRoot, 'scripts', 'restore-homebrain-backup.sh');
+
+      if (!(await this.pathExists(restoreHelperScriptPath))) {
+        throw error;
+      }
+
+      await this.spawnDetached(restoreHelperScriptPath, [], {
+        env: {
+          HOMEBRAIN_SERVICE_NAME: this.serviceName,
+          HOMEBRAIN_DIR: this.projectRoot,
+          HOMEBRAIN_PORT: String(process.env.HOMEBRAIN_PORT || '3000')
+        }
+      });
+
+      return {
+        serviceName: this.restoreHelperServiceName,
+        launchStrategy: 'detached-script',
+        scriptPath: restoreHelperScriptPath,
+        fallbackReason: error.message
+      };
+    }
   }
 
   async runRestoreJob(jobId, options = {}) {

@@ -993,6 +993,41 @@ class PlatformDeployService {
       .trim();
   }
 
+  isSudoPromptRequiredOutput(output = '') {
+    const normalized = String(output || '').toLowerCase();
+    return normalized.includes('a password is required')
+      || normalized.includes('no tty present')
+      || normalized.includes('terminal is required')
+      || normalized.includes('a terminal is required')
+      || normalized.includes('sorry, you must have a tty')
+      || normalized.includes('sorry, try again')
+      || normalized.includes('authentication failure')
+      || normalized.includes('incorrect password');
+  }
+
+  isSudoPermissionDeniedOutput(output = '') {
+    const normalized = String(output || '').toLowerCase();
+    return normalized.includes('is not in the sudoers file')
+      || normalized.includes('not allowed to execute')
+      || normalized.includes('may not run sudo');
+  }
+
+  async appendCapturedCommandOutput(jobId, stepName, result) {
+    if (result?.stdout) {
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [${stepName}] ${result.stdout}${result.stdout.endsWith('\n') ? '' : '\n'}`
+      );
+    }
+
+    if (result?.stderr) {
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [${stepName}] ERR: ${result.stderr}${result.stderr.endsWith('\n') ? '' : '\n'}`
+      );
+    }
+  }
+
   makeSystemctlRestartNonBlocking(command) {
     if (typeof command !== 'string' || !command) {
       return '';
@@ -1618,14 +1653,35 @@ class PlatformDeployService {
       return { skipped: true };
     }
 
-    await this.runLoggedCommand(
+    const stepName = 'Install service helpers';
+    const bashPath = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash';
+    const args = ['-n', bashPath, setupServicesPath, 'install-service'];
+
+    await this.appendJobLog(
       jobId,
-      'Install service helpers',
-      'bash',
-      ['scripts/setup-services.sh', 'install-service']
+      `\n[${new Date().toISOString()}] [${stepName}] Running: sudo ${args.join(' ')}\n`
     );
 
-    return { skipped: false };
+    try {
+      const result = await this.runCommand('sudo', args);
+      await this.appendCapturedCommandOutput(jobId, stepName, result);
+      return { skipped: false };
+    } catch (error) {
+      await this.appendCapturedCommandOutput(jobId, stepName, error);
+
+      const failureOutput = `${error?.message || ''}\n${error?.stderr || ''}`;
+      if (this.isSudoPromptRequiredOutput(failureOutput) || this.isSudoPermissionDeniedOutput(failureOutput)) {
+        await this.appendJobLog(
+          jobId,
+          `[${new Date().toISOString()}] [${stepName}] `
+          + 'Skipped because passwordless sudo for helper installation is not configured on this host yet. '
+          + 'Run "bash scripts/setup-services.sh refresh-privileges" once to enable future automatic helper installs.\n'
+        );
+        return { skipped: true, reason: 'sudo-not-configured' };
+      }
+
+      throw error;
+    }
   }
 }
 

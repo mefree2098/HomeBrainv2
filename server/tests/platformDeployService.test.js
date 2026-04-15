@@ -346,7 +346,7 @@ test('normalizeRestartCommandSegments adds --no-block to systemctl start and res
   ]);
 });
 
-test('installServiceHelpers runs setup-services install-service when the helper script exists', { concurrency: false }, async (t) => {
+test('installServiceHelpers runs setup-services install-service with non-interactive sudo when the helper script exists', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   const scriptsDir = path.join(service.projectRoot, 'scripts');
   const setupServicesPath = path.join(scriptsDir, 'setup-services.sh');
@@ -355,19 +355,46 @@ test('installServiceHelpers runs setup-services install-service when the helper 
   await fsp.writeFile(setupServicesPath, '#!/usr/bin/env bash\n', 'utf8');
 
   let call = null;
-  service.runLoggedCommand = async (jobId, stepName, command, args) => {
-    call = { jobId, stepName, command, args };
+  service.runCommand = async (command, args) => {
+    call = { command, args };
+    return { code: 0, stdout: '', stderr: '' };
   };
+  service.appendJobLog = async () => {};
 
   const result = await service.installServiceHelpers('job-helpers');
 
   assert.deepEqual(result, { skipped: false });
   assert.deepEqual(call, {
-    jobId: 'job-helpers',
-    stepName: 'Install service helpers',
-    command: 'bash',
-    args: ['scripts/setup-services.sh', 'install-service']
+    command: 'sudo',
+    args: ['-n', '/bin/bash', setupServicesPath, 'install-service']
   });
+});
+
+test('installServiceHelpers skips when helper installation lacks passwordless sudo', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  const scriptsDir = path.join(service.projectRoot, 'scripts');
+  const setupServicesPath = path.join(scriptsDir, 'setup-services.sh');
+  const logs = [];
+
+  await fsp.mkdir(scriptsDir, { recursive: true });
+  await fsp.writeFile(setupServicesPath, '#!/usr/bin/env bash\n', 'utf8');
+
+  service.appendJobLog = async (_jobId, text) => {
+    logs.push(text);
+  };
+  service.runCommand = async () => {
+    const error = new Error('Command failed (sudo -n /bin/bash scripts/setup-services.sh install-service): sudo: a password is required');
+    error.stderr = 'sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper\nsudo: a password is required';
+    throw error;
+  };
+
+  const result = await service.installServiceHelpers('job-helpers');
+
+  assert.deepEqual(result, { skipped: true, reason: 'sudo-not-configured' });
+  assert.equal(
+    logs.some((entry) => entry.includes('Skipped because passwordless sudo for helper installation is not configured on this host yet')),
+    true
+  );
 });
 
 test('isIgnorableDirtyEntry treats OTA artifacts as generated output', { concurrency: false }, async (t) => {

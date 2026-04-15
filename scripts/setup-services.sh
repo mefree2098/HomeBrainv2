@@ -593,9 +593,29 @@ EOF
 }
 
 configure_deploy_sudoers() {
+  local deploy_commands=(
+    "/usr/bin/systemctl"
+    "/bin/systemctl"
+    "${OLLAMA_HELPER_INSTALL_PATH} install"
+    "${OLLAMA_HELPER_INSTALL_PATH} update"
+    "${OLLAMA_HELPER_INSTALL_PATH} stop-system"
+    "${OLLAMA_HELPER_INSTALL_PATH} probe"
+  )
+  local setup_services_path="${HOMEBRAIN_DIR}/scripts/setup-services.sh"
+
+  if [[ -x /bin/bash ]]; then
+    deploy_commands+=("/bin/bash ${setup_services_path} install-service")
+    deploy_commands+=("/bin/bash ${setup_services_path} refresh-privileges")
+  fi
+
+  if [[ -x /usr/bin/bash && /usr/bin/bash != /bin/bash ]]; then
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} install-service")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} refresh-privileges")
+  fi
+
   print_status "Refreshing HomeBrain sudoers access for service management and Ollama updates..."
   sudo tee "${DEPLOY_SUDOERS_PATH}" >/dev/null <<EOF
-${HOMEBRAIN_USER} ALL=(ALL) NOPASSWD:/usr/bin/systemctl,/bin/systemctl,${OLLAMA_HELPER_INSTALL_PATH} install,${OLLAMA_HELPER_INSTALL_PATH} update,${OLLAMA_HELPER_INSTALL_PATH} stop-system,${OLLAMA_HELPER_INSTALL_PATH} probe
+${HOMEBRAIN_USER} ALL=(ALL) NOPASSWD:$(IFS=,; echo "${deploy_commands[*]}")
 EOF
   sudo chmod 0440 "${DEPLOY_SUDOERS_PATH}"
   print_success "sudoers file written to ${DEPLOY_SUDOERS_PATH}."
