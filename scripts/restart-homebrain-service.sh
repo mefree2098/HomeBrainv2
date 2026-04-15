@@ -27,27 +27,35 @@ process_matches_homebrain() {
   local cmd="$2"
   local homebrain_dir=""
   local process_cwd=""
+  local repo_scoped_runtime="false"
 
-  if [[ "${cmd}" != *"node"* ]]; then
-    return 1
-  fi
-
-  if [[ "${cmd}" != *"server.js"* && "${cmd}" != *"run-with-modern-node.js npm start"* ]]; then
+  if [[ "${cmd}" != *"node"* && "${cmd}" != *"npm"* && "${cmd}" != *"server.js"* ]]; then
     return 1
   fi
 
   if [[ -z "${HOMEBRAIN_DIR}" ]]; then
-    return 0
+    if [[ "${cmd}" == *"server.js"* || ( "${cmd}" == *"run-with-modern-node.js"* && "${cmd}" == *"start"* ) ]]; then
+      return 0
+    fi
+    return 1
   fi
 
   homebrain_dir="$(canonicalize_path "${HOMEBRAIN_DIR}")"
 
+  process_cwd="$(canonicalize_path "/proc/${pid}/cwd" || true)"
+  if [[ -n "${process_cwd}" && ( "${process_cwd}" == "${homebrain_dir}" || "${process_cwd}" == "${homebrain_dir}/"* ) ]]; then
+    repo_scoped_runtime="true"
+  fi
+
   if [[ "${cmd}" == *"${HOMEBRAIN_DIR}"* || "${cmd}" == *"${homebrain_dir}"* ]]; then
+    repo_scoped_runtime="true"
+  fi
+
+  if [[ "${repo_scoped_runtime}" == "true" ]]; then
     return 0
   fi
 
-  process_cwd="$(canonicalize_path "/proc/${pid}/cwd" || true)"
-  if [[ -n "${process_cwd}" && ( "${process_cwd}" == "${homebrain_dir}" || "${process_cwd}" == "${homebrain_dir}/"* ) ]]; then
+  if [[ "${cmd}" == *"server.js"* || ( "${cmd}" == *"run-with-modern-node.js"* && "${cmd}" == *"start"* ) ]]; then
     return 0
   fi
 

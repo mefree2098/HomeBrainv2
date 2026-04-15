@@ -130,27 +130,35 @@ process_matches_homebrain() {
   local cmd="$2"
   local homebrain_dir=""
   local process_cwd=""
+  local repo_scoped_runtime="false"
 
-  if [[ "${cmd}" != *"node"* ]]; then
-    return 1
-  fi
-
-  if [[ "${cmd}" != *"server.js"* && "${cmd}" != *"run-with-modern-node.js npm start"* ]]; then
+  if [[ "${cmd}" != *"node"* && "${cmd}" != *"npm"* && "${cmd}" != *"server.js"* ]]; then
     return 1
   fi
 
   if [[ -z "${HOMEBRAIN_DIR}" ]]; then
-    return 0
+    if [[ "${cmd}" == *"server.js"* || ( "${cmd}" == *"run-with-modern-node.js"* && "${cmd}" == *"start"* ) ]]; then
+      return 0
+    fi
+    return 1
   fi
 
   homebrain_dir="$(canonicalize_path "${HOMEBRAIN_DIR}")"
 
+  process_cwd="$(canonicalize_path "/proc/${pid}/cwd" || true)"
+  if [[ -n "${process_cwd}" && ( "${process_cwd}" == "${homebrain_dir}" || "${process_cwd}" == "${homebrain_dir}/"* ) ]]; then
+    repo_scoped_runtime="true"
+  fi
+
   if [[ "${cmd}" == *"${HOMEBRAIN_DIR}"* || "${cmd}" == *"${homebrain_dir}"* ]]; then
+    repo_scoped_runtime="true"
+  fi
+
+  if [[ "${repo_scoped_runtime}" == "true" ]]; then
     return 0
   fi
 
-  process_cwd="$(canonicalize_path "/proc/${pid}/cwd" || true)"
-  if [[ -n "${process_cwd}" && ( "${process_cwd}" == "${homebrain_dir}" || "${process_cwd}" == "${homebrain_dir}/"* ) ]]; then
+  if [[ "${cmd}" == *"server.js"* || ( "${cmd}" == *"run-with-modern-node.js"* && "${cmd}" == *"start"* ) ]]; then
     return 0
   fi
 
@@ -291,6 +299,84 @@ stop_homebrain_service() {
 
   print_warning "HomeBrain service state after stop attempt: ${state}"
   return 0
+}
+
+get_service_main_pid() {
+  local main_pid
+  main_pid="$(sudo systemctl show -p MainPID --value "${SERVICE_NAME}" 2>/dev/null || echo 0)"
+  if [[ -z "${main_pid}" ]]; then
+    echo 0
+    return
+  fi
+  echo "${main_pid}"
+}
+
+get_listener_pids_for_port() {
+  local port="$1"
+  local output
+
+  output="$(sudo ss -lntp "( sport = :${port} )" 2>/dev/null || true)"
+  if [[ -z "${output}" ]]; then
+    return 0
+  fi
+
+  grep -o 'pid=[0-9]\+' <<<"${output}" | cut -d= -f2 | sort -u
+}
+
+pid_belongs_to_process_tree() {
+  local pid="$1"
+  local root_pid="$2"
+  local parent_pid=""
+
+  if [[ -z "${pid}" || -z "${root_pid}" || "${root_pid}" == "0" ]]; then
+    return 1
+  fi
+
+  while [[ -n "${pid}" && "${pid}" != "0" ]]; do
+    if [[ "${pid}" == "${root_pid}" ]]; then
+      return 0
+    fi
+
+    parent_pid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d '[:space:]')"
+    if [[ -z "${parent_pid}" || "${parent_pid}" == "${pid}" ]]; then
+      break
+    fi
+    pid="${parent_pid}"
+  done
+
+  return 1
+}
+
+homebrain_listener_matches_service() {
+  local main_pid
+  local listener_pid
+
+  main_pid="$(get_service_main_pid)"
+  if [[ -z "${main_pid}" || "${main_pid}" == "0" ]]; then
+    return 1
+  fi
+
+  while IFS= read -r listener_pid; do
+    [[ -z "${listener_pid}" ]] && continue
+    if pid_belongs_to_process_tree "${listener_pid}" "${main_pid}"; then
+      return 0
+    fi
+  done < <(get_listener_pids_for_port 3000)
+
+  return 1
+}
+
+describe_homebrain_listener_state() {
+  local main_pid
+  local listener_pids
+
+  main_pid="$(get_service_main_pid)"
+  listener_pids="$(get_listener_pids_for_port 3000 | tr '\n' ' ' | sed 's/[[:space:]]\+$//')"
+  if [[ -z "${listener_pids}" ]]; then
+    listener_pids="none"
+  fi
+
+  echo "service MainPID=${main_pid:-0}; port 3000 listener pid(s)=${listener_pids}"
 }
 
 print_port_listener_summary() {
@@ -475,7 +561,7 @@ wait_for_homebrain_http() {
   local attempt=1
 
   while (( attempt <= attempts )); do
-    if curl -fsS http://127.0.0.1:3000/ping >/dev/null 2>&1; then
+    if curl -fsS http://127.0.0.1:3000/ping >/dev/null 2>&1 && homebrain_listener_matches_service; then
       print_success "HomeBrain is responding on port 3000."
       return 0
     fi
@@ -485,6 +571,7 @@ wait_for_homebrain_http() {
   done
 
   print_error "HomeBrain did not respond on port 3000 after restart."
+  print_warning "$(describe_homebrain_listener_state)"
   return 1
 }
 
