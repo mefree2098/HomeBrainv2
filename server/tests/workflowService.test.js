@@ -268,3 +268,96 @@ test('reviseWorkflowFromText updates an existing workflow from natural language'
   assert.deepEqual(receivedUpdatePayload.actions, revisedWorkflow.actions);
   assert.deepEqual(receivedUpdatePayload.trigger, existingWorkflow.trigger);
 });
+
+test('stopRunningWorkflowExecution closes stale running executions and records stop logs', async (t) => {
+  const workflowService = require('../services/workflowService');
+  const automationService = require('../services/automationService');
+  const automationRuntimeService = require('../services/automationRuntimeService');
+  const AutomationHistory = require('../models/AutomationHistory');
+
+  const historyId = new mongoose.Types.ObjectId();
+  const workflowId = new mongoose.Types.ObjectId();
+  const correlationId = `corr-${Date.now()}`;
+  const historyRecord = {
+    _id: historyId,
+    workflowId,
+    workflowName: 'Laundry Room Fan Auto Off',
+    automationName: 'Laundry Room Fan Auto Off',
+    correlationId,
+    status: 'running',
+    successfulActions: 1,
+    failedActions: 0,
+    durationMs: null,
+    error: null,
+    toObject() {
+      return {
+        _id: this._id.toString(),
+        workflowId: this.workflowId.toString(),
+        workflowName: this.workflowName,
+        automationName: this.automationName,
+        correlationId: this.correlationId,
+        status: this.status,
+        successfulActions: this.successfulActions,
+        failedActions: this.failedActions,
+        durationMs: this.durationMs,
+        error: this.error
+      };
+    },
+    async markCompleted(status, error = null) {
+      this.status = status;
+      this.durationMs = 1250;
+      this.error = error ? { message: error.message } : null;
+      return this;
+    }
+  };
+
+  const originalFindById = AutomationHistory.findById;
+  const originalIsExecutionActive = automationService.isExecutionActive;
+  const originalBuildExecutionContextFromHistory = automationRuntimeService.buildExecutionContextFromHistory;
+  const originalRecordExecutionStopRequested = automationRuntimeService.recordExecutionStopRequested;
+  const originalRecordExecutionCompleted = automationRuntimeService.recordExecutionCompleted;
+  let stopRequestPayload = null;
+  let completionPayload = null;
+
+  t.after(() => {
+    AutomationHistory.findById = originalFindById;
+    automationService.isExecutionActive = originalIsExecutionActive;
+    automationRuntimeService.buildExecutionContextFromHistory = originalBuildExecutionContextFromHistory;
+    automationRuntimeService.recordExecutionStopRequested = originalRecordExecutionStopRequested;
+    automationRuntimeService.recordExecutionCompleted = originalRecordExecutionCompleted;
+  });
+
+  AutomationHistory.findById = async (id) => {
+    if (id?.toString?.() !== historyId.toString()) {
+      return null;
+    }
+    return historyRecord;
+  };
+  automationService.isExecutionActive = () => false;
+  automationRuntimeService.buildExecutionContextFromHistory = () => ({
+    historyId: historyId.toString(),
+    workflowId: workflowId.toString(),
+    workflowName: historyRecord.workflowName,
+    automationName: historyRecord.automationName,
+    correlationId
+  });
+  automationRuntimeService.recordExecutionStopRequested = async (_context, payload) => {
+    stopRequestPayload = payload;
+  };
+  automationRuntimeService.recordExecutionCompleted = async (_context, payload) => {
+    completionPayload = payload;
+  };
+
+  const result = await workflowService.stopRunningWorkflowExecution(historyId.toString(), {
+    requestedBy: 'qa@example.com',
+    reason: 'manual stop request'
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.active, false);
+  assert.equal(result.execution.status, 'cancelled');
+  assert.equal(stopRequestPayload.requestedBy, 'qa@example.com');
+  assert.equal(stopRequestPayload.reason, 'manual stop request');
+  assert.equal(completionPayload.status, 'cancelled');
+  assert.equal(completionPayload.message, 'Workflow execution cancelled by user.');
+});

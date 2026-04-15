@@ -3,9 +3,13 @@ const mongoose = require('mongoose');
 const AlexaExposure = require('../models/AlexaExposure');
 const Workflow = require('../models/Workflow');
 const Automation = require('../models/Automation');
+const AutomationHistory = require('../models/AutomationHistory');
 const automationService = require('./automationService');
 const automationRuntimeService = require('./automationRuntimeService');
 const eventStreamService = require('./eventStreamService');
+const {
+  setWorkflowStopRequest
+} = require('./workflowExecutionService');
 
 function normalizeTrigger(trigger) {
   if (!trigger || typeof trigger !== 'object') {
@@ -260,6 +264,81 @@ class WorkflowService {
 
   async getRunningWorkflowExecutions(limit = 25) {
     return automationRuntimeService.getRunningWorkflowExecutions(limit);
+  }
+
+  async stopRunningWorkflowExecution(historyId, options = {}) {
+    if (!mongoose.Types.ObjectId.isValid(historyId)) {
+      throw new Error('Invalid workflow execution ID format');
+    }
+
+    const history = await AutomationHistory.findById(historyId);
+    if (!history || !history.workflowId) {
+      throw new Error(`Running workflow execution ${historyId} not found`);
+    }
+
+    const context = automationRuntimeService.buildExecutionContextFromHistory(history);
+    if (history.status !== 'running') {
+      return {
+        success: true,
+        active: false,
+        message: `Workflow "${history.workflowName || history.automationName || 'Workflow'}" is already ${history.status}.`,
+        execution: history.toObject()
+      };
+    }
+
+    const requestedBy = typeof options.requestedBy === 'string' && options.requestedBy.trim()
+      ? options.requestedBy.trim()
+      : 'unknown user';
+    const reason = typeof options.reason === 'string' && options.reason.trim()
+      ? options.reason.trim()
+      : 'manual stop request';
+    const stopMessage = `Stop requested by ${requestedBy}`;
+
+    await automationRuntimeService.recordExecutionStopRequested(context, {
+      requestedBy,
+      reason,
+      message: stopMessage
+    });
+
+    setWorkflowStopRequest({
+      historyId: history._id.toString(),
+      correlationId: history.correlationId || null
+    });
+
+    const active = automationService.isExecutionActive(history._id.toString());
+    if (!active) {
+      const refreshedHistory = await AutomationHistory.findById(history._id);
+      if (refreshedHistory && refreshedHistory.status === 'running') {
+        const cancellationError = new Error('Workflow execution cancelled by user.');
+        cancellationError.code = 'WORKFLOW_EXECUTION_CANCELLED';
+        cancellationError.isCancelled = true;
+        await refreshedHistory.markCompleted('cancelled', cancellationError);
+        await automationRuntimeService.recordExecutionCompleted(context, {
+          status: 'cancelled',
+          successfulActions: refreshedHistory.successfulActions || 0,
+          failedActions: refreshedHistory.failedActions || 0,
+          durationMs: refreshedHistory.durationMs || null,
+          message: 'Workflow execution cancelled by user.'
+        });
+        return {
+          success: true,
+          active: false,
+          message: `Workflow "${history.workflowName || history.automationName || 'Workflow'}" was stopped.`,
+          execution: refreshedHistory.toObject()
+        };
+      }
+    }
+
+    const updatedHistory = await AutomationHistory.findById(history._id).lean();
+    const stillRunning = updatedHistory?.status === 'running';
+    return {
+      success: true,
+      active: stillRunning,
+      message: stillRunning
+        ? `Stop requested for "${history.workflowName || history.automationName || 'Workflow'}".`
+        : `Workflow "${history.workflowName || history.automationName || 'Workflow'}" is now ${updatedHistory?.status || 'stopped'}.`,
+      execution: updatedHistory
+    };
   }
 
   async syncWorkflowToAutomation(workflowId) {
@@ -528,9 +607,12 @@ class WorkflowService {
       context: executionContext
     });
 
+    const executionStatus = execution?.status || execution?.history?.status || (execution?.success ? 'success' : 'failed');
+    const wasCancelled = executionStatus === 'cancelled';
+
     workflow.lastRun = new Date();
     workflow.executionCount = (workflow.executionCount || 0) + 1;
-    if (!execution.success) {
+    if (!execution.success && !wasCancelled) {
       workflow.lastError = {
         message: execution.message || 'Workflow execution failed',
         timestamp: new Date()
@@ -541,16 +623,19 @@ class WorkflowService {
     await workflow.save();
 
     void eventStreamService.publishSafe({
-      type: execution.success ? 'workflow.executed' : 'workflow.execution_failed',
+      type: execution.success
+        ? 'workflow.executed'
+        : (wasCancelled ? 'workflow.execution_cancelled' : 'workflow.execution_failed'),
       source: 'workflow',
       category: 'automation',
-      severity: execution.success ? 'info' : 'error',
+      severity: execution.success ? 'info' : (wasCancelled ? 'warn' : 'error'),
       payload: {
         workflowId: workflow._id.toString(),
         name: workflow.name,
         triggerType: options.triggerType || workflow.trigger?.type || 'manual',
         triggerSource: options.triggerSource || 'manual',
         success: Boolean(execution.success),
+        status: executionStatus,
         message: execution.message || null
       },
       tags: ['workflow', 'execution']

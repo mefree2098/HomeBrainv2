@@ -141,6 +141,26 @@ router.get('/running', async (req, res) => {
   }
 });
 
+router.post('/executions/:historyId/stop', async (req, res) => {
+  try {
+    const result = await workflowService.stopRunningWorkflowExecution(req.params.historyId, {
+      requestedBy: req.user?.email || req.user?.username || req.user?._id || 'unknown user',
+      reason: typeof req.body?.reason === 'string' && req.body.reason.trim()
+        ? req.body.reason.trim()
+        : 'manual stop request'
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    const statusCode = error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
+    console.error(`POST /api/workflows/executions/${req.params.historyId}/stop - Error:`, error.message);
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to stop workflow execution'
+    });
+  }
+});
+
 router.post('/', admin, async (req, res) => {
   try {
     const workflow = await workflowService.createWorkflow(req.body || {}, {

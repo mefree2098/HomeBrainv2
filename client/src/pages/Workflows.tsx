@@ -11,6 +11,7 @@ import {
   Plus,
   RefreshCw,
   Sparkles,
+  Square,
   Trash2,
   Upload,
   Wand2
@@ -41,6 +42,7 @@ import {
   executeWorkflow,
   reviseWorkflowFromText,
   getRunningWorkflowExecutions,
+  stopWorkflowExecution,
   getWorkflowRuntimeHistory,
   getWorkflowRuntimeTelemetry,
   getWorkflows,
@@ -278,6 +280,8 @@ const activitySummary = (event: PlatformEvent) => {
       return `${name}: trigger matched`;
     case "automation.execution.started":
       return `${name}: execution started`;
+    case "automation.execution.stop_requested":
+      return `${name}: stop requested`;
     case "automation.execution.completed":
       return `${name}: execution ${typeof payload.status === "string" ? payload.status.replace(/_/g, " ") : "finished"}`;
     case "automation.action.started":
@@ -584,6 +588,7 @@ export function Workflows() {
   const [selectedExecution, setSelectedExecution] = useState<WorkflowExecutionHistoryEntry | null>(null);
   const [selectedExecutionEvents, setSelectedExecutionEvents] = useState<PlatformEvent[]>([]);
   const [loadingExecutionEvents, setLoadingExecutionEvents] = useState(false);
+  const [stoppingExecutionIds, setStoppingExecutionIds] = useState<string[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [runtimeHistoryLimit, setRuntimeHistoryLimit] = useState<number>(50);
   const [runtimeHistoryHours, setRuntimeHistoryHours] = useState<number>(24);
@@ -734,6 +739,35 @@ export function Workflows() {
     return entry.workflowName || entry.automationName || "Workflow";
   }, [workflowNameLookup]);
 
+  const applyExecutionUpdate = useCallback((updatedExecution: WorkflowExecutionHistoryEntry | null | undefined) => {
+    if (!updatedExecution?._id) {
+      return;
+    }
+
+    setRunningExecutions((prev) => {
+      const next = prev.some((entry) => entry._id === updatedExecution._id)
+        ? prev.map((entry) => (entry._id === updatedExecution._id ? updatedExecution : entry))
+        : (updatedExecution.status === "running" ? [updatedExecution, ...prev] : prev);
+
+      return updatedExecution.status === "running"
+        ? next
+        : next.filter((entry) => entry._id !== updatedExecution._id);
+    });
+    setRuntimeHistory((prev) => (
+      prev.some((entry) => entry._id === updatedExecution._id)
+        ? prev.map((entry) => (entry._id === updatedExecution._id ? updatedExecution : entry))
+        : prev
+    ));
+    setSelectedExecution((prev) => (
+      prev?._id === updatedExecution._id
+        ? {
+            ...prev,
+            ...updatedExecution
+          }
+        : prev
+    ));
+  }, []);
+
   const openExecutionLogs = useCallback(async (entry: WorkflowExecutionHistoryEntry) => {
     setSelectedExecution(entry);
     setLoadingExecutionEvents(true);
@@ -786,6 +820,40 @@ export function Workflows() {
       });
     }
   }, [resolveExecutionName, selectedExecution, selectedExecutionEvents, toast]);
+
+  const handleStopExecution = useCallback(async (execution: WorkflowExecutionHistoryEntry) => {
+    if (!execution?._id || execution.status !== "running") {
+      return;
+    }
+
+    const executionName = resolveExecutionName(execution);
+    const confirmed = window.confirm(`Stop the running workflow "${executionName}"?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setStoppingExecutionIds((prev) => (
+      prev.includes(execution._id) ? prev : [...prev, execution._id]
+    ));
+
+    try {
+      const response = await stopWorkflowExecution(execution._id, "Stopped from workflow logs");
+      applyExecutionUpdate(response.execution);
+      toast({
+        title: response.active ? "Stop requested" : "Workflow stopped",
+        description: response.message || `${executionName} stop request recorded.`
+      });
+      void loadRuntimeData({ silent: true });
+    } catch (error) {
+      toast({
+        title: "Stop failed",
+        description: errorMessage(error, "Unable to stop the running workflow."),
+        variant: "destructive"
+      });
+    } finally {
+      setStoppingExecutionIds((prev) => prev.filter((entryId) => entryId !== execution._id));
+    }
+  }, [applyExecutionUpdate, loadRuntimeData, resolveExecutionName, toast]);
 
   const handleAutomationEvent = useCallback((event: PlatformEvent) => {
     latestActivitySequenceRef.current = Math.max(latestActivitySequenceRef.current, Number(event.sequence) || 0);
@@ -906,6 +974,19 @@ export function Workflows() {
           };
         }
 
+        if (event.type === "automation.execution.stop_requested") {
+          return {
+            ...prev,
+            lastEvent: {
+              type: event.type,
+              level: event.severity,
+              message: typeof payload.message === "string" ? payload.message : activitySummary(event),
+              details: payload,
+              createdAt: event.createdAt
+            }
+          };
+        }
+
         return prev;
       });
     }
@@ -968,6 +1049,30 @@ export function Workflows() {
                         message: typeof payload.message === "string" ? payload.message : "Action failed"
                       }
                     : null,
+                lastEvent: {
+                  type: event.type,
+                  level: event.severity,
+                  message: typeof payload.message === "string" ? payload.message : activitySummary(event),
+                  details: payload,
+                  createdAt: event.createdAt
+                }
+              }
+            : entry
+        )));
+      }
+    }
+
+    if (event.type === "automation.execution.stop_requested") {
+      const payload = event.payload || {};
+      const correlationId = typeof payload.correlationId === "string" && payload.correlationId.trim()
+        ? payload.correlationId.trim()
+        : event.correlationId || "";
+
+      if (correlationId) {
+        setRunningExecutions((prev) => prev.map((entry) => (
+          entry.correlationId === correlationId
+            ? {
+                ...entry,
                 lastEvent: {
                   type: event.type,
                   level: event.severity,
@@ -1836,13 +1941,28 @@ export function Workflows() {
                                   </div>
                                 ) : null}
 
-                                <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                                <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
                                   <span>
                                     Progress: {execution.successfulActions || 0}/{execution.totalActions || 0} steps finished
                                   </span>
-                                  <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(execution)}>
-                                    View Logs
-                                  </Button>
+                                  <div className="flex items-center gap-2">
+                                    <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(execution)}>
+                                      View Logs
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => void handleStopExecution(execution)}
+                                      disabled={stoppingExecutionIds.includes(execution._id)}
+                                    >
+                                      {stoppingExecutionIds.includes(execution._id) ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <Square className="mr-2 h-4 w-4" />
+                                      )}
+                                      {stoppingExecutionIds.includes(execution._id) ? "Stopping..." : "Stop"}
+                                    </Button>
+                                  </div>
                                 </div>
                               </>
                             );
@@ -1985,9 +2105,26 @@ export function Workflows() {
                               : `${entry.successfulActions || 0} step(s) succeeded`)}
                           </TableCell>
                           <TableCell className="text-right">
-                            <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(entry)}>
-                              View Logs
-                            </Button>
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" variant="outline" onClick={() => void openExecutionLogs(entry)}>
+                                View Logs
+                              </Button>
+                              {entry.status === "running" ? (
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => void handleStopExecution(entry)}
+                                  disabled={stoppingExecutionIds.includes(entry._id)}
+                                >
+                                  {stoppingExecutionIds.includes(entry._id) ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Square className="mr-2 h-4 w-4" />
+                                  )}
+                                  {stoppingExecutionIds.includes(entry._id) ? "Stopping..." : "Stop"}
+                                </Button>
+                              ) : null}
+                            </div>
                           </TableCell>
                         </TableRow>
                       )) : (
@@ -2090,16 +2227,34 @@ export function Workflows() {
                     : "Detailed runtime logs for the selected workflow execution."}
                 </DialogDescription>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void handleCopyExecutionLogs()}
-                disabled={!selectedExecution || loadingExecutionEvents}
-              >
-                <Copy className="mr-2 h-4 w-4" />
-                Copy Logs
-              </Button>
+              <div className="flex items-center gap-2">
+                {selectedExecution?.status === "running" ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => void handleStopExecution(selectedExecution)}
+                    disabled={loadingExecutionEvents || stoppingExecutionIds.includes(selectedExecution._id)}
+                  >
+                    {stoppingExecutionIds.includes(selectedExecution._id) ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Square className="mr-2 h-4 w-4" />
+                    )}
+                    {stoppingExecutionIds.includes(selectedExecution._id) ? "Stopping..." : "Stop"}
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleCopyExecutionLogs()}
+                  disabled={!selectedExecution || loadingExecutionEvents}
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  Copy Logs
+                </Button>
+              </div>
             </div>
           </DialogHeader>
 

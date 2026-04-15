@@ -345,3 +345,19 @@ export const getRunningWorkflowExecutions = async (limit = 25) => {
     throw new Error(getApiErrorMessage(error));
   }
 };
+
+export const stopWorkflowExecution = async (historyId: string, reason?: string) => {
+  try {
+    const response = await api.post(`/api/workflows/executions/${historyId}/stop`, {
+      reason
+    });
+    return response.data as {
+      success: boolean;
+      active: boolean;
+      message: string;
+      execution: WorkflowExecutionHistoryEntry;
+    };
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error));
+  }
+};

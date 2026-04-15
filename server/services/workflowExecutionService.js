@@ -817,36 +817,101 @@ function hydrateWorkflowRuntimeState(snapshot = {}) {
   });
 }
 
-function resolveWorkflowStopRequest(workflowId) {
-  if (!workflowId) {
-    return false;
+function buildStopRequestKeys(input = {}) {
+  if (typeof input === 'string' && input.trim()) {
+    return [`workflow:${input.trim()}`];
   }
-  const key = String(workflowId);
-  const requestedAt = workflowStopRequests.get(key);
-  if (!requestedAt) {
+
+  if (!input || typeof input !== 'object') {
+    return [];
+  }
+
+  const keys = [];
+  const historyId = sanitizeString(
+    input.historyId
+    || input.executionHistoryId
+    || input.__automationHistoryId
+  );
+  const correlationId = sanitizeString(
+    input.correlationId
+    || input.executionCorrelationId
+    || input.__automationCorrelationId
+  );
+  const workflowId = sanitizeString(input.workflowId);
+
+  if (historyId) {
+    keys.push(`history:${historyId}`);
+  }
+  if (correlationId) {
+    keys.push(`correlation:${correlationId}`);
+  }
+  if (workflowId) {
+    keys.push(`workflow:${workflowId}`);
+  }
+
+  return keys;
+}
+
+function resolveWorkflowStopRequest(target) {
+  const keys = buildStopRequestKeys(target);
+  if (keys.length === 0) {
     return false;
   }
 
-  if ((Date.now() - requestedAt) > STOP_REQUEST_TTL_MS) {
+  for (const key of keys) {
+    const requestedAt = workflowStopRequests.get(key);
+    if (!requestedAt) {
+      continue;
+    }
+
+    if ((Date.now() - requestedAt) > STOP_REQUEST_TTL_MS) {
+      workflowStopRequests.delete(key);
+      continue;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+function setWorkflowStopRequest(target) {
+  const keys = buildStopRequestKeys(target);
+  if (keys.length === 0) {
+    return;
+  }
+
+  const requestedAt = Date.now();
+  keys.forEach((key) => {
+    workflowStopRequests.set(key, requestedAt);
+  });
+}
+
+function clearWorkflowStopRequest(target) {
+  const keys = buildStopRequestKeys(target);
+  if (keys.length === 0) {
+    return;
+  }
+
+  keys.forEach((key) => {
     workflowStopRequests.delete(key);
-    return false;
-  }
-
-  return true;
+  });
 }
 
-function setWorkflowStopRequest(workflowId) {
-  if (!workflowId) {
-    return;
-  }
-  workflowStopRequests.set(String(workflowId), Date.now());
+function buildWorkflowExecutionCancelledError(context = {}, message = null) {
+  const error = new Error(message || 'Workflow execution cancelled by user.');
+  error.code = 'WORKFLOW_EXECUTION_CANCELLED';
+  error.isCancelled = true;
+  error.details = {
+    historyId: sanitizeString(context.historyId || context.executionHistoryId || context.__automationHistoryId) || null,
+    correlationId: sanitizeString(context.correlationId || context.executionCorrelationId || context.__automationCorrelationId) || null,
+    workflowId: sanitizeString(context.workflowId) || null
+  };
+  return error;
 }
 
-function clearWorkflowStopRequest(workflowId) {
-  if (!workflowId) {
-    return;
-  }
-  workflowStopRequests.delete(String(workflowId));
+function isWorkflowExecutionCancelledError(error) {
+  return error?.code === 'WORKFLOW_EXECUTION_CANCELLED' || error?.isCancelled === true;
 }
 
 async function invokeRuntimeHook(runtime, hookName, payload) {
@@ -858,8 +923,8 @@ async function invokeRuntimeHook(runtime, hookName, payload) {
 }
 
 function ensureWorkflowNotStopped(context = {}) {
-  if (resolveWorkflowStopRequest(context.workflowId)) {
-    throw new Error(`Workflow ${context.workflowId} was stopped`);
+  if (resolveWorkflowStopRequest(context)) {
+    throw buildWorkflowExecutionCancelledError(context);
   }
 }
 
@@ -2332,7 +2397,10 @@ async function executeActionSequence(actions = [], options = {}) {
         }
       }
     } catch (error) {
-      const stopped = /was stopped$/i.test(String(error?.message || ''));
+      if (isWorkflowExecutionCancelledError(error)) {
+        throw error;
+      }
+
       const resultEntry = {
         actionIndex: effectiveActionIndex,
         parentActionIndex: effectiveParentActionIndex,
@@ -2359,12 +2427,8 @@ async function executeActionSequence(actions = [], options = {}) {
         depth,
         workflowControlDepth,
         startedAt: startedAtDate,
-        resumeState: buildResumeStateSnapshot(stopped ? [] : afterCurrentActions, context)
+        resumeState: buildResumeStateSnapshot(afterCurrentActions, context)
       });
-
-      if (stopped) {
-        halt = true;
-      }
     }
   }
 
@@ -2389,6 +2453,11 @@ async function executeActionSequence(actions = [], options = {}) {
 module.exports = {
   executeActionSequence,
   getActionTargetCandidate,
+  setWorkflowStopRequest,
+  clearWorkflowStopRequest,
+  resolveWorkflowStopRequest,
+  buildWorkflowExecutionCancelledError,
+  isWorkflowExecutionCancelledError,
   exportWorkflowRuntimeState,
   hydrateWorkflowRuntimeState
 };

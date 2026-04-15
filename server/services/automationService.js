@@ -12,7 +12,9 @@ const Settings = require('../models/Settings');
 const {
   executeActionSequence,
   getActionTargetCandidate,
-  hydrateWorkflowRuntimeState
+  hydrateWorkflowRuntimeState,
+  clearWorkflowStopRequest,
+  isWorkflowExecutionCancelledError
 } = require('./workflowExecutionService');
 const automationRuntimeService = require('./automationRuntimeService');
 
@@ -27,6 +29,7 @@ const VALID_SOLAR_SCHEDULE_EVENTS = new Set(['sunrise', 'sunset']);
 const DYNAMIC_TARGET_CONTEXT_KEYS = new Set(['triggeringDeviceId']);
 const DEVICE_GROUP_TARGET_KINDS = new Set(['device_group', 'group']);
 const activeResumeExecutionIds = new Set();
+const activeExecutionIds = new Set();
 
 const DEVICE_TYPE_HINTS = {
   light: ['light', 'lights', 'lamp', 'bulb'],
@@ -2455,6 +2458,8 @@ async function executeAutomation(id, options = {}) {
   let history = null;
   let runtimeContext = null;
   let automation = null;
+  let workflowId = null;
+  let correlationId = null;
   const resumingExistingExecution = Boolean(options.resumeHistory || options.resumeHistoryId);
 
   try {
@@ -2491,12 +2496,12 @@ async function executeAutomation(id, options = {}) {
         : (history?.triggerContext && typeof history.triggerContext === 'object'
           ? { ...history.triggerContext }
           : {}));
-    const workflowId = automation.workflowId?._id?.toString?.()
+    workflowId = automation.workflowId?._id?.toString?.()
       || automation.workflowId?.toString?.()
       || history?.workflowId?._id?.toString?.()
       || history?.workflowId?.toString?.()
       || null;
-    const correlationId = options.correlationId || history?.correlationId || crypto.randomUUID();
+    correlationId = options.correlationId || history?.correlationId || crypto.randomUUID();
 
     if (!resumingExistingExecution) {
       history = new AutomationHistory({
@@ -2548,8 +2553,20 @@ async function executeAutomation(id, options = {}) {
       ? history.resumeState.pendingActions
       : automation.actions;
 
+    const historyId = history?._id?.toString?.() || null;
+    const executionContext = {
+      ...triggerContext,
+      ...(workflowId ? { workflowId } : {}),
+      ...(historyId ? { executionHistoryId: historyId } : {}),
+      ...(correlationId ? { executionCorrelationId: correlationId } : {})
+    };
+
+    if (historyId) {
+      activeExecutionIds.add(historyId);
+    }
+
     await executeActionSequence(pendingActions, {
-      context: triggerContext,
+      context: executionContext,
       runtime: {
         onActionStart: async ({ actionIndex, parentActionIndex, action, nextAction, timer, startedAt, resumeState }) => {
           await automationRuntimeService.recordActionStarted(runtimeContext, {
@@ -2660,23 +2677,55 @@ async function executeAutomation(id, options = {}) {
       try {
         const persistedHistory = await AutomationHistory.findById(history._id);
         if (persistedHistory && persistedHistory.status === 'running') {
-          await persistedHistory.markCompleted('failed', error);
-          if (runtimeContext) {
-            const failedSummary = deriveExecutionStatusFromActionResults(
-              Array.isArray(persistedHistory.actionResults) ? persistedHistory.actionResults : []
-            );
-            await automationRuntimeService.recordExecutionCompleted(runtimeContext, {
-              status: 'failed',
-              successfulActions: failedSummary.successfulActions,
-              failedActions: Math.max(1, failedSummary.failedActions),
-              durationMs: persistedHistory.durationMs,
-              message: error.message || 'Automation execution failed'
-            });
+          if (isWorkflowExecutionCancelledError(error)) {
+            await persistedHistory.markCompleted('cancelled', error);
+            if (runtimeContext) {
+              const cancelledSummary = deriveExecutionStatusFromActionResults(
+                Array.isArray(persistedHistory.actionResults) ? persistedHistory.actionResults : []
+              );
+              await automationRuntimeService.recordExecutionCompleted(runtimeContext, {
+                status: 'cancelled',
+                successfulActions: cancelledSummary.successfulActions,
+                failedActions: cancelledSummary.failedActions,
+                durationMs: persistedHistory.durationMs,
+                message: error.message || 'Automation execution cancelled by user.'
+              });
+            }
+          } else {
+            await persistedHistory.markCompleted('failed', error);
+            if (runtimeContext) {
+              const failedSummary = deriveExecutionStatusFromActionResults(
+                Array.isArray(persistedHistory.actionResults) ? persistedHistory.actionResults : []
+              );
+              await automationRuntimeService.recordExecutionCompleted(runtimeContext, {
+                status: 'failed',
+                successfulActions: failedSummary.successfulActions,
+                failedActions: Math.max(1, failedSummary.failedActions),
+                durationMs: persistedHistory.durationMs,
+                message: error.message || 'Automation execution failed'
+              });
+            }
           }
         }
       } catch (loggingError) {
         console.warn(`AutomationService: failed to persist runtime failure for ${id}: ${loggingError.message}`);
       }
+    }
+
+    if (isWorkflowExecutionCancelledError(error)) {
+      const cancelledHistory = history ? await AutomationHistory.findById(history._id) : null;
+      console.warn(`AutomationService: Automation ${id} cancelled: ${error.message}`);
+      return {
+        success: false,
+        cancelled: true,
+        status: 'cancelled',
+        message: error.message || `Automation "${automation?.name || id}" cancelled`,
+        automation: automation?.toObject?.() || automation || null,
+        executedActions: Array.isArray(cancelledHistory?.actionResults) ? cancelledHistory.actionResults.length : 0,
+        successfulActions: cancelledHistory?.successfulActions || 0,
+        failedActions: cancelledHistory?.failedActions || 0,
+        history: cancelledHistory?.toObject?.() || cancelledHistory || null
+      };
     }
 
     console.error(`AutomationService: Error executing automation ${id}:`, error.message);
@@ -2687,6 +2736,17 @@ async function executeAutomation(id, options = {}) {
       throw error;
     }
     throw new Error(`Failed to execute automation: ${error.message}`);
+  } finally {
+    const historyId = history?._id?.toString?.() || null;
+    if (historyId) {
+      activeExecutionIds.delete(historyId);
+    }
+
+    clearWorkflowStopRequest({
+      historyId,
+      correlationId,
+      workflowId
+    });
   }
 }
 
@@ -2739,6 +2799,14 @@ async function resumeRunningExecutions(options = {}) {
     reason,
     executions: launches
   };
+}
+
+function isExecutionActive(historyId) {
+  if (!historyId) {
+    return false;
+  }
+
+  return activeExecutionIds.has(String(historyId));
 }
 
 /**
@@ -2871,6 +2939,7 @@ Object.assign(module.exports, {
   reviseAutomationFromText,
   getAutomationStats,
   executeAutomation,
+  isExecutionActive,
   resumeRunningExecutions,
   getAutomationHistory,
   getExecutionStats

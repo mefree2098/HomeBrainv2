@@ -528,6 +528,40 @@ async function recordExecutionCompleted(context, details = {}) {
   });
 }
 
+async function recordExecutionStopRequested(context, details = {}) {
+  const requestedAt = details.requestedAt ? new Date(details.requestedAt) : new Date();
+  const requestedBy = typeof details.requestedBy === 'string' && details.requestedBy.trim()
+    ? details.requestedBy.trim()
+    : 'unknown user';
+  const reason = typeof details.reason === 'string' && details.reason.trim()
+    ? details.reason.trim()
+    : 'manual stop request';
+  const message = details.message || `Stop requested by ${requestedBy}`;
+  const event = createRuntimeEvent(
+    'automation.execution.stop_requested',
+    message,
+    {
+      requestedBy,
+      reason,
+      requestedAt
+    },
+    'warn'
+  );
+
+  await appendRuntimeEvent(context.historyId, event);
+  await publishAutomationEvent('automation.execution.stop_requested', context, {
+    severity: 'warn',
+    payload: {
+      requestedBy,
+      reason,
+      requestedAt,
+      status: 'running',
+      message
+    },
+    tags: ['automation', 'execution', 'stop_requested']
+  });
+}
+
 async function recordSchedulerSecurityAlarmEvaluation(details = {}) {
   await eventStreamService.publishSafe({
     type: 'automation.trigger.security_alarm_evaluated',
@@ -713,6 +747,7 @@ module.exports = {
   recordActionStarted,
   recordActionCompleted,
   recordExecutionCompleted,
+  recordExecutionStopRequested,
   recordSchedulerSecurityAlarmEvaluation,
   getWorkflowExecutionHistory,
   getWorkflowRuntimeTelemetry,

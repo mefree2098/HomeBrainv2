@@ -3,7 +3,12 @@ const assert = require('node:assert/strict');
 const axios = require('axios');
 const mongoose = require('mongoose');
 
-const { executeActionSequence } = require('../services/workflowExecutionService');
+const {
+  executeActionSequence,
+  setWorkflowStopRequest,
+  clearWorkflowStopRequest,
+  isWorkflowExecutionCancelledError
+} = require('../services/workflowExecutionService');
 const Device = require('../models/Device');
 const insteonService = require('../services/insteonService');
 const Automation = require('../models/Automation');
@@ -137,6 +142,43 @@ test('repeat action executes nested actions expected number of times', async () 
   const loopMessages = result.actionResults.filter((entry) => entry.message === 'loop');
   assert.equal(loopMessages.length, 2);
   assert.equal(result.actionResults[0].actionType, 'repeat');
+});
+
+test('delay action stops when cancellation is requested for the active execution', async () => {
+  const executionHistoryId = new mongoose.Types.ObjectId().toString();
+  const executionCorrelationId = `corr-${Date.now()}`;
+  const workflowId = new mongoose.Types.ObjectId().toString();
+
+  const actionPromise = executeActionSequence([
+    {
+      type: 'delay',
+      parameters: { seconds: 2 }
+    }
+  ], {
+    context: {
+      workflowId,
+      executionHistoryId,
+      executionCorrelationId
+    }
+  });
+
+  setTimeout(() => {
+    setWorkflowStopRequest({
+      historyId: executionHistoryId,
+      correlationId: executionCorrelationId
+    });
+  }, 25);
+
+  await assert.rejects(actionPromise, (error) => {
+    assert.equal(isWorkflowExecutionCancelledError(error), true);
+    assert.equal(error.message, 'Workflow execution cancelled by user.');
+    return true;
+  });
+
+  clearWorkflowStopRequest({
+    historyId: executionHistoryId,
+    correlationId: executionCorrelationId
+  });
 });
 
 test('isy_network_resource action executes via insteon service', async (t) => {
