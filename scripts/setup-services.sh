@@ -30,6 +30,7 @@ OLLAMA_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/ollama-host-control.sh"
 OLLAMA_HELPER_INSTALL_DIR="${HOMEBRAIN_HELPER_INSTALL_DIR}"
 OLLAMA_HELPER_INSTALL_PATH="${OLLAMA_HELPER_INSTALL_DIR}/ollama-host-control.sh"
 DEPLOY_SUDOERS_PATH="/etc/sudoers.d/homebrain-deploy"
+HOMEBRAIN_PORT="${HOMEBRAIN_PORT:-3000}"
 
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -259,11 +260,13 @@ stop_homebrain_service() {
   cleanup_orphaned_homebrain_processes
 
   if ! homebrain_service_unit_exists; then
+    cleanup_blocking_homebrain_port_listeners
     return 0
   fi
 
   state="$(get_homebrain_service_state)"
   if [[ -z "${state}" || "${state}" == "inactive" || "${state}" == "failed" ]]; then
+    cleanup_blocking_homebrain_port_listeners
     print_success "HomeBrain service is already stopped."
     return 0
   fi
@@ -290,6 +293,7 @@ stop_homebrain_service() {
   done
 
   cleanup_orphaned_homebrain_processes
+  cleanup_blocking_homebrain_port_listeners
 
   state="$(get_homebrain_service_state)"
   if [[ -z "${state}" || "${state}" == "inactive" || "${state}" == "failed" ]]; then
@@ -323,6 +327,18 @@ get_listener_pids_for_port() {
   grep -o 'pid=[0-9]\+' <<<"${output}" | cut -d= -f2 | sort -u
 }
 
+kill_listener_pids() {
+  local pids=("$@")
+
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  sudo kill "${pids[@]}" 2>/dev/null || true
+  sleep 2
+  sudo kill -9 "${pids[@]}" 2>/dev/null || true
+}
+
 pid_belongs_to_process_tree() {
   local pid="$1"
   local root_pid="$2"
@@ -347,6 +363,31 @@ pid_belongs_to_process_tree() {
   return 1
 }
 
+cleanup_blocking_homebrain_port_listeners() {
+  local main_pid
+  local listener_pid
+  local blocking_pids=()
+
+  main_pid="$(get_service_main_pid)"
+
+  while IFS= read -r listener_pid; do
+    [[ -z "${listener_pid}" ]] && continue
+
+    if pid_belongs_to_process_tree "${listener_pid}" "${main_pid}"; then
+      continue
+    fi
+
+    blocking_pids+=("${listener_pid}")
+  done < <(get_listener_pids_for_port "${HOMEBRAIN_PORT}")
+
+  if [[ "${#blocking_pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  print_warning "Stopping process(es) blocking HomeBrain port ${HOMEBRAIN_PORT}: ${blocking_pids[*]}"
+  kill_listener_pids "${blocking_pids[@]}"
+}
+
 homebrain_listener_matches_service() {
   local main_pid
   local listener_pid
@@ -361,7 +402,7 @@ homebrain_listener_matches_service() {
     if pid_belongs_to_process_tree "${listener_pid}" "${main_pid}"; then
       return 0
     fi
-  done < <(get_listener_pids_for_port 3000)
+  done < <(get_listener_pids_for_port "${HOMEBRAIN_PORT}")
 
   return 1
 }
@@ -371,7 +412,7 @@ describe_homebrain_listener_state() {
   local listener_pids
 
   main_pid="$(get_service_main_pid)"
-  listener_pids="$(get_listener_pids_for_port 3000 | tr '\n' ' ' | sed 's/[[:space:]]\+$//')"
+  listener_pids="$(get_listener_pids_for_port "${HOMEBRAIN_PORT}" | tr '\n' ' ' | sed 's/[[:space:]]\+$//')"
   if [[ -z "${listener_pids}" ]]; then
     listener_pids="none"
   fi
@@ -561,7 +602,7 @@ wait_for_homebrain_http() {
   local attempt=1
 
   while (( attempt <= attempts )); do
-    if curl -fsS http://127.0.0.1:3000/ping >/dev/null 2>&1 && homebrain_listener_matches_service; then
+    if curl -fsS "http://127.0.0.1:${HOMEBRAIN_PORT}/ping" >/dev/null 2>&1 && homebrain_listener_matches_service; then
       print_success "HomeBrain is responding on port 3000."
       return 0
     fi

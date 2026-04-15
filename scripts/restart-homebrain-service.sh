@@ -5,6 +5,7 @@ set -euo pipefail
 SERVICE_NAME="${HOMEBRAIN_SERVICE_NAME:-homebrain}"
 HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-}"
 WAIT_SECONDS="${HOMEBRAIN_RESTART_WAIT_SECONDS:-20}"
+HOMEBRAIN_PORT="${HOMEBRAIN_PORT:-3000}"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-$(command -v systemctl || true)}"
 
 if [[ -z "${SYSTEMCTL_BIN}" ]]; then
@@ -93,6 +94,89 @@ cleanup_orphaned_homebrain_processes() {
   kill -9 "${stale_pids[@]}" 2>/dev/null || true
 }
 
+get_service_main_pid() {
+  local main_pid
+  main_pid="$("${SYSTEMCTL_BIN}" show -p MainPID --value "${SERVICE_NAME}" 2>/dev/null || echo 0)"
+  if [[ -z "${main_pid}" ]]; then
+    echo 0
+    return
+  fi
+  echo "${main_pid}"
+}
+
+get_listener_pids_for_port() {
+  local port="$1"
+  local output
+
+  output="$(ss -lntp "( sport = :${port} )" 2>/dev/null || true)"
+  if [[ -z "${output}" ]]; then
+    return 0
+  fi
+
+  grep -o 'pid=[0-9]\+' <<<"${output}" | cut -d= -f2 | sort -u
+}
+
+pid_belongs_to_process_tree() {
+  local pid="$1"
+  local root_pid="$2"
+  local parent_pid=""
+
+  if [[ -z "${pid}" || -z "${root_pid}" || "${root_pid}" == "0" ]]; then
+    return 1
+  fi
+
+  while [[ -n "${pid}" && "${pid}" != "0" ]]; do
+    if [[ "${pid}" == "${root_pid}" ]]; then
+      return 0
+    fi
+
+    parent_pid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d '[:space:]')"
+    if [[ -z "${parent_pid}" || "${parent_pid}" == "${pid}" ]]; then
+      break
+    fi
+    pid="${parent_pid}"
+  done
+
+  return 1
+}
+
+kill_listener_pids() {
+  local pids=("$@")
+
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  kill "${pids[@]}" 2>/dev/null || true
+  sleep 2
+  kill -9 "${pids[@]}" 2>/dev/null || true
+}
+
+cleanup_blocking_homebrain_port_listeners() {
+  local main_pid
+  local listener_pid
+  local blocking_pids=()
+
+  main_pid="$(get_service_main_pid)"
+
+  while IFS= read -r listener_pid; do
+    [[ -z "${listener_pid}" ]] && continue
+
+    if pid_belongs_to_process_tree "${listener_pid}" "${main_pid}"; then
+      continue
+    fi
+
+    blocking_pids+=("${listener_pid}")
+  done < <(get_listener_pids_for_port "${HOMEBRAIN_PORT}")
+
+  if [[ "${#blocking_pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "Stopping process(es) blocking HomeBrain port ${HOMEBRAIN_PORT}: ${blocking_pids[*]}"
+  kill_listener_pids "${blocking_pids[@]}"
+}
+
 get_service_state() {
   "${SYSTEMCTL_BIN}" show -p ActiveState --value "${SERVICE_NAME}" 2>/dev/null || true
 }
@@ -105,6 +189,7 @@ stop_homebrain_service() {
 
   state="$(get_service_state)"
   if [[ -z "${state}" || "${state}" == "inactive" || "${state}" == "failed" ]]; then
+    cleanup_blocking_homebrain_port_listeners
     return 0
   fi
 
@@ -130,6 +215,7 @@ stop_homebrain_service() {
   done
 
   cleanup_orphaned_homebrain_processes
+  cleanup_blocking_homebrain_port_listeners
 }
 
 echo "Restarting ${SERVICE_NAME}..."
