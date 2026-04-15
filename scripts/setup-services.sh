@@ -150,7 +150,7 @@ process_matches_homebrain() {
   fi
 
   process_cwd="$(canonicalize_path "/proc/${pid}/cwd" || true)"
-  if [[ -n "${process_cwd}" && "${process_cwd}" == "${homebrain_dir}" ]]; then
+  if [[ -n "${process_cwd}" && ( "${process_cwd}" == "${homebrain_dir}" || "${process_cwd}" == "${homebrain_dir}/"* ) ]]; then
     return 0
   fi
 
