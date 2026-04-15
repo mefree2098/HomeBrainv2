@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
+  Check,
   ChevronDown,
   ChevronUp,
   Clock3,
@@ -20,8 +21,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
@@ -35,6 +38,7 @@ import {
   isHarmonyCommandDevice,
   type HarmonyCommandMetadata
 } from "@/lib/harmony";
+import { cn } from "@/lib/utils";
 
 type DeviceLite = {
   _id: string;
@@ -51,6 +55,19 @@ type DeviceLite = {
 type SceneLite = {
   _id: string;
   name: string;
+};
+
+type SearchablePickerItem = {
+  value: string;
+  label: string;
+  description?: string;
+  keywords?: string[];
+};
+
+type SearchablePickerGroup = {
+  key: string;
+  label?: string;
+  items: SearchablePickerItem[];
 };
 
 type Props = {
@@ -73,6 +90,113 @@ const DEFAULT_ACTION: WorkflowAction = {
 const TRIGGERING_DEVICE_TARGET_VALUE = "__triggering_device__";
 const DEVICE_GROUP_TARGET_PREFIX = "__device_group__:";
 const MAX_DELAY_SECONDS = 24 * 60 * 60;
+
+type SearchablePickerProps = {
+  value: string;
+  groups: SearchablePickerGroup[];
+  placeholder: string;
+  searchPlaceholder: string;
+  emptyLabel: string;
+  onValueChange: (value: string) => void;
+  selectedLabel?: string;
+  disabled?: boolean;
+};
+
+function SearchablePicker({
+  value,
+  groups,
+  placeholder,
+  searchPlaceholder,
+  emptyLabel,
+  onValueChange,
+  selectedLabel,
+  disabled = false
+}: SearchablePickerProps) {
+  const [open, setOpen] = useState(false);
+
+  const flatItems = useMemo(
+    () => groups.flatMap((group) => group.items),
+    [groups]
+  );
+  const selectedItem = flatItems.find((item) => item.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled}
+          className="h-auto min-h-11 w-full justify-between rounded-xl px-3 py-2 text-left font-normal"
+        >
+          <span className="flex min-w-0 flex-1 flex-col text-left">
+            {selectedItem ? (
+              <>
+                <span className="truncate">{selectedItem.label}</span>
+                {selectedItem.description ? (
+                  <span className="text-xs text-muted-foreground">
+                    {selectedItem.description}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <span className={cn("truncate", value ? "text-foreground" : "text-muted-foreground")}>
+                {value ? selectedLabel || value : placeholder}
+              </span>
+            )}
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+        <Command>
+          <CommandInput placeholder={searchPlaceholder} />
+          <CommandList>
+            <CommandEmpty>{emptyLabel}</CommandEmpty>
+            {groups.map((group) => {
+              if (group.items.length === 0) {
+                return null;
+              }
+
+              return (
+                <CommandGroup key={group.key} heading={group.label}>
+                  {group.items.map((item) => (
+                    <CommandItem
+                      key={item.value}
+                      value={item.value}
+                      keywords={item.keywords}
+                      onSelect={() => {
+                        onValueChange(item.value);
+                        setOpen(false);
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          "h-4 w-4",
+                          value === item.value ? "opacity-100" : "opacity-0"
+                        )}
+                      />
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate">{item.label}</span>
+                        {item.description ? (
+                          <span className="text-xs text-muted-foreground">
+                            {item.description}
+                          </span>
+                        ) : null}
+                      </div>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              );
+            })}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 const TRIGGER_LABELS: Record<WorkflowTriggerType, string> = {
   manual: "Manual",
@@ -650,6 +774,26 @@ function getDeviceSource(device: DeviceLite | null | undefined) {
   ).trim().toLowerCase();
 }
 
+function buildDevicePickerGroups(devicesByRoom: Record<string, DeviceLite[]>) {
+  return Object.entries(devicesByRoom).map<SearchablePickerGroup>(([room, roomDevices]) => ({
+    key: `room:${room}`,
+    label: room,
+    items: roomDevices.map((device) => ({
+      value: device._id,
+      label: device.name,
+      description: getWorkflowDeviceTypeLabel(device),
+      keywords: [
+        device.name,
+        room,
+        String(device.type || ""),
+        getWorkflowDeviceType(device),
+        getWorkflowDeviceTypeLabel(device),
+        getDeviceSource(device)
+      ].filter(Boolean)
+    }))
+  }));
+}
+
 function getHarmonyCommandOptions(device: DeviceLite | null | undefined) {
   return isHarmonyCommandDevice(device) ? getHarmonyCommandMetadata(device) : [];
 }
@@ -1060,6 +1204,10 @@ export function WorkflowBuilderDialog({
       return acc;
     }, {});
   }, [devices]);
+  const triggerDevicePickerGroups = useMemo(
+    () => buildDevicePickerGroups(devicesByRoom),
+    [devicesByRoom]
+  );
 
   const deviceGroups = useMemo(() => {
     const groups = new Map<string, {
@@ -1128,6 +1276,24 @@ export function WorkflowBuilderDialog({
       return acc;
     }, new Map());
   }, [actionableDeviceGroups]);
+  const actionableDevicePickerGroups = useMemo(
+    () => buildDevicePickerGroups(actionableDevicesByRoom),
+    [actionableDevicesByRoom]
+  );
+  const actionableDeviceGroupPickerItems = useMemo(
+    () => actionableDeviceGroups.map((group) => ({
+      value: getDeviceGroupTargetSelectValue(group.name),
+      label: group.name,
+      description: `Device group • ${group.devices.length} device${group.devices.length === 1 ? "" : "s"}`,
+      keywords: [
+        group.name,
+        "group",
+        group.description || "",
+        ...group.devices.map((device) => device.name)
+      ].filter(Boolean)
+    })),
+    [actionableDeviceGroups]
+  );
 
   const triggerDeviceId = typeof triggerConditions.deviceId === "string" ? triggerConditions.deviceId : null;
   const triggerDevice = useMemo(
@@ -1534,8 +1700,13 @@ export function WorkflowBuilderDialog({
                       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
                         <div className="space-y-2">
                           <Label>Device</Label>
-                          <Select
+                          <SearchablePicker
                             value={String(triggerConditions.deviceId || "")}
+                            groups={triggerDevicePickerGroups}
+                            placeholder="Select device"
+                            searchPlaceholder="Search devices..."
+                            emptyLabel="No matching devices."
+                            selectedLabel={getDeviceLabel(devices, triggerDeviceId)}
                             onValueChange={(value) => {
                               const selectedDevice = devices.find((device) => device._id === value)
                               setTriggerConditions((prev) => buildDeviceStateTriggerConditions(selectedDevice, prev.forSeconds))
@@ -1561,23 +1732,7 @@ export function WorkflowBuilderDialog({
                                 }))
                               }
                             }}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select device" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
-                                <div key={room}>
-                                  <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
-                                  {roomDevices.map((device) => (
-                                    <SelectItem key={device._id} value={device._id}>
-                                      {device.name} ({getWorkflowDeviceTypeLabel(device)})
-                                    </SelectItem>
-                                  ))}
-                                </div>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          />
                         </div>
 
                         <div className="space-y-2">
@@ -1856,8 +2011,39 @@ export function WorkflowBuilderDialog({
 
                                   <div className="space-y-2">
                                     <Label>Device or group</Label>
-                                    <Select
+                                    <SearchablePicker
                                       value={getActionTargetSelectValue(action.target)}
+                                      groups={[
+                                        ...(triggerDeviceSupportsControl && (triggerType === "device_state" || isTriggeringDeviceTarget(action.target))
+                                          ? [{
+                                              key: "triggering-device",
+                                              items: [{
+                                                value: TRIGGERING_DEVICE_TARGET_VALUE,
+                                                label: "Triggering device",
+                                                description: "Uses whichever device matched the trigger.",
+                                                keywords: ["triggering", "trigger", "matched", "device"]
+                                              }]
+                                            }]
+                                          : []),
+                                        ...(actionableDeviceGroupPickerItems.length > 0
+                                          ? [{
+                                              key: "device-groups",
+                                              label: "Groups",
+                                              items: actionableDeviceGroupPickerItems
+                                            }]
+                                          : []),
+                                        ...actionableDevicePickerGroups
+                                      ]}
+                                      placeholder="Select device"
+                                      searchPlaceholder="Search devices or groups..."
+                                      emptyLabel="No matching devices or groups."
+                                      selectedLabel={
+                                        isTriggeringDeviceTarget(action.target)
+                                          ? "Triggering device"
+                                          : isDeviceGroupTarget(action.target)
+                                            ? getDeviceGroupLabel(targetGroupName)
+                                            : getDeviceLabel(actionableDevices, targetDeviceId)
+                                      }
                                       onValueChange={(value) => {
                                         const usesTriggeringDevice = value === TRIGGERING_DEVICE_TARGET_VALUE;
                                         const selectedGroup = parseDeviceGroupSelectValue(value);
@@ -1881,38 +2067,7 @@ export function WorkflowBuilderDialog({
                                           parameters: nextParameters
                                         }, { replaceParameters: true });
                                       }}
-                                    >
-                                      <SelectTrigger>
-                                        <SelectValue placeholder="Select device" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {triggerDeviceSupportsControl && (triggerType === "device_state" || isTriggeringDeviceTarget(action.target)) && (
-                                          <SelectItem value={TRIGGERING_DEVICE_TARGET_VALUE}>
-                                            Triggering device
-                                          </SelectItem>
-                                        )}
-                                        {actionableDeviceGroups.length > 0 ? (
-                                          <>
-                                            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Groups</div>
-                                            {actionableDeviceGroups.map((group) => (
-                                              <SelectItem key={group.name} value={getDeviceGroupTargetSelectValue(group.name)}>
-                                                {group.name} ({group.devices.length} device{group.devices.length === 1 ? "" : "s"})
-                                              </SelectItem>
-                                            ))}
-                                          </>
-                                        ) : null}
-                                        {Object.entries(actionableDevicesByRoom).map(([room, roomDevices]) => (
-                                          <div key={room}>
-                                            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{room}</div>
-                                            {roomDevices.map((device) => (
-                                              <SelectItem key={device._id} value={device._id}>
-                                                {device.name} ({getWorkflowDeviceTypeLabel(device)})
-                                              </SelectItem>
-                                            ))}
-                                          </div>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
+                                    />
                                     {isTriggeringDeviceTarget(action.target) && (
                                       <p className="text-xs text-muted-foreground">
                                         Uses whichever device matched the trigger.
