@@ -1574,6 +1574,10 @@ class PlatformDeployService {
         );
       });
 
+      await runCustomStep('Install service helpers', async () => {
+        await this.installServiceHelpers(jobId);
+      });
+
       // Do not clean client/dist after build.
       // This server serves client/dist directly at runtime, so post-build cleanup would
       // revert freshly built assets and can leave the UI running stale code.
@@ -1602,6 +1606,26 @@ class PlatformDeployService {
     } catch (error) {
       await this.finalizeJobFailure(jobId, error.message || 'Deployment failed', { job });
     }
+  }
+
+  async installServiceHelpers(jobId) {
+    const setupServicesPath = path.join(this.projectRoot, 'scripts', 'setup-services.sh');
+    if (!fs.existsSync(setupServicesPath)) {
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [Install service helpers] Skipped because scripts/setup-services.sh is missing.\n`
+      );
+      return { skipped: true };
+    }
+
+    await this.runLoggedCommand(
+      jobId,
+      'Install service helpers',
+      'bash',
+      ['scripts/setup-services.sh', 'install-service']
+    );
+
+    return { skipped: false };
   }
 }
 

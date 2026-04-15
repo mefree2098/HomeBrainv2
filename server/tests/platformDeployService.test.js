@@ -346,6 +346,30 @@ test('normalizeRestartCommandSegments adds --no-block to systemctl start and res
   ]);
 });
 
+test('installServiceHelpers runs setup-services install-service when the helper script exists', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  const scriptsDir = path.join(service.projectRoot, 'scripts');
+  const setupServicesPath = path.join(scriptsDir, 'setup-services.sh');
+
+  await fsp.mkdir(scriptsDir, { recursive: true });
+  await fsp.writeFile(setupServicesPath, '#!/usr/bin/env bash\n', 'utf8');
+
+  let call = null;
+  service.runLoggedCommand = async (jobId, stepName, command, args) => {
+    call = { jobId, stepName, command, args };
+  };
+
+  const result = await service.installServiceHelpers('job-helpers');
+
+  assert.deepEqual(result, { skipped: false });
+  assert.deepEqual(call, {
+    jobId: 'job-helpers',
+    stepName: 'Install service helpers',
+    command: 'bash',
+    args: ['scripts/setup-services.sh', 'install-service']
+  });
+});
+
 test('isIgnorableDirtyEntry treats OTA artifacts as generated output', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
 
