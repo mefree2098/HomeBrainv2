@@ -1833,6 +1833,10 @@ struct DashboardView: View {
                 query.append(URLQueryItem(name: "label", value: "Current location"))
             }
 
+            if force {
+                query.append(URLQueryItem(name: "forceTempestSync", value: "true"))
+            }
+
             let response = try await session.apiClient.get("/api/weather/current", query: query)
             let root = JSON.object(response)
             let weatherPayload = root["weather"] ?? JSON.object(root["data"])["weather"]

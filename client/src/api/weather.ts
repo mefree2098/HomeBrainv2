@@ -223,12 +223,16 @@ interface GetDashboardWeatherOptions {
   latitude?: number
   longitude?: number
   label?: string
+  forceTempestSync?: boolean
 }
 
 export const getDashboardWeather = async (options: GetDashboardWeatherOptions = {}) => {
   try {
     const response = await api.get("/api/weather/current", {
-      params: options
+      params: {
+        ...options,
+        forceTempestSync: options.forceTempestSync === true ? "true" : undefined
+      }
     })
 
     return response.data as { success: boolean; weather: DashboardWeatherPayload }
@@ -241,7 +245,10 @@ export const getDashboardWeather = async (options: GetDashboardWeatherOptions = 
 export const getWeatherDashboard = async (options: GetDashboardWeatherOptions & { tempestHistoryHours?: number } = {}) => {
   try {
     const response = await api.get("/api/weather/dashboard", {
-      params: options
+      params: {
+        ...options,
+        forceTempestSync: options.forceTempestSync === true ? "true" : undefined
+      }
     })
 
     return response.data as { success: boolean; dashboard: WeatherDashboardPayload }

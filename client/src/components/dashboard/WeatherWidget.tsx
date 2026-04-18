@@ -919,7 +919,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const aqiTone = aqiToneClassName(weather?.current.airQualityIndex)
   const uvTone = uvToneClassName(tempestStation?.metrics.uvIndex)
 
-  const fetchWeather = useCallback(async () => {
+  const fetchWeather = useCallback(async (options: { forceTempestSync?: boolean } = {}) => {
     setLoading(true)
     setError(null)
 
@@ -927,16 +927,22 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
       let response
 
       if (locationMode === "custom" && locationQuery?.trim()) {
-        response = await getDashboardWeather({ address: locationQuery.trim() })
+        response = await getDashboardWeather({
+          address: locationQuery.trim(),
+          forceTempestSync: options.forceTempestSync === true
+        })
       } else if (locationMode === "auto") {
         const position = await resolveCurrentPosition()
         response = await getDashboardWeather({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
-          label: "Current location"
+          label: "Current location",
+          forceTempestSync: options.forceTempestSync === true
         })
       } else {
-        response = await getDashboardWeather()
+        response = await getDashboardWeather({
+          forceTempestSync: options.forceTempestSync === true
+        })
       }
 
       setWeather(response.weather)
@@ -1176,7 +1182,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 variant="outline"
                 size="icon"
                 className="h-8 w-8 rounded-full border-white/15 bg-white/8"
-                onClick={() => void fetchWeather()}
+                onClick={() => void fetchWeather({ forceTempestSync: true })}
                 aria-label="Refresh weather"
               >
                 <RefreshCw className="h-3.5 w-3.5" />

@@ -124,6 +124,24 @@ const parsePositiveInteger = (value, fallback) => {
   return numeric;
 };
 
+const parseBooleanFlag = (value, fallback = false) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return fallback;
+};
+
 const FORECAST_CACHE_TTL_MS = parsePositiveInteger(
   process.env.WEATHER_FORECAST_CACHE_TTL_MS,
   DEFAULT_FORECAST_CACHE_TTL_MS
@@ -610,6 +628,11 @@ async function resolveWeatherLocation({ latitude, longitude, address, label }) {
 
 async function fetchDashboardWeather(options = {}) {
   const location = await resolveWeatherLocation(options);
+  if (parseBooleanFlag(options.forceTempestSync)) {
+    await tempestService.refreshRuntime({ reason: 'weather-manual-refresh' }).catch((error) => {
+      console.warn(`WeatherService: Tempest refresh failed before weather fetch: ${error.message}`);
+    });
+  }
   const forecastCacheKey = buildForecastCacheKey(location);
   const airQualityCacheKey = buildAirQualityCacheKey(location);
   const forecastRecoveryKeys = buildRecoveryCacheKeys(location, PERSISTED_WEATHER_CACHE_KIND_FORECAST);

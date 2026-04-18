@@ -1103,13 +1103,13 @@ struct WeatherView: View {
                         buttonTitle: isRefreshing ? "Refreshing..." : "Refresh",
                         buttonIcon: isRefreshing ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.clockwise",
                         buttonAction: {
-                            Task { await refreshAll(silent: false, includeTempestStatus: isAdmin) }
+                            Task { await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true) }
                         }
                     )
 
                     if let errorMessage, dashboard == nil {
                         InlineErrorView(message: errorMessage) {
-                            Task { await refreshAll(silent: false, includeTempestStatus: isAdmin) }
+                            Task { await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true) }
                         }
                     }
 
@@ -1150,7 +1150,7 @@ struct WeatherView: View {
             .padding()
         }
         .refreshable {
-            await refreshAll(silent: false, includeTempestStatus: isAdmin)
+            await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true)
         }
         .task {
             await refreshAll(silent: false, includeTempestStatus: isAdmin)
@@ -1218,7 +1218,7 @@ struct WeatherView: View {
                         .submitLabel(.search)
                         .hbPanelTextField()
                         .onSubmit {
-                            Task { await loadWeatherDashboard(silent: false) }
+                            Task { await loadWeatherDashboard(silent: false, forceTempestSync: true) }
                         }
                 }
 
@@ -1226,7 +1226,7 @@ struct WeatherView: View {
                     if usesCompactWeatherLayout && weatherLocationMode == .auto {
                         VStack(spacing: 10) {
                             Button {
-                                Task { await loadWeatherDashboard(silent: false) }
+                                Task { await loadWeatherDashboard(silent: false, forceTempestSync: true) }
                             } label: {
                                 Label(isRefreshing ? "Refreshing..." : "Refresh Deck", systemImage: "arrow.clockwise")
                                     .frame(maxWidth: .infinity)
@@ -1244,7 +1244,7 @@ struct WeatherView: View {
                     } else {
                         HStack(spacing: 10) {
                             Button {
-                                Task { await loadWeatherDashboard(silent: false) }
+                                Task { await loadWeatherDashboard(silent: false, forceTempestSync: true) }
                             } label: {
                                 Label(isRefreshing ? "Refreshing..." : "Refresh Deck", systemImage: "arrow.clockwise")
                                     .frame(maxWidth: .infinity)
@@ -2144,14 +2144,14 @@ struct WeatherView: View {
         }
     }
 
-    private func refreshAll(silent: Bool, includeTempestStatus: Bool) async {
-        await loadWeatherDashboard(silent: silent)
+    private func refreshAll(silent: Bool, includeTempestStatus: Bool, forceTempestSync: Bool = false) async {
+        await loadWeatherDashboard(silent: silent, forceTempestSync: forceTempestSync)
         if includeTempestStatus {
             await loadTempestStatus()
         }
     }
 
-    private func loadWeatherDashboard(silent: Bool) async {
+    private func loadWeatherDashboard(silent: Bool, forceTempestSync: Bool = false) async {
         if silent {
             isRefreshing = true
         } else if dashboard == nil {
@@ -2165,8 +2165,12 @@ struct WeatherView: View {
 
         errorMessage = nil
 
-        guard let query = resolvedWeatherQuery() else {
+        guard var query = resolvedWeatherQuery() else {
             return
+        }
+
+        if forceTempestSync {
+            query.append(URLQueryItem(name: "forceTempestSync", value: "true"))
         }
 
         do {

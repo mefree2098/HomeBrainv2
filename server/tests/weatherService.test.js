@@ -221,6 +221,114 @@ test('fetchDashboardWeather attaches Tempest module telemetry to the current wea
   assert.equal(payload.current.precipitationIn, 0.03);
 });
 
+test('fetchWeatherDashboard forces a Tempest runtime refresh when requested', async (t) => {
+  await setupIsolatedWeatherCache(t);
+  const originalAxiosGet = axios.get;
+  const originalRefreshRuntime = tempestService.refreshRuntime;
+  const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
+  const originalGetDashboardData = tempestService.getDashboardData;
+  const originalGetTempestModuleTelemetry = telemetryService.getTempestModuleTelemetry;
+
+  t.after(() => {
+    axios.get = originalAxiosGet;
+    tempestService.refreshRuntime = originalRefreshRuntime;
+    tempestService.getSelectedStationSnapshot = originalGetSelectedStationSnapshot;
+    tempestService.getDashboardData = originalGetDashboardData;
+    telemetryService.getTempestModuleTelemetry = originalGetTempestModuleTelemetry;
+  });
+
+  let refreshCalls = 0;
+
+  axios.get = async (url) => {
+    if (url.includes('api.open-meteo.com/v1/forecast')) {
+      return {
+        data: {
+          timezone: 'America/Denver',
+          current: {
+            temperature_2m: 67.4,
+            apparent_temperature: 65.2,
+            relative_humidity_2m: 42,
+            wind_speed_10m: 7.8,
+            precipitation: 0,
+            weather_code: 2,
+            is_day: 1
+          },
+          daily: {
+            weather_code: [61],
+            temperature_2m_max: [74.3],
+            temperature_2m_min: [49.8],
+            precipitation_probability_max: [55],
+            sunrise: ['2026-03-23T07:01'],
+            sunset: ['2026-03-23T19:14']
+          }
+        }
+      };
+    }
+
+    if (url.includes('air-quality-api.open-meteo.com')) {
+      return {
+        data: {
+          current: {
+            us_aqi: 38
+          }
+        }
+      };
+    }
+
+    throw new Error(`Unexpected axios request: ${url}`);
+  };
+
+  tempestService.refreshRuntime = async () => {
+    refreshCalls += 1;
+    return { success: true };
+  };
+  tempestService.getSelectedStationSnapshot = async () => ({
+    id: 'tempest-device-1',
+    stationId: 12345,
+    name: 'Backyard Tempest',
+    room: 'Outside',
+    observedAt: '2026-04-02T17:00:00.000Z',
+    metrics: {
+      temperatureF: 66.9,
+      rainLastMinuteIn: 0.03
+    },
+    status: {
+      websocketConnected: true
+    }
+  });
+  tempestService.getDashboardData = async () => ({
+    available: true,
+    station: {
+      id: 'tempest-device-1',
+      stationId: 12345,
+      name: 'Backyard Tempest',
+      room: 'Outside',
+      observedAt: '2026-04-02T17:00:00.000Z',
+      metrics: {
+        temperatureF: 66.9,
+        rainLastMinuteIn: 0.03
+      },
+      status: {
+        websocketConnected: true
+      }
+    },
+    observations: [],
+    events: [],
+    moduleTelemetry: null
+  });
+  telemetryService.getTempestModuleTelemetry = async () => null;
+
+  const payload = await fetchWeatherDashboard({
+    latitude: '39.7392',
+    longitude: '-104.9903',
+    label: 'Current location',
+    forceTempestSync: true
+  });
+
+  assert.equal(refreshCalls, 1);
+  assert.equal(payload.tempest.available, true);
+});
+
 test('fetchDashboardWeather falls back to stale cached forecast data when Open-Meteo is rate limited', async (t) => {
   await setupIsolatedWeatherCache(t);
   const originalAxiosGet = axios.get;

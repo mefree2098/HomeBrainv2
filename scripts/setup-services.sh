@@ -467,7 +467,7 @@ Requires=mongod.service
 [Service]
 Type=simple
 User=${HOMEBRAIN_USER}
-WorkingDirectory=${HOMEBRAIN_DIR}
+WorkingDirectory=${HOMEBRAIN_DIR}/server
 Environment=NODE_ENV=production
 Environment=WAKEWORD_PIPER_EXEC=${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/piper
 ExecStart=${node_bin} scripts/run-with-modern-node.js node server/server.js

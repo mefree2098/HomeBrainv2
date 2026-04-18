@@ -304,7 +304,7 @@ export function Weather() {
   const [error, setError] = useState<string | null>(null)
   const [openModuleKey, setOpenModuleKey] = useState<WeatherModuleKey | null>(null)
 
-  const loadDashboard = useCallback(async (options: { silent?: boolean } = {}) => {
+  const loadDashboard = useCallback(async (options: { silent?: boolean; forceTempestSync?: boolean } = {}) => {
     const silent = options.silent === true
 
     if (!silent) {
@@ -316,7 +316,8 @@ export function Weather() {
 
     try {
       const response = await getWeatherDashboard({
-        tempestHistoryHours: 24
+        tempestHistoryHours: 24,
+        forceTempestSync: options.forceTempestSync === true
       })
       setDashboard(response.dashboard)
     } catch (loadError) {
@@ -427,7 +428,7 @@ export function Weather() {
             <CardDescription>{error || "The weather dashboard could not be loaded."}</CardDescription>
           </CardHeader>
           <CardContent className="flex gap-3">
-            <Button onClick={() => void loadDashboard()}>
+            <Button onClick={() => void loadDashboard({ forceTempestSync: true })}>
               <RefreshCw className="mr-2 h-4 w-4" />
               Retry
             </Button>
@@ -485,7 +486,11 @@ export function Weather() {
               <div className="rounded-[1.4rem] border border-white/15 bg-white/10 p-4 text-cyan-100">
                 <WeatherGlyph icon={forecast.current.icon} isDay={forecast.current.isDay} className="h-10 w-10" />
               </div>
-              <Button variant="secondary" className="border-white/10 bg-white/10 text-white hover:bg-white/15" onClick={() => void loadDashboard({ silent: true })}>
+              <Button
+                variant="secondary"
+                className="border-white/10 bg-white/10 text-white hover:bg-white/15"
+                onClick={() => void loadDashboard({ silent: true, forceTempestSync: true })}
+              >
                 {refreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Refresh
               </Button>

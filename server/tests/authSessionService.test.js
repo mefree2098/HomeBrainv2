@@ -123,6 +123,60 @@ test('issueSession reuses the same session record for the same device', async (t
   assert.notEqual(first.tokens.refreshToken, second.tokens.refreshToken);
 });
 
+test('issueSession supports at least 20 simultaneous device sessions for one user', async (t) => {
+  const originalJwtSecret = process.env.JWT_SECRET;
+  const originalRefreshSecret = process.env.REFRESH_TOKEN_SECRET;
+  const originalGetSettings = Settings.getSettings;
+  const originalUserGet = UserService.get;
+  const originalFindOne = UserSession.findOne;
+  const originalFind = UserSession.find;
+  const originalSave = UserSession.prototype.save;
+
+  const sessions = [];
+  const user = {
+    _id: '507f1f77bcf86cd799439011',
+    role: 'admin',
+    isActive: true,
+    toJSON() {
+      return { _id: this._id, role: this.role };
+    }
+  };
+
+  t.after(() => {
+    process.env.JWT_SECRET = originalJwtSecret;
+    process.env.REFRESH_TOKEN_SECRET = originalRefreshSecret;
+    Settings.getSettings = originalGetSettings;
+    UserService.get = originalUserGet;
+    UserSession.findOne = originalFindOne;
+    UserSession.find = originalFind;
+    UserSession.prototype.save = originalSave;
+  });
+
+  process.env.JWT_SECRET = 'test-jwt-secret';
+  process.env.REFRESH_TOKEN_SECRET = 'test-refresh-secret';
+
+  Settings.getSettings = async () => ({ authSessionMaxAgeDays: 365 });
+  UserService.get = async () => user;
+  UserSession.findOne = (query) => buildQueryExecutor(sessions, query, 'one');
+  UserSession.find = (query) => buildQueryExecutor(sessions, query, 'many');
+  UserSession.prototype.save = async function save() {
+    const index = sessions.findIndex((entry) => entry.sessionId === this.sessionId);
+    if (index >= 0) {
+      sessions[index] = this;
+    } else {
+      sessions.push(this);
+    }
+    return this;
+  };
+
+  for (let index = 1; index <= 20; index += 1) {
+    await authSessionService.issueSession(user, buildRequest(`device-${index}`, `Device ${index}`));
+  }
+
+  assert.equal(sessions.length, 20);
+  assert.equal(new Set(sessions.map((entry) => entry.sessionId)).size, 20);
+});
+
 test('refreshSession rotates tokens without creating a new device session', async (t) => {
   const originalJwtSecret = process.env.JWT_SECRET;
   const originalRefreshSecret = process.env.REFRESH_TOKEN_SECRET;
