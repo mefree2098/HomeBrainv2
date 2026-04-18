@@ -469,7 +469,8 @@ Type=simple
 User=${HOMEBRAIN_USER}
 WorkingDirectory=${HOMEBRAIN_DIR}
 Environment=NODE_ENV=production
-ExecStart=${node_bin} scripts/run-with-modern-node.js npm start
+Environment=WAKEWORD_PIPER_EXEC=${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/piper
+ExecStart=${node_bin} scripts/run-with-modern-node.js node server/server.js
 Restart=always
 RestartSec=5
 TimeoutStopSec=15s
@@ -668,6 +669,10 @@ wait_for_homebrain_http() {
 
   print_error "HomeBrain did not respond on port 3000 after restart."
   print_warning "$(describe_homebrain_listener_state)"
+  print_status "Recent systemd status for ${SERVICE_NAME}:"
+  sudo systemctl status "${SERVICE_NAME}" --no-pager || true
+  print_status "Recent journal entries for ${SERVICE_NAME}:"
+  sudo journalctl -u "${SERVICE_NAME}" -n 80 --no-pager || true
   return 1
 }
 
