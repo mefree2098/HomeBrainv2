@@ -49,12 +49,20 @@ export type AlexaBrokerServiceStatus = {
   rateLimitMax?: number;
   allowManualRegistration?: boolean;
   autoStart?: boolean;
+  manualStopRequested?: boolean;
   resumeAfterHostRestart?: boolean;
+  autoRecoveryMode?: 'keep_running' | 'resume_after_restart' | 'paused_manual_stop' | 'disabled';
   lastStartedAt?: string | null;
   lastStoppedAt?: string | null;
   lastError?: {
     message?: string;
     timestamp?: string;
+  } | null;
+  statusReason?: {
+    level?: 'info' | 'success' | 'warning' | 'error';
+    source?: string;
+    message?: string;
+    timestamp?: string | null;
   } | null;
   reverseProxy?: {
     routeId?: string | null;
@@ -71,6 +79,13 @@ export type AlexaBrokerServiceStatus = {
     matchesConfig?: boolean;
   };
   logs?: string[];
+  lifecycleEvents?: Array<{
+    type?: string;
+    status?: 'info' | 'success' | 'warning' | 'error';
+    message?: string;
+    details?: Record<string, any>;
+    occurredAt?: string;
+  }>;
   health?: Record<string, any> | null;
   healthAvailable?: boolean;
   healthMessage?: string;

@@ -557,7 +557,13 @@ async function gracefulShutdown(signal) {
     }
 
     try {
-      await alexaBrokerService.stopService({ preserveResumeAfterHostRestart: true });
+      await alexaBrokerService.stopService({
+        preserveResumeAfterHostRestart: true,
+        manual: false,
+        actor: 'system:shutdown',
+        source: 'server_shutdown',
+        reason: 'HomeBrain is shutting down'
+      });
     } catch (error) {
       console.error('Error stopping Alexa broker service:', error.message);
     }

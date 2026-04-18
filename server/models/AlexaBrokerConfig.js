@@ -20,6 +20,30 @@ const lastErrorSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const lifecycleEventSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    default: 'info'
+  },
+  status: {
+    type: String,
+    enum: ['info', 'success', 'warning', 'error'],
+    default: 'info'
+  },
+  message: {
+    type: String,
+    default: ''
+  },
+  details: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  occurredAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
 const alexaBrokerConfigSchema = new mongoose.Schema({
   isInstalled: {
     type: Boolean,
@@ -129,6 +153,10 @@ const alexaBrokerConfigSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  manualStopRequested: {
+    type: Boolean,
+    default: false
+  },
   lastStartedAt: {
     type: Date,
     default: null
@@ -140,6 +168,10 @@ const alexaBrokerConfigSchema = new mongoose.Schema({
   lastError: {
     type: lastErrorSchema,
     default: null
+  },
+  lifecycleEvents: {
+    type: [lifecycleEventSchema],
+    default: []
   }
 }, {
   timestamps: true
@@ -162,6 +194,17 @@ alexaBrokerConfigSchema.pre('save', function preSave() {
   this.storeFile = String(this.storeFile || '').trim();
   this.lwaTokenUrl = String(this.lwaTokenUrl || '').trim() || 'https://api.amazon.com/auth/o2/token';
   this.eventGatewayUrl = String(this.eventGatewayUrl || '').trim() || 'https://api.amazonalexa.com/v3/events';
+  this.lifecycleEvents = Array.isArray(this.lifecycleEvents)
+    ? this.lifecycleEvents.slice(-50).map((entry) => ({
+      type: String(entry?.type || 'info').trim() || 'info',
+      status: ['info', 'success', 'warning', 'error'].includes(String(entry?.status || '').trim())
+        ? String(entry.status).trim()
+        : 'info',
+      message: String(entry?.message || '').trim(),
+      details: entry?.details && typeof entry.details === 'object' ? entry.details : {},
+      occurredAt: entry?.occurredAt ? new Date(entry.occurredAt) : new Date()
+    }))
+    : [];
 });
 
 alexaBrokerConfigSchema.statics.getConfig = async function getConfig() {

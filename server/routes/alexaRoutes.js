@@ -83,7 +83,10 @@ router.post('/service/deploy', admin, async (req, res) => {
 
 router.post('/service/start', admin, async (_req, res) => {
   try {
-    const result = await alexaBrokerService.startService();
+    const result = await alexaBrokerService.startService({
+      actor: _req.user?.email || _req.user?._id || 'unknown',
+      source: 'admin_start'
+    });
     return res.status(200).json(result);
   } catch (error) {
     console.error('POST /api/alexa/service/start - Error:', error.message);
@@ -96,7 +99,10 @@ router.post('/service/start', admin, async (_req, res) => {
 
 router.post('/service/stop', admin, async (_req, res) => {
   try {
-    const result = await alexaBrokerService.stopService();
+    const result = await alexaBrokerService.stopService({
+      actor: _req.user?.email || _req.user?._id || 'unknown',
+      source: 'admin_stop'
+    });
     return res.status(200).json(result);
   } catch (error) {
     console.error('POST /api/alexa/service/stop - Error:', error.message);
@@ -109,7 +115,11 @@ router.post('/service/stop', admin, async (_req, res) => {
 
 router.post('/service/restart', admin, async (_req, res) => {
   try {
-    const result = await alexaBrokerService.restartService();
+    const result = await alexaBrokerService.restartService({
+      actor: _req.user?.email || _req.user?._id || 'unknown',
+      source: 'admin_restart',
+      reason: 'admin restart request'
+    });
     return res.status(200).json(result);
   } catch (error) {
     console.error('POST /api/alexa/service/restart - Error:', error.message);

@@ -121,6 +121,37 @@ function formatStatusLabel(status: string | null | undefined) {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
+function formatRecoveryModeLabel(mode: string | null | undefined) {
+  switch (mode) {
+    case 'keep_running':
+      return 'Keep running';
+    case 'resume_after_restart':
+      return 'Resume after restart';
+    case 'paused_manual_stop':
+      return 'Paused by manual stop';
+    case 'disabled':
+      return 'Disabled';
+    default:
+      return 'Unknown';
+  }
+}
+
+function getLifecycleBadgeVariant(status: string | null | undefined): 'default' | 'secondary' | 'outline' | 'destructive' {
+  if (status === 'success') {
+    return 'default';
+  }
+
+  if (status === 'error') {
+    return 'destructive';
+  }
+
+  if (status === 'warning') {
+    return 'outline';
+  }
+
+  return 'secondary';
+}
+
 export default function AlexaBrokerManagement() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -561,6 +592,12 @@ export default function AlexaBrokerManagement() {
             <Badge variant={currentServiceTone}>{serviceStatus?.serviceRunning ? 'Healthy' : 'Idle'}</Badge>
             <p className="mt-3">Install: {serviceStatus?.isInstalled ? 'ready' : 'missing dependencies'}</p>
             <p>PID: {serviceStatus?.servicePid || 'not running'}</p>
+            <p>Recovery: {formatRecoveryModeLabel(serviceStatus?.autoRecoveryMode)}</p>
+            {serviceStatus?.statusReason?.message ? (
+              <p className="mt-3 text-xs leading-5">
+                {serviceStatus.statusReason.message}
+              </p>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -754,12 +791,16 @@ export default function AlexaBrokerManagement() {
             </Button>
           </div>
 
-          {serviceStatus?.lastError?.message ? (
-            <Alert variant="destructive">
-              <XCircle className="h-4 w-4" />
+          {serviceStatus?.statusReason?.message ? (
+            <Alert variant={serviceStatus.statusReason.level === 'error' ? 'destructive' : 'default'}>
+              {serviceStatus.statusReason.level === 'error' ? (
+                <XCircle className="h-4 w-4" />
+              ) : (
+                <AlertCircle className="h-4 w-4" />
+              )}
               <AlertDescription>
-                {serviceStatus.lastError.message}
-                {serviceStatus.lastError.timestamp ? ` (${new Date(serviceStatus.lastError.timestamp).toLocaleString()})` : ''}
+                {serviceStatus.statusReason.message}
+                {serviceStatus.statusReason.timestamp ? ` (${new Date(serviceStatus.statusReason.timestamp).toLocaleString()})` : ''}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -896,7 +937,7 @@ export default function AlexaBrokerManagement() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium">Auto-start Managed Broker</p>
-                  <p className="text-xs text-muted-foreground">Start the broker automatically when HomeBrain boots.</p>
+                  <p className="text-xs text-muted-foreground">Keep the broker running automatically unless it was stopped manually.</p>
                 </div>
                 <Switch checked={draft.autoStart} onCheckedChange={(checked) => updateDraft('autoStart', checked === true)} />
               </div>
@@ -1110,17 +1151,44 @@ export default function AlexaBrokerManagement() {
         <Card>
           <CardHeader>
             <CardTitle>Logs</CardTitle>
-            <CardDescription>Captured stdout and stderr from the managed broker process.</CardDescription>
+            <CardDescription>Recent service lifecycle reasons plus captured stdout and stderr from the managed broker process.</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="max-h-[30rem] overflow-y-auto rounded-md border border-border/60 bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100">
-              {Array.isArray(serviceStatus?.logs) && serviceStatus.logs.length > 0 ? (
-                serviceStatus.logs.map((entry, index) => (
-                  <p key={`broker-log-${index}`}>{entry}</p>
-                ))
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Service lifecycle</p>
+              {Array.isArray(serviceStatus?.lifecycleEvents) && serviceStatus.lifecycleEvents.length > 0 ? (
+                <div className="space-y-2">
+                  {serviceStatus.lifecycleEvents.slice(0, 8).map((entry, index) => (
+                    <div key={`${entry?.type || 'lifecycle'}-${index}`} className="rounded-md border border-border/60 bg-background/50 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={getLifecycleBadgeVariant(entry?.status)}>
+                          {formatStatusLabel(entry?.status || 'info')}
+                        </Badge>
+                        <p className="text-sm font-medium">{entry?.message || 'Broker lifecycle event'}</p>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {entry?.occurredAt ? new Date(entry.occurredAt).toLocaleString() : 'Unknown time'}
+                        {entry?.type ? ` • ${formatStatusLabel(entry.type)}` : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               ) : (
-                <p className="text-slate-400">No broker logs yet. Install or start the service to populate this stream.</p>
+                <p className="text-sm text-muted-foreground">No lifecycle events yet. Start, stop, and recovery actions will appear here.</p>
               )}
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Broker stdout / stderr</p>
+              <div className="max-h-[24rem] overflow-y-auto rounded-md border border-border/60 bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100">
+                {Array.isArray(serviceStatus?.logs) && serviceStatus.logs.length > 0 ? (
+                  serviceStatus.logs.map((entry, index) => (
+                    <p key={`broker-log-${index}`}>{entry}</p>
+                  ))
+                ) : (
+                  <p className="text-slate-400">No broker logs yet. Install or start the service to populate this stream.</p>
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>

@@ -8,6 +8,7 @@ private struct DashboardTempestStationSnapshot {
     let name: String
     let room: String
     let observedAt: String?
+    let lastEventAt: String?
     let temperatureF: Double?
     let feelsLikeF: Double?
     let dewPointF: Double?
@@ -39,6 +40,7 @@ private struct DashboardTempestStationSnapshot {
             name: JSON.string(station, "name", fallback: "Tempest Station"),
             room: JSON.string(station, "room", fallback: "Outside"),
             observedAt: JSON.optionalString(station, "observedAt"),
+            lastEventAt: JSON.optionalString(station, "lastEventAt"),
             temperatureF: optionalNumber(metrics["temperatureF"]),
             feelsLikeF: optionalNumber(metrics["feelsLikeF"]),
             dewPointF: optionalNumber(metrics["dewPointF"]),
@@ -321,7 +323,11 @@ private struct DashboardWeatherSnapshot {
     }
 
     var lastSyncedAt: String? {
-        tempest?.observedAt ?? (fetchedAt.isEmpty ? nil : fetchedAt)
+        weatherMostRecentTimestamp(
+            tempest?.observedAt,
+            tempest?.lastEventAt,
+            fetchedAt.isEmpty ? nil : fetchedAt
+        )
     }
 
     nonisolated private static func optionalNumber(_ value: Any?) -> Double? {

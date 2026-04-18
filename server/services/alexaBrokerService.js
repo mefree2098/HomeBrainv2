@@ -12,6 +12,9 @@ const DEFAULT_CLIENT_ID = 'homebrain-alexa-skill';
 const DEFAULT_PORT = 4301;
 const DEFAULT_BIND_HOST = '127.0.0.1';
 const DEFAULT_LOG_LIMIT = 500;
+const DEFAULT_LIFECYCLE_LIMIT = 50;
+const DEFAULT_MONITOR_INTERVAL_MS = 15000;
+const DEFAULT_HEALTH_FAILURE_THRESHOLD = 2;
 const MANAGED_REVERSE_PROXY_NOTES = 'Managed automatically by the HomeBrain Alexa Broker deployment flow.';
 
 function trimString(value) {
@@ -156,6 +159,12 @@ function waitForChildExit(child, timeoutMs = 5000) {
   });
 }
 
+function normalizeLifecycleStatus(status) {
+  return ['info', 'success', 'warning', 'error'].includes(String(status || '').trim())
+    ? String(status).trim()
+    : 'info';
+}
+
 class AlexaBrokerService {
   constructor(options = {}) {
     this.projectRoot = options.projectRoot || path.resolve(__dirname, '..', '..');
@@ -166,10 +175,17 @@ class AlexaBrokerService {
     this.reverseProxyRouteModel = options.reverseProxyRouteModel || ReverseProxyRoute;
     this.reverseProxyService = options.reverseProxyService || reverseProxyService;
     this.logLimit = options.logLimit || DEFAULT_LOG_LIMIT;
+    this.lifecycleLimit = options.lifecycleLimit || DEFAULT_LIFECYCLE_LIMIT;
+    this.monitorIntervalMs = options.monitorIntervalMs || DEFAULT_MONITOR_INTERVAL_MS;
+    this.healthFailureThreshold = options.healthFailureThreshold || DEFAULT_HEALTH_FAILURE_THRESHOLD;
     this.child = null;
     this.installProcess = null;
     this.logBuffer = [];
     this.stoppingChild = false;
+    this.monitorTimer = null;
+    this.monitorInFlight = false;
+    this.consecutiveHealthFailures = 0;
+    this.lastAutoRecoveryAt = 0;
   }
 
   getDefaultStoreFile() {
@@ -207,6 +223,155 @@ class AlexaBrokerService {
         this.logBuffer.shift();
       }
     });
+  }
+
+  appendLifecycleEvent(config, entry = {}) {
+    if (!config) {
+      return;
+    }
+
+    config.lifecycleEvents = [
+      ...(Array.isArray(config.lifecycleEvents) ? config.lifecycleEvents : []),
+      {
+        type: trimString(entry.type) || 'info',
+        status: normalizeLifecycleStatus(entry.status),
+        message: trimString(entry.message),
+        details: entry.details && typeof entry.details === 'object' ? entry.details : {},
+        occurredAt: entry.occurredAt || new Date()
+      }
+    ].slice(-this.lifecycleLimit);
+  }
+
+  async recordLifecycleEvent(entry = {}) {
+    const config = await this.configModel.getConfig();
+    this.appendLifecycleEvent(config, entry);
+    await config.save();
+    if (trimString(entry.message)) {
+      this.pushLog(entry.message, 'broker-service');
+    }
+    return config;
+  }
+
+  shouldAutoRecover(config) {
+    if (!config || config.isInstalled !== true) {
+      return false;
+    }
+
+    if (config.manualStopRequested === true) {
+      return false;
+    }
+
+    return config.autoStart === true || config.resumeAfterHostRestart === true;
+  }
+
+  getAutoRecoveryMode(config) {
+    if (config?.manualStopRequested === true) {
+      return 'paused_manual_stop';
+    }
+
+    if (config?.autoStart === true) {
+      return 'keep_running';
+    }
+
+    if (config?.resumeAfterHostRestart === true) {
+      return 'resume_after_restart';
+    }
+
+    return 'disabled';
+  }
+
+  startMonitor() {
+    if (this.monitorTimer) {
+      return;
+    }
+
+    this.monitorTimer = setInterval(() => {
+      void this.runMonitorPass({ trigger: 'interval' });
+    }, this.monitorIntervalMs);
+
+    if (typeof this.monitorTimer.unref === 'function') {
+      this.monitorTimer.unref();
+    }
+  }
+
+  async runMonitorPass({ trigger = 'interval' } = {}) {
+    if (this.monitorInFlight) {
+      return;
+    }
+
+    this.monitorInFlight = true;
+    try {
+      const config = await this.getConfig();
+
+      if (this.installProcess || this.stoppingChild) {
+        return;
+      }
+
+      const childAlive = this.isChildAlive();
+      const probe = await this.probeHealth(config);
+      const canAutoRecover = this.shouldAutoRecover(config);
+
+      if (probe.available && childAlive) {
+        this.consecutiveHealthFailures = 0;
+        return;
+      }
+
+      if (probe.available && !childAlive) {
+        this.consecutiveHealthFailures = 0;
+        if (config.serviceStatus !== 'running_external') {
+          config.serviceStatus = 'running_external';
+          config.servicePid = null;
+          config.serviceOwner = null;
+          await config.save();
+        }
+        return;
+      }
+
+      if (!canAutoRecover) {
+        this.consecutiveHealthFailures = childAlive ? this.consecutiveHealthFailures + 1 : 0;
+        return;
+      }
+
+      const now = Date.now();
+      if (childAlive) {
+        this.consecutiveHealthFailures += 1;
+        if (this.consecutiveHealthFailures < this.healthFailureThreshold) {
+          return;
+        }
+
+        if (now - this.lastAutoRecoveryAt < this.monitorIntervalMs) {
+          return;
+        }
+
+        this.lastAutoRecoveryAt = now;
+        await this.restartService({
+          actor: 'system:auto-recovery',
+          automatic: true,
+          source: `watchdog_${trigger}`,
+          reason: `Broker health check failed: ${probe.message || 'broker is not responding on /health'}`
+        });
+        this.consecutiveHealthFailures = 0;
+        return;
+      }
+
+      this.consecutiveHealthFailures = 0;
+      if (now - this.lastAutoRecoveryAt < this.monitorIntervalMs) {
+        return;
+      }
+
+      this.lastAutoRecoveryAt = now;
+      await this.startService({
+        actor: 'system:auto-recovery',
+        automatic: true,
+        quietIfRunning: true,
+        source: `watchdog_${trigger}`,
+        reason: probe.message || 'Managed Alexa broker is offline'
+      });
+    } catch (error) {
+      this.pushLog(`Broker auto-recovery check failed: ${error.message}`, 'broker-service');
+    } finally {
+      this.monitorInFlight = false;
+    }
   }
 
   async getConfig() {
@@ -341,12 +506,21 @@ class AlexaBrokerService {
         message: error.message || 'Alexa broker process failed to launch',
         timestamp: new Date()
       };
+      this.appendLifecycleEvent(config, {
+        type: 'process_error',
+        status: 'error',
+        message: error.message || 'Alexa broker process failed to launch',
+        details: {
+          automaticRecoveryEligible: this.shouldAutoRecover(config)
+        }
+      });
       await config.save();
     });
 
     child.on('exit', async (code, signal) => {
       const exitedDuringStop = this.stoppingChild === true;
-      this.pushLog(`Broker process exited with code ${code}${signal ? ` (${signal})` : ''}`, 'broker');
+      const exitSummary = `Broker process exited with code ${code}${signal ? ` (${signal})` : ''}`;
+      this.pushLog(exitSummary, 'broker');
 
       if (this.child === child) {
         this.child = null;
@@ -362,14 +536,31 @@ class AlexaBrokerService {
         config.serviceStatus = config.isInstalled ? 'stopped' : 'not_installed';
         config.lastStoppedAt = new Date();
       } else if (config.serviceStatus !== 'starting') {
+        const automaticRecoveryEligible = this.shouldAutoRecover(config);
         config.serviceStatus = config.isInstalled ? 'stopped' : 'not_installed';
         config.lastError = {
           message: `Alexa broker exited unexpectedly with code ${code}${signal ? ` (${signal})` : ''}`,
           timestamp: new Date()
         };
+        this.appendLifecycleEvent(config, {
+          type: 'unexpected_exit',
+          status: automaticRecoveryEligible ? 'warning' : 'error',
+          message: automaticRecoveryEligible
+            ? `Alexa broker exited unexpectedly (${code}${signal ? ` / ${signal}` : ''}). HomeBrain will try to start it again automatically.`
+            : `Alexa broker exited unexpectedly (${code}${signal ? ` / ${signal}` : ''}). Automatic recovery is currently disabled.`,
+          details: {
+            code,
+            signal,
+            automaticRecoveryEligible
+          }
+        });
       }
 
       await config.save();
+
+      if (!exitedDuringStop) {
+        void this.runMonitorPass({ trigger: 'process_exit' });
+      }
     });
   }
 
@@ -528,8 +719,9 @@ class AlexaBrokerService {
   }
 
   async initialize() {
+    this.startMonitor();
     const config = await this.getConfig();
-    const shouldAutoStart = config.autoStart || config.resumeAfterHostRestart;
+    const shouldAutoStart = this.shouldAutoRecover(config);
     if (!shouldAutoStart) {
       return;
     }
@@ -537,6 +729,8 @@ class AlexaBrokerService {
     try {
       await this.startService({
         quietIfRunning: true,
+        automatic: true,
+        actor: 'system:start',
         source: config.resumeAfterHostRestart ? 'host_restart_resume' : 'auto_start'
       });
     } catch (error) {
@@ -774,8 +968,16 @@ class AlexaBrokerService {
     }
 
     const serviceResult = this.isChildAlive()
-      ? await this.restartService()
-      : await this.startService();
+      ? await this.restartService({
+        actor,
+        source: 'deploy',
+        reason: 'deploy broker request'
+      })
+      : await this.startService({
+        actor,
+        source: 'deploy',
+        reason: 'deploy broker request'
+      });
 
     const reverseProxyResult = await this.ensureManagedReverseProxyRoute({
       actor,
@@ -793,6 +995,10 @@ class AlexaBrokerService {
 
   async startService(options = {}) {
     const config = await this.getConfig();
+    const actor = trimString(options.actor) || 'system';
+    const automatic = options.automatic === true;
+    const source = trimString(options.source) || (automatic ? 'automatic' : 'manual');
+    const startReason = trimString(options.reason);
 
     if (!config.isInstalled) {
       throw new Error('Alexa broker dependencies are not installed yet. Run Install first.');
@@ -805,8 +1011,9 @@ class AlexaBrokerService {
     if (this.isChildAlive()) {
       if (config.lastError) {
         config.lastError = null;
-        await config.save();
       }
+      config.manualStopRequested = false;
+      await config.save();
       return {
         success: true,
         message: 'Alexa broker is already running',
@@ -820,7 +1027,18 @@ class AlexaBrokerService {
       config.servicePid = null;
       config.serviceOwner = null;
       config.resumeAfterHostRestart = false;
+      config.manualStopRequested = false;
       config.lastError = null;
+      this.appendLifecycleEvent(config, {
+        type: 'running_external',
+        status: 'warning',
+        message: 'HomeBrain detected an Alexa broker that is already running outside the managed service on the configured port.',
+        details: {
+          actor,
+          automatic,
+          source
+        }
+      });
       await config.save();
       return {
         success: true,
@@ -835,6 +1053,7 @@ class AlexaBrokerService {
     config.serviceStatus = 'starting';
     config.servicePid = null;
     config.serviceOwner = null;
+    config.manualStopRequested = false;
     config.lastError = null;
     await config.save();
 
@@ -860,9 +1079,25 @@ class AlexaBrokerService {
       config.servicePid = child.pid || null;
       config.serviceOwner = os.userInfo().username;
       config.resumeAfterHostRestart = false;
+      config.manualStopRequested = false;
       config.lastStartedAt = new Date();
       config.lastError = null;
+      this.appendLifecycleEvent(config, {
+        type: automatic ? 'auto_started' : 'started',
+        status: 'success',
+        message: automatic
+          ? `Alexa broker started automatically${startReason ? ` after ${startReason}` : ''}.`
+          : 'Alexa broker started successfully.',
+        details: {
+          actor,
+          automatic,
+          source,
+          reason: startReason || null,
+          pid: child.pid || null
+        }
+      });
       await config.save();
+      this.consecutiveHealthFailures = 0;
 
       return {
         success: true,
@@ -888,6 +1123,19 @@ class AlexaBrokerService {
         message: error.message || 'Alexa broker failed to become healthy',
         timestamp: new Date()
       };
+      this.appendLifecycleEvent(config, {
+        type: automatic ? 'auto_start_failed' : 'start_failed',
+        status: 'error',
+        message: automatic
+          ? `Alexa broker automatic start failed${startReason ? ` after ${startReason}` : ''}: ${error.message || 'broker failed to become healthy'}.`
+          : `Alexa broker failed to start: ${error.message || 'broker failed to become healthy'}.`,
+        details: {
+          actor,
+          automatic,
+          source,
+          reason: startReason || null
+        }
+      });
       await config.save();
       throw error;
     }
@@ -896,14 +1144,29 @@ class AlexaBrokerService {
   async stopService(options = {}) {
     const config = await this.getConfig();
     const preserveResumeAfterHostRestart = options.preserveResumeAfterHostRestart === true;
+    const actor = trimString(options.actor) || 'system';
+    const manualStop = options.manual !== false;
+    const source = trimString(options.source) || (manualStop ? 'manual' : 'internal');
+    const stopReason = trimString(options.reason);
 
     if (!this.isChildAlive()) {
       const probe = await this.probeHealth(config);
       if (probe.available) {
         config.serviceStatus = 'running_external';
+        config.manualStopRequested = manualStop;
         if (!preserveResumeAfterHostRestart) {
           config.resumeAfterHostRestart = false;
         }
+        this.appendLifecycleEvent(config, {
+          type: manualStop ? 'manual_stop_blocked_external' : 'stop_blocked_external',
+          status: 'warning',
+          message: 'HomeBrain could not stop the Alexa broker because another process is already managing the configured port.',
+          details: {
+            actor,
+            source,
+            reason: stopReason || null
+          }
+        });
         await config.save();
         throw new Error('Alexa broker is being managed outside HomeBrain. Stop that process manually or change the configured port.');
       }
@@ -911,10 +1174,23 @@ class AlexaBrokerService {
       config.serviceStatus = config.isInstalled ? 'stopped' : 'not_installed';
       config.servicePid = null;
       config.serviceOwner = null;
+      config.manualStopRequested = manualStop;
       if (!preserveResumeAfterHostRestart) {
         config.resumeAfterHostRestart = false;
       }
       config.lastStoppedAt = new Date();
+      if (manualStop) {
+        this.appendLifecycleEvent(config, {
+          type: 'manual_stop',
+          status: 'info',
+          message: 'Alexa broker was already stopped. Automatic recovery is paused until it is started again.',
+          details: {
+            actor,
+            source,
+            reason: stopReason || null
+          }
+        });
+      }
       await config.save();
       return {
         success: true,
@@ -938,14 +1214,28 @@ class AlexaBrokerService {
     config.serviceStatus = config.isInstalled ? 'stopped' : 'not_installed';
     config.servicePid = null;
     config.serviceOwner = null;
+    config.manualStopRequested = manualStop;
     if (!preserveResumeAfterHostRestart) {
       config.resumeAfterHostRestart = false;
     }
     config.lastStoppedAt = new Date();
+    this.appendLifecycleEvent(config, {
+      type: manualStop ? 'manual_stop' : 'stopped',
+      status: 'info',
+      message: manualStop
+        ? 'Alexa broker was stopped manually. Automatic recovery is paused until it is started again.'
+        : `Alexa broker stopped${stopReason ? `: ${stopReason}` : '.'}`,
+      details: {
+        actor,
+        source,
+        reason: stopReason || null
+      }
+    });
     await config.save();
 
     this.child = null;
     this.stoppingChild = false;
+    this.consecutiveHealthFailures = 0;
 
     return {
       success: true,
@@ -954,16 +1244,108 @@ class AlexaBrokerService {
     };
   }
 
-  async restartService() {
+  async restartService(options = {}) {
+    const actor = trimString(options.actor) || 'system';
+    const automatic = options.automatic === true;
+    const source = trimString(options.source) || (automatic ? 'automatic_restart' : 'manual_restart');
+    const restartReason = trimString(options.reason);
+
     try {
-      await this.stopService({ preserveResumeAfterHostRestart: true });
+      await this.stopService({
+        preserveResumeAfterHostRestart: true,
+        actor,
+        manual: false,
+        source: `${source}_stop`,
+        reason: restartReason || 'restart requested'
+      });
     } catch (error) {
       if (!String(error.message || '').includes('already stopped')) {
         throw error;
       }
     }
 
-    return this.startService();
+    return this.startService({
+      actor,
+      automatic,
+      source,
+      reason: restartReason || 'restart requested'
+    });
+  }
+
+  buildStatusReason(config, effectiveStatus, probe, serviceRunning) {
+    const lifecycleEvents = Array.isArray(config?.lifecycleEvents) ? config.lifecycleEvents : [];
+    const latestEvent = lifecycleEvents.length > 0 ? lifecycleEvents[lifecycleEvents.length - 1] : null;
+
+    if (effectiveStatus === 'running_external') {
+      return {
+        level: 'warning',
+        source: 'running_external',
+        message: 'Another process is already serving the configured Alexa broker port, so HomeBrain is leaving the managed broker stopped.',
+        timestamp: latestEvent?.occurredAt || null
+      };
+    }
+
+    if (serviceRunning) {
+      return null;
+    }
+
+    if (!config?.isInstalled) {
+      return {
+        level: 'info',
+        source: 'not_installed',
+        message: 'Alexa broker dependencies are not installed yet.',
+        timestamp: null
+      };
+    }
+
+    if (config?.manualStopRequested === true && effectiveStatus === 'stopped') {
+      return {
+        level: 'info',
+        source: 'manual_stop',
+        message: 'Alexa broker was stopped manually. Automatic recovery is paused until it is started again.',
+        timestamp: config?.lastStoppedAt || latestEvent?.occurredAt || null
+      };
+    }
+
+    if (effectiveStatus === 'starting' || effectiveStatus === 'installing') {
+      return {
+        level: 'info',
+        source: effectiveStatus,
+        message: effectiveStatus === 'installing'
+          ? 'Alexa broker dependencies are being installed.'
+          : 'Alexa broker is starting.',
+        timestamp: latestEvent?.occurredAt || null
+      };
+    }
+
+    if (config?.lastError?.message) {
+      return {
+        level: 'error',
+        source: 'last_error',
+        message: config.lastError.message,
+        timestamp: config.lastError.timestamp || latestEvent?.occurredAt || null
+      };
+    }
+
+    if (trimString(probe?.message) && effectiveStatus === 'stopped' && this.shouldAutoRecover(config)) {
+      return {
+        level: 'warning',
+        source: 'health_probe',
+        message: `Alexa broker is offline. HomeBrain will keep trying to start it automatically. Last health check: ${probe.message}`,
+        timestamp: latestEvent?.occurredAt || null
+      };
+    }
+
+    if (latestEvent?.message) {
+      return {
+        level: normalizeLifecycleStatus(latestEvent.status),
+        source: latestEvent.type || 'lifecycle',
+        message: latestEvent.message,
+        timestamp: latestEvent.occurredAt || null
+      };
+    }
+
+    return null;
   }
 
   async getStatus() {
@@ -1007,6 +1389,11 @@ class AlexaBrokerService {
     }
 
     const sanitized = config.toSanitized();
+    const lifecycleEvents = Array.isArray(sanitized.lifecycleEvents)
+      ? sanitized.lifecycleEvents.slice(-20).reverse()
+      : [];
+    const statusReason = this.buildStatusReason(config, effectiveStatus, probe, serviceRunning);
+
     return {
       ...sanitized,
       serviceStatus: effectiveStatus,
@@ -1020,6 +1407,9 @@ class AlexaBrokerService {
       localBaseUrl: buildLocalBaseUrl(config.bindHost, config.servicePort),
       reverseProxy: this.buildReverseProxyStatus(config, reverseProxyRoute),
       logs: this.logBuffer.slice(-200),
+      lifecycleEvents,
+      statusReason,
+      autoRecoveryMode: this.getAutoRecoveryMode(config),
       health: probe.available ? probe.health : null,
       healthAvailable: probe.available,
       healthMessage: probe.available ? '' : probe.message,

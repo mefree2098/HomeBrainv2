@@ -1273,7 +1273,12 @@ struct WeatherView: View {
         let headlineTemperature = forecast.headlineTemperatureF
         let headlineFeelsLike = forecast.headlineFeelsLikeF
         let stationLive = dashboard.tempestAvailable && station != nil
-        let lastSyncedAt = station?.observedAt ?? forecast.fetchedAt
+        let lastSyncedAt = weatherMostRecentTimestamp(
+            station?.observedAt,
+            station?.lastEventAt,
+            dashboard.fetchedAt.isEmpty ? nil : dashboard.fetchedAt,
+            forecast.fetchedAt.isEmpty ? nil : forecast.fetchedAt
+        )
 
         return HBDeckSurface(cornerRadius: 30) {
             Group {

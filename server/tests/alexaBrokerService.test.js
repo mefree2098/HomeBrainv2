@@ -206,3 +206,135 @@ test('getStatus clears stale lastError once the broker is healthy again', async 
   assert.equal(config.lastError, null);
   assert.ok(config.saveCalls >= 1);
 });
+
+test('runMonitorPass starts the broker automatically when it is offline and auto recovery is enabled', async () => {
+  const config = {
+    isInstalled: true,
+    autoStart: true,
+    resumeAfterHostRestart: false,
+    manualStopRequested: false,
+    serviceStatus: 'stopped'
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+
+  let startOptions = null;
+  service.getConfig = async () => config;
+  service.probeHealth = async () => ({
+    available: false,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    health: null,
+    message: 'connect ECONNREFUSED 127.0.0.1:4301'
+  });
+  service.isChildAlive = () => false;
+  service.startService = async (options = {}) => {
+    startOptions = options;
+    return { success: true };
+  };
+
+  await service.runMonitorPass({ trigger: 'test' });
+
+  assert.equal(startOptions?.automatic, true);
+  assert.equal(startOptions?.actor, 'system:auto-recovery');
+  assert.match(startOptions?.reason || '', /ECONNREFUSED/);
+});
+
+test('runMonitorPass leaves the broker stopped after a manual stop request', async () => {
+  const config = {
+    isInstalled: true,
+    autoStart: true,
+    resumeAfterHostRestart: false,
+    manualStopRequested: true,
+    serviceStatus: 'stopped'
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+
+  let startCalled = false;
+  service.getConfig = async () => config;
+  service.probeHealth = async () => ({
+    available: false,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    health: null,
+    message: 'connect ECONNREFUSED 127.0.0.1:4301'
+  });
+  service.isChildAlive = () => false;
+  service.startService = async () => {
+    startCalled = true;
+    return { success: true };
+  };
+
+  await service.runMonitorPass({ trigger: 'test' });
+
+  assert.equal(startCalled, false);
+});
+
+test('getStatus reports the manual-stop reason and recovery mode', async () => {
+  const stoppedAt = new Date('2026-04-17T16:30:00.000Z');
+  const config = {
+    isInstalled: true,
+    autoStart: true,
+    manualStopRequested: true,
+    resumeAfterHostRestart: false,
+    serviceStatus: 'stopped',
+    servicePid: null,
+    serviceOwner: null,
+    servicePort: 4301,
+    bindHost: '127.0.0.1',
+    lastStoppedAt: stoppedAt,
+    lastError: null,
+    lifecycleEvents: [{
+      type: 'manual_stop',
+      status: 'info',
+      message: 'Alexa broker was stopped manually. Automatic recovery is paused until it is started again.',
+      occurredAt: stoppedAt
+    }],
+    saveCalls: 0,
+    async save() {
+      this.saveCalls += 1;
+    },
+    toSanitized() {
+      return {
+        isInstalled: this.isInstalled,
+        autoStart: this.autoStart,
+        manualStopRequested: this.manualStopRequested,
+        resumeAfterHostRestart: this.resumeAfterHostRestart,
+        serviceStatus: this.serviceStatus,
+        servicePid: this.servicePid,
+        serviceOwner: this.serviceOwner,
+        servicePort: this.servicePort,
+        bindHost: this.bindHost,
+        lastStoppedAt: this.lastStoppedAt,
+        lastError: this.lastError,
+        lifecycleEvents: this.lifecycleEvents
+      };
+    }
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test',
+    configModel: {
+      getConfig: async () => config
+    }
+  });
+
+  service.getConfig = async () => config;
+  service.probeHealth = async () => ({
+    available: false,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    health: null,
+    message: 'connect ECONNREFUSED 127.0.0.1:4301'
+  });
+  service.findManagedReverseProxyRoute = async () => null;
+  service.isChildAlive = () => false;
+
+  const status = await service.getStatus();
+
+  assert.equal(status.autoRecoveryMode, 'paused_manual_stop');
+  assert.match(status.statusReason?.message || '', /stopped manually/i);
+  assert.equal(status.lifecycleEvents?.[0]?.type, 'manual_stop');
+});

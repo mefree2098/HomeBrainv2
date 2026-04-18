@@ -589,6 +589,26 @@ private func weatherLastSyncedDate(from value: String?) -> Date? {
     JSON.date(from: value)
 }
 
+func weatherMostRecentTimestamp(_ values: String?...) -> String? {
+    var latestValue: String?
+    var latestDate: Date?
+
+    for value in values {
+        guard let value, let date = JSON.date(from: value) else {
+            continue
+        }
+
+        if let latestDate, latestDate >= date {
+            continue
+        }
+
+        latestValue = value
+        latestDate = date
+    }
+
+    return latestValue
+}
+
 private func weatherLastSyncedTimeText(from value: String?) -> String {
     guard let date = weatherLastSyncedDate(from: value) else {
         return "--"
