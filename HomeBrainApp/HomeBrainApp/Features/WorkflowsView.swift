@@ -133,6 +133,7 @@ struct WorkflowsView: View {
     @State private var selectedExecution: WorkflowExecutionHistoryItem?
     @State private var selectedExecutionEvents: [PlatformEventItem] = []
     @State private var loadingExecutionEvents = false
+    @State private var executionPendingStop: WorkflowExecutionHistoryItem?
     @State private var workflowToRevise: WorkflowItem?
     @State private var workflowPendingDelete: WorkflowItem?
 
@@ -148,6 +149,7 @@ struct WorkflowsView: View {
     @State private var runtimeWindowHours = 24
     @State private var runtimeHistoryPage = 1
     @State private var selectedTab: WorkflowStudioTab = .overview
+    @State private var stoppingExecutionIds: Set<String> = []
 
     @State private var createName = ""
     @State private var createDescription = ""
@@ -273,6 +275,20 @@ struct WorkflowsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { workflow in
             Text("This removes \(workflow.name) and its current configuration from HomeBrain.")
+        }
+        .confirmationDialog(
+            executionPendingStop == nil ? "Stop workflow execution?" : "Stop \(executionPendingStop?.displayName ?? "workflow")?",
+            isPresented: stopExecutionConfirmationBinding(),
+            titleVisibility: .visible,
+            presenting: executionPendingStop
+        ) { execution in
+            Button("Stop Workflow", role: .destructive) {
+                Task { await stop(execution) }
+            }
+            .disabled(stoppingExecutionIds.contains(execution.id))
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This requests that HomeBrain stop the running workflow and records the stop request in the runtime logs.")
         }
         .onReceive(refreshTimer) { _ in
             Task {
@@ -816,7 +832,15 @@ struct WorkflowsView: View {
                         selectedExecutionEvents = []
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    if execution.status == "running" {
+                        Button(stoppingExecutionIds.contains(execution.id) ? "Stopping..." : "Stop") {
+                            requestStop(execution)
+                        }
+                        .disabled(loadingExecutionEvents || stoppingExecutionIds.contains(execution.id))
+                        .tint(HBPalette.accentRed)
+                    }
+
                     Button("Copy Logs") {
                         copyExecutionLogs()
                     }
@@ -879,6 +903,8 @@ struct WorkflowsView: View {
     }
 
     private func runningExecutionCard(for execution: WorkflowExecutionHistoryItem) -> some View {
+        let isStopping = stoppingExecutionIds.contains(execution.id)
+
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -937,6 +963,14 @@ struct WorkflowsView: View {
                     Task { await openExecutionLogs(execution) }
                 }
                 .buttonStyle(HBSecondaryButtonStyle(compact: true))
+
+                Button {
+                    requestStop(execution)
+                } label: {
+                    Label(isStopping ? "Stopping..." : "Stop", systemImage: isStopping ? "hourglass" : "stop.fill")
+                }
+                .buttonStyle(HBDestructiveButtonStyle(compact: true))
+                .disabled(isStopping)
             }
         }
     }
@@ -968,6 +1002,8 @@ struct WorkflowsView: View {
     }
 
     private func executionHistoryCard(for execution: WorkflowExecutionHistoryItem) -> some View {
+        let isStopping = stoppingExecutionIds.contains(execution.id)
+
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1015,6 +1051,16 @@ struct WorkflowsView: View {
                     Task { await openExecutionLogs(execution) }
                 }
                 .buttonStyle(HBSecondaryButtonStyle(compact: true))
+
+                if execution.status == "running" {
+                    Button {
+                        requestStop(execution)
+                    } label: {
+                        Label(isStopping ? "Stopping..." : "Stop", systemImage: isStopping ? "hourglass" : "stop.fill")
+                    }
+                    .buttonStyle(HBDestructiveButtonStyle(compact: true))
+                    .disabled(isStopping)
+                }
             }
         }
     }
@@ -1219,6 +1265,26 @@ struct WorkflowsView: View {
         )
     }
 
+    private func stopExecutionConfirmationBinding() -> Binding<Bool> {
+        Binding(
+            get: { executionPendingStop != nil },
+            set: { open in
+                if !open {
+                    executionPendingStop = nil
+                }
+            }
+        )
+    }
+
+    private func requestStop(_ execution: WorkflowExecutionHistoryItem) {
+        guard execution.status == "running",
+              !stoppingExecutionIds.contains(execution.id) else {
+            return
+        }
+
+        executionPendingStop = execution
+    }
+
     private func refreshWorkflowScreen(silent: Bool) async {
         if !silent {
             isLoading = workflows.isEmpty
@@ -1320,6 +1386,57 @@ struct WorkflowsView: View {
         await refreshSelectedExecutionEvents()
     }
 
+    private func stop(_ execution: WorkflowExecutionHistoryItem) async {
+        guard execution.status == "running",
+              !stoppingExecutionIds.contains(execution.id) else {
+            executionPendingStop = nil
+            return
+        }
+
+        executionPendingStop = nil
+        stoppingExecutionIds.insert(execution.id)
+        defer { stoppingExecutionIds.remove(execution.id) }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/workflows/executions/\(execution.id)/stop",
+                body: ["reason": "Stopped from workflow logs"]
+            )
+            let object = JSON.object(response)
+            let updatedExecution = WorkflowExecutionHistoryItem.from(JSON.object(object["execution"]))
+            applyExecutionUpdate(updatedExecution)
+
+            if selectedExecution?.id == execution.id {
+                loadingExecutionEvents = true
+                await refreshSelectedExecutionEvents()
+            }
+
+            await refreshWorkflowScreen(silent: true)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyExecutionUpdate(_ updatedExecution: WorkflowExecutionHistoryItem) {
+        if updatedExecution.status == "running" {
+            if let index = runningExecutions.firstIndex(where: { $0.id == updatedExecution.id }) {
+                runningExecutions[index] = updatedExecution
+            } else {
+                runningExecutions.insert(updatedExecution, at: 0)
+            }
+        } else {
+            runningExecutions.removeAll { $0.id == updatedExecution.id }
+        }
+
+        if let index = runtimeHistory.firstIndex(where: { $0.id == updatedExecution.id }) {
+            runtimeHistory[index] = updatedExecution
+        }
+
+        if selectedExecution?.id == updatedExecution.id {
+            selectedExecution = updatedExecution
+        }
+    }
+
     private func copyExecutionLogs() {
         guard let selectedExecution else {
             return
@@ -1342,11 +1459,24 @@ struct WorkflowsView: View {
             "Successful Actions: \(selectedExecution.successfulActions)",
             "Failed Actions: \(selectedExecution.failedActions)",
             "Total Actions: \(selectedExecution.totalActions)",
-            selectedExecution.currentAction == nil ? "" : "\nCurrent Action\n\(JSON.prettyString(selectedExecution.currentAction?.message))",
+            selectedExecution.workflowId == nil ? "" : "Workflow ID: \(selectedExecution.workflowId ?? "")",
+            selectedExecution.correlationId == nil ? "" : "Correlation ID: \(selectedExecution.correlationId ?? "")",
+            selectedExecution.lastEvent?.message == nil ? "" : "Last Event: \(selectedExecution.lastEvent?.message ?? "")",
+            selectedExecution.currentAction == nil ? "" : "\nCurrent Action\n\(JSON.prettyString(selectedExecution.currentAction))",
             selectedExecution.currentAction == nil ? "" : "Next Action: \(nextActionMessage(for: selectedExecution.currentAction))",
             selectedExecution.currentAction == nil ? "" : "Timer Remaining: \(countdownText(for: selectedExecution.currentAction) ?? "No active timer")",
+            selectedExecution.triggerContext.isEmpty ? "" : "\nTrigger Context\n\(JSON.prettyString(selectedExecution.triggerContext))",
             selectedExecution.errorDetails.isEmpty ? "" : "\nExecution Error\n\(JSON.prettyString(selectedExecution.errorDetails))",
             selectedExecution.actionResults.isEmpty ? "" : "\nAction Results\n\(JSON.prettyString(selectedExecution.actionResults))",
+            selectedExecution.runtimeEvents.isEmpty ? "" : "\nPersisted Runtime Event Summaries\n\(JSON.prettyString(selectedExecution.runtimeEvents.map { event in
+                [
+                    "type": event.type,
+                    "level": event.level,
+                    "message": event.message,
+                    "details": event.details,
+                    "createdAt": event.createdAt ?? ""
+                ]
+            }))",
             "",
             "Event Stream Logs (\(selectedExecutionEvents.count))"
         ]
@@ -1641,6 +1771,8 @@ struct WorkflowsView: View {
             return "\(name): trigger matched"
         case "automation.execution.started":
             return "\(name): execution started"
+        case "automation.execution.stop_requested":
+            return "\(name): stop requested"
         case "automation.execution.completed":
             let status = JSON.string(event.payload, "status", fallback: "finished").replacingOccurrences(of: "_", with: " ")
             return "\(name): execution \(status)"
