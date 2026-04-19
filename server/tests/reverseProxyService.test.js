@@ -228,6 +228,7 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
   const originalValidateRoute = reverseProxyService.validateRoute;
   const originalAcmeEmail = process.env.CADDY_ACME_EMAIL;
   const originalExpectedPublicIp = process.env.HOMEBRAIN_EXPECTED_PUBLIC_IP;
+  const originalExpectedPublicIpv6 = process.env.HOMEBRAIN_EXPECTED_PUBLIC_IPV6;
   const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
   const originalPublicHost = process.env.HOMEBRAIN_PUBLIC_HOST;
   const originalAxiomPublicHost = process.env.AXIOM_PUBLIC_HOST;
@@ -240,6 +241,7 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
     reverseProxyService.validateRoute = originalValidateRoute;
     process.env.CADDY_ACME_EMAIL = originalAcmeEmail;
     process.env.HOMEBRAIN_EXPECTED_PUBLIC_IP = originalExpectedPublicIp;
+    process.env.HOMEBRAIN_EXPECTED_PUBLIC_IPV6 = originalExpectedPublicIpv6;
     process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicBaseUrl;
     process.env.HOMEBRAIN_PUBLIC_HOST = originalPublicHost;
     process.env.AXIOM_PUBLIC_HOST = originalAxiomPublicHost;
@@ -247,6 +249,7 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
 
   process.env.CADDY_ACME_EMAIL = 'ops@example.com';
   process.env.HOMEBRAIN_EXPECTED_PUBLIC_IP = '203.0.113.10';
+  process.env.HOMEBRAIN_EXPECTED_PUBLIC_IPV6 = '2001:db8::10';
   delete process.env.HOMEBRAIN_PUBLIC_BASE_URL;
   delete process.env.HOMEBRAIN_PUBLIC_HOST;
   delete process.env.AXIOM_PUBLIC_HOST;
@@ -256,7 +259,8 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
     caddyAdminUrl: '',
     caddyStorageRoot: '',
     acmeEmail: '',
-    expectedPublicIp: '',
+    expectedPublicIp: undefined,
+    expectedPublicIpv6: undefined,
     async save() {
       saved = true;
       return this;
@@ -291,7 +295,7 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
   assert.equal(saved, true);
   assert.deepEqual(
     result.settingsUpdated.sort(),
-    ['acmeEmail', 'caddyAdminUrl', 'caddyStorageRoot', 'expectedPublicIp'].sort()
+    ['acmeEmail', 'caddyAdminUrl', 'caddyStorageRoot', 'expectedPublicIp', 'expectedPublicIpv6'].sort()
   );
   assert.deepEqual(
     createdRoutes.sort(),
@@ -302,4 +306,46 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
     result.createdRoutes.sort(),
     ['example.com', 'mail.example.com'].sort()
   );
+});
+
+test('ensureBootstrapState preserves explicitly cleared expected public IP settings', async (t) => {
+  const originalGetSettings = ReverseProxySettings.getSettings;
+  const originalFind = ReverseProxyRoute.find;
+  const originalAuditCreate = ReverseProxyAuditLog.create;
+  const originalExpectedPublicIp = process.env.HOMEBRAIN_EXPECTED_PUBLIC_IP;
+  const originalExpectedPublicIpv6 = process.env.HOMEBRAIN_EXPECTED_PUBLIC_IPV6;
+
+  t.after(() => {
+    ReverseProxySettings.getSettings = originalGetSettings;
+    ReverseProxyRoute.find = originalFind;
+    ReverseProxyAuditLog.create = originalAuditCreate;
+    process.env.HOMEBRAIN_EXPECTED_PUBLIC_IP = originalExpectedPublicIp;
+    process.env.HOMEBRAIN_EXPECTED_PUBLIC_IPV6 = originalExpectedPublicIpv6;
+  });
+
+  process.env.HOMEBRAIN_EXPECTED_PUBLIC_IP = '203.0.113.10';
+  process.env.HOMEBRAIN_EXPECTED_PUBLIC_IPV6 = '2001:db8::10';
+
+  let saved = false;
+  ReverseProxySettings.getSettings = async () => createSettings({
+    expectedPublicIp: '',
+    expectedPublicIpv6: '',
+    async save() {
+      saved = true;
+      return this;
+    }
+  });
+
+  ReverseProxyRoute.find = async () => [];
+  ReverseProxyAuditLog.create = async () => ({ ok: true });
+
+  const result = await reverseProxyService.ensureBootstrapState({
+    actor: 'system:test-bootstrap',
+    seedDefaultRoutes: false
+  });
+
+  assert.equal(saved, false);
+  assert.equal(result.settings.expectedPublicIp, '');
+  assert.equal(result.settings.expectedPublicIpv6, '');
+  assert.doesNotMatch(result.settingsUpdated.join(','), /expectedPublicIp|expectedPublicIpv6/);
 });

@@ -156,6 +156,10 @@ function isBlankString(value) {
   return trimString(value) === '';
 }
 
+function isMissingValue(value) {
+  return value === undefined || value === null;
+}
+
 function isLoopbackHost(host) {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
@@ -321,11 +325,13 @@ function buildBootstrapSettings(settings) {
     updates.acmeEmail = defaultAcmeEmail;
   }
 
-  if (isBlankString(settings.expectedPublicIp) && defaultExpectedIpv4) {
+  // Preserve explicitly cleared values so deploy bootstrap does not reintroduce
+  // environment defaults after an admin removes the expected public IP.
+  if (isMissingValue(settings.expectedPublicIp) && defaultExpectedIpv4) {
     updates.expectedPublicIp = defaultExpectedIpv4;
   }
 
-  if (isBlankString(settings.expectedPublicIpv6) && defaultExpectedIpv6) {
+  if (isMissingValue(settings.expectedPublicIpv6) && defaultExpectedIpv6) {
     updates.expectedPublicIpv6 = defaultExpectedIpv6;
   }
 
