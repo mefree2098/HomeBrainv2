@@ -305,21 +305,13 @@ struct WorkflowsView: View {
             await refreshWorkflowScreen(silent: false)
         }
         .onChange(of: runtimeLogLimit) { _, _ in
-            if runtimeHistoryPage == 1 {
-                Task { await refreshWorkflowScreen(silent: false) }
-            } else {
-                runtimeHistoryPage = 1
-            }
+            handleRuntimeLogLimitChange()
         }
         .onChange(of: runtimeWindowHours) { _, _ in
-            if runtimeHistoryPage == 1 {
-                Task { await refreshWorkflowScreen(silent: false) }
-            } else {
-                runtimeHistoryPage = 1
-            }
+            handleRuntimeWindowChange()
         }
         .onChange(of: runtimeHistoryPage) { _, _ in
-            Task { await refreshWorkflowScreen(silent: false) }
+            handleRuntimeHistoryPageChange()
         }
     }
 
@@ -905,7 +897,7 @@ struct WorkflowsView: View {
     private func runningExecutionCard(for execution: WorkflowExecutionHistoryItem) -> some View {
         let isStopping = stoppingExecutionIds.contains(execution.id)
 
-        VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(execution.displayName)
@@ -1004,7 +996,7 @@ struct WorkflowsView: View {
     private func executionHistoryCard(for execution: WorkflowExecutionHistoryItem) -> some View {
         let isStopping = stoppingExecutionIds.contains(execution.id)
 
-        VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(execution.displayName)
@@ -1285,6 +1277,26 @@ struct WorkflowsView: View {
         executionPendingStop = execution
     }
 
+    private func handleRuntimeLogLimitChange() {
+        if runtimeHistoryPage == 1 {
+            Task { await refreshWorkflowScreen(silent: false) }
+        } else {
+            runtimeHistoryPage = 1
+        }
+    }
+
+    private func handleRuntimeWindowChange() {
+        if runtimeHistoryPage == 1 {
+            Task { await refreshWorkflowScreen(silent: false) }
+        } else {
+            runtimeHistoryPage = 1
+        }
+    }
+
+    private func handleRuntimeHistoryPageChange() {
+        Task { await refreshWorkflowScreen(silent: false) }
+    }
+
     private func refreshWorkflowScreen(silent: Bool) async {
         if !silent {
             isLoading = workflows.isEmpty
@@ -1442,6 +1454,22 @@ struct WorkflowsView: View {
             return
         }
 
+        let persistedRuntimeEventSummary: String
+        if selectedExecution.runtimeEvents.isEmpty {
+            persistedRuntimeEventSummary = ""
+        } else {
+            let runtimeEventPayloads = selectedExecution.runtimeEvents.map { event in
+                [
+                    "type": event.type,
+                    "level": event.level,
+                    "message": event.message,
+                    "details": event.details,
+                    "createdAt": event.createdAt ?? ""
+                ]
+            }
+            persistedRuntimeEventSummary = "\nPersisted Runtime Event Summaries\n\(JSON.prettyString(runtimeEventPayloads))"
+        }
+
         let lines: [String] = [
             "HomeBrain Automation Runtime Logs",
             "Copied: \(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short))",
@@ -1468,15 +1496,7 @@ struct WorkflowsView: View {
             selectedExecution.triggerContext.isEmpty ? "" : "\nTrigger Context\n\(JSON.prettyString(selectedExecution.triggerContext))",
             selectedExecution.errorDetails.isEmpty ? "" : "\nExecution Error\n\(JSON.prettyString(selectedExecution.errorDetails))",
             selectedExecution.actionResults.isEmpty ? "" : "\nAction Results\n\(JSON.prettyString(selectedExecution.actionResults))",
-            selectedExecution.runtimeEvents.isEmpty ? "" : "\nPersisted Runtime Event Summaries\n\(JSON.prettyString(selectedExecution.runtimeEvents.map { event in
-                [
-                    "type": event.type,
-                    "level": event.level,
-                    "message": event.message,
-                    "details": event.details,
-                    "createdAt": event.createdAt ?? ""
-                ]
-            }))",
+            persistedRuntimeEventSummary,
             "",
             "Event Stream Logs (\(selectedExecutionEvents.count))"
         ]
