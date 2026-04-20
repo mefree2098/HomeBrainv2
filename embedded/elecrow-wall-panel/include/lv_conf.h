@@ -35,6 +35,7 @@
 #define LV_USE_SPAN 0
 #define LV_USE_IMGBTN 0
 #define LV_USE_DRAW_SW 1
+#define LV_USE_SNAPSHOT 1
 
 #define LV_USE_THEME_DEFAULT 1
 #define LV_USE_THEME_MONO 0

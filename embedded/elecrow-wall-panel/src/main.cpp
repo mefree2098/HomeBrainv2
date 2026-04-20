@@ -304,6 +304,7 @@ unsigned long gLastLvglTickAt = 0;
 
 lv_obj_t* gScreen = nullptr;
 lv_obj_t* gMainCard = nullptr;
+lv_obj_t* gUiMountSnapshotImage = nullptr;
 lv_obj_t* gModeBadge = nullptr;
 lv_obj_t* gModeBadgeLabel = nullptr;
 lv_obj_t* gTitleLabel = nullptr;
@@ -315,6 +316,7 @@ lv_obj_t* gHintLabel = nullptr;
 lv_obj_t* gFooterLabel = nullptr;
 lv_obj_t* gArc = nullptr;
 lv_obj_t* gCenterTapButton = nullptr;
+lv_obj_t* gCenterTapTouchTarget = nullptr;
 lv_obj_t* gWeatherGlyphImage = nullptr;
 lv_obj_t* gWeatherBadgeCard = nullptr;
 lv_obj_t* gWeatherSunCore = nullptr;
@@ -326,9 +328,14 @@ lv_obj_t* gWeatherFogLines[2] = {};
 lv_obj_t* gWeatherSunRays[8] = {};
 lv_obj_t* gWeatherBolt = nullptr;
 lv_obj_t* gActionButtons[kActionSlots] = {};
+lv_obj_t* gActionTouchTargets[kActionSlots] = {};
 lv_obj_t* gActionTitleLabels[kActionSlots] = {};
 lv_obj_t* gActionSubtitleLabels[kActionSlots] = {};
 int8_t gActionMappings[kActionSlots] = {-1, -1, -1, -1};
+lv_img_dsc_t gUiMountSnapshotDescriptor = {};
+uint8_t* gUiMountSnapshotBuffer = nullptr;
+uint32_t gUiMountSnapshotBufferSize = 0;
+bool gUiMountSnapshotVisible = false;
 
 void renderOtaProgressScreen(const String& title, int progress, const String& message);
 
@@ -452,18 +459,134 @@ int16_t normalizeMountOffsetTenths(long value) {
   return static_cast<int16_t>(constrain(static_cast<int>(value), kMountOffsetMinTenths, kMountOffsetMaxTenths));
 }
 
-lv_coord_t calculateMountOffsetExtDrawPad(int16_t angleTenths) {
-  const int16_t normalized = normalizeMountOffsetTenths(angleTenths);
-  if (normalized == 0) {
-    return 0;
+struct RotatedBounds {
+  lv_coord_t x;
+  lv_coord_t y;
+  lv_coord_t width;
+  lv_coord_t height;
+};
+
+RotatedBounds calculateRotatedBounds(lv_obj_t* object, int16_t angleTenths) {
+  const float angleRadians = static_cast<float>(angleTenths) * 3.14159265358979323846f / 1800.0f;
+  const float cosine = cosf(angleRadians);
+  const float sine = sinf(angleRadians);
+  const float absoluteCosine = fabsf(cosine);
+  const float absoluteSine = fabsf(sine);
+
+  const float width = static_cast<float>(lv_obj_get_width(object));
+  const float height = static_cast<float>(lv_obj_get_height(object));
+  const float sourceCenterX = static_cast<float>(lv_obj_get_x(object)) + (width * 0.5f);
+  const float sourceCenterY = static_cast<float>(lv_obj_get_y(object)) + (height * 0.5f);
+  const float screenCenterX = static_cast<float>(kScreenWidth) * 0.5f;
+  const float screenCenterY = static_cast<float>(kScreenHeight) * 0.5f;
+  const float deltaX = sourceCenterX - screenCenterX;
+  const float deltaY = sourceCenterY - screenCenterY;
+
+  const float rotatedCenterX = screenCenterX + (deltaX * cosine) - (deltaY * sine);
+  const float rotatedCenterY = screenCenterY + (deltaX * sine) + (deltaY * cosine);
+  const lv_coord_t rotatedWidth = static_cast<lv_coord_t>(ceilf((width * absoluteCosine) + (height * absoluteSine)));
+  const lv_coord_t rotatedHeight = static_cast<lv_coord_t>(ceilf((width * absoluteSine) + (height * absoluteCosine)));
+
+  RotatedBounds bounds;
+  bounds.width = rotatedWidth;
+  bounds.height = rotatedHeight;
+  bounds.x = static_cast<lv_coord_t>(lroundf(rotatedCenterX - (static_cast<float>(rotatedWidth) * 0.5f)));
+  bounds.y = static_cast<lv_coord_t>(lroundf(rotatedCenterY - (static_cast<float>(rotatedHeight) * 0.5f)));
+  return bounds;
+}
+
+bool ensureUiMountSnapshotBuffer(uint32_t requiredSize) {
+  if (requiredSize == 0) {
+    return false;
   }
 
-  const float radians = static_cast<float>(normalized) * 3.14159265358979323846f / 1800.0f;
-  const float rotatedScale = fabsf(cosf(radians)) + fabsf(sinf(radians));
-  const float extraWidth = (static_cast<float>(kScreenWidth) * rotatedScale) - static_cast<float>(kScreenWidth);
-  const float extraHeight = (static_cast<float>(kScreenHeight) * rotatedScale) - static_cast<float>(kScreenHeight);
-  const float extDrawPad = fmaxf(extraWidth, extraHeight) * 0.5f;
-  return static_cast<lv_coord_t>(ceilf(extDrawPad)) + 4;
+  if (gUiMountSnapshotBuffer && gUiMountSnapshotBufferSize >= requiredSize) {
+    return true;
+  }
+
+  if (gUiMountSnapshotBuffer) {
+    free(gUiMountSnapshotBuffer);
+    gUiMountSnapshotBuffer = nullptr;
+    gUiMountSnapshotBufferSize = 0;
+  }
+
+  void* buffer = heap_caps_malloc(requiredSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!buffer) {
+    buffer = heap_caps_malloc(requiredSize, MALLOC_CAP_8BIT);
+  }
+  if (!buffer) {
+    return false;
+  }
+
+  gUiMountSnapshotBuffer = static_cast<uint8_t*>(buffer);
+  gUiMountSnapshotBufferSize = requiredSize;
+  return true;
+}
+
+bool captureUiMountSnapshot(lv_img_cf_t colorFormat) {
+  if (!gMainCard) {
+    return false;
+  }
+
+  const uint32_t requiredSize = lv_snapshot_buf_size_needed(gMainCard, colorFormat);
+  if (requiredSize == 0 || !ensureUiMountSnapshotBuffer(requiredSize)) {
+    return false;
+  }
+
+  memset(&gUiMountSnapshotDescriptor, 0, sizeof(gUiMountSnapshotDescriptor));
+  if (lv_snapshot_take_to_buf(
+    gMainCard,
+    colorFormat,
+    &gUiMountSnapshotDescriptor,
+    gUiMountSnapshotBuffer,
+    gUiMountSnapshotBufferSize
+  ) != LV_RES_OK) {
+    memset(&gUiMountSnapshotDescriptor, 0, sizeof(gUiMountSnapshotDescriptor));
+    return false;
+  }
+
+  lv_img_cache_invalidate_src(&gUiMountSnapshotDescriptor);
+  return true;
+}
+
+void updateActionTouchTargets(bool useRotatedTargets) {
+  for (uint8_t index = 0; index < kActionSlots; index += 1) {
+    if (!gActionButtons[index] || !gActionTouchTargets[index]) {
+      continue;
+    }
+
+    if (!useRotatedTargets || lv_obj_has_flag(gActionButtons[index], LV_OBJ_FLAG_HIDDEN)) {
+      lv_obj_add_flag(gActionTouchTargets[index], LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+
+    const RotatedBounds bounds = calculateRotatedBounds(gActionButtons[index], gMountOffsetTenths);
+    lv_obj_set_pos(gActionTouchTargets[index], bounds.x, bounds.y);
+    lv_obj_set_size(gActionTouchTargets[index], bounds.width, bounds.height);
+    lv_obj_clear_flag(gActionTouchTargets[index], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(gActionTouchTargets[index]);
+  }
+}
+
+void updateCenterTapTouchTarget(bool useRotatedTargets) {
+  if (!gCenterTapButton || !gCenterTapTouchTarget) {
+    return;
+  }
+
+  if (!useRotatedTargets || lv_obj_has_flag(gCenterTapButton, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_add_flag(gCenterTapTouchTarget, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+
+  lv_obj_set_size(gCenterTapTouchTarget, lv_obj_get_width(gCenterTapButton), lv_obj_get_height(gCenterTapButton));
+  lv_obj_align(gCenterTapTouchTarget, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_clear_flag(gCenterTapTouchTarget, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(gCenterTapTouchTarget);
+}
+
+void updateOverlayTouchTargets(bool useRotatedTargets) {
+  updateActionTouchTargets(useRotatedTargets);
+  updateCenterTapTouchTarget(useRotatedTargets);
 }
 
 void persistMountOffsetTenthsIfNeeded(int16_t value) {
@@ -482,13 +605,49 @@ void applyUiMountOffset() {
     return;
   }
 
-  const lv_coord_t extDrawPad = calculateMountOffsetExtDrawPad(gMountOffsetTenths);
-  lv_obj_set_style_transform_pivot_x(gMainCard, lv_obj_get_width(gMainCard) / 2, 0);
-  lv_obj_set_style_transform_pivot_y(gMainCard, lv_obj_get_height(gMainCard) / 2, 0);
-  lv_obj_set_style_transform_angle(gMainCard, gMountOffsetTenths, 0);
-  lv_obj_set_style_transform_width(gMainCard, extDrawPad, 0);
-  lv_obj_set_style_transform_height(gMainCard, extDrawPad, 0);
+  if (lv_obj_has_flag(gMainCard, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_clear_flag(gMainCard, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  lv_obj_set_style_transform_pivot_x(gMainCard, 0, 0);
+  lv_obj_set_style_transform_pivot_y(gMainCard, 0, 0);
+  lv_obj_set_style_transform_angle(gMainCard, 0, 0);
+  lv_obj_set_style_transform_width(gMainCard, 0, 0);
+  lv_obj_set_style_transform_height(gMainCard, 0, 0);
   lv_obj_set_style_clip_corner(gMainCard, false, 0);
+
+  if (!gUiMountSnapshotImage || gMountOffsetTenths == 0) {
+    if (gUiMountSnapshotImage) {
+      lv_obj_add_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
+    }
+    gUiMountSnapshotVisible = false;
+    updateOverlayTouchTargets(false);
+    return;
+  }
+
+  const bool captured = captureUiMountSnapshot(LV_IMG_CF_TRUE_COLOR_ALPHA);
+
+  if (!captured) {
+    lv_obj_add_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
+    gUiMountSnapshotVisible = false;
+    updateOverlayTouchTargets(false);
+    return;
+  }
+
+  lv_obj_add_flag(gMainCard, LV_OBJ_FLAG_HIDDEN);
+  lv_img_set_src(gUiMountSnapshotImage, &gUiMountSnapshotDescriptor);
+  lv_img_set_pivot(
+    gUiMountSnapshotImage,
+    static_cast<lv_coord_t>(gUiMountSnapshotDescriptor.header.w / 2),
+    static_cast<lv_coord_t>(gUiMountSnapshotDescriptor.header.h / 2)
+  );
+  lv_img_set_angle(gUiMountSnapshotImage, gMountOffsetTenths);
+  lv_img_set_zoom(gUiMountSnapshotImage, LV_IMG_ZOOM_NONE);
+  lv_obj_center(gUiMountSnapshotImage);
+  lv_obj_clear_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(gUiMountSnapshotImage);
+  gUiMountSnapshotVisible = true;
+  updateOverlayTouchTargets(true);
 }
 
 long long extractPanelFirmwareTimestamp(const String& value) {
@@ -3182,7 +3341,10 @@ void createUi() {
   lv_obj_center(gMainCard);
   lv_obj_clear_flag(gMainCard, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_radius(gMainCard, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_opa(gMainCard, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_bg_color(gMainCard, hex(homebrain::palette::kPageBottom), 0);
+  lv_obj_set_style_bg_grad_color(gMainCard, hex(homebrain::palette::kPageTop), 0);
+  lv_obj_set_style_bg_grad_dir(gMainCard, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_style_bg_opa(gMainCard, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(gMainCard, 0, 0);
   lv_obj_set_style_shadow_width(gMainCard, 0, 0);
   lv_obj_set_style_pad_all(gMainCard, 0, 0);
@@ -3384,6 +3546,18 @@ void createUi() {
   lv_obj_add_flag(gCenterTapButton, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_event_cb(gCenterTapButton, centerTapEventHandler, LV_EVENT_CLICKED, nullptr);
 
+  gCenterTapTouchTarget = lv_btn_create(gScreen);
+  lv_obj_set_size(gCenterTapTouchTarget, 176, 176);
+  lv_obj_align(gCenterTapTouchTarget, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_add_flag(gCenterTapTouchTarget, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(gCenterTapTouchTarget, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_radius(gCenterTapTouchTarget, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(gCenterTapTouchTarget, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(gCenterTapTouchTarget, 0, 0);
+  lv_obj_set_style_shadow_width(gCenterTapTouchTarget, 0, 0);
+  lv_obj_set_style_outline_width(gCenterTapTouchTarget, 0, 0);
+  lv_obj_add_event_cb(gCenterTapTouchTarget, centerTapEventHandler, LV_EVENT_CLICKED, nullptr);
+
   createActionButton(0, 50, 300);
   createActionButton(1, 256, 300);
   createActionButton(2, 50, 382);
@@ -3404,6 +3578,29 @@ void createUi() {
   lv_obj_set_style_text_color(gRoomOverlayCenterLabel, hex(homebrain::palette::kTextPrimary), 0);
   lv_label_set_text(gRoomOverlayCenterLabel, "");
   lv_obj_add_flag(gRoomOverlayCenterLabel, LV_OBJ_FLAG_HIDDEN);
+
+  gUiMountSnapshotImage = lv_img_create(gScreen);
+  lv_obj_center(gUiMountSnapshotImage);
+  lv_obj_add_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_CLICKABLE);
+
+  for (uint8_t index = 0; index < kActionSlots; index += 1) {
+    gActionTouchTargets[index] = lv_btn_create(gScreen);
+    lv_obj_set_size(gActionTouchTargets[index], 202, 80);
+    lv_obj_add_flag(gActionTouchTargets[index], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(gActionTouchTargets[index], LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(gActionTouchTargets[index], LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(gActionTouchTargets[index], 0, 0);
+    lv_obj_set_style_shadow_width(gActionTouchTargets[index], 0, 0);
+    lv_obj_set_style_outline_width(gActionTouchTargets[index], 0, 0);
+    lv_obj_add_event_cb(
+      gActionTouchTargets[index],
+      buttonEventHandler,
+      LV_EVENT_CLICKED,
+      reinterpret_cast<void*>(static_cast<intptr_t>(index))
+    );
+  }
 }
 
 void setupDisplay() {
