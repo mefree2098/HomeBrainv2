@@ -46,6 +46,9 @@ constexpr uint8_t kTouchAddress = 0x15;
 constexpr uint16_t kScreenWidth = 480;
 constexpr uint16_t kScreenHeight = 480;
 constexpr uint8_t kActionSlots = 4;
+constexpr uint8_t kThermostatModeOptionCount = 3;
+constexpr uint8_t kOtaMatrixColumnCount = 8;
+constexpr uint8_t kOtaMatrixRowCount = 9;
 constexpr uint8_t kRemoteModeSlots = 5;
 constexpr uint8_t kSettingsModeSlot = 5;
 constexpr uint8_t kModeSlots = 6;
@@ -87,6 +90,7 @@ constexpr int kOtaHttpConnectTimeoutMs = 4000;
 constexpr int kOtaHttpTimeoutMs = 15000;
 constexpr int kOtaProgressReportStepPercent = 5;
 constexpr size_t kOtaProgressReportStepBytes = 64 * 1024;
+constexpr unsigned long kOtaMatrixFrameIntervalMs = 90;
 constexpr uint8_t kNetworkJobQueueCapacity = 12;
 constexpr uint8_t kNetworkResultQueueCapacity = 12;
 constexpr uint16_t kNetworkTaskIdleDelayMs = 8;
@@ -258,6 +262,7 @@ portMUX_TYPE gEncoderMux = portMUX_INITIALIZER_UNLOCKED;
 bool gPanelActivated = false;
 bool gPendingThermostatCommit = false;
 bool gThermostatModePickerExpanded = false;
+int8_t gThermostatModePickerSelection = -1;
 bool gOtaInProgress = false;
 int gPendingThermostatValue = 0;
 bool gPendingDeviceLevelCommit = false;
@@ -322,6 +327,8 @@ lv_obj_t* gRoomOverlaySubtitleLabel = nullptr;
 lv_obj_t* gHintLabel = nullptr;
 lv_obj_t* gFooterLabel = nullptr;
 lv_obj_t* gArc = nullptr;
+lv_obj_t* gOtaMatrixLayer = nullptr;
+lv_obj_t* gOtaMatrixLabels[kOtaMatrixColumnCount][kOtaMatrixRowCount] = {};
 lv_obj_t* gCenterTapButton = nullptr;
 lv_obj_t* gCenterTapTouchTarget = nullptr;
 lv_obj_t* gWeatherGlyphImage = nullptr;
@@ -339,12 +346,19 @@ lv_obj_t* gActionTouchTargets[kActionSlots] = {};
 lv_obj_t* gActionTitleLabels[kActionSlots] = {};
 lv_obj_t* gActionSubtitleLabels[kActionSlots] = {};
 int8_t gActionMappings[kActionSlots] = {-1, -1, -1, -1};
+char gOtaMatrixCellText[kOtaMatrixColumnCount][kOtaMatrixRowCount][2] = {};
+int8_t gOtaMatrixColumnHeadRow[kOtaMatrixColumnCount] = {};
+uint8_t gOtaMatrixColumnTrailLength[kOtaMatrixColumnCount] = {};
+unsigned long gOtaMatrixColumnNextStepAt[kOtaMatrixColumnCount] = {};
+unsigned long gOtaMatrixLastFrameAt = 0;
+uint32_t gOtaMatrixRngState = 0x4F52424FUL;
+bool gOtaMatrixVisible = false;
 lv_img_dsc_t gUiMountSnapshotDescriptor = {};
 uint8_t* gUiMountSnapshotBuffer = nullptr;
 uint32_t gUiMountSnapshotBufferSize = 0;
 bool gUiMountSnapshotVisible = false;
 
-void renderOtaProgressScreen(const String& title, int progress, const String& message);
+void renderOtaProgressScreen(const String& title, int progress, const String& message, bool showMatrixBackdrop = false);
 
 String normalizeHubUrl() {
   String base = String(HOMEBRAIN_PANEL_HUB_URL);
@@ -1132,11 +1146,15 @@ bool applyPanelStatePayload(const String& payload, StatePayloadSource source);
 void applyActivationResult(bool ok);
 bool applyPanelStateFetchResult(bool ok, const String& payload);
 void renderMode();
+void dispatchQuickAction(const QuickAction& action);
+bool updateOtaMatrixAnimation(bool force = false);
+void setOtaMatrixVisible(bool visible, bool resetAnimation = false);
+void pumpUiFrame(bool forceOtaMatrixFrame = false);
 void processNetworkResults();
 void scheduleDeferredStateRefresh(unsigned long delayMs = kActionStateRefreshDelayMs);
 bool loadCachedPanelState();
 void maybeResolvePendingOtaValidation();
-void renderOtaProgressScreen(const String& title, int progress, const String& message);
+void renderOtaProgressScreen(const String& title, int progress, const String& message, bool showMatrixBackdrop);
 
 void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
   LV_UNUSED(indevDriver);
@@ -1274,6 +1292,7 @@ void rememberSettingsReturnMode(const String& modeId) {
 
 void resetModeNavigationState() {
   gThermostatModePickerExpanded = false;
+  gThermostatModePickerSelection = -1;
   gEncoderDeltaAccumulator = 0;
   gLastEncoderTurnAt = 0;
   gLastEncoderDirection = 0;
@@ -1520,6 +1539,7 @@ bool parseState(JsonDocument& document) {
 
   const String previousModeId = currentMode() ? currentMode()->id : "";
   gThermostatModePickerExpanded = false;
+  gThermostatModePickerSelection = -1;
   gState = PanelState();
   gState.panelId = jsonVariantToString(state["panel"]["id"]);
   gState.panelName = jsonVariantToString(state["panel"]["name"]);
@@ -1632,6 +1652,49 @@ String formatTemperatureDegrees(const String& value, int fallback) {
 
 String formatTemperatureDegreesFromNumber(int value) {
   return String(value) + String("°");
+}
+
+const char* thermostatModeValueForSlot(uint8_t slot) {
+  switch (slot) {
+    case 0:
+      return "cool";
+    case 1:
+      return "heat";
+    default:
+      return "off";
+  }
+}
+
+String thermostatModeDisplayLabel(const String& modeValue) {
+  if (modeValue == "cool") {
+    return "Cool";
+  }
+  if (modeValue == "heat") {
+    return "Heat";
+  }
+  if (modeValue == "off") {
+    return "Off";
+  }
+  if (modeValue == "auto") {
+    return "Auto";
+  }
+  return modeValue.isEmpty() ? String("Off") : modeValue;
+}
+
+String thermostatModeAccentName(const String& modeValue) {
+  if (modeValue == "cool") {
+    return "blue";
+  }
+  if (modeValue == "heat") {
+    return "orange";
+  }
+  if (modeValue == "off") {
+    return "red";
+  }
+  if (modeValue == "auto") {
+    return "purple";
+  }
+  return "slate";
 }
 
 bool isNumericDisplayValue(const String& value) {
@@ -1920,6 +1983,142 @@ void styleBackdropLine(
   lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
 }
 
+uint32_t nextOtaMatrixRandom() {
+  if (gOtaMatrixRngState == 0) {
+    gOtaMatrixRngState = 0x4F52424FUL;
+  }
+
+  gOtaMatrixRngState ^= gOtaMatrixRngState << 13;
+  gOtaMatrixRngState ^= gOtaMatrixRngState >> 17;
+  gOtaMatrixRngState ^= gOtaMatrixRngState << 5;
+  return gOtaMatrixRngState;
+}
+
+char otaMatrixGlyph() {
+  static const char kGlyphs[] = "01ABCDEFHOMEBRAINUPDATE";
+  return kGlyphs[nextOtaMatrixRandom() % (sizeof(kGlyphs) - 1)];
+}
+
+void hideOtaMatrixCell(uint8_t column, uint8_t row) {
+  if (!gOtaMatrixLabels[column][row]) {
+    return;
+  }
+
+  gOtaMatrixCellText[column][row][0] = ' ';
+  gOtaMatrixCellText[column][row][1] = '\0';
+  lv_label_set_text_static(gOtaMatrixLabels[column][row], gOtaMatrixCellText[column][row]);
+  lv_obj_add_flag(gOtaMatrixLabels[column][row], LV_OBJ_FLAG_HIDDEN);
+}
+
+void showOtaMatrixCell(uint8_t column, uint8_t row, char glyph, lv_color_t color, lv_opa_t opacity) {
+  if (!gOtaMatrixLabels[column][row]) {
+    return;
+  }
+
+  gOtaMatrixCellText[column][row][0] = glyph;
+  gOtaMatrixCellText[column][row][1] = '\0';
+  lv_label_set_text_static(gOtaMatrixLabels[column][row], gOtaMatrixCellText[column][row]);
+  lv_obj_set_style_text_color(gOtaMatrixLabels[column][row], color, 0);
+  lv_obj_set_style_text_opa(gOtaMatrixLabels[column][row], opacity, 0);
+  lv_obj_clear_flag(gOtaMatrixLabels[column][row], LV_OBJ_FLAG_HIDDEN);
+}
+
+void resetOtaMatrixColumn(uint8_t column, unsigned long now) {
+  gOtaMatrixColumnHeadRow[column] = -static_cast<int8_t>((nextOtaMatrixRandom() % kOtaMatrixRowCount) + 1);
+  gOtaMatrixColumnTrailLength[column] = static_cast<uint8_t>(3 + (nextOtaMatrixRandom() % 4));
+  gOtaMatrixColumnNextStepAt[column] = now + 24UL + (nextOtaMatrixRandom() % 180UL);
+}
+
+void resetOtaMatrixAnimation() {
+  gOtaMatrixRngState ^= static_cast<uint32_t>(millis() | 1UL);
+  const unsigned long now = millis();
+  for (uint8_t column = 0; column < kOtaMatrixColumnCount; column += 1) {
+    resetOtaMatrixColumn(column, now);
+    for (uint8_t row = 0; row < kOtaMatrixRowCount; row += 1) {
+      hideOtaMatrixCell(column, row);
+    }
+  }
+  gOtaMatrixLastFrameAt = 0;
+}
+
+void setOtaMatrixVisible(bool visible, bool resetAnimation) {
+  if (!gOtaMatrixLayer) {
+    return;
+  }
+
+  if (!visible) {
+    lv_obj_add_flag(gOtaMatrixLayer, LV_OBJ_FLAG_HIDDEN);
+    gOtaMatrixVisible = false;
+    return;
+  }
+
+  if (resetAnimation || !gOtaMatrixVisible) {
+    resetOtaMatrixAnimation();
+  }
+
+  lv_obj_clear_flag(gOtaMatrixLayer, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_background(gOtaMatrixLayer);
+  gOtaMatrixVisible = true;
+}
+
+bool updateOtaMatrixAnimation(bool force) {
+  if (!gOtaMatrixVisible || !gOtaMatrixLayer) {
+    return false;
+  }
+
+  const unsigned long now = millis();
+  if (!force && gOtaMatrixLastFrameAt != 0 && now - gOtaMatrixLastFrameAt < kOtaMatrixFrameIntervalMs) {
+    return false;
+  }
+
+  bool changed = force;
+  for (uint8_t column = 0; column < kOtaMatrixColumnCount; column += 1) {
+    if (!force && now < gOtaMatrixColumnNextStepAt[column]) {
+      continue;
+    }
+
+    gOtaMatrixColumnHeadRow[column] += 1;
+    if (gOtaMatrixColumnHeadRow[column] - static_cast<int8_t>(gOtaMatrixColumnTrailLength[column]) > static_cast<int8_t>(kOtaMatrixRowCount)) {
+      resetOtaMatrixColumn(column, now);
+    } else {
+      gOtaMatrixColumnNextStepAt[column] = now + 36UL + (nextOtaMatrixRandom() % 150UL);
+    }
+    changed = true;
+  }
+
+  if (!changed) {
+    return false;
+  }
+
+  gOtaMatrixLastFrameAt = now;
+  for (uint8_t column = 0; column < kOtaMatrixColumnCount; column += 1) {
+    for (uint8_t row = 0; row < kOtaMatrixRowCount; row += 1) {
+      const int distance = static_cast<int>(gOtaMatrixColumnHeadRow[column]) - static_cast<int>(row);
+      if (distance < 0 || distance >= static_cast<int>(gOtaMatrixColumnTrailLength[column])) {
+        hideOtaMatrixCell(column, row);
+        continue;
+      }
+
+      lv_opa_t opacity = static_cast<lv_opa_t>(44);
+      lv_color_t color = hex(homebrain::palette::kAccentBlue);
+      if (distance == 0) {
+        opacity = LV_OPA_COVER;
+        color = hex(homebrain::palette::kPanelStroke);
+      } else if (distance == 1) {
+        opacity = static_cast<lv_opa_t>(176);
+      } else if (distance == 2) {
+        opacity = static_cast<lv_opa_t>(118);
+      } else if (distance == 3) {
+        opacity = static_cast<lv_opa_t>(74);
+      }
+
+      showOtaMatrixCell(column, row, otaMatrixGlyph(), color, opacity);
+    }
+  }
+
+  return true;
+}
+
 void hideWeatherBackdrop() {
   if (gWeatherGlyphImage) {
     lv_obj_add_flag(gWeatherGlyphImage, LV_OBJ_FLAG_HIDDEN);
@@ -2083,6 +2282,21 @@ void syncRoomModeLocalState(ModeSnapshot& mode, int brightness) {
   );
   mode.knob.pressAction.targetId = mode.metaDeviceId;
   mode.knob.pressAction.action = "set_brightness";
+}
+
+void syncThermostatModeLocalState(ModeSnapshot& mode, const String& modeValue) {
+  mode.metaMode = modeValue;
+
+  for (uint8_t index = 0; index < mode.quickActionCount; index += 1) {
+    QuickAction& action = mode.quickActions[index];
+    if (!action.valid || action.type != "thermostat.set_mode") {
+      continue;
+    }
+
+    const bool isActive = action.value == modeValue;
+    action.accent = isActive ? thermostatModeAccentName(action.value) : "slate";
+    action.subtitle = isActive ? "Active" : "";
+  }
 }
 
 bool networkJobsMatch(const NetworkJob& left, const NetworkJob& right) {
@@ -2447,8 +2661,6 @@ void applyDefaultTextLayout() {
 void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_clear_flag(gTitleLabel, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gCenterValueLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN);
   const String currentValue = mode.metaCurrentTemperature != kTemperatureUnavailable
     ? formatTemperatureDegreesFromNumber(mode.metaCurrentTemperature)
     : formatTemperatureDegrees(mode.centerValue, mode.knob.value);
@@ -2471,29 +2683,40 @@ void renderThermostatOverview(const ModeSnapshot& mode) {
   lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
   lv_label_set_text(gCenterValueLabel, currentValue.c_str());
 
-  lv_obj_set_width(gSecondaryLabel, lv_pct(100));
-  lv_obj_align(gSecondaryLabel, LV_ALIGN_CENTER, 0, 138);
-  lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gSecondaryLabel, &hb_font_orbitron_28, 0);
-  lv_obj_set_style_transform_zoom(gSecondaryLabel, kZoomNormal, 0);
-  lv_obj_set_style_text_letter_space(gSecondaryLabel, 0, 0);
-  lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextPrimary), 0);
-  const String setPointValue = String(mode.knob.value) + String("°");
-  lv_label_set_text(gSecondaryLabel, setPointValue.c_str());
+  if (gThermostatModePickerExpanded) {
+    hideTextLabel(gSecondaryLabel);
+    hideTextLabel(gHintLabel);
+  } else {
+    lv_obj_clear_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_width(gSecondaryLabel, lv_pct(100));
+    lv_obj_align(gSecondaryLabel, LV_ALIGN_CENTER, 0, 138);
+    lv_obj_set_style_text_align(gSecondaryLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(gSecondaryLabel, &hb_font_orbitron_28, 0);
+    lv_obj_set_style_transform_zoom(gSecondaryLabel, kZoomNormal, 0);
+    lv_obj_set_style_text_letter_space(gSecondaryLabel, 0, 0);
+    lv_obj_set_style_text_color(gSecondaryLabel, hex(homebrain::palette::kTextPrimary), 0);
+    const String setPointValue = String(mode.knob.value) + String("°");
+    lv_label_set_text(gSecondaryLabel, setPointValue.c_str());
 
-  lv_obj_set_width(gHintLabel, lv_pct(100));
-  lv_obj_align(gHintLabel, LV_ALIGN_CENTER, 0, 174);
-  lv_obj_set_width(gHintLabel, lv_pct(100));
-  lv_obj_set_style_text_align(gHintLabel, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(gHintLabel, &hb_font_space_grotesk_20, 0);
-  lv_obj_set_style_transform_zoom(gHintLabel, kZoomNormal, 0);
-  lv_obj_set_style_text_color(gHintLabel, hex(homebrain::palette::kTextSecondary), 0);
-  lv_label_set_text(gHintLabel, "Set point");
+    lv_obj_clear_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_width(gHintLabel, lv_pct(100));
+    lv_obj_align(gHintLabel, LV_ALIGN_CENTER, 0, 174);
+    lv_obj_set_width(gHintLabel, lv_pct(100));
+    lv_obj_set_style_text_align(gHintLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(gHintLabel, &hb_font_space_grotesk_20, 0);
+    lv_obj_set_style_transform_zoom(gHintLabel, kZoomNormal, 0);
+    lv_obj_set_style_text_color(gHintLabel, hex(homebrain::palette::kTextSecondary), 0);
+    lv_label_set_text(gHintLabel, "Set point");
+  }
 
   lv_obj_move_foreground(gTitleLabel);
   lv_obj_move_foreground(gCenterValueLabel);
-  lv_obj_move_foreground(gSecondaryLabel);
-  lv_obj_move_foreground(gHintLabel);
+  if (!lv_obj_has_flag(gSecondaryLabel, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_move_foreground(gSecondaryLabel);
+  }
+  if (!lv_obj_has_flag(gHintLabel, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_move_foreground(gHintLabel);
+  }
   lv_obj_move_foreground(gFooterLabel);
 }
 
@@ -2640,7 +2863,135 @@ int8_t findThermostatActionIndex(const ModeSnapshot& mode, const String& value) 
       return static_cast<int8_t>(index);
     }
   }
-  return mode.quickActionCount > 0 ? 0 : -1;
+  return -1;
+}
+
+int8_t thermostatActionIndexForSlot(const ModeSnapshot& mode, uint8_t slot) {
+  if (slot >= kThermostatModeOptionCount) {
+    return -1;
+  }
+  return findThermostatActionIndex(mode, thermostatModeValueForSlot(slot));
+}
+
+int8_t thermostatModePickerSlotForValue(const ModeSnapshot& mode, const String& value) {
+  for (uint8_t slot = 0; slot < kThermostatModeOptionCount; slot += 1) {
+    if (value == thermostatModeValueForSlot(slot) && thermostatActionIndexForSlot(mode, slot) >= 0) {
+      return static_cast<int8_t>(slot);
+    }
+  }
+  return -1;
+}
+
+int8_t firstThermostatModePickerSlot(const ModeSnapshot& mode) {
+  for (uint8_t slot = 0; slot < kThermostatModeOptionCount; slot += 1) {
+    if (thermostatActionIndexForSlot(mode, slot) >= 0) {
+      return static_cast<int8_t>(slot);
+    }
+  }
+  return -1;
+}
+
+int8_t normalizeThermostatModePickerSelection(const ModeSnapshot& mode, int8_t selection) {
+  if (selection >= 0
+      && selection < static_cast<int8_t>(kThermostatModeOptionCount)
+      && thermostatActionIndexForSlot(mode, static_cast<uint8_t>(selection)) >= 0) {
+    return selection;
+  }
+
+  const int8_t activeSlot = thermostatModePickerSlotForValue(mode, mode.metaMode);
+  if (activeSlot >= 0) {
+    return activeSlot;
+  }
+
+  return firstThermostatModePickerSlot(mode);
+}
+
+int8_t advanceThermostatModePickerSelection(const ModeSnapshot& mode, int8_t selection, int direction) {
+  int8_t current = normalizeThermostatModePickerSelection(mode, selection);
+  if (current < 0 || direction == 0) {
+    return current;
+  }
+
+  for (uint8_t attempts = 0; attempts < kThermostatModeOptionCount; attempts += 1) {
+    current = static_cast<int8_t>(
+      (current + (direction > 0 ? 1 : -1) + static_cast<int>(kThermostatModeOptionCount))
+      % static_cast<int>(kThermostatModeOptionCount)
+    );
+    if (thermostatActionIndexForSlot(mode, static_cast<uint8_t>(current)) >= 0) {
+      return current;
+    }
+  }
+
+  return selection;
+}
+
+QuickAction thermostatModeVisualAction(const QuickAction& source) {
+  QuickAction action = source;
+  action.label = thermostatModeDisplayLabel(source.value);
+  action.subtitle = "";
+  action.accent = thermostatModeAccentName(source.value);
+  action.destructive = source.value == "off";
+  return action;
+}
+
+void styleThermostatModeButton(uint8_t slot, const QuickAction& action, bool isSelected, bool isActive, bool collapsed) {
+  const lv_color_t accent = accentForName(thermostatModeAccentName(action.value));
+  const lv_color_t idleBorder = accentForName("slate");
+
+  lv_obj_set_style_radius(gActionButtons[slot], collapsed ? 24 : 26, 0);
+  lv_obj_set_style_pad_all(gActionButtons[slot], collapsed ? 10 : 8, 0);
+  lv_obj_set_style_border_width(gActionButtons[slot], (collapsed || isSelected) ? 3 : (isActive ? 2 : 1), 0);
+  lv_obj_set_style_border_color(gActionButtons[slot], (collapsed || isSelected || isActive) ? accent : idleBorder, 0);
+  lv_obj_set_style_bg_opa(gActionButtons[slot], (collapsed || isSelected) ? LV_OPA_COVER : LV_OPA_90, 0);
+  lv_obj_set_style_bg_color(gActionButtons[slot], hex(homebrain::palette::kPanelSoft), 0);
+  lv_obj_set_style_shadow_width(gActionButtons[slot], 0, 0);
+  lv_obj_set_style_outline_width(gActionButtons[slot], 0, 0);
+
+  lv_obj_set_style_text_color(
+    gActionTitleLabels[slot],
+    (collapsed || isSelected || isActive) ? accent : hex(homebrain::palette::kTextPrimary),
+    0
+  );
+  lv_obj_set_style_text_letter_space(gActionTitleLabels[slot], 0, 0);
+}
+
+void closeThermostatModePicker() {
+  gThermostatModePickerExpanded = false;
+  gThermostatModePickerSelection = -1;
+}
+
+void openThermostatModePicker(const ModeSnapshot& mode) {
+  gThermostatModePickerExpanded = true;
+  gThermostatModePickerSelection = normalizeThermostatModePickerSelection(mode, gThermostatModePickerSelection);
+}
+
+bool applySelectedThermostatMode(ModeSnapshot& mode) {
+  const int8_t selectedSlot = normalizeThermostatModePickerSelection(mode, gThermostatModePickerSelection);
+  if (selectedSlot < 0) {
+    closeThermostatModePicker();
+    renderMode();
+    return false;
+  }
+
+  const int8_t actionIndex = thermostatActionIndexForSlot(mode, static_cast<uint8_t>(selectedSlot));
+  if (actionIndex < 0 || actionIndex >= mode.quickActionCount) {
+    closeThermostatModePicker();
+    renderMode();
+    return false;
+  }
+
+  QuickAction action = mode.quickActions[actionIndex];
+  action.label = thermostatModeDisplayLabel(action.value);
+  closeThermostatModePicker();
+
+  if (action.value == mode.metaMode) {
+    renderMode();
+    return false;
+  }
+
+  syncThermostatModeLocalState(mode, action.value);
+  dispatchQuickAction(action);
+  return true;
 }
 
 void renderStandardButtons(const ModeSnapshot& mode) {
@@ -2740,11 +3091,70 @@ void renderSettingsButtons(const ModeSnapshot& mode) {
 }
 
 void renderThermostatButtons(const ModeSnapshot& mode) {
-  (void)mode;
   hideAllActionButtons();
+
+  if (gPendingThermostatCommit) {
+    return;
+  }
+
+  applyActionButtonFonts(&hb_font_space_grotesk_20, 164, &hb_font_space_grotesk_20, 156);
+  for (uint8_t index = 0; index < kActionSlots; index += 1) {
+    lv_obj_set_style_text_letter_space(gActionTitleLabels[index], 0, 0);
+    lv_label_set_long_mode(gActionTitleLabels[index], LV_LABEL_LONG_CLIP);
+  }
+
+  if (gThermostatModePickerExpanded) {
+    gThermostatModePickerSelection = normalizeThermostatModePickerSelection(mode, gThermostatModePickerSelection);
+
+    static const lv_coord_t kButtonY[kThermostatModeOptionCount] = {266, 320, 374};
+    static const lv_coord_t kButtonX = 126;
+    static const lv_coord_t kButtonWidth = 228;
+    static const lv_coord_t kButtonHeight = 46;
+
+    for (uint8_t slot = 0; slot < kThermostatModeOptionCount; slot += 1) {
+      const int8_t actionIndex = thermostatActionIndexForSlot(mode, slot);
+      if (actionIndex < 0 || actionIndex >= mode.quickActionCount) {
+        hideActionButton(slot);
+        continue;
+      }
+
+      const QuickAction action = thermostatModeVisualAction(mode.quickActions[actionIndex]);
+      const bool isSelected = gThermostatModePickerSelection == static_cast<int8_t>(slot);
+      const bool isActive = mode.quickActions[actionIndex].value == mode.metaMode;
+      showActionButton(slot, actionIndex, action, kButtonX, kButtonY[slot], kButtonWidth, kButtonHeight, false);
+      styleThermostatModeButton(slot, action, isSelected, isActive, false);
+    }
+
+    hideActionButton(3);
+    return;
+  }
+
+  const String collapsedModeValue = mode.metaMode.isEmpty() ? String("off") : mode.metaMode;
+  int8_t collapsedActionIndex = findThermostatActionIndex(mode, collapsedModeValue);
+  if (collapsedActionIndex < 0) {
+    collapsedActionIndex = firstThermostatModePickerSlot(mode);
+    if (collapsedActionIndex >= 0) {
+      collapsedActionIndex = thermostatActionIndexForSlot(mode, static_cast<uint8_t>(collapsedActionIndex));
+    }
+  }
+
+  if (collapsedActionIndex < 0 || collapsedActionIndex >= mode.quickActionCount) {
+    return;
+  }
+
+  QuickAction action = thermostatModeVisualAction(mode.quickActions[collapsedActionIndex]);
+  action.label = thermostatModeDisplayLabel(collapsedModeValue);
+  action.value = collapsedModeValue;
+  showActionButton(0, collapsedActionIndex, action, 154, 292, 172, 44, false);
+  styleThermostatModeButton(0, action, true, true, true);
+
+  for (uint8_t index = 1; index < kActionSlots; index += 1) {
+    hideActionButton(index);
+  }
 }
 
 void renderMode() {
+  setOtaMatrixVisible(false);
   hideRoomSurfaceLabels();
   hideRoomOverlayLabels();
   ModeSnapshot* mode = currentMode();
@@ -3074,23 +3484,56 @@ bool loadCachedPanelState() {
   return applyPanelStatePayload(payload, StatePayloadSource::Cached);
 }
 
-void renderOtaProgressScreen(const String& title, int progress, const String& message) {
+void pumpUiFrame(bool forceOtaMatrixFrame) {
+  const unsigned long now = millis();
+  const unsigned long elapsed = now - gLastLvglTickAt;
+  if (elapsed > 0) {
+    lv_tick_inc(static_cast<uint32_t>(elapsed));
+    gLastLvglTickAt = now;
+  }
+
+  const bool matrixChanged = updateOtaMatrixAnimation(forceOtaMatrixFrame);
+  if (matrixChanged && gMountOffsetTenths != 0) {
+    applyUiMountOffset();
+  }
+
+  lv_timer_handler();
+}
+
+void renderOtaProgressScreen(const String& title, int progress, const String& message, bool showMatrixBackdrop) {
   hideWeatherBackdrop();
   setCenterTapEnabled(false);
   hideRoomSurfaceLabels();
   hideAllActionButtons();
   lv_obj_add_flag(gFooterLabel, LV_OBJ_FLAG_HIDDEN);
+  setOtaMatrixVisible(showMatrixBackdrop, showMatrixBackdrop && !gOtaMatrixVisible);
 
   const String percentLabel = String(progress) + String("%");
   setSurfaceTitleText(title, 82);
+  lv_obj_set_style_text_color(
+    gTitleLabel,
+    showMatrixBackdrop ? hex(homebrain::palette::kAccentBlue) : hex(homebrain::palette::kTextPrimary),
+    0
+  );
   styleSurfaceCenterValue(percentLabel, -6, 224, 380);
+  lv_obj_set_style_text_color(gCenterValueLabel, hex(homebrain::palette::kTextPrimary), 0);
   hideTextLabel(gSecondaryLabel);
   styleHelperLabel(gHintLabel, 314, message);
+  lv_obj_set_style_text_color(
+    gHintLabel,
+    showMatrixBackdrop ? hex(homebrain::palette::kPanelStroke) : hex(homebrain::palette::kTextSecondary),
+    0
+  );
 
   lv_obj_set_style_arc_color(gArc, hex(homebrain::palette::kPanelStroke), LV_PART_MAIN);
   lv_obj_set_style_arc_color(gArc, hex(homebrain::palette::kAccentBlue), LV_PART_INDICATOR);
   lv_arc_set_range(gArc, 0, 100);
   lv_arc_set_value(gArc, progress);
+
+  if (showMatrixBackdrop) {
+    updateOtaMatrixAnimation(true);
+  }
+
   applyUiMountOffset();
 }
 
@@ -3137,6 +3580,7 @@ bool handleLocalPanelAction(const QuickAction& action) {
   if (action.type == "panel.local.reboot") {
     setStatusLine("Restarting orb");
     renderOtaProgressScreen("Restarting", 100, "Rebooting the hardware orb...");
+    pumpUiFrame(true);
     delay(300);
     ESP.restart();
     return true;
@@ -3153,7 +3597,8 @@ bool performOtaUpdate() {
   gOtaInProgress = true;
   gActiveOtaJobId = gState.ota.jobId;
   setStatusLine("Installing OTA update");
-  renderOtaProgressScreen("Updating", 60, "Preparing secure download...");
+  renderOtaProgressScreen("Firmware Update", 60, "Preparing secure download...", true);
+  pumpUiFrame(true);
   reportOtaStatus("downloading", 0, "Preparing OTA download...", 0, gState.ota.bytesTotal);
 
   HTTPClient http;
@@ -3225,6 +3670,7 @@ bool performOtaUpdate() {
         renderMode();
         return false;
       }
+      pumpUiFrame();
       delay(10);
       continue;
     }
@@ -3255,7 +3701,8 @@ bool performOtaUpdate() {
       ? static_cast<int>((totalWritten * 100UL) / totalBytes)
       : min(99, max(0, gState.ota.progress));
 
-    renderOtaProgressScreen("Updating", min(98, max(60, rawProgress)), "Downloading firmware package...");
+    renderOtaProgressScreen("Firmware Update", min(98, max(60, rawProgress)), "Downloading firmware package...", true);
+    pumpUiFrame();
 
     const int reportProgress = min(99, max(1, rawProgress));
     const unsigned long now = millis();
@@ -3297,7 +3744,8 @@ bool performOtaUpdate() {
   }
 
   http.end();
-  renderOtaProgressScreen("Updating", 96, "Validating and finalizing firmware...");
+  renderOtaProgressScreen("Firmware Update", 96, "Validating and finalizing firmware...", true);
+  pumpUiFrame(true);
   reportOtaStatus("installing", 100, "Validating firmware image...", totalWritten, totalBytes);
 
   if (!Update.end()) {
@@ -3324,7 +3772,8 @@ bool performOtaUpdate() {
   }
 
   reportOtaStatus("rebooting", 100, "Rebooting into the new HomeBrain firmware...", totalWritten, totalBytes);
-  renderOtaProgressScreen("Updating", 100, "Rebooting into the new firmware...");
+  renderOtaProgressScreen("Firmware Update", 100, "Rebooting into the new firmware...", true);
+  pumpUiFrame(true);
   delay(400);
   ESP.restart();
   return true;
@@ -3416,13 +3865,15 @@ void buttonEventHandler(lv_event_t* event) {
   }
 
   if (mode->id == "thermostat") {
-    const int8_t currentActionIndex = findThermostatActionIndex(*mode, mode->metaMode);
-    if (slotIndex == 0 && actionIndex == currentActionIndex) {
-      gThermostatModePickerExpanded = !gThermostatModePickerExpanded;
+    if (!gThermostatModePickerExpanded) {
+      openThermostatModePicker(*mode);
       renderMode();
       return;
     }
-    gThermostatModePickerExpanded = false;
+
+    gThermostatModePickerSelection = thermostatModePickerSlotForValue(*mode, mode->quickActions[actionIndex].value);
+    applySelectedThermostatMode(*mode);
+    return;
   }
 
   dispatchQuickAction(mode->quickActions[actionIndex]);
@@ -3558,6 +4009,36 @@ void createUi() {
   lv_obj_set_style_arc_width(gArc, 24, LV_PART_MAIN);
   lv_obj_set_style_arc_width(gArc, 24, LV_PART_INDICATOR);
   lv_obj_set_style_arc_opa(gArc, LV_OPA_70, LV_PART_MAIN);
+
+  gOtaMatrixLayer = lv_obj_create(gMainCard);
+  lv_obj_set_size(gOtaMatrixLayer, 384, 300);
+  lv_obj_align(gOtaMatrixLayer, LV_ALIGN_CENTER, 0, 6);
+  lv_obj_clear_flag(gOtaMatrixLayer, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(gOtaMatrixLayer, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_bg_opa(gOtaMatrixLayer, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(gOtaMatrixLayer, 0, 0);
+  lv_obj_set_style_shadow_width(gOtaMatrixLayer, 0, 0);
+  lv_obj_set_style_pad_all(gOtaMatrixLayer, 0, 0);
+  lv_obj_add_flag(gOtaMatrixLayer, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_background(gOtaMatrixLayer);
+
+  for (uint8_t column = 0; column < kOtaMatrixColumnCount; column += 1) {
+    for (uint8_t row = 0; row < kOtaMatrixRowCount; row += 1) {
+      gOtaMatrixLabels[column][row] = lv_label_create(gOtaMatrixLayer);
+      lv_obj_set_pos(
+        gOtaMatrixLabels[column][row],
+        static_cast<lv_coord_t>(18 + (column * 46)),
+        static_cast<lv_coord_t>(10 + (row * 30))
+      );
+      lv_obj_set_style_text_font(gOtaMatrixLabels[column][row], &hb_font_space_grotesk_20, 0);
+      lv_obj_set_style_transform_zoom(gOtaMatrixLabels[column][row], 170, 0);
+      lv_obj_set_style_text_letter_space(gOtaMatrixLabels[column][row], 0, 0);
+      lv_obj_set_style_text_color(gOtaMatrixLabels[column][row], hex(homebrain::palette::kAccentBlue), 0);
+      lv_obj_set_style_text_opa(gOtaMatrixLabels[column][row], LV_OPA_40, 0);
+      lv_label_set_text(gOtaMatrixLabels[column][row], " ");
+      lv_obj_add_flag(gOtaMatrixLabels[column][row], LV_OBJ_FLAG_HIDDEN);
+    }
+  }
 
   gWeatherGlyphImage = lv_img_create(gMainCard);
   lv_obj_add_flag(gWeatherGlyphImage, LV_OBJ_FLAG_HIDDEN);
@@ -4088,6 +4569,19 @@ void handleEncoderTurn(int signedSteps, unsigned long latestIntervalUs = 0) {
   const int direction = signedSteps > 0 ? 1 : -1;
   const int turnCount = abs(signedSteps);
 
+  if (mode->id == "thermostat" && gThermostatModePickerExpanded) {
+    int8_t nextSelection = normalizeThermostatModePickerSelection(*mode, gThermostatModePickerSelection);
+    for (int step = 0; step < turnCount; step += 1) {
+      nextSelection = advanceThermostatModePickerSelection(*mode, nextSelection, direction);
+    }
+
+    if (nextSelection >= 0 && nextSelection != gThermostatModePickerSelection) {
+      gThermostatModePickerSelection = nextSelection;
+      renderMode();
+    }
+    return;
+  }
+
   if (mode->knob.kind == "range") {
     const int stepAmount = encoderStepAmount(*mode, direction, turnCount, latestIntervalUs);
     const int next = constrain(
@@ -4179,6 +4673,11 @@ void pollEncoder() {
 
     ModeSnapshot* mode = currentMode();
     if (!mode) {
+      return;
+    }
+
+    if (mode->id == "thermostat" && gThermostatModePickerExpanded) {
+      applySelectedThermostatMode(*mode);
       return;
     }
 
