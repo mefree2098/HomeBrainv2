@@ -1150,3 +1150,128 @@ test('buildPanelOtaArtifact bootstraps a private PlatformIO toolchain when none 
   assert.ok(spawnCommands.some((entry) => entry.command === managedPio));
   assert.equal(copiedArtifact, 'firmware-binary');
 });
+
+test('updatePanelOtaState can refresh panel lastSeen while the orb is updating', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-ota-touch',
+    status: 'updating',
+    lastSeen: new Date('2026-04-20T19:15:16.295Z'),
+    ota: {
+      jobId: 'job-touch',
+      status: 'ready',
+      phase: 'ready',
+      progress: 60,
+      previousPanelStatus: 'online'
+    },
+    async save() {
+      return this;
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const service = new WallPanelService();
+  const previousLastSeen = panelDoc.lastSeen.getTime();
+  const result = await service.updatePanelOtaState(
+    'panel-ota-touch',
+    'job-touch',
+    {
+      status: 'downloading',
+      phase: 'downloading',
+      progress: 68
+    },
+    {
+      touchLastSeen: true
+    }
+  );
+
+  assert.equal(result.status, 'updating');
+  assert.equal(result.ota.status, 'downloading');
+  assert.equal(result.ota.progress, 68);
+  assert.ok(result.lastSeen instanceof Date);
+  assert.ok(result.lastSeen.getTime() >= previousLastSeen);
+});
+
+test('reportPanelOtaStatus preserves known OTA bytesTotal when download updates omit it', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-ota-report',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    firmwareVersion: 'panel-old',
+    ota: {
+      jobId: 'job-report',
+      status: 'downloading',
+      phase: 'downloading',
+      progress: 62,
+      bytesTransferred: 0,
+      bytesTotal: 2_072_784,
+      artifactSizeBytes: 2_072_784,
+      currentVersion: 'panel-old',
+      previousPanelStatus: 'online'
+    },
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456'
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const service = new WallPanelService();
+  let capturedUpdates = null;
+  let capturedOptions = null;
+  service.updatePanelOtaState = async (panelId, jobId, updates, options) => {
+    capturedUpdates = { panelId, jobId, ...updates };
+    capturedOptions = options;
+    return {
+      _id: panelId,
+      id: panelId,
+      status: 'updating',
+      ota: {
+        previousPanelStatus: 'online',
+        ...updates
+      }
+    };
+  };
+  service.serializePanelForResponse = async (panel) => panel;
+
+  await service.reportPanelOtaStatus(
+    'panel-ota-report',
+    {
+      registrationCode: 'HBWP-ABCD-EF12-3456'
+    },
+    {
+      jobId: 'job-report',
+      phase: 'downloading',
+      progress: 35,
+      bytesTransferred: 65_536,
+      bytesTotal: 0,
+      message: 'Downloading firmware package...'
+    }
+  );
+
+  assert.equal(capturedUpdates.panelId, 'panel-ota-report');
+  assert.equal(capturedUpdates.jobId, 'job-report');
+  assert.equal(capturedUpdates.bytesTransferred, 65_536);
+  assert.equal(capturedUpdates.bytesTotal, 2_072_784);
+  assert.equal(capturedUpdates.phase, 'downloading');
+  assert.equal(capturedUpdates.status, 'downloading');
+  assert.equal(capturedOptions.allowMissingJob, true);
+  assert.equal(capturedOptions.touchLastSeen, true);
+});

@@ -1854,7 +1854,7 @@ class WallPanelService {
   }
 
   async updatePanelOtaState(panelId, jobId, updates = {}, options = {}) {
-    const { allowMissingJob = false } = options;
+    const { allowMissingJob = false, touchLastSeen = false } = options;
     const panel = await getPanelDocument(panelId);
     const currentOta = normalizeOtaState(panel.ota || {});
 
@@ -1873,6 +1873,10 @@ class WallPanelService {
       panel.status = trimString(panel.ota.previousPanelStatus) || 'online';
     } else if (otaStatusIsActive(panel.ota.status)) {
       panel.status = 'updating';
+    }
+
+    if (touchLastSeen) {
+      panel.lastSeen = new Date();
     }
 
     await panel.save();
@@ -2129,18 +2133,28 @@ class WallPanelService {
       progress = 100;
     }
 
+    const reportedBytesTransferred = Math.max(0, normalizeNumber(report.bytesTransferred, ota.bytesTransferred));
+    const reportedBytesTotal = Math.max(0, normalizeNumber(report.bytesTotal, ota.bytesTotal || ota.artifactSizeBytes));
+    const bytesTransferred = reportedBytesTransferred > 0
+      ? reportedBytesTransferred
+      : ota.bytesTransferred;
+    const bytesTotal = reportedBytesTotal > 0
+      ? reportedBytesTotal
+      : (ota.bytesTotal || ota.artifactSizeBytes || 0);
+
     const updatedPanel = await this.updatePanelOtaState(panel.id, ota.jobId, {
       status,
       phase,
       progress,
       currentVersion: trimString(report.currentVersion) || ota.currentVersion || panel.firmwareVersion || '',
-      bytesTransferred: Math.max(0, normalizeNumber(report.bytesTransferred, ota.bytesTransferred)),
-      bytesTotal: Math.max(0, normalizeNumber(report.bytesTotal, ota.bytesTotal || ota.artifactSizeBytes)),
+      bytesTransferred,
+      bytesTotal,
       message: trimString(report.message) || ota.message,
       lastError: phase === 'failed' ? (trimString(report.error) || trimString(report.message) || ota.lastError) : '',
       completedAt: phase === 'failed' || phase === 'completed' ? new Date() : ota.completedAt
     }, {
-      allowMissingJob: true
+      allowMissingJob: true,
+      touchLastSeen: true
     });
 
     if (phase === 'failed') {

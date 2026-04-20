@@ -70,6 +70,7 @@ constexpr unsigned long kSwipeWindowMs = 1000;
 constexpr uint16_t kStateJsonCapacity = 32768;
 constexpr unsigned long kBrightnessPersistDelayMs = 1000;
 constexpr unsigned long kOtaPostActivationValidationMs = 45000;
+constexpr unsigned long kOtaProgressReportIntervalMs = 1200;
 constexpr int kBrightnessDefaultPercent = 94;
 constexpr int kBrightnessMinPercent = 15;
 constexpr int kBrightnessMaxPercent = 100;
@@ -84,6 +85,8 @@ constexpr int kPanelHttpConnectTimeoutMs = 3000;
 constexpr int kPanelHttpTimeoutMs = 5000;
 constexpr int kOtaHttpConnectTimeoutMs = 4000;
 constexpr int kOtaHttpTimeoutMs = 15000;
+constexpr int kOtaProgressReportStepPercent = 5;
+constexpr size_t kOtaProgressReportStepBytes = 64 * 1024;
 constexpr uint8_t kNetworkJobQueueCapacity = 12;
 constexpr uint8_t kNetworkResultQueueCapacity = 12;
 constexpr uint16_t kNetworkTaskIdleDelayMs = 8;
@@ -3151,7 +3154,7 @@ bool performOtaUpdate() {
   gActiveOtaJobId = gState.ota.jobId;
   setStatusLine("Installing OTA update");
   renderOtaProgressScreen("Updating", 60, "Preparing secure download...");
-  reportOtaStatus("downloading", 0, "Preparing OTA download...");
+  reportOtaStatus("downloading", 0, "Preparing OTA download...", 0, gState.ota.bytesTotal);
 
   HTTPClient http;
   const String downloadUrl = otaDownloadUrlWithCredentials();
@@ -3200,6 +3203,9 @@ bool performOtaUpdate() {
   size_t totalWritten = 0;
   unsigned long lastChunkAt = millis();
   const bool hasKnownContentLength = expectedBytes > 0;
+  unsigned long lastProgressReportAt = 0;
+  int lastReportedDownloadProgress = -1;
+  size_t lastReportedBytes = 0;
 
   while (!hasKnownContentLength || totalWritten < expectedBytes) {
     const size_t availableBytes = stream->available();
@@ -3250,6 +3256,32 @@ bool performOtaUpdate() {
       : min(99, max(0, gState.ota.progress));
 
     renderOtaProgressScreen("Updating", min(98, max(60, rawProgress)), "Downloading firmware package...");
+
+    const int reportProgress = min(99, max(1, rawProgress));
+    const unsigned long now = millis();
+    const bool completedDownload = hasKnownContentLength && totalWritten >= expectedBytes;
+    const bool progressAdvanced = reportProgress >= (lastReportedDownloadProgress + kOtaProgressReportStepPercent);
+    const bool byteWindowAdvanced = totalWritten >= (lastReportedBytes + kOtaProgressReportStepBytes);
+    const bool intervalElapsed = lastProgressReportAt == 0
+      || (now - lastProgressReportAt >= kOtaProgressReportIntervalMs);
+
+    if (
+      completedDownload
+      || progressAdvanced
+      || byteWindowAdvanced
+      || (intervalElapsed && totalWritten > lastReportedBytes)
+    ) {
+      reportOtaStatus(
+        "downloading",
+        reportProgress,
+        "Downloading firmware package...",
+        totalWritten,
+        totalBytes
+      );
+      lastProgressReportAt = now;
+      lastReportedDownloadProgress = reportProgress;
+      lastReportedBytes = totalWritten;
+    }
   }
 
   if (hasKnownContentLength && totalWritten < expectedBytes) {
