@@ -62,7 +62,10 @@ constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
 constexpr unsigned long kSecurityStateRefreshDelayMs = 1750;
 constexpr unsigned long kActionStateRefreshDelayMs = 450;
 constexpr int kSwipeThreshold = 18;
+constexpr int kSettingsSwipeThreshold = 48;
+constexpr int kSwipeHorizontalLimit = 220;
 constexpr int kSwipeVerticalLimit = 220;
+constexpr int kSettingsSwipeEdgeZone = 72;
 constexpr unsigned long kSwipeWindowMs = 1000;
 constexpr uint16_t kStateJsonCapacity = 32768;
 constexpr unsigned long kBrightnessPersistDelayMs = 1000;
@@ -230,6 +233,7 @@ struct NetworkResult {
 
 PanelState gState;
 uint8_t gCurrentModeIndex = 0;
+String gSettingsReturnModeId;
 
 bool gSwipeTracking = false;
 bool gSwipeConsumed = false;
@@ -1102,6 +1106,7 @@ void displayFlush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* colorB
 }
 
 void changeMode(int delta);
+void toggleSettingsMode();
 void queueDeviceLevelCommit(const String& targetId, int value);
 bool commitPendingDeviceLevelNow();
 void commitPendingDeviceLevelIfReady();
@@ -1168,10 +1173,34 @@ void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
 
   const int deltaX = x - gSwipeStartX;
   const int absoluteDeltaX = abs(deltaX);
-  const int deltaY = abs(y - gSwipeStartY);
+  const int signedDeltaY = y - gSwipeStartY;
+  const int absoluteDeltaY = abs(signedDeltaY);
   const unsigned long elapsed = millis() - gSwipeStartedAt;
 
-  if (elapsed > kSwipeWindowMs || deltaY > kSwipeVerticalLimit) {
+  if (elapsed > kSwipeWindowMs) {
+    return;
+  }
+
+  const bool startedNearTopEdge = gSwipeStartY <= kSettingsSwipeEdgeZone;
+  const bool startedNearBottomEdge = gSwipeStartY >= (static_cast<int>(kScreenHeight) - kSettingsSwipeEdgeZone);
+  const bool verticalSwipeHasEnoughTravel = absoluteDeltaY >= kSettingsSwipeThreshold;
+  const bool verticalSwipeDominates = absoluteDeltaY > absoluteDeltaX + 4;
+  const bool verticalSwipeWithinHorizontalDrift = absoluteDeltaX <= kSwipeHorizontalLimit;
+  const bool verticalSwipeFromTop = startedNearTopEdge && signedDeltaY >= kSettingsSwipeThreshold;
+  const bool verticalSwipeFromBottom = startedNearBottomEdge && signedDeltaY <= -kSettingsSwipeThreshold;
+
+  if (
+    verticalSwipeHasEnoughTravel &&
+    verticalSwipeDominates &&
+    verticalSwipeWithinHorizontalDrift &&
+    (verticalSwipeFromTop || verticalSwipeFromBottom)
+  ) {
+    toggleSettingsMode();
+    gSwipeConsumed = true;
+    return;
+  }
+
+  if (absoluteDeltaY > kSwipeVerticalLimit) {
     return;
   }
 
@@ -1181,7 +1210,7 @@ void touchpadRead(lv_indev_drv_t* indevDriver, lv_indev_data_t* data) {
 
   // Keep swipes easy to trigger while still requiring a clear horizontal lead
   // so taps and short diagonals do not unexpectedly flip surfaces.
-  if (absoluteDeltaX <= deltaY + 4) {
+  if (absoluteDeltaX <= absoluteDeltaY + 4) {
     return;
   }
 
@@ -1208,6 +1237,97 @@ ModeSnapshot* currentMode() {
     }
   }
   return nullptr;
+}
+
+int findModeIndexById(const String& modeId) {
+  if (modeId.isEmpty()) {
+    return -1;
+  }
+
+  for (uint8_t index = 0; index < gState.modeCount; index += 1) {
+    if (gState.modeOrder[index] == modeId) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+int firstNonSettingsModeIndex() {
+  for (uint8_t index = 0; index < gState.modeCount; index += 1) {
+    if (gState.modeOrder[index] != "settings") {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+void rememberSettingsReturnMode(const String& modeId) {
+  if (!modeId.isEmpty() && modeId != "settings") {
+    gSettingsReturnModeId = modeId;
+  }
+}
+
+void resetModeNavigationState() {
+  gThermostatModePickerExpanded = false;
+  gEncoderDeltaAccumulator = 0;
+  gLastEncoderTurnAt = 0;
+  gLastEncoderDirection = 0;
+  clearPendingEncoderInput();
+}
+
+bool activateModeIndex(uint8_t index, const String& status) {
+  if (!gState.loaded || gState.modeCount == 0 || index >= gState.modeCount) {
+    return false;
+  }
+
+  resetModeNavigationState();
+  gCurrentModeIndex = index;
+
+  ModeSnapshot* mode = currentMode();
+  if (mode) {
+    rememberSettingsReturnMode(mode->id);
+  }
+
+  setStatusLine(status);
+  renderMode();
+  return true;
+}
+
+void toggleSettingsMode() {
+  if (gOtaInProgress || !gState.loaded || gState.modeCount == 0) {
+    return;
+  }
+
+  ModeSnapshot* mode = currentMode();
+  const int settingsIndex = findModeIndexById("settings");
+  if (settingsIndex < 0) {
+    return;
+  }
+
+  if (mode && mode->id == "settings") {
+    int returnIndex = findModeIndexById(gSettingsReturnModeId);
+    if (returnIndex < 0 || returnIndex == settingsIndex) {
+      returnIndex = firstNonSettingsModeIndex();
+    }
+    if (returnIndex < 0 || returnIndex == settingsIndex) {
+      return;
+    }
+
+    const String targetModeId = gState.modeOrder[returnIndex];
+    activateModeIndex(
+      static_cast<uint8_t>(returnIndex),
+      "Returned to " + modeLabel(targetModeId)
+    );
+    return;
+  }
+
+  if (mode) {
+    rememberSettingsReturnMode(mode->id);
+  }
+
+  activateModeIndex(static_cast<uint8_t>(settingsIndex), "Opened settings");
 }
 
 ModeSnapshot* modeById(const String& modeId) {
@@ -1454,6 +1574,7 @@ bool parseState(JsonDocument& document) {
     for (uint8_t index = 0; index < gState.modeCount; index += 1) {
       if (gState.modeOrder[index] == previousModeId) {
         gCurrentModeIndex = index;
+        rememberSettingsReturnMode(previousModeId);
         return true;
       }
     }
@@ -1461,6 +1582,11 @@ bool parseState(JsonDocument& document) {
 
   if (gCurrentModeIndex >= gState.modeCount) {
     gCurrentModeIndex = 0;
+  }
+
+  ModeSnapshot* mode = currentMode();
+  if (mode) {
+    rememberSettingsReturnMode(mode->id);
   }
 
   return true;
@@ -2701,23 +2827,17 @@ void changeMode(int delta) {
     return;
   }
 
-  gThermostatModePickerExpanded = false;
-  gEncoderDeltaAccumulator = 0;
-  gLastEncoderTurnAt = 0;
-  gLastEncoderDirection = 0;
-  clearPendingEncoderInput();
-
   const int next = static_cast<int>(gCurrentModeIndex) + delta;
+  uint8_t nextIndex = 0;
   if (next < 0) {
-    gCurrentModeIndex = gState.modeCount - 1;
+    nextIndex = gState.modeCount - 1;
   } else if (next >= gState.modeCount) {
-    gCurrentModeIndex = 0;
+    nextIndex = 0;
   } else {
-    gCurrentModeIndex = static_cast<uint8_t>(next);
+    nextIndex = static_cast<uint8_t>(next);
   }
 
-  setStatusLine("Swiped to " + modeLabel(gState.modeOrder[gCurrentModeIndex]));
-  renderMode();
+  activateModeIndex(nextIndex, "Swiped to " + modeLabel(gState.modeOrder[nextIndex]));
 }
 
 bool postPanelJson(const String& url, JsonDocument& requestDocument, JsonDocument* responseDocument) {
