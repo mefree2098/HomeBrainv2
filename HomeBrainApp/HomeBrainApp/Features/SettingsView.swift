@@ -292,6 +292,24 @@ struct SettingsView: View {
                                             .foregroundStyle(HBPalette.textPrimary)
                                     }
 
+                                    if hardwareOrb.requiresFirmwareUpdate {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Text("Update orb firmware for live rotation")
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(HBPalette.accentOrange)
+                                            Text("This orb is still on \(hardwareOrb.firmwareVersionDisplay). HomeBrain will save the offset now, but the on-device UI will not rotate until the orb is updated to \(hardwareOrb.latestFirmwareVersionDisplay).")
+                                                .font(.caption)
+                                                .foregroundStyle(HBPalette.textSecondary)
+                                        }
+                                        .padding(10)
+                                        .background(HBPalette.panelSoft.opacity(0.9))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(HBPalette.accentOrange.opacity(0.55), lineWidth: 1)
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    }
+
                                     HStack(spacing: 8) {
                                         Button {
                                             Task {
@@ -338,7 +356,11 @@ struct SettingsView: View {
                                         )
                                     }
 
-                                    Text("Range \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMinimumTenths)) to \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMaximumTenths)); positive values rotate the visual layer clockwise.")
+                                    Text(
+                                        hardwareOrb.requiresFirmwareUpdate
+                                        ? "Range \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMinimumTenths)) to \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMaximumTenths)); positive values still save immediately, but they will only become visible on the orb after the firmware update."
+                                        : "Range \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMinimumTenths)) to \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMaximumTenths)); positive values rotate the visual layer clockwise."
+                                    )
                                         .font(.caption)
                                         .foregroundStyle(HBPalette.textSecondary)
                                 }
@@ -724,6 +746,9 @@ private struct HardwareOrbRecord: Identifiable {
     let room: String
     let status: String
     var mountOffsetTenths: Int
+    let firmwareVersion: String
+    let latestFirmwareVersion: String
+    let updateAvailable: Bool
 
     var statusLabel: String {
         status.isEmpty ? "Unknown" : status.capitalized
@@ -731,6 +756,18 @@ private struct HardwareOrbRecord: Identifiable {
 
     var formattedMountOffset: String {
         Self.formattedMountOffset(mountOffsetTenths)
+    }
+
+    var firmwareVersionDisplay: String {
+        firmwareVersion.isEmpty ? "older firmware" : firmwareVersion
+    }
+
+    var latestFirmwareVersionDisplay: String {
+        latestFirmwareVersion.isEmpty ? "the latest OTA" : latestFirmwareVersion
+    }
+
+    var requiresFirmwareUpdate: Bool {
+        updateAvailable || !firmwareVersion.isEmpty && firmwareVersion != latestFirmwareVersion
     }
 
     static func from(_ object: [String: Any]) -> HardwareOrbRecord? {
@@ -747,7 +784,10 @@ private struct HardwareOrbRecord: Identifiable {
             name: JSON.string(object, "name", fallback: "Unnamed Orb"),
             room: JSON.string(object, "room", fallback: "Unassigned"),
             status: JSON.string(object, "status", fallback: "offline"),
-            mountOffsetTenths: clampMountOffset(JSON.int(mountAlignment, "offsetTenths"))
+            mountOffsetTenths: clampMountOffset(JSON.int(mountAlignment, "offsetTenths")),
+            firmwareVersion: JSON.string(object, "firmwareVersion"),
+            latestFirmwareVersion: JSON.string(object, "latestFirmwareVersion"),
+            updateAvailable: JSON.bool(object, "updateAvailable")
         )
     }
 

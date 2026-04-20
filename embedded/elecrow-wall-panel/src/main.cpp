@@ -45,8 +45,6 @@ constexpr uint8_t kBacklightPin = 6;
 constexpr uint8_t kTouchAddress = 0x15;
 constexpr uint16_t kScreenWidth = 480;
 constexpr uint16_t kScreenHeight = 480;
-constexpr lv_coord_t kScreenCenterX = static_cast<lv_coord_t>(kScreenWidth / 2);
-constexpr lv_coord_t kScreenCenterY = static_cast<lv_coord_t>(kScreenHeight / 2);
 constexpr uint8_t kActionSlots = 4;
 constexpr uint8_t kRemoteModeSlots = 5;
 constexpr uint8_t kSettingsModeSlot = 5;
@@ -97,7 +95,6 @@ constexpr lv_coord_t kThermostatWeatherZoom = 352;
 constexpr lv_opa_t kThermostatWeatherOpacity = static_cast<lv_opa_t>(72);
 constexpr int16_t kMountOffsetMinTenths = -150;
 constexpr int16_t kMountOffsetMaxTenths = 150;
-constexpr float kPi = 3.14159265358979323846f;
 
 PCF8574 gPcf8574(0x21);
 Adafruit_CST8XX gTouchPanel;
@@ -455,6 +452,20 @@ int16_t normalizeMountOffsetTenths(long value) {
   return static_cast<int16_t>(constrain(static_cast<int>(value), kMountOffsetMinTenths, kMountOffsetMaxTenths));
 }
 
+lv_coord_t calculateMountOffsetExtDrawPad(int16_t angleTenths) {
+  const int16_t normalized = normalizeMountOffsetTenths(angleTenths);
+  if (normalized == 0) {
+    return 0;
+  }
+
+  const float radians = static_cast<float>(normalized) * 3.14159265358979323846f / 1800.0f;
+  const float rotatedScale = fabsf(cosf(radians)) + fabsf(sinf(radians));
+  const float extraWidth = (static_cast<float>(kScreenWidth) * rotatedScale) - static_cast<float>(kScreenWidth);
+  const float extraHeight = (static_cast<float>(kScreenHeight) * rotatedScale) - static_cast<float>(kScreenHeight);
+  const float extDrawPad = fmaxf(extraWidth, extraHeight) * 0.5f;
+  return static_cast<lv_coord_t>(ceilf(extDrawPad)) + 4;
+}
+
 void persistMountOffsetTenthsIfNeeded(int16_t value) {
   const int16_t normalized = normalizeMountOffsetTenths(value);
   gMountOffsetTenths = normalized;
@@ -466,62 +477,18 @@ void persistMountOffsetTenthsIfNeeded(int16_t value) {
   gPersistedMountOffsetTenths = normalized;
 }
 
-void applyMountOffsetToObjectPosition(lv_obj_t* object) {
-  if (!object || gMountOffsetTenths == 0) {
-    return;
-  }
-
-  const float radians = static_cast<float>(gMountOffsetTenths) * kPi / 1800.0f;
-  const float sinTheta = sinf(radians);
-  const float cosTheta = cosf(radians);
-  const lv_coord_t width = lv_obj_get_width(object);
-  const lv_coord_t height = lv_obj_get_height(object);
-  const float centerX = static_cast<float>(lv_obj_get_x(object)) + (static_cast<float>(width) * 0.5f);
-  const float centerY = static_cast<float>(lv_obj_get_y(object)) + (static_cast<float>(height) * 0.5f);
-  const float deltaX = centerX - static_cast<float>(kScreenCenterX);
-  const float deltaY = centerY - static_cast<float>(kScreenCenterY);
-  const float rotatedCenterX = static_cast<float>(kScreenCenterX) + (deltaX * cosTheta) - (deltaY * sinTheta);
-  const float rotatedCenterY = static_cast<float>(kScreenCenterY) + (deltaX * sinTheta) + (deltaY * cosTheta);
-
-  lv_obj_set_pos(
-    object,
-    static_cast<lv_coord_t>(lroundf(rotatedCenterX - (static_cast<float>(width) * 0.5f))),
-    static_cast<lv_coord_t>(lroundf(rotatedCenterY - (static_cast<float>(height) * 0.5f)))
-  );
-}
-
 void applyUiMountOffset() {
-  if (!gArc) {
+  if (!gMainCard) {
     return;
   }
 
-  lv_obj_set_style_transform_pivot_x(gArc, lv_obj_get_width(gArc) / 2, 0);
-  lv_obj_set_style_transform_pivot_y(gArc, lv_obj_get_height(gArc) / 2, 0);
-  lv_obj_set_style_transform_angle(gArc, gMountOffsetTenths, 0);
-
-  if (gWeatherGlyphImage) {
-    lv_obj_set_style_transform_pivot_x(gWeatherGlyphImage, lv_obj_get_width(gWeatherGlyphImage) / 2, 0);
-    lv_obj_set_style_transform_pivot_y(gWeatherGlyphImage, lv_obj_get_height(gWeatherGlyphImage) / 2, 0);
-    lv_obj_set_style_transform_angle(gWeatherGlyphImage, gMountOffsetTenths, 0);
-  }
-
-  if (gWeatherBadgeCard) {
-    lv_obj_set_style_transform_pivot_x(gWeatherBadgeCard, lv_obj_get_width(gWeatherBadgeCard) / 2, 0);
-    lv_obj_set_style_transform_pivot_y(gWeatherBadgeCard, lv_obj_get_height(gWeatherBadgeCard) / 2, 0);
-    lv_obj_set_style_transform_angle(gWeatherBadgeCard, gMountOffsetTenths, 0);
-    applyMountOffsetToObjectPosition(gWeatherBadgeCard);
-  }
-
-  applyMountOffsetToObjectPosition(gModeBadge);
-  applyMountOffsetToObjectPosition(gTitleLabel);
-  applyMountOffsetToObjectPosition(gSecondaryLabel);
-  applyMountOffsetToObjectPosition(gRoomOverlaySubtitleLabel);
-  applyMountOffsetToObjectPosition(gHintLabel);
-  applyMountOffsetToObjectPosition(gFooterLabel);
-
-  for (uint8_t index = 0; index < kActionSlots; index += 1) {
-    applyMountOffsetToObjectPosition(gActionButtons[index]);
-  }
+  const lv_coord_t extDrawPad = calculateMountOffsetExtDrawPad(gMountOffsetTenths);
+  lv_obj_set_style_transform_pivot_x(gMainCard, lv_obj_get_width(gMainCard) / 2, 0);
+  lv_obj_set_style_transform_pivot_y(gMainCard, lv_obj_get_height(gMainCard) / 2, 0);
+  lv_obj_set_style_transform_angle(gMainCard, gMountOffsetTenths, 0);
+  lv_obj_set_style_transform_width(gMainCard, extDrawPad, 0);
+  lv_obj_set_style_transform_height(gMainCard, extDrawPad, 0);
+  lv_obj_set_style_clip_corner(gMainCard, false, 0);
 }
 
 long long extractPanelFirmwareTimestamp(const String& value) {
