@@ -39,6 +39,10 @@ const PANEL_FIRMWARE_VERSION_CACHE_TTL_MS = Math.max(
   1_000,
   Number(process.env.HOMEBRAIN_PANEL_VERSION_CACHE_TTL_MS || 15_000)
 );
+const PANEL_OTA_BUILD_STALE_MS = Math.max(
+  60_000,
+  Number(process.env.HOMEBRAIN_PANEL_OTA_BUILD_STALE_MS || 2 * 60 * 1000)
+);
 
 const PANEL_MODE_ORDER = Object.freeze(['thermostat', 'room', 'home', 'media', 'quiet']);
 const THERMOSTAT_MODES = Object.freeze(['auto', 'cool', 'heat', 'off']);
@@ -150,6 +154,24 @@ function otaActivationCanFinalize(ota = {}) {
 
   return ['downloading', 'installing', 'rebooting'].includes(normalized.status)
     || ['downloading', 'download', 'installing', 'write', 'verifying', 'rebooting'].includes(normalized.phase);
+}
+
+function otaBuildIsStale(ota = {}, now = new Date()) {
+  const normalized = normalizeOtaState(ota);
+  if (!['queued', 'building'].includes(normalized.status)) {
+    return false;
+  }
+
+  if (normalized.artifactPath || normalized.bytesTransferred > 0 || normalized.bytesTotal > 0) {
+    return false;
+  }
+
+  const referenceTime = normalized.updatedAt || normalized.startedAt || normalized.requestedAt;
+  if (!referenceTime) {
+    return false;
+  }
+
+  return (now.getTime() - referenceTime.getTime()) >= PANEL_OTA_BUILD_STALE_MS;
 }
 
 function buildPanelFirmwareVersion() {
@@ -2017,14 +2039,23 @@ class WallPanelService {
   }
 
   async pushFirmwareUpdate(panelId) {
-    const panel = normalizePanelDocument(await getPanelDocument(panelId));
+    let panel = normalizePanelDocument(await getPanelDocument(panelId));
 
     if (!panel.settings.registered) {
       throw createError(400, 'This hardware orb has not completed its first activation yet');
     }
 
     if (otaStatusIsActive(panel.ota.status)) {
-      throw createError(409, 'A firmware update is already in progress for this hardware orb');
+      if (panel.ota.jobId && otaBuildIsStale(panel.ota)) {
+        await this.failPanelOtaJob(
+          panel.id,
+          panel.ota.jobId,
+          new Error('A stale orb OTA build was recovered after the backend restarted.')
+        );
+        panel = normalizePanelDocument(await getPanelDocument(panelId));
+      } else {
+        throw createError(409, 'A firmware update is already in progress for this hardware orb');
+      }
     }
 
     const buildTarget = resolvePanelBuildTarget(panel.hardwareProfile);

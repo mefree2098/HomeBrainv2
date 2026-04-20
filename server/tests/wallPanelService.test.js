@@ -1275,3 +1275,80 @@ test('reportPanelOtaStatus preserves known OTA bytesTotal when download updates 
   assert.equal(capturedOptions.allowMissingJob, true);
   assert.equal(capturedOptions.touchLastSeen, true);
 });
+
+test('pushFirmwareUpdate recovers a stale orb OTA build before queuing a new update', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const recoveredJobs = [];
+
+  const panelDoc = {
+    _id: 'panel-stale-build',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    firmwareVersion: 'panel-old',
+    ota: {
+      jobId: 'job-stale-build',
+      status: 'building',
+      phase: 'building',
+      progress: 24,
+      targetVersion: 'panel-target-old',
+      currentVersion: 'panel-old',
+      message: 'Compiling wall panel firmware...',
+      updatedAt: new Date(Date.now() - (3 * 60 * 1000)),
+      startedAt: new Date(Date.now() - (3 * 60 * 1000)),
+      requestedAt: new Date(Date.now() - (3 * 60 * 1000)),
+      previousPanelStatus: 'online',
+      artifactPath: '',
+      artifactSizeBytes: 0,
+      bytesTransferred: 0,
+      bytesTotal: 0
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-ABCD-EF12-3456'
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const service = new WallPanelService();
+  service.getLatestPanelFirmwareVersion = async () => 'panel-20260420T205435Z-b36dc043';
+  service.failPanelOtaJob = async (panelId, jobId, error) => {
+    recoveredJobs.push({ panelId, jobId, message: error.message });
+    panelDoc.status = 'online';
+    panelDoc.ota = {
+      jobId,
+      status: 'failed',
+      phase: 'failed',
+      progress: 0,
+      targetVersion: panelDoc.ota.targetVersion,
+      currentVersion: panelDoc.firmwareVersion,
+      message: error.message,
+      lastError: error.message,
+      previousPanelStatus: 'online'
+    };
+  };
+  service.buildPanelOtaArtifact = async () => {};
+  service.serializePanelForResponse = async (panel) => panel;
+
+  const result = await service.pushFirmwareUpdate('panel-stale-build');
+
+  assert.equal(recoveredJobs.length, 1);
+  assert.equal(recoveredJobs[0].panelId, 'panel-stale-build');
+  assert.equal(recoveredJobs[0].jobId, 'job-stale-build');
+  assert.match(recoveredJobs[0].message, /stale orb OTA build/i);
+  assert.notEqual(result.ota.jobId, 'job-stale-build');
+  assert.equal(result.ota.status, 'queued');
+  assert.equal(result.ota.targetVersion, 'panel-20260420T205435Z-b36dc043');
+});
