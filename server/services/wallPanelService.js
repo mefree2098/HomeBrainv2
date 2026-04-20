@@ -23,9 +23,17 @@ const PANEL_CLAIM_TOKEN_TTL_MS = Math.max(
 );
 
 const DEFAULT_POLL_INTERVAL_MS = Math.max(
-  1_000,
-  Number(process.env.WALL_PANEL_POLL_INTERVAL_MS || 4_000)
+  500,
+  Number(process.env.WALL_PANEL_POLL_INTERVAL_MS || 1_000)
 );
+
+const PANEL_REALTIME_POLL_INTERVAL_MS = Math.max(
+  500,
+  Number(process.env.WALL_PANEL_REALTIME_POLL_INTERVAL_MS || 1_000)
+);
+
+const PANEL_MOUNT_OFFSET_MIN_TENTHS = -150;
+const PANEL_MOUNT_OFFSET_MAX_TENTHS = 150;
 
 const PANEL_FIRMWARE_VERSION_CACHE_TTL_MS = Math.max(
   1_000,
@@ -302,6 +310,16 @@ function normalizeNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeMountOffsetTenths(value, fallback = 0) {
+  const parsed = Math.round(normalizeNumber(value, fallback));
+  return Math.max(PANEL_MOUNT_OFFSET_MIN_TENTHS, Math.min(PANEL_MOUNT_OFFSET_MAX_TENTHS, parsed));
+}
+
+function resolvePanelPollIntervalMs(value) {
+  const normalized = Math.max(500, normalizeNumber(value, DEFAULT_POLL_INTERVAL_MS));
+  return Math.min(normalized, PANEL_REALTIME_POLL_INTERVAL_MS);
+}
+
 function buildRegistrationCode() {
   const raw = crypto.randomBytes(6).toString('hex').toUpperCase();
   return `HBWP-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
@@ -465,12 +483,21 @@ function buildThemeSnapshot() {
   };
 }
 
+function buildOrientationSnapshot(panel) {
+  const offsetTenths = normalizeMountOffsetTenths(panel?.settings?.mountAlignment?.offsetTenths, 0);
+  return {
+    mountOffsetTenths: offsetTenths,
+    mountOffsetDegrees: offsetTenths / 10,
+    clockwisePositive: true
+  };
+}
+
 function buildDefaultSettings(overrides = {}) {
   const input = overrides && typeof overrides === 'object' ? overrides : {};
   return {
     integrationKind: 'elecrow-wall-panel',
     theme: 'homebrain-ios-future',
-    pollingIntervalMs: normalizeNumber(input.pollingIntervalMs, DEFAULT_POLL_INTERVAL_MS),
+    pollingIntervalMs: resolvePanelPollIntervalMs(input.pollingIntervalMs),
     modeOrder: Array.isArray(input.modeOrder) && input.modeOrder.length > 0
       ? input.modeOrder.map((value) => trimString(value)).filter(Boolean)
       : [...PANEL_MODE_ORDER],
@@ -481,6 +508,9 @@ function buildDefaultSettings(overrides = {}) {
     registrationCode: trimString(input.registrationCode),
     claimToken: trimString(input.claimToken),
     claimTokenExpires: input.claimTokenExpires ? new Date(input.claimTokenExpires) : null,
+    mountAlignment: {
+      offsetTenths: normalizeMountOffsetTenths(input?.mountAlignment?.offsetTenths, 0)
+    },
     thermostat: {
       deviceId: toId(input?.thermostat?.deviceId),
       sensorDeviceId: toId(input?.thermostat?.sensorDeviceId),
@@ -529,6 +559,10 @@ function mergeSettings(existing = {}, updates = {}) {
     homeStatus: {
       ...current.homeStatus,
       ...(next.homeStatus || {})
+    },
+    mountAlignment: {
+      ...current.mountAlignment,
+      ...(next.mountAlignment || {})
     },
     harmony: {
       ...current.harmony,
@@ -2414,11 +2448,12 @@ class WallPanelService {
         lastSeen: panel.lastSeen || null
       },
       transport: {
-        pollIntervalMs: panel.settings.pollingIntervalMs || DEFAULT_POLL_INTERVAL_MS,
+        pollIntervalMs: resolvePanelPollIntervalMs(panel.settings.pollingIntervalMs),
         supportsEncoder: true,
         supportsSwipeModes: true
       },
       ota: buildPanelOtaPayload(panel, origin),
+      orientation: buildOrientationSnapshot(panel),
       theme: buildThemeSnapshot(),
       modeOrder,
       modes: modeMap,

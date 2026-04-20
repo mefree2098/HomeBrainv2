@@ -11,6 +11,7 @@
 #include <Adafruit_CST8XX.h>
 #include <PCF8574.h>
 #include <Preferences.h>
+#include <math.h>
 #include <memory>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -44,6 +45,8 @@ constexpr uint8_t kBacklightPin = 6;
 constexpr uint8_t kTouchAddress = 0x15;
 constexpr uint16_t kScreenWidth = 480;
 constexpr uint16_t kScreenHeight = 480;
+constexpr lv_coord_t kScreenCenterX = static_cast<lv_coord_t>(kScreenWidth / 2);
+constexpr lv_coord_t kScreenCenterY = static_cast<lv_coord_t>(kScreenHeight / 2);
 constexpr uint8_t kActionSlots = 4;
 constexpr uint8_t kRemoteModeSlots = 5;
 constexpr uint8_t kSettingsModeSlot = 5;
@@ -92,6 +95,9 @@ constexpr lv_coord_t kThermostatCenterZoom = 256;
 constexpr lv_coord_t kThermostatAdjustmentZoom = 256;
 constexpr lv_coord_t kThermostatWeatherZoom = 352;
 constexpr lv_opa_t kThermostatWeatherOpacity = static_cast<lv_opa_t>(72);
+constexpr int16_t kMountOffsetMinTenths = -150;
+constexpr int16_t kMountOffsetMaxTenths = 150;
+constexpr float kPi = 3.14159265358979323846f;
 
 PCF8574 gPcf8574(0x21);
 Adafruit_CST8XX gTouchPanel;
@@ -273,6 +279,8 @@ unsigned long gLastLiveStateAppliedAt = 0;
 unsigned long gPendingOtaActivatedAt = 0;
 
 int gBrightnessPercent = kBrightnessDefaultPercent;
+int16_t gMountOffsetTenths = 0;
+int16_t gPersistedMountOffsetTenths = 0;
 bool gPendingBrightnessPersist = false;
 bool gSpiffsReady = false;
 bool gLoadedCachedState = false;
@@ -443,6 +451,79 @@ String brightnessLabel(int value) {
   return String(normalizeBrightnessPercent(value)) + String("%");
 }
 
+int16_t normalizeMountOffsetTenths(long value) {
+  return static_cast<int16_t>(constrain(static_cast<int>(value), kMountOffsetMinTenths, kMountOffsetMaxTenths));
+}
+
+void persistMountOffsetTenthsIfNeeded(int16_t value) {
+  const int16_t normalized = normalizeMountOffsetTenths(value);
+  gMountOffsetTenths = normalized;
+  if (normalized == gPersistedMountOffsetTenths) {
+    return;
+  }
+
+  gPreferences.putShort("mount_offset", normalized);
+  gPersistedMountOffsetTenths = normalized;
+}
+
+void applyMountOffsetToObjectPosition(lv_obj_t* object) {
+  if (!object || gMountOffsetTenths == 0) {
+    return;
+  }
+
+  const float radians = static_cast<float>(gMountOffsetTenths) * kPi / 1800.0f;
+  const float sinTheta = sinf(radians);
+  const float cosTheta = cosf(radians);
+  const lv_coord_t width = lv_obj_get_width(object);
+  const lv_coord_t height = lv_obj_get_height(object);
+  const float centerX = static_cast<float>(lv_obj_get_x(object)) + (static_cast<float>(width) * 0.5f);
+  const float centerY = static_cast<float>(lv_obj_get_y(object)) + (static_cast<float>(height) * 0.5f);
+  const float deltaX = centerX - static_cast<float>(kScreenCenterX);
+  const float deltaY = centerY - static_cast<float>(kScreenCenterY);
+  const float rotatedCenterX = static_cast<float>(kScreenCenterX) + (deltaX * cosTheta) - (deltaY * sinTheta);
+  const float rotatedCenterY = static_cast<float>(kScreenCenterY) + (deltaX * sinTheta) + (deltaY * cosTheta);
+
+  lv_obj_set_pos(
+    object,
+    static_cast<lv_coord_t>(lroundf(rotatedCenterX - (static_cast<float>(width) * 0.5f))),
+    static_cast<lv_coord_t>(lroundf(rotatedCenterY - (static_cast<float>(height) * 0.5f)))
+  );
+}
+
+void applyUiMountOffset() {
+  if (!gArc) {
+    return;
+  }
+
+  lv_obj_set_style_transform_pivot_x(gArc, lv_obj_get_width(gArc) / 2, 0);
+  lv_obj_set_style_transform_pivot_y(gArc, lv_obj_get_height(gArc) / 2, 0);
+  lv_obj_set_style_transform_angle(gArc, gMountOffsetTenths, 0);
+
+  if (gWeatherGlyphImage) {
+    lv_obj_set_style_transform_pivot_x(gWeatherGlyphImage, lv_obj_get_width(gWeatherGlyphImage) / 2, 0);
+    lv_obj_set_style_transform_pivot_y(gWeatherGlyphImage, lv_obj_get_height(gWeatherGlyphImage) / 2, 0);
+    lv_obj_set_style_transform_angle(gWeatherGlyphImage, gMountOffsetTenths, 0);
+  }
+
+  if (gWeatherBadgeCard) {
+    lv_obj_set_style_transform_pivot_x(gWeatherBadgeCard, lv_obj_get_width(gWeatherBadgeCard) / 2, 0);
+    lv_obj_set_style_transform_pivot_y(gWeatherBadgeCard, lv_obj_get_height(gWeatherBadgeCard) / 2, 0);
+    lv_obj_set_style_transform_angle(gWeatherBadgeCard, gMountOffsetTenths, 0);
+    applyMountOffsetToObjectPosition(gWeatherBadgeCard);
+  }
+
+  applyMountOffsetToObjectPosition(gModeBadge);
+  applyMountOffsetToObjectPosition(gTitleLabel);
+  applyMountOffsetToObjectPosition(gSecondaryLabel);
+  applyMountOffsetToObjectPosition(gRoomOverlaySubtitleLabel);
+  applyMountOffsetToObjectPosition(gHintLabel);
+  applyMountOffsetToObjectPosition(gFooterLabel);
+
+  for (uint8_t index = 0; index < kActionSlots; index += 1) {
+    applyMountOffsetToObjectPosition(gActionButtons[index]);
+  }
+}
+
 long long extractPanelFirmwareTimestamp(const String& value) {
   const int markerIndex = value.indexOf('T');
   if (markerIndex < 8 || markerIndex + 7 >= static_cast<int>(value.length())) {
@@ -550,6 +631,10 @@ void buildPanelStateFilter(JsonDocument& filterDocument) {
 
   JsonObject transport = state["transport"].to<JsonObject>();
   transport["pollIntervalMs"] = true;
+
+  JsonObject orientation = state["orientation"].to<JsonObject>();
+  orientation["mountOffsetTenths"] = true;
+  orientation["clockwisePositive"] = true;
 
   JsonObject ota = state["ota"].to<JsonObject>();
   ota["active"] = true;
@@ -867,6 +952,10 @@ void loadPersistentDeviceSettings() {
   gBrightnessPercent = normalizeBrightnessPercent(
     gPreferences.getInt("brightness", kBrightnessDefaultPercent)
   );
+  gMountOffsetTenths = normalizeMountOffsetTenths(
+    gPreferences.getShort("mount_offset", 0)
+  );
+  gPersistedMountOffsetTenths = gMountOffsetTenths;
 }
 
 void initBacklight() {
@@ -893,6 +982,10 @@ void commitPendingDeviceLevelIfReady();
 void queueDeviceLevelDispatch(const String& targetId, int value);
 bool toggleRoomLight(ModeSnapshot& mode);
 void hideRoomSurfaceLabels();
+int16_t normalizeMountOffsetTenths(long value);
+void persistMountOffsetTenthsIfNeeded(int16_t value);
+void applyMountOffsetToObjectPosition(lv_obj_t* object);
+void applyUiMountOffset();
 int activeEncoderThreshold();
 int encoderStepAmount(const ModeSnapshot& mode, int direction, int turnCount, unsigned long latestIntervalUs);
 uint8_t readEncoderStateFast();
@@ -1184,6 +1277,8 @@ bool parseState(JsonDocument& document) {
   gState.room = jsonVariantToString(state["panel"]["room"]);
   gState.panelStatus = jsonVariantToString(state["panel"]["status"]);
   gState.hardwareProfile = jsonVariantToString(state["panel"]["hardwareProfile"]);
+  gMountOffsetTenths = normalizeMountOffsetTenths(state["orientation"]["mountOffsetTenths"] | gPersistedMountOffsetTenths);
+  persistMountOffsetTenthsIfNeeded(gMountOffsetTenths);
   gState.pollIntervalMs = state["transport"]["pollIntervalMs"] | kStateRefreshFallbackMs;
   gState.ota.active = state["ota"]["active"] | false;
   gState.ota.available = state["ota"]["available"] | false;
@@ -2410,6 +2505,7 @@ void renderMode() {
     lv_arc_set_range(gArc, 0, 100);
     lv_arc_set_value(gArc, 18);
     hideAllActionButtons();
+    applyUiMountOffset();
     updateFooter();
     return;
   }
@@ -2466,6 +2562,7 @@ void renderMode() {
     renderStandardButtons(*mode);
   }
 
+  applyUiMountOffset();
   updateFooter();
 }
 
@@ -2745,6 +2842,7 @@ void renderOtaProgressScreen(const String& title, int progress, const String& me
   lv_obj_set_style_arc_color(gArc, hex(homebrain::palette::kAccentBlue), LV_PART_INDICATOR);
   lv_arc_set_range(gArc, 0, 100);
   lv_arc_set_value(gArc, progress);
+  applyUiMountOffset();
 }
 
 bool reportOtaStatus(

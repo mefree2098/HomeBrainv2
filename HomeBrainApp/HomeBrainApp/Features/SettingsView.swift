@@ -12,6 +12,9 @@ struct SettingsView: View {
     @State private var authSessionMaxAgeDays = 365
     @State private var authSessions: [AuthSessionRecord] = []
     @State private var revokingSessionIDs: Set<String> = []
+    @State private var hardwareOrbs: [HardwareOrbRecord] = []
+    @State private var hardwareOrbLoadError: String?
+    @State private var savingHardwareOrbIDs: Set<String> = []
 
     @State private var location = ""
     @State private var timezone = ""
@@ -240,6 +243,115 @@ struct SettingsView: View {
                         .buttonStyle(.bordered)
                     }
 
+                    Section("Hardware Orbs") {
+                        Text("Rotate each orb UI in 0.5° steps to compensate for wall mounting. Changes save per device, sync through HomeBrain immediately, and the orb keeps the latest offset across reloads.")
+                            .font(.footnote)
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                        if let hardwareOrbLoadError {
+                            Text(hardwareOrbLoadError)
+                                .font(.footnote)
+                                .foregroundStyle(HBPalette.accentRed)
+                        } else if hardwareOrbs.isEmpty {
+                            Text("No hardware orbs registered yet.")
+                                .font(.subheadline)
+                                .foregroundStyle(HBPalette.textSecondary)
+                        } else {
+                            ForEach(hardwareOrbs) { hardwareOrb in
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(hardwareOrb.name)
+                                                .font(.headline)
+                                            Text("\(hardwareOrb.room) • \(hardwareOrb.statusLabel)")
+                                                .font(.caption)
+                                                .foregroundStyle(HBPalette.textSecondary)
+                                        }
+                                        Spacer()
+                                        if savingHardwareOrbIDs.contains(hardwareOrb.id) {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                        } else {
+                                            Text("Saved")
+                                                .font(.caption.weight(.semibold))
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(HBPalette.panelSoft.opacity(0.92))
+                                                .foregroundStyle(HBPalette.textSecondary)
+                                                .clipShape(Capsule())
+                                        }
+                                    }
+
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text("Offset")
+                                            .font(.subheadline.weight(.semibold))
+                                        Spacer()
+                                        Text(hardwareOrb.formattedMountOffset)
+                                            .font(.title3.weight(.semibold))
+                                            .monospacedDigit()
+                                            .foregroundStyle(HBPalette.textPrimary)
+                                    }
+
+                                    HStack(spacing: 8) {
+                                        Button {
+                                            Task {
+                                                await adjustHardwareOrbRotation(
+                                                    hardwareOrb,
+                                                    deltaTenths: -HardwareOrbRecord.mountOffsetStepTenths
+                                                )
+                                            }
+                                        } label: {
+                                            Label("Counterclockwise", systemImage: "rotate.left")
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(
+                                            savingHardwareOrbIDs.contains(hardwareOrb.id)
+                                            || hardwareOrb.mountOffsetTenths <= HardwareOrbRecord.mountOffsetMinimumTenths
+                                        )
+
+                                        Button("Reset") {
+                                            Task {
+                                                await setHardwareOrbRotation(hardwareOrb, offsetTenths: 0)
+                                            }
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(
+                                            savingHardwareOrbIDs.contains(hardwareOrb.id)
+                                            || hardwareOrb.mountOffsetTenths == 0
+                                        )
+
+                                        Button {
+                                            Task {
+                                                await adjustHardwareOrbRotation(
+                                                    hardwareOrb,
+                                                    deltaTenths: HardwareOrbRecord.mountOffsetStepTenths
+                                                )
+                                            }
+                                        } label: {
+                                            Label("Clockwise", systemImage: "rotate.right")
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(HBPalette.accentBlue)
+                                        .disabled(
+                                            savingHardwareOrbIDs.contains(hardwareOrb.id)
+                                            || hardwareOrb.mountOffsetTenths >= HardwareOrbRecord.mountOffsetMaximumTenths
+                                        )
+                                    }
+
+                                    Text("Range \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMinimumTenths)) to \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMaximumTenths)); positive values rotate the visual layer clockwise.")
+                                        .font(.caption)
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+
+                        Button("Refresh Hardware Orbs") {
+                            Task { await loadHardwareOrbs() }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
                     Section("API Keys & Tests") {
                         SecureField("OpenAI API Key", text: $openaiApiKey)
                         HStack {
@@ -350,6 +462,7 @@ struct SettingsView: View {
 
             serverURL = session.serverURLString
             await loadAuthSessions()
+            await loadHardwareOrbs()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -486,6 +599,84 @@ struct SettingsView: View {
             errorMessage = error.localizedDescription
         }
     }
+
+    private func loadHardwareOrbs() async {
+        hardwareOrbLoadError = nil
+
+        do {
+            let response = try await session.apiClient.get("/api/panels")
+            let object = JSON.object(response)
+            hardwareOrbs = JSON.array(object["panels"])
+                .compactMap(HardwareOrbRecord.from)
+                .sorted { lhs, rhs in
+                    if lhs.room.localizedCaseInsensitiveCompare(rhs.room) == .orderedSame {
+                        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                    }
+                    return lhs.room.localizedCaseInsensitiveCompare(rhs.room) == .orderedAscending
+                }
+        } catch {
+            hardwareOrbs = []
+            hardwareOrbLoadError = error.localizedDescription
+        }
+    }
+
+    private func adjustHardwareOrbRotation(_ hardwareOrb: HardwareOrbRecord, deltaTenths: Int) async {
+        await setHardwareOrbRotation(
+            hardwareOrb,
+            offsetTenths: hardwareOrb.mountOffsetTenths + deltaTenths
+        )
+    }
+
+    private func setHardwareOrbRotation(_ hardwareOrb: HardwareOrbRecord, offsetTenths: Int) async {
+        let clampedOffset = HardwareOrbRecord.clampMountOffset(offsetTenths)
+        guard clampedOffset != hardwareOrb.mountOffsetTenths else {
+            return
+        }
+
+        let previousHardwareOrbs = hardwareOrbs
+        updateHardwareOrb(id: hardwareOrb.id) { current in
+            var updated = current
+            updated.mountOffsetTenths = clampedOffset
+            return updated
+        }
+
+        savingHardwareOrbIDs.insert(hardwareOrb.id)
+        defer { savingHardwareOrbIDs.remove(hardwareOrb.id) }
+
+        do {
+            let response = try await session.apiClient.put(
+                "/api/panels/\(hardwareOrb.id)",
+                body: [
+                    "settings": [
+                        "mountAlignment": [
+                            "offsetTenths": clampedOffset
+                        ]
+                    ]
+                ]
+            )
+            let object = JSON.object(response)
+            if let refreshed = HardwareOrbRecord.from(JSON.object(object["panel"])) {
+                updateHardwareOrb(id: refreshed.id) { _ in refreshed }
+            }
+            infoMessage = "\(hardwareOrb.name) mount offset updated to \(HardwareOrbRecord.formattedMountOffset(clampedOffset))."
+            errorMessage = nil
+        } catch {
+            hardwareOrbs = previousHardwareOrbs
+            hardwareOrbLoadError = error.localizedDescription
+        }
+    }
+
+    private func updateHardwareOrb(
+        id: String,
+        transform: (HardwareOrbRecord) -> HardwareOrbRecord
+    ) {
+        hardwareOrbs = hardwareOrbs.map { hardwareOrb in
+            guard hardwareOrb.id == id else {
+                return hardwareOrb
+            }
+            return transform(hardwareOrb)
+        }
+    }
 }
 
 private struct AuthSessionRecord: Identifiable {
@@ -521,4 +712,52 @@ private func settingsFormatDateTime(_ value: String) -> String {
     }
 
     return date.formatted(date: .abbreviated, time: .shortened)
+}
+
+private struct HardwareOrbRecord: Identifiable {
+    static let mountOffsetMinimumTenths = -150
+    static let mountOffsetMaximumTenths = 150
+    static let mountOffsetStepTenths = 5
+
+    let id: String
+    let name: String
+    let room: String
+    let status: String
+    var mountOffsetTenths: Int
+
+    var statusLabel: String {
+        status.isEmpty ? "Unknown" : status.capitalized
+    }
+
+    var formattedMountOffset: String {
+        Self.formattedMountOffset(mountOffsetTenths)
+    }
+
+    static func from(_ object: [String: Any]) -> HardwareOrbRecord? {
+        let id = JSON.id(object)
+        guard !id.isEmpty else {
+            return nil
+        }
+
+        let settings = JSON.object(object["settings"])
+        let mountAlignment = JSON.object(settings["mountAlignment"])
+
+        return HardwareOrbRecord(
+            id: id,
+            name: JSON.string(object, "name", fallback: "Unnamed Orb"),
+            room: JSON.string(object, "room", fallback: "Unassigned"),
+            status: JSON.string(object, "status", fallback: "offline"),
+            mountOffsetTenths: clampMountOffset(JSON.int(mountAlignment, "offsetTenths"))
+        )
+    }
+
+    static func clampMountOffset(_ value: Int) -> Int {
+        min(max(value, mountOffsetMinimumTenths), mountOffsetMaximumTenths)
+    }
+
+    static func formattedMountOffset(_ value: Int) -> String {
+        let clamped = clampMountOffset(value)
+        let sign = clamped > 0 ? "+" : ""
+        return "\(sign)\(String(format: "%.1f", Double(clamped) / 10.0))°"
+    }
 }

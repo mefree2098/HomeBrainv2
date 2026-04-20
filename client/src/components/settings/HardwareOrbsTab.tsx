@@ -9,6 +9,8 @@ import {
   Moon,
   Plus,
   RefreshCw,
+  RotateCcw,
+  RotateCw,
   Save,
   Thermometer,
   Tv,
@@ -68,6 +70,7 @@ type PanelDraft = {
   room: string
   hardwareProfile: WallPanelRecord["hardwareProfile"]
   powerSource: WallPanelRecord["powerSource"]
+  mountOffsetTenths: number
   thermostatDeviceId: string
   sensorDeviceId: string
   thermostatBedtimeSceneId: string
@@ -106,6 +109,9 @@ const DEFAULT_CREATE_DRAFT: CreatePanelDraft = {
 }
 
 const OTA_ACTIVE_STATUSES = new Set(["queued", "building", "ready", "downloading", "installing", "rebooting"])
+const MOUNT_OFFSET_STEP_TENTHS = 5
+const MOUNT_OFFSET_MIN_TENTHS = -150
+const MOUNT_OFFSET_MAX_TENTHS = 150
 
 const sortPanels = (panels: WallPanelRecord[]) =>
   [...panels].sort((left, right) => {
@@ -117,6 +123,20 @@ const sortPanels = (panels: WallPanelRecord[]) =>
   })
 
 const normalizeString = (value: string | undefined | null) => (value || "").trim()
+const clampMountOffsetTenths = (value: number) =>
+  Math.max(MOUNT_OFFSET_MIN_TENTHS, Math.min(MOUNT_OFFSET_MAX_TENTHS, Math.round(value)))
+
+const getMountOffsetTenths = (panel: WallPanelRecord | null | undefined) =>
+  clampMountOffsetTenths(Number(panel?.settings?.mountAlignment?.offsetTenths || 0))
+
+const formatMountOffset = (valueTenths: number) => {
+  const normalized = clampMountOffsetTenths(valueTenths)
+  const degrees = (normalized / 10).toFixed(1)
+  if (normalized > 0) {
+    return `+${degrees}°`
+  }
+  return `${degrees}°`
+}
 
 const isTemperatureCapable = (device: DeviceRecord) => {
   return [
@@ -187,6 +207,7 @@ const toPanelDraft = (panel: WallPanelRecord): PanelDraft => ({
   room: normalizeString(panel.room),
   hardwareProfile: panel.hardwareProfile || "elecrow-crowpanel-2.1-rotary",
   powerSource: panel.powerSource || "wired",
+  mountOffsetTenths: getMountOffsetTenths(panel),
   thermostatDeviceId: normalizeString(panel.settings?.thermostat?.deviceId),
   sensorDeviceId: normalizeString(panel.settings?.thermostat?.sensorDeviceId),
   thermostatBedtimeSceneId: normalizeString(panel.settings?.thermostat?.bedtimeSceneId),
@@ -217,6 +238,9 @@ const buildUpdatePayload = (draft: PanelDraft) => ({
   hardwareProfile: draft.hardwareProfile,
   powerSource: draft.powerSource,
   settings: {
+    mountAlignment: {
+      offsetTenths: clampMountOffsetTenths(draft.mountOffsetTenths)
+    },
     thermostat: {
       deviceId: normalizeString(draft.thermostatDeviceId),
       sensorDeviceId: normalizeString(draft.sensorDeviceId),
@@ -301,6 +325,7 @@ export function HardwareOrbsTab() {
   const [loadingProvisioningKey, setLoadingProvisioningKey] = useState("")
   const [rotatingProvisioningKey, setRotatingProvisioningKey] = useState("")
   const [pushingUpdateKey, setPushingUpdateKey] = useState("")
+  const [rotationSavingKey, setRotationSavingKey] = useState("")
 
   const selectedPanel = useMemo(
     () => panels.find((panel) => panel.id === selectedPanelId) || null,
@@ -468,6 +493,7 @@ export function HardwareOrbsTab() {
 
   const selectedPanelOta = selectedPanel?.ota
   const selectedPanelOtaBusy = isOtaBusy(selectedPanel)
+  const selectedPanelMountOffsetTenths = getMountOffsetTenths(selectedPanel)
   const selectedPanelFirmwareVersion = normalizeString(selectedPanel?.firmwareVersion)
   const selectedPanelLatestFirmwareVersion = normalizeString(selectedPanel?.latestFirmwareVersion)
   const selectedPanelFirmwareUpdateAvailable = Boolean(
@@ -596,6 +622,33 @@ export function HardwareOrbsTab() {
       })
     } finally {
       setPushingUpdateKey("")
+    }
+  }
+
+  const persistMountOffset = async (panel: WallPanelRecord, nextOffsetTenths: number) => {
+    const clampedOffsetTenths = clampMountOffsetTenths(nextOffsetTenths)
+    if (clampedOffsetTenths === getMountOffsetTenths(panel)) {
+      return
+    }
+
+    setRotationSavingKey(panel.id)
+    try {
+      const response = await updateWallPanel(panel.id, {
+        settings: {
+          mountAlignment: {
+            offsetTenths: clampedOffsetTenths
+          }
+        }
+      })
+      replacePanel(response.panel)
+    } catch (error: any) {
+      toast({
+        title: "Rotation update failed",
+        description: error?.message || "Unable to save the orb mount offset.",
+        variant: "destructive"
+      })
+    } finally {
+      setRotationSavingKey("")
     }
   }
 
@@ -800,6 +853,8 @@ export function HardwareOrbsTab() {
                       <span>{hardwareProfileLabel(panel.hardwareProfile)}</span>
                       <span>•</span>
                       <span>{panel.settings?.registered ? "Provisioned" : "Awaiting first activation"}</span>
+                      <span>•</span>
+                      <span>Offset {formatMountOffset(getMountOffsetTenths(panel))}</span>
                     </div>
                     <div className="mt-4 flex flex-wrap gap-2">
                       <Button
@@ -917,6 +972,88 @@ export function HardwareOrbsTab() {
                         HomeBrain host version: {selectedPanelLatestFirmwareVersion}
                       </p>
                     ) : null}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <RotateCw className="h-5 w-5 text-cyan-500" />
+                    Mount Alignment
+                  </CardTitle>
+                  <CardDescription>
+                    Rotate the orb UI in 0.5° steps to compensate for a wall mount that is slightly off. Each tap saves immediately, and the orb keeps the offset across reloads.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+                  <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current Offset</p>
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <p className="text-3xl font-semibold">{formatMountOffset(selectedPanelMountOffsetTenths)}</p>
+                      {rotationSavingKey === selectedPanel.id ? (
+                        <Badge variant="secondary">
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          Saving
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">
+                          Saved on orb
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      Positive values rotate the visual layer clockwise. The orb now fast-polls HomeBrain so these adjustments land almost immediately while you stand at the wall and fine-tune it.
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void persistMountOffset(selectedPanel, selectedPanelMountOffsetTenths - MOUNT_OFFSET_STEP_TENTHS)}
+                        disabled={rotationSavingKey === selectedPanel.id || selectedPanelMountOffsetTenths <= MOUNT_OFFSET_MIN_TENTHS}
+                      >
+                        <RotateCcw className="mr-2 h-4 w-4" />
+                        Counterclockwise
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void persistMountOffset(selectedPanel, 0)}
+                        disabled={rotationSavingKey === selectedPanel.id || selectedPanelMountOffsetTenths === 0}
+                      >
+                        Reset to 0.0°
+                      </Button>
+                      <Button
+                        type="button"
+                        className="bg-cyan-600 hover:bg-cyan-700 text-white"
+                        onClick={() => void persistMountOffset(selectedPanel, selectedPanelMountOffsetTenths + MOUNT_OFFSET_STEP_TENTHS)}
+                        disabled={rotationSavingKey === selectedPanel.id || selectedPanelMountOffsetTenths >= MOUNT_OFFSET_MAX_TENTHS}
+                      >
+                        <RotateCw className="mr-2 h-4 w-4" />
+                        Clockwise
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+                    <p className="text-sm font-medium">How the orb applies this</p>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      HomeBrain stores this per orb in the database, the orb also keeps the latest value locally, and the firmware re-lays out the visual layer instead of rotating the display or remapping touch.
+                    </p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+                      <div className="rounded-xl border border-border/60 bg-background/80 p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Range</p>
+                        <p className="mt-1 font-medium">-15.0° to +15.0°</p>
+                      </div>
+                      <div className="rounded-xl border border-border/60 bg-background/80 p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Step</p>
+                        <p className="mt-1 font-medium">0.5° per tap</p>
+                      </div>
+                      <div className="rounded-xl border border-border/60 bg-background/80 p-3">
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Stored</p>
+                        <p className="mt-1 font-medium">{selectedPanel.settings?.registered ? "DB + orb cache" : "DB + next activation"}</p>
+                      </div>
+                    </div>
                   </div>
                 </CardContent>
               </Card>

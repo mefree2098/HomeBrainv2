@@ -11,6 +11,9 @@ export type WallPanelSettingsRecord = {
   claimTokenExpires?: string | null
   pollingIntervalMs?: number
   modeOrder?: string[]
+  mountAlignment?: {
+    offsetTenths?: number
+  }
   thermostat?: {
     deviceId?: string
     sensorDeviceId?: string

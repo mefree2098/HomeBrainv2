@@ -42,6 +42,7 @@ test('registerPanel issues panel credentials and default mode order', async (t) 
   assert.match(result.settings.registrationCode, /^HBWP-/);
   assert.ok(result.settings.claimToken);
   assert.deepEqual(result.settings.modeOrder, ['thermostat', 'room', 'home', 'media', 'quiet']);
+  assert.equal(result.settings.mountAlignment.offsetTenths, 0);
 });
 
 test('activatePanel accepts the registration code and clears the claim token', async (t) => {
@@ -273,6 +274,9 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
       claimToken: '',
       claimTokenExpires: null,
       pollingIntervalMs: 4000,
+      mountAlignment: {
+        offsetTenths: 25
+      },
       modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet'],
       thermostat: {
         deviceId: 'thermo-1',
@@ -357,6 +361,10 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   }, 'https://example.com');
 
   assert.deepEqual(result.modeOrder, ['thermostat', 'room', 'home', 'media', 'quiet']);
+  assert.equal(result.transport.pollIntervalMs, 1000);
+  assert.equal(result.orientation.mountOffsetTenths, 25);
+  assert.equal(result.orientation.mountOffsetDegrees, 2.5);
+  assert.equal(result.orientation.clockwisePositive, true);
   assert.equal(result.modes.thermostat.centerValue, '69°');
   assert.equal(result.modes.thermostat.meta.mode, 'cool');
   assert.equal(result.modes.thermostat.meta.weatherIcon, 'sunny');
@@ -388,6 +396,50 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   assert.equal(result.modes.quiet.quickActions[0].label, 'Bedtime');
   assert.equal(result.ota.available, false);
   assert.equal(result.ota.downloadUrl, '');
+});
+
+test('updatePanel clamps persisted mount alignment offsets to the supported range', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-rotation-clamp',
+    name: 'Bedroom Orb',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      mountAlignment: {
+        offsetTenths: 0
+      },
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const result = await wallPanelService.updatePanel('panel-rotation-clamp', {
+    settings: {
+      mountAlignment: {
+        offsetTenths: 999
+      }
+    }
+  });
+
+  assert.equal(result.settings.mountAlignment.offsetTenths, 150);
+  assert.equal(panelDoc.settings.mountAlignment.offsetTenths, 150);
 });
 
 test('getPanelState prefers a LAN OTA download URL when the panel and hub share a private subnet', async (t) => {
