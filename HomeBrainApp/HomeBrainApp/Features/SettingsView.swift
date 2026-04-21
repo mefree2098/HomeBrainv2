@@ -1005,72 +1005,274 @@ struct SettingsView: View {
 
     private var settingsHardwareOrbsSection: some View {
         Section("Hardware Orbs") {
-            Text("Rotate each orb UI in 0.5° steps to compensate for wall mounting. Changes save per device and sync through HomeBrain.")
+            Text("Manage the orb fleet from iOS: firmware pushes, OTA status, setup tokens, Wi-Fi credentials, USB provisioning, and mount alignment.")
                 .font(.footnote)
                 .foregroundStyle(HBPalette.textSecondary)
+
+            Picker("Hardware Orb Settings", selection: $selectedHardwareOrbTab) {
+                ForEach(HardwareOrbSettingsTab.allCases) { tab in
+                    Text(tab.title).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
 
             if let hardwareOrbLoadError {
                 Text(hardwareOrbLoadError)
                     .font(.footnote)
                     .foregroundStyle(HBPalette.accentRed)
-            } else if hardwareOrbs.isEmpty {
+            }
+
+            hardwareOrbTabContent
+
+            Button("Refresh Hardware Orbs") {
+                Task { await loadHardwareOrbs() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var hardwareOrbTabContent: some View {
+        switch selectedHardwareOrbTab {
+        case .fleet:
+            hardwareOrbFleetContent
+        case .firmware:
+            hardwareOrbFirmwareContent
+        case .provisioning:
+            hardwareOrbProvisioningContent
+        case .alignment:
+            hardwareOrbAlignmentContent
+        }
+    }
+
+    private var hardwareOrbFleetContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                HardwareOrbMetricView(title: "Fleet", value: "\(hardwareOrbs.count)", subtitle: "Configured")
+                HardwareOrbMetricView(
+                    title: "Provisioned",
+                    value: "\(hardwareOrbs.filter { $0.isRegistered }.count)",
+                    subtitle: "Activated"
+                )
+                HardwareOrbMetricView(
+                    title: "Live",
+                    value: "\(hardwareOrbs.filter { $0.status == "online" }.count)",
+                    subtitle: "Online"
+                )
+            }
+
+            if hardwareOrbs.isEmpty {
+                Text("No hardware orbs registered yet. Use Provisioning to create a setup token or start a USB flash.")
+                    .font(.subheadline)
+                    .foregroundStyle(HBPalette.textSecondary)
+            } else {
+                ForEach(hardwareOrbs) { hardwareOrb in
+                    Button {
+                        selectedHardwareOrbID = hardwareOrb.id
+                        selectedHardwareOrbTab = .firmware
+                    } label: {
+                        HardwareOrbFleetRow(hardwareOrb: hardwareOrb, isSelected: selectedHardwareOrbID == hardwareOrb.id)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var hardwareOrbFirmwareContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            hardwareOrbPicker
+
+            if let hardwareOrb = selectedHardwareOrb {
+                HardwareOrbFirmwareStatusView(hardwareOrb: hardwareOrb)
+
+                if hardwareOrb.hasOtaActivity {
+                    ProgressView(value: Double(hardwareOrb.ota.progress), total: 100)
+                    Text(hardwareOrb.ota.detailText)
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                if !hardwareOrb.ota.lastError.isEmpty {
+                    Text(hardwareOrb.ota.lastError)
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.accentRed)
+                }
+
+                Button {
+                    Task { await pushHardwareOrbFirmwareUpdate(hardwareOrb) }
+                } label: {
+                    Label(
+                        pushingHardwareOrbFirmwareIDs.contains(hardwareOrb.id)
+                            ? "Pushing Firmware Update"
+                            : "Push Firmware Update",
+                        systemImage: "arrow.up.circle"
+                    )
+                }
+                .disabled(!hardwareOrbWifiConfigured
+                    || !hardwareOrb.isRegistered
+                    || hardwareOrb.isOtaBusy
+                    || pushingHardwareOrbFirmwareIDs.contains(hardwareOrb.id))
+
+                if !hardwareOrbWifiConfigured {
+                    Text("Save Hardware Orb Wi-Fi in Provisioning before building USB or OTA firmware images.")
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                } else if !hardwareOrb.isRegistered {
+                    Text("This orb must complete its first activation before Wi-Fi OTA firmware pushes are available.")
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            } else {
+                Text("No hardware orb is selected.")
+                    .font(.subheadline)
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var hardwareOrbProvisioningContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HardwareOrbWifiStatusView(isConfigured: hardwareOrbWifiConfigured)
+
+            TextField("Hardware Orb Wi-Fi SSID", text: $hardwareOrbWifiSsid)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            SecureField(
+                hardwareOrbWifiPasswordConfigured ? "Saved password unchanged" : "Hardware Orb Wi-Fi Password",
+                text: $hardwareOrbWifiPassword
+            )
+            Button {
+                Task { await saveHardwareOrbWifi() }
+            } label: {
+                Label(savingHardwareOrbWifi ? "Saving Wi-Fi" : "Save Wi-Fi", systemImage: "wifi")
+            }
+            .disabled(!hardwareOrbWifiDirty || savingHardwareOrbWifi)
+
+            Divider()
+
+            Text("New Orb")
+                .font(.headline)
+            TextField("Orb name", text: $newHardwareOrbName)
+            TextField("Room", text: $newHardwareOrbRoom)
+            Picker("Hardware Profile", selection: $newHardwareOrbHardwareProfile) {
+                Text("ELECROW 2.1\" Rotary").tag("elecrow-crowpanel-2.1-rotary")
+                Text("ELECROW 1.28\" Rotary").tag("elecrow-crowpanel-1.28-rotary")
+            }
+            .pickerStyle(.menu)
+            Picker("Power Source", selection: $newHardwareOrbPowerSource) {
+                Text("Wired USB").tag("wired")
+                Text("Battery").tag("battery")
+                Text("Both").tag("both")
+            }
+            .pickerStyle(.menu)
+
+            HStack {
+                Button {
+                    Task { await createHardwareOrbSetupToken() }
+                } label: {
+                    Label(creatingHardwareOrb ? "Creating" : "Create Setup Token", systemImage: "plus.circle")
+                }
+                .disabled(creatingHardwareOrb || usbProvisioningHardwareOrb)
+
+                Button {
+                    Task { await provisionHardwareOrbOverUSB() }
+                } label: {
+                    Label(usbProvisioningHardwareOrb ? "Starting USB Flash" : "Provision and Flash USB", systemImage: "externaldrive.connected.to.line.below")
+                }
+                .disabled(!hardwareOrbWifiConfigured || creatingHardwareOrb || usbProvisioningHardwareOrb)
+            }
+
+            Divider()
+
+            Text("Selected Orb Setup")
+                .font(.headline)
+            hardwareOrbPicker
+
+            if let hardwareOrb = selectedHardwareOrb {
+                HStack {
+                    Button {
+                        Task { await loadHardwareOrbProvisioning(hardwareOrb) }
+                    } label: {
+                        Label("Reveal Setup Packet", systemImage: "doc.text")
+                    }
+                    .disabled(provisioningHardwareOrbIDs.contains(hardwareOrb.id))
+
+                    Button {
+                        Task { await rotateHardwareOrbSetupToken(hardwareOrb) }
+                    } label: {
+                        Label("New Setup Token", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(rotatingHardwareOrbIDs.contains(hardwareOrb.id))
+                }
+            }
+
+            if let packet = hardwareOrbProvisioningPacket {
+                HardwareOrbProvisioningPacketView(packet: packet)
+                HStack {
+                    Button("Copy Setup Packet") {
+                        copyHardwareOrbText(packet.setupPacketText, label: "Setup packet")
+                    }
+                    Button("Copy Header Snippet") {
+                        copyHardwareOrbText(packet.headerSnippet, label: "Firmware header snippet")
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var hardwareOrbAlignmentContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Rotate each orb UI in 0.5° steps to compensate for wall mounting. Changes save per device and sync through HomeBrain.")
+                .font(.footnote)
+                .foregroundStyle(HBPalette.textSecondary)
+
+            if hardwareOrbs.isEmpty {
                 Text("No hardware orbs registered yet.")
                     .font(.subheadline)
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
                 ForEach(hardwareOrbs) { hardwareOrb in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(hardwareOrb.name)
-                                    .font(.headline)
-                                Text("\(hardwareOrb.room) · \(hardwareOrb.statusLabel)")
-                                    .font(.caption)
-                                    .foregroundStyle(HBPalette.textSecondary)
+                    HardwareOrbAlignmentRow(
+                        hardwareOrb: hardwareOrb,
+                        isSaving: savingHardwareOrbIDs.contains(hardwareOrb.id),
+                        onRotateLeft: {
+                            Task {
+                                await adjustHardwareOrbRotation(
+                                    hardwareOrb,
+                                    deltaTenths: -HardwareOrbRecord.mountOffsetStepTenths
+                                )
                             }
-                            Spacer()
-                            Text(hardwareOrb.formattedMountOffset)
-                                .font(.headline.monospacedDigit())
+                        },
+                        onReset: {
+                            Task { await setHardwareOrbRotation(hardwareOrb, offsetTenths: 0) }
+                        },
+                        onRotateRight: {
+                            Task {
+                                await adjustHardwareOrbRotation(
+                                    hardwareOrb,
+                                    deltaTenths: HardwareOrbRecord.mountOffsetStepTenths
+                                )
+                            }
                         }
-
-                        HStack(spacing: 8) {
-                            Button {
-                                Task {
-                                    await adjustHardwareOrbRotation(
-                                        hardwareOrb,
-                                        deltaTenths: -HardwareOrbRecord.mountOffsetStepTenths
-                                    )
-                                }
-                            } label: {
-                                Label("Left", systemImage: "rotate.left")
-                            }
-                            .disabled(savingHardwareOrbIDs.contains(hardwareOrb.id))
-
-                            Button("Reset") {
-                                Task { await setHardwareOrbRotation(hardwareOrb, offsetTenths: 0) }
-                            }
-                            .disabled(savingHardwareOrbIDs.contains(hardwareOrb.id) || hardwareOrb.mountOffsetTenths == 0)
-
-                            Button {
-                                Task {
-                                    await adjustHardwareOrbRotation(
-                                        hardwareOrb,
-                                        deltaTenths: HardwareOrbRecord.mountOffsetStepTenths
-                                    )
-                                }
-                            } label: {
-                                Label("Right", systemImage: "rotate.right")
-                            }
-                            .disabled(savingHardwareOrbIDs.contains(hardwareOrb.id))
-                        }
-                    }
-                    .padding(.vertical, 4)
+                    )
                 }
             }
+        }
+        .padding(.vertical, 4)
+    }
 
-            Button("Refresh Hardware Orbs") {
-                Task { await loadHardwareOrbs() }
+    @ViewBuilder
+    private var hardwareOrbPicker: some View {
+        if !hardwareOrbs.isEmpty {
+            Picker("Orb", selection: $selectedHardwareOrbID) {
+                ForEach(hardwareOrbs) { hardwareOrb in
+                    Text(hardwareOrb.name).tag(hardwareOrb.id)
+                }
             }
+            .pickerStyle(.menu)
         }
     }
 
@@ -1107,6 +1309,12 @@ struct SettingsView: View {
 
             smartthingsUseOAuth = JSON.bool(settings, "smartthingsUseOAuth", fallback: smartthingsUseOAuth)
             harmonyHubAddresses = JSON.string(settings, "harmonyHubAddresses", fallback: harmonyHubAddresses)
+            let savedHardwareOrbWifiSsid = JSON.string(settings, "hardwareOrbWifiSsid")
+            hardwareOrbWifiSsid = savedHardwareOrbWifiSsid
+            hardwareOrbWifiSavedSsid = savedHardwareOrbWifiSsid
+            hardwareOrbWifiPassword = ""
+            hardwareOrbWifiPasswordConfigured = JSON.bool(settings, "hardwareOrbWifiPasswordConfigured")
+                || !JSON.string(settings, "hardwareOrbWifiPassword").isEmpty
 
             if let priorityResponse = try? await session.apiClient.get("/api/settings/llm-priority") {
                 let priorityObject = JSON.object(priorityResponse)
@@ -1261,7 +1469,7 @@ struct SettingsView: View {
         do {
             let response = try await session.apiClient.get("/api/panels")
             let object = JSON.object(response)
-            hardwareOrbs = JSON.array(object["panels"])
+            let nextHardwareOrbs = JSON.array(object["panels"])
                 .compactMap(HardwareOrbRecord.from)
                 .sorted { lhs, rhs in
                     if lhs.room.localizedCaseInsensitiveCompare(rhs.room) == .orderedSame {
@@ -1269,9 +1477,187 @@ struct SettingsView: View {
                     }
                     return lhs.room.localizedCaseInsensitiveCompare(rhs.room) == .orderedAscending
                 }
+            hardwareOrbs = nextHardwareOrbs
+            if !nextHardwareOrbs.contains(where: { $0.id == selectedHardwareOrbID }) {
+                selectedHardwareOrbID = nextHardwareOrbs.first?.id ?? ""
+            }
         } catch {
             hardwareOrbs = []
             hardwareOrbLoadError = error.localizedDescription
+        }
+    }
+
+    private func saveHardwareOrbWifi() async {
+        let ssid = hardwareOrbWifiSsid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = hardwareOrbWifiPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !ssid.isEmpty, !password.isEmpty || hardwareOrbWifiPasswordConfigured else {
+            errorMessage = "Save the Hardware Orb Wi-Fi SSID and password before building orb firmware."
+            return
+        }
+
+        savingHardwareOrbWifi = true
+        defer { savingHardwareOrbWifi = false }
+
+        var payload: [String: Any] = ["hardwareOrbWifiSsid": ssid]
+        if !password.isEmpty {
+            payload["hardwareOrbWifiPassword"] = password
+        }
+
+        do {
+            let response = try await session.apiClient.put("/api/settings", body: payload)
+            let object = JSON.object(response)
+            let settings = JSON.object(object["settings"])
+            let savedSsid = JSON.string(settings, "hardwareOrbWifiSsid", fallback: ssid)
+            hardwareOrbWifiSsid = savedSsid
+            hardwareOrbWifiSavedSsid = savedSsid
+            hardwareOrbWifiPassword = ""
+            hardwareOrbWifiPasswordConfigured = JSON.bool(settings, "hardwareOrbWifiPasswordConfigured")
+                || !password.isEmpty
+                || !JSON.string(settings, "hardwareOrbWifiPassword").isEmpty
+            infoMessage = "Hardware Orb Wi-Fi saved for USB provisioning and OTA firmware builds."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func pushHardwareOrbFirmwareUpdate(_ hardwareOrb: HardwareOrbRecord) async {
+        guard hardwareOrbWifiConfigured else {
+            errorMessage = "Save Hardware Orb Wi-Fi before building orb firmware."
+            return
+        }
+
+        pushingHardwareOrbFirmwareIDs.insert(hardwareOrb.id)
+        defer { pushingHardwareOrbFirmwareIDs.remove(hardwareOrb.id) }
+
+        do {
+            let response = try await session.apiClient.post("/api/panels/\(settingsPathComponent(hardwareOrb.id))/ota/push")
+            let object = JSON.object(response)
+            if let refreshed = HardwareOrbRecord.from(JSON.object(object["panel"])) {
+                replaceHardwareOrb(refreshed)
+            }
+            infoMessage = JSON.string(object, "message", fallback: "\(hardwareOrb.name) firmware update queued.")
+            errorMessage = nil
+            await loadHardwareOrbs()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadHardwareOrbProvisioning(_ hardwareOrb: HardwareOrbRecord) async {
+        provisioningHardwareOrbIDs.insert(hardwareOrb.id)
+        defer { provisioningHardwareOrbIDs.remove(hardwareOrb.id) }
+
+        do {
+            let response = try await session.apiClient.get("/api/panels/\(settingsPathComponent(hardwareOrb.id))/provisioning")
+            applyHardwareOrbProvisioningResponse(response)
+            infoMessage = "\(hardwareOrb.name) setup packet loaded."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func rotateHardwareOrbSetupToken(_ hardwareOrb: HardwareOrbRecord) async {
+        rotatingHardwareOrbIDs.insert(hardwareOrb.id)
+        defer { rotatingHardwareOrbIDs.remove(hardwareOrb.id) }
+
+        do {
+            let response = try await session.apiClient.post("/api/panels/\(settingsPathComponent(hardwareOrb.id))/registration-code/rotate")
+            applyHardwareOrbProvisioningResponse(response)
+            infoMessage = "\(hardwareOrb.name) generated a new setup token."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func createHardwareOrbSetupToken() async {
+        let name = newHardwareOrbName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let room = newHardwareOrbRoom.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !name.isEmpty, !room.isEmpty else {
+            errorMessage = "Enter a name and room before creating a Hardware Orb setup token."
+            return
+        }
+
+        creatingHardwareOrb = true
+        defer { creatingHardwareOrb = false }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/panels/register",
+                body: hardwareOrbCreatePayload(name: name, room: room)
+            )
+            let object = JSON.object(response)
+            if let panel = HardwareOrbRecord.from(JSON.object(object["panel"])) {
+                replaceHardwareOrb(panel)
+                await loadHardwareOrbProvisioning(panel)
+            }
+            clearNewHardwareOrbDraft()
+            infoMessage = "Hardware Orb setup token created."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func provisionHardwareOrbOverUSB() async {
+        let name = newHardwareOrbName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let room = newHardwareOrbRoom.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard hardwareOrbWifiConfigured else {
+            errorMessage = "Save Hardware Orb Wi-Fi before USB provisioning."
+            return
+        }
+
+        guard !name.isEmpty, !room.isEmpty else {
+            errorMessage = "Enter a name and room before starting USB provisioning."
+            return
+        }
+
+        usbProvisioningHardwareOrb = true
+        defer { usbProvisioningHardwareOrb = false }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/panels/provisioning/usb",
+                body: hardwareOrbCreatePayload(name: name, room: room)
+            )
+            applyHardwareOrbProvisioningResponse(response)
+            clearNewHardwareOrbDraft()
+            infoMessage = "USB firmware provisioning started. Refresh Firmware to follow OTA/provisioning status."
+            errorMessage = nil
+            await loadHardwareOrbs()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func hardwareOrbCreatePayload(name: String, room: String) -> [String: Any] {
+        [
+            "name": name,
+            "room": room,
+            "hardwareProfile": newHardwareOrbHardwareProfile,
+            "powerSource": newHardwareOrbPowerSource
+        ]
+    }
+
+    private func clearNewHardwareOrbDraft() {
+        newHardwareOrbName = ""
+        newHardwareOrbRoom = ""
+        newHardwareOrbHardwareProfile = "elecrow-crowpanel-2.1-rotary"
+        newHardwareOrbPowerSource = "wired"
+    }
+
+    private func applyHardwareOrbProvisioningResponse(_ response: Any) {
+        let object = JSON.object(response)
+        if let refreshed = HardwareOrbRecord.from(JSON.object(object["panel"])) {
+            replaceHardwareOrb(refreshed)
+        }
+        if let packet = HardwareOrbProvisioningPacket.from(object) {
+            hardwareOrbProvisioningPacket = packet
         }
     }
 
@@ -1300,7 +1686,7 @@ struct SettingsView: View {
 
         do {
             let response = try await session.apiClient.put(
-                "/api/panels/\(hardwareOrb.id)",
+                "/api/panels/\(settingsPathComponent(hardwareOrb.id))",
                 body: [
                     "settings": [
                         "mountAlignment": [
@@ -1331,6 +1717,27 @@ struct SettingsView: View {
             }
             return transform(hardwareOrb)
         }
+    }
+
+    private func replaceHardwareOrb(_ updated: HardwareOrbRecord) {
+        if hardwareOrbs.contains(where: { $0.id == updated.id }) {
+            updateHardwareOrb(id: updated.id) { _ in updated }
+        } else {
+            hardwareOrbs.append(updated)
+        }
+        hardwareOrbs.sort { lhs, rhs in
+            if lhs.room.localizedCaseInsensitiveCompare(rhs.room) == .orderedSame {
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            return lhs.room.localizedCaseInsensitiveCompare(rhs.room) == .orderedAscending
+        }
+        selectedHardwareOrbID = updated.id
+    }
+
+    private func copyHardwareOrbText(_ value: String, label: String) {
+        UIPasteboard.general.string = value
+        infoMessage = "\(label) copied."
+        errorMessage = nil
     }
 }
 
@@ -1766,6 +2173,92 @@ private func settingsFormatDateTime(_ value: String) -> String {
     return date.formatted(date: .abbreviated, time: .shortened)
 }
 
+private func settingsPathComponent(_ value: String) -> String {
+    let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+}
+
+private struct HardwareOrbOTA {
+    let status: String
+    let phase: String
+    let progress: Int
+    let targetVersion: String
+    let currentVersion: String
+    let message: String
+    let lastError: String
+    let requestedAt: String
+    let startedAt: String
+    let completedAt: String
+    let updatedAt: String
+
+    var isBusy: Bool {
+        ["queued", "building", "ready", "flashing", "downloading", "installing", "rebooting"].contains(status)
+    }
+
+    var hasActivity: Bool {
+        !status.isEmpty && status != "idle" || !message.isEmpty || !targetVersion.isEmpty || !completedAt.isEmpty || !lastError.isEmpty
+    }
+
+    var statusLabel: String {
+        switch status {
+        case "queued": return "Queued"
+        case "building": return "Building"
+        case "ready": return "Ready for Orb"
+        case "flashing": return "Flashing over USB"
+        case "downloading": return "Downloading"
+        case "installing": return "Installing"
+        case "rebooting": return "Rebooting"
+        case "provisioned": return "USB Flash Complete"
+        case "completed": return "Completed"
+        case "failed": return "Failed"
+        case "idle", "": return "Idle"
+        default: return status.capitalized
+        }
+    }
+
+    var lastActivityText: String {
+        if !completedAt.isEmpty {
+            return settingsFormatDateTime(completedAt)
+        }
+        if !updatedAt.isEmpty {
+            return settingsFormatDateTime(updatedAt)
+        }
+        if !startedAt.isEmpty {
+            return settingsFormatDateTime(startedAt)
+        }
+        if !requestedAt.isEmpty {
+            return settingsFormatDateTime(requestedAt)
+        }
+        return "No firmware update reported"
+    }
+
+    var detailText: String {
+        if !message.isEmpty {
+            return message
+        }
+        if !phase.isEmpty {
+            return phase
+        }
+        return "HomeBrain is coordinating this firmware job."
+    }
+
+    static func from(_ object: [String: Any]) -> HardwareOrbOTA {
+        HardwareOrbOTA(
+            status: JSON.string(object, "status", fallback: "idle"),
+            phase: JSON.string(object, "phase"),
+            progress: max(0, min(100, JSON.int(object, "progress"))),
+            targetVersion: JSON.string(object, "targetVersion"),
+            currentVersion: JSON.string(object, "currentVersion"),
+            message: JSON.string(object, "message"),
+            lastError: JSON.string(object, "lastError"),
+            requestedAt: JSON.string(object, "requestedAt"),
+            startedAt: JSON.string(object, "startedAt"),
+            completedAt: JSON.string(object, "completedAt"),
+            updatedAt: JSON.string(object, "updatedAt")
+        )
+    }
+}
+
 private struct HardwareOrbRecord: Identifiable {
     static let mountOffsetMinimumTenths = -150
     static let mountOffsetMaximumTenths = 150
@@ -1775,13 +2268,24 @@ private struct HardwareOrbRecord: Identifiable {
     let name: String
     let room: String
     let status: String
+    let hardwareProfile: String
+    let powerSource: String
+    let connectionType: String
+    let ipAddress: String
+    let lastSeen: String
+    let isRegistered: Bool
     var mountOffsetTenths: Int
     let firmwareVersion: String
     let latestFirmwareVersion: String
     let updateAvailable: Bool
+    let ota: HardwareOrbOTA
 
     var statusLabel: String {
         status.isEmpty ? "Unknown" : status.capitalized
+    }
+
+    var hardwareProfileLabel: String {
+        hardwareProfile == "elecrow-crowpanel-1.28-rotary" ? "ELECROW 1.28\" Rotary" : "ELECROW 2.1\" Rotary"
     }
 
     var formattedMountOffset: String {
@@ -1797,7 +2301,15 @@ private struct HardwareOrbRecord: Identifiable {
     }
 
     var requiresFirmwareUpdate: Bool {
-        updateAvailable || !firmwareVersion.isEmpty && firmwareVersion != latestFirmwareVersion
+        updateAvailable || !firmwareVersion.isEmpty && !latestFirmwareVersion.isEmpty && firmwareVersion != latestFirmwareVersion
+    }
+
+    var isOtaBusy: Bool {
+        ota.isBusy
+    }
+
+    var hasOtaActivity: Bool {
+        ota.hasActivity
     }
 
     static func from(_ object: [String: Any]) -> HardwareOrbRecord? {
@@ -1814,10 +2326,17 @@ private struct HardwareOrbRecord: Identifiable {
             name: JSON.string(object, "name", fallback: "Unnamed Orb"),
             room: JSON.string(object, "room", fallback: "Unassigned"),
             status: JSON.string(object, "status", fallback: "offline"),
+            hardwareProfile: JSON.string(object, "hardwareProfile", fallback: "elecrow-crowpanel-2.1-rotary"),
+            powerSource: JSON.string(object, "powerSource", fallback: "wired"),
+            connectionType: JSON.string(object, "connectionType", fallback: "wifi"),
+            ipAddress: JSON.string(object, "ipAddress"),
+            lastSeen: JSON.string(object, "lastSeen"),
+            isRegistered: JSON.bool(settings, "registered"),
             mountOffsetTenths: clampMountOffset(JSON.int(mountAlignment, "offsetTenths")),
             firmwareVersion: JSON.string(object, "firmwareVersion"),
             latestFirmwareVersion: JSON.string(object, "latestFirmwareVersion"),
-            updateAvailable: JSON.bool(object, "updateAvailable")
+            updateAvailable: JSON.bool(object, "updateAvailable"),
+            ota: HardwareOrbOTA.from(JSON.object(object["ota"]))
         )
     }
 
@@ -1829,5 +2348,238 @@ private struct HardwareOrbRecord: Identifiable {
         let clamped = clampMountOffset(value)
         let sign = clamped > 0 ? "+" : ""
         return "\(sign)\(String(format: "%.1f", Double(clamped) / 10.0))°"
+    }
+}
+
+private struct HardwareOrbProvisioningPacket: Identifiable {
+    let id: String
+    let panelName: String
+    let panelRoom: String
+    let hubURL: String
+    let panelID: String
+    let registrationCode: String
+    let hardwareProfile: String
+    let headerHubURL: String
+    let headerPanelID: String
+    let headerRegistrationCode: String
+
+    var setupPacketText: String {
+        [
+            "HOMEBRAIN_PANEL_HUB_URL=\(headerHubURL)",
+            "HOMEBRAIN_PANEL_ID=\(headerPanelID)",
+            "HOMEBRAIN_PANEL_REGISTRATION_CODE=\(headerRegistrationCode)"
+        ].joined(separator: "\n")
+    }
+
+    var headerSnippet: String {
+        [
+            "#define HOMEBRAIN_PANEL_HUB_URL \"\(headerHubURL)\"",
+            "#define HOMEBRAIN_PANEL_ID \"\(headerPanelID)\"",
+            "#define HOMEBRAIN_PANEL_REGISTRATION_CODE \"\(headerRegistrationCode)\""
+        ].joined(separator: "\n")
+    }
+
+    static func from(_ object: [String: Any]) -> HardwareOrbProvisioningPacket? {
+        let panel = JSON.object(object["panel"])
+        let provisioning = JSON.object(object["provisioning"])
+        let firmwareHeader = JSON.object(provisioning["firmwareHeader"])
+        let panelID = JSON.string(provisioning, "panelId", fallback: JSON.id(panel))
+        guard !panelID.isEmpty else {
+            return nil
+        }
+
+        return HardwareOrbProvisioningPacket(
+            id: panelID,
+            panelName: JSON.string(panel, "name", fallback: "Hardware Orb"),
+            panelRoom: JSON.string(panel, "room", fallback: "Unassigned"),
+            hubURL: JSON.string(provisioning, "hubUrl"),
+            panelID: panelID,
+            registrationCode: JSON.string(provisioning, "registrationCode"),
+            hardwareProfile: JSON.string(provisioning, "hardwareProfile", fallback: JSON.string(panel, "hardwareProfile")),
+            headerHubURL: JSON.string(firmwareHeader, "HOMEBRAIN_PANEL_HUB_URL"),
+            headerPanelID: JSON.string(firmwareHeader, "HOMEBRAIN_PANEL_ID", fallback: panelID),
+            headerRegistrationCode: JSON.string(firmwareHeader, "HOMEBRAIN_PANEL_REGISTRATION_CODE")
+        )
+    }
+}
+
+private struct HardwareOrbMetricView: View {
+    let title: String
+    let value: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.caption2)
+                .foregroundStyle(HBPalette.textSecondary)
+            Text(value)
+                .font(.headline.monospacedDigit())
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(HBPalette.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct HardwareOrbFleetRow: View {
+    let hardwareOrb: HardwareOrbRecord
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(hardwareOrb.name)
+                        .font(.headline)
+                    Text("\(hardwareOrb.room) · \(hardwareOrb.statusLabel) · \(hardwareOrb.hardwareProfileLabel)")
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+                Spacer()
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? HBPalette.accentBlue : HBPalette.textSecondary)
+            }
+
+            HStack {
+                Text(hardwareOrb.isRegistered ? "Provisioned" : "Awaiting first activation")
+                Spacer()
+                Text("Firmware \(hardwareOrb.firmwareVersionDisplay)")
+            }
+            .font(.caption)
+            .foregroundStyle(HBPalette.textSecondary)
+
+            if hardwareOrb.requiresFirmwareUpdate || hardwareOrb.isOtaBusy {
+                Text(hardwareOrb.isOtaBusy ? "OTA: \(hardwareOrb.ota.statusLabel)" : "Newer firmware available")
+                    .font(.caption)
+                    .foregroundStyle(hardwareOrb.isOtaBusy ? HBPalette.accentBlue : HBPalette.accentRed)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+private struct HardwareOrbWifiStatusView: View {
+    let isConfigured: Bool
+
+    var body: some View {
+        HStack {
+            Label(
+                isConfigured ? "Ready for firmware builds" : "Required before firmware builds",
+                systemImage: isConfigured ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(isConfigured ? HBPalette.accentGreen : HBPalette.accentRed)
+            Spacer()
+        }
+        .font(.subheadline)
+    }
+}
+
+private struct HardwareOrbFirmwareStatusView: View {
+    let hardwareOrb: HardwareOrbRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HardwareOrbValueRow(title: "Orb", value: "\(hardwareOrb.name) · \(hardwareOrb.room)")
+            HardwareOrbValueRow(title: "Status", value: "\(hardwareOrb.statusLabel) · \(hardwareOrb.ipAddress.isEmpty ? "Awaiting Wi-Fi" : hardwareOrb.ipAddress)")
+            HardwareOrbValueRow(title: "Running Firmware", value: hardwareOrb.firmwareVersion.isEmpty ? "Not reported yet" : hardwareOrb.firmwareVersion)
+            HardwareOrbValueRow(title: "Available Firmware", value: hardwareOrb.latestFirmwareVersion.isEmpty ? "Not available yet" : hardwareOrb.latestFirmwareVersion)
+            HardwareOrbValueRow(title: "Target Firmware", value: hardwareOrb.ota.targetVersion.isEmpty ? "No pending OTA job" : hardwareOrb.ota.targetVersion)
+            HardwareOrbValueRow(title: "OTA State", value: hardwareOrb.ota.statusLabel)
+            HardwareOrbValueRow(title: "Last Firmware Update", value: hardwareOrb.ota.lastActivityText)
+            HardwareOrbValueRow(title: "Last Seen", value: settingsFormatDateTime(hardwareOrb.lastSeen))
+
+            if hardwareOrb.requiresFirmwareUpdate {
+                Label("Newer firmware available on this HomeBrain host", systemImage: "arrow.up.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.accentRed)
+            }
+        }
+    }
+}
+
+private struct HardwareOrbValueRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(HBPalette.textSecondary)
+            Spacer(minLength: 16)
+            Text(value)
+                .font(.caption)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+}
+
+private struct HardwareOrbProvisioningPacketView: View {
+    let packet: HardwareOrbProvisioningPacket
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Setup Packet")
+                .font(.headline)
+            HardwareOrbValueRow(title: "Orb", value: "\(packet.panelName) · \(packet.panelRoom)")
+            HardwareOrbValueRow(title: "Hub URL", value: packet.hubURL.isEmpty ? packet.headerHubURL : packet.hubURL)
+            HardwareOrbValueRow(title: "Panel ID", value: packet.panelID)
+            HardwareOrbValueRow(title: "Setup Token", value: packet.registrationCode)
+            Text(packet.headerSnippet)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .foregroundStyle(HBPalette.textSecondary)
+                .padding(.top, 4)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct HardwareOrbAlignmentRow: View {
+    let hardwareOrb: HardwareOrbRecord
+    let isSaving: Bool
+    let onRotateLeft: () -> Void
+    let onReset: () -> Void
+    let onRotateRight: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(hardwareOrb.name)
+                        .font(.headline)
+                    Text("\(hardwareOrb.room) · \(hardwareOrb.statusLabel)")
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+                Spacer()
+                Text(hardwareOrb.formattedMountOffset)
+                    .font(.headline.monospacedDigit())
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    onRotateLeft()
+                } label: {
+                    Label("Left", systemImage: "rotate.left")
+                }
+                .disabled(isSaving)
+
+                Button("Reset") {
+                    onReset()
+                }
+                .disabled(isSaving || hardwareOrb.mountOffsetTenths == 0)
+
+                Button {
+                    onRotateRight()
+                } label: {
+                    Label("Right", systemImage: "rotate.right")
+                }
+                .disabled(isSaving)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
