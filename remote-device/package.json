@@ -21,7 +21,7 @@
   "dependencies": {
     "ws": "^8.18.0",
     "node-record-lpcm16": "^1.0.1",
-    "node-fetch": "^2.7.0",
+    "node-fetch": "^3.3.2",
     "yargs": "^17.7.2",
     "node-wav": "^0.0.2",
     "audio-buffer-utils": "^5.1.2",
