@@ -1544,10 +1544,10 @@ class PlatformDeployService {
       }
 
       if (job.options.installDependencies) {
-        await runNpmStep('Install root dependencies', ['install', '--include=dev', '--no-audit', '--no-fund']);
-        await runNpmStep('Install server dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'server']);
-        await runNpmStep('Install client dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'client']);
-        await runNpmStep('Install broker dependencies', ['install', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'broker']);
+        await runNpmStep('Install root dependencies', ['ci', '--include=dev', '--no-audit', '--no-fund']);
+        await runNpmStep('Install server dependencies', ['ci', '--include=dev', '--include=optional', '--no-audit', '--no-fund', '--prefix', 'server']);
+        await runNpmStep('Install client dependencies', ['ci', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'client']);
+        await runNpmStep('Install broker dependencies', ['ci', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'broker']);
       }
 
       await runNpmStep('Ensure server native modules', ['run', 'ensure:native', '--prefix', 'server']);
