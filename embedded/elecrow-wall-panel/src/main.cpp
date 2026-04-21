@@ -58,9 +58,9 @@ constexpr uint32_t kPwmFrequency = 5000;
 constexpr unsigned long kWifiRetryMs = 15000;
 constexpr unsigned long kEncoderLongPressMs = 900;
 constexpr unsigned long kStateRefreshFallbackMs = 5000;
-constexpr unsigned long kThermostatCommitDelayMs = 3000;
+constexpr unsigned long kThermostatCommitDelayMs = 1000;
 constexpr unsigned long kThermostatDispatchDelayMs = 75;
-constexpr unsigned long kDeviceLevelCommitDelayMs = 3000;
+constexpr unsigned long kDeviceLevelCommitDelayMs = 1000;
 constexpr unsigned long kDeviceLevelDispatchDelayMs = 45;
 constexpr unsigned long kSecurityStateRefreshDelayMs = 1750;
 constexpr unsigned long kActionStateRefreshDelayMs = 450;
@@ -373,7 +373,7 @@ String panelBasePath() {
 }
 
 String panelStateUrl() {
-  return normalizeHubUrl() + panelBasePath() + "/state";
+  return normalizeHubUrl() + panelBasePath() + "/state?stateRequestAt=" + String(millis());
 }
 
 String panelActionUrl() {
@@ -3338,6 +3338,8 @@ bool getPanelJson(const String& url, JsonDocument& responseDocument) {
   }
 
   http.addHeader("X-HomeBrain-Panel-Code", HOMEBRAIN_PANEL_REGISTRATION_CODE);
+  http.addHeader("Cache-Control", "no-cache");
+  http.addHeader("Pragma", "no-cache");
   const int statusCode = http.GET();
   if (statusCode <= 0) {
     Serial.println(String("[http] GET failed: ") + url + " code=" + statusCode);
@@ -3372,6 +3374,8 @@ bool getPanelResponse(const String& url, String& responseBody) {
   }
 
   http.addHeader("X-HomeBrain-Panel-Code", HOMEBRAIN_PANEL_REGISTRATION_CODE);
+  http.addHeader("Cache-Control", "no-cache");
+  http.addHeader("Pragma", "no-cache");
   const int statusCode = http.GET();
   if (statusCode <= 0) {
     Serial.println(String("[http] GET failed: ") + url + " code=" + statusCode);

@@ -20,6 +20,13 @@ function extractPanelCredentials(req) {
   };
 }
 
+function setNoStoreHeaders(res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+}
+
 router.get('/', admin, async (_req, res) => {
   try {
     const panels = await wallPanelService.listPanels();
@@ -182,6 +189,7 @@ router.post('/:panelId/activate', async (req, res) => {
 
 router.get('/:panelId/state', async (req, res) => {
   try {
+    setNoStoreHeaders(res);
     const state = await wallPanelService.getPanelState(
       req.params.panelId,
       extractPanelCredentials(req),
