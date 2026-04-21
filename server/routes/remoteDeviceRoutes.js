@@ -101,6 +101,116 @@ function issueDeviceClaimToken() {
   };
 }
 
+function hashDeviceToken(token) {
+  return crypto.createHash('sha256').update(String(token || ''), 'utf8').digest('hex');
+}
+
+function issueDeviceToken() {
+  const deviceToken = crypto.randomBytes(32).toString('hex');
+  return {
+    deviceToken,
+    deviceTokenHash: hashDeviceToken(deviceToken),
+    deviceTokenCreatedAt: new Date()
+  };
+}
+
+function safeEquals(left, right) {
+  const leftValue = Buffer.from(String(left || ''), 'utf8');
+  const rightValue = Buffer.from(String(right || ''), 'utf8');
+  if (leftValue.length !== rightValue.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(leftValue, rightValue);
+}
+
+function getCredentialValue(req, headerName, bodyNames = [], queryNames = []) {
+  const headerValue = req.get(headerName);
+  if (typeof headerValue === 'string' && headerValue.trim()) {
+    return headerValue.trim();
+  }
+
+  for (const name of bodyNames) {
+    const value = req.body?.[name];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  for (const name of queryNames) {
+    const value = req.query?.[name];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return '';
+}
+
+function getDeviceCredentialsFromRequest(req) {
+  return {
+    registrationCode: getCredentialValue(
+      req,
+      'X-HomeBrain-Registration-Code',
+      ['registrationCode'],
+      ['code', 'registrationCode']
+    ),
+    claimToken: getCredentialValue(
+      req,
+      'X-HomeBrain-Claim-Token',
+      ['claimToken'],
+      ['claim', 'claimToken']
+    ),
+    deviceToken: getCredentialValue(
+      req,
+      'X-HomeBrain-Device-Token',
+      ['deviceToken'],
+      ['deviceToken']
+    )
+  };
+}
+
+function sanitizeDeviceForRemote(device) {
+  if (!device) {
+    return null;
+  }
+
+  return {
+    _id: device._id,
+    name: device.name,
+    room: device.room,
+    deviceType: device.deviceType,
+    status: device.status,
+    supportedWakeWords: device.supportedWakeWords,
+    volume: device.volume,
+    microphoneSensitivity: device.microphoneSensitivity,
+    firmwareVersion: device.firmwareVersion,
+    lastSeen: device.lastSeen,
+    registered: device.settings?.registered === true
+  };
+}
+
+function buildRemoteDeviceConfig(device, req) {
+  const defaultThreshold = typeof device.settings?.wakeWordThreshold === 'number'
+    ? device.settings.wakeWordThreshold
+    : 0.5;
+
+  return {
+    deviceId: device._id,
+    name: device.name,
+    room: device.room,
+    wakeWords: device.supportedWakeWords,
+    volume: device.volume,
+    microphoneSensitivity: device.microphoneSensitivity,
+    hubUrl: `${toWebSocketOrigin(getRequestOrigin(req))}/ws/voice-device/${device._id}`,
+    settings: {
+      audioSampleRate: 16000,
+      audioChannels: 1,
+      wakeWordThreshold: defaultThreshold,
+      recordingTimeout: 30000
+    }
+  };
+}
+
 async function getLatestRemoteSetupSourceMtimeMs() {
   const sourceStats = await Promise.all(
     REMOTE_SETUP_FILES.map(async (file) => {
@@ -210,7 +320,7 @@ router.post('/register', admin, async (req, res) => {
     console.log(`POST /api/remote-devices/register - Successfully registered device: ${device.name} (${device._id})`);
     res.status(201).json({
       success: true,
-      device: device,
+      device: sanitizeDeviceForRemote(device),
       registrationCode: registrationCode,
       claimToken,
       claimTokenExpires,
@@ -238,8 +348,11 @@ async function validateDeviceAccess(deviceId, credentials = {}) {
   const claimToken = typeof credentials.claimToken === 'string'
     ? credentials.claimToken.trim()
     : '';
+  const deviceToken = typeof credentials.deviceToken === 'string'
+    ? credentials.deviceToken.trim()
+    : '';
 
-  if (!registrationCode && !claimToken) {
+  if (!registrationCode && !claimToken && !deviceToken) {
     return null;
   }
 
@@ -249,6 +362,11 @@ async function validateDeviceAccess(deviceId, credentials = {}) {
   }
 
   if (registrationCode && device.settings?.registrationCode === registrationCode) {
+    return device;
+  }
+
+  const deviceTokenHash = device.settings?.deviceTokenHash;
+  if (deviceToken && deviceTokenHash && safeEquals(hashDeviceToken(deviceToken), deviceTokenHash)) {
     return device;
   }
 
@@ -476,13 +594,10 @@ final_message: "HomeBrain listener bootstrap completed."
 
 router.get('/:deviceId/wake-words', async (req, res) => {
   const { deviceId } = req.params;
-  const { code, claim, platform, arch } = req.query;
+  const { platform, arch } = req.query;
 
   try {
-    const device = await validateDeviceAccess(deviceId, {
-      registrationCode: code,
-      claimToken: claim
-    });
+    const device = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
     if (!device) {
       return res.status(403).json({
         success: false,
@@ -552,13 +667,10 @@ router.get('/:deviceId/wake-words', async (req, res) => {
 // Stream TTS audio for a device using ElevenLabs with device validation
 router.get('/:deviceId/tts', async (req, res) => {
   const { deviceId } = req.params;
-  const { code, claim, text, voiceId } = req.query;
+  const { text, voiceId } = req.query;
 
   try {
-    const device = await validateDeviceAccess(deviceId, {
-      registrationCode: code,
-      claimToken: claim
-    });
+    const device = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
     if (!device) {
       return res.status(403).json({ success: false, message: 'Invalid device credentials' });
     }
@@ -594,13 +706,10 @@ router.get('/:deviceId/tts', async (req, res) => {
 
 router.get('/:deviceId/wake-words/:slug', async (req, res) => {
   const { deviceId, slug } = req.params;
-  const { code, claim, platform, arch } = req.query;
+  const { platform, arch } = req.query;
 
   try {
-    const device = await validateDeviceAccess(deviceId, {
-      registrationCode: code,
-      claimToken: claim
-    });
+    const device = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
     if (!device) {
       return res.status(403).json({
         success: false,
@@ -681,11 +790,15 @@ router.post('/activate', async (req, res) => {
       });
     }
 
+    const issuedDeviceToken = issueDeviceToken();
+
     // Activate the device
     device.status = 'online';
     device.ipAddress = ipAddress;
     device.firmwareVersion = firmwareVersion;
     device.settings.registered = true;
+    device.settings.deviceTokenHash = issuedDeviceToken.deviceTokenHash;
+    device.settings.deviceTokenCreatedAt = issuedDeviceToken.deviceTokenCreatedAt;
     device.settings.claimToken = undefined;
     device.settings.claimTokenExpires = undefined;
     device.lastSeen = new Date();
@@ -711,7 +824,8 @@ router.post('/activate', async (req, res) => {
     console.log(`POST /api/remote-devices/activate - Successfully activated device: ${device.name} (${device._id})`);
     res.status(200).json({
       success: true,
-      device: device,
+      device: sanitizeDeviceForRemote(device),
+      deviceToken: issuedDeviceToken.deviceToken,
       hubUrl: hubUrl,
       message: 'Device activated successfully'
     });
@@ -780,37 +894,22 @@ router.get('/:deviceId/config', async (req, res) => {
   console.log(`GET /api/remote-devices/${deviceId}/config - Fetching device configuration`);
 
   try {
-    const device = await VoiceDevice.findById(deviceId);
+    const device = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
 
     if (!device) {
-      console.warn(`GET /api/remote-devices/${deviceId}/config - Device not found`);
-      return res.status(404).json({
+      console.warn(`GET /api/remote-devices/${deviceId}/config - Invalid device credentials`);
+      return res.status(403).json({
         success: false,
-        message: 'Device not found'
+        message: 'Invalid device credentials'
       });
     }
 
-    // Generate configuration for remote device
-    const config = {
-      deviceId: device._id,
-      name: device.name,
-      room: device.room,
-      wakeWords: device.supportedWakeWords,
-      volume: device.volume,
-      microphoneSensitivity: device.microphoneSensitivity,
-        hubUrl: `${toWebSocketOrigin(getRequestOrigin(req))}/ws/voice-device/${device._id}`,
-      settings: {
-        audioSampleRate: 16000,
-        audioChannels: 1,
-        wakeWordThreshold: 0.5,
-        recordingTimeout: 30000, // 30 seconds
-      }
-    };
+    const config = buildRemoteDeviceConfig(device, req);
 
     console.log(`GET /api/remote-devices/${deviceId}/config - Successfully fetched configuration for ${device.name}`);
     res.status(200).json({
       success: true,
-      device: device,
+      device: sanitizeDeviceForRemote(device),
       config: config
     });
 
@@ -834,6 +933,14 @@ router.post('/:deviceId/heartbeat', async (req, res) => {
 
   try {
     const { status, batteryLevel, uptime, lastInteraction } = req.body;
+    const existingDevice = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
+    if (!existingDevice) {
+      console.warn(`POST /api/remote-devices/${deviceId}/heartbeat - Invalid device credentials`);
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid device credentials'
+      });
+    }
 
     const updateData = {
       lastSeen: new Date(),

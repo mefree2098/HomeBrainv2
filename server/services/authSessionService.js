@@ -6,7 +6,8 @@ const UserService = require('./userService');
 const Settings = require('../models/Settings');
 const { generateAccessToken, generateRefreshToken } = require('../utils/auth');
 
-const DEFAULT_SESSION_MAX_AGE_DAYS = 365;
+const DEFAULT_SESSION_MAX_AGE_DAYS = 30;
+const DEFAULT_IOS_SESSION_MAX_AGE_DAYS = 365;
 const MIN_SESSION_MAX_AGE_DAYS = 1;
 const MAX_SESSION_MAX_AGE_DAYS = 3650;
 const SESSION_CLIENT_TYPES = new Set(['ios', 'web', 'android', 'desktop', 'api', 'unknown']);
@@ -31,6 +32,10 @@ function clampNumber(value, min, max, fallback) {
 function normalizeClientType(rawValue) {
   const normalized = trimString(rawValue, 'unknown').toLowerCase();
   return SESSION_CLIENT_TYPES.has(normalized) ? normalized : 'unknown';
+}
+
+function isBrowserLikeRequest(req = {}) {
+  return Boolean(req.headers?.origin || req.headers?.['sec-fetch-site']);
 }
 
 function extractIpAddress(req) {
@@ -98,7 +103,10 @@ function inferClientName(clientType, userAgent) {
 
 function extractSessionMetadata(req = {}) {
   const userAgent = trimString(req.headers?.['user-agent']);
-  const clientType = normalizeClientType(req.headers?.['x-homebrain-client-type']);
+  const requestedClientType = normalizeClientType(req.headers?.['x-homebrain-client-type']);
+  const clientType = isBrowserLikeRequest(req) && requestedClientType !== 'web'
+    ? 'web'
+    : requestedClientType;
   const clientName = trimString(req.headers?.['x-homebrain-client-name']);
   const deviceId = trimString(req.headers?.['x-homebrain-device-id']);
   const appVersion = trimString(req.headers?.['x-homebrain-app-version']);
@@ -113,23 +121,43 @@ function extractSessionMetadata(req = {}) {
   };
 }
 
-async function getSessionLifetimeDays() {
-  const envOverride = trimString(process.env.AUTH_SESSION_MAX_AGE_DAYS);
-  if (envOverride) {
-    return clampNumber(envOverride, MIN_SESSION_MAX_AGE_DAYS, MAX_SESSION_MAX_AGE_DAYS, DEFAULT_SESSION_MAX_AGE_DAYS);
-  }
-
+async function getSettingsSessionLifetimeDays(fallback) {
   try {
     const settings = await Settings.getSettings();
     return clampNumber(
       settings?.authSessionMaxAgeDays,
       MIN_SESSION_MAX_AGE_DAYS,
       MAX_SESSION_MAX_AGE_DAYS,
-      DEFAULT_SESSION_MAX_AGE_DAYS
+      fallback
     );
   } catch (_error) {
-    return DEFAULT_SESSION_MAX_AGE_DAYS;
+    return fallback;
   }
+}
+
+async function getSessionLifetimeDays(clientType = 'unknown') {
+  const normalizedClientType = normalizeClientType(clientType);
+
+  if (normalizedClientType === 'ios') {
+    const iosEnvOverride = trimString(process.env.AUTH_IOS_SESSION_MAX_AGE_DAYS);
+    if (iosEnvOverride) {
+      return clampNumber(
+        iosEnvOverride,
+        MIN_SESSION_MAX_AGE_DAYS,
+        MAX_SESSION_MAX_AGE_DAYS,
+        DEFAULT_IOS_SESSION_MAX_AGE_DAYS
+      );
+    }
+
+    return getSettingsSessionLifetimeDays(DEFAULT_IOS_SESSION_MAX_AGE_DAYS);
+  }
+
+  const envOverride = trimString(process.env.AUTH_SESSION_MAX_AGE_DAYS);
+  if (envOverride) {
+    return clampNumber(envOverride, MIN_SESSION_MAX_AGE_DAYS, MAX_SESSION_MAX_AGE_DAYS, DEFAULT_SESSION_MAX_AGE_DAYS);
+  }
+
+  return DEFAULT_SESSION_MAX_AGE_DAYS;
 }
 
 function buildExpiryForDays(days) {
@@ -194,8 +222,8 @@ async function persistSession(session, metadata, refreshToken, expiresAt, overri
   return session;
 }
 
-async function buildTokensForSession(user, sessionId) {
-  const lifetimeDays = await getSessionLifetimeDays();
+async function buildTokensForSession(user, sessionId, clientType = 'unknown') {
+  const lifetimeDays = await getSessionLifetimeDays(clientType);
   const refreshExpiresAt = buildExpiryForDays(lifetimeDays);
   const expiresIn = `${lifetimeDays}d`;
 
@@ -239,7 +267,7 @@ async function issueSession(user, req, options = {}) {
     });
   }
 
-  const tokens = await buildTokensForSession(user, session.sessionId);
+  const tokens = await buildTokensForSession(user, session.sessionId, metadata.clientType);
   await persistSession(
     session,
     metadata,
@@ -362,8 +390,16 @@ async function loadValidatedSession(refreshToken, req = null, options = {}) {
 
 async function refreshSession(refreshToken, req = null) {
   const { user, session } = await loadValidatedSession(refreshToken, req);
-  const metadata = extractSessionMetadata(req);
-  const tokens = await buildTokensForSession(user, session.sessionId);
+  const requestMetadata = extractSessionMetadata(req);
+  const metadata = {
+    ...requestMetadata,
+    clientType: session.clientType || requestMetadata.clientType,
+    clientName: requestMetadata.clientName || session.clientName,
+    deviceId: requestMetadata.deviceId || session.deviceId,
+    appVersion: requestMetadata.appVersion || session.appVersion,
+    userAgent: requestMetadata.userAgent || session.userAgent
+  };
+  const tokens = await buildTokensForSession(user, session.sessionId, metadata.clientType);
 
   await persistSession(session, metadata, tokens.refreshToken, tokens.refreshExpiresAt);
 
@@ -495,6 +531,7 @@ function getSessionIdFromAccessToken(token) {
 
 module.exports = {
   DEFAULT_SESSION_MAX_AGE_DAYS,
+  DEFAULT_IOS_SESSION_MAX_AGE_DAYS,
   MIN_SESSION_MAX_AGE_DAYS,
   MAX_SESSION_MAX_AGE_DAYS,
   extractSessionMetadata,

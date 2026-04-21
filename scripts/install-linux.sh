@@ -284,6 +284,11 @@ configure_env() {
   set_env_value_if_missing "${env_file}" "DATABASE_URL" "mongodb://localhost/HomeBrain"
   set_env_value_if_missing "${env_file}" "CADDY_ADMIN_URL" "http://127.0.0.1:2019"
   set_env_value_if_missing "${env_file}" "ACME_ENV" "${default_acme_env}"
+  set_env_value_if_missing "${env_file}" "AUTH_ACCESS_TOKEN_TTL" "1h"
+  set_env_value_if_missing "${env_file}" "AUTH_REFRESH_TOKEN_TTL" "30d"
+  set_env_value_if_missing "${env_file}" "AUTH_SESSION_MAX_AGE_DAYS" "30"
+  set_env_value_if_missing "${env_file}" "AUTH_IOS_SESSION_MAX_AGE_DAYS" "365"
+  set_env_value_if_missing "${env_file}" "COOKIE_SAMESITE" "lax"
   set_env_value_if_missing "${env_file}" "HOMEBRAIN_DEFAULT_ADMIN_EMAIL" "admin@example.com"
   set_env_value_if_missing "${env_file}" "HOMEBRAIN_DEFAULT_ADMIN_NAME" "HomeBrain Admin"
 
@@ -297,6 +302,10 @@ configure_env() {
 
   if [[ -n "${HOMEBRAIN_PUBLIC_BASE_URL:-}" ]]; then
     set_env_value "${env_file}" "HOMEBRAIN_PUBLIC_BASE_URL" "${HOMEBRAIN_PUBLIC_BASE_URL}"
+    set_env_value_if_missing "${env_file}" "CORS_ALLOWED_ORIGINS" "${HOMEBRAIN_PUBLIC_BASE_URL}"
+    if [[ "${HOMEBRAIN_PUBLIC_BASE_URL}" == https://* ]]; then
+      set_env_value_if_missing "${env_file}" "COOKIE_SECURE" "true"
+    fi
   fi
 
   if [[ -n "${HOMEBRAIN_EXPECTED_PUBLIC_IP:-}" ]]; then
@@ -313,7 +322,7 @@ configure_env() {
 install_app() {
   print_status "Installing HomeBrain dependencies..."
   cd "${HOMEBRAIN_DIR}"
-  node scripts/run-with-modern-node.js npm install --no-audit --no-fund
+  node scripts/run-with-modern-node.js npm ci --no-audit --no-fund
   print_status "Ensuring native server modules match the active Node.js runtime..."
   node scripts/run-with-modern-node.js npm run ensure:native --prefix server
 

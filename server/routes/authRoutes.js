@@ -16,6 +16,27 @@ const {
 } = require('../utils/authCookies');
 
 const router = express.Router();
+const TOKEN_JSON_CLIENT_TYPES = new Set(['ios', 'android', 'desktop', 'api']);
+
+function trimString(value, fallback = '') {
+  return typeof value === 'string' ? value.trim() : fallback;
+}
+
+function isBrowserLikeRequest(req = {}) {
+  return Boolean(req.headers?.origin || req.headers?.['sec-fetch-site']);
+}
+
+function getRequestClientType(req = {}) {
+  const requestedClientType = trimString(req.headers?.['x-homebrain-client-type'], 'unknown').toLowerCase();
+  if (isBrowserLikeRequest(req) && requestedClientType !== 'web') {
+    return 'web';
+  }
+  return requestedClientType;
+}
+
+function shouldReturnTokenJson(req = {}) {
+  return TOKEN_JSON_CLIENT_TYPES.has(getRequestClientType(req)) && !isBrowserLikeRequest(req);
+}
 
 function buildAuthenticatedUserPayload(user, req, tokens = {}) {
   const serializedUser = typeof user?.toJSON === 'function'
@@ -34,11 +55,17 @@ function buildAuthenticatedUserPayload(user, req, tokens = {}) {
   };
 }
 
-function buildAuthResponse(user, req, sessionIssue) {
-  return buildAuthenticatedUserPayload(user, req, {
-    accessToken: sessionIssue.tokens.accessToken,
-    refreshToken: sessionIssue.tokens.refreshToken
-  });
+function buildAuthResponse(user, req, tokens = {}) {
+  return buildAuthenticatedUserPayload(
+    user,
+    req,
+    shouldReturnTokenJson(req) ? tokens : {}
+  );
+}
+
+function getRefreshTokenFromRequest(req) {
+  return getCookieValue(req, SESSION_TOKEN_COOKIE_NAME)
+    || (shouldReturnTokenJson(req) ? trimString(req.body?.refreshToken) : '');
 }
 
 router.post('/login', async (req, res) => {
@@ -70,7 +97,10 @@ router.post('/login', async (req, res) => {
         }
       );
 
-      return res.json(buildAuthResponse(user, req, sessionIssue));
+      return res.json(buildAuthResponse(user, req, {
+        accessToken: sessionIssue.tokens.accessToken,
+        refreshToken: sessionIssue.tokens.refreshToken
+      }));
     } catch (error) {
       console.error(`Error while issuing login session: ${error.message}`);
       return res.status(500).json({ message: 'Login failed' });
@@ -128,7 +158,10 @@ router.post('/register', async (req, res, next) => {
       }
     );
 
-    return res.status(200).json(buildAuthResponse(user, req, sessionIssue));
+    return res.status(200).json(buildAuthResponse(user, req, {
+      accessToken: sessionIssue.tokens.accessToken,
+      refreshToken: sessionIssue.tokens.refreshToken
+    }));
   } catch (error) {
     console.error(`Error while registering user: ${error}`);
     return res.status(400).json({ message: error.message || 'Registration failed' });
@@ -179,7 +212,7 @@ router.post('/logout', async (req, res) => {
 });
 
 router.post('/refresh', async (req, res) => {
-  const refreshToken = req.body?.refreshToken || getCookieValue(req, SESSION_TOKEN_COOKIE_NAME);
+  const refreshToken = getRefreshTokenFromRequest(req);
 
   console.log('Refresh token request received');
 
@@ -207,7 +240,10 @@ router.post('/refresh', async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        ...buildAuthResponse(sessionIssue.user, req, sessionIssue)
+        ...buildAuthResponse(sessionIssue.user, req, {
+          accessToken: sessionIssue.tokens.accessToken,
+          refreshToken: sessionIssue.tokens.refreshToken
+        })
       }
     });
   } catch (error) {
@@ -233,7 +269,8 @@ router.get('/sessions', requireUser(ALL_ROLES, { platform: null }), async (req, 
   try {
     const currentSessionId = authSessionService.getSessionIdFromAccessToken(extractToken(req));
     const sessions = await authSessionService.listSessionsForUser(req.user._id, currentSessionId);
-    const lifetimeDays = await authSessionService.getSessionLifetimeDays();
+    const sessionMetadata = authSessionService.extractSessionMetadata(req);
+    const lifetimeDays = await authSessionService.getSessionLifetimeDays(sessionMetadata.clientType);
 
     return res.status(200).json({
       success: true,

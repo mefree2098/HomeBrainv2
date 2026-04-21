@@ -34,6 +34,15 @@ If the app still fails, confirm [`server/.env`](../server/.env) exists and the d
 
 Make sure `JWT_SECRET` and `REFRESH_TOKEN_SECRET` exist in `server/.env`, then restart HomeBrain.
 
+HomeBrain uses `HttpOnly` cookies for web sessions. If an upgraded browser still has old local token state, use the UI logout path or clear site data for the HomeBrain origin, then sign in again.
+
+For public HTTPS installs, also verify:
+
+```dotenv
+COOKIE_SECURE=true
+CORS_ALLOWED_ORIGINS=https://your-homebrain-hostname
+```
+
 ## Platform Deploy Fails
 
 Common reasons:
@@ -65,6 +74,7 @@ Typical fixes:
 - rerun the one-command installer from `Voice Devices`
 - confirm the listener can reach `http://<hub-ip>:3000`
 - confirm the registration code or claim token is current
+- rerun the installer if the listener predates device-token support
 
 ## ELECROW Wall Panel Will Not Come Online
 

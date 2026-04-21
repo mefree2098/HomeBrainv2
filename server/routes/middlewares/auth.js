@@ -5,30 +5,15 @@ const jwt = require('jsonwebtoken');
 const { ALL_ROLES, ROLES } = require("../../../shared/config/roles");
 const oidcService = require('../../services/oidcService');
 const { USER_PLATFORMS, hasPlatformAccess } = require('../../utils/userPlatforms');
+const { ACCESS_TOKEN_COOKIE_NAME, getCookieValue } = require('../../utils/authCookies');
 
 function extractToken(req) {
   const authorizationHeader = req.headers.authorization;
-  const headerToken = authorizationHeader?.split(' ')[1];
-  const queryToken = req.query?.token;
+  const [scheme, headerToken] = authorizationHeader?.split(/\s+/, 2) || [];
+  const bearerToken = scheme?.toLowerCase() === 'bearer' ? headerToken : null;
+  const cookieToken = getCookieValue(req, ACCESS_TOKEN_COOKIE_NAME);
 
-  let cookieToken = null;
-  const rawCookies = req.headers.cookie;
-  if (rawCookies) {
-    cookieToken = rawCookies
-      .split(';')
-      .map(part => part.trim())
-      .map(part => part.split('='))
-      .reduce((acc, [key, value]) => {
-        if (key && value && !acc) {
-          if (decodeURIComponent(key) === 'hbAccessToken') {
-            acc = decodeURIComponent(value);
-          }
-        }
-        return acc;
-      }, null);
-  }
-
-  return headerToken || queryToken || cookieToken || null;
+  return bearerToken || cookieToken || null;
 }
 
 function formatPlatformName(platform) {

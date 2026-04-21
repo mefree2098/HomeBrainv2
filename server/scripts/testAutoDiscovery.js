@@ -8,7 +8,21 @@
 const axios = require('axios');
 
 const BASE_URL = 'http://localhost:3000';
-let authToken = null;
+let cookieHeader = '';
+
+function storeCookies(response) {
+  const setCookie = response.headers?.['set-cookie'];
+  if (Array.isArray(setCookie) && setCookie.length > 0) {
+    cookieHeader = setCookie.map((cookie) => cookie.split(';')[0]).join('; ');
+  }
+}
+
+function authHeaders(extra = {}) {
+  return {
+    ...extra,
+    ...(cookieHeader ? { Cookie: cookieHeader } : {})
+  };
+}
 
 // Test data
 const testDevice = {
@@ -32,13 +46,17 @@ async function authenticate() {
     // User might already exist, continue with login
   }
 
-  // Login to get token
+  // Login to establish the HttpOnly session cookies used by the API.
   const loginResponse = await axios.post(`${BASE_URL}/api/auth/login`, {
     email: 'test@example.com',
     password: 'testpassword123'
   });
+  storeCookies(loginResponse);
 
-  authToken = loginResponse.data.accessToken;
+  if (!cookieHeader) {
+    throw new Error('No session cookies received from login');
+  }
+
   console.log('✅ Authentication successful');
   console.log('');
 }
@@ -55,8 +73,7 @@ async function testAutoDiscovery() {
 
     // Set up headers for authenticated requests
     const headers = {
-      'Authorization': `Bearer ${authToken}`,
-      'Content-Type': 'application/json'
+      ...authHeaders({ 'Content-Type': 'application/json' })
     };
 
     // Test 1: Check discovery status

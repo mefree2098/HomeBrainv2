@@ -11,6 +11,13 @@ const api = axios.create({
   }
 });
 
+function storeCookies(response) {
+  const setCookie = response.headers?.['set-cookie'];
+  if (Array.isArray(setCookie) && setCookie.length > 0) {
+    api.defaults.headers.Cookie = setCookie.map((cookie) => cookie.split(';')[0]).join('; ');
+  }
+}
+
 // Test user credentials
 const testUser = {
   email: 'test@homebrain.local',
@@ -53,21 +60,18 @@ async function registerAndLogin() {
       }
     }
 
-    // Login to get token
+    // Login to establish the HttpOnly session cookies used by the API.
     console.log("🔑 Logging in...");
     const loginResponse = await api.post('/auth/login', testUser);
-    const token = loginResponse.data.accessToken;
+    storeCookies(loginResponse);
     
-    if (!token) {
-      throw new Error('No access token received from login');
+    if (!api.defaults.headers.Cookie) {
+      throw new Error('No session cookies received from login');
     }
 
-    console.log("   ✅ Login successful, token received");
+    console.log("   ✅ Login successful, session cookies received");
     
-    // Update axios instance with auth token
-    api.defaults.headers.Authorization = `Bearer ${token}`;
-    
-    return token;
+    return api.defaults.headers.Cookie;
 
   } catch (error) {
     console.error("   ❌ Auth error:", error.response?.data?.message || error.message);

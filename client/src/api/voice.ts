@@ -156,7 +156,6 @@ export const transcribeBrowserAudio = async (payload: {
   profile?: "realtime" | "default";
 }): Promise<BrowserTranscriptionResult> => {
   const attempt = async (path: string) => {
-    const token = localStorage.getItem('accessToken');
     const timeoutMs = payload?.profile === 'realtime'
       ? BROWSER_STT_FETCH_TIMEOUT_MS
       : BROWSER_STT_FETCH_TIMEOUT_MS + 6000;
@@ -171,9 +170,9 @@ export const transcribeBrowserAudio = async (payload: {
     try {
       response = await fetch(path, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload),
         ...(controller ? { signal: controller.signal } : {})
@@ -246,12 +245,11 @@ export const transcribeBrowserAudio = async (payload: {
 export const fetchBrowserWakeAcknowledgmentAudio = async (payload: {
   wakeWord?: string;
 }): Promise<Blob | null> => {
-  const token = localStorage.getItem('accessToken');
   const response = await fetch('/api/voice/browser/acknowledgment', {
     method: 'POST',
+    credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
+      'Content-Type': 'application/json'
     },
     body: JSON.stringify(payload || {})
   });

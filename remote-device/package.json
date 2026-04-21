@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "test": "node test-audio.js",
-    "install-deps": "npm install && sudo apt-get update && sudo apt-get install -y alsa-utils pulseaudio",
+    "install-deps": "npm ci --no-audit --no-fund && sudo apt-get update && sudo apt-get install -y alsa-utils pulseaudio",
     "setup-audio": "node setup-audio.js"
   },
   "keywords": [

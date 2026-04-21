@@ -14,7 +14,7 @@ function refreshLifetimeInSeconds(token) {
   return Number(decoded?.exp || 0) - Number(decoded?.iat || 0);
 }
 
-test('generateRefreshToken defaults to a 365 day lifetime', (t) => {
+test('generateRefreshToken defaults to a 30 day lifetime', (t) => {
   const originalRefreshTokenTtl = process.env.AUTH_REFRESH_TOKEN_TTL;
   const originalRefreshSecret = process.env.REFRESH_TOKEN_SECRET;
 
@@ -30,7 +30,7 @@ test('generateRefreshToken defaults to a 365 day lifetime', (t) => {
   const { generateRefreshToken } = loadAuthModule();
   const token = generateRefreshToken({ _id: '507f1f77bcf86cd799439011' });
 
-  assert.equal(refreshLifetimeInSeconds(token), 365 * 24 * 60 * 60);
+  assert.equal(refreshLifetimeInSeconds(token), 30 * 24 * 60 * 60);
 });
 
 test('generateRefreshToken respects AUTH_REFRESH_TOKEN_TTL overrides', (t) => {

@@ -106,6 +106,9 @@ bash scripts/setup-services.sh health
 - Do not commit `server/.env`
 - Use strong passwords for admin accounts
 - Prefer LAN-only access unless you really need public HTTPS
+- Use `COOKIE_SECURE=true` and exact `CORS_ALLOWED_ORIGINS` values for public HTTPS deployments
+- Keep browser and native iOS session policies separate with `AUTH_SESSION_MAX_AGE_DAYS` and `AUTH_IOS_SESSION_MAX_AGE_DAYS`
+- Run `bash scripts/check-secrets.sh --history` before pushing or publishing
 
 ## Weekly Checklist
 

@@ -32,6 +32,9 @@ The installer now:
 - creates `server/.env` from `server/.env.example`
 - backfills required keys into an existing `server/.env` on upgrade installs
 - generates fresh local JWT secrets
+- defaults web auth to HttpOnly cookies with 1-hour access cookies and 30-day session cookies
+- keeps native iOS app refresh sessions at 365 days by default
+- backfills deterministic npm lockfile installs with `npm ci`
 - sets `CADDY_ADMIN_URL=http://127.0.0.1:2019`
 - defaults `ACME_ENV` to `production` for already-public deployments and to `staging` for first-time local/testing installs
 - stops `homebrain` first if it is already running on the host
@@ -160,6 +163,10 @@ At minimum, verify:
 - `DATABASE_URL`
 - `JWT_SECRET`
 - `REFRESH_TOKEN_SECRET`
+- `AUTH_ACCESS_TOKEN_TTL`
+- `AUTH_REFRESH_TOKEN_TTL`
+- `AUTH_SESSION_MAX_AGE_DAYS`
+- `AUTH_IOS_SESSION_MAX_AGE_DAYS`
 - `CADDY_ADMIN_URL`
 - `ACME_ENV`
 
@@ -168,6 +175,8 @@ Recommended additions for public deployment:
 ```dotenv
 HOMEBRAIN_PUBLIC_BASE_URL=https://example.com
 HOMEBRAIN_EXPECTED_PUBLIC_IP=<your-public-ip>
+COOKIE_SECURE=true
+CORS_ALLOWED_ORIGINS=https://example.com,https://www.example.com
 ```
 
 Optional if you want HomeBrain accessible only through Caddy:
@@ -181,6 +190,10 @@ If you still want direct LAN access on `:3000`, leave `HOMEBRAIN_BIND_HOST` unse
 Template file:
 
 [`server/.env.example`](server/.env.example)
+
+Security checklist:
+
+[`docs/security.md`](docs/security.md)
 
 The repository now also advertises its runtime preference directly:
 
@@ -359,6 +372,7 @@ bash scripts/setup-services.sh update
 ```
 
 That update path now waits for HomeBrain to come back and re-seeds both reverse-proxy state and OIDC identity state if new managed fields or clients were added by the release.
+It also uses the committed npm lockfiles through `npm ci`, so dependency resolution stays reproducible across clean Jetson, Raspberry Pi, generic Linux, and cloud deployments.
 
 UI path:
 

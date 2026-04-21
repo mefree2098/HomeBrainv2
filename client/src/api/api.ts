@@ -4,6 +4,7 @@ import JSONbig from 'json-bigint';
 
 
 const localApi = axios.create({
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -38,8 +39,7 @@ const localApi = axios.create({
 
 
 
-let accessToken: string | null = null;
-let refreshRequest: Promise<string> | null = null;
+let refreshRequest: Promise<void> | null = null;
 const WEB_INSTALLATION_ID_KEY = 'homebrain.webInstallationId';
 
 const generateInstallationId = (): string => {
@@ -86,78 +86,32 @@ const isRefreshTokenEndpoint = (url: string): boolean => {
 };
 
 const clearClientAuthState = () => {
+  // Remove legacy browser-readable token storage from older HomeBrain builds.
   localStorage.removeItem('refreshToken');
   localStorage.removeItem('accessToken');
   localStorage.removeItem('userData');
-  accessToken = null;
   refreshRequest = null;
 };
 
-const syncAccessTokenCookie = (nextAccessToken: string | null) => {
-  const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
+const persistAuthPayload = (payload: Record<string, unknown> | null | undefined) => {
+  const userData = { ...(payload || {}) };
 
-  if (!nextAccessToken) {
-    document.cookie = `hbAccessToken=; Max-Age=0; path=/; SameSite=Lax${secureFlag}`;
-    return;
+  if (Object.keys(userData).length > 0) {
+    localStorage.setItem('userData', JSON.stringify(userData));
   }
 
-  try {
-    const [, payloadSegment = ''] = nextAccessToken.split('.');
-    const normalizedPayload = payloadSegment
-      .replace(/-/g, '+')
-      .replace(/_/g, '/')
-      .padEnd(Math.ceil(payloadSegment.length / 4) * 4, '=');
-    const payload = JSON.parse(window.atob(normalizedPayload));
-    const expSeconds = Number(payload?.exp);
-    if (Number.isFinite(expSeconds)) {
-      const maxAge = Math.max(0, Math.floor(expSeconds - (Date.now() / 1000)));
-      document.cookie = `hbAccessToken=${encodeURIComponent(nextAccessToken)}; Max-Age=${maxAge}; path=/; SameSite=Lax${secureFlag}`;
-      return;
-    }
-  } catch {
-    // Fall back to a session cookie if the JWT payload cannot be decoded here.
-  }
-
-  document.cookie = `hbAccessToken=${encodeURIComponent(nextAccessToken)}; path=/; SameSite=Lax${secureFlag}`;
+  return undefined;
 };
 
-const persistAuthPayload = (payload: Record<string, unknown>) => {
-  const newAccessToken = typeof payload.accessToken === 'string' ? payload.accessToken : '';
-  const newRefreshToken = typeof payload.refreshToken === 'string' ? payload.refreshToken : '';
-
-  if (!newAccessToken || !newRefreshToken) {
-    throw new Error('Invalid response from refresh token endpoint');
-  }
-
-  const userData = { ...payload };
-  delete userData.accessToken;
-  delete userData.refreshToken;
-
-  localStorage.setItem('accessToken', newAccessToken);
-  localStorage.setItem('refreshToken', newRefreshToken);
-  localStorage.setItem('userData', JSON.stringify(userData));
-  accessToken = newAccessToken;
-  syncAccessTokenCookie(newAccessToken);
-
-  return newAccessToken;
-};
-
-const refreshAccessToken = async (): Promise<string> => {
+const refreshAccessToken = async (): Promise<void> => {
   if (refreshRequest) {
     return refreshRequest;
   }
 
   refreshRequest = (async () => {
-    const refreshToken = localStorage.getItem('refreshToken');
-    if (!refreshToken) {
-      throw new Error('No refresh token available');
-    }
+    const response = await localApi.post('/api/auth/refresh', {});
 
-    const response = await localApi.post('/api/auth/refresh', {
-      refreshToken,
-    });
-
-    return persistAuthPayload(response?.data?.data as Record<string, unknown>);
+    persistAuthPayload(response?.data?.data as Record<string, unknown>);
   })();
 
   try {
@@ -170,14 +124,6 @@ const refreshAccessToken = async (): Promise<string> => {
 const setupInterceptors = (apiInstance: typeof axios) => {
   apiInstance.interceptors.request.use(
     (config: InternalAxiosRequestConfig): InternalAxiosRequestConfig => {
-      const storedAccessToken = localStorage.getItem('accessToken');
-      if (storedAccessToken !== accessToken) {
-        accessToken = storedAccessToken;
-      }
-      if (accessToken && config.headers) {
-        config.headers.Authorization = `Bearer ${accessToken}`;
-      }
-
       if (config.headers) {
         config.headers['X-HomeBrain-Client-Type'] = 'web';
         config.headers['X-HomeBrain-Client-Name'] = buildWebClientName();
@@ -205,18 +151,18 @@ const setupInterceptors = (apiInstance: typeof axios) => {
         originalRequest._retry = true;
 
         try {
-          const newAccessToken = await refreshAccessToken();
-
-          if (originalRequest.headers) {
-            originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
-          }
+          await refreshAccessToken();
           return getApiInstance(originalRequest.url || '')(originalRequest);
         } catch (err) {
           console.error('Token refresh failed:', err);
           console.log('Clearing invalid tokens and redirecting to login');
           clearClientAuthState();
-          syncAccessTokenCookie(null);
-          window.location.href = '/login';
+          const currentPath = window.location.pathname;
+          const isPublicAuthPage = currentPath === '/login' || currentPath === '/register';
+          const isCurrentUserBootstrap = originalRequest.url.includes('/api/auth/me');
+          if (!isPublicAuthPage && !isCurrentUserBootstrap) {
+            window.location.href = '/login';
+          }
           return Promise.reject(err);
         }
       }

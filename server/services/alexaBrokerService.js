@@ -889,12 +889,16 @@ class AlexaBrokerService {
     config.serviceStatus = 'installing';
     config.lastError = null;
     await config.save();
-    this.pushLog('Installing Alexa broker dependencies with npm install', 'install');
+    const hasLockfile = fs.existsSync(path.join(this.brokerRoot, 'package-lock.json'));
+    const installArgs = hasLockfile
+      ? ['ci', '--no-audit', '--no-fund']
+      : ['install', '--no-audit', '--no-fund'];
+    this.pushLog(`Installing Alexa broker dependencies with npm ${installArgs[0]}`, 'install');
 
     const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
     return new Promise((resolve, reject) => {
-      const child = this.spawnProcess(command, ['install'], {
+      const child = this.spawnProcess(command, installArgs, {
         cwd: this.brokerRoot,
         env: { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe']

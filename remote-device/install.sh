@@ -160,10 +160,16 @@ fi
 # Install Node.js dependencies
 print_status "Installing Node.js dependencies..."
 if [ -d "$INSTALL_DIR/node_modules" ]; then
-    print_warning "Dependencies already present (skipping npm install)"
+    print_warning "Dependencies already present (skipping dependency install)"
 else
-    if ! npm install --no-audit --no-fund; then
-        print_warning "npm install failed; attempting to enforce tflite-node@1.0.0 and retry"
+    if [ -f package-lock.json ]; then
+        NPM_INSTALL_CMD=(npm ci --no-audit --no-fund)
+    else
+        NPM_INSTALL_CMD=(npm install --no-audit --no-fund)
+    fi
+
+    if ! "${NPM_INSTALL_CMD[@]}"; then
+        print_warning "${NPM_INSTALL_CMD[*]} failed; attempting to enforce tflite-node@1.0.0 and retry"
         # Ensure tflite-node version is pinned in package.json
         if grep -q '"tflite-node"' package.json; then
             sed -i 's/"tflite-node"\s*:\s*"[^"]*"/"tflite-node": "1.0.0"/g' package.json || true
@@ -306,6 +312,7 @@ cat > config.json << 'EOF'
   "wakeWords": ["anna", "henry", "home brain"],
   "hubUrl": null,
   "deviceId": null,
+  "deviceToken": null,
   "registrationCode": null,
   "voice": {
     "captureMode": "none"

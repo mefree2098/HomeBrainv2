@@ -269,6 +269,9 @@ class HomeBrainRemoteDevice {
       this.config.deviceId = this.deviceId;
       this.config.hubUrl = hubUrl;
       this.config.hubWsUrl = data.hubUrl;
+      if (data.deviceToken) {
+        this.config.deviceToken = data.deviceToken;
+      }
       this.setHubHttpBase(data.hubUrl || hubUrl);
 
       await this.saveConfig();
@@ -354,6 +357,7 @@ class HomeBrainRemoteDevice {
     this.sendMessage({
       type: 'authenticate',
       registrationCode: this.config.registrationCode || 'auto',
+      deviceToken: this.config.deviceToken || '',
       deviceInfo: {
         version: PACKAGE_VERSION,
         platform: process.platform,
@@ -650,7 +654,8 @@ class HomeBrainRemoteDevice {
       method: 'GET',
       headers: {
         'User-Agent': WAKE_WORD_USER_AGENT,
-        'Accept': 'application/octet-stream'
+        'Accept': 'application/octet-stream',
+        ...this.getDeviceAuthHeaders()
       }
     });
 
@@ -1786,10 +1791,15 @@ class HomeBrainRemoteDevice {
       const voiceId = voice && voice !== 'default' ? voice : null;
       if (voiceId) {
         const base = this.getHubHttpBase();
-        const params = new URLSearchParams({ code: this.config.registrationCode || 'auto', text });
+        const params = new URLSearchParams({ text });
+        if (!this.config.deviceToken && this.config.registrationCode) {
+          params.set('code', this.config.registrationCode);
+        }
         params.set('voiceId', voiceId);
         const url = `${base}/api/remote-devices/${this.deviceId}/tts?${params.toString()}`;
-        const res = await fetch(url);
+        const res = await fetch(url, {
+          headers: this.getDeviceAuthHeaders()
+        });
         if (res.ok) {
           const arrayBuf = await res.arrayBuffer();
           const buf = Buffer.from(arrayBuf);
@@ -1920,6 +1930,22 @@ class HomeBrainRemoteDevice {
       this.hubHttpBaseUrl = this.deriveInitialHubBaseUrl();
     }
     return this.hubHttpBaseUrl || 'http://localhost:3000';
+  }
+
+  getDeviceAuthHeaders() {
+    if (this.config.deviceToken) {
+      return {
+        'X-HomeBrain-Device-Token': this.config.deviceToken
+      };
+    }
+
+    if (this.config.registrationCode) {
+      return {
+        'X-HomeBrain-Registration-Code': this.config.registrationCode
+      };
+    }
+
+    return {};
   }
 
   buildAbsoluteHubUrl(pathOrUrl) {
@@ -2480,7 +2506,8 @@ async function loadConfig() {
       channels: 1,
       recordingDevice: 'default',
       playbackDevice: 'default'
-    }
+    },
+    deviceToken: null
   };
 
   try {

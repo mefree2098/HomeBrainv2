@@ -19,6 +19,7 @@ bash scripts/install-jetson.sh
 The script installs everything HomeBrain needs and creates the production service for you.
 
 It also prepares the Ollama management helper and privilege wiring used by the HomeBrain UI on Jetson hosts.
+Clean installs use committed npm lockfiles, generate local JWT/session secrets, and default browser auth to `HttpOnly` cookies.
 
 ## Open HomeBrain
 
@@ -52,6 +53,7 @@ Next steps:
 2. Follow [`configuration.md`](configuration.md)
 3. Add remote listener devices from `Voice Devices`
 4. If you want a bedside touch/rotary controller, follow [`elecrow-wall-panel.md`](elecrow-wall-panel.md)
+5. Before publishing or exposing the repo, run the checklist in [`security.md`](security.md)
 
 ## Useful Commands
 

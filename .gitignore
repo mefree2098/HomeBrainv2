@@ -23,7 +23,6 @@ client/.env.local
 *.csr
 
 server/node_modules/
-server/package-lock.json
 server/certificates/
 server/.wakeword-venv/
 server/data/voice-acknowledgments/
@@ -34,7 +33,6 @@ server/data/weather-provider-cache.json
 server/public/downloads/
 
 client/node_modules/
-client/package-lock.json
 client/.env.local
 client/dist/
 
@@ -42,7 +40,6 @@ HomeBrainApp/**/xcuserdata/
 HomeBrainApp/**/.DS_Store
 
 node_modules/
-package-lock.json
 uploads
 .codex-home/
 **/.codex-home/

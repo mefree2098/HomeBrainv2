@@ -5,6 +5,7 @@ const UserSession = require('../models/UserSession');
 const Settings = require('../models/Settings');
 const UserService = require('../services/userService');
 const authSessionService = require('../services/authSessionService');
+const jwt = require('jsonwebtoken');
 
 function buildQueryExecutor(records, query = {}, mode = 'one') {
   const matchValue = (actual, expected) => {
@@ -69,6 +70,56 @@ function buildRequest(deviceId, clientName = 'Hallway iPad') {
   };
 }
 
+function refreshLifetimeInDays(token) {
+  const decoded = jwt.decode(token);
+  const issuedAt = Number(decoded?.iat || 0);
+  const expiresAt = Number(decoded?.exp || 0);
+  return Math.round((expiresAt - issuedAt) / (24 * 60 * 60));
+}
+
+function restoreEnvValue(key, value) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
+test('session lifetime keeps iOS at 365 days while browser sessions default to 30 days', async (t) => {
+  const originalAuthSessionMaxAge = process.env.AUTH_SESSION_MAX_AGE_DAYS;
+  const originalIosSessionMaxAge = process.env.AUTH_IOS_SESSION_MAX_AGE_DAYS;
+  const originalGetSettings = Settings.getSettings;
+
+  t.after(() => {
+    restoreEnvValue('AUTH_SESSION_MAX_AGE_DAYS', originalAuthSessionMaxAge);
+    restoreEnvValue('AUTH_IOS_SESSION_MAX_AGE_DAYS', originalIosSessionMaxAge);
+    Settings.getSettings = originalGetSettings;
+  });
+
+  process.env.AUTH_SESSION_MAX_AGE_DAYS = '30';
+  process.env.AUTH_IOS_SESSION_MAX_AGE_DAYS = '365';
+  Settings.getSettings = async () => ({ authSessionMaxAgeDays: 365 });
+
+  assert.equal(await authSessionService.getSessionLifetimeDays('web'), 30);
+  assert.equal(await authSessionService.getSessionLifetimeDays('ios'), 365);
+});
+
+test('browser-like requests cannot spoof iOS session metadata', () => {
+  const metadata = authSessionService.extractSessionMetadata({
+    headers: {
+      origin: 'https://homebrain.example.com',
+      'sec-fetch-site': 'same-origin',
+      'x-homebrain-client-type': 'ios',
+      'x-homebrain-client-name': 'Spoofed iPad',
+      'x-homebrain-device-id': 'browser-device',
+      'user-agent': 'Mozilla/5.0 Safari/605.1.15'
+    },
+    ip: '192.168.1.40'
+  });
+
+  assert.equal(metadata.clientType, 'web');
+});
+
 test('issueSession reuses the same session record for the same device', async (t) => {
   const originalJwtSecret = process.env.JWT_SECRET;
   const originalRefreshSecret = process.env.REFRESH_TOKEN_SECRET;
@@ -121,6 +172,7 @@ test('issueSession reuses the same session record for the same device', async (t
   assert.equal(sessions.length, 1);
   assert.equal(first.session.sessionId, second.session.sessionId);
   assert.notEqual(first.tokens.refreshToken, second.tokens.refreshToken);
+  assert.equal(refreshLifetimeInDays(first.tokens.refreshToken), 365);
 });
 
 test('issueSession supports at least 20 simultaneous device sessions for one user', async (t) => {

@@ -17,21 +17,35 @@ const TEST_USER = {
   password: 'Admin123!'
 };
 
-let authToken = null;
+let cookieHeader = '';
+
+function storeCookies(response) {
+  const setCookie = response.headers?.['set-cookie'];
+  if (Array.isArray(setCookie) && setCookie.length > 0) {
+    cookieHeader = setCookie.map((cookie) => cookie.split(';')[0]).join('; ');
+  }
+}
+
+function authHeaders(extra = {}) {
+  return {
+    ...extra,
+    ...(cookieHeader ? { Cookie: cookieHeader } : {})
+  };
+}
 
 async function login() {
   console.log('\n=== Step 1: Login ===');
   try {
     const response = await axios.post(`${API_BASE}/api/auth/login`, TEST_USER);
+    storeCookies(response);
 
-    if (response.data.success && response.data.accessToken) {
-      authToken = response.data.accessToken;
+    if (response.data.success && cookieHeader) {
       console.log('✓ Login successful');
       console.log('  User:', response.data.user.email);
       console.log('  Role:', response.data.user.role);
       return true;
     } else {
-      console.error('✗ Login failed: No access token received');
+      console.error('✗ Login failed: No session cookies received');
       return false;
     }
   } catch (error) {
@@ -44,9 +58,7 @@ async function getLLMPriority() {
   console.log('\n=== Step 2: Get Current LLM Priority List ===');
   try {
     const response = await axios.get(`${API_BASE}/api/settings/llm-priority`, {
-      headers: {
-        'Authorization': `Bearer ${authToken}`
-      }
+      headers: authHeaders()
     });
 
     if (response.data.success && response.data.priorityList) {
@@ -72,10 +84,7 @@ async function updateLLMPriority(newPriority) {
       `${API_BASE}/api/settings/llm-priority`,
       { priorityList: newPriority },
       {
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json'
-        }
+        headers: authHeaders({ 'Content-Type': 'application/json' })
       }
     );
 
@@ -101,10 +110,7 @@ async function testInvalidPriority() {
       `${API_BASE}/api/settings/llm-priority`,
       { priorityList: ['invalid', 'providers'] },
       {
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json'
-        }
+        headers: authHeaders({ 'Content-Type': 'application/json' })
       }
     );
 

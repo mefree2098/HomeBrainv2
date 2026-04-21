@@ -10,6 +10,33 @@ const oidcService = require('../services/oidcService');
 const OIDCProviderSettings = require('../models/OIDCProviderSettings');
 const UserService = require('../services/userService');
 
+test('extractToken ignores URL query tokens and accepts HttpOnly cookie tokens', () => {
+  const req = {
+    headers: {
+      cookie: `theme=dark; hbAccessToken=${encodeURIComponent('cookie-token')}`
+    },
+    query: {
+      token: 'query-token'
+    }
+  };
+
+  assert.equal(authMiddleware.extractToken(req), 'cookie-token');
+});
+
+test('extractToken prefers Authorization bearer tokens over cookies', () => {
+  const req = {
+    headers: {
+      authorization: 'Bearer header-token',
+      cookie: `hbAccessToken=${encodeURIComponent('cookie-token')}`
+    },
+    query: {
+      token: 'query-token'
+    }
+  };
+
+  assert.equal(authMiddleware.extractToken(req), 'header-token');
+});
+
 function generateProviderKeys() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,

@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const WebSocket = require('ws');
 const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
@@ -10,6 +11,29 @@ const settingsService = require('../services/settingsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 
 console.log('voiceWebSocket.js loaded with enhanced logging');
+
+function hashDeviceToken(token) {
+  return crypto.createHash('sha256').update(String(token || ''), 'utf8').digest('hex');
+}
+
+function safeEquals(left, right) {
+  const leftValue = Buffer.from(String(left || ''), 'utf8');
+  const rightValue = Buffer.from(String(right || ''), 'utf8');
+  if (leftValue.length !== rightValue.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(leftValue, rightValue);
+}
+
+function redactMessageForLog(message = {}) {
+  const redacted = { ...message };
+  for (const key of ['registrationCode', 'deviceToken', 'claimToken']) {
+    if (Object.prototype.hasOwnProperty.call(redacted, key)) {
+      redacted[key] = '[redacted]';
+    }
+  }
+  return redacted;
+}
 
 class VoiceWebSocketServer {
   constructor() {
@@ -118,24 +142,18 @@ class VoiceWebSocketServer {
         device: device,
         lastPing: Date.now(),
         authenticated: false,
+        credentials: null,
         deviceInfo: null,
         pendingWakeWord: null
-      });
-
-      // Update device status to online
-      await VoiceDevice.findByIdAndUpdate(deviceId, {
-        status: 'online',
-        lastSeen: new Date(),
-        ipAddress: req.connection.remoteAddress
       });
 
       // Set up WebSocket event handlers
       ws.on('message', (message) => {
         try {
-          const text = message.toString();
-          console.log(`WebSocket message event for ${deviceId}: ${text}`);
+          const parsed = JSON.parse(message.toString());
+          console.log(`WebSocket message event for ${deviceId}:`, redactMessageForLog(parsed));
         } catch (logError) {
-          console.warn(`Failed to log raw message for ${deviceId}:`, logError);
+          console.warn(`Failed to parse message for logging from ${deviceId}:`, logError.message);
         }
         console.log(`Queueing message for processing for ${deviceId}`);
         this.handleMessage(deviceId, message);
@@ -164,22 +182,7 @@ class VoiceWebSocketServer {
         timestamp: new Date().toISOString()
       });
 
-      // Proactively authenticate device on connect to avoid race/missed auth messages
-      try {
-        const registrationCode = device.settings?.registrationCode || 'auto';
-        const { config } = await this.buildWakeWordConfig(device, registrationCode, {});
-        const conn = this.deviceConnections.get(deviceId);
-        if (conn) {
-          conn.authenticated = true;
-          conn.deviceInfo = conn.deviceInfo || {};
-        }
-        this.sendMessage(deviceId, { type: 'auth_success', config });
-        console.log(`Proactive auth_success sent to ${deviceId} (${device.name}) on connection`);
-      } catch (autoAuthErr) {
-        console.warn(`Failed to proactively authenticate ${deviceId} on connect:`, autoAuthErr.message);
-      }
-
-      console.log(`Voice device ${device.name} connected successfully`);
+      console.log(`Voice device ${device.name} connected; waiting for authentication`);
 
     } catch (error) {
       console.error(`Error handling WebSocket connection for ${deviceId}:`, error);
@@ -187,7 +190,11 @@ class VoiceWebSocketServer {
     }
   }
 
-  async buildWakeWordConfig(device, registrationCode, deviceInfo = {}) {
+  async buildWakeWordConfig(device, credentials = {}, deviceInfo = {}) {
+    if (typeof credentials === 'string') {
+      credentials = { registrationCode: credentials };
+    }
+
     const deviceId = device._id.toString();
     const platform = deviceInfo.platform || null;
     const arch = deviceInfo.arch || null;
@@ -219,7 +226,9 @@ class VoiceWebSocketServer {
 
     const wakeWordAssetPayload = assets.map((asset) => {
       const params = new URLSearchParams();
-      params.set('code', registrationCode);
+      if (!credentials.deviceToken) {
+        params.set('code', credentials.registrationCode || device.settings?.registrationCode || '');
+      }
       if (asset.platform || platform) {
         params.set('platform', asset.platform || platform);
       }
@@ -251,7 +260,9 @@ class VoiceWebSocketServer {
         format: asset.format,
         updatedAt: asset.updatedAt,
         metadata: modelMetadata,
-        downloadUrl: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
+        downloadUrl: params.toString()
+          ? `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
+          : `/api/remote-devices/${deviceId}/wake-words/${asset.slug}`
       };
     });
 
@@ -303,14 +314,21 @@ class VoiceWebSocketServer {
       const message = JSON.parse(rawMessage.toString());
       const connection = this.deviceConnections.get(deviceId);
 
-      console.log(`WebSocket raw message from ${deviceId}: ${rawMessage.toString()}`);
-
       if (!connection) {
         console.warn(`Received message from unconnected device: ${deviceId}`);
         return;
       }
 
       console.log(`WebSocket message from ${deviceId}:`, message.type);
+
+      if (message.type !== 'authenticate' && !connection.authenticated) {
+        console.warn(`Rejected unauthenticated ${message.type || 'unknown'} message from device ${deviceId}`);
+        this.sendMessage(deviceId, {
+          type: 'auth_failed',
+          message: 'Device authentication required'
+        });
+        return;
+      }
 
       switch (message.type) {
         case 'authenticate':
@@ -351,7 +369,7 @@ class VoiceWebSocketServer {
 
     } catch (error) {
       console.error(`Error processing message from device ${deviceId}:`, error);
-      console.error('Failed message payload:', rawMessage.toString());
+      console.error('Failed message type could not be processed safely');
       this.sendMessage(deviceId, {
         type: 'error',
         message: 'Failed to process message'
@@ -363,7 +381,7 @@ class VoiceWebSocketServer {
     const connection = this.deviceConnections.get(deviceId);
     if (!connection) return;
 
-    const { registrationCode, deviceInfo = {} } = message;
+    const { registrationCode, deviceToken, deviceInfo = {} } = message;
 
     try {
       const device = await VoiceDevice.findById(deviceId);
@@ -375,17 +393,32 @@ class VoiceWebSocketServer {
         return;
       }
 
-      if (device.settings.registrationCode !== registrationCode) {
-        console.warn(`Authentication failed for device ${deviceId}: Invalid registration code (${registrationCode || 'none'})`);
+      const registrationMatches = Boolean(
+        registrationCode
+        && device.settings?.registrationCode
+        && device.settings.registrationCode === registrationCode
+      );
+      const deviceTokenMatches = Boolean(
+        deviceToken
+        && device.settings?.deviceTokenHash
+        && safeEquals(hashDeviceToken(deviceToken), device.settings.deviceTokenHash)
+      );
+
+      if (!registrationMatches && !deviceTokenMatches) {
+        console.warn(`Authentication failed for device ${deviceId}: Invalid device credentials`);
         this.sendMessage(deviceId, {
           type: 'auth_failed',
-          message: 'Invalid registration code'
+          message: 'Invalid device credentials'
         });
         return;
       }
 
       connection.authenticated = true;
       connection.deviceInfo = deviceInfo;
+      connection.credentials = {
+        registrationCode: registrationMatches ? registrationCode : '',
+        deviceToken: deviceTokenMatches ? deviceToken : ''
+      };
 
       const authUpdate = {
         status: 'online',
@@ -403,9 +436,9 @@ class VoiceWebSocketServer {
         connection.device = refreshedDevice;
       }
 
-      console.log(`Authenticating device ${deviceId} (${device.name}) with code ${registrationCode}`);
+      console.log(`Authenticating device ${deviceId} (${device.name})`);
 
-      const { config, assets } = await this.buildWakeWordConfig(device, registrationCode, deviceInfo);
+      const { config, assets } = await this.buildWakeWordConfig(device, connection.credentials, deviceInfo);
 
       if (!assets.length) {
         console.warn(`No wake word assets available for device ${device.name}. Ensure files exist in server/public/wake-words.`);
@@ -452,14 +485,16 @@ class VoiceWebSocketServer {
           continue;
         }
 
-        const registrationCode = device.settings?.registrationCode;
-        if (!registrationCode) {
+        const credentials = connection.credentials || {
+          registrationCode: device.settings?.registrationCode || ''
+        };
+        if (!credentials.registrationCode && !credentials.deviceToken) {
           console.warn(`Cannot send wake word update to ${device.name}: missing registration code`);
           continue;
         }
 
         try {
-          const { config, assets } = await this.buildWakeWordConfig(device, registrationCode, connection.deviceInfo || {});
+          const { config, assets } = await this.buildWakeWordConfig(device, credentials, connection.deviceInfo || {});
           console.log(`Dispatching config_update to ${deviceId} for wake word "${phrase}" with ${assets.length} asset(s)`);
           this.sendMessage(deviceId, {
             type: 'config_update',
@@ -1153,8 +1188,10 @@ class VoiceWebSocketServer {
       if (!device) {
         throw new Error('Device not found');
       }
-      const registrationCode = device.settings?.registrationCode || 'auto';
-      const { config } = await this.buildWakeWordConfig(device, registrationCode, connection.deviceInfo || {});
+      const credentials = connection.credentials || {
+        registrationCode: device.settings?.registrationCode || ''
+      };
+      const { config } = await this.buildWakeWordConfig(device, credentials, connection.deviceInfo || {});
       const ok = this.sendMessage(deviceId, { type: 'config_update', config });
       return ok ? { success: true } : { success: false, error: 'WebSocket send failed' };
     } catch (error) {

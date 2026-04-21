@@ -12,6 +12,8 @@ http://<hub-ip>:3000
 
 Create the first account, then sign in.
 
+HomeBrain browser sessions are stored in `HttpOnly` cookies set by the server. If login behaves strangely after an upgrade from an older build, sign out once and sign back in so the browser drops any legacy local token state. The native iOS app remains a bearer-token client and keeps its 365-day refresh-session default.
+
 ## 2. General Settings
 
 Open `Settings -> General`.
@@ -140,3 +142,18 @@ You only need this if:
 - or an external integration requires a public HTTPS endpoint
 
 If you only use HomeBrain inside your LAN, plain `http://<hub-ip>:3000` is enough.
+
+## 11. Security Baseline
+
+For public deployments:
+
+- set `HOMEBRAIN_PUBLIC_BASE_URL`
+- set `COOKIE_SECURE=true`
+- set `CORS_ALLOWED_ORIGINS` to the exact HTTPS origins that should use browser credentials
+- keep `AUTH_SESSION_MAX_AGE_DAYS=30` for browsers and `AUTH_IOS_SESSION_MAX_AGE_DAYS=365` for the native iOS app unless you intentionally want a different policy
+- keep real secrets only in `server/.env`
+- run `bash scripts/check-secrets.sh --history` before pushing
+
+Full checklist:
+
+- [`security.md`](security.md)

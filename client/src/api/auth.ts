@@ -10,7 +10,7 @@ export type RegistrationStatus = {
 // Description: Login user functionality
 // Endpoint: POST /api/auth/login
 // Request: { email: string, password: string }
-// Response: { accessToken: string, refreshToken: string }
+// Response: sanitized user object; session tokens are set as HttpOnly cookies
 export const login = async (email: string, password: string) => {
   try {
     const response = await api.post('/api/auth/login', { email, password });
@@ -40,9 +40,7 @@ export const register = async (email: string, password: string) => {
 // Response: { success: boolean, message: string }
 export const logout = async () => {
   try {
-    return await api.post('/api/auth/logout', {
-      refreshToken: localStorage.getItem('refreshToken') || ''
-    });
+    return await api.post('/api/auth/logout', {});
   } catch (error) {
     throw new Error(error?.response?.data?.message || error.message);
   }

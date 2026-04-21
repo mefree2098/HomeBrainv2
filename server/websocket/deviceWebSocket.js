@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const { URL } = require('url');
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
-const { verifyAccessToken } = require('../routes/middlewares/auth');
+const { extractToken, verifyAccessToken } = require('../routes/middlewares/auth');
 
 class DeviceWebSocket {
   constructor() {
@@ -20,12 +20,8 @@ class DeviceWebSocket {
 
     this.wss.on('connection', async (socket, request) => {
       try {
-        const base = request.headers?.host
-          ? `http://${request.headers.host}`
-          : 'http://localhost';
-        const url = new URL(request.url, base);
-        const token = url.searchParams.get('token');
-        const user = await verifyAccessToken(token);
+        const token = extractToken(request);
+        const user = await verifyAccessToken(token, undefined, request);
         socket.user = user;
       } catch (error) {
         console.warn('DeviceWebSocket: authentication failed:', error.message);

@@ -33,7 +33,6 @@ export function useDeviceRealtime(applyIncomingDevices: (devices: any[]) => void
     const override = import.meta.env.VITE_DEVICE_WS_URL;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const hostname = getHostname();
-    const token = localStorage.getItem("accessToken");
     const inferredPort = inferPort();
 
     if (override && typeof override === "string") {
@@ -57,11 +56,7 @@ export function useDeviceRealtime(applyIncomingDevices: (devices: any[]) => void
           parsedUrl.port = inferredPort;
         }
 
-        if (token) {
-          parsedUrl.searchParams.set("token", token);
-        } else {
-          parsedUrl.searchParams.delete("token");
-        }
+        parsedUrl.searchParams.delete("token");
 
         return parsedUrl.toString();
       } catch (error) {
@@ -71,24 +66,20 @@ export function useDeviceRealtime(applyIncomingDevices: (devices: any[]) => void
 
     const explicitPort = import.meta.env.VITE_DEVICE_WS_PORT;
     if (explicitPort) {
-      const base = `${protocol}//${hostname}:${explicitPort}/ws/devices`;
-      return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+      return `${protocol}//${hostname}:${explicitPort}/ws/devices`;
     }
 
     if (inferredPort) {
-      const base = `${protocol}//${hostname}:${inferredPort}/ws/devices`;
-      return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+      return `${protocol}//${hostname}:${inferredPort}/ws/devices`;
     }
 
-    const base = `${protocol}//${hostname}/ws/devices`;
-    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+    return `${protocol}//${hostname}/ws/devices`;
   }, []);
 
   const resolveDeviceStreamUrl = useCallback(() => {
     const override = import.meta.env.VITE_DEVICE_WS_URL;
     const protocol = window.location.protocol === "https:" ? "https:" : "http:";
     const hostname = getHostname();
-    const token = localStorage.getItem("accessToken");
     const inferredPort = inferPort();
 
     if (override && typeof override === "string") {
@@ -114,18 +105,10 @@ export function useDeviceRealtime(applyIncomingDevices: (devices: any[]) => void
           parsedUrl.port = inferredPort;
         }
 
-        if (token) {
-          parsedUrl.searchParams.set("token", token);
-        }
-
         return parsedUrl.toString();
       } catch (error) {
         console.warn("Failed to derive devices stream URL from VITE_DEVICE_WS_URL override", error);
       }
-    }
-
-    if (token) {
-      return `/api/devices/stream?token=${encodeURIComponent(token)}`;
     }
 
     return "/api/devices/stream";
@@ -158,7 +141,7 @@ export function useDeviceRealtime(applyIncomingDevices: (devices: any[]) => void
 
       console.log("Device updates: falling back to SSE stream");
       const streamUrl = resolveDeviceStreamUrl();
-      const source = new EventSource(streamUrl);
+      const source = new EventSource(streamUrl, { withCredentials: true });
       eventSource = source;
 
       source.onopen = () => {

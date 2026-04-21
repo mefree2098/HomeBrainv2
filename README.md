@@ -67,6 +67,9 @@ Important:
 - Production HomeBrain serves the UI/API on internal port `3000`
 - Caddy is now the intended public edge on `80/443`
 - Port `5173` is only used by the Vite dev server during local frontend development
+- The installer uses committed npm lockfiles for deterministic clean deployments
+- Browser sessions use `HttpOnly` cookies; tokens are not stored in browser `localStorage`
+- The native iOS app remains a bearer-token client with a 365-day refresh-session lifetime
 
 ## Documentation
 
@@ -80,6 +83,7 @@ Important:
 - Admin workflow: [`docs/admin-guide.md`](docs/admin-guide.md)
 - End-user voice usage: [`docs/user-guide.md`](docs/user-guide.md)
 - Troubleshooting: [`docs/troubleshooting.md`](docs/troubleshooting.md)
+- Security checklist: [`docs/security.md`](docs/security.md)
 - Wake-word setup: [`docs/wake-word-setup.md`](docs/wake-word-setup.md)
 - Remote listener guide: [`remote-device/README.md`](remote-device/README.md)
 - Docs index: [`docs/README.md`](docs/README.md)
@@ -95,6 +99,7 @@ From the HomeBrain UI:
 5. Run that command on the listener device
 
 Raspberry Pi cloud-init onboarding is also available from the same dialog.
+After activation, listeners use a generated device token for config, heartbeat, wake-word asset, and TTS requests.
 
 ## Wall Panel Flow
 
@@ -145,7 +150,7 @@ Details:
 Install dependencies:
 
 ```bash
-npm install
+npm ci
 ```
 
 Run the backend:
@@ -178,12 +183,12 @@ This repository is set up so secrets should stay local:
 Before publishing or opening a pull request, run:
 
 ```bash
-bash scripts/check-secrets.sh
+bash scripts/check-secrets.sh --history
 ```
 
-GitHub Actions also runs the same check against the full checked-out history.
+GitHub Actions also runs the same check against the full checked-out history, plus dependency review, npm audit, and CodeQL. Enable GitHub secret scanning, push protection, Dependabot alerts/security updates, and code scanning in the repository settings before opening the repo.
 
-One thing git itself can still expose is commit author metadata. If you want to hide older author email addresses before publishing the full history, that requires a separate git history rewrite.
+If old commits contain unsafe local state such as `.codex-home`, clean it with the coordinated history rewrite in [`docs/security.md`](docs/security.md) before publishing. One thing git itself can still expose is commit author metadata; hiding older author email addresses also requires a separate git history rewrite.
 
 ## License
 

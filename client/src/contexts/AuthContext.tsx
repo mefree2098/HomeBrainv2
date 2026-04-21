@@ -27,49 +27,12 @@ const getStoredUser = (): User | null => {
   }
 };
 
-const getAccessTokenCookieOptions = (accessToken: string): string => {
-  const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
-
-  try {
-    const [, payloadSegment = ''] = accessToken.split('.');
-    const normalizedPayload = payloadSegment
-      .replace(/-/g, '+')
-      .replace(/_/g, '/')
-      .padEnd(Math.ceil(payloadSegment.length / 4) * 4, '=');
-    const payload = JSON.parse(window.atob(normalizedPayload));
-    const expSeconds = Number(payload?.exp);
-    if (Number.isFinite(expSeconds)) {
-      const maxAge = Math.max(0, Math.floor(expSeconds - (Date.now() / 1000)));
-      return `; Max-Age=${maxAge}; path=/; SameSite=Lax${secureFlag}`;
-    }
-  } catch {
-    // Fall back to a session cookie if the JWT cannot be decoded client-side.
-  }
-
-  return `; path=/; SameSite=Lax${secureFlag}`;
-};
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return !!localStorage.getItem("accessToken");
+    return !!getStoredUser();
   });
   const [currentUser, setCurrentUser] = useState<User | null>(() => getStoredUser());
-  const [isLoading, setIsLoading] = useState(() => !!localStorage.getItem("accessToken"));
-
-  const clearAuthCookies = () => {
-    const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
-    document.cookie = `hbAccessToken=; Max-Age=0; path=/; SameSite=Lax${secureFlag}`;
-    document.cookie = `hbSessionToken=; Max-Age=0; path=/; SameSite=Lax${secureFlag}`;
-  };
-
-  const syncAccessTokenCookie = (accessToken: string | null) => {
-    if (!accessToken) {
-      clearAuthCookies();
-      return;
-    }
-
-    document.cookie = `hbAccessToken=${encodeURIComponent(accessToken)}${getAccessTokenCookieOptions(accessToken)}`;
-  };
+  const [isLoading, setIsLoading] = useState(true);
 
   const setStoredUser = (userData: User | null) => {
     if (userData) {
@@ -84,34 +47,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const resetAuth = () => {
+    // Clean up legacy token storage from older browser builds. HttpOnly cookies
+    // are cleared by the server through /api/auth/logout or failed refreshes.
     localStorage.removeItem("refreshToken");
     localStorage.removeItem("accessToken");
     localStorage.removeItem("userData");
     setCurrentUser(null);
     setIsAuthenticated(false);
     setIsLoading(false);
-    clearAuthCookies();
   };
 
-  const setAuthData = (accessToken: string, refreshToken: string, userData: User) => {
-    if (!accessToken && !refreshToken) {
-      throw new Error('Neither refreshToken nor accessToken was returned.');
-    }
-
-    localStorage.setItem("refreshToken", refreshToken);
-    localStorage.setItem("accessToken", accessToken);
+  const setAuthData = (userData: User) => {
     setStoredUser(userData);
     setIsLoading(false);
-    syncAccessTokenCookie(accessToken);
   };
 
   const refreshCurrentUser = async () => {
-    const accessToken = localStorage.getItem("accessToken");
-    if (!accessToken) {
-      resetAuth();
-      return null;
-    }
-
     const userData = await apiGetCurrentUser();
     setStoredUser(userData);
     return userData;
@@ -121,13 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     const bootstrap = async () => {
-      if (!localStorage.getItem("accessToken")) {
-        setIsLoading(false);
-        return;
-      }
-
       try {
-        syncAccessTokenCookie(localStorage.getItem("accessToken"));
         const userData = await apiGetCurrentUser();
         if (cancelled) {
           return;
@@ -156,9 +101,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       setIsLoading(true);
       const response = await apiLogin(email, password);
-      const { accessToken, refreshToken, ...userData } = response;
-      setAuthData(accessToken, refreshToken, userData as User);
-      return userData as User;
+      setAuthData(response as User);
+      return response as User;
     } catch (error) {
       resetAuth();
       throw new Error(error?.message || 'Login failed');
@@ -169,9 +113,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       setIsLoading(true);
       const response = await apiRegister(email, password);
-      const { accessToken, refreshToken, ...userData } = response;
-      setAuthData(accessToken, refreshToken, userData as User);
-      return userData as User;
+      setAuthData(response as User);
+      return response as User;
     } catch (error) {
       resetAuth();
       throw new Error(error?.message || 'Registration failed');

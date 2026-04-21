@@ -101,6 +101,124 @@ function envFlagEnabled(value, fallback = true) {
   return fallback;
 }
 
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function normalizeOrigin(value) {
+  if (!value || typeof value !== 'string') {
+    return '';
+  }
+
+  try {
+    return new URL(value.trim()).origin;
+  } catch (_error) {
+    return '';
+  }
+}
+
+function buildAllowedOrigins() {
+  const configured = [
+    process.env.CLIENT_URL,
+    process.env.HOMEBRAIN_PUBLIC_BASE_URL,
+    process.env.PUBLIC_BASE_URL,
+    process.env.AXIOM_PUBLIC_BASE_URL,
+    process.env.AXIOM_PUBLIC_URL,
+    ...splitList(process.env.CORS_ALLOWED_ORIGINS)
+  ].map(normalizeOrigin).filter(Boolean);
+
+  if (process.env.NODE_ENV !== 'production') {
+    configured.push(
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:3000',
+      'http://127.0.0.1:3000'
+    );
+  }
+
+  return [...new Set(configured)];
+}
+
+function buildCorsOptions(req = null) {
+  const requestOrigin = req?.get?.('host')
+    ? normalizeOrigin(`${req.protocol || (req.secure ? 'https' : 'http')}://${req.get('host')}`)
+    : '';
+  const allowedOrigins = [
+    ...buildAllowedOrigins(),
+    requestOrigin
+  ].filter(Boolean);
+
+  return {
+    origin(origin, callback) {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      const error = new Error('CORS origin not allowed');
+      error.status = 403;
+      return callback(error);
+    },
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Authorization',
+      'Content-Type',
+      'X-CSRF-Token',
+      'X-HomeBrain-Client-Type',
+      'X-HomeBrain-Client-Name',
+      'X-HomeBrain-Device-Id',
+      'X-HomeBrain-Registration-Code',
+      'X-HomeBrain-Claim-Token',
+      'X-HomeBrain-Device-Token'
+    ]
+  };
+}
+
+function buildConnectSrc(req = null) {
+  const sources = new Set(["'self'"]);
+  const host = req?.get?.('host');
+
+  if (host) {
+    sources.add(`ws://${host}`);
+    sources.add(`wss://${host}`);
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    sources.add('ws://localhost:*');
+    sources.add('ws://127.0.0.1:*');
+    sources.add('http://localhost:*');
+    sources.add('http://127.0.0.1:*');
+  }
+
+  return `connect-src ${Array.from(sources).join(' ')}`;
+}
+
+function getContentSecurityPolicy(req = null) {
+  if (process.env.CONTENT_SECURITY_POLICY) {
+    return process.env.CONTENT_SECURITY_POLICY;
+  }
+
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    buildConnectSrc(req),
+    "frame-ancestors 'self'",
+    "form-action 'self'"
+  ].join('; ');
+}
+
 function closeServer(server, name) {
   return new Promise((resolve) => {
     if (!server || typeof server.close !== 'function' || !server.listening) {
@@ -155,12 +273,15 @@ app.enable('strict routing');
 app.disable('x-powered-by');
 app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 
-app.use(cors({}));
+app.use(cors((req, callback) => {
+  callback(null, buildCorsOptions(req));
+}));
 app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Permissions-Policy', 'camera=(), geolocation=(self), microphone=(self)');
+  res.setHeader('Content-Security-Policy', getContentSecurityPolicy(req));
   next();
 });
 app.use(express.json({

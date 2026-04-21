@@ -201,32 +201,6 @@ cleanup_orphaned_homebrain_processes() {
   sudo kill -9 "${stale_pids[@]}" 2>/dev/null || true
 }
 
-clear_ignored_package_locks() {
-  local relative_lock_paths=(
-    "package-lock.json"
-    "server/package-lock.json"
-    "client/package-lock.json"
-    "broker/package-lock.json"
-    "lambda/package-lock.json"
-  )
-  local existing_lock_paths=()
-  local relative_path
-
-  for relative_path in "${relative_lock_paths[@]}"; do
-    local absolute_path="${HOMEBRAIN_DIR}/${relative_path}"
-    if [[ -e "${absolute_path}" ]]; then
-      existing_lock_paths+=("${absolute_path}")
-    fi
-  done
-
-  if [[ "${#existing_lock_paths[@]}" -eq 0 ]]; then
-    return 0
-  fi
-
-  print_status "Removing ignored package-lock files so dependencies refresh from the latest package manifests..."
-  sudo -u "$HOMEBRAIN_USER" rm -f "${existing_lock_paths[@]}"
-}
-
 homebrain_service_unit_exists() {
   if ! command -v systemctl >/dev/null 2>&1; then
     return 1
@@ -839,10 +813,8 @@ update_homebrain() {
   print_status "Pulling latest HomeBrain code from Git..."
   sudo -u "$HOMEBRAIN_USER" git -C "${HOMEBRAIN_DIR}" pull --ff-only
 
-  clear_ignored_package_locks
-
   print_status "Installing dependencies..."
-  run_modern_npm install --package-lock=false --no-audit --no-fund
+  run_modern_npm ci --no-audit --no-fund
 
   print_status "Ensuring native server modules match the active Node.js runtime..."
   run_modern_npm run ensure:native --prefix server

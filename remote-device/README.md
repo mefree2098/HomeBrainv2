@@ -28,6 +28,8 @@ Example:
 curl -fsSL "http://<HUB_IP>:3000/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE>" | bash
 ```
 
+The generated installer activates the listener, stores the hub URL, and saves a device token used for authenticated device-side APIs.
+
 ## Verify The Service
 
 ```bash
@@ -68,6 +70,8 @@ Fallback:
 
 ```bash
 cd ~/homebrain-remote
-npm install --no-audit --no-fund
+npm ci --no-audit --no-fund
 sudo systemctl restart homebrain-remote
 ```
+
+If the listener was installed before HomeBrain added device-token authentication, rerun the one-command installer from `Voice Devices` so `config.json` receives a `deviceToken`.

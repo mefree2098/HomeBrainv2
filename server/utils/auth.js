@@ -2,7 +2,7 @@ const { randomUUID } = require('crypto');
 const jwt = require('jsonwebtoken');
 
 const ACCESS_TOKEN_TTL = process.env.AUTH_ACCESS_TOKEN_TTL || '1d';
-const REFRESH_TOKEN_TTL = process.env.AUTH_REFRESH_TOKEN_TTL || '365d';
+const REFRESH_TOKEN_TTL = process.env.AUTH_REFRESH_TOKEN_TTL || '30d';
 
 const generateAccessToken = (user, options = {}) => {
   const payload = {

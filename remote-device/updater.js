@@ -130,6 +130,7 @@ class RemoteDeviceUpdater {
       const filesToBackup = [
         'index.js',
         'package.json',
+        'package-lock.json',
         'config.json',
         'README.md'
       ];
@@ -145,7 +146,7 @@ class RemoteDeviceUpdater {
       }
 
       // Backup node_modules package list
-      const { stdout } = await execAsync('npm list --json --depth=0');
+      const { stdout } = await execAsync('npm list --json --depth=0', { cwd: this.installDir });
       fs.writeFileSync(
         path.join(this.backupDir, 'package-list.json'),
         stdout
@@ -197,6 +198,7 @@ class RemoteDeviceUpdater {
       const filesToUpdate = [
         'index.js',
         'package.json',
+        'package-lock.json',
         'README.md',
         'updater.js',
         'feature_infer.py'
@@ -229,10 +231,14 @@ class RemoteDeviceUpdater {
 
       // Update dependencies only if necessary
       if (depsChanged) {
-        console.log('Dependencies changed; running npm install...');
-        await execAsync('npm install', { cwd: this.installDir });
+        const hasLockfile = fs.existsSync(path.join(this.installDir, 'package-lock.json'));
+        const installCommand = hasLockfile
+          ? 'npm ci --no-audit --no-fund'
+          : 'npm install --no-audit --no-fund';
+        console.log(`Dependencies changed; running ${installCommand}...`);
+        await execAsync(installCommand, { cwd: this.installDir });
       } else {
-        console.log('Dependencies unchanged; skipping npm install');
+        console.log('Dependencies unchanged; skipping dependency install');
       }
 
       console.log('Update installed successfully');
@@ -257,6 +263,7 @@ class RemoteDeviceUpdater {
       const filesToRestore = [
         'index.js',
         'package.json',
+        'package-lock.json',
         'README.md'
       ];
 
@@ -271,7 +278,11 @@ class RemoteDeviceUpdater {
       }
 
       // Restore dependencies
-      await execAsync('npm install', { cwd: this.installDir });
+      const hasLockfile = fs.existsSync(path.join(this.installDir, 'package-lock.json'));
+      const installCommand = hasLockfile
+        ? 'npm ci --no-audit --no-fund'
+        : 'npm install --no-audit --no-fund';
+      await execAsync(installCommand, { cwd: this.installDir });
 
       console.log('Backup restored successfully');
     } catch (error) {
