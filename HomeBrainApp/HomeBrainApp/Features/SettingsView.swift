@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 private enum SettingsParitySurface: String, CaseIterable, Identifiable {
     case senseEnergy
@@ -143,6 +144,24 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
     }
 }
 
+private enum HardwareOrbSettingsTab: String, CaseIterable, Identifiable {
+    case fleet
+    case firmware
+    case provisioning
+    case alignment
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fleet: return "Fleet"
+        case .firmware: return "Firmware"
+        case .provisioning: return "Provisioning"
+        case .alignment: return "Alignment"
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var session: SessionStore
 
@@ -160,6 +179,23 @@ struct SettingsView: View {
     @State private var hardwareOrbs: [HardwareOrbRecord] = []
     @State private var hardwareOrbLoadError: String?
     @State private var savingHardwareOrbIDs: Set<String> = []
+    @State private var selectedHardwareOrbID = ""
+    @State private var selectedHardwareOrbTab: HardwareOrbSettingsTab = .firmware
+    @State private var hardwareOrbWifiSsid = ""
+    @State private var hardwareOrbWifiSavedSsid = ""
+    @State private var hardwareOrbWifiPassword = ""
+    @State private var hardwareOrbWifiPasswordConfigured = false
+    @State private var savingHardwareOrbWifi = false
+    @State private var pushingHardwareOrbFirmwareIDs: Set<String> = []
+    @State private var provisioningHardwareOrbIDs: Set<String> = []
+    @State private var rotatingHardwareOrbIDs: Set<String> = []
+    @State private var creatingHardwareOrb = false
+    @State private var usbProvisioningHardwareOrb = false
+    @State private var hardwareOrbProvisioningPacket: HardwareOrbProvisioningPacket?
+    @State private var newHardwareOrbName = ""
+    @State private var newHardwareOrbRoom = ""
+    @State private var newHardwareOrbHardwareProfile = "elecrow-crowpanel-2.1-rotary"
+    @State private var newHardwareOrbPowerSource = "wired"
 
     @State private var location = ""
     @State private var timezone = ""
@@ -197,6 +233,23 @@ struct SettingsView: View {
 
     private var isAdmin: Bool {
         session.currentUser?.role == "admin"
+    }
+
+    private var selectedHardwareOrb: HardwareOrbRecord? {
+        if let selected = hardwareOrbs.first(where: { $0.id == selectedHardwareOrbID }) {
+            return selected
+        }
+        return hardwareOrbs.first
+    }
+
+    private var hardwareOrbWifiConfigured: Bool {
+        !hardwareOrbWifiSsid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (hardwareOrbWifiPasswordConfigured || !hardwareOrbWifiPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private var hardwareOrbWifiDirty: Bool {
+        hardwareOrbWifiSsid.trimmingCharacters(in: .whitespacesAndNewlines) != hardwareOrbWifiSavedSsid
+            || !hardwareOrbWifiPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {

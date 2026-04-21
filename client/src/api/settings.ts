@@ -42,6 +42,8 @@ export const updateSettings = async (settings: {
   smartthingsRedirectUri?: string;
   smartthingsUseOAuth?: boolean;
   harmonyHubAddresses?: string;
+  hardwareOrbWifiSsid?: string;
+  hardwareOrbWifiPassword?: string;
   elevenlabsApiKey?: string;
   enableSecurityMode?: boolean;
   llmProvider?: string;

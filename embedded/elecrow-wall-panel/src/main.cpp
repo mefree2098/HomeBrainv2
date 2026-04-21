@@ -93,6 +93,7 @@ constexpr size_t kOtaProgressReportMinIntervalBytes = 16 * 1024;
 constexpr size_t kOtaProgressReportStepBytes = 64 * 1024;
 constexpr size_t kOtaDownloadChunkBytes = 4096;
 constexpr unsigned long kOtaMatrixFrameIntervalMs = 90;
+constexpr unsigned long kOtaMountSnapshotRefreshMs = 30000;
 constexpr unsigned long kOtaProgressRenderIntervalMs = 240;
 constexpr uint8_t kNetworkJobQueueCapacity = 12;
 constexpr uint8_t kNetworkResultQueueCapacity = 12;
@@ -354,6 +355,7 @@ int8_t gOtaMatrixColumnHeadRow[kOtaMatrixColumnCount] = {};
 uint8_t gOtaMatrixColumnTrailLength[kOtaMatrixColumnCount] = {};
 unsigned long gOtaMatrixColumnNextStepAt[kOtaMatrixColumnCount] = {};
 unsigned long gOtaMatrixLastFrameAt = 0;
+unsigned long gLastOtaMountSnapshotAt = 0;
 uint32_t gOtaMatrixRngState = 0x4F52424FUL;
 bool gOtaMatrixVisible = false;
 lv_img_dsc_t gUiMountSnapshotDescriptor = {};
@@ -613,6 +615,22 @@ void updateOverlayTouchTargets(bool useRotatedTargets) {
   updateCenterTapTouchTarget(useRotatedTargets);
 }
 
+bool shouldReuseOtaMountSnapshot() {
+  if (
+    !gOtaInProgress ||
+    !gOtaMatrixVisible ||
+    !gUiMountSnapshotImage ||
+    !gUiMountSnapshotVisible ||
+    gMountOffsetTenths == 0 ||
+    gLastOtaMountSnapshotAt == 0
+  ) {
+    return false;
+  }
+
+  const unsigned long now = millis();
+  return now - gLastOtaMountSnapshotAt < kOtaMountSnapshotRefreshMs;
+}
+
 void showLiveUiMountSurface() {
   if (gMainCard && lv_obj_has_flag(gMainCard, LV_OBJ_FLAG_HIDDEN)) {
     lv_obj_clear_flag(gMainCard, LV_OBJ_FLAG_HIDDEN);
@@ -623,6 +641,7 @@ void showLiveUiMountSurface() {
   }
 
   gUiMountSnapshotVisible = false;
+  gLastOtaMountSnapshotAt = 0;
   updateOverlayTouchTargets(false);
 }
 
@@ -642,6 +661,13 @@ void applyUiMountOffset() {
     return;
   }
 
+  if (shouldReuseOtaMountSnapshot()) {
+    lv_obj_clear_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(gUiMountSnapshotImage);
+    updateOverlayTouchTargets(true);
+    return;
+  }
+
   if (lv_obj_has_flag(gMainCard, LV_OBJ_FLAG_HIDDEN)) {
     lv_obj_clear_flag(gMainCard, LV_OBJ_FLAG_HIDDEN);
   }
@@ -653,7 +679,7 @@ void applyUiMountOffset() {
   lv_obj_set_style_transform_height(gMainCard, 0, 0);
   lv_obj_set_style_clip_corner(gMainCard, false, 0);
 
-  if (!gUiMountSnapshotImage || gMountOffsetTenths == 0 || (gOtaInProgress && gOtaMatrixVisible)) {
+  if (!gUiMountSnapshotImage || gMountOffsetTenths == 0) {
     showLiveUiMountSurface();
     return;
   }
@@ -678,6 +704,7 @@ void applyUiMountOffset() {
   lv_obj_clear_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(gUiMountSnapshotImage);
   gUiMountSnapshotVisible = true;
+  gLastOtaMountSnapshotAt = (gOtaInProgress && gOtaMatrixVisible) ? millis() : 0;
   updateOverlayTouchTargets(true);
 }
 
@@ -2059,11 +2086,13 @@ void setOtaMatrixVisible(bool visible, bool resetAnimation) {
   if (!visible) {
     lv_obj_add_flag(gOtaMatrixLayer, LV_OBJ_FLAG_HIDDEN);
     gOtaMatrixVisible = false;
+    gLastOtaMountSnapshotAt = 0;
     return;
   }
 
   if (resetAnimation || !gOtaMatrixVisible) {
     resetOtaMatrixAnimation();
+    gLastOtaMountSnapshotAt = 0;
   }
 
   lv_obj_clear_flag(gOtaMatrixLayer, LV_OBJ_FLAG_HIDDEN);

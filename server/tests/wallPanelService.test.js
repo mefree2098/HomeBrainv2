@@ -9,6 +9,7 @@ const { PassThrough } = require('stream');
 const WallPanel = require('../models/WallPanel');
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
+const Settings = require('../models/Settings');
 const deviceService = require('../services/deviceService');
 const eventStreamService = require('../services/eventStreamService');
 const sceneService = require('../services/sceneService');
@@ -19,6 +20,24 @@ const wallPanelServiceModule = require('../services/wallPanelService');
 
 const wallPanelService = wallPanelServiceModule;
 const { WallPanelService } = wallPanelServiceModule;
+
+function withPanelWifiBuildSettings(t, overrides = {}) {
+  const originalGetSettings = Settings.getSettings;
+
+  t.after(() => {
+    Settings.getSettings = originalGetSettings;
+  });
+
+  Settings.getSettings = async () => ({
+    hardwareOrbWifiSsid: 'HomeBrain-Test-WiFi',
+    hardwareOrbWifiPassword: 'HomeBrain-Test-Password',
+    ...overrides
+  });
+}
+
+function buildTestFirmwareArtifact(version) {
+  return Buffer.from(`firmware-binary\\0${version}\\0HomeBrain-Test-WiFi\\0HomeBrain-Test-Password\\0`);
+}
 
 test('registerPanel issues panel credentials and default mode order', async (t) => {
   const originalSave = WallPanel.prototype.save;
@@ -204,6 +223,74 @@ test('activatePanel completes an OTA after download progress has started', async
   assert.equal(result.ota.phase, 'completed');
   assert.equal(result.ota.progress, 100);
   assert.equal(result.ota.currentVersion, 'panel-target');
+});
+
+test('activatePanel fails an OTA when the orb reboots into a different firmware version', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const cleanupCalls = [];
+
+  const panelDoc = {
+    _id: 'panel-2-rollback',
+    name: 'Bedroom Panel',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    ipAddress: '',
+    firmwareVersion: 'panel-old',
+    ota: {
+      jobId: 'job-rebooting',
+      status: 'rebooting',
+      phase: 'rebooting',
+      progress: 97,
+      targetVersion: 'panel-target',
+      currentVersion: 'panel-old',
+      bytesTransferred: 2048,
+      bytesTotal: 2048,
+      artifactPath: '/tmp/job-rebooting.bin',
+      message: 'Rebooting into the new HomeBrain firmware.'
+    },
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return {
+        ...this
+      };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const service = new WallPanelService();
+  service.cleanupPanelOtaArtifact = async (_panel, artifactPath) => {
+    cleanupCalls.push(artifactPath);
+  };
+  service.serializePanelForResponse = async (panel) => panel;
+
+  const result = await service.activatePanel('panel-2-rollback', {
+    registrationCode: 'HBWP-ABCD-EF12-3456'
+  }, {
+    ipAddress: '192.168.1.45',
+    firmwareVersion: 'panel-old'
+  });
+
+  assert.equal(result.status, 'online');
+  assert.equal(result.ota.status, 'failed');
+  assert.equal(result.ota.phase, 'failed');
+  assert.equal(result.ota.progress, 0);
+  assert.equal(result.ota.currentVersion, 'panel-old');
+  assert.match(result.ota.lastError, /instead of OTA target panel-target/i);
+  assert.deepEqual(cleanupCalls, ['/tmp/job-rebooting.bin']);
 });
 
 test('getPanelState builds swipeable mode payloads for the firmware', async (t) => {
@@ -804,10 +891,12 @@ test('getPanelById reports when newer HomeBrain firmware is available', async (t
 });
 
 test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missing from PATH', async (t) => {
+  withPanelWifiBuildSettings(t);
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-'));
   const firmwareDir = path.join(tempRoot, 'embedded', 'elecrow-wall-panel');
   const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
   const builtArtifactPath = path.join(firmwareDir, '.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin');
+  const targetVersion = 'panel-20240410T000000Z-abc1234';
   const originalPublishSafe = eventStreamService.publishSafe;
 
   t.after(async () => {
@@ -817,7 +906,7 @@ test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missin
 
   await fs.promises.mkdir(path.dirname(builtArtifactPath), { recursive: true });
   await fs.promises.writeFile(path.join(firmwareDir, 'platformio.ini'), '[env:elecrow-crowpanel-2_1]\n');
-  await fs.promises.writeFile(builtArtifactPath, Buffer.from('firmware-binary'));
+  await fs.promises.writeFile(builtArtifactPath, buildTestFirmwareArtifact(targetVersion));
 
   eventStreamService.publishSafe = async () => {};
 
@@ -848,6 +937,8 @@ test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missin
 
         child.stdout.write('Compiling wall panel firmware...\n');
         child.stderr.write('Linking and packaging OTA image...\n');
+        fs.mkdirSync(path.dirname(builtArtifactPath), { recursive: true });
+        fs.writeFileSync(builtArtifactPath, buildTestFirmwareArtifact(targetVersion));
         child.emit('close', 0);
       });
 
@@ -864,26 +955,27 @@ test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missin
     },
     {
       jobId: 'job-1',
-      targetVersion: 'panel-20240410T000000Z-abc1234'
+      targetVersion
     }
   );
 
   const copiedArtifact = await fs.promises.readFile(
-    path.join(otaArtifactsDir, 'panel-build', 'job-1.bin'),
-    'utf8'
+    path.join(otaArtifactsDir, 'panel-build', 'job-1.bin')
   );
 
   assert.equal(commands[0].command, 'pio');
   assert.ok(commands.some((entry) => entry.command === '/opt/homebrew/bin/pio'));
   assert.ok(commands.some((entry) => entry.envPath.includes('/opt/homebrew/bin')));
-  assert.equal(copiedArtifact, 'firmware-binary');
+  assert.ok(copiedArtifact.includes(Buffer.from(targetVersion)));
 });
 
 test('buildPanelOtaArtifact falls back to Linux user-local PlatformIO when PATH is missing it', async (t) => {
+  withPanelWifiBuildSettings(t);
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-local-'));
   const firmwareDir = path.join(tempRoot, 'embedded', 'elecrow-wall-panel');
   const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
   const builtArtifactPath = path.join(firmwareDir, '.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin');
+  const targetVersion = 'panel-20240410T000000Z-abc1234';
   const homeDir = path.join(tempRoot, 'home');
   const userLocalPlatformio = path.join(homeDir, '.local', 'bin', 'platformio');
   const originalPublishSafe = eventStreamService.publishSafe;
@@ -900,7 +992,7 @@ test('buildPanelOtaArtifact falls back to Linux user-local PlatformIO when PATH 
   await fs.promises.mkdir(path.dirname(builtArtifactPath), { recursive: true });
   await fs.promises.mkdir(path.dirname(userLocalPlatformio), { recursive: true });
   await fs.promises.writeFile(path.join(firmwareDir, 'platformio.ini'), '[env:elecrow-crowpanel-2_1]\n');
-  await fs.promises.writeFile(builtArtifactPath, Buffer.from('firmware-binary'));
+  await fs.promises.writeFile(builtArtifactPath, buildTestFirmwareArtifact(targetVersion));
 
   eventStreamService.publishSafe = async () => {};
 
@@ -931,6 +1023,8 @@ test('buildPanelOtaArtifact falls back to Linux user-local PlatformIO when PATH 
 
         child.stdout.write('Compiling wall panel firmware...\n');
         child.stderr.write('Linking and packaging OTA image...\n');
+        fs.mkdirSync(path.dirname(builtArtifactPath), { recursive: true });
+        fs.writeFileSync(builtArtifactPath, buildTestFirmwareArtifact(targetVersion));
         child.emit('close', 0);
       });
 
@@ -947,25 +1041,26 @@ test('buildPanelOtaArtifact falls back to Linux user-local PlatformIO when PATH 
     },
     {
       jobId: 'job-2',
-      targetVersion: 'panel-20240410T000000Z-abc1234'
+      targetVersion
     }
   );
 
   const copiedArtifact = await fs.promises.readFile(
-    path.join(otaArtifactsDir, 'panel-build', 'job-2.bin'),
-    'utf8'
+    path.join(otaArtifactsDir, 'panel-build', 'job-2.bin')
   );
 
   assert.ok(commands.some((entry) => entry.command === userLocalPlatformio));
   assert.ok(commands.some((entry) => entry.envPath.includes(path.join(homeDir, '.local', 'bin'))));
-  assert.equal(copiedArtifact, 'firmware-binary');
+  assert.ok(copiedArtifact.includes(Buffer.from(targetVersion)));
 });
 
 test('buildPanelOtaArtifact keeps trying candidates when python3 lacks the platformio module', async (t) => {
+  withPanelWifiBuildSettings(t);
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-python-'));
   const firmwareDir = path.join(tempRoot, 'embedded', 'elecrow-wall-panel');
   const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
   const builtArtifactPath = path.join(firmwareDir, '.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin');
+  const targetVersion = 'panel-20240410T000000Z-abc1234';
   const originalPublishSafe = eventStreamService.publishSafe;
 
   t.after(async () => {
@@ -975,7 +1070,7 @@ test('buildPanelOtaArtifact keeps trying candidates when python3 lacks the platf
 
   await fs.promises.mkdir(path.dirname(builtArtifactPath), { recursive: true });
   await fs.promises.writeFile(path.join(firmwareDir, 'platformio.ini'), '[env:elecrow-crowpanel-2_1]\n');
-  await fs.promises.writeFile(builtArtifactPath, Buffer.from('firmware-binary'));
+  await fs.promises.writeFile(builtArtifactPath, buildTestFirmwareArtifact(targetVersion));
 
   eventStreamService.publishSafe = async () => {};
 
@@ -1012,6 +1107,8 @@ test('buildPanelOtaArtifact keeps trying candidates when python3 lacks the platf
 
         child.stdout.write('Compiling wall panel firmware...\n');
         child.stderr.write('Linking and packaging OTA image...\n');
+        fs.mkdirSync(path.dirname(builtArtifactPath), { recursive: true });
+        fs.writeFileSync(builtArtifactPath, buildTestFirmwareArtifact(targetVersion));
         child.emit('close', 0);
       });
 
@@ -1028,7 +1125,7 @@ test('buildPanelOtaArtifact keeps trying candidates when python3 lacks the platf
     },
     {
       jobId: 'job-3',
-      targetVersion: 'panel-20240410T000000Z-abc1234'
+      targetVersion
     }
   );
 
@@ -1037,10 +1134,12 @@ test('buildPanelOtaArtifact keeps trying candidates when python3 lacks the platf
 });
 
 test('buildPanelOtaArtifact bootstraps a private PlatformIO toolchain when none is installed', async (t) => {
+  withPanelWifiBuildSettings(t);
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-managed-'));
   const firmwareDir = path.join(tempRoot, 'embedded', 'elecrow-wall-panel');
   const otaArtifactsDir = path.join(tempRoot, 'server', 'data', 'wall-panel-ota');
   const builtArtifactPath = path.join(firmwareDir, '.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin');
+  const targetVersion = 'panel-20240410T000000Z-abc1234';
   const managedRootDir = path.join(otaArtifactsDir, '.platformio-homebrain');
   const managedPython = path.join(managedRootDir, 'bin', 'python');
   const managedPio = path.join(managedRootDir, 'bin', 'pio');
@@ -1053,7 +1152,7 @@ test('buildPanelOtaArtifact bootstraps a private PlatformIO toolchain when none 
 
   await fs.promises.mkdir(path.dirname(builtArtifactPath), { recursive: true });
   await fs.promises.writeFile(path.join(firmwareDir, 'platformio.ini'), '[env:elecrow-crowpanel-2_1]\n');
-  await fs.promises.writeFile(builtArtifactPath, Buffer.from('firmware-binary'));
+  await fs.promises.writeFile(builtArtifactPath, buildTestFirmwareArtifact(targetVersion));
 
   eventStreamService.publishSafe = async () => {};
 
@@ -1126,6 +1225,8 @@ test('buildPanelOtaArtifact bootstraps a private PlatformIO toolchain when none 
 
         child.stdout.write('Compiling wall panel firmware...\n');
         child.stderr.write('Linking and packaging OTA image...\n');
+        fs.mkdirSync(path.dirname(builtArtifactPath), { recursive: true });
+        fs.writeFileSync(builtArtifactPath, buildTestFirmwareArtifact(targetVersion));
         child.emit('close', 0);
       });
 
@@ -1142,25 +1243,86 @@ test('buildPanelOtaArtifact bootstraps a private PlatformIO toolchain when none 
     },
     {
       jobId: 'job-4',
-      targetVersion: 'panel-20240410T000000Z-abc1234'
+      targetVersion
     }
   );
 
   const copiedArtifact = await fs.promises.readFile(
-    path.join(otaArtifactsDir, 'panel-build', 'job-4.bin'),
-    'utf8'
+    path.join(otaArtifactsDir, 'panel-build', 'job-4.bin')
   );
 
   assert.ok(execCalls.some((entry) => entry.file === 'python3' && entry.args[0] === '--version'));
   assert.ok(execCalls.some((entry) => entry.file === 'python3' && entry.args[0] === '-m' && entry.args[1] === 'venv'));
   assert.ok(execCalls.some((entry) => entry.file === managedPython && entry.args[1] === 'pip'));
   assert.ok(spawnCommands.some((entry) => entry.command === managedPio));
-  assert.equal(copiedArtifact, 'firmware-binary');
+  assert.ok(copiedArtifact.includes(Buffer.from(targetVersion)));
 });
 
-test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', () => {
+test('runPanelFirmwareBuild refuses to build when orb Wi-Fi credentials are not configured', async (t) => {
   const service = new WallPanelService();
-  const env = service.createPanelFirmwareBuildEnv({
+
+  await assert.rejects(
+    () => service.runPanelFirmwareBuild(
+      { id: 'panel-missing-wifi' },
+      'job-missing-wifi',
+      {
+        env: 'elecrow-crowpanel-2_1',
+        artifactRelativePath: path.join('.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin')
+      },
+      {}
+    ),
+    /Settings > Hardware Orbs/
+  );
+});
+
+test('createPanelFirmwareBuildEnv refuses missing saved orb Wi-Fi settings', async (t) => {
+  withPanelWifiBuildSettings(t, {
+    hardwareOrbWifiSsid: '',
+    hardwareOrbWifiPassword: ''
+  });
+
+  const service = new WallPanelService();
+
+  await assert.rejects(
+    () => service.createPanelFirmwareBuildEnv({
+      _id: 'panel-missing-wifi-settings',
+      id: 'panel-missing-wifi-settings',
+      name: 'Kitchen Orb',
+      room: 'Kitchen',
+      hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+      settings: {
+        registrationCode: 'HBWP-1234-5678-90AB'
+      }
+    }),
+    /Settings > Hardware Orbs/
+  );
+});
+
+test('validatePanelFirmwareArtifact rejects placeholder Wi-Fi credentials', async (t) => {
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-artifact-validation-'));
+  const artifactPath = path.join(tempRoot, 'firmware.bin');
+  const targetVersion = 'panel-20260410T000000Z-abc1234';
+
+  t.after(async () => {
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.promises.writeFile(
+    artifactPath,
+    Buffer.from(`firmware-binary\\0${targetVersion}\\0YOUR_WIFI_SSID\\0`)
+  );
+
+  const service = new WallPanelService();
+  await assert.rejects(
+    () => service.validatePanelFirmwareArtifact(artifactPath, { targetVersion }),
+    /placeholder Wi-Fi credentials/
+  );
+});
+
+test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', async (t) => {
+  withPanelWifiBuildSettings(t);
+  const service = new WallPanelService();
+  const env = await service.createPanelFirmwareBuildEnv({
     _id: 'panel-usb-env',
     id: 'panel-usb-env',
     name: 'Kitchen Orb',
@@ -1179,6 +1341,8 @@ test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', () => {
   assert.equal(env.HOMEBRAIN_PANEL_ID, 'panel-usb-env');
   assert.equal(env.HOMEBRAIN_PANEL_REGISTRATION_CODE, 'HBWP-1234-5678-90AB');
   assert.equal(env.HOMEBRAIN_PANEL_HOSTNAME, 'homebrain-kitchen-orb');
+  assert.equal(env.HOMEBRAIN_PANEL_WIFI_SSID, 'HomeBrain-Test-WiFi');
+  assert.equal(env.HOMEBRAIN_PANEL_WIFI_PASSWORD, 'HomeBrain-Test-Password');
 });
 
 test('listProvisioningUsbPorts selects a single Espressif USB serial candidate', async () => {
@@ -1205,6 +1369,7 @@ test('listProvisioningUsbPorts selects a single Espressif USB serial candidate',
 });
 
 test('flashPanelInitialFirmware uploads to the selected USB port with per-panel build env', async (t) => {
+  withPanelWifiBuildSettings(t);
   const originalFindById = WallPanel.findById;
   const originalPublishSafe = eventStreamService.publishSafe;
   const uploadCommands = [];
@@ -1278,6 +1443,8 @@ test('flashPanelInitialFirmware uploads to the selected USB port with per-panel 
   assert.equal(capturedBuildEnv.HOMEBRAIN_PANEL_ID, 'panel-usb-flash');
   assert.equal(capturedBuildEnv.HOMEBRAIN_PANEL_REGISTRATION_CODE, 'HBWP-1234-5678-90AB');
   assert.equal(capturedBuildEnv.HOMEBRAIN_PANEL_HUB_URL, 'http://homebrain.local:3000');
+  assert.equal(capturedBuildEnv.HOMEBRAIN_PANEL_WIFI_SSID, 'HomeBrain-Test-WiFi');
+  assert.equal(capturedBuildEnv.HOMEBRAIN_PANEL_WIFI_PASSWORD, 'HomeBrain-Test-Password');
   assert.equal(uploadCommands.length, 1);
   assert.deepEqual(uploadCommands[0].args.slice(-2), ['--upload-port', '/dev/ttyACM0']);
   assert.equal(panelDoc.status, 'offline');
@@ -1411,6 +1578,7 @@ test('reportPanelOtaStatus preserves known OTA bytesTotal when download updates 
 });
 
 test('pushFirmwareUpdate recovers a stale orb OTA build before queuing a new update', async (t) => {
+  withPanelWifiBuildSettings(t);
   const originalFindById = WallPanel.findById;
   const recoveredJobs = [];
 

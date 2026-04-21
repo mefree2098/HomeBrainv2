@@ -20,6 +20,7 @@ import {
 
 import { getDevices, type DeviceRecord } from "@/api/devices"
 import { getHarmonyHubs } from "@/api/harmony"
+import { getSettings, updateSettings } from "@/api/settings"
 import {
   getWallPanelProvisioning,
   getWallPanelUsbProvisioningPorts,
@@ -99,6 +100,11 @@ type CreatePanelDraft = {
   powerSource: WallPanelRecord["powerSource"]
 }
 
+type OrbWifiDraft = {
+  ssid: string
+  password: string
+}
+
 type ProvisioningDialogState = {
   panel: WallPanelRecord
   provisioning: WallPanelProvisioningBundle
@@ -111,6 +117,10 @@ const DEFAULT_CREATE_DRAFT: CreatePanelDraft = {
   room: "",
   hardwareProfile: "elecrow-crowpanel-2.1-rotary",
   powerSource: "wired"
+}
+const DEFAULT_ORB_WIFI_DRAFT: OrbWifiDraft = {
+  ssid: "",
+  password: ""
 }
 
 const OTA_ACTIVE_STATUSES = new Set(["queued", "building", "ready", "flashing", "downloading", "installing", "rebooting"])
@@ -351,6 +361,10 @@ export function HardwareOrbsTab() {
   const [rotatingProvisioningKey, setRotatingProvisioningKey] = useState("")
   const [pushingUpdateKey, setPushingUpdateKey] = useState("")
   const [rotationSavingKey, setRotationSavingKey] = useState("")
+  const [orbWifiDraft, setOrbWifiDraft] = useState<OrbWifiDraft>(DEFAULT_ORB_WIFI_DRAFT)
+  const [orbWifiSavedSsid, setOrbWifiSavedSsid] = useState("")
+  const [orbWifiPasswordConfigured, setOrbWifiPasswordConfigured] = useState(false)
+  const [savingOrbWifi, setSavingOrbWifi] = useState(false)
 
   const selectedPanel = useMemo(
     () => panels.find((panel) => panel.id === selectedPanelId) || null,
@@ -371,14 +385,15 @@ export function HardwareOrbsTab() {
     }
 
     try {
-      const [panelsResponse, devicesResponse, scenesResponse, harmonyResponse] = await Promise.all([
+      const [panelsResponse, devicesResponse, scenesResponse, harmonyResponse, settingsResponse] = await Promise.all([
         getWallPanels(),
         getDevices(),
         getScenes(),
         getHarmonyHubs({ includeCommands: true, timeoutMs: 5000 }).catch((error) => {
           console.warn("Failed to load Harmony hubs for orb settings:", error)
           return { success: false, hubs: [] as HarmonyHubSnapshot[] }
-        })
+        }),
+        getSettings()
       ])
 
       const nextPanels = sortPanels(Array.isArray(panelsResponse?.panels) ? panelsResponse.panels : [])
@@ -398,6 +413,14 @@ export function HardwareOrbsTab() {
       setDevices(nextDevices)
       setScenes(nextScenes)
       setHarmonyHubs(nextHarmonyHubs)
+      const settings = settingsResponse?.settings || {}
+      const savedSsid = normalizeString(settings.hardwareOrbWifiSsid)
+      const passwordConfigured = Boolean(settings.hardwareOrbWifiPasswordConfigured || normalizeString(settings.hardwareOrbWifiPassword))
+      if (!silent) {
+        setOrbWifiDraft({ ssid: savedSsid, password: "" })
+      }
+      setOrbWifiSavedSsid(savedSsid)
+      setOrbWifiPasswordConfigured(passwordConfigured)
       setSelectedPanelId((previous) => {
         if (focusPanelId && nextPanels.some((panel) => panel.id === focusPanelId)) {
           return focusPanelId
@@ -544,6 +567,11 @@ export function HardwareOrbsTab() {
     return panelDraftKey(draft) !== panelRecordKey(selectedPanel)
   }, [draft, selectedPanel])
 
+  const orbWifiSsid = normalizeString(orbWifiDraft.ssid)
+  const orbWifiPassword = normalizeString(orbWifiDraft.password)
+  const orbWifiConfigured = Boolean(orbWifiSsid && (orbWifiPasswordConfigured || orbWifiPassword))
+  const orbWifiDirty = orbWifiSsid !== orbWifiSavedSsid || Boolean(orbWifiPassword)
+
   const selectedPanelOta = selectedPanel?.ota
   const selectedPanelOtaBusy = isOtaBusy(selectedPanel)
   const selectedPanelMountOffsetTenths = getMountOffsetTenths(selectedPanel)
@@ -625,7 +653,61 @@ export function HardwareOrbsTab() {
     }
   }
 
+  const handleSaveOrbWifi = async () => {
+    const ssid = normalizeString(orbWifiDraft.ssid)
+    const password = normalizeString(orbWifiDraft.password)
+
+    if (!ssid || (!password && !orbWifiPasswordConfigured)) {
+      toast({
+        title: "Orb Wi-Fi required",
+        description: "Save the Wi-Fi SSID and password HomeBrain should compile into hardware orb firmware.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setSavingOrbWifi(true)
+    try {
+      const payload: { hardwareOrbWifiSsid: string; hardwareOrbWifiPassword?: string } = {
+        hardwareOrbWifiSsid: ssid
+      }
+      if (password) {
+        payload.hardwareOrbWifiPassword = password
+      }
+
+      const response = await updateSettings(payload)
+      const settings = response?.settings || {}
+      const savedSsid = normalizeString(settings.hardwareOrbWifiSsid || ssid)
+      const passwordConfigured = Boolean(settings.hardwareOrbWifiPasswordConfigured || password || normalizeString(settings.hardwareOrbWifiPassword))
+
+      setOrbWifiDraft({ ssid: savedSsid, password: "" })
+      setOrbWifiSavedSsid(savedSsid)
+      setOrbWifiPasswordConfigured(passwordConfigured)
+      toast({
+        title: "Orb Wi-Fi saved",
+        description: "USB provisioning and OTA firmware builds will use the saved Wi-Fi credentials."
+      })
+    } catch (error: any) {
+      toast({
+        title: "Orb Wi-Fi save failed",
+        description: error?.message || "Unable to save the hardware orb Wi-Fi settings.",
+        variant: "destructive"
+      })
+    } finally {
+      setSavingOrbWifi(false)
+    }
+  }
+
   const handleProvisionPanelOverUsb = async () => {
+    if (!orbWifiConfigured) {
+      toast({
+        title: "Save orb Wi-Fi first",
+        description: "HomeBrain needs the orb Wi-Fi SSID and password before it can build and flash firmware.",
+        variant: "destructive"
+      })
+      return
+    }
+
     const name = normalizeString(usbProvisionDraft.name)
     const room = normalizeString(usbProvisionDraft.room)
 
@@ -709,6 +791,15 @@ export function HardwareOrbsTab() {
   }
 
   const handlePushFirmwareUpdate = async (panel: WallPanelRecord) => {
+    if (!orbWifiConfigured) {
+      toast({
+        title: "Save orb Wi-Fi first",
+        description: "HomeBrain needs the orb Wi-Fi SSID and password before it can build firmware.",
+        variant: "destructive"
+      })
+      return
+    }
+
     setPushingUpdateKey(panel.id)
     try {
       const response = await pushWallPanelFirmwareUpdate(panel.id)
@@ -881,7 +972,12 @@ export function HardwareOrbsTab() {
                 <Plus className="mr-2 h-4 w-4" />
                 New Orb
               </Button>
-              <Button type="button" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setUsbProvisionDialogOpen(true)}>
+              <Button
+                type="button"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={() => setUsbProvisionDialogOpen(true)}
+                disabled={!orbWifiConfigured}
+              >
                 <Upload className="mr-2 h-4 w-4" />
                 Provision New Device
               </Button>
@@ -907,6 +1003,55 @@ export function HardwareOrbsTab() {
         </CardContent>
       </Card>
 
+      <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+        <CardHeader>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Wifi className="h-5 w-5 text-cyan-500" />
+                Orb Wi-Fi
+              </CardTitle>
+              <CardDescription>
+                Saved here for HomeBrain-managed USB provisioning and OTA firmware builds.
+              </CardDescription>
+            </div>
+            <Badge variant={orbWifiConfigured ? "secondary" : "destructive"} className="w-fit">
+              {orbWifiConfigured ? "Ready for firmware builds" : "Required before firmware builds"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Wi-Fi SSID</label>
+            <Input
+              value={orbWifiDraft.ssid}
+              onChange={(event) => setOrbWifiDraft((current) => ({ ...current, ssid: event.target.value }))}
+              placeholder="Home Wi-Fi"
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Wi-Fi password</label>
+            <Input
+              type="password"
+              value={orbWifiDraft.password}
+              onChange={(event) => setOrbWifiDraft((current) => ({ ...current, password: event.target.value }))}
+              placeholder={orbWifiPasswordConfigured ? "Saved password unchanged" : "Required"}
+              autoComplete="new-password"
+            />
+          </div>
+          <Button
+            type="button"
+            className="h-10 bg-cyan-600 hover:bg-cyan-700 text-white"
+            onClick={() => void handleSaveOrbWifi()}
+            disabled={!orbWifiDirty || savingOrbWifi}
+          >
+            {savingOrbWifi ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            Save Wi-Fi
+          </Button>
+        </CardContent>
+      </Card>
+
       {panels.length === 0 ? (
         <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
           <CardContent className="flex min-h-[18rem] flex-col items-center justify-center text-center">
@@ -916,7 +1061,12 @@ export function HardwareOrbsTab() {
               Create the orb here, copy its setup packet, flash the firmware, and then return to fine-tune room controls. The terminal should only be needed for the firmware upload itself.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-2">
-              <Button type="button" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setUsbProvisionDialogOpen(true)}>
+              <Button
+                type="button"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={() => setUsbProvisionDialogOpen(true)}
+                disabled={!orbWifiConfigured}
+              >
                 <Upload className="mr-2 h-4 w-4" />
                 Provision over USB
               </Button>
@@ -1135,7 +1285,7 @@ export function HardwareOrbsTab() {
                             type="button"
                             variant="outline"
                             onClick={() => void handlePushFirmwareUpdate(selectedPanel)}
-                            disabled={pushingUpdateKey === selectedPanel.id || selectedPanelOtaBusy}
+                            disabled={!orbWifiConfigured || pushingUpdateKey === selectedPanel.id || selectedPanelOtaBusy}
                           >
                             {pushingUpdateKey === selectedPanel.id ? (
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1224,7 +1374,7 @@ export function HardwareOrbsTab() {
                       type="button"
                       className="w-full sm:w-auto min-w-[15rem] h-auto min-h-11 whitespace-normal px-5 py-3 text-center leading-tight bg-cyan-600 hover:bg-cyan-700 text-white"
                       onClick={() => void handlePushFirmwareUpdate(selectedPanel)}
-                      disabled={!selectedPanel.settings?.registered || selectedPanelOtaBusy || pushingUpdateKey === selectedPanel.id}
+                      disabled={!orbWifiConfigured || !selectedPanel.settings?.registered || selectedPanelOtaBusy || pushingUpdateKey === selectedPanel.id}
                     >
                       {pushingUpdateKey === selectedPanel.id ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1742,7 +1892,7 @@ export function HardwareOrbsTab() {
           <DialogHeader>
             <DialogTitle>Provision New Hardware Orb</DialogTitle>
             <DialogDescription>
-              Plug the new orb into a USB port on the HomeBrain server. HomeBrain will register it, compile its credentials into the firmware, and flash it from here.
+              Plug the new orb into a USB port on the HomeBrain server. HomeBrain will register it, compile the saved orb Wi-Fi and setup credentials into the firmware, and flash it from here.
             </DialogDescription>
           </DialogHeader>
 
@@ -2006,7 +2156,7 @@ export function HardwareOrbsTab() {
                   <CardHeader>
                     <CardTitle className="text-base">Firmware Header Snippet</CardTitle>
                     <CardDescription>
-                      Paste these values into the firmware config before uploading. Wi-Fi SSID and password still come from your local environment.
+                      Paste these values into the firmware config before uploading. Managed USB and OTA builds use the orb Wi-Fi saved above.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">

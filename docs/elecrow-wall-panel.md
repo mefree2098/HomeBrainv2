@@ -112,6 +112,12 @@ You provide these local network values yourself:
 - `HOMEBRAIN_PANEL_WIFI_PASSWORD`
 - `HOMEBRAIN_PANEL_HOSTNAME`
 
+For HomeBrain-managed USB provisioning or OTA firmware builds, save the hardware
+orb Wi-Fi SSID and password in Settings > Hardware Orbs. HomeBrain stores those
+values in its settings database and refuses to stage an orb firmware image if
+they are missing, because an image without real Wi-Fi credentials cannot
+reconnect after reboot.
+
 The `Hardware Orbs` setup packet in the UI gives you the HomeBrain values for:
 
 - `HOMEBRAIN_PANEL_HUB_URL`
@@ -235,6 +241,7 @@ HomeBrain will:
 Operational notes:
 
 - the orb must already be provisioned and able to reach the hub over `Wi-Fi`
+- the HomeBrain Hardware Orbs settings must have the orb Wi-Fi SSID and password saved before HomeBrain can build or flash orb firmware
 - OTA updates depend on the new OTA partition table, so older pre-OTA USB flashes need one manual refresh first
 - if the orb is offline when you queue an update, HomeBrain can build the package, but the install will wait until the orb reconnects
 ## 9. Advanced Manual API Fallback

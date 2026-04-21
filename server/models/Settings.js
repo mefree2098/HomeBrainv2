@@ -189,6 +189,14 @@ const SettingsSchema = new mongoose.Schema({
     type: [HarmonyKnownHubSchema],
     default: []
   },
+  hardwareOrbWifiSsid: {
+    type: String,
+    default: ''
+  },
+  hardwareOrbWifiPassword: {
+    type: String,
+    default: ''
+  },
   elevenlabsApiKey: {
     type: String,
     default: ''
@@ -418,6 +426,10 @@ SettingsSchema.methods.toSanitized = function() {
   }
   if (sanitized.isyPassword) {
     sanitized.isyPassword = sanitized.isyPassword.replace(/.(?=.{4})/g, '*');
+  }
+  sanitized.hardwareOrbWifiPasswordConfigured = Boolean(sanitized.hardwareOrbWifiPassword);
+  if (sanitized.hardwareOrbWifiPassword) {
+    sanitized.hardwareOrbWifiPassword = '********';
   }
   delete sanitized.harmonyKnownHubs;
   delete sanitized.voiceRegion;

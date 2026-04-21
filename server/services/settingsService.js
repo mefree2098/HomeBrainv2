@@ -52,6 +52,7 @@ class SettingsService {
         'insteonPort', 'isyHost', 'isyPort', 'isyUsername', 'isyPassword', 'isyUseHttps', 'isyIgnoreTlsErrors',
         'smartthingsToken', 'elevenlabsApiKey', 'elevenlabsDefaultVoiceId',
         'harmonyHubAddresses',
+        'hardwareOrbWifiSsid', 'hardwareOrbWifiPassword',
         'sttProvider', 'sttModel', 'sttLanguage', 'enableSecurityMode',
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',
@@ -71,7 +72,8 @@ class SettingsService {
         'smartthingsClientSecret',
         'openaiApiKey',
         'anthropicApiKey',
-        'isyPassword'
+        'isyPassword',
+        'hardwareOrbWifiPassword'
       ]);
       
       const sanitizedUpdates = {};
@@ -110,6 +112,10 @@ class SettingsService {
             sanitizedUpdates[key] = sanitizedUpdates[key].trim();
           }
         });
+
+      if (typeof sanitizedUpdates.hardwareOrbWifiSsid === 'string') {
+        sanitizedUpdates.hardwareOrbWifiSsid = sanitizedUpdates.hardwareOrbWifiSsid.trim();
+      }
 
       if (typeof sanitizedUpdates.codexHomeProfile === 'string') {
         const normalizedProfile = sanitizedUpdates.codexHomeProfile.trim().toLowerCase();

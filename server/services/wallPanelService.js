@@ -8,6 +8,7 @@ const { spawn, execFile } = require('child_process');
 
 const Device = require('../models/Device');
 const Scene = require('../models/Scene');
+const Settings = require('../models/Settings');
 const WallPanel = require('../models/WallPanel');
 const deviceService = require('./deviceService');
 const sceneService = require('./sceneService');
@@ -49,6 +50,7 @@ const THERMOSTAT_MODES = Object.freeze(['auto', 'cool', 'heat', 'off']);
 const ROOM_DEVICE_TYPES = new Set(['light', 'switch', 'speaker', 'lock', 'garage']);
 const ACTIVE_OTA_STATUSES = new Set(['queued', 'building', 'ready', 'flashing', 'downloading', 'installing', 'rebooting']);
 const DOWNLOADABLE_OTA_STATUSES = new Set(['ready', 'downloading', 'installing', 'rebooting']);
+const PANEL_WIFI_PLACEHOLDER_VALUES = new Set(['YOUR_WIFI_SSID', 'YOUR_WIFI_PASSWORD']);
 const PANEL_FIRMWARE_VERSION_INPUTS = Object.freeze([
   'platformio.ini',
   'partitions-ota.csv',
@@ -220,6 +222,42 @@ function createError(status, message) {
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function isPanelWifiPlaceholder(value) {
+  return PANEL_WIFI_PLACEHOLDER_VALUES.has(trimString(value));
+}
+
+function getPanelWifiBuildConfigFromSettings(settings = {}) {
+  const ssid = trimString(
+    settings.hardwareOrbWifiSsid
+      || settings.panelWifiSsid
+      || ''
+  );
+  const password = trimString(
+    settings.hardwareOrbWifiPassword
+      || settings.panelWifiPassword
+      || ''
+  );
+
+  return { ssid, password };
+}
+
+function assertPanelWifiBuildConfig(wifi = {}) {
+  const { ssid, password } = wifi;
+  if (!ssid || !password || isPanelWifiPlaceholder(ssid) || isPanelWifiPlaceholder(password)) {
+    throw createError(
+      400,
+      'HomeBrain cannot build hardware orb firmware until the orb Wi-Fi SSID and password are saved in Settings > Hardware Orbs.'
+    );
+  }
+}
+
+function getPanelWifiBuildConfigFromEnv(processEnv = {}) {
+  return {
+    ssid: trimString(processEnv.HOMEBRAIN_PANEL_WIFI_SSID || ''),
+    password: trimString(processEnv.HOMEBRAIN_PANEL_WIFI_PASSWORD || '')
+  };
 }
 
 function extractPanelFirmwareTimestamp(value) {
@@ -1885,14 +1923,24 @@ class WallPanelService {
     };
   }
 
-  createPanelFirmwareBuildEnv(panel, { targetVersion = '', origin = '' } = {}) {
+  async getPanelWifiBuildConfig() {
+    const settings = await Settings.getSettings();
+    const wifi = getPanelWifiBuildConfigFromSettings(settings);
+    assertPanelWifiBuildConfig(wifi);
+    return wifi;
+  }
+
+  async createPanelFirmwareBuildEnv(panel, { targetVersion = '', origin = '' } = {}) {
     const normalized = normalizePanelDocument(panel);
     const hubUrl = resolvePanelOtaOrigin(normalized, origin);
+    const wifi = await this.getPanelWifiBuildConfig();
     const firmwareEnv = {
       HOMEBRAIN_PANEL_BUILD_VERSION: trimString(targetVersion) || buildPanelFirmwareVersion(),
       HOMEBRAIN_PANEL_ID: normalized.id,
       HOMEBRAIN_PANEL_REGISTRATION_CODE: normalized.settings.registrationCode,
-      HOMEBRAIN_PANEL_HOSTNAME: buildPanelHostname(normalized)
+      HOMEBRAIN_PANEL_HOSTNAME: buildPanelHostname(normalized),
+      HOMEBRAIN_PANEL_WIFI_SSID: wifi.ssid,
+      HOMEBRAIN_PANEL_WIFI_PASSWORD: wifi.password
     };
 
     if (hubUrl) {
@@ -1900,6 +1948,34 @@ class WallPanelService {
     }
 
     return this.createPlatformioEnv(firmwareEnv);
+  }
+
+  async cleanPanelFirmwareBuildOutput(buildTarget) {
+    const artifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
+    await fsp.rm(path.dirname(artifactPath), { recursive: true, force: true }).catch(() => null);
+  }
+
+  async validatePanelFirmwareArtifact(artifactPath, { targetVersion = '' } = {}) {
+    const artifact = await fsp.readFile(artifactPath);
+    const expectedVersion = trimString(targetVersion);
+
+    if (expectedVersion && !artifact.includes(Buffer.from(expectedVersion))) {
+      throw createError(
+        500,
+        `HomeBrain built a hardware orb firmware image, but it did not contain the expected version ${expectedVersion}.`
+      );
+    }
+
+    for (const placeholder of PANEL_WIFI_PLACEHOLDER_VALUES) {
+      if (artifact.includes(Buffer.from(placeholder))) {
+        throw createError(
+          500,
+          'HomeBrain built a hardware orb firmware image with placeholder Wi-Fi credentials. Save the orb Wi-Fi SSID and password in Settings > Hardware Orbs, then retry.'
+        );
+      }
+    }
+
+    return artifact.length;
   }
 
   createPlatformioEnv(extraEnv = {}) {
@@ -2198,6 +2274,8 @@ class WallPanelService {
 
   async runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv) {
     const missingCandidates = [];
+    assertPanelWifiBuildConfig(getPanelWifiBuildConfigFromEnv(processEnv));
+    await this.cleanPanelFirmwareBuildOutput(buildTarget);
 
     for (const candidate of this.getPlatformioCandidates()) {
       try {
@@ -2394,10 +2472,11 @@ class WallPanelService {
       hardwareProfile: panel.hardwareProfile
     });
 
-    const processEnv = this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
+    const processEnv = await this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
     await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
 
     const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
+    await this.validatePanelFirmwareArtifact(builtArtifactPath, { targetVersion });
     const panelDir = path.join(this.panelOtaArtifactsDir, panel.id);
     await fsp.mkdir(panelDir, { recursive: true });
 
@@ -2455,6 +2534,8 @@ class WallPanelService {
       throw createError(400, `Hardware profile ${panel.hardwareProfile} is not OTA-capable yet`);
     }
 
+    await this.getPanelWifiBuildConfig();
+
     const jobId = crypto.randomUUID();
     const targetVersion = await this.getLatestPanelFirmwareVersion().catch(() => buildPanelFirmwareVersion());
     const panelDoc = await getPanelDocument(panelId);
@@ -2507,7 +2588,7 @@ class WallPanelService {
       throw createError(400, `Hardware profile ${panel.hardwareProfile} cannot be flashed by HomeBrain yet`);
     }
 
-    const processEnv = this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
+    const processEnv = await this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
     const platformioCandidate = await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
 
     await this.updatePanelOtaState(panel.id, jobId, {
@@ -2554,6 +2635,8 @@ class WallPanelService {
   }
 
   async provisionPanelOverUsb(input = {}, origin = '') {
+    await this.getPanelWifiBuildConfig();
+
     const serialPort = await this.resolveProvisioningUsbPort(input.serialPath || input.port || '');
     const requestedHardwareProfile = trimString(input.hardwareProfile) || 'elecrow-crowpanel-2.1-rotary';
     const requestedBuildTarget = resolvePanelBuildTarget(requestedHardwareProfile);
@@ -2916,7 +2999,30 @@ class WallPanelService {
     });
 
     const currentOta = normalizeOtaState(panel.ota || {});
-    if (panel.firmwareVersion === currentOta.targetVersion && otaActivationCanFinalize(currentOta)) {
+    const reportedFirmwareVersion = panel.firmwareVersion;
+    const expectedFirmwareVersion = currentOta.targetVersion;
+    let cleanupFailedOtaArtifact = false;
+
+    if (
+      reportedFirmwareVersion
+      && expectedFirmwareVersion
+      && reportedFirmwareVersion !== expectedFirmwareVersion
+      && otaStatusIsActive(currentOta.status)
+      && otaActivationCanFinalize(currentOta)
+    ) {
+      const message = `Orb rebooted with firmware ${reportedFirmwareVersion} instead of OTA target ${expectedFirmwareVersion}. The update likely rolled back or the OTA image was not applied.`;
+      panel.status = 'online';
+      panel.ota = mergeOtaState(currentOta, {
+        status: 'failed',
+        phase: 'failed',
+        progress: 0,
+        currentVersion: reportedFirmwareVersion,
+        message,
+        lastError: message,
+        completedAt: new Date()
+      });
+      cleanupFailedOtaArtifact = true;
+    } else if (panel.firmwareVersion === currentOta.targetVersion && otaActivationCanFinalize(currentOta)) {
       panel.status = 'online';
       panel.ota = mergeOtaState(currentOta, {
         status: 'completed',
@@ -2945,6 +3051,10 @@ class WallPanelService {
     }
 
     await panel.save();
+
+    if (cleanupFailedOtaArtifact) {
+      await this.cleanupPanelOtaArtifact(panel, currentOta.artifactPath).catch(() => null);
+    }
 
     void eventStreamService.publishSafe({
       type: 'wall_panel.activated',
