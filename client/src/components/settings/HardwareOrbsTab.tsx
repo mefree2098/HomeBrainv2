@@ -585,10 +585,6 @@ export function HardwareOrbsTab() {
     && selectedPanelLatestFirmwareVersion
     && selectedPanelFirmwareVersion === selectedPanelLatestFirmwareVersion
   )
-  const selectedPanelMountAlignmentNeedsFirmwareUpdate = Boolean(
-    selectedPanel && (!selectedPanelFirmwareUpToDate || selectedPanelFirmwareUpdateAvailable)
-  )
-
   const onlineCount = panels.filter((panel) => panel.status === "online").length
   const provisionedCount = panels.filter((panel) => panel.settings?.registered === true).length
 
@@ -1262,45 +1258,12 @@ export function HardwareOrbsTab() {
                         </Badge>
                       ) : (
                         <Badge variant="outline">
-                          {selectedPanelMountAlignmentNeedsFirmwareUpdate ? "Saved in HomeBrain" : "Saved on orb"}
+                          Saved on orb
                         </Badge>
                       )}
                     </div>
-                    {selectedPanelMountAlignmentNeedsFirmwareUpdate ? (
-                      <div className="mt-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-200">
-                              <AlertCircle className="h-4 w-4" />
-                              Firmware update required for live rotation
-                            </p>
-                            <p className="mt-2 text-sm text-muted-foreground">
-                              HomeBrain is saving the offset, but this orb is still on{" "}
-                              <span className="font-medium">{selectedPanelFirmwareVersion || "older firmware"}</span>.
-                              The mount-alignment renderer ships in the latest orb firmware, so the display will not tilt in real time until you install{" "}
-                              <span className="font-medium">{selectedPanelLatestFirmwareVersion || "the latest OTA"}</span>.
-                            </p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => void handlePushFirmwareUpdate(selectedPanel)}
-                            disabled={!orbWifiConfigured || pushingUpdateKey === selectedPanel.id || selectedPanelOtaBusy}
-                          >
-                            {pushingUpdateKey === selectedPanel.id ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <RefreshCw className="mr-2 h-4 w-4" />
-                            )}
-                            Push Latest Firmware
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
                     <p className="mt-3 text-sm text-muted-foreground">
-                      {selectedPanelMountAlignmentNeedsFirmwareUpdate
-                        ? "Positive values still save now, but the orb will only render them after it reboots onto the latest firmware."
-                        : "Positive values rotate the visual layer clockwise. The orb now fast-polls HomeBrain so these adjustments land almost immediately while you stand at the wall and fine-tune it."}
+                      Positive values rotate the visual layer clockwise. The orb fast-polls HomeBrain so these adjustments land almost immediately while you stand at the wall and fine-tune it.
                     </p>
                     <div className="mt-4 flex flex-wrap gap-2">
                       <Button
