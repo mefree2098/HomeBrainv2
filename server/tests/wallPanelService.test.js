@@ -501,6 +501,13 @@ test('getPanelState prefers a LAN OTA download URL when the panel and hub share 
   harmonyService.getHubSnapshot = async () => null;
   weatherService.fetchDashboardWeather = async () => null;
   os.networkInterfaces = () => ({
+    docker0: [
+      {
+        family: 'IPv4',
+        internal: false,
+        address: '172.17.0.1'
+      }
+    ],
     en0: [
       {
         family: 'IPv4',

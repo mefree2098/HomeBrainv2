@@ -73,7 +73,7 @@ constexpr unsigned long kSwipeWindowMs = 1000;
 constexpr uint16_t kStateJsonCapacity = 32768;
 constexpr unsigned long kBrightnessPersistDelayMs = 1000;
 constexpr unsigned long kOtaPostActivationValidationMs = 45000;
-constexpr unsigned long kOtaProgressReportIntervalMs = 1200;
+constexpr unsigned long kOtaProgressReportIntervalMs = 10000;
 constexpr int kBrightnessDefaultPercent = 94;
 constexpr int kBrightnessMinPercent = 15;
 constexpr int kBrightnessMaxPercent = 100;
@@ -89,10 +89,11 @@ constexpr int kPanelHttpTimeoutMs = 5000;
 constexpr int kOtaHttpConnectTimeoutMs = 4000;
 constexpr int kOtaHttpTimeoutMs = 15000;
 constexpr int kOtaProgressReportStepPercent = 5;
+constexpr size_t kOtaProgressReportMinIntervalBytes = 16 * 1024;
 constexpr size_t kOtaProgressReportStepBytes = 64 * 1024;
-constexpr size_t kOtaDownloadChunkBytes = 2048;
+constexpr size_t kOtaDownloadChunkBytes = 4096;
 constexpr unsigned long kOtaMatrixFrameIntervalMs = 90;
-constexpr unsigned long kOtaProgressRenderIntervalMs = 140;
+constexpr unsigned long kOtaProgressRenderIntervalMs = 240;
 constexpr uint8_t kNetworkJobQueueCapacity = 12;
 constexpr uint8_t kNetworkResultQueueCapacity = 12;
 constexpr uint16_t kNetworkTaskIdleDelayMs = 8;
@@ -3657,7 +3658,7 @@ bool performOtaUpdate() {
   }
 
   WiFiClient* stream = http.getStreamPtr();
-  uint8_t buffer[kOtaDownloadChunkBytes];
+  static uint8_t buffer[kOtaDownloadChunkBytes];
   size_t totalWritten = 0;
   unsigned long lastChunkAt = millis();
   const bool hasKnownContentLength = expectedBytes > 0;
@@ -3731,6 +3732,7 @@ bool performOtaUpdate() {
     const int reportProgress = min(99, max(1, rawProgress));
     const bool progressAdvanced = reportProgress >= (lastReportedDownloadProgress + kOtaProgressReportStepPercent);
     const bool byteWindowAdvanced = totalWritten >= (lastReportedBytes + kOtaProgressReportStepBytes);
+    const bool intervalBytesAdvanced = totalWritten >= (lastReportedBytes + kOtaProgressReportMinIntervalBytes);
     const bool intervalElapsed = lastProgressReportAt == 0
       || (now - lastProgressReportAt >= kOtaProgressReportIntervalMs);
 
@@ -3738,7 +3740,7 @@ bool performOtaUpdate() {
       completedDownload
       || progressAdvanced
       || byteWindowAdvanced
-      || (intervalElapsed && totalWritten > lastReportedBytes)
+      || (intervalElapsed && intervalBytesAdvanced)
     ) {
       reportOtaStatus(
         "downloading",

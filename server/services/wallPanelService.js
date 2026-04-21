@@ -1366,17 +1366,30 @@ function isPrivateIpAddress(host) {
   return normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80');
 }
 
-function getLocalIpAddress() {
+function getLocalIpAddresses() {
   const interfaces = os.networkInterfaces();
+  const addresses = [];
   for (const values of Object.values(interfaces)) {
     for (const iface of values || []) {
       if (iface?.family === 'IPv4' && !iface.internal) {
-        return iface.address;
+        addresses.push(iface.address);
       }
     }
   }
 
-  return '';
+  return addresses;
+}
+
+function getLocalIpAddress(panelIp = '') {
+  const addresses = getLocalIpAddresses();
+  if (net.isIPv4(panelIp)) {
+    const subnetMatch = addresses.find((address) => sharesPrivateIpv4Subnet(address, panelIp));
+    if (subnetMatch) {
+      return subnetMatch;
+    }
+  }
+
+  return addresses[0] || '';
 }
 
 function sharesPrivateIpv4Subnet(left, right) {
@@ -1393,7 +1406,7 @@ function sharesPrivateIpv4Subnet(left, right) {
 
 function resolvePanelOtaOrigin(panel, origin = '') {
   const panelIp = trimString(panel?.ipAddress);
-  const localIp = getLocalIpAddress();
+  const localIp = getLocalIpAddress(panelIp);
   const localPort = trimString(process.env.PORT) || '3000';
 
   if (isPrivateIpAddress(panelIp) && isPrivateIpAddress(localIp) && sharesPrivateIpv4Subnet(panelIp, localIp)) {
