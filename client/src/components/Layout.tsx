@@ -131,6 +131,7 @@ export function Layout({ children }: LayoutProps) {
         <Header
           isMobile={isMobile}
           isMobileMenuOpen={isMobileMenuOpen}
+          isSidebarCollapsed={isSidebarCollapsed}
           onToggleMobileMenu={isMobile ? handleToggleMobileMenu : undefined}
         />
 

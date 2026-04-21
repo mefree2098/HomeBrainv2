@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils"
 interface HeaderProps {
   isMobile?: boolean
   isMobileMenuOpen?: boolean
+  isSidebarCollapsed?: boolean
   onToggleMobileMenu?: () => void
 }
 
@@ -53,7 +54,12 @@ const ROUTE_META: Record<string, { label: string; detail: string }> = {
   "/whisper": { label: "Whisper Matrix", detail: "Speech intelligence" }
 }
 
-export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMobileMenu }: HeaderProps) {
+export function Header({
+  isMobile = false,
+  isMobileMenuOpen = false,
+  isSidebarCollapsed = false,
+  onToggleMobileMenu
+}: HeaderProps) {
   const { logout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
@@ -221,8 +227,13 @@ export function Header({ isMobile = false, isMobileMenuOpen = false, onToggleMob
     : "Syncing device telemetry"
 
   return (
-    <header className="fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:px-5">
-      <div className="glass-panel glass-panel-strong mx-auto flex h-[4.5rem] max-w-[1720px] items-center justify-between rounded-[1.75rem] px-3 sm:px-4 lg:px-5">
+    <header
+      className={cn(
+        "fixed right-0 top-0 z-50 pt-3 transition-[left,padding] duration-500",
+        isMobile ? "left-0 px-3 sm:px-5" : isSidebarCollapsed ? "left-[6.75rem] px-4 lg:px-6" : "left-[18.25rem] px-4 lg:px-6"
+      )}
+    >
+      <div className="glass-panel glass-panel-strong mx-auto flex h-[4.5rem] max-w-[1700px] items-center justify-between rounded-[1.75rem] px-3 sm:px-4 lg:px-5">
         <div className="flex min-w-0 items-center gap-3">
           {isMobile && onToggleMobileMenu ? (
             <Button
