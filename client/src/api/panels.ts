@@ -60,7 +60,7 @@ export type WallPanelRecord = {
   updatedAt?: string | null
   ota?: {
     jobId?: string
-    status?: 'idle' | 'queued' | 'building' | 'ready' | 'downloading' | 'installing' | 'rebooting' | 'completed' | 'failed'
+    status?: 'idle' | 'queued' | 'building' | 'ready' | 'flashing' | 'downloading' | 'installing' | 'rebooting' | 'provisioned' | 'completed' | 'failed'
     phase?: string
     progress?: number
     targetVersion?: string
@@ -79,6 +79,21 @@ export type WallPanelRecord = {
   settings: WallPanelSettingsRecord
 }
 
+export type WallPanelUsbPort = {
+  path: string
+  stablePath?: string | null
+  aliases?: string[]
+  manufacturer?: string | null
+  friendlyName?: string | null
+  serialNumber?: string | null
+  vendorId?: string | null
+  productId?: string | null
+  pnpId?: string | null
+  displayName?: string
+  likelyPanel?: boolean
+  score?: number
+}
+
 export type WallPanelProvisioningBundle = {
   hubUrl: string
   panelId: string
@@ -91,10 +106,48 @@ export type WallPanelProvisioningBundle = {
   }
 }
 
+export const getWallPanelUsbProvisioningPorts = async () => {
+  try {
+    const response = await api.get('/api/panels/provisioning/usb-ports')
+    return response.data as {
+      success: boolean
+      count: number
+      ports: WallPanelUsbPort[]
+      selectedPort?: WallPanelUsbPort | null
+      serialTransportSupported?: boolean
+      serialTransportError?: string | null
+    }
+  } catch (error) {
+    console.error(error)
+    throw new Error(getApiErrorMessage(error))
+  }
+}
+
 export const getWallPanels = async () => {
   try {
     const response = await api.get('/api/panels')
     return response.data as { success: boolean; panels: WallPanelRecord[]; count: number }
+  } catch (error) {
+    console.error(error)
+    throw new Error(getApiErrorMessage(error))
+  }
+}
+
+export const provisionWallPanelOverUsb = async (payload: {
+  name: string
+  room: string
+  hardwareProfile?: WallPanelRecord['hardwareProfile']
+  powerSource?: WallPanelRecord['powerSource']
+  serialPath?: string
+}) => {
+  try {
+    const response = await api.post('/api/panels/provisioning/usb', payload)
+    return response.data as {
+      success: boolean
+      panel: WallPanelRecord
+      provisioning: WallPanelProvisioningBundle
+      port: WallPanelUsbPort
+    }
   } catch (error) {
     console.error(error)
     throw new Error(getApiErrorMessage(error))

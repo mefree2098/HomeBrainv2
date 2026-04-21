@@ -14,6 +14,7 @@ import {
   Save,
   Thermometer,
   Tv,
+  Upload,
   Wifi
 } from "lucide-react"
 
@@ -21,13 +22,16 @@ import { getDevices, type DeviceRecord } from "@/api/devices"
 import { getHarmonyHubs } from "@/api/harmony"
 import {
   getWallPanelProvisioning,
+  getWallPanelUsbProvisioningPorts,
   getWallPanels,
+  provisionWallPanelOverUsb,
   pushWallPanelFirmwareUpdate,
   registerWallPanel,
   rotateWallPanelRegistrationCode,
   updateWallPanel,
   type WallPanelProvisioningBundle,
-  type WallPanelRecord
+  type WallPanelRecord,
+  type WallPanelUsbPort
 } from "@/api/panels"
 import { getScenes, type SceneRecord } from "@/api/scenes"
 import { Badge } from "@/components/ui/badge"
@@ -101,6 +105,7 @@ type ProvisioningDialogState = {
 } | null
 
 const SELECT_NONE = "__none__"
+const USB_AUTO_PORT = "__auto__"
 const DEFAULT_CREATE_DRAFT: CreatePanelDraft = {
   name: "",
   room: "",
@@ -108,7 +113,7 @@ const DEFAULT_CREATE_DRAFT: CreatePanelDraft = {
   powerSource: "wired"
 }
 
-const OTA_ACTIVE_STATUSES = new Set(["queued", "building", "ready", "downloading", "installing", "rebooting"])
+const OTA_ACTIVE_STATUSES = new Set(["queued", "building", "ready", "flashing", "downloading", "installing", "rebooting"])
 const MOUNT_OFFSET_STEP_TENTHS = 5
 const MOUNT_OFFSET_MIN_TENTHS = -150
 const MOUNT_OFFSET_MAX_TENTHS = 150
@@ -164,6 +169,15 @@ const getSceneLabel = (scene: SceneRecord) => {
 const hardwareProfileLabel = (profile: WallPanelRecord["hardwareProfile"]) =>
   profile === "elecrow-crowpanel-1.28-rotary" ? 'ELECROW 1.28" Rotary' : 'ELECROW 2.1" Rotary'
 
+const usbPortValue = (port: WallPanelUsbPort) => normalizeString(port.stablePath || port.path)
+
+const usbPortLabel = (port: WallPanelUsbPort) => {
+  const primary = normalizeString(port.displayName || port.stablePath || port.path)
+  const detail = normalizeString(port.path) && normalizeString(port.path) !== primary ? normalizeString(port.path) : ""
+  const manufacturer = normalizeString(port.manufacturer)
+  return [primary, detail, manufacturer].filter(Boolean).join(" · ")
+}
+
 const statusBadgeVariant = (status: WallPanelRecord["status"]) => {
   if (status === "online") return "default" as const
   if (status === "error") return "destructive" as const
@@ -185,12 +199,16 @@ const otaStatusLabel = (status?: string) => {
       return "Building"
     case "ready":
       return "Ready for Orb"
+    case "flashing":
+      return "Flashing over USB"
     case "downloading":
       return "Downloading"
     case "installing":
       return "Installing"
     case "rebooting":
       return "Rebooting"
+    case "provisioned":
+      return "USB Flash Complete"
     case "completed":
       return "Completed"
     case "failed":
@@ -320,6 +338,13 @@ export function HardwareOrbsTab() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createDraft, setCreateDraft] = useState<CreatePanelDraft>(DEFAULT_CREATE_DRAFT)
   const [creating, setCreating] = useState(false)
+  const [usbProvisionDialogOpen, setUsbProvisionDialogOpen] = useState(false)
+  const [usbProvisionDraft, setUsbProvisionDraft] = useState<CreatePanelDraft>(DEFAULT_CREATE_DRAFT)
+  const [usbProvisioning, setUsbProvisioning] = useState(false)
+  const [usbProvisionPorts, setUsbProvisionPorts] = useState<WallPanelUsbPort[]>([])
+  const [usbProvisionPortValue, setUsbProvisionPortValue] = useState(USB_AUTO_PORT)
+  const [loadingUsbProvisionPorts, setLoadingUsbProvisionPorts] = useState(false)
+  const [usbProvisionPortError, setUsbProvisionPortError] = useState("")
   const [provisioningDialog, setProvisioningDialog] = useState<ProvisioningDialogState>(null)
   const [provisioningDialogOpen, setProvisioningDialogOpen] = useState(false)
   const [loadingProvisioningKey, setLoadingProvisioningKey] = useState("")
@@ -394,9 +419,37 @@ export function HardwareOrbsTab() {
     }
   }
 
+  const loadUsbProvisionPorts = async () => {
+    setLoadingUsbProvisionPorts(true)
+    setUsbProvisionPortError("")
+    try {
+      const response = await getWallPanelUsbProvisioningPorts()
+      const ports = Array.isArray(response?.ports) ? response.ports : []
+      setUsbProvisionPorts(ports)
+      setUsbProvisionPortValue(response?.selectedPort ? usbPortValue(response.selectedPort) : USB_AUTO_PORT)
+      if (ports.length === 0) {
+        setUsbProvisionPortError("No USB serial devices were detected on the HomeBrain server.")
+      }
+    } catch (error: any) {
+      setUsbProvisionPorts([])
+      setUsbProvisionPortValue(USB_AUTO_PORT)
+      setUsbProvisionPortError(error?.message || "Unable to scan USB ports on the HomeBrain server.")
+    } finally {
+      setLoadingUsbProvisionPorts(false)
+    }
+  }
+
   useEffect(() => {
     void loadOrbData()
   }, [])
+
+  useEffect(() => {
+    if (!usbProvisionDialogOpen) {
+      return
+    }
+
+    void loadUsbProvisionPorts()
+  }, [usbProvisionDialogOpen])
 
   useEffect(() => {
     if (!panels.some((panel) => isOtaBusy(panel))) {
@@ -569,6 +622,54 @@ export function HardwareOrbsTab() {
       })
     } finally {
       setCreating(false)
+    }
+  }
+
+  const handleProvisionPanelOverUsb = async () => {
+    const name = normalizeString(usbProvisionDraft.name)
+    const room = normalizeString(usbProvisionDraft.room)
+
+    if (!name || !room) {
+      toast({
+        title: "Name and room required",
+        description: "Give the orb a clear name and room before HomeBrain flashes it.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setUsbProvisioning(true)
+    try {
+      const response = await provisionWallPanelOverUsb({
+        name,
+        room,
+        hardwareProfile: usbProvisionDraft.hardwareProfile,
+        powerSource: usbProvisionDraft.powerSource,
+        serialPath: usbProvisionPortValue === USB_AUTO_PORT ? "" : usbProvisionPortValue
+      })
+
+      replacePanel(response.panel)
+      setUsbProvisionDialogOpen(false)
+      setUsbProvisionDraft(DEFAULT_CREATE_DRAFT)
+      setUsbProvisionPortValue(USB_AUTO_PORT)
+      setProvisioningDialog({
+        panel: response.panel,
+        provisioning: response.provisioning
+      })
+
+      toast({
+        title: "USB provisioning started",
+        description: `${response.panel.name} is building and flashing initial firmware on ${response.port?.stablePath || response.port?.path || "the detected USB port"}.`
+      })
+      void loadOrbData({ silent: true, focusPanelId: response.panel.id })
+    } catch (error: any) {
+      toast({
+        title: "USB provisioning failed",
+        description: error?.message || "Unable to start the hardware orb USB provisioning job.",
+        variant: "destructive"
+      })
+    } finally {
+      setUsbProvisioning(false)
     }
   }
 
@@ -780,6 +881,10 @@ export function HardwareOrbsTab() {
                 <Plus className="mr-2 h-4 w-4" />
                 New Orb
               </Button>
+              <Button type="button" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setUsbProvisionDialogOpen(true)}>
+                <Upload className="mr-2 h-4 w-4" />
+                Provision New Device
+              </Button>
             </div>
           </div>
         </CardHeader>
@@ -810,10 +915,16 @@ export function HardwareOrbsTab() {
             <p className="mt-2 max-w-xl text-sm text-muted-foreground">
               Create the orb here, copy its setup packet, flash the firmware, and then return to fine-tune room controls. The terminal should only be needed for the firmware upload itself.
             </p>
-            <Button type="button" className="mt-6 bg-cyan-600 hover:bg-cyan-700 text-white" onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create the first orb
-            </Button>
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              <Button type="button" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setUsbProvisionDialogOpen(true)}>
+                <Upload className="mr-2 h-4 w-4" />
+                Provision over USB
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setCreateDialogOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create setup token
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : (
@@ -1625,6 +1736,135 @@ export function HardwareOrbsTab() {
           ) : null}
         </div>
       )}
+
+      <Dialog open={usbProvisionDialogOpen} onOpenChange={setUsbProvisionDialogOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Provision New Hardware Orb</DialogTitle>
+            <DialogDescription>
+              Plug the new orb into a USB port on the HomeBrain server. HomeBrain will register it, compile its credentials into the firmware, and flash it from here.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Orb name</label>
+              <Input
+                value={usbProvisionDraft.name}
+                onChange={(event) => setUsbProvisionDraft((current) => ({ ...current, name: event.target.value }))}
+                placeholder="Master Bedroom Orb"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Room</label>
+              <Input
+                value={usbProvisionDraft.room}
+                onChange={(event) => setUsbProvisionDraft((current) => ({ ...current, room: event.target.value }))}
+                placeholder="Master Bedroom"
+                list="hardware-orb-usb-room-options"
+              />
+              <datalist id="hardware-orb-usb-room-options">
+                {roomOptions.map((room) => (
+                  <option key={room} value={room} />
+                ))}
+              </datalist>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Hardware profile</label>
+              <Select
+                value={usbProvisionDraft.hardwareProfile}
+                onValueChange={(value: WallPanelRecord["hardwareProfile"]) =>
+                  setUsbProvisionDraft((current) => ({ ...current, hardwareProfile: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="elecrow-crowpanel-2.1-rotary">ELECROW 2.1&quot; Rotary</SelectItem>
+                  <SelectItem value="elecrow-crowpanel-1.28-rotary">ELECROW 1.28&quot; Rotary</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Power source</label>
+              <Select
+                value={usbProvisionDraft.powerSource}
+                onValueChange={(value: WallPanelRecord["powerSource"]) =>
+                  setUsbProvisionDraft((current) => ({ ...current, powerSource: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="wired">Wired USB</SelectItem>
+                  <SelectItem value="battery">Battery</SelectItem>
+                  <SelectItem value="both">Both</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-sm font-medium">USB port on HomeBrain server</label>
+                <Button type="button" variant="outline" size="sm" onClick={() => void loadUsbProvisionPorts()} disabled={loadingUsbProvisionPorts || usbProvisioning}>
+                  {loadingUsbProvisionPorts ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+                  Scan
+                </Button>
+              </div>
+              <Select value={usbProvisionPortValue} onValueChange={setUsbProvisionPortValue} disabled={loadingUsbProvisionPorts || usbProvisioning}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Auto-detect USB port" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={USB_AUTO_PORT}>Auto-detect best port</SelectItem>
+                  {usbProvisionPorts.map((port) => (
+                    <SelectItem key={usbPortValue(port)} value={usbPortValue(port)}>
+                      {usbPortLabel(port)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {usbProvisionPortError ? (
+                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-200">
+                  {usbProvisionPortError}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {usbProvisionPorts.length > 0 ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {usbProvisionPorts.slice(0, 4).map((port) => (
+                <div key={usbPortValue(port)} className="rounded-xl border border-border/60 bg-background/70 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{port.displayName || port.stablePath || port.path}</p>
+                      <p className="mt-1 break-all text-xs text-muted-foreground">{port.stablePath || port.path}</p>
+                    </div>
+                    {port.likelyPanel ? <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">Likely orb</Badge> : <Badge variant="outline">USB serial</Badge>}
+                  </div>
+                  {port.manufacturer || port.vendorId ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {[port.manufacturer, port.vendorId ? `VID ${port.vendorId}` : ""].filter(Boolean).join(" · ")}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setUsbProvisionDialogOpen(false)} disabled={usbProvisioning}>
+              Cancel
+            </Button>
+            <Button type="button" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => void handleProvisionPanelOverUsb()} disabled={usbProvisioning || loadingUsbProvisionPorts}>
+              {usbProvisioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+              {usbProvisioning ? "Starting USB Provisioning" : "Provision and Flash"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
         <DialogContent className="max-w-2xl">

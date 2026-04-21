@@ -47,7 +47,7 @@ const PANEL_OTA_BUILD_STALE_MS = Math.max(
 const PANEL_MODE_ORDER = Object.freeze(['thermostat', 'room', 'home', 'media', 'quiet']);
 const THERMOSTAT_MODES = Object.freeze(['auto', 'cool', 'heat', 'off']);
 const ROOM_DEVICE_TYPES = new Set(['light', 'switch', 'speaker', 'lock', 'garage']);
-const ACTIVE_OTA_STATUSES = new Set(['queued', 'building', 'ready', 'downloading', 'installing', 'rebooting']);
+const ACTIVE_OTA_STATUSES = new Set(['queued', 'building', 'ready', 'flashing', 'downloading', 'installing', 'rebooting']);
 const DOWNLOADABLE_OTA_STATUSES = new Set(['ready', 'downloading', 'installing', 'rebooting']);
 const PANEL_FIRMWARE_VERSION_INPUTS = Object.freeze([
   'platformio.ini',
@@ -63,6 +63,28 @@ const PANEL_BUILD_TARGETS = Object.freeze({
     artifactRelativePath: path.join('.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin')
   })
 });
+const PANEL_USB_PORT_NAME_PATTERNS = Object.freeze([
+  /^ttyACM/i,
+  /^ttyUSB/i,
+  /^cu\.usbmodem/i,
+  /^tty\.usbmodem/i,
+  /^cu\.usbserial/i,
+  /^tty\.usbserial/i
+]);
+const PANEL_USB_PORT_TEXT_PATTERNS = Object.freeze([
+  /esp32/i,
+  /esp32-s3/i,
+  /espressif/i,
+  /usb jtag/i,
+  /usb serial/i,
+  /usb-serial/i,
+  /cp210/i,
+  /ch340/i,
+  /wchusbserial/i,
+  /usbmodem/i,
+  /ttyacm/i
+]);
+const ESPRESSIF_USB_VENDOR_ID = '303a';
 
 function normalizeTimestamp(value) {
   if (!value) {
@@ -152,8 +174,8 @@ function otaActivationCanFinalize(ota = {}) {
     return true;
   }
 
-  return ['downloading', 'installing', 'rebooting'].includes(normalized.status)
-    || ['downloading', 'download', 'installing', 'write', 'verifying', 'rebooting'].includes(normalized.phase);
+  return ['downloading', 'installing', 'rebooting', 'provisioned'].includes(normalized.status)
+    || ['downloading', 'download', 'installing', 'write', 'verifying', 'rebooting', 'usb-provisioned'].includes(normalized.phase);
 }
 
 function otaBuildIsStale(ota = {}, now = new Date()) {
@@ -345,6 +367,19 @@ function resolvePanelPollIntervalMs(value) {
 function buildRegistrationCode() {
   const raw = crypto.randomBytes(6).toString('hex').toUpperCase();
   return `HBWP-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+}
+
+function buildPanelHostname(panel) {
+  const base = trimString(panel?.name)
+    || trimString(panel?.room)
+    || toId(panel?._id || panel?.id)
+    || 'orb';
+  const slug = base
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36);
+  return `homebrain-${slug || 'orb'}`;
 }
 
 function issueClaimToken() {
@@ -682,6 +717,76 @@ function credentialsMatchPanel(panel, credentials = {}) {
   }
 
   return false;
+}
+
+function normalizeUsbVendorId(value) {
+  const normalized = trimString(value).toLowerCase().replace(/^0x/, '');
+  return normalized ? normalized.padStart(4, '0') : '';
+}
+
+function scorePanelUsbPort(port = {}) {
+  const text = [
+    port.path,
+    port.stablePath,
+    ...(Array.isArray(port.aliases) ? port.aliases : []),
+    port.manufacturer,
+    port.friendlyName,
+    port.serialNumber,
+    port.pnpId,
+    port.productId,
+    port.vendorId
+  ].filter(Boolean).join(' ');
+  const baseName = path.basename(trimString(port.path || port.stablePath));
+  let score = 0;
+
+  if (normalizeUsbVendorId(port.vendorId) === ESPRESSIF_USB_VENDOR_ID) {
+    score += 80;
+  }
+
+  if (PANEL_USB_PORT_NAME_PATTERNS.some((pattern) => pattern.test(baseName))) {
+    score += 30;
+  }
+
+  PANEL_USB_PORT_TEXT_PATTERNS.forEach((pattern) => {
+    if (pattern.test(text)) {
+      score += 12;
+    }
+  });
+
+  if (/bluetooth/i.test(text)) {
+    score -= 100;
+  }
+
+  return Math.max(0, score);
+}
+
+function normalizeSerialPortRecord(port = {}) {
+  const portPath = trimString(port.path || port.comName || port.device);
+  const stablePath = trimString(port.stablePath);
+  const aliases = Array.isArray(port.aliases)
+    ? port.aliases.map((entry) => trimString(entry)).filter(Boolean)
+    : [];
+  const normalized = {
+    path: portPath,
+    stablePath: stablePath || null,
+    aliases,
+    manufacturer: trimString(port.manufacturer) || null,
+    friendlyName: trimString(port.friendlyName) || null,
+    serialNumber: trimString(port.serialNumber) || null,
+    vendorId: normalizeUsbVendorId(port.vendorId) || null,
+    productId: normalizeUsbVendorId(port.productId) || null,
+    pnpId: trimString(port.pnpId) || null
+  };
+  const score = scorePanelUsbPort(normalized);
+  return {
+    ...normalized,
+    displayName: normalized.friendlyName
+      || normalized.manufacturer
+      || normalized.stablePath
+      || normalized.path,
+    likelyPanel: score > 0,
+    score
+  };
 }
 
 async function getPanelDocument(panelId) {
@@ -1341,6 +1446,192 @@ class WallPanelService {
       expiresAt: 0,
       value: ''
     };
+    this._serialPortModule = undefined;
+    this._serialPortLoadError = null;
+  }
+
+  loadSerialPortModule() {
+    if (this._serialPortModule !== undefined) {
+      return this._serialPortModule;
+    }
+
+    try {
+      const serialPortModule = require('serialport');
+      this._serialPortModule = serialPortModule?.SerialPort || serialPortModule;
+      this._serialPortLoadError = null;
+    } catch (error) {
+      this._serialPortModule = null;
+      this._serialPortLoadError = error;
+      console.warn(`WallPanelService: Failed to load serialport module: ${error.message}`);
+    }
+
+    return this._serialPortModule;
+  }
+
+  getSerialTransportDiagnostics() {
+    const SerialPort = this.loadSerialPortModule();
+    return {
+      supported: Boolean(SerialPort && typeof SerialPort.list === 'function'),
+      module: SerialPort ? 'serialport' : null,
+      error: SerialPort ? null : (this._serialPortLoadError?.message || 'serialport module not available')
+    };
+  }
+
+  async getSerialByIdEntries() {
+    const byIdDir = '/dev/serial/by-id';
+    const entries = await fsp.readdir(byIdDir, { withFileTypes: true }).catch(() => []);
+    const results = [];
+
+    for (const entry of entries) {
+      if (!entry.isSymbolicLink() && !entry.isFile()) {
+        continue;
+      }
+
+      const symlinkPath = path.join(byIdDir, entry.name);
+      const resolvedPath = await fsp.realpath(symlinkPath).catch(() => '');
+      results.push({
+        symlinkPath,
+        resolvedPath,
+        friendlyName: entry.name
+      });
+    }
+
+    return results.sort((left, right) => left.symlinkPath.localeCompare(right.symlinkPath));
+  }
+
+  async scanFallbackSerialDevices() {
+    const devEntries = await fsp.readdir('/dev').catch(() => []);
+    return devEntries
+      .filter((fileName) => PANEL_USB_PORT_NAME_PATTERNS.some((pattern) => pattern.test(fileName)))
+      .map((fileName) => ({ path: path.join('/dev', fileName) }));
+  }
+
+  async listProvisioningUsbPorts() {
+    const SerialPort = this.loadSerialPortModule();
+    let listedPorts = [];
+
+    if (SerialPort && typeof SerialPort.list === 'function') {
+      try {
+        listedPorts = await SerialPort.list();
+      } catch (error) {
+        console.warn(`WallPanelService: Failed to enumerate USB serial ports: ${error.message}`);
+      }
+    }
+
+    const byIdEntries = await this.getSerialByIdEntries();
+    const byResolvedPath = new Map();
+    byIdEntries.forEach((entry) => {
+      if (!entry.resolvedPath) {
+        return;
+      }
+      const current = byResolvedPath.get(entry.resolvedPath) || [];
+      current.push(entry.symlinkPath);
+      byResolvedPath.set(entry.resolvedPath, current);
+    });
+
+    const portMap = new Map();
+    const addPort = (rawPort) => {
+      const normalized = normalizeSerialPortRecord(rawPort);
+      if (!normalized.path) {
+        return;
+      }
+
+      const existing = portMap.get(normalized.path);
+      if (!existing || normalized.score > existing.score) {
+        portMap.set(normalized.path, normalized);
+      }
+    };
+
+    listedPorts.forEach((portInfo) => {
+      const serialPath = trimString(portInfo.path || portInfo.comName);
+      if (!serialPath) {
+        return;
+      }
+
+      const aliases = byResolvedPath.get(serialPath) || [];
+      addPort({
+        path: serialPath,
+        stablePath: aliases[0] || '',
+        aliases,
+        manufacturer: portInfo.manufacturer,
+        friendlyName: portInfo.friendlyName,
+        serialNumber: portInfo.serialNumber,
+        vendorId: portInfo.vendorId,
+        productId: portInfo.productId,
+        pnpId: portInfo.pnpId
+      });
+    });
+
+    byIdEntries.forEach((entry) => {
+      const canonicalPath = entry.resolvedPath || entry.symlinkPath;
+      addPort({
+        path: canonicalPath,
+        stablePath: entry.symlinkPath,
+        aliases: [entry.symlinkPath],
+        friendlyName: entry.friendlyName
+      });
+    });
+
+    const fallbackPorts = await this.scanFallbackSerialDevices();
+    fallbackPorts.forEach(addPort);
+
+    const ports = Array.from(portMap.values()).sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return (left.stablePath || left.path).localeCompare(right.stablePath || right.path);
+    });
+    const likelyPorts = ports.filter((port) => port.likelyPanel);
+    const selectedPort = likelyPorts.length === 1
+      ? likelyPorts[0]
+      : (ports.length === 1 ? ports[0] : null);
+    const serialTransport = this.getSerialTransportDiagnostics();
+
+    return {
+      ports,
+      selectedPort,
+      count: ports.length,
+      serialTransportSupported: serialTransport.supported,
+      serialTransportError: serialTransport.error
+    };
+  }
+
+  async resolveProvisioningUsbPort(serialPath = '') {
+    const requestedPath = trimString(serialPath);
+    const { ports } = await this.listProvisioningUsbPorts();
+
+    if (requestedPath) {
+      const match = ports.find((port) => {
+        const aliases = Array.isArray(port.aliases) ? port.aliases : [];
+        return port.path === requestedPath
+          || port.stablePath === requestedPath
+          || aliases.includes(requestedPath);
+      });
+      if (match) {
+        return match;
+      }
+
+      if (requestedPath.startsWith('/dev/') || /^[A-Z]+[0-9]+$/i.test(requestedPath)) {
+        return normalizeSerialPortRecord({ path: requestedPath });
+      }
+
+      throw createError(400, `USB serial port "${requestedPath}" was not found on this HomeBrain host`);
+    }
+
+    const likelyPorts = ports.filter((port) => port.likelyPanel);
+    if (likelyPorts.length === 1) {
+      return likelyPorts[0];
+    }
+
+    if (ports.length === 1) {
+      return ports[0];
+    }
+
+    if (likelyPorts.length > 1) {
+      throw createError(400, 'Multiple likely hardware orb USB ports are connected. Choose the port in the provisioning dialog and try again.');
+    }
+
+    throw createError(400, 'No hardware orb USB serial port was detected. Plug the new orb into this HomeBrain server and try again.');
   }
 
   async ensureOtaArtifactsDir() {
@@ -1579,6 +1870,23 @@ class WallPanelService {
       latestFirmwareVersion,
       updateAvailable: isFirmwareUpdateAvailable(payload.firmwareVersion, latestFirmwareVersion)
     };
+  }
+
+  createPanelFirmwareBuildEnv(panel, { targetVersion = '', origin = '' } = {}) {
+    const normalized = normalizePanelDocument(panel);
+    const hubUrl = resolvePanelOtaOrigin(normalized, origin);
+    const firmwareEnv = {
+      HOMEBRAIN_PANEL_BUILD_VERSION: trimString(targetVersion) || buildPanelFirmwareVersion(),
+      HOMEBRAIN_PANEL_ID: normalized.id,
+      HOMEBRAIN_PANEL_REGISTRATION_CODE: normalized.settings.registrationCode,
+      HOMEBRAIN_PANEL_HOSTNAME: buildPanelHostname(normalized)
+    };
+
+    if (hubUrl) {
+      firmwareEnv.HOMEBRAIN_PANEL_HUB_URL = hubUrl;
+    }
+
+    return this.createPlatformioEnv(firmwareEnv);
   }
 
   createPlatformioEnv(extraEnv = {}) {
@@ -1875,6 +2183,125 @@ class WallPanelService {
     });
   }
 
+  async runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv) {
+    const missingCandidates = [];
+
+    for (const candidate of this.getPlatformioCandidates()) {
+      try {
+        await this.runPlatformioBuildCandidate(panel, jobId, buildTarget, candidate, processEnv);
+        return candidate;
+      } catch (error) {
+        if (error?.code === 'ENOENT' || isMissingPlatformioModule(error)) {
+          missingCandidates.push(candidate.label);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const managedPlatformio = await this.ensureManagedPlatformio(panel.id, jobId, processEnv).catch((error) => {
+      const detail = trimString(error?.message || error?.stderr);
+      if (detail) {
+        throw createError(500, detail);
+      }
+      throw error;
+    });
+    const managedCandidate = {
+      command: managedPlatformio,
+      args: [],
+      label: managedPlatformio
+    };
+
+    await this.runPlatformioBuildCandidate(
+      panel,
+      jobId,
+      buildTarget,
+      managedCandidate,
+      processEnv
+    ).catch((error) => {
+      if (error?.code === 'ENOENT' || isMissingPlatformioModule(error)) {
+        throw createError(
+          500,
+          `HomeBrain could not find PlatformIO. Checked ${missingCandidates.join(', ') || 'configured PATH'}, and the private OTA toolchain at ${managedPlatformio}. Install PlatformIO or set HOMEBRAIN_PANEL_PLATFORMIO_BIN.`
+        );
+      }
+      throw error;
+    });
+
+    return managedCandidate;
+  }
+
+  async runPlatformioUploadCandidate(panel, jobId, buildTarget, candidate, processEnv, serialPath) {
+    const uploadPort = trimString(serialPath);
+    if (!uploadPort) {
+      throw createError(400, 'A USB serial upload port is required');
+    }
+
+    await this.updatePanelOtaState(panel.id, jobId, {
+      status: 'flashing',
+      phase: 'usb-flashing',
+      progress: 70,
+      message: `Uploading initial firmware over USB to ${uploadPort}...`
+    }, { allowMissingJob: true });
+
+    await new Promise((resolve, reject) => {
+      const child = this.spawnProcess(
+        candidate.command,
+        [...candidate.args, 'run', '-e', buildTarget.env, '-t', 'upload', '--upload-port', uploadPort],
+        {
+          cwd: this.panelFirmwareProjectDir,
+          env: processEnv,
+          stdio: ['ignore', 'pipe', 'pipe']
+        }
+      );
+
+      let stderr = '';
+      let sawWriting = false;
+      let sawVerify = false;
+
+      const handleOutput = async (chunk) => {
+        const text = chunk.toString();
+        stderr = `${stderr}${text}`.slice(-4000);
+
+        if (!sawWriting && /Writing at|Uploading|Connecting/i.test(text)) {
+          sawWriting = true;
+          await this.updatePanelOtaState(panel.id, jobId, {
+            progress: 78,
+            message: 'Writing initial firmware to the connected orb...'
+          }, { allowMissingJob: true }).catch(() => null);
+        }
+
+        if (!sawVerify && /Hash of data verified|Leaving|Hard resetting|SUCCESS/i.test(text)) {
+          sawVerify = true;
+          await this.updatePanelOtaState(panel.id, jobId, {
+            progress: 92,
+            message: 'USB flash completed. Waiting for the orb to reboot...'
+          }, { allowMissingJob: true }).catch(() => null);
+        }
+      };
+
+      child.stdout.on('data', handleOutput);
+      child.stderr.on('data', handleOutput);
+      child.on('error', (error) => {
+        error.command = candidate.label;
+        error.stderr = trimString(stderr);
+        reject(error);
+      });
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        const failure = new Error(trimString(stderr) || `${candidate.label} upload exited with code ${code}`);
+        failure.code = code;
+        failure.command = candidate.label;
+        failure.stderr = trimString(stderr);
+        reject(failure);
+      });
+    });
+  }
+
   async updatePanelOtaState(panelId, jobId, updates = {}, options = {}) {
     const { allowMissingJob = false, touchLastSeen = false } = options;
     const panel = await getPanelDocument(panelId);
@@ -1938,7 +2365,7 @@ class WallPanelService {
     }
   }
 
-  async buildPanelOtaArtifact(panel, { jobId, targetVersion }) {
+  async buildPanelOtaArtifact(panel, { jobId, targetVersion, origin = '' }) {
     const buildTarget = resolvePanelBuildTarget(panel.hardwareProfile);
     if (!buildTarget) {
       throw createError(400, `Hardware profile ${panel.hardwareProfile} does not have an OTA build target yet`);
@@ -1954,56 +2381,8 @@ class WallPanelService {
       hardwareProfile: panel.hardwareProfile
     });
 
-    const processEnv = this.createPlatformioEnv({
-      HOMEBRAIN_PANEL_BUILD_VERSION: targetVersion
-    });
-    const missingCandidates = [];
-    let buildCompleted = false;
-
-    for (const candidate of this.getPlatformioCandidates()) {
-      try {
-        await this.runPlatformioBuildCandidate(panel, jobId, buildTarget, candidate, processEnv);
-
-        buildCompleted = true;
-        break;
-      } catch (error) {
-        if (error?.code === 'ENOENT' || isMissingPlatformioModule(error)) {
-          missingCandidates.push(candidate.label);
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    if (!buildCompleted) {
-      const managedPlatformio = await this.ensureManagedPlatformio(panel.id, jobId, processEnv).catch((error) => {
-        const detail = trimString(error?.message || error?.stderr);
-        if (detail) {
-          throw createError(500, detail);
-        }
-        throw error;
-      });
-
-      await this.runPlatformioBuildCandidate(
-        panel,
-        jobId,
-        buildTarget,
-        {
-          command: managedPlatformio,
-          args: [],
-          label: managedPlatformio
-        },
-        processEnv
-      ).catch((error) => {
-        if (error?.code === 'ENOENT' || isMissingPlatformioModule(error)) {
-          throw createError(
-            500,
-            `HomeBrain could not find PlatformIO. Checked ${missingCandidates.join(', ') || 'configured PATH'}, and the private OTA toolchain at ${managedPlatformio}. Install PlatformIO or set HOMEBRAIN_PANEL_PLATFORMIO_BIN.`
-          );
-        }
-        throw error;
-      });
-    }
+    const processEnv = this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
+    await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
 
     const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
     const panelDir = path.join(this.panelOtaArtifactsDir, panel.id);
@@ -2038,7 +2417,7 @@ class WallPanelService {
     });
   }
 
-  async pushFirmwareUpdate(panelId) {
+  async pushFirmwareUpdate(panelId, origin = '') {
     let panel = normalizePanelDocument(await getPanelDocument(panelId));
 
     if (!panel.settings.registered) {
@@ -2101,12 +2480,135 @@ class WallPanelService {
       tags: ['wall-panel', 'ota']
     });
 
-    void this.buildPanelOtaArtifact(normalizePanelDocument(panelDoc), { jobId, targetVersion }).catch((error) => {
+    void this.buildPanelOtaArtifact(normalizePanelDocument(panelDoc), { jobId, targetVersion, origin }).catch((error) => {
       console.error('Wall panel OTA build failed:', error.message);
       return this.failPanelOtaJob(panel.id, jobId, error);
     });
 
     return this.serializePanelForResponse(panelDoc);
+  }
+
+  async flashPanelInitialFirmware(panel, { jobId, targetVersion, origin = '', serialPath = '' }) {
+    const buildTarget = resolvePanelBuildTarget(panel.hardwareProfile);
+    if (!buildTarget) {
+      throw createError(400, `Hardware profile ${panel.hardwareProfile} cannot be flashed by HomeBrain yet`);
+    }
+
+    const processEnv = this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
+    const platformioCandidate = await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
+
+    await this.updatePanelOtaState(panel.id, jobId, {
+      status: 'flashing',
+      phase: 'usb-flashing',
+      progress: 66,
+      message: 'Firmware image built. Starting USB upload...'
+    }, { allowMissingJob: true });
+
+    await this.runPlatformioUploadCandidate(
+      panel,
+      jobId,
+      buildTarget,
+      platformioCandidate,
+      processEnv,
+      serialPath
+    );
+
+    const updatedPanel = await this.updatePanelOtaState(panel.id, jobId, {
+      status: 'provisioned',
+      phase: 'usb-provisioned',
+      progress: 100,
+      targetVersion,
+      currentVersion: '',
+      message: 'Initial firmware flashed. Unplug or reboot the orb and wait for its first Wi-Fi activation.',
+      lastError: '',
+      completedAt: new Date()
+    }, { allowMissingJob: true });
+    updatedPanel.status = 'offline';
+    await updatedPanel.save();
+
+    void eventStreamService.publishSafe({
+      type: 'wall_panel.usb_provisioned',
+      source: 'wall_panel',
+      category: 'panel',
+      payload: {
+        panelId: panel.id,
+        jobId,
+        targetVersion,
+        serialPath
+      },
+      tags: ['wall-panel', 'provisioning']
+    });
+  }
+
+  async provisionPanelOverUsb(input = {}, origin = '') {
+    const serialPort = await this.resolveProvisioningUsbPort(input.serialPath || input.port || '');
+    const requestedHardwareProfile = trimString(input.hardwareProfile) || 'elecrow-crowpanel-2.1-rotary';
+    const requestedBuildTarget = resolvePanelBuildTarget(requestedHardwareProfile);
+    if (!requestedBuildTarget) {
+      throw createError(400, `Hardware profile ${requestedHardwareProfile} cannot be flashed by HomeBrain yet`);
+    }
+
+    const panel = await this.registerPanel(input);
+    const panelDoc = await getPanelDocument(panel.id);
+
+    const jobId = crypto.randomUUID();
+    const targetVersion = await this.getLatestPanelFirmwareVersion().catch(() => buildPanelFirmwareVersion());
+    const uploadPath = trimString(serialPort.stablePath || serialPort.path);
+
+    panelDoc.status = 'updating';
+    panelDoc.ota = mergeOtaState(panelDoc.ota || {}, {
+      jobId,
+      status: 'queued',
+      phase: 'usb-queued',
+      progress: 4,
+      targetVersion,
+      currentVersion: '',
+      message: `Queued initial USB firmware flash for ${uploadPath}.`,
+      hardwareProfile: panelDoc.hardwareProfile,
+      previousPanelStatus: 'offline',
+      requestedAt: new Date(),
+      startedAt: null,
+      completedAt: null,
+      lastError: '',
+      artifactPath: '',
+      artifactSizeBytes: 0,
+      bytesTransferred: 0,
+      bytesTotal: 0
+    });
+    await panelDoc.save();
+
+    void eventStreamService.publishSafe({
+      type: 'wall_panel.usb_provision_requested',
+      source: 'wall_panel',
+      category: 'panel',
+      payload: {
+        panelId: toId(panelDoc._id),
+        jobId,
+        targetVersion,
+        serialPath: uploadPath,
+        hardwareProfile: panelDoc.hardwareProfile
+      },
+      tags: ['wall-panel', 'provisioning']
+    });
+
+    void this.flashPanelInitialFirmware(
+      normalizePanelDocument(panelDoc),
+      {
+        jobId,
+        targetVersion,
+        origin,
+        serialPath: uploadPath
+      }
+    ).catch((error) => {
+      console.error('Wall panel USB provisioning failed:', error.message);
+      return this.failPanelOtaJob(toId(panelDoc._id), jobId, error);
+    });
+
+    return {
+      panel: await this.serializePanelForResponse(panelDoc, { includeSecrets: true }),
+      provisioning: buildProvisioningSnapshot(panelDoc, origin),
+      port: serialPort
+    };
   }
 
   async getPanelOtaArtifact(panelId, credentials = {}) {

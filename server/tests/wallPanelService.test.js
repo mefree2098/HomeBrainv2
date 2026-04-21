@@ -1151,6 +1151,133 @@ test('buildPanelOtaArtifact bootstraps a private PlatformIO toolchain when none 
   assert.equal(copiedArtifact, 'firmware-binary');
 });
 
+test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', () => {
+  const service = new WallPanelService();
+  const env = service.createPanelFirmwareBuildEnv({
+    _id: 'panel-usb-env',
+    id: 'panel-usb-env',
+    name: 'Kitchen Orb',
+    room: 'Kitchen',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    settings: {
+      registrationCode: 'HBWP-1234-5678-90AB'
+    }
+  }, {
+    targetVersion: 'panel-20260421T210000Z-test',
+    origin: 'http://homebrain.local:3000'
+  });
+
+  assert.equal(env.HOMEBRAIN_PANEL_BUILD_VERSION, 'panel-20260421T210000Z-test');
+  assert.equal(env.HOMEBRAIN_PANEL_HUB_URL, 'http://homebrain.local:3000');
+  assert.equal(env.HOMEBRAIN_PANEL_ID, 'panel-usb-env');
+  assert.equal(env.HOMEBRAIN_PANEL_REGISTRATION_CODE, 'HBWP-1234-5678-90AB');
+  assert.equal(env.HOMEBRAIN_PANEL_HOSTNAME, 'homebrain-kitchen-orb');
+});
+
+test('listProvisioningUsbPorts selects a single Espressif USB serial candidate', async () => {
+  const service = new WallPanelService();
+  service._serialPortModule = {
+    list: async () => [
+      {
+        path: '/dev/ttyACM0',
+        manufacturer: 'Espressif',
+        friendlyName: 'USB JTAG/serial debug unit',
+        vendorId: '303A',
+        productId: '1001'
+      }
+    ]
+  };
+  service.getSerialByIdEntries = async () => [];
+  service.scanFallbackSerialDevices = async () => [];
+
+  const result = await service.listProvisioningUsbPorts();
+
+  assert.equal(result.count, 1);
+  assert.equal(result.selectedPort.path, '/dev/ttyACM0');
+  assert.equal(result.selectedPort.likelyPanel, true);
+});
+
+test('flashPanelInitialFirmware uploads to the selected USB port with per-panel build env', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const uploadCommands = [];
+  let capturedBuildEnv = null;
+
+  const panelDoc = {
+    _id: 'panel-usb-flash',
+    id: 'panel-usb-flash',
+    name: 'Kitchen Orb',
+    room: 'Kitchen',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    firmwareVersion: '',
+    ota: {
+      jobId: 'job-usb-flash',
+      status: 'queued',
+      phase: 'usb-queued',
+      progress: 4,
+      previousPanelStatus: 'offline'
+    },
+    settings: {
+      registrationCode: 'HBWP-1234-5678-90AB'
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+  eventStreamService.publishSafe = async () => {};
+
+  const service = new WallPanelService({
+    spawnProcess: (command, args, options) => {
+      uploadCommands.push({ command, args, env: options?.env || {} });
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      process.nextTick(() => {
+        child.stdout.write('Writing at 0x00010000...\n');
+        child.stdout.write('Hash of data verified.\n');
+        child.stdout.write('SUCCESS\n');
+        child.emit('close', 0);
+      });
+      return child;
+    }
+  });
+  service.runPanelFirmwareBuild = async (_panel, _jobId, _buildTarget, processEnv) => {
+    capturedBuildEnv = processEnv;
+    return {
+      command: 'pio',
+      args: [],
+      label: 'pio'
+    };
+  };
+
+  await service.flashPanelInitialFirmware(panelDoc, {
+    jobId: 'job-usb-flash',
+    targetVersion: 'panel-20260421T210500Z-test',
+    origin: 'http://homebrain.local:3000',
+    serialPath: '/dev/ttyACM0'
+  });
+
+  assert.equal(capturedBuildEnv.HOMEBRAIN_PANEL_ID, 'panel-usb-flash');
+  assert.equal(capturedBuildEnv.HOMEBRAIN_PANEL_REGISTRATION_CODE, 'HBWP-1234-5678-90AB');
+  assert.equal(capturedBuildEnv.HOMEBRAIN_PANEL_HUB_URL, 'http://homebrain.local:3000');
+  assert.equal(uploadCommands.length, 1);
+  assert.deepEqual(uploadCommands[0].args.slice(-2), ['--upload-port', '/dev/ttyACM0']);
+  assert.equal(panelDoc.status, 'offline');
+  assert.equal(panelDoc.ota.status, 'provisioned');
+  assert.equal(panelDoc.ota.phase, 'usb-provisioned');
+});
+
 test('updatePanelOtaState can refresh panel lastSeen while the orb is updating', async (t) => {
   const originalFindById = WallPanel.findById;
 

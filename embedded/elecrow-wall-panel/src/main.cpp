@@ -90,7 +90,9 @@ constexpr int kOtaHttpConnectTimeoutMs = 4000;
 constexpr int kOtaHttpTimeoutMs = 15000;
 constexpr int kOtaProgressReportStepPercent = 5;
 constexpr size_t kOtaProgressReportStepBytes = 64 * 1024;
+constexpr size_t kOtaDownloadChunkBytes = 2048;
 constexpr unsigned long kOtaMatrixFrameIntervalMs = 90;
+constexpr unsigned long kOtaProgressRenderIntervalMs = 140;
 constexpr uint8_t kNetworkJobQueueCapacity = 12;
 constexpr uint8_t kNetworkResultQueueCapacity = 12;
 constexpr uint16_t kNetworkTaskIdleDelayMs = 8;
@@ -610,6 +612,19 @@ void updateOverlayTouchTargets(bool useRotatedTargets) {
   updateCenterTapTouchTarget(useRotatedTargets);
 }
 
+void showLiveUiMountSurface() {
+  if (gMainCard && lv_obj_has_flag(gMainCard, LV_OBJ_FLAG_HIDDEN)) {
+    lv_obj_clear_flag(gMainCard, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  if (gUiMountSnapshotImage) {
+    lv_obj_add_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  gUiMountSnapshotVisible = false;
+  updateOverlayTouchTargets(false);
+}
+
 void persistMountOffsetTenthsIfNeeded(int16_t value) {
   const int16_t normalized = normalizeMountOffsetTenths(value);
   gMountOffsetTenths = normalized;
@@ -637,21 +652,15 @@ void applyUiMountOffset() {
   lv_obj_set_style_transform_height(gMainCard, 0, 0);
   lv_obj_set_style_clip_corner(gMainCard, false, 0);
 
-  if (!gUiMountSnapshotImage || gMountOffsetTenths == 0) {
-    if (gUiMountSnapshotImage) {
-      lv_obj_add_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
-    }
-    gUiMountSnapshotVisible = false;
-    updateOverlayTouchTargets(false);
+  if (!gUiMountSnapshotImage || gMountOffsetTenths == 0 || (gOtaInProgress && gOtaMatrixVisible)) {
+    showLiveUiMountSurface();
     return;
   }
 
   const bool captured = captureUiMountSnapshot(LV_IMG_CF_TRUE_COLOR_ALPHA);
 
   if (!captured) {
-    lv_obj_add_flag(gUiMountSnapshotImage, LV_OBJ_FLAG_HIDDEN);
-    gUiMountSnapshotVisible = false;
-    updateOverlayTouchTargets(false);
+    showLiveUiMountSurface();
     return;
   }
 
@@ -3648,13 +3657,15 @@ bool performOtaUpdate() {
   }
 
   WiFiClient* stream = http.getStreamPtr();
-  uint8_t buffer[1024];
+  uint8_t buffer[kOtaDownloadChunkBytes];
   size_t totalWritten = 0;
   unsigned long lastChunkAt = millis();
   const bool hasKnownContentLength = expectedBytes > 0;
   unsigned long lastProgressReportAt = 0;
   int lastReportedDownloadProgress = -1;
   size_t lastReportedBytes = 0;
+  unsigned long lastProgressRenderAt = 0;
+  int lastRenderedDownloadProgress = -1;
 
   while (!hasKnownContentLength || totalWritten < expectedBytes) {
     const size_t availableBytes = stream->available();
@@ -3704,13 +3715,20 @@ bool performOtaUpdate() {
     const int rawProgress = totalBytes > 0
       ? static_cast<int>((totalWritten * 100UL) / totalBytes)
       : min(99, max(0, gState.ota.progress));
+    const int displayProgress = min(98, max(60, rawProgress));
+    const unsigned long now = millis();
+    const bool completedDownload = hasKnownContentLength && totalWritten >= expectedBytes;
+    const bool progressRenderDue = lastProgressRenderAt == 0
+      || now - lastProgressRenderAt >= kOtaProgressRenderIntervalMs;
 
-    renderOtaProgressScreen("Firmware Update", min(98, max(60, rawProgress)), "Downloading firmware package...", true);
+    if (completedDownload || (displayProgress != lastRenderedDownloadProgress && progressRenderDue)) {
+      renderOtaProgressScreen("Firmware Update", displayProgress, "Downloading firmware package...", true);
+      lastProgressRenderAt = now;
+      lastRenderedDownloadProgress = displayProgress;
+    }
     pumpUiFrame();
 
     const int reportProgress = min(99, max(1, rawProgress));
-    const unsigned long now = millis();
-    const bool completedDownload = hasKnownContentLength && totalWritten >= expectedBytes;
     const bool progressAdvanced = reportProgress >= (lastReportedDownloadProgress + kOtaProgressReportStepPercent);
     const bool byteWindowAdvanced = totalWritten >= (lastReportedBytes + kOtaProgressReportStepBytes);
     const bool intervalElapsed = lastProgressReportAt == 0
@@ -3733,6 +3751,8 @@ bool performOtaUpdate() {
       lastReportedDownloadProgress = reportProgress;
       lastReportedBytes = totalWritten;
     }
+
+    delay(1);
   }
 
   if (hasKnownContentLength && totalWritten < expectedBytes) {
@@ -4010,6 +4030,8 @@ void createUi() {
   lv_arc_set_value(gArc, 50);
   lv_obj_remove_style(gArc, nullptr, LV_PART_KNOB);
   lv_obj_clear_flag(gArc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_bg_opa(gArc, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(gArc, 0, 0);
   lv_obj_set_style_arc_width(gArc, 24, LV_PART_MAIN);
   lv_obj_set_style_arc_width(gArc, 24, LV_PART_INDICATOR);
   lv_obj_set_style_arc_opa(gArc, LV_OPA_70, LV_PART_MAIN);

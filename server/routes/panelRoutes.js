@@ -44,6 +44,42 @@ router.get('/', admin, async (_req, res) => {
   }
 });
 
+router.get('/provisioning/usb-ports', admin, async (_req, res) => {
+  try {
+    const result = await wallPanelService.listProvisioningUsbPorts();
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('GET /api/panels/provisioning/usb-ports - Error:', error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to detect hardware orb USB ports',
+      ports: []
+    });
+  }
+});
+
+router.post('/provisioning/usb', admin, async (req, res) => {
+  try {
+    const result = await wallPanelService.provisionPanelOverUsb(
+      req.body || {},
+      getRequestOrigin(req)
+    );
+    return res.status(202).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('POST /api/panels/provisioning/usb - Error:', error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to start hardware orb USB provisioning'
+    });
+  }
+});
+
 router.post('/register', admin, async (req, res) => {
   try {
     const panel = await wallPanelService.registerPanel(req.body || {});
@@ -210,7 +246,10 @@ router.get('/:panelId/state', async (req, res) => {
 
 router.post('/:panelId/ota/push', admin, async (req, res) => {
   try {
-    const panel = await wallPanelService.pushFirmwareUpdate(req.params.panelId);
+    const panel = await wallPanelService.pushFirmwareUpdate(
+      req.params.panelId,
+      getRequestOrigin(req)
+    );
     return res.status(202).json({
       success: true,
       panel
