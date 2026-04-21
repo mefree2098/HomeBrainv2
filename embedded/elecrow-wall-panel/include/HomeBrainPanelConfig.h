@@ -12,7 +12,7 @@
 #endif
 
 #ifndef HOMEBRAIN_PANEL_HUB_URL
-#define HOMEBRAIN_PANEL_HUB_URL "https://example.com"
+#define HOMEBRAIN_PANEL_HUB_URL "http://homebrain.local:3000"
 #endif
 
 #ifndef HOMEBRAIN_PANEL_ID

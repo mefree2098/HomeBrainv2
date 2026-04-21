@@ -172,6 +172,16 @@ This repository is set up so secrets should stay local:
 - real runtime secrets belong in `server/.env`
 - `server/.env` is gitignored
 - build output and generated download packages are gitignored
+- local Codex/tool state, SQLite databases, certificates, and private keys are gitignored
+- firmware defaults in `embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h` must remain placeholders in git
+
+Before publishing or opening a pull request, run:
+
+```bash
+bash scripts/check-secrets.sh
+```
+
+GitHub Actions also runs the same check against the full checked-out history.
 
 One thing git itself can still expose is commit author metadata. If you want to hide older author email addresses before publishing the full history, that requires a separate git history rewrite.
 

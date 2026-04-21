@@ -27,7 +27,7 @@ final class SessionStore: ObservableObject {
     private let refreshTokenKey = "homebrain.refreshToken"
     private let currentUserKey = "homebrain.currentUser"
     private let clientInstallationIdKey = "homebrain.clientInstallationId"
-    private static let defaultServerURL = "https://example.com"
+    private static let defaultServerURL = "http://homebrain.local:3000"
     private static let homeBrainAccessDeniedMessage = "This account does not have HomeBrain access."
     private static let accessTokenRefreshLeadTime: TimeInterval = 5 * 60
 

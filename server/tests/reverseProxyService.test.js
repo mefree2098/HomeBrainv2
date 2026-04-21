@@ -79,9 +79,9 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
   assert.match(result.caddyfile, /admin "127\.0\.0\.1:2019"/);
   assert.match(result.caddyfile, /acme_ca "https:\/\/acme-staging-v02\.api\.letsencrypt\.org\/directory"/);
   assert.match(result.caddyfile, /on_demand_tls/);
-  assert.match(result.caddyfile, /freestonefamily\.com \{/);
+  assert.match(result.caddyfile, /example\.com \{/);
   assert.match(result.caddyfile, /reverse_proxy "http:\/\/127\.0\.0\.1:3000"/);
-  assert.match(result.caddyfile, /mail\.freestonefamily\.com \{/);
+  assert.match(result.caddyfile, /mail\.example\.com \{/);
   assert.match(result.caddyfile, /tls \{\n    on_demand\n  \}/);
 });
 

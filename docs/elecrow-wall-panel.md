@@ -104,7 +104,7 @@ The setup packet gives you:
 
 ## 3. Configure The Firmware Header
 
-Open [HomeBrainPanelConfig.h](~/HomeBrainv2/embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h) and replace the placeholder values.
+Open [HomeBrainPanelConfig.h](../embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h) and replace the placeholder values.
 
 You provide these local network values yourself:
 

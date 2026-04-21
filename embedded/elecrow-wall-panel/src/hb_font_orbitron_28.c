@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 28 px
  * Bpp: 4
- * Opts: --size 28 --bpp 4 --format lvgl --font /tmp/homebrain-panel-assets/Orbitron.ttf -r 0x20-0x7F,0xB0 --no-compress --no-prefilter --force-fast-kern-format --lv-include lvgl.h --lv-font-name hb_font_orbitron_28 -o ~/HomeBrainv2/embedded/elecrow-wall-panel/src/hb_font_orbitron_28.c
+ * Opts: --size 28 --bpp 4 --format lvgl --font /tmp/homebrain-panel-assets/Orbitron.ttf -r 0x20-0x7F,0xB0 --no-compress --no-prefilter --force-fast-kern-format --lv-include lvgl.h --lv-font-name hb_font_orbitron_28 -o embedded/elecrow-wall-panel/src/hb_font_orbitron_28.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

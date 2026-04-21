@@ -57,7 +57,7 @@ The UI intentionally mirrors the HomeBrain iOS app:
 
 2. In HomeBrain, open `Settings -> Hardware Orbs`, create the orb, and open its `Setup Packet`.
 
-3. Copy the `panel ID`, `setup token`, and `hub URL` values into [HomeBrainPanelConfig.h](~/HomeBrainv2/embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h).
+3. Copy the `panel ID`, `setup token`, and `hub URL` values into [HomeBrainPanelConfig.h](include/HomeBrainPanelConfig.h).
 
 4. Build and flash:
 

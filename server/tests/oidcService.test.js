@@ -200,7 +200,7 @@ test('handleAuthorize redirects an authenticated HomeBrain session back to the c
   await oidcService.handleAuthorize(req, res);
 
   assert.equal(res.statusCode, 302);
-  assert.match(res.redirectUrl, /^https:\/\/mail\.freestonefamily\.com\/api\/identity\/homebrain\/callback\?/);
+  assert.match(res.redirectUrl, /^https:\/\/mail\.example\.com\/api\/identity\/homebrain\/callback\?/);
 
   const redirectUrl = new URL(res.redirectUrl);
   assert.equal(redirectUrl.searchParams.get('state'), 'state-123');
@@ -269,7 +269,7 @@ test('handleAuthorize returns login_required when prompt=none has no active Home
   await oidcService.handleAuthorize(req, res);
 
   assert.equal(res.statusCode, 302);
-  assert.match(res.redirectUrl, /^https:\/\/mail\.freestonefamily\.com\/api\/identity\/homebrain\/callback\?/);
+  assert.match(res.redirectUrl, /^https:\/\/mail\.example\.com\/api\/identity\/homebrain\/callback\?/);
   const redirectUrl = new URL(res.redirectUrl);
   assert.equal(redirectUrl.searchParams.get('error'), 'login_required');
   assert.equal(redirectUrl.searchParams.get('state'), 'state-123');

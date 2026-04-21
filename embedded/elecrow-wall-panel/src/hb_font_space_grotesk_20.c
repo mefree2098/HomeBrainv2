@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 20 px
  * Bpp: 4
- * Opts: --size 20 --bpp 4 --format lvgl --font /tmp/homebrain-panel-assets/SpaceGrotesk.ttf -r 0x20-0x7F,0xB0 --no-compress --no-prefilter --force-fast-kern-format --lv-include lvgl.h --lv-font-name hb_font_space_grotesk_20 -o ~/HomeBrainv2/embedded/elecrow-wall-panel/src/hb_font_space_grotesk_20.c
+ * Opts: --size 20 --bpp 4 --format lvgl --font /tmp/homebrain-panel-assets/SpaceGrotesk.ttf -r 0x20-0x7F,0xB0 --no-compress --no-prefilter --force-fast-kern-format --lv-include lvgl.h --lv-font-name hb_font_space_grotesk_20 -o embedded/elecrow-wall-panel/src/hb_font_space_grotesk_20.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

@@ -2,9 +2,27 @@
 *.xcuserstate
 __pycache__/
 *.pyc
+*.log
+
+# Runtime secrets and local environment overrides
+.env
+.env.*
+!.env.example
+server/.env
+client/.env.local
+
+# Local databases, generated state, and credentials
+*.db
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.pem
+*.key
+*.p12
+*.crt
+*.csr
 
 server/node_modules/
-server/.env
 server/package-lock.json
 server/certificates/
 server/.wakeword-venv/
