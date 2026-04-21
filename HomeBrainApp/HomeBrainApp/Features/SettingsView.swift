@@ -1338,18 +1338,13 @@ private struct SettingsEndpointPane: View {
                     GroupBox("Actions") {
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(actions) { action in
-                                Button {
-                                    Task { await run(action) }
-                                } label: {
-                                    if activeActionID == action.id {
-                                        ProgressView()
-                                    } else {
-                                        Label(action.title, systemImage: iconName(for: action.method))
-                                    }
+                                SettingsEndpointActionButton(
+                                    action: action,
+                                    isActive: activeActionID == action.id,
+                                    isDisabled: activeActionID != nil
+                                ) { selectedAction in
+                                    trigger(selectedAction)
                                 }
-                                .buttonStyle(action.method == .delete ? .bordered : .borderedProminent)
-                                .tint(action.method == .delete ? HBPalette.accentRed : HBPalette.accentBlue)
-                                .disabled(activeActionID != nil)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1377,15 +1372,6 @@ private struct SettingsEndpointPane: View {
         }
     }
 
-    private func iconName(for method: HTTPMethod) -> String {
-        switch method {
-        case .get: return "arrow.clockwise"
-        case .post: return "play.fill"
-        case .put, .patch: return "square.and.arrow.down"
-        case .delete: return "trash"
-        }
-    }
-
     private func loadStatus() async {
         isLoading = true
         errorMessage = nil
@@ -1397,6 +1383,10 @@ private struct SettingsEndpointPane: View {
         }
 
         isLoading = false
+    }
+
+    private func trigger(_ action: SettingsEndpointAction) {
+        Task { await run(action) }
     }
 
     private func run(_ action: SettingsEndpointAction) async {
@@ -1423,6 +1413,53 @@ private struct SettingsEndpointPane: View {
             await loadStatus()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct SettingsEndpointActionButton: View {
+    let action: SettingsEndpointAction
+    let isActive: Bool
+    let isDisabled: Bool
+    let onTap: (SettingsEndpointAction) -> Void
+
+    var body: some View {
+        if action.method == .delete {
+            Button {
+                onTap(action)
+            } label: {
+                actionLabel
+            }
+            .buttonStyle(.bordered)
+            .tint(HBPalette.accentRed)
+            .disabled(isDisabled)
+        } else {
+            Button {
+                onTap(action)
+            } label: {
+                actionLabel
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(HBPalette.accentBlue)
+            .disabled(isDisabled)
+        }
+    }
+
+    @ViewBuilder
+    private var actionLabel: some View {
+        if isActive {
+            ProgressView()
+        } else {
+            Label(action.title, systemImage: iconName(for: action.method))
+        }
+    }
+
+    private func iconName(for method: HTTPMethod) -> String {
+        switch method {
+        case .get: return "arrow.clockwise"
+        case .post: return "play.fill"
+        case .put, .patch: return "square.and.arrow.down"
+        case .delete: return "trash"
         }
     }
 }
