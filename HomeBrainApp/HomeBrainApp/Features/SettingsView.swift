@@ -36,14 +36,122 @@ private enum SettingsParitySurface: String, CaseIterable, Identifiable {
     }
 }
 
+private enum SettingsWebArea: String, CaseIterable, Identifiable {
+    case general
+    case voice
+    case integrations
+    case alexa
+    case codexSkill
+    case openClaw
+    case sense
+    case tempest
+    case rainMachine
+    case deviceIntegrations
+    case ecobee
+    case apiKeys
+    case aiProviders
+    case llmPriority
+    case hardwareOrbs
+    case security
+    case resources
+    case maintenance
+    case platformAdmin
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: return "General"
+        case .voice: return "Voice"
+        case .integrations: return "Integrations"
+        case .alexa: return "Alexa"
+        case .codexSkill: return "Codex Skill"
+        case .openClaw: return "OpenClaw"
+        case .sense: return "Sense"
+        case .tempest: return "Tempest"
+        case .rainMachine: return "RainMachine"
+        case .deviceIntegrations: return "Device Integrations"
+        case .ecobee: return "Ecobee"
+        case .apiKeys: return "API Keys"
+        case .aiProviders: return "AI / LLM"
+        case .llmPriority: return "LLM Priority"
+        case .hardwareOrbs: return "Hardware Orbs"
+        case .security: return "Security"
+        case .resources: return "Resources"
+        case .maintenance: return "Maintenance"
+        case .platformAdmin: return "Platform Admin"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .general: return "Location, timezone, notifications, discovery"
+        case .voice: return "Wake word, mic, volume, STT settings"
+        case .integrations: return "Web Settings integration index"
+        case .alexa: return "Broker, link codes, discovery, voice users"
+        case .codexSkill: return "Codex live skill token and bundle status"
+        case .openClaw: return "OpenClaw MCP, token, Jetson bundle"
+        case .sense: return "Sense Energy monitor setup and sync"
+        case .tempest: return "Tempest station setup and weather fusion"
+        case .rainMachine: return "RainMachine controller setup and sync"
+        case .deviceIntegrations: return "INSTEON, SmartThings, Harmony"
+        case .ecobee: return "Ecobee OAuth and thermostat sync"
+        case .apiKeys: return "OpenAI, Anthropic, ElevenLabs, SmartThings"
+        case .aiProviders: return "OpenAI, Codex, Anthropic, local LLM"
+        case .llmPriority: return "Provider fallback order"
+        case .hardwareOrbs: return "Orb provisioning and mount alignment"
+        case .security: return "Security mode and refresh-session lifetime"
+        case .resources: return "CPU, memory, disk, GPU, deploy health"
+        case .maintenance: return "Sync, reset, backup, diagnostics"
+        case .platformAdmin: return "Deploy, SSL, operations, model services"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .general: return "gearshape"
+        case .voice: return "mic"
+        case .integrations: return "puzzlepiece.extension"
+        case .alexa: return "waveform"
+        case .codexSkill: return "terminal"
+        case .openClaw: return "point.3.connected.trianglepath.dotted"
+        case .sense: return "bolt.fill"
+        case .tempest: return "cloud.sun"
+        case .rainMachine: return "cloud.rain"
+        case .deviceIntegrations: return "switch.2"
+        case .ecobee: return "thermometer.medium"
+        case .apiKeys: return "key"
+        case .aiProviders: return "brain"
+        case .llmPriority: return "arrow.up.arrow.down"
+        case .hardwareOrbs: return "circle.hexagongrid"
+        case .security: return "lock.shield"
+        case .resources: return "gauge.with.dots.needle.50percent"
+        case .maintenance: return "wrench.adjustable"
+        case .platformAdmin: return "server.rack"
+        }
+    }
+
+    var isAdminOnly: Bool {
+        switch self {
+        case .alexa, .codexSkill, .openClaw, .sense, .tempest, .rainMachine, .deviceIntegrations,
+             .ecobee, .apiKeys, .aiProviders, .llmPriority, .hardwareOrbs, .resources, .maintenance,
+             .platformAdmin:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var session: SessionStore
 
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var infoMessage = ""
-    @State private var showingOpenClawSettings = false
     @State private var presentedSettingsSurface: SettingsParitySurface?
+    @State private var presentedWebSettingsArea: SettingsWebArea?
+    @State private var selectedSettingsArea: SettingsWebArea = .general
 
     @State private var serverURL = ""
     @State private var authSessionMaxAgeDays = 365
@@ -118,366 +226,12 @@ struct SettingsView: View {
                         }
                     }
 
-                    Section("Connection") {
-                        TextField("Server URL", text: $serverURL)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-
-                        Button("Apply Server URL") {
-                            if session.updateServerURL(serverURL) {
-                                serverURL = session.serverURLString
-                                infoMessage = "Server URL updated."
-                                errorMessage = nil
-                            } else {
-                                errorMessage = "Enter a valid server URL."
-                            }
-                        }
+                    Section("Settings Areas") {
+                        settingsTabRail
                     }
 
-                    Section("Sessions") {
-                        Stepper(value: $authSessionMaxAgeDays, in: 30...3650, step: 30) {
-                            HStack {
-                                Text("Session Lifetime")
-                                Spacer()
-                                Text("\(authSessionMaxAgeDays) days")
-                                    .foregroundStyle(HBPalette.textSecondary)
-                            }
-                        }
+                    settingsInlineAreaContent(selectedSettingsArea)
 
-                        Text("Refresh sessions stay active for up to \(authSessionMaxAgeDays) days and renew on use. Each device now keeps its own session so signing into one iPad will not knock out the others.")
-                            .font(.footnote)
-                            .foregroundStyle(HBPalette.textSecondary)
-
-                        if authSessions.isEmpty {
-                            Text("No active sessions found for this account.")
-                                .font(.subheadline)
-                                .foregroundStyle(HBPalette.textSecondary)
-                        } else {
-                            ForEach(authSessions) { authSession in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack(alignment: .firstTextBaseline) {
-                                        Text(authSession.clientName)
-                                            .font(.headline)
-                                        if authSession.isCurrent {
-                                            Text("This device")
-                                                .font(.caption.weight(.semibold))
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 3)
-                                                .background(HBPalette.accentBlue.opacity(0.14))
-                                                .foregroundStyle(HBPalette.accentBlue)
-                                                .clipShape(Capsule())
-                                        }
-                                        Spacer()
-                                    }
-
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Type: \(authSession.clientType.capitalized)")
-                                        Text("Last used: \(settingsFormatDateTime(authSession.lastUsedAt))")
-                                        Text("Expires: \(settingsFormatDateTime(authSession.expiresAt))")
-                                    }
-                                    .font(.caption)
-                                    .foregroundStyle(HBPalette.textSecondary)
-
-                                    if !authSession.isCurrent {
-                                        Button {
-                                            Task { await revokeAuthSession(authSession) }
-                                        } label: {
-                                            if revokingSessionIDs.contains(authSession.id) {
-                                                ProgressView()
-                                            } else {
-                                                Text("Revoke Session")
-                                            }
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(revokingSessionIDs.contains(authSession.id))
-                                    }
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-
-                        Button("Refresh Session List") {
-                            Task { await loadAuthSessions() }
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    Section("General") {
-                        TextField("Location", text: $location)
-                        TextField("Timezone", text: $timezone)
-                        Toggle("Enable Notifications", isOn: $enableNotifications)
-                        Toggle("Enable Security Mode", isOn: $enableSecurityMode)
-                        Toggle("Enable Auto Discovery", isOn: $autoDiscoveryEnabled)
-                    }
-
-                    Section("Voice") {
-                        HStack {
-                            Text("Wake Word Sensitivity")
-                            Spacer()
-                            Text(String(format: "%.2f", wakeWordSensitivity))
-                                .foregroundStyle(HBPalette.textSecondary)
-                        }
-                        Slider(value: $wakeWordSensitivity, in: 0.1...1)
-
-                        HStack {
-                            Text("Voice Volume")
-                            Spacer()
-                            Text(String(format: "%.2f", voiceVolume))
-                                .foregroundStyle(HBPalette.textSecondary)
-                        }
-                        Slider(value: $voiceVolume, in: 0.1...1)
-
-                        HStack {
-                            Text("Mic Sensitivity")
-                            Spacer()
-                            Text(String(format: "%.2f", microphoneSensitivity))
-                                .foregroundStyle(HBPalette.textSecondary)
-                        }
-                        Slider(value: $microphoneSensitivity, in: 0.1...1)
-
-                        Toggle("Enable Voice Confirmation", isOn: $enableVoiceConfirmation)
-                    }
-
-                    Section("STT") {
-                        Picker("Provider", selection: $sttProvider) {
-                            ForEach(sttProviders, id: \.self) { provider in
-                                Text(provider.capitalized).tag(provider)
-                            }
-                        }
-
-                        TextField("STT Model", text: $sttModel)
-                        TextField("STT Language", text: $sttLanguage)
-                    }
-
-                    Section("LLM") {
-                        Picker("LLM Provider", selection: $llmProvider) {
-                            ForEach(llmProviders, id: \.self) { provider in
-                                Text(provider.capitalized).tag(provider)
-                            }
-                        }
-
-                        TextField("OpenAI Model", text: $openaiModel)
-                        TextField("Codex Model", text: $codexModel)
-                        TextField("Anthropic Model", text: $anthropicModel)
-                        TextField("Local LLM Endpoint", text: $localLlmEndpoint)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-                        TextField("Local LLM Model", text: $localLlmModel)
-
-                        TextField("LLM Priority (comma-separated)", text: $llmPriority)
-                    }
-
-                    Section("Integrations") {
-                        Toggle("SmartThings uses OAuth", isOn: $smartthingsUseOAuth)
-                        TextField("Harmony Hub Addresses", text: $harmonyHubAddresses)
-                    }
-
-                    if isAdmin {
-                        Section("OpenClaw") {
-                            Text("Configure the external OpenClaw admin integration, rotate its HomeBrain token, and download the Jetson deployment bundle from here.")
-                                .font(.footnote)
-                                .foregroundStyle(HBPalette.textSecondary)
-
-                            Button("Open OpenClaw Settings") {
-                                showingOpenClawSettings = true
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        Section("Platform Areas") {
-                            ForEach(SettingsParitySurface.allCases) { surface in
-                                Button {
-                                    presentedSettingsSurface = surface
-                                } label: {
-                                    Label(surface.title, systemImage: surface.icon)
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                        }
-                    }
-
-                    Section("Hardware Orbs") {
-                        Text("Rotate each orb UI in 0.5° steps to compensate for wall mounting. Changes save per device, sync through HomeBrain immediately, and the orb keeps the latest offset across reloads.")
-                            .font(.footnote)
-                            .foregroundStyle(HBPalette.textSecondary)
-
-                        if let hardwareOrbLoadError {
-                            Text(hardwareOrbLoadError)
-                                .font(.footnote)
-                                .foregroundStyle(HBPalette.accentRed)
-                        } else if hardwareOrbs.isEmpty {
-                            Text("No hardware orbs registered yet.")
-                                .font(.subheadline)
-                                .foregroundStyle(HBPalette.textSecondary)
-                        } else {
-                            ForEach(hardwareOrbs) { hardwareOrb in
-                                VStack(alignment: .leading, spacing: 10) {
-                                    HStack(alignment: .top, spacing: 12) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(hardwareOrb.name)
-                                                .font(.headline)
-                                            Text("\(hardwareOrb.room) • \(hardwareOrb.statusLabel)")
-                                                .font(.caption)
-                                                .foregroundStyle(HBPalette.textSecondary)
-                                        }
-                                        Spacer()
-                                        if savingHardwareOrbIDs.contains(hardwareOrb.id) {
-                                            ProgressView()
-                                                .controlSize(.small)
-                                        } else {
-                                            Text("Saved")
-                                                .font(.caption.weight(.semibold))
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 4)
-                                                .background(HBPalette.panelSoft.opacity(0.92))
-                                                .foregroundStyle(HBPalette.textSecondary)
-                                                .clipShape(Capsule())
-                                        }
-                                    }
-
-                                    HStack(alignment: .firstTextBaseline) {
-                                        Text("Offset")
-                                            .font(.subheadline.weight(.semibold))
-                                        Spacer()
-                                        Text(hardwareOrb.formattedMountOffset)
-                                            .font(.title3.weight(.semibold))
-                                            .monospacedDigit()
-                                            .foregroundStyle(HBPalette.textPrimary)
-                                    }
-
-                                    if hardwareOrb.requiresFirmwareUpdate {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            Text("Update orb firmware for live rotation")
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(HBPalette.accentOrange)
-                                            Text("This orb is still on \(hardwareOrb.firmwareVersionDisplay). HomeBrain will save the offset now, but the on-device UI will not rotate until the orb is updated to \(hardwareOrb.latestFirmwareVersionDisplay).")
-                                                .font(.caption)
-                                                .foregroundStyle(HBPalette.textSecondary)
-                                        }
-                                        .padding(10)
-                                        .background(HBPalette.panelSoft.opacity(0.9))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(HBPalette.accentOrange.opacity(0.55), lineWidth: 1)
-                                        )
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    }
-
-                                    HStack(spacing: 8) {
-                                        Button {
-                                            Task {
-                                                await adjustHardwareOrbRotation(
-                                                    hardwareOrb,
-                                                    deltaTenths: -HardwareOrbRecord.mountOffsetStepTenths
-                                                )
-                                            }
-                                        } label: {
-                                            Label("Counterclockwise", systemImage: "rotate.left")
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(
-                                            savingHardwareOrbIDs.contains(hardwareOrb.id)
-                                            || hardwareOrb.mountOffsetTenths <= HardwareOrbRecord.mountOffsetMinimumTenths
-                                        )
-
-                                        Button("Reset") {
-                                            Task {
-                                                await setHardwareOrbRotation(hardwareOrb, offsetTenths: 0)
-                                            }
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(
-                                            savingHardwareOrbIDs.contains(hardwareOrb.id)
-                                            || hardwareOrb.mountOffsetTenths == 0
-                                        )
-
-                                        Button {
-                                            Task {
-                                                await adjustHardwareOrbRotation(
-                                                    hardwareOrb,
-                                                    deltaTenths: HardwareOrbRecord.mountOffsetStepTenths
-                                                )
-                                            }
-                                        } label: {
-                                            Label("Clockwise", systemImage: "rotate.right")
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(HBPalette.accentBlue)
-                                        .disabled(
-                                            savingHardwareOrbIDs.contains(hardwareOrb.id)
-                                            || hardwareOrb.mountOffsetTenths >= HardwareOrbRecord.mountOffsetMaximumTenths
-                                        )
-                                    }
-
-                                    Text(
-                                        hardwareOrb.requiresFirmwareUpdate
-                                        ? "Range \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMinimumTenths)) to \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMaximumTenths)); positive values still save immediately, but they will only become visible on the orb after the firmware update."
-                                        : "Range \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMinimumTenths)) to \(HardwareOrbRecord.formattedMountOffset(HardwareOrbRecord.mountOffsetMaximumTenths)); positive values rotate the visual layer clockwise."
-                                    )
-                                        .font(.caption)
-                                        .foregroundStyle(HBPalette.textSecondary)
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-
-                        Button("Refresh Hardware Orbs") {
-                            Task { await loadHardwareOrbs() }
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    Section("API Keys & Tests") {
-                        SecureField("OpenAI API Key", text: $openaiApiKey)
-                        HStack {
-                            Button("Test OpenAI") {
-                                Task { await testOpenAI() }
-                            }
-                            .buttonStyle(.bordered)
-                            Spacer()
-                        }
-
-                        SecureField("Anthropic API Key", text: $anthropicApiKey)
-                        HStack {
-                            Button("Test Anthropic") {
-                                Task { await testAnthropic() }
-                            }
-                            .buttonStyle(.bordered)
-                            Spacer()
-                        }
-
-                        SecureField("ElevenLabs API Key", text: $elevenLabsApiKey)
-                        HStack {
-                            Button("Test ElevenLabs") {
-                                Task { await testElevenLabs() }
-                            }
-                            .buttonStyle(.bordered)
-                            Spacer()
-                        }
-
-                        SecureField("SmartThings Token", text: $smartThingsToken)
-                        HStack {
-                            Button("Test SmartThings") {
-                                Task { await testSmartThings() }
-                            }
-                            .buttonStyle(.bordered)
-                            Spacer()
-                        }
-                    }
-
-                    Section {
-                        Button("Save Settings") {
-                            Task { await saveSettings() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(HBPalette.accentBlue)
-
-                        Button("Refresh Settings") {
-                            Task { await loadSettings() }
-                        }
-                        .buttonStyle(.bordered)
-                    }
                 }
                 .hbFormStyle()
                 .refreshable {
@@ -489,10 +243,6 @@ struct SettingsView: View {
         .task {
             await loadSettings()
         }
-        .sheet(isPresented: $showingOpenClawSettings) {
-            OpenClawIntegrationView()
-                .environmentObject(session)
-        }
         .sheet(item: $presentedSettingsSurface) { surface in
             NavigationStack {
                 settingsSurfaceView(surface)
@@ -502,6 +252,21 @@ struct SettingsView: View {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Close") {
                                 presentedSettingsSurface = nil
+                            }
+                        }
+                    }
+            }
+            .environmentObject(session)
+        }
+        .sheet(item: $presentedWebSettingsArea) { area in
+            NavigationStack {
+                settingsWebAreaView(area)
+                    .navigationTitle(area.title)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                presentedWebSettingsArea = nil
                             }
                         }
                     }
@@ -527,6 +292,732 @@ struct SettingsView: View {
             OperationsView()
         case .ssl:
             SSLView()
+        }
+    }
+
+    private var availableSettingsAreas: [SettingsWebArea] {
+        SettingsWebArea.allCases.filter { !$0.isAdminOnly || isAdmin }
+    }
+
+    private var settingsTabRail: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(availableSettingsAreas) { area in
+                        Button {
+                            selectedSettingsArea = area
+                        } label: {
+                            Label(area.title, systemImage: area.icon)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 8)
+                                .background(
+                                    Capsule()
+                                        .fill(selectedSettingsArea == area ? HBPalette.accentBlue.opacity(0.22) : HBPalette.panelSoft.opacity(0.72))
+                                )
+                                .overlay(
+                                    Capsule()
+                                        .stroke(selectedSettingsArea == area ? HBPalette.accentBlue.opacity(0.78) : HBPalette.panelStroke, lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: selectedSettingsArea.icon)
+                    .foregroundStyle(HBPalette.accentBlue)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(selectedSettingsArea.title)
+                        .font(.subheadline.weight(.semibold))
+                    Text(selectedSettingsArea.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+                Spacer()
+                if selectedSettingsArea.isAdminOnly {
+                    Button("Open Full") {
+                        presentedWebSettingsArea = selectedSettingsArea
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsInlineAreaContent(_ area: SettingsWebArea) -> some View {
+        switch area {
+        case .general:
+            settingsConnectionSection
+            settingsGeneralSection
+            settingsSaveRefreshSection
+
+        case .voice:
+            settingsVoiceSection
+            settingsSTTSection
+            settingsSaveRefreshSection
+
+        case .integrations:
+            settingsIntegrationBasicsSection
+            settingsIntegrationTabsSection
+            settingsSaveRefreshSection
+
+        case .alexa, .codexSkill, .openClaw, .sense, .tempest, .rainMachine, .ecobee, .resources, .maintenance:
+            settingsOpenFullAreaSection(area)
+
+        case .deviceIntegrations:
+            settingsIntegrationBasicsSection
+            settingsOpenFullAreaSection(area)
+            settingsSaveRefreshSection
+
+        case .apiKeys:
+            settingsAPIKeysSection
+            settingsSaveRefreshSection
+
+        case .aiProviders:
+            settingsLLMSection
+            settingsSaveRefreshSection
+
+        case .llmPriority:
+            settingsLLMPrioritySection
+            settingsSaveRefreshSection
+
+        case .hardwareOrbs:
+            settingsHardwareOrbsSection
+
+        case .security:
+            settingsSecuritySection
+            settingsSessionsSection
+            settingsSaveRefreshSection
+
+        case .platformAdmin:
+            settingsPlatformAdminSection
+        }
+    }
+
+    private var settingsConnectionSection: some View {
+        Section("Connection") {
+            TextField("Server URL", text: $serverURL)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+
+            Button("Apply Server URL") {
+                if session.updateServerURL(serverURL) {
+                    serverURL = session.serverURLString
+                    infoMessage = "Server URL updated."
+                    errorMessage = nil
+                } else {
+                    errorMessage = "Enter a valid server URL."
+                }
+            }
+        }
+    }
+
+    private var settingsGeneralSection: some View {
+        Section("General") {
+            TextField("Location", text: $location)
+            TextField("Timezone", text: $timezone)
+            Toggle("Enable Notifications", isOn: $enableNotifications)
+            Toggle("Enable Security Mode", isOn: $enableSecurityMode)
+            Toggle("Enable Auto Discovery", isOn: $autoDiscoveryEnabled)
+        }
+    }
+
+    private var settingsVoiceSection: some View {
+        Section("Voice") {
+            HStack {
+                Text("Wake Word Sensitivity")
+                Spacer()
+                Text(String(format: "%.2f", wakeWordSensitivity))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+            Slider(value: $wakeWordSensitivity, in: 0.1...1)
+
+            HStack {
+                Text("Voice Volume")
+                Spacer()
+                Text(String(format: "%.2f", voiceVolume))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+            Slider(value: $voiceVolume, in: 0.1...1)
+
+            HStack {
+                Text("Mic Sensitivity")
+                Spacer()
+                Text(String(format: "%.2f", microphoneSensitivity))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+            Slider(value: $microphoneSensitivity, in: 0.1...1)
+
+            Toggle("Enable Voice Confirmation", isOn: $enableVoiceConfirmation)
+        }
+    }
+
+    private var settingsSTTSection: some View {
+        Section("STT") {
+            Picker("Provider", selection: $sttProvider) {
+                ForEach(sttProviders, id: \.self) { provider in
+                    Text(provider.capitalized).tag(provider)
+                }
+            }
+
+            TextField("STT Model", text: $sttModel)
+            TextField("STT Language", text: $sttLanguage)
+        }
+    }
+
+    private var settingsLLMSection: some View {
+        Section("AI / LLM Providers") {
+            Picker("LLM Provider", selection: $llmProvider) {
+                ForEach(llmProviders, id: \.self) { provider in
+                    Text(provider.capitalized).tag(provider)
+                }
+            }
+
+            TextField("OpenAI Model", text: $openaiModel)
+            TextField("Codex Model", text: $codexModel)
+            TextField("Anthropic Model", text: $anthropicModel)
+            TextField("Local LLM Endpoint", text: $localLlmEndpoint)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+            TextField("Local LLM Model", text: $localLlmModel)
+        }
+    }
+
+    private var settingsLLMPrioritySection: some View {
+        Section("LLM Priority") {
+            TextField("Provider order", text: $llmPriority)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+            Text("Comma-separated fallback order, for example local,codex,openai,anthropic.")
+                .font(.footnote)
+                .foregroundStyle(HBPalette.textSecondary)
+        }
+    }
+
+    private var settingsIntegrationBasicsSection: some View {
+        Section("Integration Basics") {
+            Toggle("SmartThings uses OAuth", isOn: $smartthingsUseOAuth)
+            TextField("Harmony Hub Addresses", text: $harmonyHubAddresses)
+        }
+    }
+
+    private var settingsIntegrationTabsSection: some View {
+        Section("Integration Tabs") {
+            ForEach([
+                SettingsWebArea.alexa,
+                .codexSkill,
+                .openClaw,
+                .sense,
+                .tempest,
+                .rainMachine,
+                .deviceIntegrations,
+                .ecobee
+            ].filter { !$0.isAdminOnly || isAdmin }) { area in
+                Button {
+                    selectedSettingsArea = area
+                } label: {
+                    HStack {
+                        Label(area.title, systemImage: area.icon)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(HBPalette.textMuted)
+                    }
+                }
+            }
+        }
+    }
+
+    private var settingsAPIKeysSection: some View {
+        Section("API Keys & Tests") {
+            SecureField("OpenAI API Key", text: $openaiApiKey)
+            Button("Test OpenAI") {
+                Task { await testOpenAI() }
+            }
+
+            SecureField("Anthropic API Key", text: $anthropicApiKey)
+            Button("Test Anthropic") {
+                Task { await testAnthropic() }
+            }
+
+            SecureField("ElevenLabs API Key", text: $elevenLabsApiKey)
+            Button("Test ElevenLabs") {
+                Task { await testElevenLabs() }
+            }
+
+            SecureField("SmartThings Token", text: $smartThingsToken)
+            Button("Test SmartThings") {
+                Task { await testSmartThings() }
+            }
+        }
+    }
+
+    private var settingsSecuritySection: some View {
+        Section("Security") {
+            Toggle("Enable Security Mode", isOn: $enableSecurityMode)
+
+            Stepper(value: $authSessionMaxAgeDays, in: 30...3650, step: 30) {
+                HStack {
+                    Text("Session Lifetime")
+                    Spacer()
+                    Text("\(authSessionMaxAgeDays) days")
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+
+            Text("iOS refresh sessions remain configurable up to 365 days and beyond; browser defaults are handled separately by the backend.")
+                .font(.footnote)
+                .foregroundStyle(HBPalette.textSecondary)
+        }
+    }
+
+    private func settingsOpenFullAreaSection(_ area: SettingsWebArea) -> some View {
+        Section(area.title) {
+            Text(area.subtitle)
+                .font(.footnote)
+                .foregroundStyle(HBPalette.textSecondary)
+
+            Button {
+                presentedWebSettingsArea = area
+            } label: {
+                Label("Open \(area.title) Controls", systemImage: area.icon)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(HBPalette.accentBlue)
+        }
+    }
+
+    private var settingsPlatformAdminSection: some View {
+        Section("Platform Admin") {
+            ForEach(SettingsParitySurface.allCases) { surface in
+                Button {
+                    presentedSettingsSurface = surface
+                } label: {
+                    Label(surface.title, systemImage: surface.icon)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsWebAreaView(_ area: SettingsWebArea) -> some View {
+        switch area {
+        case .general:
+            Form {
+                Section("Connection") {
+                    TextField("Server URL", text: $serverURL)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+
+                    Button("Apply Server URL") {
+                        if session.updateServerURL(serverURL) {
+                            serverURL = session.serverURLString
+                            infoMessage = "Server URL updated."
+                            errorMessage = nil
+                        } else {
+                            errorMessage = "Enter a valid server URL."
+                        }
+                    }
+                }
+
+                Section("General") {
+                    TextField("Location", text: $location)
+                    TextField("Timezone", text: $timezone)
+                    Toggle("Enable Notifications", isOn: $enableNotifications)
+                    Toggle("Enable Security Mode", isOn: $enableSecurityMode)
+                    Toggle("Enable Auto Discovery", isOn: $autoDiscoveryEnabled)
+                }
+
+                settingsSaveRefreshSection
+            }
+            .hbFormStyle()
+
+        case .voice:
+            Form {
+                Section("Voice") {
+                    HStack {
+                        Text("Wake Word Sensitivity")
+                        Spacer()
+                        Text(String(format: "%.2f", wakeWordSensitivity))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                    Slider(value: $wakeWordSensitivity, in: 0.1...1)
+
+                    HStack {
+                        Text("Voice Volume")
+                        Spacer()
+                        Text(String(format: "%.2f", voiceVolume))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                    Slider(value: $voiceVolume, in: 0.1...1)
+
+                    HStack {
+                        Text("Mic Sensitivity")
+                        Spacer()
+                        Text(String(format: "%.2f", microphoneSensitivity))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                    Slider(value: $microphoneSensitivity, in: 0.1...1)
+
+                    Toggle("Enable Voice Confirmation", isOn: $enableVoiceConfirmation)
+                }
+
+                Section("STT") {
+                    Picker("Provider", selection: $sttProvider) {
+                        ForEach(sttProviders, id: \.self) { provider in
+                            Text(provider.capitalized).tag(provider)
+                        }
+                    }
+
+                    TextField("STT Model", text: $sttModel)
+                    TextField("STT Language", text: $sttLanguage)
+                }
+
+                settingsSaveRefreshSection
+            }
+            .hbFormStyle()
+
+        case .integrations:
+            Form {
+                Section("Integration Tabs") {
+                    ForEach([
+                        SettingsWebArea.alexa,
+                        .codexSkill,
+                        .openClaw,
+                        .sense,
+                        .tempest,
+                        .rainMachine,
+                        .deviceIntegrations,
+                        .ecobee
+                    ]) { child in
+                        Button {
+                            presentedWebSettingsArea = child
+                        } label: {
+                            Label(child.title, systemImage: child.icon)
+                        }
+                    }
+                }
+            }
+            .hbFormStyle()
+
+        case .alexa:
+            SettingsEndpointPane(
+                title: "Alexa",
+                subtitle: "Broker pairing, link codes, discovery sync, and event delivery controls.",
+                statusPath: "/api/alexa",
+                actions: [
+                    SettingsEndpointAction(title: "Generate Private Link Code", method: .post, path: "/api/alexa/link-codes", body: ["mode": "private"]),
+                    SettingsEndpointAction(title: "Generate Public Link Code", method: .post, path: "/api/alexa/link-codes", body: ["mode": "public"]),
+                    SettingsEndpointAction(title: "Force Discovery Sync", method: .post, path: "/api/alexa/discovery-sync", body: ["reason": "ios-settings"]),
+                    SettingsEndpointAction(title: "Flush Broker Events", method: .post, path: "/api/alexa/events/flush", body: ["limit": 100])
+                ]
+            )
+
+        case .codexSkill:
+            SettingsEndpointPane(
+                title: "Codex Skill",
+                subtitle: "HomeBrain live skill status, token lifecycle, and bundle metadata.",
+                statusPath: "/api/codex-skill",
+                actions: [
+                    SettingsEndpointAction(title: "Rotate Token", method: .post, path: "/api/codex-skill/token/rotate"),
+                    SettingsEndpointAction(title: "Revoke Token", method: .delete, path: "/api/codex-skill/token")
+                ]
+            )
+
+        case .openClaw:
+            OpenClawIntegrationView()
+
+        case .sense:
+            SenseEnergyView()
+
+        case .tempest:
+            WeatherView()
+
+        case .rainMachine:
+            RainMachineView()
+
+        case .deviceIntegrations:
+            SettingsDeviceIntegrationsPane(
+                harmonyHubAddresses: $harmonyHubAddresses,
+                smartthingsUseOAuth: $smartthingsUseOAuth,
+                smartThingsToken: $smartThingsToken,
+                onSave: { Task { await saveSettings() } },
+                onTestSmartThings: { Task { await testSmartThings() } }
+            )
+
+        case .ecobee:
+            SettingsEndpointPane(
+                title: "Ecobee",
+                subtitle: "OAuth status, connection testing, and synced thermostat inventory.",
+                statusPath: "/api/ecobee/status",
+                actions: [
+                    SettingsEndpointAction(title: "Get Auth URL", method: .get, path: "/api/ecobee/auth/url"),
+                    SettingsEndpointAction(title: "Test Connection", method: .post, path: "/api/ecobee/test"),
+                    SettingsEndpointAction(title: "Refresh Devices", method: .get, path: "/api/ecobee/devices", query: [URLQueryItem(name: "refresh", value: "1")]),
+                    SettingsEndpointAction(title: "Disconnect", method: .post, path: "/api/ecobee/disconnect")
+                ]
+            )
+
+        case .apiKeys:
+            Form {
+                Section("API Keys & Tests") {
+                    SecureField("OpenAI API Key", text: $openaiApiKey)
+                    Button("Test OpenAI") {
+                        Task { await testOpenAI() }
+                    }
+
+                    SecureField("Anthropic API Key", text: $anthropicApiKey)
+                    Button("Test Anthropic") {
+                        Task { await testAnthropic() }
+                    }
+
+                    SecureField("ElevenLabs API Key", text: $elevenLabsApiKey)
+                    Button("Test ElevenLabs") {
+                        Task { await testElevenLabs() }
+                    }
+
+                    SecureField("SmartThings Token", text: $smartThingsToken)
+                    Button("Test SmartThings") {
+                        Task { await testSmartThings() }
+                    }
+                }
+
+                settingsSaveRefreshSection
+            }
+            .hbFormStyle()
+
+        case .aiProviders:
+            Form {
+                Section("LLM") {
+                    Picker("LLM Provider", selection: $llmProvider) {
+                        ForEach(llmProviders, id: \.self) { provider in
+                            Text(provider.capitalized).tag(provider)
+                        }
+                    }
+
+                    TextField("OpenAI Model", text: $openaiModel)
+                    TextField("Codex Model", text: $codexModel)
+                    TextField("Anthropic Model", text: $anthropicModel)
+                    TextField("Local LLM Endpoint", text: $localLlmEndpoint)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    TextField("Local LLM Model", text: $localLlmModel)
+                }
+
+                settingsSaveRefreshSection
+            }
+            .hbFormStyle()
+
+        case .llmPriority:
+            Form {
+                Section("LLM Priority") {
+                    TextField("Provider order", text: $llmPriority)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    Text("Comma-separated fallback order, for example local,codex,openai,anthropic.")
+                        .font(.footnote)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                settingsSaveRefreshSection
+            }
+            .hbFormStyle()
+
+        case .hardwareOrbs:
+            Form {
+                settingsHardwareOrbsSection
+            }
+            .hbFormStyle()
+
+        case .security:
+            Form {
+                Section("Security") {
+                    Toggle("Enable Security Mode", isOn: $enableSecurityMode)
+                    Stepper(value: $authSessionMaxAgeDays, in: 30...3650, step: 30) {
+                        HStack {
+                            Text("Session Lifetime")
+                            Spacer()
+                            Text("\(authSessionMaxAgeDays) days")
+                                .foregroundStyle(HBPalette.textSecondary)
+                        }
+                    }
+
+                    Text("iOS refresh sessions remain configurable up to 365 days and beyond; browser defaults are handled separately by the backend.")
+                        .font(.footnote)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                settingsSessionsSection
+                settingsSaveRefreshSection
+            }
+            .hbFormStyle()
+
+        case .resources:
+            SettingsEndpointPane(
+                title: "Resources",
+                subtitle: "Live platform resource utilization, including Jetson GPU telemetry where available.",
+                statusPath: "/api/resources/utilization",
+                actions: [
+                    SettingsEndpointAction(title: "Refresh Resource Snapshot", method: .get, path: "/api/resources/utilization"),
+                    SettingsEndpointAction(title: "Run Deploy Health", method: .get, path: "/api/platform-deploy/health")
+                ]
+            )
+
+        case .maintenance:
+            SettingsMaintenancePane()
+
+        case .platformAdmin:
+            Form {
+                Section("Platform Admin") {
+                    ForEach(SettingsParitySurface.allCases) { surface in
+                        Button {
+                            presentedSettingsSurface = surface
+                            presentedWebSettingsArea = nil
+                        } label: {
+                            Label(surface.title, systemImage: surface.icon)
+                        }
+                    }
+                }
+            }
+            .hbFormStyle()
+        }
+    }
+
+    private var settingsSaveRefreshSection: some View {
+        Section {
+            Button("Save Settings") {
+                Task { await saveSettings() }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(HBPalette.accentBlue)
+
+            Button("Refresh Settings") {
+                Task { await loadSettings() }
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private var settingsSessionsSection: some View {
+        Section("Sessions") {
+            if authSessions.isEmpty {
+                Text("No active sessions found for this account.")
+                    .font(.subheadline)
+                    .foregroundStyle(HBPalette.textSecondary)
+            } else {
+                ForEach(authSessions) { authSession in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(authSession.clientName)
+                                .font(.headline)
+                            Spacer()
+                            if authSession.isCurrent {
+                                Text("This device")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(HBPalette.accentBlue)
+                            }
+                        }
+
+                        Text("Last used: \(settingsFormatDateTime(authSession.lastUsedAt))")
+                            .font(.caption)
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Text("Expires: \(settingsFormatDateTime(authSession.expiresAt))")
+                            .font(.caption)
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                        if !authSession.isCurrent {
+                            Button("Revoke Session") {
+                                Task { await revokeAuthSession(authSession) }
+                            }
+                            .disabled(revokingSessionIDs.contains(authSession.id))
+                        }
+                    }
+                }
+            }
+
+            Button("Refresh Session List") {
+                Task { await loadAuthSessions() }
+            }
+        }
+    }
+
+    private var settingsHardwareOrbsSection: some View {
+        Section("Hardware Orbs") {
+            Text("Rotate each orb UI in 0.5° steps to compensate for wall mounting. Changes save per device and sync through HomeBrain.")
+                .font(.footnote)
+                .foregroundStyle(HBPalette.textSecondary)
+
+            if let hardwareOrbLoadError {
+                Text(hardwareOrbLoadError)
+                    .font(.footnote)
+                    .foregroundStyle(HBPalette.accentRed)
+            } else if hardwareOrbs.isEmpty {
+                Text("No hardware orbs registered yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(HBPalette.textSecondary)
+            } else {
+                ForEach(hardwareOrbs) { hardwareOrb in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(hardwareOrb.name)
+                                    .font(.headline)
+                                Text("\(hardwareOrb.room) · \(hardwareOrb.statusLabel)")
+                                    .font(.caption)
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
+                            Spacer()
+                            Text(hardwareOrb.formattedMountOffset)
+                                .font(.headline.monospacedDigit())
+                        }
+
+                        HStack(spacing: 8) {
+                            Button {
+                                Task {
+                                    await adjustHardwareOrbRotation(
+                                        hardwareOrb,
+                                        deltaTenths: -HardwareOrbRecord.mountOffsetStepTenths
+                                    )
+                                }
+                            } label: {
+                                Label("Left", systemImage: "rotate.left")
+                            }
+                            .disabled(savingHardwareOrbIDs.contains(hardwareOrb.id))
+
+                            Button("Reset") {
+                                Task { await setHardwareOrbRotation(hardwareOrb, offsetTenths: 0) }
+                            }
+                            .disabled(savingHardwareOrbIDs.contains(hardwareOrb.id) || hardwareOrb.mountOffsetTenths == 0)
+
+                            Button {
+                                Task {
+                                    await adjustHardwareOrbRotation(
+                                        hardwareOrb,
+                                        deltaTenths: HardwareOrbRecord.mountOffsetStepTenths
+                                    )
+                                }
+                            } label: {
+                                Label("Right", systemImage: "rotate.right")
+                            }
+                            .disabled(savingHardwareOrbIDs.contains(hardwareOrb.id))
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            Button("Refresh Hardware Orbs") {
+                Task { await loadHardwareOrbs() }
+            }
         }
     }
 
@@ -786,6 +1277,366 @@ struct SettingsView: View {
                 return hardwareOrb
             }
             return transform(hardwareOrb)
+        }
+    }
+}
+
+private struct SettingsEndpointAction: Identifiable {
+    let id = UUID()
+    let title: String
+    let method: HTTPMethod
+    let path: String
+    var body: Any?
+    var query: [URLQueryItem] = []
+}
+
+private struct SettingsEndpointPane: View {
+    @EnvironmentObject private var session: SessionStore
+
+    let title: String
+    let subtitle: String
+    let statusPath: String
+    let actions: [SettingsEndpointAction]
+
+    @State private var isLoading = true
+    @State private var activeActionID: UUID?
+    @State private var errorMessage: String?
+    @State private var statusPayload: Any?
+    @State private var actionPayload: Any?
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                HBSectionHeader(title: title, subtitle: subtitle)
+
+                if let errorMessage {
+                    InlineErrorView(message: errorMessage) {
+                        Task { await loadStatus() }
+                    }
+                }
+
+                GroupBox("Status") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if isLoading {
+                            ProgressView()
+                        } else {
+                            Text(JSON.prettyString(statusPayload))
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .foregroundStyle(HBPalette.textSecondary)
+                        }
+
+                        Button("Refresh Status") {
+                            Task { await loadStatus() }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if !actions.isEmpty {
+                    GroupBox("Actions") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(actions) { action in
+                                Button {
+                                    Task { await run(action) }
+                                } label: {
+                                    if activeActionID == action.id {
+                                        ProgressView()
+                                    } else {
+                                        Label(action.title, systemImage: iconName(for: action.method))
+                                    }
+                                }
+                                .buttonStyle(action.method == .delete ? .bordered : .borderedProminent)
+                                .tint(action.method == .delete ? HBPalette.accentRed : HBPalette.accentBlue)
+                                .disabled(activeActionID != nil)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                if let actionPayload {
+                    GroupBox("Latest Result") {
+                        Text(JSON.prettyString(actionPayload))
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .padding()
+        }
+        .groupBoxStyle(HBPanelGroupBoxStyle())
+        .task {
+            await loadStatus()
+        }
+        .refreshable {
+            await loadStatus()
+        }
+    }
+
+    private func iconName(for method: HTTPMethod) -> String {
+        switch method {
+        case .get: return "arrow.clockwise"
+        case .post: return "play.fill"
+        case .put, .patch: return "square.and.arrow.down"
+        case .delete: return "trash"
+        }
+    }
+
+    private func loadStatus() async {
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            statusPayload = try await session.apiClient.get(statusPath)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isLoading = false
+    }
+
+    private func run(_ action: SettingsEndpointAction) async {
+        activeActionID = action.id
+        errorMessage = nil
+        defer { activeActionID = nil }
+
+        do {
+            let response: Any
+            switch action.method {
+            case .get:
+                response = try await session.apiClient.get(action.path, query: action.query)
+            case .post:
+                response = try await session.apiClient.post(action.path, body: action.body)
+            case .put:
+                response = try await session.apiClient.put(action.path, body: action.body)
+            case .patch:
+                response = try await session.apiClient.patch(action.path, body: action.body)
+            case .delete:
+                response = try await session.apiClient.delete(action.path)
+            }
+
+            actionPayload = response
+            await loadStatus()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct SettingsDeviceIntegrationsPane: View {
+    @EnvironmentObject private var session: SessionStore
+
+    @Binding var harmonyHubAddresses: String
+    @Binding var smartthingsUseOAuth: Bool
+    @Binding var smartThingsToken: String
+
+    let onSave: () -> Void
+    let onTestSmartThings: () -> Void
+
+    @State private var activeAction = ""
+    @State private var message = ""
+    @State private var resultPayload: Any?
+
+    var body: some View {
+        Form {
+            Section("SmartThings") {
+                Toggle("Use OAuth", isOn: $smartthingsUseOAuth)
+                SecureField("Legacy Token", text: $smartThingsToken)
+                Button("Save SmartThings Settings") { onSave() }
+                Button("Test SmartThings") { onTestSmartThings() }
+                actionButton("Status", key: "smartthings-status", method: .get, path: "/api/smartthings/status")
+                actionButton("Get Auth URL", key: "smartthings-auth-url", method: .get, path: "/api/smartthings/auth/url")
+                actionButton("Refresh Devices", key: "smartthings-devices", method: .get, path: "/api/smartthings/devices")
+                actionButton("Disconnect", key: "smartthings-disconnect", method: .post, path: "/api/smartthings/disconnect")
+            }
+
+            Section("Harmony") {
+                TextField("Hub IPs / Hosts", text: $harmonyHubAddresses)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                Button("Save Harmony Settings") { onSave() }
+                actionButton("Harmony Status", key: "harmony-status", method: .get, path: "/api/harmony/status")
+                actionButton("Discover Hubs", key: "harmony-discover", method: .post, path: "/api/harmony/discover", body: ["timeoutMs": 5000])
+                actionButton("Sync Devices", key: "harmony-sync", method: .post, path: "/api/harmony/sync", body: ["timeoutMs": 6000])
+                actionButton("Sync Activity State", key: "harmony-sync-state", method: .post, path: "/api/harmony/sync-state")
+            }
+
+            Section("INSTEON") {
+                actionButton("Runtime Status", key: "insteon-status", method: .get, path: "/api/insteon/status")
+                actionButton("Scan Serial Ports", key: "insteon-ports", method: .get, path: "/api/insteon/serial-ports")
+                actionButton("Test PLM", key: "insteon-test", method: .get, path: "/api/insteon/test")
+                actionButton("Soft Reset PLM", key: "insteon-soft-reset", method: .post, path: "/api/insteon/maintenance/soft-reset")
+                actionButton("Cancel Active Command", key: "insteon-cancel", method: .post, path: "/api/insteon/maintenance/cancel-active")
+                actionButton("Clear Queue", key: "insteon-clear-queue", method: .post, path: "/api/insteon/maintenance/clear-queue")
+                actionButton("Pause Runtime Monitoring", key: "insteon-pause", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/stop")
+                actionButton("Resume Runtime Monitoring", key: "insteon-resume", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/start", body: ["immediate": true])
+            }
+
+            if !message.isEmpty {
+                Section("Message") {
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+
+            if let resultPayload {
+                Section("Latest Result") {
+                    Text(JSON.prettyString(resultPayload))
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+        }
+        .hbFormStyle()
+    }
+
+    private func actionButton(
+        _ title: String,
+        key: String,
+        method: HTTPMethod,
+        path: String,
+        body: Any? = nil
+    ) -> some View {
+        Button {
+            Task { await runAction(key: key, method: method, path: path, body: body) }
+        } label: {
+            if activeAction == key {
+                ProgressView()
+            } else {
+                Label(title, systemImage: method == .get ? "arrow.clockwise" : "play.fill")
+            }
+        }
+        .disabled(!activeAction.isEmpty)
+    }
+
+    private func runAction(key: String, method: HTTPMethod, path: String, body: Any?) async {
+        activeAction = key
+        message = ""
+        defer { activeAction = "" }
+
+        do {
+            let response: Any
+            switch method {
+            case .get:
+                response = try await session.apiClient.get(path)
+            case .post:
+                response = try await session.apiClient.post(path, body: body)
+            case .put:
+                response = try await session.apiClient.put(path, body: body)
+            case .patch:
+                response = try await session.apiClient.patch(path, body: body)
+            case .delete:
+                response = try await session.apiClient.delete(path)
+            }
+
+            resultPayload = response
+            let object = JSON.object(response)
+            message = JSON.string(object, "message", fallback: "Action completed.")
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+}
+
+private struct SettingsMaintenancePane: View {
+    @EnvironmentObject private var session: SessionStore
+
+    @State private var activeAction = ""
+    @State private var message = ""
+    @State private var resultPayload: Any?
+
+    var body: some View {
+        Form {
+            Section("Diagnostics") {
+                actionButton("Run Health Check", key: "health", method: .get, path: "/api/maintenance/health")
+                actionButton("Export Configuration", key: "export", method: .get, path: "/api/maintenance/export")
+                actionButton("Latest Restore Status", key: "restore-latest", method: .get, path: "/api/maintenance/restore/latest")
+            }
+
+            Section("Sync") {
+                actionButton("Sync SmartThings", key: "sync-smartthings", method: .post, path: "/api/maintenance/sync/smartthings")
+                actionButton("Sync Harmony", key: "sync-harmony", method: .post, path: "/api/maintenance/sync/harmony")
+                actionButton("Start INSTEON Sync", key: "sync-insteon", method: .post, path: "/api/maintenance/sync/insteon/start", body: ["skipExisting": false])
+            }
+
+            Section("Destructive Operations") {
+                actionButton("Reset Settings", key: "reset-settings", method: .post, path: "/api/maintenance/reset/settings")
+                actionButton("Clear Voice History", key: "clear-voice", method: .delete, path: "/api/maintenance/voice-commands")
+                actionButton("Clear SmartThings Devices", key: "clear-smartthings", method: .delete, path: "/api/maintenance/devices/smartthings")
+                actionButton("Clear Harmony Devices", key: "clear-harmony", method: .delete, path: "/api/maintenance/devices/harmony")
+                actionButton("Clear INSTEON Devices", key: "clear-insteon", method: .delete, path: "/api/maintenance/devices/insteon")
+            }
+
+            if !message.isEmpty {
+                Section("Message") {
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+
+            if let resultPayload {
+                Section("Latest Result") {
+                    Text(JSON.prettyString(resultPayload))
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+        }
+        .hbFormStyle()
+    }
+
+    private func actionButton(
+        _ title: String,
+        key: String,
+        method: HTTPMethod,
+        path: String,
+        body: Any? = nil
+    ) -> some View {
+        Button(role: method == .delete ? .destructive : nil) {
+            Task { await runAction(key: key, method: method, path: path, body: body) }
+        } label: {
+            if activeAction == key {
+                ProgressView()
+            } else {
+                Label(title, systemImage: method == .delete ? "trash" : "play.fill")
+            }
+        }
+        .disabled(!activeAction.isEmpty)
+    }
+
+    private func runAction(key: String, method: HTTPMethod, path: String, body: Any?) async {
+        activeAction = key
+        message = ""
+        defer { activeAction = "" }
+
+        do {
+            let response: Any
+            switch method {
+            case .get:
+                response = try await session.apiClient.get(path)
+            case .post:
+                response = try await session.apiClient.post(path, body: body)
+            case .put:
+                response = try await session.apiClient.put(path, body: body)
+            case .patch:
+                response = try await session.apiClient.patch(path, body: body)
+            case .delete:
+                response = try await session.apiClient.delete(path)
+            }
+
+            resultPayload = response
+            let object = JSON.object(response)
+            message = JSON.string(object, "message", fallback: "Action completed.")
+        } catch {
+            message = error.localizedDescription
         }
     }
 }
