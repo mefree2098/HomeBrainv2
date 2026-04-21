@@ -6330,6 +6330,8 @@ struct DashboardView: View {
                     throw APIError.server(statusCode: httpResponse.statusCode, message: "Failed to open device update stream.")
                 }
 
+                session.reportBackendRequestSucceeded()
+
                 var eventName = "message"
                 var dataLines: [String] = []
 
@@ -6365,6 +6367,11 @@ struct DashboardView: View {
                     return
                 }
 
+                if case APIError.unauthorized = error {
+                    return
+                }
+
+                session.reportTransientBackendFailure(error, path: "/api/devices/stream")
                 try? await Task.sleep(for: .seconds(5))
             }
         }

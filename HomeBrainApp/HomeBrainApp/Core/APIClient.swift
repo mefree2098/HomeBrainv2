@@ -6,6 +6,7 @@ enum APIError: LocalizedError {
     case unauthorized
     case server(statusCode: Int, message: String)
     case parsingFailed
+    case transientBackendUnavailable(message: String)
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ enum APIError: LocalizedError {
             return message
         case .parsingFailed:
             return "Failed to parse server response."
+        case .transientBackendUnavailable(let message):
+            return message
         }
     }
 }
@@ -35,6 +38,7 @@ enum HTTPMethod: String {
 final class APIClient {
     unowned let sessionStore: SessionStore
     private let urlSession: URLSession
+    private static let transientRetryDelays: [TimeInterval] = [0.75, 1.5, 3.0, 5.0]
 
     init(sessionStore: SessionStore, urlSession: URLSession = .shared) {
         self.sessionStore = sessionStore
@@ -109,7 +113,8 @@ final class APIClient {
         body: Any?,
         query: [URLQueryItem],
         authorized: Bool = true,
-        hasRetried: Bool = false
+        hasRetried: Bool = false,
+        transientAttempt: Int = 0
     ) async throws -> (Data, HTTPURLResponse) {
         guard let url = buildURL(path: path, query: query) else {
             throw APIError.invalidURL
@@ -139,13 +144,61 @@ final class APIClient {
             }
         }
 
-        let (data, response) = try await urlSession.data(for: urlRequest)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await urlSession.data(for: urlRequest)
+        } catch {
+            guard isTransientTransportError(error) else {
+                throw error
+            }
+
+            sessionStore.reportTransientBackendFailure(error, path: path)
+            if shouldRetryTransientRequest(method: method, attempt: transientAttempt) {
+                await sleepBeforeTransientRetry(attempt: transientAttempt)
+                return try await dataRequest(
+                    path: path,
+                    method: method,
+                    body: body,
+                    query: query,
+                    authorized: authorized,
+                    hasRetried: hasRetried,
+                    transientAttempt: transientAttempt + 1
+                )
+            }
+
+            throw APIError.transientBackendUnavailable(message: transientBackendMessage())
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
 
         let statusCode = httpResponse.statusCode
+        let parsedErrorMessage = { self.parseErrorMessage(from: self.payloadForError(from: data)) }
+
+        if isTransientHTTPStatus(statusCode) {
+            let message = parsedErrorMessage()
+            sessionStore.reportTransientBackendFailure(
+                APIError.server(statusCode: statusCode, message: message),
+                path: path
+            )
+
+            if shouldRetryTransientRequest(method: method, attempt: transientAttempt) {
+                await sleepBeforeTransientRetry(attempt: transientAttempt)
+                return try await dataRequest(
+                    path: path,
+                    method: method,
+                    body: body,
+                    query: query,
+                    authorized: authorized,
+                    hasRetried: hasRetried,
+                    transientAttempt: transientAttempt + 1
+                )
+            }
+
+            throw APIError.transientBackendUnavailable(message: transientBackendMessage())
+        }
 
         if statusCode == 401 || statusCode == 403,
            authorized,
@@ -160,12 +213,13 @@ final class APIClient {
                 body: body,
                 query: query,
                 authorized: authorized,
-                hasRetried: true
+                hasRetried: true,
+                transientAttempt: transientAttempt
             )
         }
 
         guard (200..<300).contains(statusCode) else {
-            let message = parseErrorMessage(from: payloadForError(from: data))
+            let message = parsedErrorMessage()
             if statusCode == 401 {
                 if authorized {
                     sessionStore.expireAuthentication(message: message)
@@ -175,6 +229,7 @@ final class APIClient {
             throw APIError.server(statusCode: statusCode, message: message)
         }
 
+        sessionStore.reportBackendRequestSucceeded()
         return (data, httpResponse)
     }
 
@@ -230,6 +285,56 @@ final class APIClient {
 
     private func payloadForError(from data: Data) -> Any {
         (try? parseJSONPayload(data: data)) ?? [:]
+    }
+
+    private func isTransientTransportError(_ error: Error) -> Bool {
+        guard let urlError = urlError(from: error) else {
+            return false
+        }
+
+        switch urlError.code {
+        case .badServerResponse,
+             .cannotConnectToHost,
+             .cannotFindHost,
+             .dnsLookupFailed,
+             .networkConnectionLost,
+             .notConnectedToInternet,
+             .secureConnectionFailed,
+             .timedOut:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func urlError(from error: Error) -> URLError? {
+        if let urlError = error as? URLError {
+            return urlError
+        }
+
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else {
+            return nil
+        }
+
+        return URLError(URLError.Code(rawValue: nsError.code))
+    }
+
+    private func isTransientHTTPStatus(_ statusCode: Int) -> Bool {
+        statusCode == 408 || statusCode == 502 || statusCode == 503 || statusCode == 504
+    }
+
+    private func shouldRetryTransientRequest(method: HTTPMethod, attempt: Int) -> Bool {
+        method == .get && attempt < Self.transientRetryDelays.count
+    }
+
+    private func sleepBeforeTransientRetry(attempt: Int) async {
+        let delay = Self.transientRetryDelays[min(attempt, Self.transientRetryDelays.count - 1)]
+        try? await Task.sleep(for: .seconds(delay))
+    }
+
+    private func transientBackendMessage() -> String {
+        "HomeBrain is restarting or temporarily unreachable. Reconnecting..."
     }
 
     private func suggestedFilename(from response: HTTPURLResponse) -> String? {
